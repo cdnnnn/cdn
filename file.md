@@ -1,5 +1,4 @@
 //ChatPanel.tsx
-
 import React, { useState, useEffect, useRef, KeyboardEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -247,14 +246,6 @@ export default ChatPanel;
 
 
 
-
-
-
-
-
-
-
-
 //FollowupChips.tsx
 
 import React from 'react';
@@ -302,14 +293,8 @@ export default FollowupChips;
 
 
 
-
-
-
-
-
-
-
 // SuggestedPrompts.tsx
+
 
 import React from 'react';
 import styles from './SuggestedPrompts.module.scss';
@@ -388,13 +373,87 @@ export default SuggestedPrompts;
 
 
 
+// icons.tsx
+
+// Central place for every SVG icon used across the DBAnalytics feature.
+// Swaps the old Tabler icon-font (`<i className="ti ti-x" />`) for real
+// inline SVG components from lucide-react.
+import React from 'react';
+import {
+  Plus,
+  X,
+  Check,
+  Database,
+  DatabaseZap,
+  Settings,
+  Info,
+  Loader2,
+  MessageCircle,
+  Sparkles,
+  BarChart3,
+  Send,
+  AreaChart,
+  Gauge,
+  LineChart,
+  PieChart,
+  Table,
+  ScatterChart,
+  Lightbulb,
+  ArrowRight,
+  Upload,
+  FileSpreadsheet,
+  Maximize2,
+  type LucideProps,
+} from 'lucide-react';
+
+export type IconComponent = React.FC<LucideProps>;
+
+export const Icon = {
+  plus: Plus,
+  close: X,
+  check: Check,
+  database: Database,
+  databaseInsights: DatabaseZap,
+  settings: Settings,
+  infoCircle: Info,
+  loader: Loader2,
+  messageCircle: MessageCircle,
+  sparkles: Sparkles,
+  chartBar: BarChart3,
+  send: Send,
+  chartAreaLine: AreaChart,
+  gauge: Gauge,
+  chartLine: LineChart,
+  chartPie: PieChart,
+  chartArea: AreaChart,
+  chartDots: ScatterChart,
+  table: Table,
+  lightbulb: Lightbulb,
+  arrowRight: ArrowRight,
+  upload: Upload,
+  csv: FileSpreadsheet,
+  expand: Maximize2,
+} as const;
+
+export type IconName = keyof typeof Icon;
+
+
+
+
+
+
+
+
+
+
+
 // api.ts
 
-const BASE_URL = 'http://107.108.32.188:8000';
+// TODO: point this at your project's actual configured axios instance
+// (the one with the auth-token interceptor already set up).
+import { http } from '../lib/http';
 
-// TODO: replace with your actual static token, or better, load it from an env variable
-// (e.g. import.meta.env.VITE_API_TOKEN) instead of hardcoding it here.
-const AUTH_TOKEN = 'YOUR_STATIC_TOKEN_HERE';
+const API_PREFIX = '/db-analytics';
 
 export interface ApiDatabase {
   id: string;
@@ -537,28 +596,6 @@ export interface ApiFollowupsResponse {
   followups: string[];
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${AUTH_TOKEN}`,
-    },
-    ...options,
-  });
-  if (!res.ok) {
-    let detail = '';
-    try {
-      const body = await res.json();
-      detail = body?.message || body?.detail || '';
-    } catch {
-      // ignore parse errors
-    }
-    throw new Error(detail || `Request failed with status ${res.status}`);
-  }
-  const text = await res.text();
-  return (text ? JSON.parse(text) : null) as T;
-}
-
 // Some list endpoints inconsistently respond either as a bare array
 // (`[...]`) or wrapped in an envelope (`{ status: "Success", result: [...] }`).
 // This normalizes either shape into a plain array so callers never have to
@@ -572,9 +609,20 @@ function unwrapList<T>(payload: unknown): T[] {
   return [];
 }
 
-async function requestList<T>(path: string, options?: RequestInit): Promise<T[]> {
-  const raw = await request<unknown>(path, options);
-  return unwrapList<T>(raw);
+async function getList<T>(path: string): Promise<T[]> {
+  const res = await http.get(`${API_PREFIX}${path}`);
+  return unwrapList<T>(res.data);
+}
+
+// Extracts a human-readable message from an axios error response, whatever
+// shape the backend used (`detail` as a string, `message`, or nothing at all).
+function extractErrorMessage(err: unknown, fallback: string): string {
+  const anyErr = err as { response?: { data?: { message?: string; detail?: unknown } }; message?: string };
+  const data = anyErr?.response?.data;
+  if (typeof data?.detail === 'string') return data.detail;
+  if (typeof data?.message === 'string') return data.message;
+  if (typeof anyErr?.message === 'string') return anyErr.message;
+  return fallback;
 }
 
 // Parses a streaming response body into individual JSON payloads as they
@@ -653,12 +701,21 @@ async function* parseEventStream(res: Response): AsyncGenerator<ApiQueryEvent> {
   yield* flushSseBuffer();
 }
 
+// NOTE: this one deliberately stays on raw `fetch` instead of the axios
+// instance. Axios buffers the full response body before resolving (or needs
+// extra adapter config to expose a readable stream), which defeats the
+// purpose here — we need to read and yield each SSE/NDJSON chunk as it
+// arrives so the UI can render step-by-step progress in real time. `fetch`'s
+// `res.body` ReadableStream gives us that directly. The auth header is
+// applied manually below since this bypasses the axios interceptor.
 async function* streamQuery(sessionId: string, query: string): AsyncGenerator<ApiQueryEvent> {
-  const res = await fetch(`${BASE_URL}/sessions/${sessionId}/query`, {
+  const authHeader = http.defaults.headers.common?.['Authorization'];
+
+  const res = await fetch(`${http.defaults.baseURL ?? ''}${API_PREFIX}/sessions/${sessionId}/query`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${AUTH_TOKEN}`,
+      ...(authHeader ? { Authorization: String(authHeader) } : {}),
     },
     body: JSON.stringify({ query }),
   });
@@ -690,82 +747,86 @@ async function uploadCsv(payload: UploadCsvPayload): Promise<ApiDatabase> {
   formData.append('name', payload.name);
   formData.append('table_name', payload.table_name);
 
-  const res = await fetch(`${BASE_URL}/dbs/upload-csv`, {
-    method: 'POST',
-    headers: {
-      // No Content-Type here on purpose — the browser sets
-      // multipart/form-data with the correct boundary automatically when
-      // the body is a FormData instance. Setting it manually breaks upload.
-      Authorization: `Bearer ${AUTH_TOKEN}`,
-    },
-    body: formData,
-  });
-
-  if (!res.ok) {
-    let detail = '';
-    try {
-      const body = await res.json();
-      detail = body?.message || body?.detail || '';
-    } catch {
-      // ignore parse errors
-    }
-    throw new Error(detail || `Request failed with status ${res.status}`);
+  try {
+    const res = await http.post(`${API_PREFIX}/dbs/upload-csv`, formData, {
+      headers: {
+        // Let axios/the browser set the multipart boundary automatically —
+        // don't hardcode 'multipart/form-data' here or the boundary gets lost.
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return res.data;
+  } catch (err) {
+    throw new Error(extractErrorMessage(err, 'Failed to upload CSV file.'));
   }
-
-  return res.json();
 }
 
 export const api = {
-  listDatabases: () => requestList<ApiDatabase>('/dbs'),
+  listDatabases: () => getList<ApiDatabase>('/dbs'),
 
-  listSessions: () => requestList<ApiSession>('/sessions'),
+  listSessions: () => getList<ApiSession>('/sessions'),
 
-  createDatabase: (payload: CreateDbPayload) =>
-    request<ApiDatabase>('/dbs', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
+  createDatabase: async (payload: CreateDbPayload): Promise<ApiDatabase> => {
+    try {
+      const res = await http.post(`${API_PREFIX}/dbs`, payload);
+      return res.data;
+    } catch (err) {
+      throw new Error(extractErrorMessage(err, 'Failed to create database.'));
+    }
+  },
 
   uploadCsv,
 
-  connectDatabase: (dbId: string, password: string) =>
-    request<{ message: string; db_id: string; cache_until: string }>(
-      `/dbs/${dbId}/connect`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ password }),
-      }
-    ),
+  connectDatabase: async (
+    dbId: string,
+    password: string
+  ): Promise<{ message: string; db_id: string; cache_until: string }> => {
+    try {
+      const res = await http.post(`${API_PREFIX}/dbs/${dbId}/connect`, { password });
+      return res.data;
+    } catch (err) {
+      throw new Error(extractErrorMessage(err, 'Failed to connect.'));
+    }
+  },
 
-  disconnectDatabase: (dbId: string) =>
-    request<{ message: string; db_id: string }>(`/dbs/${dbId}/disconnect`, {
-      method: 'POST',
-    }),
+  disconnectDatabase: async (dbId: string): Promise<{ message: string; db_id: string }> => {
+    try {
+      const res = await http.post(`${API_PREFIX}/dbs/${dbId}/disconnect`);
+      return res.data;
+    } catch (err) {
+      throw new Error(extractErrorMessage(err, 'Failed to disconnect.'));
+    }
+  },
 
-  getSchema: (dbId: string) => request<ApiSchema>(`/dbs/${dbId}/schema`),
+  getSchema: async (dbId: string): Promise<ApiSchema> => {
+    const res = await http.get(`${API_PREFIX}/dbs/${dbId}/schema`);
+    return res.data;
+  },
 
-  createSession: (payload: CreateSessionPayload) =>
-    request<ApiSession>('/sessions', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
+  createSession: async (payload: CreateSessionPayload): Promise<ApiSession> => {
+    try {
+      const res = await http.post(`${API_PREFIX}/sessions`, payload);
+      return res.data;
+    } catch (err) {
+      throw new Error(extractErrorMessage(err, 'Failed to create session.'));
+    }
+  },
 
-  getMessages: (sessionId: string) => requestList<ApiMessage>(`/sessions/${sessionId}/messages`),
+  getMessages: (sessionId: string) => getList<ApiMessage>(`/sessions/${sessionId}/messages`),
 
   getSuggestedPrompts: async (sessionId: string): Promise<ApiSuggestedPromptsResponse> => {
-    const raw = await request<Partial<ApiSuggestedPromptsResponse>>(
-      `/sessions/${sessionId}/suggested-prompts`,
-      { method: 'POST' }
-    );
-    return { prompts: Array.isArray(raw?.prompts) ? raw.prompts : [] };
+    const res = await http.post(`${API_PREFIX}/sessions/${sessionId}/suggested-prompts`);
+    const prompts = res.data?.prompts;
+    return { prompts: Array.isArray(prompts) ? prompts : [] };
   },
 
   streamQuery,
 
   getFollowups: async (sessionId: string): Promise<ApiFollowupsResponse> => {
-    const raw = await request<Partial<ApiFollowupsResponse>>(`/sessions/${sessionId}/followups`, {
-      method: 'POST',
-    });
-    return { followups: Array.isArray(raw?.followups) ? raw.followups : [] };
+    const res = await http.post(`${API_PREFIX}/sessions/${sessionId}/followups`);
+    const followups = res.data?.followups;
+    return { followups: Array.isArray(followups) ? followups : [] };
   },
 };
+
+
