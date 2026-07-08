@@ -1,442 +1,498 @@
-//ChatPanel.tsx
-import React, { useState, useEffect, useRef, KeyboardEvent } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import styles from './ChatPanel.module.scss';
-import { ChatMessage, SuggestedPrompt, DatabaseItem } from '../types';
+//SessionHistory.tsx
+import React from 'react';
+import styles from './SessionHistory.module.scss';
+import { SessionItem } from '../types';
 import { Icon } from '../icons';
-import SuggestedPrompts from './SuggestedPrompts';
-import QueryProgress from './QueryProgress';
-import FollowupChips from './FollowupChips';
 
 interface Props {
-  sessionTitle: string;
-  messages: ChatMessage[];
-  loading?: boolean;
-  hasActiveSession: boolean;
-  suggestedPrompts: SuggestedPrompt[];
-  suggestedPromptsLoading?: boolean;
-  suggestedPromptsError?: string | null;
-  isStreaming: boolean;
-  streamSteps: string[];
-  streamError?: string | null;
-  followups: string[];
-  followupsLoading?: boolean;
-  disconnectedDatabases: DatabaseItem[];
-  onManageDatabases: () => void;
-  onSend: (text: string) => void;
+  sessions: SessionItem[];
+  activeSessionId: string | null;
+  onSelect: (id: string) => void;
+  onNewSession: () => void;
+  disabled?: boolean;
 }
 
-const ChatPanel: React.FC<Props> = ({
-  sessionTitle,
-  messages = [],
-  loading,
-  hasActiveSession,
-  suggestedPrompts = [],
-  suggestedPromptsLoading,
-  suggestedPromptsError,
-  isStreaming,
-  streamSteps = [],
-  streamError,
-  followups = [],
-  followupsLoading,
-  disconnectedDatabases = [],
-  onManageDatabases,
-  onSend,
-}) => {
-  const [draft, setDraft] = useState('');
-  const threadEndRef = useRef<HTMLDivElement>(null);
+const formatSessionDate = (iso: string) => {
+  const date = new Date(iso);
+  return date.toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+};
 
-  const isBlocked = disconnectedDatabases.length > 0;
-  const composerDisabled = isStreaming || isBlocked;
+const SessionHistory: React.FC<Props> = ({ sessions, activeSessionId, onSelect, onNewSession, disabled }) => {
+  return (
+    <div className={styles['db-analytics-session-panel']}>
+      <div className={styles['db-analytics-session-panel__header']}>
+        <h2 className={styles['db-analytics-session-panel__title']}>Chat sessions</h2>
+        <button
+          className={styles['db-analytics-session-panel__icon-btn']}
+          aria-label="New chat session"
+          onClick={onNewSession}
+          disabled={disabled}
+          title={disabled ? 'Wait for the current response to finish' : undefined}
+        >
+          <Icon.plus size={16} aria-hidden="true" />
+        </button>
+      </div>
+      <div className={styles['db-analytics-session-panel__body']}>
+        {sessions.length === 0 ? (
+          <div className={styles['db-analytics-session-panel__empty']}>
+            <span className={styles['db-analytics-session-panel__empty-icon']}>
+              <Icon.messageCircle size={18} aria-hidden="true" />
+            </span>
+            <p>No sessions yet</p>
+            <span>Start a new conversation to begin.</span>
+          </div>
+        ) : (
+          <ul className={styles['db-analytics-session-list']}>
+            {sessions.map((session) => {
+              const isActive = session.id === activeSessionId;
+              return (
+                <li key={session.id}>
+                  <button
+                    className={`${styles['db-analytics-session-item']} ${
+                      isActive ? styles['db-analytics-session-item--active'] : ''
+                    }`}
+                    onClick={() => onSelect(session.id)}
+                    disabled={disabled}
+                    title={disabled ? 'Wait for the current response to finish' : undefined}
+                  >
+                    <span className={styles['db-analytics-session-item__icon-wrap']}>
+                      <Icon.messageCircle size={15} aria-hidden="true" />
+                    </span>
+                    <span className={styles['db-analytics-session-item__text']}>
+                      <span className={styles['db-analytics-session-item__title']}>{session.name}</span>
+                      <span className={styles['db-analytics-session-item__meta']}>
+                        <span className={styles['db-analytics-session-item__db-pill']}>
+                          <Icon.database size={10} aria-hidden="true" />
+                          {(session.db_ids ?? []).length}
+                        </span>
+                        <span className={styles['db-analytics-session-item__time']}>
+                          {formatSessionDate(session.created_at)}
+                        </span>
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+};
 
-  // Keep the thread pinned to the bottom while a response streams in (and
-  // whenever new messages/steps/followups appear generally), so the person
-  // doesn't have to manually scroll to follow along in real time.
+export default SessionHistory;
+
+
+
+
+
+
+//DBAnalytics.tsx
+
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import styles from './DBAnalytics.module.scss';
+import SessionHistory from './components/SessionHistory';
+import DatabaseList from './components/DatabaseList';
+import ChatPanel from './components/ChatPanel';
+import ResultsPanel from './components/ResultsPanel';
+import DatabaseManagerSlider from './components/DatabaseManagerSlider';
+import NewSessionSlider from './components/NewSessionSlider';
+import { ChatMessage, ChartResult, DatabaseItem, SessionItem, SuggestedPrompt } from './types';
+import { api, MissingDbConnectionError } from '../../services/api';
+import { Icon } from './icons';
+
+const STREAM_MESSAGE_ID = 'stream-in-progress';
+
+const DBAnalytics: React.FC = () => {
+  const [sessions, setSessions] = useState<SessionItem[]>([]);
+  const [databases, setDatabases] = useState<DatabaseItem[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [messagesError, setMessagesError] = useState<string | null>(null);
+
+  const [suggestedPrompts, setSuggestedPrompts] = useState<SuggestedPrompt[]>([]);
+  const [suggestedPromptsLoading, setSuggestedPromptsLoading] = useState(false);
+  const [suggestedPromptsError, setSuggestedPromptsError] = useState<string | null>(null);
+
+  // --- Live query streaming state ---
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [streamSteps, setStreamSteps] = useState<string[]>([]);
+  const [streamError, setStreamError] = useState<string | null>(null);
+
+  // Populated when the query endpoint responds 424 because one or more of
+  // the session's databases isn't connected. Cleared whenever the session
+  // changes or the missing databases get reconnected.
+  const [queryMissingDbIds, setQueryMissingDbIds] = useState<string[]>([]);
+
+  // --- Follow-up questions state (shown after the latest assistant reply,
+  // and also on initial load for sessions that already have a conversation) ---
+  const [followups, setFollowups] = useState<string[]>([]);
+  const [followupsLoading, setFollowupsLoading] = useState(false);
+
+  const [dbSliderOpen, setDbSliderOpen] = useState(false);
+  const [sessionSliderOpen, setSessionSliderOpen] = useState(false);
+
+  // Tracks the session any in-flight async work (stream, follow-ups, message
+  // refresh) belongs to. Every async callback checks this before touching
+  // state, so results for a session the user has since navigated away from
+  // never leak into the currently active session's view.
+  const activeSessionRef = useRef<string | null>(null);
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const [dbList, sessionList] = await Promise.all([api.listDatabases(), api.listSessions()]);
+      setDatabases(dbList);
+      setSessions(sessionList);
+      setActiveSessionId((prev) => prev ?? (sessionList.length > 0 ? sessionList[0].id : null));
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Failed to load data.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    threadEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages, streamSteps, isStreaming, followups, followupsLoading]);
+    loadData();
+  }, [loadData]);
 
-  const submit = () => {
-    const trimmed = draft.trim();
-    if (!trimmed || composerDisabled) return;
-    onSend(trimmed);
-    setDraft('');
+  // Load chat history whenever the active session changes, and — depending
+  // on whether it already has a conversation — either show starter prompts
+  // (empty session) or fetch follow-up questions right away (existing session).
+  useEffect(() => {
+    activeSessionRef.current = activeSessionId;
+
+    // Clear everything belonging to the previous session immediately and
+    // synchronously — this is what stops old graphs/messages from a prior
+    // session showing up for a beat before the new session's data arrives.
+    setMessages([]);
+    setSuggestedPrompts([]);
+    setSuggestedPromptsError(null);
+    setFollowups([]);
+    setFollowupsLoading(false);
+    setStreamSteps([]);
+    setStreamError(null);
+    setIsStreaming(false);
+    setQueryMissingDbIds([]);
+
+    if (!activeSessionId) {
+      setMessagesLoading(false);
+      return;
+    }
+
+    const sessionId = activeSessionId;
+    const isStale = () => activeSessionRef.current !== sessionId;
+
+    setMessagesLoading(true);
+    setMessagesError(null);
+
+    api
+      .getMessages(sessionId)
+      .then((msgs) => {
+        if (isStale()) return;
+        setMessages(msgs);
+
+        if (msgs.length === 0) {
+          // No conversation yet — show starter prompts.
+          setSuggestedPromptsLoading(true);
+          api
+            .getSuggestedPrompts(sessionId)
+            .then((res) => {
+              if (!isStale()) setSuggestedPrompts(res.prompts);
+            })
+            .catch((err) => {
+              if (!isStale()) {
+                setSuggestedPromptsError(
+                  err instanceof Error ? err.message : 'Failed to load suggested prompts.'
+                );
+              }
+            })
+            .finally(() => {
+              if (!isStale()) setSuggestedPromptsLoading(false);
+            });
+        } else {
+          // Existing conversation — show follow-up questions by default.
+          setFollowupsLoading(true);
+          api
+            .getFollowups(sessionId)
+            .then((res) => {
+              if (!isStale()) setFollowups(res.followups);
+            })
+            .catch(() => {
+              // Follow-ups are a nice-to-have; fail silently.
+            })
+            .finally(() => {
+              if (!isStale()) setFollowupsLoading(false);
+            });
+        }
+      })
+      .catch((err) => {
+        if (!isStale()) {
+          setMessagesError(err instanceof Error ? err.message : 'Failed to load messages.');
+          setMessages([]);
+        }
+      })
+      .finally(() => {
+        if (!isStale()) setMessagesLoading(false);
+      });
+  }, [activeSessionId]);
+
+  const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
+
+  // Databases this session depends on that are currently disconnected —
+  // checked proactively from the session's db_ids on load, and reactively
+  // whenever the query endpoint reports missing connections via a 424.
+  const disconnectedSessionDbs: DatabaseItem[] = activeSession
+    ? databases.filter(
+        (db) =>
+          ((activeSession.db_ids ?? []).includes(db.id) || queryMissingDbIds.includes(db.id)) &&
+          !db.connected &&
+          db.db_type !== 'csv'
+      )
+    : [];
+  const isBlockedByDisconnectedDb = disconnectedSessionDbs.length > 0;
+
+  // Column 3 shows every graph produced across the session's messages, in order.
+  // Column 3 shows only the graphs from the most recent assistant response —
+  // not every graph accumulated across the whole session's history. This
+  // applies the same way whether the session is brand new or has a long
+  // existing conversation: whichever assistant message is last wins.
+  const latestAssistantMessage = [...messages].reverse().find((msg) => msg.role === 'assistant');
+  const charts: ChartResult[] = latestAssistantMessage?.graphs ?? [];
+
+  const handleSelectSession = (id: string) => {
+    if (isStreaming) return;
+    setActiveSessionId(id);
   };
 
-  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      submit();
+  const handleSendMessage = async (text: string) => {
+    const sessionId = activeSessionId;
+    if (!sessionId || isStreaming || isBlockedByDisconnectedDb) return;
+
+    const isStale = () => activeSessionRef.current !== sessionId;
+
+    const userMsg: ChatMessage = {
+      id: `local-${Date.now()}`,
+      role: 'user',
+      content: text,
+      graphs: [],
+      created_at: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, userMsg]);
+    // Once a message is sent, starter prompts and any previous followups no longer apply.
+    setSuggestedPrompts([]);
+    setFollowups([]);
+
+    setIsStreaming(true);
+    setStreamSteps([]);
+    setStreamError(null);
+
+    let sawMessageEvent = false;
+    let streamFailed = false;
+
+    // Upserts the single in-progress assistant bubble with the latest text
+    // seen so far, so the response prints incrementally as events arrive
+    // instead of only appearing once the whole stream finishes.
+    const upsertStreamingMessage = (text: string) => {
+      setMessages((prev) => {
+        const withoutProvisional = prev.filter((m) => m.id !== STREAM_MESSAGE_ID);
+        return [
+          ...withoutProvisional,
+          {
+            id: STREAM_MESSAGE_ID,
+            role: 'assistant',
+            content: text,
+            graphs: [],
+            created_at: new Date().toISOString(),
+          },
+        ];
+      });
+    };
+
+    try {
+      for await (const event of api.streamQuery(sessionId, text)) {
+        if (isStale()) return;
+
+        if (event.type === 'step') {
+          setStreamSteps((prev) => [...prev, event.step]);
+        } else if (event.type === 'message') {
+          sawMessageEvent = true;
+          upsertStreamingMessage(event.step);
+        } else if (event.type === 'error') {
+          streamFailed = true;
+          setStreamError(event.message);
+        } else if (event.type === 'done') {
+          break;
+        }
+      }
+    } catch (err) {
+      if (!isStale()) {
+        streamFailed = true;
+        if (err instanceof MissingDbConnectionError) {
+          setQueryMissingDbIds(err.missingDbIds);
+          setStreamError(null);
+          // The query never actually ran — remove the optimistic user
+          // message so the thread doesn't imply it was processed.
+          setMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
+        } else {
+          setStreamError(err instanceof Error ? err.message : 'Something went wrong while running your query.');
+        }
+      }
+    }
+
+    if (isStale()) return;
+
+    setIsStreaming(false);
+    setStreamSteps([]);
+
+    if (!sawMessageEvent || streamFailed) {
+      // Nothing usable streamed back — drop the placeholder bubble if present.
+      setMessages((prev) => prev.filter((m) => m.id !== STREAM_MESSAGE_ID));
+    } else {
+      // Reconcile with the server's message list to swap the provisional
+      // bubble for the real message (real id + any graphs attached to it,
+      // since the stream itself doesn't carry graphs).
+      try {
+        const freshMessages = await api.getMessages(sessionId);
+        if (!isStale()) setMessages(freshMessages);
+      } catch {
+        // Keep the provisional message on screen if the refresh fails — the
+        // user still sees the answer, just without graphs until they retry.
+      }
+    }
+
+    if (isStale() || streamFailed || !sawMessageEvent) return;
+
+    // Once the stream completes, fetch fresh follow-up question suggestions.
+    setFollowupsLoading(true);
+    try {
+      const res = await api.getFollowups(sessionId);
+      if (!isStale()) setFollowups(res.followups);
+    } catch {
+      // Follow-ups are a nice-to-have; fail silently rather than blocking the chat.
+    } finally {
+      if (!isStale()) setFollowupsLoading(false);
     }
   };
 
-  const handlePromptSelect = (prompt: SuggestedPrompt) => {
-    if (composerDisabled) return;
-    onSend(prompt.text);
+  const handleDatabaseCreated = (db: DatabaseItem) => {
+    setDatabases((prev) => [...prev, db]);
   };
 
-  const handleFollowupSelect = (text: string) => {
-    if (composerDisabled) return;
-    onSend(text);
-  };
-
-  const showSuggestedPrompts = hasActiveSession && !loading && messages.length === 0 && !isStreaming;
-  const showFollowups =
-    !isStreaming && !loading && messages.length > 0 && (followupsLoading || followups.length > 0);
-
-  const composerPlaceholder = isBlocked
-    ? 'Connect the databases below to start asking questions…'
-    : isStreaming
-    ? 'Waiting for the current response to finish…'
-    : 'Ask about revenue, trends, or run a custom query...';
-
-  return (
-    <div className={styles['db-analytics-chat-panel']}>
-      <div className={styles['db-analytics-chat-panel__header']}>
-        <div className={styles['db-analytics-chat-panel__header-text']}>
-          <h2 className={styles['db-analytics-chat-panel__title']}>{sessionTitle || 'New session'}</h2>
-          <p className={styles['db-analytics-chat-panel__subtitle']}>
-            Ask questions about your connected databases
-          </p>
-        </div>
-      </div>
-
-      <div className={styles['db-analytics-chat-panel__thread']}>
-        {loading ? (
-          <div className={styles['db-analytics-chat-panel__empty']}>
-            <Icon.loader size={28} aria-hidden="true" className={styles['db-analytics-chat-panel__spin']} />
-            <p>Loading conversation…</p>
-          </div>
-        ) : showSuggestedPrompts ? (
-          <div className={styles['db-analytics-chat-panel__empty']}>
-            <SuggestedPrompts
-              prompts={suggestedPrompts}
-              loading={suggestedPromptsLoading}
-              error={suggestedPromptsError}
-              onSelect={handlePromptSelect}
-            />
-            {!suggestedPromptsLoading && suggestedPrompts.length === 0 && !suggestedPromptsError && (
-              <>
-                <Icon.messageCircle size={28} aria-hidden="true" />
-                <p>Ask a question to get started with this session.</p>
-              </>
-            )}
-          </div>
-        ) : messages.length === 0 && !isStreaming ? (
-          <div className={styles['db-analytics-chat-panel__empty']}>
-            <Icon.messageCircle size={28} aria-hidden="true" />
-            <p>Select a session to get started.</p>
-          </div>
-        ) : (
-          <>
-            {messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`${styles['db-analytics-chat-bubble']} ${
-                  msg.role === 'user'
-                    ? styles['db-analytics-chat-bubble--user']
-                    : styles['db-analytics-chat-bubble--assistant']
-                }`}
-              >
-                {msg.role === 'assistant' && (
-                  <div className={styles['db-analytics-chat-bubble__avatar']}>
-                    <Icon.sparkles size={14} aria-hidden="true" />
-                  </div>
-                )}
-                <div className={styles['db-analytics-chat-bubble__content']}>
-                  {msg.role === 'assistant' ? (
-                    <div className={styles['db-analytics-chat-bubble__markdown']}>
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                    </div>
-                  ) : (
-                    <p className={styles['db-analytics-chat-bubble__text']}>{msg.content}</p>
-                  )}
-                  {msg.graphs.length > 0 && (
-                    <div className={styles['db-analytics-chat-bubble__chart-ref']}>
-                      <Icon.chartBar size={13} aria-hidden="true" />
-                      {msg.graphs.length === 1
-                        ? '1 chart generated in results panel'
-                        : `${msg.graphs.length} charts generated in results panel`}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-
-            {isStreaming && <QueryProgress steps={streamSteps} isStreaming={isStreaming} error={streamError} />}
-
-            {showFollowups && (
-              <FollowupChips followups={followups} loading={followupsLoading} onSelect={handleFollowupSelect} />
-            )}
-          </>
-        )}
-        <div ref={threadEndRef} />
-      </div>
-
-      {isBlocked && (
-        <div className={styles['db-analytics-db-notice']} role="status">
-          <span className={styles['db-analytics-db-notice__icon']}>
-            <Icon.infoCircle size={16} aria-hidden="true" />
-          </span>
-          <div className={styles['db-analytics-db-notice__body']}>
-            <p className={styles['db-analytics-db-notice__title']}>
-              {disconnectedDatabases.length === 1
-                ? 'A database in this session is disconnected'
-                : `${disconnectedDatabases.length} databases in this session are disconnected`}
-            </p>
-            <p className={styles['db-analytics-db-notice__desc']}>
-              Reconnect{' '}
-              {disconnectedDatabases.map((db, i) => (
-                <React.Fragment key={db.id}>
-                  <strong>{db.name}</strong>
-                  {i < disconnectedDatabases.length - 2
-                    ? ', '
-                    : i === disconnectedDatabases.length - 2
-                    ? ' and '
-                    : ''}
-                </React.Fragment>
-              ))}{' '}
-              to continue this conversation.
-            </p>
-          </div>
-          <button className={styles['db-analytics-db-notice__action']} onClick={onManageDatabases}>
-            Connect now
-          </button>
-        </div>
-      )}
-
-      <div className={styles['db-analytics-chat-composer']}>
-        <textarea
-          className={styles['db-analytics-chat-composer__input']}
-          placeholder={composerPlaceholder}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={handleKeyDown}
-          rows={3}
-          disabled={composerDisabled}
-        />
-        <div className={styles['db-analytics-chat-composer__actions']}>
-          <span className={styles['db-analytics-chat-composer__hint']}>
-            Enter to send &middot; Shift+Enter for new line
-          </span>
-          <button
-            className={styles['db-analytics-chat-composer__send-btn']}
-            onClick={submit}
-            aria-label="Send message"
-            disabled={composerDisabled || !draft.trim()}
-          >
-            {isStreaming ? (
-              <Icon.loader size={14} aria-hidden="true" className={styles['db-analytics-chat-panel__spin']} />
-            ) : (
-              <Icon.send size={14} aria-hidden="true" />
-            )}
-            Send
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-export default ChatPanel;
-
-
-
-
-
-
-//FollowupChips.tsx
-
-import React from 'react';
-import styles from './FollowupChips.module.scss';
-import { Icon } from '../icons';
-
-interface Props {
-  followups: string[];
-  loading?: boolean;
-  onSelect: (text: string) => void;
-}
-
-const FollowupChips: React.FC<Props> = ({ followups = [], loading, onSelect }) => {
-  if (!loading && followups.length === 0) return null;
-
-  return (
-    <div className={styles['db-analytics-followups']}>
-      <span className={styles['db-analytics-followups__label']}>
-        <Icon.sparkles size={12} aria-hidden="true" />
-        {loading ? 'Finding follow-up questions…' : 'Continue exploring'}
-      </span>
-      {!loading && (
-        <div className={styles['db-analytics-followups__list']}>
-          {followups.map((text, i) => (
-            <button key={i} className={styles['db-analytics-followups__chip']} onClick={() => onSelect(text)}>
-              <span className={styles['db-analytics-followups__chip-icon']}>
-                <Icon.messageCircle size={12} aria-hidden="true" />
-              </span>
-              <span className={styles['db-analytics-followups__chip-text']}>{text}</span>
-              <span className={styles['db-analytics-followups__chip-arrow']}>
-                <Icon.arrowRight size={13} aria-hidden="true" />
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-};
-
-export default FollowupChips;
-
-
-
-
-
-
-// SuggestedPrompts.tsx
-
-
-import React from 'react';
-import styles from './SuggestedPrompts.module.scss';
-import { SuggestedPrompt } from '../types';
-import { Icon } from '../icons';
-
-interface Props {
-  prompts: SuggestedPrompt[];
-  loading?: boolean;
-  error?: string | null;
-  onSelect: (prompt: SuggestedPrompt) => void;
-}
-
-const SuggestedPrompts: React.FC<Props> = ({ prompts = [], loading, error, onSelect }) => {
-  if (loading) {
-    return (
-      <div className={styles['db-analytics-suggested-prompts']}>
-        <div className={styles['db-analytics-suggested-prompts__intro']}>
-          <Icon.loader size={20} aria-hidden="true" className={styles['db-analytics-suggested-prompts__spin']} />
-          <p>Finding good questions to start with…</p>
-        </div>
-      </div>
+  const handleDatabaseConnected = (dbId: string, cacheUntil: string) => {
+    setDatabases((prev) =>
+      prev.map((db) => (db.id === dbId ? { ...db, connected: true, cache_until: cacheUntil } : db))
     );
-  }
+  };
 
-  if (error) {
-    return null;
-  }
+  const handleDatabaseDisconnected = (dbId: string) => {
+    setDatabases((prev) =>
+      prev.map((db) => (db.id === dbId ? { ...db, connected: false, cache_until: null } : db))
+    );
+  };
 
-  if (prompts.length === 0) {
-    return null;
-  }
+  const handleSessionCreated = (session: SessionItem) => {
+    setSessions((prev) => [session, ...prev]);
+    setActiveSessionId(session.id);
+    setSessionSliderOpen(false);
+  };
 
   return (
-    <div className={styles['db-analytics-suggested-prompts']}>
-      <div className={styles['db-analytics-suggested-prompts__intro']}>
-        <span className={styles['db-analytics-suggested-prompts__badge']}>
-          <Icon.lightbulb size={14} aria-hidden="true" />
+    <div className={styles['db-analytics']}>
+      <header className={styles['db-analytics__feature-header']}>
+        <div className={styles['db-analytics__feature-header-main']}>
+          <span className={styles['db-analytics__feature-header-icon']}>
+            <Icon.databaseInsights size={18} aria-hidden="true" />
+          </span>
+          <div className={styles['db-analytics__feature-header-text']}>
+            <h1 className={styles['db-analytics__feature-header-title']}>DB Analytics</h1>
+            <p className={styles['db-analytics__feature-header-subtitle']}>
+              Ask questions about your databases in natural language and get instant charts and insights.
+            </p>
+          </div>
+        </div>
+        <span className={styles['db-analytics__feature-header-badge']}>
+          <span className={styles['db-analytics__feature-header-badge-dot']} aria-hidden="true" />
+          <span className={styles['db-analytics__feature-header-badge-text']}>
+            {databases.filter((db) => db.connected).length} database
+            {databases.filter((db) => db.connected).length !== 1 ? 's' : ''} connected
+          </span>
         </span>
-        <p>Not sure where to start? Try one of these.</p>
-      </div>
+      </header>
 
-      <div className={styles['db-analytics-suggested-prompts__grid']}>
-        {prompts.map((prompt, i) => (
-          <button
-            key={`${prompt.label}-${i}`}
-            className={styles['db-analytics-suggested-prompts__card']}
-            onClick={() => onSelect(prompt)}
-          >
-            <div className={styles['db-analytics-suggested-prompts__card-top']}>
-              <span className={styles['db-analytics-suggested-prompts__label']}>{prompt.label}</span>
-              <span className={styles['db-analytics-suggested-prompts__db']}>
-                <Icon.database size={11} aria-hidden="true" />
-                {prompt.db_name}
-              </span>
-            </div>
-            <p className={styles['db-analytics-suggested-prompts__text']}>{prompt.text}</p>
-            <span className={styles['db-analytics-suggested-prompts__cta']}>
-              Ask this
-              <Icon.arrowRight size={13} aria-hidden="true" />
-            </span>
-          </button>
-        ))}
-      </div>
+
+      <main className={styles['db-analytics__body']}>
+        <section className={`${styles['db-analytics__col']} ${styles['db-analytics__col--nav']}`}>
+          <SessionHistory
+            sessions={sessions}
+            activeSessionId={activeSessionId}
+            onSelect={handleSelectSession}
+            onNewSession={() => setSessionSliderOpen(true)}
+            disabled={isStreaming}
+          />
+          <DatabaseList databases={databases} onManage={() => setDbSliderOpen(true)} disabled={isStreaming} />
+        </section>
+
+        <section className={`${styles['db-analytics__col']} ${styles['db-analytics__col--chat']}`}>
+          <ChatPanel
+            sessionTitle={activeSession?.name ?? (loading ? 'Loading…' : 'No session selected')}
+            messages={messages}
+            loading={messagesLoading}
+            hasActiveSession={!!activeSessionId}
+            suggestedPrompts={suggestedPrompts}
+            suggestedPromptsLoading={suggestedPromptsLoading}
+            suggestedPromptsError={suggestedPromptsError}
+            isStreaming={isStreaming}
+            streamSteps={streamSteps}
+            streamError={streamError}
+            followups={followups}
+            followupsLoading={followupsLoading}
+            disconnectedDatabases={disconnectedSessionDbs}
+            onManageDatabases={() => setDbSliderOpen(true)}
+            onSend={handleSendMessage}
+          />
+        </section>
+
+        <section className={`${styles['db-analytics__col']} ${styles['db-analytics__col--results']}`}>
+          <ResultsPanel charts={charts} loadError={loadError ?? messagesError} isGenerating={isStreaming} />
+        </section>
+      </main>
+
+      <DatabaseManagerSlider
+        open={dbSliderOpen}
+        databases={databases}
+        onClose={() => setDbSliderOpen(false)}
+        onDatabaseCreated={handleDatabaseCreated}
+        onDatabaseConnected={handleDatabaseConnected}
+        onDatabaseDisconnected={handleDatabaseDisconnected}
+      />
+
+      <NewSessionSlider
+        open={sessionSliderOpen}
+        databases={databases}
+        onClose={() => setSessionSliderOpen(false)}
+        onCreated={handleSessionCreated}
+        onManageDatabases={() => {
+          setSessionSliderOpen(false);
+          setDbSliderOpen(true);
+        }}
+      />
     </div>
   );
 };
 
-export default SuggestedPrompts;
-
-
-
-
-
-
-
-
-
-// icons.tsx
-
-// Central place for every SVG icon used across the DBAnalytics feature.
-// Swaps the old Tabler icon-font (`<i className="ti ti-x" />`) for real
-// inline SVG components from lucide-react.
-import React from 'react';
-import {
-  Plus,
-  X,
-  Check,
-  Database,
-  DatabaseZap,
-  Settings,
-  Info,
-  Loader2,
-  MessageCircle,
-  Sparkles,
-  BarChart3,
-  Send,
-  AreaChart,
-  Gauge,
-  LineChart,
-  PieChart,
-  Table,
-  ScatterChart,
-  Lightbulb,
-  ArrowRight,
-  Upload,
-  FileSpreadsheet,
-  Maximize2,
-  type LucideProps,
-} from 'lucide-react';
-
-export type IconComponent = React.FC<LucideProps>;
-
-export const Icon = {
-  plus: Plus,
-  close: X,
-  check: Check,
-  database: Database,
-  databaseInsights: DatabaseZap,
-  settings: Settings,
-  infoCircle: Info,
-  loader: Loader2,
-  messageCircle: MessageCircle,
-  sparkles: Sparkles,
-  chartBar: BarChart3,
-  send: Send,
-  chartAreaLine: AreaChart,
-  gauge: Gauge,
-  chartLine: LineChart,
-  chartPie: PieChart,
-  chartArea: AreaChart,
-  chartDots: ScatterChart,
-  table: Table,
-  lightbulb: Lightbulb,
-  arrowRight: ArrowRight,
-  upload: Upload,
-  csv: FileSpreadsheet,
-  expand: Maximize2,
-} as const;
-
-export type IconName = keyof typeof Icon;
-
+export default DBAnalytics;
 
 
 
@@ -614,6 +670,18 @@ async function getList<T>(path: string): Promise<T[]> {
   return unwrapList<T>(res.data);
 }
 
+// Guarantees db_ids is always a real array. The backend has been observed to
+// omit it or send null for sessions with no databases attached yet (e.g.
+// right after creation), and `.includes()`/`.filter()` on undefined throws.
+function normalizeSession(raw: Partial<ApiSession> & { id: string }): ApiSession {
+  return {
+    id: raw.id,
+    name: raw.name ?? '',
+    db_ids: Array.isArray(raw.db_ids) ? raw.db_ids : [],
+    created_at: raw.created_at ?? new Date().toISOString(),
+  };
+}
+
 // Extracts a human-readable message from an axios error response, whatever
 // shape the backend used (`detail` as a string, `message`, or nothing at all).
 function extractErrorMessage(err: unknown, fallback: string): string {
@@ -741,6 +809,38 @@ async function* streamQuery(sessionId: string, query: string): AsyncGenerator<Ap
   yield* parseEventStream(res);
 }
 
+// Mirrors unwrapList, but for single-object responses. Some create/action
+// endpoints have been observed to wrap their result the same way list
+// endpoints do (`{ status: "Success", result: {...} }`) instead of
+// returning the object directly — this normalizes either shape.
+function unwrapObject<T extends object>(payload: unknown): T {
+  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    const withResult = payload as { result?: unknown; status?: unknown };
+    if (withResult.result && typeof withResult.result === 'object' && !Array.isArray(withResult.result)) {
+      return withResult.result as T;
+    }
+  }
+  return payload as T;
+}
+
+// Guarantees every field the UI relies on is present with a sane default,
+// even if the create/upload response is missing some of them.
+function normalizeDatabase(raw: unknown): ApiDatabase {
+  const obj = unwrapObject<Partial<ApiDatabase>>(raw) ?? {};
+  return {
+    id: obj.id ?? '',
+    name: obj.name ?? '',
+    db_type: obj.db_type ?? '',
+    host: obj.host,
+    port: obj.port ?? 0,
+    db_name: obj.db_name ?? '',
+    username: obj.username ?? '',
+    created_at: obj.created_at ?? new Date().toISOString(),
+    connected: obj.connected ?? false,
+    cache_until: obj.cache_until ?? null,
+  };
+}
+
 async function uploadCsv(payload: UploadCsvPayload): Promise<ApiDatabase> {
   const formData = new FormData();
   formData.append('file', payload.file);
@@ -755,7 +855,7 @@ async function uploadCsv(payload: UploadCsvPayload): Promise<ApiDatabase> {
         'Content-Type': 'multipart/form-data',
       },
     });
-    return res.data;
+    return normalizeDatabase(res.data);
   } catch (err) {
     throw new Error(extractErrorMessage(err, 'Failed to upload CSV file.'));
   }
@@ -764,12 +864,15 @@ async function uploadCsv(payload: UploadCsvPayload): Promise<ApiDatabase> {
 export const api = {
   listDatabases: () => getList<ApiDatabase>('/dbs'),
 
-  listSessions: () => getList<ApiSession>('/sessions'),
+  listSessions: async () => {
+    const raw = await getList<Partial<ApiSession> & { id: string }>('/sessions');
+    return raw.map(normalizeSession);
+  },
 
   createDatabase: async (payload: CreateDbPayload): Promise<ApiDatabase> => {
     try {
       const res = await http.post(`${API_PREFIX}/dbs`, payload);
-      return res.data;
+      return normalizeDatabase(res.data);
     } catch (err) {
       throw new Error(extractErrorMessage(err, 'Failed to create database.'));
     }
@@ -806,7 +909,7 @@ export const api = {
   createSession: async (payload: CreateSessionPayload): Promise<ApiSession> => {
     try {
       const res = await http.post(`${API_PREFIX}/sessions`, payload);
-      return res.data;
+      return normalizeSession(res.data);
     } catch (err) {
       throw new Error(extractErrorMessage(err, 'Failed to create session.'));
     }
@@ -816,17 +919,15 @@ export const api = {
 
   getSuggestedPrompts: async (sessionId: string): Promise<ApiSuggestedPromptsResponse> => {
     const res = await http.post(`${API_PREFIX}/sessions/${sessionId}/suggested-prompts`);
-    const prompts = res.data?.prompts;
-    return { prompts: Array.isArray(prompts) ? prompts : [] };
+    const body = unwrapObject<{ prompts?: unknown }>(res.data) ?? {};
+    return { prompts: Array.isArray(body.prompts) ? (body.prompts as ApiSuggestedPrompt[]) : [] };
   },
 
   streamQuery,
 
   getFollowups: async (sessionId: string): Promise<ApiFollowupsResponse> => {
     const res = await http.post(`${API_PREFIX}/sessions/${sessionId}/followups`);
-    const followups = res.data?.followups;
-    return { followups: Array.isArray(followups) ? followups : [] };
+    const body = unwrapObject<{ followups?: unknown }>(res.data) ?? {};
+    return { followups: Array.isArray(body.followups) ? (body.followups as string[]) : [] };
   },
 };
-
-
