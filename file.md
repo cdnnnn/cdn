@@ -1615,3 +1615,394 @@ export const Icon = {
 } as const;
 
 export type IconName = keyof typeof Icon;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+const BASE_URL = 'http://107.108.32.188:8000';
+
+// TODO: replace with your actual static token, or better, load it from an env variable
+// (e.g. import.meta.env.VITE_API_TOKEN) instead of hardcoding it here.
+const AUTH_TOKEN = 'YOUR_STATIC_TOKEN_HERE';
+
+export interface ApiDatabase {
+  id: string;
+  name: string;
+  db_type: string;
+  host?: string;
+  port: number;
+  db_name: string;
+  username: string;
+  created_at: string;
+  connected: boolean;
+  cache_until: string | null;
+}
+
+export interface ApiSession {
+  id: string;
+  name: string;
+  db_ids: string[];
+  created_at: string;
+}
+
+export interface ApiColumn {
+  name: string;
+  type: string;
+  nullable: boolean;
+  primary_key: boolean;
+  default: string | null;
+}
+
+export interface ApiTable {
+  name: string;
+  columns: ApiColumn[];
+  row_count: number;
+}
+
+export interface ApiSchema {
+  db_id: string;
+  db_name: string;
+  tables: ApiTable[];
+}
+
+export interface CreateDbPayload {
+  db_name: string;
+  db_type: 'mysql' | 'postgres';
+  host: string;
+  name: string;
+  port: number;
+  username: string;
+}
+
+export interface CreateSessionPayload {
+  name: string;
+  db_ids: string[];
+}
+
+// Thrown when POST /sessions/:id/query responds 424 because one or more of
+// the session's databases isn't currently connected. Carries the specific
+// db ids so the UI can point at exactly which connections need attention.
+export class MissingDbConnectionError extends Error {
+  missingDbIds: string[];
+
+  constructor(message: string, missingDbIds: string[]) {
+    super(message);
+    this.name = 'MissingDbConnectionError';
+    this.missingDbIds = missingDbIds;
+  }
+}
+
+export interface UploadCsvPayload {
+  file: File;
+  name: string;
+  table_name: string;
+}
+
+export interface ApiGraphQuery {
+  db_id: string;
+  db_name: string;
+  sql: string;
+  row_count: number;
+}
+
+export type ApiChartType = 'kpi' | 'line' | 'bar' | 'pie' | 'area' | 'scatter' | 'table';
+
+export interface ApiGraph {
+  id: string;
+  chart_type: ApiChartType;
+  title: string;
+  x_axis: string | null;
+  y_axis: string | null;
+  series: string[] | null;
+  stacked: boolean;
+  data: Record<string, string | number>[];
+  queries: ApiGraphQuery[];
+}
+
+export interface ApiMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  graphs: ApiGraph[];
+  created_at: string;
+}
+
+export interface ApiSuggestedPrompt {
+  text: string;
+  label: string;
+  db_name: string;
+}
+
+export interface ApiSuggestedPromptsResponse {
+  prompts: ApiSuggestedPrompt[];
+}
+
+export interface ApiQueryStepEvent {
+  type: 'step';
+  step: string;
+}
+
+export interface ApiQueryMessageEvent {
+  type: 'message';
+  step: string;
+}
+
+export interface ApiQueryDoneEvent {
+  type: 'done';
+}
+
+export interface ApiQueryErrorEvent {
+  type: 'error';
+  message: string;
+}
+
+export type ApiQueryEvent =
+  | ApiQueryStepEvent
+  | ApiQueryMessageEvent
+  | ApiQueryDoneEvent
+  | ApiQueryErrorEvent;
+
+export interface ApiFollowupsResponse {
+  followups: string[];
+}
+
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${AUTH_TOKEN}`,
+    },
+    ...options,
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const body = await res.json();
+      detail = body?.message || body?.detail || '';
+    } catch {
+      // ignore parse errors
+    }
+    throw new Error(detail || `Request failed with status ${res.status}`);
+  }
+  const text = await res.text();
+  return (text ? JSON.parse(text) : null) as T;
+}
+
+// Some list endpoints inconsistently respond either as a bare array
+// (`[...]`) or wrapped in an envelope (`{ status: "Success", result: [...] }`).
+// This normalizes either shape into a plain array so callers never have to
+// guess which one they got — and never crash calling array methods on an
+// object if the envelope shape shows up unexpectedly.
+function unwrapList<T>(payload: unknown): T[] {
+  if (Array.isArray(payload)) return payload;
+  if (payload && typeof payload === 'object' && Array.isArray((payload as { result?: unknown }).result)) {
+    return (payload as { result: T[] }).result;
+  }
+  return [];
+}
+
+async function requestList<T>(path: string, options?: RequestInit): Promise<T[]> {
+  const raw = await request<unknown>(path, options);
+  return unwrapList<T>(raw);
+}
+
+// Parses a streaming response body into individual JSON payloads as they
+// arrive. Two framing styles are supported, detected automatically per line:
+//  1) Newline-delimited JSON — one `{...}` object per line (no `data:` prefix,
+//     no blank-line separators). This is what a lot of simple SSE-flavored
+//     backends actually send even when the content-type says event-stream.
+//  2) Standard SSE framing — `data: {...}` lines, events separated by a
+//     blank line, potentially multi-line data blocks.
+// Critically, this parses and yields as soon as a complete line/frame is
+// available rather than waiting for the whole response to buffer, so the
+// consumer can render each event the moment it arrives instead of getting
+// everything dumped at once when the stream closes.
+async function* parseEventStream(res: Response): AsyncGenerator<ApiQueryEvent> {
+  if (!res.body) return;
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let sseDataBuffer: string[] = [];
+
+  const tryParse = (raw: string): ApiQueryEvent | null => {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    try {
+      return JSON.parse(trimmed) as ApiQueryEvent;
+    } catch {
+      return null;
+    }
+  };
+
+  const flushSseBuffer = function* (): Generator<ApiQueryEvent> {
+    if (sseDataBuffer.length === 0) return;
+    const joined = sseDataBuffer.join('\n');
+    sseDataBuffer = [];
+    const parsed = tryParse(joined);
+    if (parsed) yield parsed;
+  };
+
+  const processLine = function* (line: string): Generator<ApiQueryEvent> {
+    if (line.startsWith('data:')) {
+      // Standard SSE frame: accumulate until a blank line flushes it.
+      sseDataBuffer.push(line.slice(5).trim());
+      return;
+    }
+    if (line.trim() === '') {
+      // Blank line = SSE event boundary.
+      yield* flushSseBuffer();
+      return;
+    }
+    // Not SSE-prefixed — try treating the line as a standalone JSON event
+    // (newline-delimited JSON framing).
+    const parsed = tryParse(line);
+    if (parsed) {
+      yield parsed;
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const lines = buffer.split('\n');
+    // Keep the last (possibly incomplete) line in the buffer for next read.
+    buffer = lines.pop() ?? '';
+
+    for (const line of lines) {
+      yield* processLine(line);
+    }
+  }
+
+  // Flush anything left after the stream closes.
+  if (buffer.trim()) {
+    yield* processLine(buffer);
+  }
+  yield* flushSseBuffer();
+}
+
+async function* streamQuery(sessionId: string, query: string): AsyncGenerator<ApiQueryEvent> {
+  const res = await fetch(`${BASE_URL}/sessions/${sessionId}/query`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${AUTH_TOKEN}`,
+    },
+    body: JSON.stringify({ query }),
+  });
+
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const body = await res.json();
+      // 424 shape: { detail: { message: string, missing_db_ids: string[] } }
+      if (res.status === 424 && body?.detail && typeof body.detail === 'object') {
+        const message = body.detail.message || 'One or more databases are not connected.';
+        const missingDbIds = Array.isArray(body.detail.missing_db_ids) ? body.detail.missing_db_ids : [];
+        throw new MissingDbConnectionError(message, missingDbIds);
+      }
+      detail = typeof body?.detail === 'string' ? body.detail : body?.message || '';
+    } catch (err) {
+      if (err instanceof MissingDbConnectionError) throw err;
+      // ignore parse errors from a non-JSON error body
+    }
+    throw new Error(detail || `Request failed with status ${res.status}`);
+  }
+
+  yield* parseEventStream(res);
+}
+
+async function uploadCsv(payload: UploadCsvPayload): Promise<ApiDatabase> {
+  const formData = new FormData();
+  formData.append('file', payload.file);
+  formData.append('name', payload.name);
+  formData.append('table_name', payload.table_name);
+
+  const res = await fetch(`${BASE_URL}/dbs/upload-csv`, {
+    method: 'POST',
+    headers: {
+      // No Content-Type here on purpose — the browser sets
+      // multipart/form-data with the correct boundary automatically when
+      // the body is a FormData instance. Setting it manually breaks upload.
+      Authorization: `Bearer ${AUTH_TOKEN}`,
+    },
+    body: formData,
+  });
+
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const body = await res.json();
+      detail = body?.message || body?.detail || '';
+    } catch {
+      // ignore parse errors
+    }
+    throw new Error(detail || `Request failed with status ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export const api = {
+  listDatabases: () => requestList<ApiDatabase>('/dbs'),
+
+  listSessions: () => requestList<ApiSession>('/sessions'),
+
+  createDatabase: (payload: CreateDbPayload) =>
+    request<ApiDatabase>('/dbs', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  uploadCsv,
+
+  connectDatabase: (dbId: string, password: string) =>
+    request<{ message: string; db_id: string; cache_until: string }>(
+      `/dbs/${dbId}/connect`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ password }),
+      }
+    ),
+
+  disconnectDatabase: (dbId: string) =>
+    request<{ message: string; db_id: string }>(`/dbs/${dbId}/disconnect`, {
+      method: 'POST',
+    }),
+
+  getSchema: (dbId: string) => request<ApiSchema>(`/dbs/${dbId}/schema`),
+
+  createSession: (payload: CreateSessionPayload) =>
+    request<ApiSession>('/sessions', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  getMessages: (sessionId: string) => requestList<ApiMessage>(`/sessions/${sessionId}/messages`),
+
+  getSuggestedPrompts: (sessionId: string) =>
+    request<ApiSuggestedPromptsResponse>(`/sessions/${sessionId}/suggested-prompts`, {
+      method: 'POST',
+    }),
+
+  streamQuery,
+
+  getFollowups: (sessionId: string) =>
+    request<ApiFollowupsResponse>(`/sessions/${sessionId}/followups`, {
+      method: 'POST',
+    }),
+};
