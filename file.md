@@ -1,332 +1,3 @@
-//ChartConstructingAnimation.module.scss
-@use '../../../styles/tokens' as t;
-
-.db-analytics-chart-draw {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-  padding: 24px;
-  height: 100%;
-  min-height: 260px;
-}
-
-.db-analytics-chart-draw__svg {
-  width: 100%;
-  max-width: 300px;
-  height: auto;
-  overflow: visible;
-}
-
-.db-analytics-chart-draw__erase-group {
-  animation: db-analytics-chart-draw-erase var(--cycle-duration, 3.5s) ease-in-out infinite;
-  transform-origin: 115px 150px;
-}
-
-@keyframes db-analytics-chart-draw-erase {
-  0% {
-    opacity: 0;
-  }
-  4% {
-    opacity: 1;
-  }
-  78% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  92% {
-    opacity: 0;
-    transform: scale(0.94);
-  }
-  100% {
-    opacity: 0;
-    transform: scale(0.94);
-  }
-}
-
-.db-analytics-chart-draw__axis {
-  stroke: t.$border-strong;
-  stroke-width: 1.5;
-}
-
-.db-analytics-chart-draw__bar {
-  fill: t.$accent;
-  fill-opacity: 0.16;
-  stroke: t.$accent;
-  stroke-width: 1.5;
-  animation: db-analytics-chart-draw-bar var(--cycle-duration, 3.5s) cubic-bezier(0.22, 1, 0.36, 1) infinite;
-}
-
-.db-analytics-chart-draw__bar:nth-of-type(1) {
-  animation-name: db-analytics-chart-draw-bar-1;
-}
-.db-analytics-chart-draw__bar:nth-of-type(2) {
-  animation-name: db-analytics-chart-draw-bar-2;
-}
-.db-analytics-chart-draw__bar:nth-of-type(3) {
-  animation-name: db-analytics-chart-draw-bar-3;
-}
-.db-analytics-chart-draw__bar:nth-of-type(4) {
-  animation-name: db-analytics-chart-draw-bar-4;
-}
-
-@keyframes db-analytics-chart-draw-bar-1 {
-  0%,
-  2% {
-    transform: scaleY(0);
-  }
-  16%,
-  100% {
-    transform: scaleY(1);
-  }
-}
-@keyframes db-analytics-chart-draw-bar-2 {
-  0%,
-  6% {
-    transform: scaleY(0);
-  }
-  20%,
-  100% {
-    transform: scaleY(1);
-  }
-}
-@keyframes db-analytics-chart-draw-bar-3 {
-  0%,
-  10% {
-    transform: scaleY(0);
-  }
-  24%,
-  100% {
-    transform: scaleY(1);
-  }
-}
-@keyframes db-analytics-chart-draw-bar-4 {
-  0%,
-  14% {
-    transform: scaleY(0);
-  }
-  28%,
-  100% {
-    transform: scaleY(1);
-  }
-}
-
-.db-analytics-chart-draw__line {
-  fill: none;
-  stroke: #4f46e5;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-dasharray: 260;
-  animation: db-analytics-chart-draw-line var(--cycle-duration, 3.5s) ease-out infinite;
-}
-
-@keyframes db-analytics-chart-draw-line {
-  0%,
-  32% {
-    stroke-dashoffset: 260;
-    opacity: 0;
-  }
-  34% {
-    opacity: 1;
-  }
-  56%,
-  100% {
-    stroke-dashoffset: 0;
-    opacity: 1;
-  }
-}
-
-.db-analytics-chart-draw__dot {
-  fill: #4f46e5;
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: db-analytics-chart-draw-dot var(--cycle-duration, 3.5s) cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
-}
-
-.db-analytics-chart-draw__dot:nth-of-type(1) {
-  animation-name: db-analytics-chart-draw-dot-1;
-}
-.db-analytics-chart-draw__dot:nth-of-type(2) {
-  animation-name: db-analytics-chart-draw-dot-2;
-}
-.db-analytics-chart-draw__dot:nth-of-type(3) {
-  animation-name: db-analytics-chart-draw-dot-3;
-}
-.db-analytics-chart-draw__dot:nth-of-type(4) {
-  animation-name: db-analytics-chart-draw-dot-4;
-}
-
-@keyframes db-analytics-chart-draw-dot-1 {
-  0%,
-  33% {
-    opacity: 0;
-    transform: scale(0);
-  }
-  38%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-@keyframes db-analytics-chart-draw-dot-2 {
-  0%,
-  40% {
-    opacity: 0;
-    transform: scale(0);
-  }
-  45%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-@keyframes db-analytics-chart-draw-dot-3 {
-  0%,
-  47% {
-    opacity: 0;
-    transform: scale(0);
-  }
-  52%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-@keyframes db-analytics-chart-draw-dot-4 {
-  0%,
-  54% {
-    opacity: 0;
-    transform: scale(0);
-  }
-  59%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-.db-analytics-chart-draw__caption {
-  margin: 0;
-  font-size: 12.5px;
-  font-weight: 500;
-  color: t.$text-muted;
-  animation: db-analytics-chart-draw-caption-pulse 1.6s ease-in-out infinite;
-}
-
-@keyframes db-analytics-chart-draw-caption-pulse {
-  0%,
-  100% {
-    opacity: 0.55;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-//ChartConstructingAnimation.tsx
-import React from 'react';
-import styles from './ChartConstructingAnimation.module.scss';
-
-// Four bars plus a line series, drawn on the same plot, on a continuous
-// loop: bars grow from the baseline (staggered), then a line draws itself
-// across their tops with a point "popping in" at each vertex, everything
-// holds briefly, fades/shrinks out, and the cycle restarts. All pieces
-// share one CSS custom property (--cycle-duration) with matching
-// percentage-based keyframes (see the .module.scss) and
-// `animation-iteration-count: infinite`, so every repeat stays in sync.
-const BAR_X = [40, 90, 140, 190];
-const BAR_HEIGHTS = [70, 110, 55, 90];
-const BASELINE_Y = 150;
-const LINE_POINTS = [
-  { x: 40, y: 60 },
-  { x: 90, y: 40 },
-  { x: 140, y: 85 },
-  { x: 190, y: 30 },
-];
-const BAR_WIDTH = 22;
-const CYCLE_DURATION_SECONDS = 3.6;
-
-const ChartConstructingAnimation: React.FC = () => {
-  const linePath = LINE_POINTS.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
-  const cycleDurationVar = { ['--cycle-duration' as string]: `${CYCLE_DURATION_SECONDS}s` };
-
-  return (
-    <div className={styles['db-analytics-chart-draw']}>
-      <svg viewBox="0 0 230 170" className={styles['db-analytics-chart-draw__svg']}>
-        <g className={styles['db-analytics-chart-draw__erase-group']} style={cycleDurationVar}>
-          <line
-            x1={20}
-            y1={BASELINE_Y}
-            x2={210}
-            y2={BASELINE_Y}
-            className={styles['db-analytics-chart-draw__axis']}
-          />
-
-          {BAR_X.map((x, i) => {
-            const height = BAR_HEIGHTS[i];
-            return (
-              <rect
-                key={i}
-                x={x - BAR_WIDTH / 2}
-                y={BASELINE_Y - height}
-                width={BAR_WIDTH}
-                height={height}
-                rx={3}
-                className={styles['db-analytics-chart-draw__bar']}
-                style={{ transformOrigin: `${x}px ${BASELINE_Y}px`, ...cycleDurationVar }}
-              />
-            );
-          })}
-
-          <path d={linePath} className={styles['db-analytics-chart-draw__line']} style={cycleDurationVar} />
-          {LINE_POINTS.map((p, i) => (
-            <circle
-              key={i}
-              cx={p.x}
-              cy={p.y}
-              r={3.5}
-              className={styles['db-analytics-chart-draw__dot']}
-              style={cycleDurationVar}
-            />
-          ))}
-        </g>
-      </svg>
-      <p className={styles['db-analytics-chart-draw__caption']}>Drawing your chart…</p>
-    </div>
-  );
-};
-
-export default ChartConstructingAnimation;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 //DatabaseManagerSlider.module.scss
 @use '../../../styles/tokens' as t;
 
@@ -844,6 +515,45 @@ export default ChartConstructingAnimation;
   color: t.$text-secondary;
 }
 
+.db-analytics-type-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid t.$border-strong;
+  border-radius: t.$radius;
+  background: t.$surface-1;
+  width: fit-content;
+}
+
+.db-analytics-type-switch__option {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: t.$text-secondary;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 7px 16px;
+  border-radius: calc(t.$radius - 2px);
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
+
+  &:hover {
+    color: t.$text-primary;
+  }
+}
+
+.db-analytics-type-switch__option--active {
+  background: t.$surface-2;
+  color: t.$text-primary;
+  box-shadow: 0 1px 2px rgba(11, 11, 11, 0.08);
+
+  &:hover {
+    color: t.$text-primary;
+  }
+}
+
 .db-analytics-form__input {
   font-family: inherit;
   font-size: 13px;
@@ -961,7 +671,9 @@ export default ChartConstructingAnimation;
 
 
 
+
 //DatabaseManagerSlider.tsx
+
 import React, { useRef, useState } from 'react';
 import styles from './DatabaseManagerSlider.module.scss';
 import { DatabaseItem } from '../types';
@@ -981,6 +693,13 @@ interface Props {
 }
 
 type Tab = 'existing' | 'new' | 'csv';
+
+// Options for the database-type switch on the "New connection" form.
+// Adding another engine later is just one more entry here.
+const DB_TYPE_OPTIONS: { value: CreateDbPayload['db_type']; label: string }[] = [
+  { value: 'mysql', label: 'MySQL' },
+  { value: 'postgres', label: 'PostgreSQL' },
+];
 
 const emptyForm: CreateDbPayload = {
   name: '',
@@ -1304,17 +1023,25 @@ const DatabaseManagerSlider: React.FC<Props> = ({
                   />
                 </label>
 
-                <label className={styles['db-analytics-form__field']}>
+                <div className={styles['db-analytics-form__field']}>
                   <span className={styles['db-analytics-form__label']}>Database type</span>
-                  <select
-                    className={styles['db-analytics-form__input']}
-                    value={form.db_type}
-                    onChange={(e) => updateField('db_type', e.target.value as CreateDbPayload['db_type'])}
-                  >
-                    <option value="mysql">MySQL</option>
-                    <option value="postgres">PostgreSQL</option>
-                  </select>
-                </label>
+                  <div className={styles['db-analytics-type-switch']} role="radiogroup" aria-label="Database type">
+                    {DB_TYPE_OPTIONS.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        role="radio"
+                        aria-checked={form.db_type === option.value}
+                        className={`${styles['db-analytics-type-switch__option']} ${
+                          form.db_type === option.value ? styles['db-analytics-type-switch__option--active'] : ''
+                        }`}
+                        onClick={() => updateField('db_type', option.value)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
                 <div className={styles['db-analytics-form__row']}>
                   <label className={styles['db-analytics-form__field']}>
@@ -1530,8 +1257,6 @@ export default DatabaseManagerSlider;
 
 
 
-
-
 //ResultsPanel.module.scss
 @use '../../../styles/tokens' as t;
 
@@ -1630,31 +1355,29 @@ export default DatabaseManagerSlider;
 }
 
 .db-analytics-chart-group__prompt {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin: 4px 12px 8px;
+  margin: 4px 12px 0;
+  padding: 10px 14px;
+  border-left: 2px solid t.$border-stronger;
+  background: t.$surface-1;
+  border-radius: 0 t.$radius t.$radius 0;
 }
 
-.db-analytics-chart-group__prompt-icon {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: t.$surface-0;
+.db-analytics-chart-group__prompt-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: t.$text-muted;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  margin-top: 1px;
+  margin: 0 0 4px;
 }
 
 .db-analytics-chart-group__prompt-text {
-  font-size: 12.5px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
   color: t.$text-primary;
   margin: 0;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 .db-analytics-chart-grid {
@@ -1909,9 +1632,6 @@ export default DatabaseManagerSlider;
   font-size: 12px;
   color: t.$text-muted;
 }
-
-
-
 
 
 
@@ -2323,9 +2043,7 @@ const ResultsPanel: React.FC<Props> = ({ chartGroups, loadError, isGenerating, s
                 <section className={styles['db-analytics-chart-group']}>
                   {group.prompt && (
                     <div className={styles['db-analytics-chart-group__prompt']}>
-                      <span className={styles['db-analytics-chart-group__prompt-icon']}>
-                        <Icon.messageCircle size={12} aria-hidden="true" />
-                      </span>
+                      <span className={styles['db-analytics-chart-group__prompt-label']}>Prompt</span>
                       <p className={styles['db-analytics-chart-group__prompt-text']}>{group.prompt}</p>
                     </div>
                   )}
@@ -2412,3 +2130,1039 @@ const ResultsPanel: React.FC<Props> = ({ chartGroups, loadError, isGenerating, s
 };
 
 export default ResultsPanel;
+
+
+
+
+
+
+
+
+
+
+
+
+//SessionHistory.module.scss
+@use '../../../styles/tokens' as t;
+
+.db-analytics-session-panel {
+  background: t.$surface-2;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+  border-bottom: 1px solid t.$border-strong;
+}
+
+.db-analytics-session-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 53px;
+  padding: 0 16px;
+  border-bottom: 1px solid t.$border-strong;
+  background: t.$surface-1;
+  flex-shrink: 0;
+}
+
+.db-analytics-session-panel__title {
+  font-size: 14px;
+  font-weight: 500;
+  margin: 0;
+  color: t.$text-primary;
+}
+
+.db-analytics-session-panel__icon-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: t.$radius;
+  border: 0.5px solid t.$border-strong;
+  background: transparent;
+  color: t.$text-secondary;
+  cursor: pointer;
+  font-size: 15px;
+  flex-shrink: 0;
+
+  &:hover:not(:disabled) {
+    background: t.$surface-0;
+    border-color: t.$border-strong;
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+}
+
+.db-analytics-session-panel__body {
+  padding: 8px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.db-analytics-session-panel__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 32px 16px;
+  gap: 3px;
+
+  p {
+    font-size: 13px;
+    font-weight: 600;
+    color: t.$text-primary;
+    margin: 4px 0 0;
+  }
+
+  span {
+    font-size: 11.5px;
+    color: t.$text-muted;
+  }
+}
+
+.db-analytics-session-panel__empty-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: t.$surface-0;
+  color: t.$text-muted;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.db-analytics-session-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.db-analytics-session-item {
+  position: relative;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: t.$radius;
+  padding: 8px 10px;
+  cursor: pointer;
+  color: t.$text-primary;
+  font-family: inherit;
+  transition: background 0.15s ease, border-color 0.15s ease;
+
+  &:hover:not(:disabled) {
+    background: t.$surface-0;
+  }
+
+  &:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+}
+
+.db-analytics-session-item--active {
+  background: t.$accent-bg;
+  border-color: rgba(79, 70, 229, 0.18);
+
+  &::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 6px;
+    bottom: 6px;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: t.$gradient-primary;
+  }
+
+  &:hover {
+    background: t.$accent-bg;
+  }
+
+  .db-analytics-session-item__title {
+    color: t.$blue-fg;
+  }
+
+  .db-analytics-session-item__icon-wrap {
+    background: t.$chip-solid;
+    color: t.$violet-fg;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  }
+}
+
+.db-analytics-session-item__icon-wrap {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: t.$surface-0;
+  color: t.$text-muted;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.db-analytics-session-item__text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.db-analytics-session-item__title {
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: t.$text-primary;
+}
+
+.db-analytics-session-item__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.db-analytics-session-item__db-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  color: t.$text-secondary;
+  background: t.$surface-2;
+  border: 0.5px solid t.$border-strong;
+  padding: 1px 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+
+  &:hover {
+    background: t.$accent-bg;
+    border-color: t.$accent;
+    color: t.$accent;
+  }
+
+  &:focus-visible {
+    outline: 2px solid t.$accent;
+    outline-offset: 1px;
+  }
+}
+
+.db-analytics-session-item__time {
+  font-size: 10.5px;
+  color: t.$text-muted;
+}
+
+.db-analytics-session-item-wrap {
+  position: relative;
+}
+
+.db-analytics-session-db-popover {
+  position: absolute;
+  top: 100%;
+  left: 12px;
+  z-index: 30;
+  margin-top: 4px;
+  min-width: 200px;
+  max-width: 260px;
+  background: t.$surface-2;
+  border: 1px solid t.$border-strong;
+  border-radius: t.$radius;
+  box-shadow: 0 8px 22px rgba(11, 11, 11, 0.14);
+  padding: 10px;
+  animation: db-analytics-session-db-popover-pop 0.12s ease;
+}
+
+@keyframes db-analytics-session-db-popover-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.db-analytics-session-db-popover__title {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: t.$text-muted;
+  margin-bottom: 8px;
+}
+
+.db-analytics-session-db-popover__empty {
+  display: block;
+  font-size: 12px;
+  color: t.$text-muted;
+}
+
+.db-analytics-session-db-popover__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.db-analytics-session-db-popover__item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: t.$text-muted;
+}
+
+.db-analytics-session-db-popover__name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: t.$text-primary;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.db-analytics-session-db-popover__status {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: t.$danger;
+  flex-shrink: 0;
+}
+
+.db-analytics-session-db-popover__status--on {
+  background: t.$success;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//SessionHistory.tsx
+import React, { useEffect, useRef, useState } from 'react';
+import styles from './SessionHistory.module.scss';
+import { SessionItem, DatabaseItem } from '../types';
+import { Icon } from '../icons';
+import SkeletonListItem from './SkeletonListItem';
+
+interface Props {
+  sessions: SessionItem[];
+  databases: DatabaseItem[];
+  activeSessionId: string | null;
+  onSelect: (id: string) => void;
+  onNewSession: () => void;
+  disabled?: boolean;
+  loading?: boolean;
+}
+
+const formatSessionDate = (iso: string) => {
+  const date = new Date(iso);
+  return date.toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+};
+
+const SessionHistory: React.FC<Props> = ({
+  sessions,
+  databases,
+  activeSessionId,
+  onSelect,
+  onNewSession,
+  disabled,
+  loading,
+}) => {
+  const [openDbListFor, setOpenDbListFor] = useState<string | null>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!openDbListFor) return;
+    const onClickOutside = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        setOpenDbListFor(null);
+      }
+    };
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, [openDbListFor]);
+
+  const getSessionDatabases = (session: SessionItem): DatabaseItem[] => {
+    const ids = session.db_ids ?? [];
+    return databases.filter((db) => ids.includes(db.id));
+  };
+
+  return (
+    <div className={styles['db-analytics-session-panel']}>
+      <div className={styles['db-analytics-session-panel__header']}>
+        <h2 className={styles['db-analytics-session-panel__title']}>Chat sessions</h2>
+        <button
+          className={styles['db-analytics-session-panel__icon-btn']}
+          aria-label="New chat session"
+          onClick={onNewSession}
+          disabled={disabled}
+          title={disabled ? 'Wait for the current response to finish' : undefined}
+        >
+          <Icon.plus size={16} aria-hidden="true" />
+        </button>
+      </div>
+      <div className={styles['db-analytics-session-panel__body']}>
+        {loading ? (
+          <SkeletonListItem variant="session" count={4} />
+        ) : sessions.length === 0 ? (
+          <div className={styles['db-analytics-session-panel__empty']}>
+            <span className={styles['db-analytics-session-panel__empty-icon']}>
+              <Icon.messageCircle size={18} aria-hidden="true" />
+            </span>
+            <p>No sessions yet</p>
+            <span>Start a new conversation to begin.</span>
+          </div>
+        ) : (
+          <ul className={styles['db-analytics-session-list']}>
+            {sessions.map((session, index) => {
+              const isActive = session.id === activeSessionId;
+              const sessionDbs = getSessionDatabases(session);
+              const isPopoverOpen = openDbListFor === session.id;
+              return (
+                <li
+                  key={session.id ? `${session.id}-${index}` : `session-${index}`}
+                  className={styles['db-analytics-session-item-wrap']}
+                >
+                  <button
+                    className={`${styles['db-analytics-session-item']} ${
+                      isActive ? styles['db-analytics-session-item--active'] : ''
+                    }`}
+                    onClick={() => onSelect(session.id)}
+                    disabled={disabled}
+                    title={disabled ? 'Wait for the current response to finish' : undefined}
+                  >
+                    <span className={styles['db-analytics-session-item__icon-wrap']}>
+                      <Icon.messageCircle size={15} aria-hidden="true" />
+                    </span>
+                    <span className={styles['db-analytics-session-item__text']}>
+                      <span className={styles['db-analytics-session-item__title']}>{session.name}</span>
+                      <span className={styles['db-analytics-session-item__meta']}>
+                        <span
+                          className={styles['db-analytics-session-item__db-pill']}
+                          role="button"
+                          tabIndex={0}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenDbListFor(isPopoverOpen ? null : session.id);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setOpenDbListFor(isPopoverOpen ? null : session.id);
+                            }
+                          }}
+                          title="View connected databases"
+                        >
+                          <Icon.database size={10} aria-hidden="true" />
+                          {(session.db_ids ?? []).length}
+                        </span>
+                        <span className={styles['db-analytics-session-item__time']}>
+                          {formatSessionDate(session.created_at)}
+                        </span>
+                      </span>
+                    </span>
+                  </button>
+
+                  {isPopoverOpen && (
+                    <div ref={popoverRef} className={styles['db-analytics-session-db-popover']}>
+                      <span className={styles['db-analytics-session-db-popover__title']}>
+                        Connected databases
+                      </span>
+                      {sessionDbs.length === 0 ? (
+                        <span className={styles['db-analytics-session-db-popover__empty']}>
+                          No matching databases found.
+                        </span>
+                      ) : (
+                        <ul className={styles['db-analytics-session-db-popover__list']}>
+                          {sessionDbs.map((db) => (
+                            <li key={db.id} className={styles['db-analytics-session-db-popover__item']}>
+                              <Icon.database size={11} aria-hidden="true" />
+                              <span className={styles['db-analytics-session-db-popover__name']}>{db.name}</span>
+                              <span
+                                className={`${styles['db-analytics-session-db-popover__status']} ${
+                                  db.connected ? styles['db-analytics-session-db-popover__status--on'] : ''
+                                }`}
+                              />
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default SessionHistory;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//DBAnalytics.tsx
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import styles from './DBAnalytics.module.scss';
+import SessionHistory from './components/SessionHistory';
+import DatabaseList from './components/DatabaseList';
+import ChatPanel from './components/ChatPanel';
+import ResultsPanel from './components/ResultsPanel';
+import DatabaseManagerSlider from './components/DatabaseManagerSlider';
+import NewSessionSlider from './components/NewSessionSlider';
+import { ChatMessage, ChartGroup, DatabaseItem, SessionItem, SuggestedPrompt } from './types';
+import { api, MissingDbConnectionError } from '../../services/api';
+import { Icon } from './icons';
+
+const STREAM_MESSAGE_ID = 'stream-in-progress';
+const CHAT_COL_MIN_WIDTH = 380;
+const CHAT_COL_DEFAULT_WIDTH = 380;
+// Leaves the nav column (300px) and a sensible minimum for the results
+// column so dragging the handle all the way right can't squeeze column 3
+// down to nothing.
+const RESULTS_COL_MIN_WIDTH = 320;
+const NAV_COL_WIDTH = 300;
+
+const DBAnalytics: React.FC = () => {
+  const [sessions, setSessions] = useState<SessionItem[]>([]);
+  const [databases, setDatabases] = useState<DatabaseItem[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [messagesError, setMessagesError] = useState<string | null>(null);
+
+  const [suggestedPrompts, setSuggestedPrompts] = useState<SuggestedPrompt[]>([]);
+  const [suggestedPromptsLoading, setSuggestedPromptsLoading] = useState(false);
+  const [suggestedPromptsError, setSuggestedPromptsError] = useState<string | null>(null);
+
+  // --- Live query streaming state ---
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [streamSteps, setStreamSteps] = useState<string[]>([]);
+  const [streamError, setStreamError] = useState<string | null>(null);
+
+  // Populated when the query endpoint responds 424 because one or more of
+  // the session's databases isn't connected. Cleared whenever the session
+  // changes or the missing databases get reconnected.
+  const [queryMissingDbIds, setQueryMissingDbIds] = useState<string[]>([]);
+
+  // --- Follow-up questions state (shown after the latest assistant reply,
+  // and also on initial load for sessions that already have a conversation) ---
+  const [followups, setFollowups] = useState<string[]>([]);
+  const [followupsLoading, setFollowupsLoading] = useState(false);
+
+  const [dbSliderOpen, setDbSliderOpen] = useState(false);
+  const [sessionSliderOpen, setSessionSliderOpen] = useState(false);
+
+  // --- Resizable chat column (column 2) ---
+  const [chatColWidth, setChatColWidth] = useState(CHAT_COL_DEFAULT_WIDTH);
+  const [isResizing, setIsResizing] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const dragStartXRef = useRef(0);
+  const dragStartWidthRef = useRef(CHAT_COL_DEFAULT_WIDTH);
+
+  // Tracks the session any in-flight async work (stream, follow-ups, message
+  // refresh) belongs to. Every async callback checks this before touching
+  // state, so results for a session the user has since navigated away from
+  // never leak into the currently active session's view.
+  const activeSessionRef = useRef<string | null>(null);
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const [dbList, sessionList] = await Promise.all([api.listDatabases(), api.listSessions()]);
+      setDatabases(dbList);
+      setSessions(sessionList);
+      setActiveSessionId((prev) => prev ?? (sessionList.length > 0 ? sessionList[0].id : null));
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Failed to load data.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const fetchSuggestedPrompts = useCallback((sessionId: string, isStale: () => boolean) => {
+    setSuggestedPromptsLoading(true);
+    setSuggestedPromptsError(null);
+    api
+      .getSuggestedPrompts(sessionId)
+      .then((res) => {
+        if (!isStale()) setSuggestedPrompts(res.prompts);
+      })
+      .catch((err) => {
+        if (!isStale()) {
+          setSuggestedPromptsError(err instanceof Error ? err.message : 'Failed to load suggested prompts.');
+        }
+      })
+      .finally(() => {
+        if (!isStale()) setSuggestedPromptsLoading(false);
+      });
+  }, []);
+
+  const fetchFollowups = useCallback((sessionId: string, isStale: () => boolean) => {
+    setFollowupsLoading(true);
+    api
+      .getFollowups(sessionId)
+      .then((res) => {
+        if (!isStale()) setFollowups(res.followups);
+      })
+      .catch(() => {
+        // Follow-ups are a nice-to-have; fail silently.
+      })
+      .finally(() => {
+        if (!isStale()) setFollowupsLoading(false);
+      });
+  }, []);
+
+  const loadSessionData = useCallback(
+    (sessionId: string) => {
+      activeSessionRef.current = sessionId;
+      const isStale = () => activeSessionRef.current !== sessionId;
+
+      setMessages([]);
+      setSuggestedPrompts([]);
+      setSuggestedPromptsError(null);
+      setFollowups([]);
+      setFollowupsLoading(false);
+      setStreamSteps([]);
+      setStreamError(null);
+      setIsStreaming(false);
+      setQueryMissingDbIds([]);
+      setMessagesLoading(true);
+      setMessagesError(null);
+
+      api
+        .getMessages(sessionId)
+        .then((msgs) => {
+          if (isStale()) return;
+          setMessages(msgs);
+
+          if (msgs.length === 0) {
+            fetchSuggestedPrompts(sessionId, isStale);
+          } else {
+            fetchFollowups(sessionId, isStale);
+          }
+        })
+        .catch((err) => {
+          if (isStale()) return;
+          setMessagesError(err instanceof Error ? err.message : 'Failed to load messages.');
+          setMessages([]);
+          // A brand-new session's messages endpoint can 404 briefly right
+          // after creation (same server propagation lag seen elsewhere) even
+          // though the session itself exists and has no conversation yet.
+          // Don't let that failure also hide starter prompts — treat it the
+          // same as an empty conversation and try to fetch them anyway.
+          fetchSuggestedPrompts(sessionId, isStale);
+        })
+        .finally(() => {
+          if (!isStale()) setMessagesLoading(false);
+        });
+    },
+    [fetchSuggestedPrompts, fetchFollowups]
+  );
+
+  // Load chat history whenever the active session changes, and — depending
+  // on whether it already has a conversation — either show starter prompts
+  // (empty session) or fetch follow-up questions right away (existing session).
+  useEffect(() => {
+    if (!activeSessionId) {
+      activeSessionRef.current = null;
+      setMessages([]);
+      setSuggestedPrompts([]);
+      setSuggestedPromptsError(null);
+      setFollowups([]);
+      setFollowupsLoading(false);
+      setStreamSteps([]);
+      setStreamError(null);
+      setIsStreaming(false);
+      setQueryMissingDbIds([]);
+      setMessagesLoading(false);
+      return;
+    }
+    loadSessionData(activeSessionId);
+  }, [activeSessionId, loadSessionData]);
+
+  const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
+
+  // Databases this session depends on that are currently disconnected —
+  // checked proactively from the session's db_ids on load, and reactively
+  // whenever the query endpoint reports missing connections via a 424.
+  const disconnectedSessionDbs: DatabaseItem[] = activeSession
+    ? databases.filter(
+        (db) =>
+          ((activeSession.db_ids ?? []).includes(db.id) || queryMissingDbIds.includes(db.id)) &&
+          !db.connected &&
+          db.db_type !== 'csv'
+      )
+    : [];
+  const isBlockedByDisconnectedDb = disconnectedSessionDbs.length > 0;
+
+  // Column 3 groups graphs by the prompt that produced them — every
+  // assistant response that came back with at least one graph gets its own
+  // section, labeled with the user's question, newest first. Responses that
+  // didn't produce any graphs are skipped entirely (nothing to show).
+  const chartGroups: ChartGroup[] = (() => {
+    const groups: ChartGroup[] = [];
+    let pendingPrompt = '';
+
+    for (const msg of messages) {
+      if (msg.role === 'user') {
+        pendingPrompt = msg.content;
+        continue;
+      }
+      if (msg.role === 'assistant' && msg.graphs && msg.graphs.length > 0) {
+        groups.push({ id: msg.id, prompt: pendingPrompt, graphs: msg.graphs });
+      }
+    }
+
+    return groups.reverse();
+  })();
+
+  const handleSelectSession = (id: string) => {
+    if (isStreaming) return;
+    setActiveSessionId(id);
+  };
+
+  const handleSendMessage = async (text: string) => {
+    const sessionId = activeSessionId;
+    if (!sessionId || isStreaming || isBlockedByDisconnectedDb) return;
+
+    const isStale = () => activeSessionRef.current !== sessionId;
+
+    const userMsg: ChatMessage = {
+      id: `local-${Date.now()}`,
+      role: 'user',
+      content: text,
+      graphs: [],
+      created_at: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, userMsg]);
+    // Once a message is sent, starter prompts and any previous followups no longer apply.
+    setSuggestedPrompts([]);
+    setFollowups([]);
+
+    setIsStreaming(true);
+    setStreamSteps([]);
+    setStreamError(null);
+
+    let sawMessageEvent = false;
+    let streamFailed = false;
+
+    // Upserts the single in-progress assistant bubble with the latest text
+    // seen so far, so the response prints incrementally as events arrive
+    // instead of only appearing once the whole stream finishes.
+    const upsertStreamingMessage = (text: string) => {
+      setMessages((prev) => {
+        const withoutProvisional = prev.filter((m) => m.id !== STREAM_MESSAGE_ID);
+        return [
+          ...withoutProvisional,
+          {
+            id: STREAM_MESSAGE_ID,
+            role: 'assistant',
+            content: text,
+            graphs: [],
+            created_at: new Date().toISOString(),
+          },
+        ];
+      });
+    };
+
+    try {
+      for await (const event of api.streamQuery(sessionId, text)) {
+        if (isStale()) return;
+
+        if (event.type === 'step') {
+          setStreamSteps((prev) => [...prev, event.step]);
+        } else if (event.type === 'message') {
+          sawMessageEvent = true;
+          upsertStreamingMessage(event.step);
+        } else if (event.type === 'error') {
+          streamFailed = true;
+          setStreamError(event.message);
+        } else if (event.type === 'done') {
+          break;
+        }
+      }
+    } catch (err) {
+      if (!isStale()) {
+        streamFailed = true;
+        if (err instanceof MissingDbConnectionError) {
+          setQueryMissingDbIds(err.missingDbIds);
+          setStreamError(null);
+          // The query never actually ran — remove the optimistic user
+          // message so the thread doesn't imply it was processed.
+          setMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
+        } else {
+          setStreamError(err instanceof Error ? err.message : 'Something went wrong while running your query.');
+        }
+      }
+    }
+
+    if (isStale()) return;
+
+    setIsStreaming(false);
+    setStreamSteps([]);
+
+    if (!sawMessageEvent || streamFailed) {
+      // Nothing usable streamed back — drop the placeholder bubble if present.
+      setMessages((prev) => prev.filter((m) => m.id !== STREAM_MESSAGE_ID));
+    } else {
+      // Reconcile with the server's message list to swap the provisional
+      // bubble for the real message (real id + any graphs attached to it,
+      // since the stream itself doesn't carry graphs).
+      try {
+        const freshMessages = await api.getMessages(sessionId);
+        if (!isStale()) setMessages(freshMessages);
+      } catch {
+        // Keep the provisional message on screen if the refresh fails — the
+        // user still sees the answer, just without graphs until they retry.
+      }
+    }
+
+    if (isStale() || streamFailed || !sawMessageEvent) return;
+
+    // Once the stream completes, fetch fresh follow-up question suggestions.
+    setFollowupsLoading(true);
+    try {
+      const res = await api.getFollowups(sessionId);
+      if (!isStale()) setFollowups(res.followups);
+    } catch {
+      // Follow-ups are a nice-to-have; fail silently rather than blocking the chat.
+    } finally {
+      if (!isStale()) setFollowupsLoading(false);
+    }
+  };
+
+  const handleDatabaseCreated = (db: DatabaseItem) => {
+    setDatabases((prev) => [...prev, db]);
+  };
+
+  const handleDatabaseConnected = (dbId: string, cacheUntil: string) => {
+    setDatabases((prev) =>
+      prev.map((db) => (db.id === dbId ? { ...db, connected: true, cache_until: cacheUntil } : db))
+    );
+  };
+
+  const handleDatabaseDisconnected = (dbId: string) => {
+    setDatabases((prev) =>
+      prev.map((db) => (db.id === dbId ? { ...db, connected: false, cache_until: null } : db))
+    );
+  };
+
+  const handleSessionCreated = (session: SessionItem) => {
+    // De-duplicate defensively: if a rapid double-submit (or any other
+    // race) ever produces two session entries with the same id, keep only
+    // the newest one rather than showing duplicate rows in the list.
+    setSessions((prev) => [session, ...prev.filter((s) => s.id !== session.id)]);
+    setSessionSliderOpen(false);
+
+    if (session.id === activeSessionId) {
+      // Selecting "the same" session id wouldn't normally re-trigger the
+      // data-loading effect (React bails out on an unchanged state value),
+      // which would leave a stale view showing no messages/prompts for a
+      // session that's actually brand new. Force the effect to run again
+      // for this session explicitly.
+      loadSessionData(session.id);
+    } else {
+      setActiveSessionId(session.id);
+    }
+  };
+
+  const handleResizeStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    dragStartXRef.current = e.clientX;
+    dragStartWidthRef.current = chatColWidth;
+    setIsResizing(true);
+  };
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handlePointerMove = (e: PointerEvent) => {
+      const delta = e.clientX - dragStartXRef.current;
+      const bodyWidth = bodyRef.current?.clientWidth ?? Infinity;
+      const maxWidth = Math.max(CHAT_COL_MIN_WIDTH, bodyWidth - NAV_COL_WIDTH - RESULTS_COL_MIN_WIDTH);
+      const nextWidth = Math.min(maxWidth, Math.max(CHAT_COL_MIN_WIDTH, dragStartWidthRef.current + delta));
+      setChatColWidth(nextWidth);
+    };
+
+    const handlePointerUp = () => setIsResizing(false);
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+  }, [isResizing]);
+
+  return (
+    <div className={styles['db-analytics']}>
+      <header className={styles['db-analytics__feature-header']}>
+        <div className={styles['db-analytics__feature-header-main']}>
+          <span className={styles['db-analytics__feature-header-icon']}>
+            <Icon.databaseInsights size={18} aria-hidden="true" />
+          </span>
+          <div className={styles['db-analytics__feature-header-text']}>
+            <h1 className={styles['db-analytics__feature-header-title']}>DB Analytics</h1>
+            <p className={styles['db-analytics__feature-header-subtitle']}>
+              Ask questions about your databases in natural language and get instant charts and insights.
+            </p>
+          </div>
+        </div>
+        <span className={styles['db-analytics__feature-header-badge']}>
+          <span className={styles['db-analytics__feature-header-badge-dot']} aria-hidden="true" />
+          <span className={styles['db-analytics__feature-header-badge-text']}>
+            {databases.filter((db) => db.connected).length} database
+            {databases.filter((db) => db.connected).length !== 1 ? 's' : ''} connected
+          </span>
+        </span>
+      </header>
+
+
+      <main
+        ref={bodyRef}
+        className={`${styles['db-analytics__body']} ${isResizing ? styles['db-analytics--resizing'] : ''}`}
+        style={{ ['--db-analytics-chat-col-width' as string]: `${chatColWidth}px` }}
+      >
+        <section className={`${styles['db-analytics__col']} ${styles['db-analytics__col--nav']}`}>
+          <SessionHistory
+            sessions={sessions}
+            databases={databases}
+            activeSessionId={activeSessionId}
+            onSelect={handleSelectSession}
+            onNewSession={() => setSessionSliderOpen(true)}
+            disabled={isStreaming}
+            loading={loading}
+          />
+          <DatabaseList
+            databases={databases}
+            onManage={() => setDbSliderOpen(true)}
+            disabled={isStreaming}
+            loading={loading}
+          />
+        </section>
+
+        <section className={`${styles['db-analytics__col']} ${styles['db-analytics__col--chat']}`}>
+          <div
+            className={`${styles['db-analytics__resize-handle']} ${
+              isResizing ? styles['db-analytics__resize-handle--active'] : ''
+            }`}
+            onPointerDown={handleResizeStart}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize chat panel"
+            title="Drag to resize"
+          />
+          <ChatPanel
+            sessionTitle={activeSession?.name ?? (loading ? 'Loading…' : 'No session selected')}
+            messages={messages}
+            loading={loading || messagesLoading}
+            hasActiveSession={!!activeSessionId}
+            suggestedPrompts={suggestedPrompts}
+            suggestedPromptsLoading={suggestedPromptsLoading}
+            suggestedPromptsError={suggestedPromptsError}
+            isStreaming={isStreaming}
+            streamSteps={streamSteps}
+            streamError={streamError}
+            followups={followups}
+            followupsLoading={followupsLoading}
+            disconnectedDatabases={disconnectedSessionDbs}
+            onManageDatabases={() => setDbSliderOpen(true)}
+            onSend={handleSendMessage}
+          />
+        </section>
+
+        <section className={`${styles['db-analytics__col']} ${styles['db-analytics__col--results']}`}>
+          <ResultsPanel
+            chartGroups={chartGroups}
+            loadError={loadError ?? messagesError}
+            isGenerating={isStreaming}
+            sessionId={activeSessionId}
+          />
+        </section>
+      </main>
+
+      <DatabaseManagerSlider
+        open={dbSliderOpen}
+        databases={databases}
+        onClose={() => setDbSliderOpen(false)}
+        onDatabaseCreated={handleDatabaseCreated}
+        onDatabaseConnected={handleDatabaseConnected}
+        onDatabaseDisconnected={handleDatabaseDisconnected}
+      />
+
+      <NewSessionSlider
+        open={sessionSliderOpen}
+        databases={databases}
+        onClose={() => setSessionSliderOpen(false)}
+        onCreated={handleSessionCreated}
+        onManageDatabases={() => {
+          setSessionSliderOpen(false);
+          setDbSliderOpen(true);
+        }}
+      />
+    </div>
+  );
+};
+
+export default DBAnalytics;
