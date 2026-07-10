@@ -1,396 +1,913 @@
-//ChatPanel.module.scss
+//ChartConstructingAnimation.module.scss
 @use '../../../styles/tokens' as t;
 
-.db-analytics-chat-panel {
+.db-analytics-chart-draw {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+  height: 100%;
+  min-height: 260px;
+}
+
+.db-analytics-chart-draw__svg {
+  width: 100%;
+  max-width: 300px;
+  height: auto;
+  overflow: visible;
+}
+
+.db-analytics-chart-draw__erase-group {
+  animation: db-analytics-chart-draw-erase var(--cycle-duration, 3.5s) ease-in-out infinite;
+  transform-origin: 115px 150px;
+}
+
+@keyframes db-analytics-chart-draw-erase {
+  0% {
+    opacity: 0;
+  }
+  4% {
+    opacity: 1;
+  }
+  78% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  92% {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+}
+
+.db-analytics-chart-draw__axis {
+  stroke: t.$border-strong;
+  stroke-width: 1.5;
+}
+
+.db-analytics-chart-draw__bar {
+  fill: t.$accent;
+  fill-opacity: 0.16;
+  stroke: t.$accent;
+  stroke-width: 1.5;
+  animation: db-analytics-chart-draw-bar var(--cycle-duration, 3.5s) cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+.db-analytics-chart-draw__bar:nth-of-type(1) {
+  animation-name: db-analytics-chart-draw-bar-1;
+}
+.db-analytics-chart-draw__bar:nth-of-type(2) {
+  animation-name: db-analytics-chart-draw-bar-2;
+}
+.db-analytics-chart-draw__bar:nth-of-type(3) {
+  animation-name: db-analytics-chart-draw-bar-3;
+}
+.db-analytics-chart-draw__bar:nth-of-type(4) {
+  animation-name: db-analytics-chart-draw-bar-4;
+}
+
+@keyframes db-analytics-chart-draw-bar-1 {
+  0%,
+  2% {
+    transform: scaleY(0);
+  }
+  16%,
+  100% {
+    transform: scaleY(1);
+  }
+}
+@keyframes db-analytics-chart-draw-bar-2 {
+  0%,
+  6% {
+    transform: scaleY(0);
+  }
+  20%,
+  100% {
+    transform: scaleY(1);
+  }
+}
+@keyframes db-analytics-chart-draw-bar-3 {
+  0%,
+  10% {
+    transform: scaleY(0);
+  }
+  24%,
+  100% {
+    transform: scaleY(1);
+  }
+}
+@keyframes db-analytics-chart-draw-bar-4 {
+  0%,
+  14% {
+    transform: scaleY(0);
+  }
+  28%,
+  100% {
+    transform: scaleY(1);
+  }
+}
+
+.db-analytics-chart-draw__line {
+  fill: none;
+  stroke: #4f46e5;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 260;
+  animation: db-analytics-chart-draw-line var(--cycle-duration, 3.5s) ease-out infinite;
+}
+
+@keyframes db-analytics-chart-draw-line {
+  0%,
+  32% {
+    stroke-dashoffset: 260;
+    opacity: 0;
+  }
+  34% {
+    opacity: 1;
+  }
+  56%,
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+}
+
+.db-analytics-chart-draw__dot {
+  fill: #4f46e5;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: db-analytics-chart-draw-dot var(--cycle-duration, 3.5s) cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
+}
+
+.db-analytics-chart-draw__dot:nth-of-type(1) {
+  animation-name: db-analytics-chart-draw-dot-1;
+}
+.db-analytics-chart-draw__dot:nth-of-type(2) {
+  animation-name: db-analytics-chart-draw-dot-2;
+}
+.db-analytics-chart-draw__dot:nth-of-type(3) {
+  animation-name: db-analytics-chart-draw-dot-3;
+}
+.db-analytics-chart-draw__dot:nth-of-type(4) {
+  animation-name: db-analytics-chart-draw-dot-4;
+}
+
+@keyframes db-analytics-chart-draw-dot-1 {
+  0%,
+  33% {
+    opacity: 0;
+    transform: scale(0);
+  }
+  38%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes db-analytics-chart-draw-dot-2 {
+  0%,
+  40% {
+    opacity: 0;
+    transform: scale(0);
+  }
+  45%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes db-analytics-chart-draw-dot-3 {
+  0%,
+  47% {
+    opacity: 0;
+    transform: scale(0);
+  }
+  52%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes db-analytics-chart-draw-dot-4 {
+  0%,
+  54% {
+    opacity: 0;
+    transform: scale(0);
+  }
+  59%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.db-analytics-chart-draw__caption {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: t.$text-muted;
+  animation: db-analytics-chart-draw-caption-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes db-analytics-chart-draw-caption-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+//ChartConstructingAnimation.tsx
+import React from 'react';
+import styles from './ChartConstructingAnimation.module.scss';
+
+// Four bars plus a line series, drawn on the same plot, on a continuous
+// loop: bars grow from the baseline (staggered), then a line draws itself
+// across their tops with a point "popping in" at each vertex, everything
+// holds briefly, fades/shrinks out, and the cycle restarts. All pieces
+// share one CSS custom property (--cycle-duration) with matching
+// percentage-based keyframes (see the .module.scss) and
+// `animation-iteration-count: infinite`, so every repeat stays in sync.
+const BAR_X = [40, 90, 140, 190];
+const BAR_HEIGHTS = [70, 110, 55, 90];
+const BASELINE_Y = 150;
+const LINE_POINTS = [
+  { x: 40, y: 60 },
+  { x: 90, y: 40 },
+  { x: 140, y: 85 },
+  { x: 190, y: 30 },
+];
+const BAR_WIDTH = 22;
+const CYCLE_DURATION_SECONDS = 3.6;
+
+const ChartConstructingAnimation: React.FC = () => {
+  const linePath = LINE_POINTS.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+  const cycleDurationVar = { ['--cycle-duration' as string]: `${CYCLE_DURATION_SECONDS}s` };
+
+  return (
+    <div className={styles['db-analytics-chart-draw']}>
+      <svg viewBox="0 0 230 170" className={styles['db-analytics-chart-draw__svg']}>
+        <g className={styles['db-analytics-chart-draw__erase-group']} style={cycleDurationVar}>
+          <line
+            x1={20}
+            y1={BASELINE_Y}
+            x2={210}
+            y2={BASELINE_Y}
+            className={styles['db-analytics-chart-draw__axis']}
+          />
+
+          {BAR_X.map((x, i) => {
+            const height = BAR_HEIGHTS[i];
+            return (
+              <rect
+                key={i}
+                x={x - BAR_WIDTH / 2}
+                y={BASELINE_Y - height}
+                width={BAR_WIDTH}
+                height={height}
+                rx={3}
+                className={styles['db-analytics-chart-draw__bar']}
+                style={{ transformOrigin: `${x}px ${BASELINE_Y}px`, ...cycleDurationVar }}
+              />
+            );
+          })}
+
+          <path d={linePath} className={styles['db-analytics-chart-draw__line']} style={cycleDurationVar} />
+          {LINE_POINTS.map((p, i) => (
+            <circle
+              key={i}
+              cx={p.x}
+              cy={p.y}
+              r={3.5}
+              className={styles['db-analytics-chart-draw__dot']}
+              style={cycleDurationVar}
+            />
+          ))}
+        </g>
+      </svg>
+      <p className={styles['db-analytics-chart-draw__caption']}>Drawing your chart…</p>
+    </div>
+  );
+};
+
+export default ChartConstructingAnimation;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//DatabaseManagerSlider.module.scss
+@use '../../../styles/tokens' as t;
+
+.db-analytics-slider-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.db-analytics-slider-overlay__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(11, 11, 11, 0.32);
+  animation: db-analytics-fade-in 0.15s ease;
+}
+
+.db-analytics-slider-panel {
+  position: relative;
+  width: 600px;
+  max-width: 100vw;
+  height: 100%;
   background: t.$surface-2;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
-  flex: 1;
-  min-height: 0;
+  box-shadow: -8px 0 24px rgba(11, 11, 11, 0.12);
+  animation: db-analytics-slide-in-right 0.22s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.db-analytics-chat-panel__header {
+.db-analytics-slider-panel__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 53px;
-  padding: 0 16px;
+  height: 60px;
+  padding: 0 20px;
   border-bottom: 1px solid t.$border-strong;
   background: t.$surface-1;
   flex-shrink: 0;
 }
 
-.db-analytics-chat-panel__header-text {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 1px;
-  min-width: 0;
-}
-
-.db-analytics-chat-panel__title {
-  font-size: 14px;
+.db-analytics-slider-panel__title {
+  font-size: 16px;
   font-weight: 500;
   margin: 0;
-  color: t.$text-primary;
-  line-height: 1.3;
 }
 
-.db-analytics-chat-panel__subtitle {
-  font-size: 11px;
-  color: t.$text-muted;
-  margin: 0;
-  line-height: 1.3;
-}
-
-.db-analytics-chat-panel__thread {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 12px;
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-}
-
-.db-analytics-chat-panel__empty {
-  display: flex;
-  flex-direction: column;
+.db-analytics-slider-panel__close-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 48px 16px;
-  color: t.$text-muted;
-  text-align: center;
+  border-radius: t.$radius;
+  border: 0.5px solid t.$border-strong;
+  background: transparent;
+  color: t.$text-secondary;
+  cursor: pointer;
+  font-size: 15px;
+  flex-shrink: 0;
+
+  &:hover {
+    background: t.$surface-0;
+  }
+}
+
+.db-analytics-slider-panel__body {
   flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
 
-  p {
-    font-size: 13px;
-    margin: 0;
-    max-width: 220px;
+@keyframes db-analytics-slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
   }
 }
 
-.db-analytics-chat-bubble {
+@keyframes db-analytics-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.db-analytics-slider-tabs {
   display: flex;
-  gap: 8px;
-  max-width: 92%;
+  gap: 4px;
+  padding: 12px 20px 0;
+  border-bottom: 1px solid t.$border-strong;
+  background: t.$surface-1;
+  flex-shrink: 0;
 }
 
-.db-analytics-chat-bubble--user {
-  align-self: flex-end;
-  flex-direction: row-reverse;
+.db-analytics-slider-tabs__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: t.$text-muted;
+  padding: 10px 14px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
 
-  .db-analytics-chat-bubble__content {
-    background: t.$accent-bg;
-    border: 1px solid rgba(79, 70, 229, 0.14);
-  }
-
-  .db-analytics-chat-bubble__text {
+  &:hover {
     color: t.$text-primary;
   }
 }
 
-.db-analytics-chat-bubble--assistant {
-  align-self: flex-start;
+.db-analytics-slider-tabs__item--active {
+  color: t.$text-primary;
+  border-bottom-color: t.$text-primary;
 }
 
-.db-analytics-chat-bubble__avatar {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  background: #eeedfe;
-  color: #3c3489;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 13px;
-  flex-shrink: 0;
-  margin-top: 2px;
-}
-
-.db-analytics-chat-bubble__content {
-  background: t.$surface-0;
-  border-radius: t.$radius-lg;
-  padding: 10px 12px;
-}
-
-.db-analytics-chat-bubble__text {
-  font-size: 13px;
-  line-height: 1.6;
+.db-analytics-db-manage-list {
+  list-style: none;
   margin: 0;
-  color: t.$text-primary;
-}
-
-.db-analytics-chat-bubble__markdown {
-  font-size: 13px;
-  line-height: 1.6;
-  color: t.$text-primary;
-
-  > *:first-child {
-    margin-top: 0;
-  }
-
-  > *:last-child {
-    margin-bottom: 0;
-  }
-
-  p {
-    margin: 0 0 8px;
-  }
-
-  h1,
-  h2,
-  h3,
-  h4 {
-    font-weight: 600;
-    line-height: 1.35;
-    margin: 14px 0 6px;
-  }
-
-  h1 {
-    font-size: 17px;
-  }
-
-  h2 {
-    font-size: 15px;
-  }
-
-  h3,
-  h4 {
-    font-size: 13.5px;
-  }
-
-  ul,
-  ol {
-    margin: 0 0 8px;
-    padding-left: 20px;
-  }
-
-  li {
-    margin: 2px 0;
-  }
-
-  li > p {
-    margin: 0;
-  }
-
-  strong {
-    font-weight: 600;
-  }
-
-  em {
-    font-style: italic;
-  }
-
-  a {
-    color: t.$accent;
-    text-decoration: underline;
-
-    &:hover {
-      color: #185fa5;
-    }
-  }
-
-  blockquote {
-    margin: 8px 0;
-    padding: 4px 12px;
-    border-left: 3px solid t.$border-strong;
-    color: t.$text-secondary;
-  }
-
-  code {
-    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-    font-size: 12px;
-    background: t.$surface-1;
-    border: 0.5px solid t.$border;
-    border-radius: 4px;
-    padding: 1px 5px;
-  }
-
-  pre {
-    margin: 8px 0;
-    padding: 10px 12px;
-    background: t.$surface-1;
-    border: 0.5px solid t.$border-strong;
-    border-radius: t.$radius;
-    overflow-x: auto;
-
-    code {
-      background: none;
-      border: none;
-      padding: 0;
-      font-size: 12px;
-    }
-  }
-
-  hr {
-    border: none;
-    border-top: 0.5px solid t.$border;
-    margin: 12px 0;
-  }
-
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    margin: 8px 0;
-    font-size: 12px;
-  }
-
-  th,
-  td {
-    text-align: left;
-    padding: 6px 8px;
-    border: 0.5px solid t.$border-strong;
-  }
-
-  th {
-    background: t.$surface-1;
-    font-weight: 600;
-  }
-}
-
-.db-analytics-chat-bubble__chart-ref {
+  padding: 0;
   display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: t.$text-secondary;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 0.5px solid t.$border;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.db-analytics-db-notice {
+.db-analytics-db-manage-item {
+  padding: 16px;
+  border: 1px solid t.$border-strong;
+  border-radius: t.$radius-lg;
+  background: t.$surface-2;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+
+  &:hover {
+    border-color: t.$border-stronger;
+    box-shadow: 0 2px 8px rgba(11, 11, 11, 0.05);
+  }
+}
+
+.db-analytics-db-manage-item__top {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  margin: 0 12px;
-  padding: 12px 14px;
-  border: 1px solid rgba(237, 161, 0, 0.35);
-  border-radius: t.$radius-lg;
-  background: #fdf6e8;
-  flex-shrink: 0;
+  justify-content: space-between;
+  gap: 12px;
 }
 
-.db-analytics-db-notice__icon {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  background: #f7e6bd;
-  color: #8a5a00;
+.db-analytics-db-manage-item__identity {
   display: flex;
   align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  margin-top: 1px;
-}
-
-.db-analytics-db-notice__body {
-  flex: 1;
+  gap: 12px;
   min-width: 0;
 }
 
-.db-analytics-db-notice__title {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: #6b4400;
-  margin: 0 0 2px;
+.db-analytics-db-manage-item__icon {
+  width: 38px;
+  height: 38px;
+  border-radius: t.$radius;
+  background: t.$indigo-bg;
+  color: t.$indigo-fg;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
-.db-analytics-db-notice__desc {
+.db-analytics-db-manage-item__icon--mysql {
+  background: t.$blue-bg;
+  color: t.$blue-fg;
+}
+
+.db-analytics-db-manage-item__icon--postgres {
+  background: t.$violet-bg;
+  color: t.$violet-fg;
+}
+
+.db-analytics-db-manage-item__icon--csv {
+  background: t.$green-bg;
+  color: t.$green-fg;
+}
+
+.db-analytics-db-manage-item__name-block {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.db-analytics-db-manage-item__name {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: t.$text-primary;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.db-analytics-db-manage-item__type-badge {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: t.$text-secondary;
+  background: t.$surface-0;
+  border: 0.5px solid t.$border;
+  padding: 2px 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.db-analytics-db-manage-item__type-badge--mysql {
+  color: t.$blue-fg;
+  background: t.$blue-bg;
+  border-color: transparent;
+}
+
+.db-analytics-db-manage-item__type-badge--postgres {
+  color: t.$violet-fg;
+  background: t.$violet-bg;
+  border-color: transparent;
+}
+
+.db-analytics-db-manage-item__type-badge--csv {
+  color: t.$green-fg;
+  background: t.$green-bg;
+  border-color: transparent;
+}
+
+.db-analytics-db-manage-item__meta-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  background: t.$surface-0;
+  border-radius: t.$radius;
+}
+
+.db-analytics-db-manage-item__meta-cell {
+  min-width: 0;
+
+  dt {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: t.$text-muted;
+    margin: 0 0 3px;
+  }
+
+  dd {
+    font-size: 12.5px;
+    color: t.$text-primary;
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  }
+}
+
+.db-analytics-db-manage-item__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 0.5px solid t.$border;
+}
+
+.db-analytics-db-manage-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 44px 20px;
+  border: 1px dashed t.$border-strong;
+  border-radius: t.$radius-lg;
+  background: t.$surface-0;
+}
+
+.db-analytics-db-manage-empty__icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: t.$accent-bg;
+  color: #0c447c;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.db-analytics-db-manage-empty__title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: t.$text-primary;
+  margin: 0 0 4px;
+}
+
+.db-analytics-db-manage-empty__desc {
   font-size: 12px;
-  color: #8a5a00;
+  color: t.$text-muted;
+  margin: 0;
+  max-width: 280px;
+}
+
+.db-analytics-db-status {
+  font-size: 11px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.db-analytics-db-status__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.db-analytics-db-status--connected {
+  color: t.$status-connected-fg;
+
+  .db-analytics-db-status__dot {
+    background: t.$success;
+  }
+}
+
+.db-analytics-db-status--disconnected {
+  color: t.$status-disconnected-fg;
+
+  .db-analytics-db-status__dot {
+    background: t.$danger;
+  }
+}
+
+.db-analytics-form-card {
+  border: 1px solid t.$border-strong;
+  border-radius: t.$radius-lg;
+  background: t.$surface-2;
+  padding: 18px;
+}
+
+.db-analytics-form-card__header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding-bottom: 16px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid t.$border;
+}
+
+.db-analytics-form-card__icon {
+  width: 34px;
+  height: 34px;
+  border-radius: t.$radius;
+  background: t.$accent-bg;
+  color: #0c447c;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.db-analytics-form-card__icon--csv {
+  background: #e3f5ea;
+  color: #0a7a41;
+}
+
+.db-analytics-form-card__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: t.$text-primary;
+  margin: 0 0 3px;
+}
+
+.db-analytics-form-card__subtitle {
+  font-size: 12px;
+  color: t.$text-muted;
   margin: 0;
   line-height: 1.5;
-
-  strong {
-    font-weight: 600;
-  }
 }
 
-.db-analytics-db-notice__action {
-  align-self: center;
-  flex-shrink: 0;
-  font-size: 12px;
-  font-weight: 600;
-  color: #6b4400;
-  background: #fff;
-  border: 1px solid rgba(237, 161, 0, 0.4);
-  padding: 7px 13px;
+.db-analytics-file-drop {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px;
+  border: 1.5px dashed t.$border-strong;
   border-radius: t.$radius;
+  background: t.$surface-0;
   cursor: pointer;
   font-family: inherit;
-  white-space: nowrap;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  text-align: left;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 
   &:hover {
-    background: #fef8ea;
-    border-color: rgba(237, 161, 0, 0.6);
+    border-color: t.$accent;
+    background: t.$accent-bg;
   }
 }
 
-.db-analytics-chat-composer {
-  border-top: 0.5px solid t.$border;
-  padding: 12px;
+.db-analytics-file-drop--filled {
+  border-style: solid;
+  border-color: rgba(10, 122, 65, 0.35);
+  background: #e3f5ea;
+
+  &:hover {
+    border-color: rgba(10, 122, 65, 0.5);
+    background: #d7f0e1;
+  }
+}
+
+.db-analytics-file-drop--dragging {
+  border-style: solid;
+  border-color: t.$accent;
+  background: t.$accent-bg;
+  box-shadow: 0 0 0 3px rgba(42, 120, 214, 0.12);
+  transform: scale(1.01);
+
+  .db-analytics-file-drop__icon {
+    background: t.$accent;
+    color: #fff;
+  }
+}
+
+.db-analytics-file-drop__icon {
+  width: 34px;
+  height: 34px;
+  border-radius: t.$radius;
+  background: t.$surface-2;
+  color: t.$text-muted;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
 }
 
-.db-analytics-chat-composer__input {
-  width: 100%;
-  box-sizing: border-box;
-  resize: none;
-  border: 0.5px solid t.$border-strong;
-  border-radius: t.$radius;
-  padding: 10px 12px;
+.db-analytics-file-drop--filled .db-analytics-file-drop__icon {
+  background: #fff;
+  color: #0a7a41;
+}
+
+.db-analytics-file-drop__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.db-analytics-file-drop__title {
   font-size: 13px;
-  font-family: inherit;
+  font-weight: 600;
   color: t.$text-primary;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.db-analytics-file-drop__subtitle {
+  font-size: 11.5px;
+  color: t.$text-muted;
+}
+
+.db-analytics-file-drop__input {
+  // Visually hidden but still accessible/functional — the styled button
+  // above triggers it via ref, so the native input itself stays off-screen.
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.db-analytics-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.db-analytics-form__row {
+  display: flex;
+  gap: 12px;
+}
+
+.db-analytics-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.db-analytics-form__field--narrow {
+  flex: 0 0 120px;
+}
+
+.db-analytics-form__label {
+  font-size: 12px;
+  font-weight: 500;
+  color: t.$text-secondary;
+}
+
+.db-analytics-form__input {
+  font-family: inherit;
+  font-size: 13px;
+  padding: 9px 11px;
+  border: 1px solid t.$border-strong;
+  border-radius: t.$radius;
   background: t.$surface-1;
+  color: t.$text-primary;
 
   &:focus {
     outline: none;
     border-color: t.$accent;
     box-shadow: 0 0 0 2px rgba(42, 120, 214, 0.15);
   }
-
-  &::placeholder {
-    color: t.$text-muted;
-  }
-
-  &:disabled {
-    cursor: not-allowed;
-    opacity: 0.6;
-    background: t.$surface-0;
-  }
 }
 
-.db-analytics-chat-composer__actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-top: 8px;
-}
-
-.db-analytics-chat-composer__hint {
-  font-size: 11px;
-  color: t.$text-muted;
-}
-
-.db-analytics-chat-composer__send-btn {
+.db-analytics-form__hint {
   display: flex;
   align-items: center;
   gap: 6px;
-  background: t.$gradient-primary;
-  color: #fff;
-  border: none;
+  font-size: 12px;
+  color: t.$text-muted;
+  margin: 0;
+}
+
+.db-analytics-form__error {
+  font-size: 12px;
+  color: #791f1f;
+  background: #fbe9e9;
+  padding: 8px 11px;
   border-radius: t.$radius;
-  padding: 7px 14px;
+}
+
+.db-analytics-form__actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 8px;
+  border-top: 1px solid t.$border;
+}
+
+.db-analytics-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   font-size: 13px;
   font-weight: 500;
   font-family: inherit;
+  border-radius: t.$radius;
+  padding: 8px 16px;
   cursor: pointer;
+  border: 1px solid transparent;
+  transition: filter 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+}
+
+.db-analytics-btn--primary {
+  background: t.$gradient-primary;
+  color: #fff;
   box-shadow: 0 1px 2px rgba(79, 70, 229, 0.25);
 
   &:hover:not(:disabled) {
@@ -401,24 +918,35 @@
   &:active:not(:disabled) {
     filter: brightness(0.96);
   }
+}
 
-  &:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-    box-shadow: none;
+.db-analytics-btn--ghost {
+  background: transparent;
+  border-color: t.$border-strong;
+  color: t.$text-primary;
+
+  &:hover:not(:disabled) {
+    background: t.$surface-0;
   }
 }
 
-.db-analytics-chat-panel__spin {
-  animation: db-analytics-chat-panel-spin 0.8s linear infinite;
+.db-analytics-btn--sm {
+  padding: 5px 11px;
+  font-size: 12px;
 }
 
-@keyframes db-analytics-chat-panel-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
+.db-analytics-btn--icon {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  background: t.$surface-0;
+  border-color: t.$border-strong;
+  color: t.$text-secondary;
+
+  &:hover:not(:disabled) {
+    background: t.$surface-2;
+    border-color: t.$border-stronger;
+    color: t.$text-primary;
   }
 }
 
@@ -432,774 +960,956 @@
 
 
 
-//ChatPanel.tsx
 
-import React, { useState, useEffect, useRef, KeyboardEvent } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import styles from './ChatPanel.module.scss';
-import { ChatMessage, SuggestedPrompt, DatabaseItem } from '../types';
+//DatabaseManagerSlider.tsx
+import React, { useRef, useState } from 'react';
+import styles from './DatabaseManagerSlider.module.scss';
+import { DatabaseItem } from '../types';
+import { api, CreateDbPayload } from '../../../services/api';
+import ConnectPasswordModal from './ConnectPasswordModal';
+import DbSchemaSlider from './DbSchemaSlider';
 import { Icon } from '../icons';
-import SuggestedPrompts from './SuggestedPrompts';
-import QueryProgress from './QueryProgress';
-import FollowupChips from './FollowupChips';
+import { getDbTypeMeta } from '../dbTypeMeta';
 
 interface Props {
-  sessionTitle: string;
-  messages: ChatMessage[];
-  loading?: boolean;
-  hasActiveSession: boolean;
-  suggestedPrompts: SuggestedPrompt[];
-  suggestedPromptsLoading?: boolean;
-  suggestedPromptsError?: string | null;
-  isStreaming: boolean;
-  streamSteps: string[];
-  streamError?: string | null;
-  followups: string[];
-  followupsLoading?: boolean;
-  disconnectedDatabases: DatabaseItem[];
-  onManageDatabases: () => void;
-  onSend: (text: string) => void;
+  open: boolean;
+  databases: DatabaseItem[];
+  onClose: () => void;
+  onDatabaseCreated: (db: DatabaseItem) => void;
+  onDatabaseConnected: (dbId: string, cacheUntil: string) => void;
+  onDatabaseDisconnected: (dbId: string) => void;
 }
 
-const ChatPanel: React.FC<Props> = ({
-  sessionTitle,
-  messages = [],
-  loading,
-  hasActiveSession,
-  suggestedPrompts = [],
-  suggestedPromptsLoading,
-  suggestedPromptsError,
-  isStreaming,
-  streamSteps = [],
-  streamError,
-  followups = [],
-  followupsLoading,
-  disconnectedDatabases = [],
-  onManageDatabases,
-  onSend,
-}) => {
-  const [draft, setDraft] = useState('');
-  const threadEndRef = useRef<HTMLDivElement>(null);
+type Tab = 'existing' | 'new' | 'csv';
 
-  const isBlocked = disconnectedDatabases.length > 0;
-  const composerDisabled = !!loading || isStreaming || isBlocked;
-
-  // Keep the thread pinned to the bottom while a response streams in (and
-  // whenever new messages/steps/followups appear generally), so the person
-  // doesn't have to manually scroll to follow along in real time.
-  useEffect(() => {
-    threadEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages, streamSteps, isStreaming, followups, followupsLoading]);
-
-  const submit = () => {
-    const trimmed = draft.trim();
-    if (!trimmed || composerDisabled) return;
-    onSend(trimmed);
-    setDraft('');
-  };
-
-  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      submit();
-    }
-  };
-
-  const handlePromptSelect = (prompt: SuggestedPrompt) => {
-    if (composerDisabled) return;
-    onSend(prompt.text);
-  };
-
-  const handleFollowupSelect = (text: string) => {
-    if (composerDisabled) return;
-    onSend(text);
-  };
-
-  const showSuggestedPrompts = hasActiveSession && !loading && messages.length === 0 && !isStreaming;
-  const showFollowups =
-    !isStreaming && !loading && messages.length > 0 && (followupsLoading || followups.length > 0);
-
-  const composerPlaceholder = loading
-    ? 'Loading…'
-    : isBlocked
-    ? 'Connect the databases below to start asking questions…'
-    : isStreaming
-    ? 'Waiting for the current response to finish…'
-    : 'Ask about revenue, trends, or run a custom query...';
-
-  return (
-    <div className={styles['db-analytics-chat-panel']}>
-      <div className={styles['db-analytics-chat-panel__header']}>
-        <div className={styles['db-analytics-chat-panel__header-text']}>
-          <h2 className={styles['db-analytics-chat-panel__title']}>{sessionTitle || 'New session'}</h2>
-          <p className={styles['db-analytics-chat-panel__subtitle']}>
-            Ask questions about your connected databases
-          </p>
-        </div>
-      </div>
-
-      <div className={styles['db-analytics-chat-panel__thread']}>
-        {loading ? (
-          <div className={styles['db-analytics-chat-panel__empty']}>
-            <Icon.loader size={28} aria-hidden="true" className={styles['db-analytics-chat-panel__spin']} />
-            <p>Loading conversation…</p>
-          </div>
-        ) : showSuggestedPrompts ? (
-          <div className={styles['db-analytics-chat-panel__empty']}>
-            <SuggestedPrompts
-              prompts={suggestedPrompts}
-              loading={suggestedPromptsLoading}
-              error={suggestedPromptsError}
-              onSelect={handlePromptSelect}
-            />
-            {!suggestedPromptsLoading && suggestedPrompts.length === 0 && !suggestedPromptsError && (
-              <>
-                <Icon.messageCircle size={28} aria-hidden="true" />
-                <p>Ask a question to get started with this session.</p>
-              </>
-            )}
-          </div>
-        ) : messages.length === 0 && !isStreaming ? (
-          <div className={styles['db-analytics-chat-panel__empty']}>
-            <Icon.messageCircle size={28} aria-hidden="true" />
-            <p>Select a session to get started.</p>
-          </div>
-        ) : (
-          <>
-            {messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`${styles['db-analytics-chat-bubble']} ${
-                  msg.role === 'user'
-                    ? styles['db-analytics-chat-bubble--user']
-                    : styles['db-analytics-chat-bubble--assistant']
-                }`}
-              >
-                {msg.role === 'assistant' && (
-                  <div className={styles['db-analytics-chat-bubble__avatar']}>
-                    <Icon.sparkles size={14} aria-hidden="true" />
-                  </div>
-                )}
-                <div className={styles['db-analytics-chat-bubble__content']}>
-                  {msg.role === 'assistant' ? (
-                    <div className={styles['db-analytics-chat-bubble__markdown']}>
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                    </div>
-                  ) : (
-                    <p className={styles['db-analytics-chat-bubble__text']}>{msg.content}</p>
-                  )}
-                  {msg.graphs.length > 0 && (
-                    <div className={styles['db-analytics-chat-bubble__chart-ref']}>
-                      <Icon.chartBar size={13} aria-hidden="true" />
-                      {msg.graphs.length === 1
-                        ? '1 chart generated in results panel'
-                        : `${msg.graphs.length} charts generated in results panel`}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-
-            {isStreaming && <QueryProgress steps={streamSteps} isStreaming={isStreaming} error={streamError} />}
-
-            {showFollowups && (
-              <FollowupChips followups={followups} loading={followupsLoading} onSelect={handleFollowupSelect} />
-            )}
-          </>
-        )}
-        <div ref={threadEndRef} />
-      </div>
-
-      {isBlocked && (
-        <div className={styles['db-analytics-db-notice']} role="status">
-          <span className={styles['db-analytics-db-notice__icon']}>
-            <Icon.infoCircle size={16} aria-hidden="true" />
-          </span>
-          <div className={styles['db-analytics-db-notice__body']}>
-            <p className={styles['db-analytics-db-notice__title']}>
-              {disconnectedDatabases.length === 1
-                ? 'A database in this session is disconnected'
-                : `${disconnectedDatabases.length} databases in this session are disconnected`}
-            </p>
-            <p className={styles['db-analytics-db-notice__desc']}>
-              Reconnect{' '}
-              {disconnectedDatabases.map((db, i) => (
-                <React.Fragment key={db.id ? `${db.id}-${i}` : `db-${i}`}>
-                  <strong>{db.name}</strong>
-                  {i < disconnectedDatabases.length - 2
-                    ? ', '
-                    : i === disconnectedDatabases.length - 2
-                    ? ' and '
-                    : ''}
-                </React.Fragment>
-              ))}{' '}
-              to continue this conversation.
-            </p>
-          </div>
-          <button className={styles['db-analytics-db-notice__action']} onClick={onManageDatabases}>
-            Connect now
-          </button>
-        </div>
-      )}
-
-      <div className={styles['db-analytics-chat-composer']}>
-        <textarea
-          className={styles['db-analytics-chat-composer__input']}
-          placeholder={composerPlaceholder}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={handleKeyDown}
-          rows={3}
-          disabled={composerDisabled}
-        />
-        <div className={styles['db-analytics-chat-composer__actions']}>
-          <span className={styles['db-analytics-chat-composer__hint']}>
-            Enter to send &middot; Shift+Enter for new line
-          </span>
-          <button
-            className={styles['db-analytics-chat-composer__send-btn']}
-            onClick={submit}
-            aria-label="Send message"
-            disabled={composerDisabled || !draft.trim()}
-          >
-            {isStreaming ? (
-              <Icon.loader size={14} aria-hidden="true" className={styles['db-analytics-chat-panel__spin']} />
-            ) : (
-              <Icon.send size={14} aria-hidden="true" />
-            )}
-            Send
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+const emptyForm: CreateDbPayload = {
+  name: '',
+  db_name: '',
+  db_type: 'mysql',
+  host: '',
+  port: 3306,
+  username: '',
 };
 
-export default ChatPanel;
+const emptyCsvForm = {
+  name: '',
+  table_name: '',
+};
 
+const DatabaseManagerSlider: React.FC<Props> = ({
+  open,
+  databases,
+  onClose,
+  onDatabaseCreated,
+  onDatabaseConnected,
+  onDatabaseDisconnected,
+}) => {
+  const [tab, setTab] = useState<Tab>('existing');
+  const [form, setForm] = useState<CreateDbPayload>(emptyForm);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [busyDbId, setBusyDbId] = useState<string | null>(null);
+  const [connectTarget, setConnectTarget] = useState<DatabaseItem | null>(null);
+  const [schemaTarget, setSchemaTarget] = useState<DatabaseItem | null>(null);
 
+  const [csvForm, setCsvForm] = useState(emptyCsvForm);
+  const [csvFile, setCsvFile] = useState<File | null>(null);
+  const [csvUploading, setCsvUploading] = useState(false);
+  const [csvError, setCsvError] = useState<string | null>(null);
+  const [isDraggingCsv, setIsDraggingCsv] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
+  if (!open) return null;
 
+  const updateField = <K extends keyof CreateDbPayload>(key: K, value: CreateDbPayload[K]) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  };
 
-
-
-
-
-
-//DBAnalytics.tsx
-import React, { useEffect, useState, useCallback, useRef } from 'react';
-import styles from './DBAnalytics.module.scss';
-import SessionHistory from './components/SessionHistory';
-import DatabaseList from './components/DatabaseList';
-import ChatPanel from './components/ChatPanel';
-import ResultsPanel from './components/ResultsPanel';
-import DatabaseManagerSlider from './components/DatabaseManagerSlider';
-import NewSessionSlider from './components/NewSessionSlider';
-import { ChatMessage, ChartGroup, DatabaseItem, SessionItem, SuggestedPrompt } from './types';
-import { api, MissingDbConnectionError } from '../../services/api';
-import { Icon } from './icons';
-
-const STREAM_MESSAGE_ID = 'stream-in-progress';
-const CHAT_COL_MIN_WIDTH = 380;
-const CHAT_COL_DEFAULT_WIDTH = 380;
-// Leaves the nav column (300px) and a sensible minimum for the results
-// column so dragging the handle all the way right can't squeeze column 3
-// down to nothing.
-const RESULTS_COL_MIN_WIDTH = 320;
-const NAV_COL_WIDTH = 300;
-
-const DBAnalytics: React.FC = () => {
-  const [sessions, setSessions] = useState<SessionItem[]>([]);
-  const [databases, setDatabases] = useState<DatabaseItem[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  const [messagesLoading, setMessagesLoading] = useState(false);
-  const [messagesError, setMessagesError] = useState<string | null>(null);
-
-  const [suggestedPrompts, setSuggestedPrompts] = useState<SuggestedPrompt[]>([]);
-  const [suggestedPromptsLoading, setSuggestedPromptsLoading] = useState(false);
-  const [suggestedPromptsError, setSuggestedPromptsError] = useState<string | null>(null);
-
-  // --- Live query streaming state ---
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [streamSteps, setStreamSteps] = useState<string[]>([]);
-  const [streamError, setStreamError] = useState<string | null>(null);
-
-  // Populated when the query endpoint responds 424 because one or more of
-  // the session's databases isn't connected. Cleared whenever the session
-  // changes or the missing databases get reconnected.
-  const [queryMissingDbIds, setQueryMissingDbIds] = useState<string[]>([]);
-
-  // --- Follow-up questions state (shown after the latest assistant reply,
-  // and also on initial load for sessions that already have a conversation) ---
-  const [followups, setFollowups] = useState<string[]>([]);
-  const [followupsLoading, setFollowupsLoading] = useState(false);
-
-  const [dbSliderOpen, setDbSliderOpen] = useState(false);
-  const [sessionSliderOpen, setSessionSliderOpen] = useState(false);
-
-  // --- Resizable chat column (column 2) ---
-  const [chatColWidth, setChatColWidth] = useState(CHAT_COL_DEFAULT_WIDTH);
-  const [isResizing, setIsResizing] = useState(false);
-  const bodyRef = useRef<HTMLDivElement>(null);
-  const dragStartXRef = useRef(0);
-  const dragStartWidthRef = useRef(CHAT_COL_DEFAULT_WIDTH);
-
-  // Tracks the session any in-flight async work (stream, follow-ups, message
-  // refresh) belongs to. Every async callback checks this before touching
-  // state, so results for a session the user has since navigated away from
-  // never leak into the currently active session's view.
-  const activeSessionRef = useRef<string | null>(null);
-
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const [dbList, sessionList] = await Promise.all([api.listDatabases(), api.listSessions()]);
-      setDatabases(dbList);
-      setSessions(sessionList);
-      setActiveSessionId((prev) => prev ?? (sessionList.length > 0 ? sessionList[0].id : null));
-    } catch (err) {
-      setLoadError(err instanceof Error ? err.message : 'Failed to load data.');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
-
-  const fetchSuggestedPrompts = useCallback((sessionId: string, isStale: () => boolean) => {
-    setSuggestedPromptsLoading(true);
-    setSuggestedPromptsError(null);
-    api
-      .getSuggestedPrompts(sessionId)
-      .then((res) => {
-        if (!isStale()) setSuggestedPrompts(res.prompts);
-      })
-      .catch((err) => {
-        if (!isStale()) {
-          setSuggestedPromptsError(err instanceof Error ? err.message : 'Failed to load suggested prompts.');
-        }
-      })
-      .finally(() => {
-        if (!isStale()) setSuggestedPromptsLoading(false);
-      });
-  }, []);
-
-  const fetchFollowups = useCallback((sessionId: string, isStale: () => boolean) => {
-    setFollowupsLoading(true);
-    api
-      .getFollowups(sessionId)
-      .then((res) => {
-        if (!isStale()) setFollowups(res.followups);
-      })
-      .catch(() => {
-        // Follow-ups are a nice-to-have; fail silently.
-      })
-      .finally(() => {
-        if (!isStale()) setFollowupsLoading(false);
-      });
-  }, []);
-
-  const loadSessionData = useCallback(
-    (sessionId: string) => {
-      activeSessionRef.current = sessionId;
-      const isStale = () => activeSessionRef.current !== sessionId;
-
-      setMessages([]);
-      setSuggestedPrompts([]);
-      setSuggestedPromptsError(null);
-      setFollowups([]);
-      setFollowupsLoading(false);
-      setStreamSteps([]);
-      setStreamError(null);
-      setIsStreaming(false);
-      setQueryMissingDbIds([]);
-      setMessagesLoading(true);
-      setMessagesError(null);
-
-      api
-        .getMessages(sessionId)
-        .then((msgs) => {
-          if (isStale()) return;
-          setMessages(msgs);
-
-          if (msgs.length === 0) {
-            fetchSuggestedPrompts(sessionId, isStale);
-          } else {
-            fetchFollowups(sessionId, isStale);
-          }
-        })
-        .catch((err) => {
-          if (isStale()) return;
-          setMessagesError(err instanceof Error ? err.message : 'Failed to load messages.');
-          setMessages([]);
-          // A brand-new session's messages endpoint can 404 briefly right
-          // after creation (same server propagation lag seen elsewhere) even
-          // though the session itself exists and has no conversation yet.
-          // Don't let that failure also hide starter prompts — treat it the
-          // same as an empty conversation and try to fetch them anyway.
-          fetchSuggestedPrompts(sessionId, isStale);
-        })
-        .finally(() => {
-          if (!isStale()) setMessagesLoading(false);
-        });
-    },
-    [fetchSuggestedPrompts, fetchFollowups]
-  );
-
-  // Load chat history whenever the active session changes, and — depending
-  // on whether it already has a conversation — either show starter prompts
-  // (empty session) or fetch follow-up questions right away (existing session).
-  useEffect(() => {
-    if (!activeSessionId) {
-      activeSessionRef.current = null;
-      setMessages([]);
-      setSuggestedPrompts([]);
-      setSuggestedPromptsError(null);
-      setFollowups([]);
-      setFollowupsLoading(false);
-      setStreamSteps([]);
-      setStreamError(null);
-      setIsStreaming(false);
-      setQueryMissingDbIds([]);
-      setMessagesLoading(false);
+  const handleCreate = async () => {
+    setCreateError(null);
+    if (!form.name.trim() || !form.db_name.trim() || !form.host.trim() || !form.username.trim()) {
+      setCreateError('Please fill in all required fields.');
       return;
     }
-    loadSessionData(activeSessionId);
-  }, [activeSessionId, loadSessionData]);
-
-  const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
-
-  // Databases this session depends on that are currently disconnected —
-  // checked proactively from the session's db_ids on load, and reactively
-  // whenever the query endpoint reports missing connections via a 424.
-  const disconnectedSessionDbs: DatabaseItem[] = activeSession
-    ? databases.filter(
-        (db) =>
-          ((activeSession.db_ids ?? []).includes(db.id) || queryMissingDbIds.includes(db.id)) &&
-          !db.connected &&
-          db.db_type !== 'csv'
-      )
-    : [];
-  const isBlockedByDisconnectedDb = disconnectedSessionDbs.length > 0;
-
-  // Column 3 groups graphs by the prompt that produced them — every
-  // assistant response that came back with at least one graph gets its own
-  // section, labeled with the user's question, newest first. Responses that
-  // didn't produce any graphs are skipped entirely (nothing to show).
-  const chartGroups: ChartGroup[] = (() => {
-    const groups: ChartGroup[] = [];
-    let pendingPrompt = '';
-
-    for (const msg of messages) {
-      if (msg.role === 'user') {
-        pendingPrompt = msg.content;
-        continue;
-      }
-      if (msg.role === 'assistant' && msg.graphs && msg.graphs.length > 0) {
-        groups.push({ id: msg.id, prompt: pendingPrompt, graphs: msg.graphs });
-      }
-    }
-
-    return groups.reverse();
-  })();
-
-  const handleSelectSession = (id: string) => {
-    if (isStreaming) return;
-    setActiveSessionId(id);
-  };
-
-  const handleSendMessage = async (text: string) => {
-    const sessionId = activeSessionId;
-    if (!sessionId || isStreaming || isBlockedByDisconnectedDb) return;
-
-    const isStale = () => activeSessionRef.current !== sessionId;
-
-    const userMsg: ChatMessage = {
-      id: `local-${Date.now()}`,
-      role: 'user',
-      content: text,
-      graphs: [],
-      created_at: new Date().toISOString(),
-    };
-    setMessages((prev) => [...prev, userMsg]);
-    // Once a message is sent, starter prompts and any previous followups no longer apply.
-    setSuggestedPrompts([]);
-    setFollowups([]);
-
-    setIsStreaming(true);
-    setStreamSteps([]);
-    setStreamError(null);
-
-    let sawMessageEvent = false;
-    let streamFailed = false;
-
-    // Upserts the single in-progress assistant bubble with the latest text
-    // seen so far, so the response prints incrementally as events arrive
-    // instead of only appearing once the whole stream finishes.
-    const upsertStreamingMessage = (text: string) => {
-      setMessages((prev) => {
-        const withoutProvisional = prev.filter((m) => m.id !== STREAM_MESSAGE_ID);
-        return [
-          ...withoutProvisional,
-          {
-            id: STREAM_MESSAGE_ID,
-            role: 'assistant',
-            content: text,
-            graphs: [],
-            created_at: new Date().toISOString(),
-          },
-        ];
-      });
-    };
-
+    setCreating(true);
     try {
-      for await (const event of api.streamQuery(sessionId, text)) {
-        if (isStale()) return;
-
-        if (event.type === 'step') {
-          setStreamSteps((prev) => [...prev, event.step]);
-        } else if (event.type === 'message') {
-          sawMessageEvent = true;
-          upsertStreamingMessage(event.step);
-        } else if (event.type === 'error') {
-          streamFailed = true;
-          setStreamError(event.message);
-        } else if (event.type === 'done') {
-          break;
-        }
-      }
+      const created = await api.createDatabase(form);
+      onDatabaseCreated(created);
+      setForm(emptyForm);
+      setTab('existing');
     } catch (err) {
-      if (!isStale()) {
-        streamFailed = true;
-        if (err instanceof MissingDbConnectionError) {
-          setQueryMissingDbIds(err.missingDbIds);
-          setStreamError(null);
-          // The query never actually ran — remove the optimistic user
-          // message so the thread doesn't imply it was processed.
-          setMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
-        } else {
-          setStreamError(err instanceof Error ? err.message : 'Something went wrong while running your query.');
-        }
-      }
-    }
-
-    if (isStale()) return;
-
-    setIsStreaming(false);
-    setStreamSteps([]);
-
-    if (!sawMessageEvent || streamFailed) {
-      // Nothing usable streamed back — drop the placeholder bubble if present.
-      setMessages((prev) => prev.filter((m) => m.id !== STREAM_MESSAGE_ID));
-    } else {
-      // Reconcile with the server's message list to swap the provisional
-      // bubble for the real message (real id + any graphs attached to it,
-      // since the stream itself doesn't carry graphs).
-      try {
-        const freshMessages = await api.getMessages(sessionId);
-        if (!isStale()) setMessages(freshMessages);
-      } catch {
-        // Keep the provisional message on screen if the refresh fails — the
-        // user still sees the answer, just without graphs until they retry.
-      }
-    }
-
-    if (isStale() || streamFailed || !sawMessageEvent) return;
-
-    // Once the stream completes, fetch fresh follow-up question suggestions.
-    setFollowupsLoading(true);
-    try {
-      const res = await api.getFollowups(sessionId);
-      if (!isStale()) setFollowups(res.followups);
-    } catch {
-      // Follow-ups are a nice-to-have; fail silently rather than blocking the chat.
+      setCreateError(err instanceof Error ? err.message : 'Failed to create database.');
     } finally {
-      if (!isStale()) setFollowupsLoading(false);
+      setCreating(false);
     }
   };
 
-  const handleDatabaseCreated = (db: DatabaseItem) => {
-    setDatabases((prev) => [...prev, db]);
-  };
-
-  const handleDatabaseConnected = (dbId: string, cacheUntil: string) => {
-    setDatabases((prev) =>
-      prev.map((db) => (db.id === dbId ? { ...db, connected: true, cache_until: cacheUntil } : db))
-    );
-  };
-
-  const handleDatabaseDisconnected = (dbId: string) => {
-    setDatabases((prev) =>
-      prev.map((db) => (db.id === dbId ? { ...db, connected: false, cache_until: null } : db))
-    );
-  };
-
-  const handleSessionCreated = (session: SessionItem) => {
-    // De-duplicate defensively: if a rapid double-submit (or any other
-    // race) ever produces two session entries with the same id, keep only
-    // the newest one rather than showing duplicate rows in the list.
-    setSessions((prev) => [session, ...prev.filter((s) => s.id !== session.id)]);
-    setSessionSliderOpen(false);
-
-    if (session.id === activeSessionId) {
-      // Selecting "the same" session id wouldn't normally re-trigger the
-      // data-loading effect (React bails out on an unchanged state value),
-      // which would leave a stale view showing no messages/prompts for a
-      // session that's actually brand new. Force the effect to run again
-      // for this session explicitly.
-      loadSessionData(session.id);
-    } else {
-      setActiveSessionId(session.id);
+  const handleDisconnect = async (db: DatabaseItem) => {
+    setBusyDbId(db.id);
+    try {
+      await api.disconnectDatabase(db.id);
+      onDatabaseDisconnected(db.id);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setBusyDbId(null);
     }
   };
 
-  const handleResizeStart = (e: React.PointerEvent<HTMLDivElement>) => {
+  const handleFilePick = (fileList: FileList | null) => {
+    const file = fileList?.[0];
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+      setCsvError('Only .csv files are supported.');
+      return;
+    }
+    setCsvError(null);
+    setCsvFile(file);
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLButtonElement>) => {
     e.preventDefault();
-    dragStartXRef.current = e.clientX;
-    dragStartWidthRef.current = chatColWidth;
-    setIsResizing(true);
+    e.stopPropagation();
+    if (!isDraggingCsv) setIsDraggingCsv(true);
   };
 
-  useEffect(() => {
-    if (!isResizing) return;
+  const handleDragLeave = (e: React.DragEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Ignore dragleave events fired when moving between child elements of
+    // the drop zone — only actually clear the state once the pointer has
+    // left the drop zone itself.
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setIsDraggingCsv(false);
+  };
 
-    const handlePointerMove = (e: PointerEvent) => {
-      const delta = e.clientX - dragStartXRef.current;
-      const bodyWidth = bodyRef.current?.clientWidth ?? Infinity;
-      const maxWidth = Math.max(CHAT_COL_MIN_WIDTH, bodyWidth - NAV_COL_WIDTH - RESULTS_COL_MIN_WIDTH);
-      const nextWidth = Math.min(maxWidth, Math.max(CHAT_COL_MIN_WIDTH, dragStartWidthRef.current + delta));
-      setChatColWidth(nextWidth);
-    };
+  const handleDrop = (e: React.DragEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingCsv(false);
+    handleFilePick(e.dataTransfer.files);
+  };
 
-    const handlePointerUp = () => setIsResizing(false);
-
-    window.addEventListener('pointermove', handlePointerMove);
-    window.addEventListener('pointerup', handlePointerUp);
-    return () => {
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', handlePointerUp);
-    };
-  }, [isResizing]);
+  const handleCsvUpload = async () => {
+    setCsvError(null);
+    if (!csvFile) {
+      setCsvError('Please select a CSV file to upload.');
+      return;
+    }
+    if (!csvForm.name.trim() || !csvForm.table_name.trim()) {
+      setCsvError('Please provide both a name and a table name.');
+      return;
+    }
+    setCsvUploading(true);
+    try {
+      const created = await api.uploadCsv({
+        file: csvFile,
+        name: csvForm.name.trim(),
+        table_name: csvForm.table_name.trim(),
+      });
+      onDatabaseCreated(created);
+      setCsvForm(emptyCsvForm);
+      setCsvFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      setTab('existing');
+    } catch (err) {
+      setCsvError(err instanceof Error ? err.message : 'Failed to upload CSV file.');
+    } finally {
+      setCsvUploading(false);
+    }
+  };
 
   return (
-    <div className={styles['db-analytics']}>
-      <header className={styles['db-analytics__feature-header']}>
-        <div className={styles['db-analytics__feature-header-main']}>
-          <span className={styles['db-analytics__feature-header-icon']}>
-            <Icon.databaseInsights size={18} aria-hidden="true" />
-          </span>
-          <div className={styles['db-analytics__feature-header-text']}>
-            <h1 className={styles['db-analytics__feature-header-title']}>DB Analytics</h1>
-            <p className={styles['db-analytics__feature-header-subtitle']}>
-              Ask questions about your databases in natural language and get instant charts and insights.
-            </p>
-          </div>
+    <div className={styles['db-analytics-slider-overlay']} role="dialog" aria-modal="true">
+      <div className={styles['db-analytics-slider-overlay__backdrop']} onClick={onClose} />
+      <aside className={styles['db-analytics-slider-panel']}>
+        <div className={styles['db-analytics-slider-panel__header']}>
+          <h2 className={styles['db-analytics-slider-panel__title']}>Manage databases</h2>
+          <button className={styles['db-analytics-slider-panel__close-btn']} aria-label="Close" onClick={onClose}>
+            <Icon.close size={16} aria-hidden="true" />
+          </button>
         </div>
-        <span className={styles['db-analytics__feature-header-badge']}>
-          <span className={styles['db-analytics__feature-header-badge-dot']} aria-hidden="true" />
-          <span className={styles['db-analytics__feature-header-badge-text']}>
-            {databases.filter((db) => db.connected).length} database
-            {databases.filter((db) => db.connected).length !== 1 ? 's' : ''} connected
-          </span>
-        </span>
-      </header>
 
-
-      <main
-        ref={bodyRef}
-        className={`${styles['db-analytics__body']} ${isResizing ? styles['db-analytics--resizing'] : ''}`}
-        style={{ ['--db-analytics-chat-col-width' as string]: `${chatColWidth}px` }}
-      >
-        <section className={`${styles['db-analytics__col']} ${styles['db-analytics__col--nav']}`}>
-          <SessionHistory
-            sessions={sessions}
-            activeSessionId={activeSessionId}
-            onSelect={handleSelectSession}
-            onNewSession={() => setSessionSliderOpen(true)}
-            disabled={isStreaming}
-            loading={loading}
-          />
-          <DatabaseList
-            databases={databases}
-            onManage={() => setDbSliderOpen(true)}
-            disabled={isStreaming}
-            loading={loading}
-          />
-        </section>
-
-        <section className={`${styles['db-analytics__col']} ${styles['db-analytics__col--chat']}`}>
-          <div
-            className={`${styles['db-analytics__resize-handle']} ${
-              isResizing ? styles['db-analytics__resize-handle--active'] : ''
+        <div className={styles['db-analytics-slider-tabs']}>
+          <button
+            className={`${styles['db-analytics-slider-tabs__item']} ${
+              tab === 'existing' ? styles['db-analytics-slider-tabs__item--active'] : ''
             }`}
-            onPointerDown={handleResizeStart}
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize chat panel"
-            title="Drag to resize"
-          />
-          <ChatPanel
-            sessionTitle={activeSession?.name ?? (loading ? 'Loading…' : 'No session selected')}
-            messages={messages}
-            loading={loading || messagesLoading}
-            hasActiveSession={!!activeSessionId}
-            suggestedPrompts={suggestedPrompts}
-            suggestedPromptsLoading={suggestedPromptsLoading}
-            suggestedPromptsError={suggestedPromptsError}
-            isStreaming={isStreaming}
-            streamSteps={streamSteps}
-            streamError={streamError}
-            followups={followups}
-            followupsLoading={followupsLoading}
-            disconnectedDatabases={disconnectedSessionDbs}
-            onManageDatabases={() => setDbSliderOpen(true)}
-            onSend={handleSendMessage}
-          />
-        </section>
+            onClick={() => setTab('existing')}
+          >
+            Existing databases
+          </button>
+          <button
+            className={`${styles['db-analytics-slider-tabs__item']} ${
+              tab === 'new' ? styles['db-analytics-slider-tabs__item--active'] : ''
+            }`}
+            onClick={() => setTab('new')}
+          >
+            <Icon.plus size={14} aria-hidden="true" />
+            New connection
+          </button>
+          <button
+            className={`${styles['db-analytics-slider-tabs__item']} ${
+              tab === 'csv' ? styles['db-analytics-slider-tabs__item--active'] : ''
+            }`}
+            onClick={() => setTab('csv')}
+          >
+            <Icon.upload size={14} aria-hidden="true" />
+            Upload CSV
+          </button>
+        </div>
 
-        <section className={`${styles['db-analytics__col']} ${styles['db-analytics__col--results']}`}>
-          <ResultsPanel
-            chartGroups={chartGroups}
-            loadError={loadError ?? messagesError}
-            isGenerating={isStreaming}
-            sessionId={activeSessionId}
-          />
-        </section>
-      </main>
+        <div className={styles['db-analytics-slider-panel__body']}>
+          {tab === 'existing' ? (
+            <ul className={styles['db-analytics-db-manage-list']}>
+              {databases.length === 0 && (
+                <li className={styles['db-analytics-db-manage-empty']}>
+                  <span className={styles['db-analytics-db-manage-empty__icon']}>
+                    <Icon.database size={22} aria-hidden="true" />
+                  </span>
+                  <p className={styles['db-analytics-db-manage-empty__title']}>No databases yet</p>
+                  <p className={styles['db-analytics-db-manage-empty__desc']}>
+                    Create a connection or upload a CSV file to start querying data.
+                  </p>
+                </li>
+              )}
+              {databases.map((db, index) => {
+                const typeMeta = getDbTypeMeta(db.db_type);
+                const isCsv = db.db_type === 'csv';
+                return (
+                  <li key={db.id ? `${db.id}-${index}` : `db-${index}`} className={styles['db-analytics-db-manage-item']}>
+                    <div className={styles['db-analytics-db-manage-item__top']}>
+                      <div className={styles['db-analytics-db-manage-item__identity']}>
+                        <div
+                          className={`${styles['db-analytics-db-manage-item__icon']} ${
+                            styles[`db-analytics-db-manage-item__icon--${typeMeta.modifier}`] ?? ''
+                          }`}
+                        >
+                          {isCsv ? (
+                            <Icon.csv size={17} aria-hidden="true" />
+                          ) : (
+                            <Icon.database size={17} aria-hidden="true" />
+                          )}
+                        </div>
+                        <div className={styles['db-analytics-db-manage-item__name-block']}>
+                          <span className={styles['db-analytics-db-manage-item__name']}>{db.name}</span>
+                          <span
+                            className={`${styles['db-analytics-db-manage-item__type-badge']} ${
+                              styles[`db-analytics-db-manage-item__type-badge--${typeMeta.modifier}`] ?? ''
+                            }`}
+                          >
+                            {typeMeta.label}
+                          </span>
+                        </div>
+                      </div>
+                      {isCsv ? (
+                        <span
+                          className={`${styles['db-analytics-db-status']} ${styles['db-analytics-db-status--connected']}`}
+                        >
+                          <span className={styles['db-analytics-db-status__dot']} aria-hidden="true" />
+                          Ready
+                        </span>
+                      ) : (
+                        <span
+                          className={`${styles['db-analytics-db-status']} ${
+                            db.connected
+                              ? styles['db-analytics-db-status--connected']
+                              : styles['db-analytics-db-status--disconnected']
+                          }`}
+                        >
+                          <span className={styles['db-analytics-db-status__dot']} aria-hidden="true" />
+                          {db.connected ? 'Connected' : 'Disconnected'}
+                        </span>
+                      )}
+                    </div>
 
-      <DatabaseManagerSlider
-        open={dbSliderOpen}
-        databases={databases}
-        onClose={() => setDbSliderOpen(false)}
-        onDatabaseCreated={handleDatabaseCreated}
-        onDatabaseConnected={handleDatabaseConnected}
-        onDatabaseDisconnected={handleDatabaseDisconnected}
-      />
+                    <dl className={styles['db-analytics-db-manage-item__meta-grid']}>
+                      <div className={styles['db-analytics-db-manage-item__meta-cell']}>
+                        <dt>{isCsv ? 'Table' : 'Database'}</dt>
+                        <dd>{db.db_name}</dd>
+                      </div>
+                      {!isCsv && (
+                        <div className={styles['db-analytics-db-manage-item__meta-cell']}>
+                          <dt>Port</dt>
+                          <dd>{db.port}</dd>
+                        </div>
+                      )}
+                      <div className={styles['db-analytics-db-manage-item__meta-cell']}>
+                        <dt>{isCsv ? 'Source' : 'User'}</dt>
+                        <dd>{isCsv ? 'CSV upload' : db.username}</dd>
+                      </div>
+                    </dl>
 
-      <NewSessionSlider
-        open={sessionSliderOpen}
-        databases={databases}
-        onClose={() => setSessionSliderOpen(false)}
-        onCreated={handleSessionCreated}
-        onManageDatabases={() => {
-          setSessionSliderOpen(false);
-          setDbSliderOpen(true);
-        }}
-      />
+                    <div className={styles['db-analytics-db-manage-item__footer']}>
+                      <button
+                        type="button"
+                        className={`${styles['db-analytics-btn']} ${styles['db-analytics-btn--icon']}`}
+                        onClick={() => setSchemaTarget(db)}
+                        disabled={!isCsv && !db.connected}
+                        title={
+                          isCsv || db.connected
+                            ? 'View schema & ER diagram'
+                            : 'Connect this database to view its schema'
+                        }
+                        aria-label="View schema and ER diagram"
+                      >
+                        <Icon.schema size={14} aria-hidden="true" />
+                      </button>
+                      {!isCsv &&
+                        (db.connected ? (
+                          <button
+                            className={`${styles['db-analytics-btn']} ${styles['db-analytics-btn--ghost']} ${styles['db-analytics-btn--sm']}`}
+                            onClick={() => handleDisconnect(db)}
+                            disabled={busyDbId === db.id}
+                          >
+                            {busyDbId === db.id ? 'Disconnecting…' : 'Disconnect'}
+                          </button>
+                        ) : (
+                          <button
+                            className={`${styles['db-analytics-btn']} ${styles['db-analytics-btn--primary']} ${styles['db-analytics-btn--sm']}`}
+                            onClick={() => setConnectTarget(db)}
+                          >
+                            Connect
+                          </button>
+                        ))}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : tab === 'new' ? (
+            <div className={styles['db-analytics-form-card']}>
+              <div className={styles['db-analytics-form-card__header']}>
+                <span className={styles['db-analytics-form-card__icon']}>
+                  <Icon.database size={16} aria-hidden="true" />
+                </span>
+                <div>
+                  <h3 className={styles['db-analytics-form-card__title']}>New database connection</h3>
+                  <p className={styles['db-analytics-form-card__subtitle']}>
+                    Connect a MySQL or PostgreSQL database to query from this workspace.
+                  </p>
+                </div>
+              </div>
+
+              <div className={styles['db-analytics-form']}>
+                {createError && <div className={styles['db-analytics-form__error']}>{createError}</div>}
+
+                <label className={styles['db-analytics-form__field']}>
+                  <span className={styles['db-analytics-form__label']}>Connection name</span>
+                  <input
+                    className={styles['db-analytics-form__input']}
+                    value={form.name}
+                    onChange={(e) => updateField('name', e.target.value)}
+                    placeholder="e.g. Production Warehouse"
+                  />
+                </label>
+
+                <label className={styles['db-analytics-form__field']}>
+                  <span className={styles['db-analytics-form__label']}>Database type</span>
+                  <select
+                    className={styles['db-analytics-form__input']}
+                    value={form.db_type}
+                    onChange={(e) => updateField('db_type', e.target.value as CreateDbPayload['db_type'])}
+                  >
+                    <option value="mysql">MySQL</option>
+                    <option value="postgres">PostgreSQL</option>
+                  </select>
+                </label>
+
+                <div className={styles['db-analytics-form__row']}>
+                  <label className={styles['db-analytics-form__field']}>
+                    <span className={styles['db-analytics-form__label']}>Host</span>
+                    <input
+                      className={styles['db-analytics-form__input']}
+                      value={form.host}
+                      onChange={(e) => updateField('host', e.target.value)}
+                      placeholder="e.g. 10.0.0.4"
+                    />
+                  </label>
+                  <label
+                    className={`${styles['db-analytics-form__field']} ${styles['db-analytics-form__field--narrow']}`}
+                  >
+                    <span className={styles['db-analytics-form__label']}>Port</span>
+                    <input
+                      className={styles['db-analytics-form__input']}
+                      type="number"
+                      value={form.port}
+                      onChange={(e) => updateField('port', Number(e.target.value))}
+                    />
+                  </label>
+                </div>
+
+                <label className={styles['db-analytics-form__field']}>
+                  <span className={styles['db-analytics-form__label']}>Database name</span>
+                  <input
+                    className={styles['db-analytics-form__input']}
+                    value={form.db_name}
+                    onChange={(e) => updateField('db_name', e.target.value)}
+                    placeholder="e.g. analytics_prod"
+                  />
+                </label>
+
+                <label className={styles['db-analytics-form__field']}>
+                  <span className={styles['db-analytics-form__label']}>Username</span>
+                  <input
+                    className={styles['db-analytics-form__input']}
+                    value={form.username}
+                    onChange={(e) => updateField('username', e.target.value)}
+                    placeholder="e.g. readonly_user"
+                  />
+                </label>
+
+                <p className={styles['db-analytics-form__hint']}>
+                  <Icon.infoCircle size={14} aria-hidden="true" /> You'll be asked for the password
+                  separately when connecting.
+                </p>
+
+                <div className={styles['db-analytics-form__actions']}>
+                  <button
+                    className={`${styles['db-analytics-btn']} ${styles['db-analytics-btn--ghost']}`}
+                    onClick={() => setForm(emptyForm)}
+                    disabled={creating}
+                  >
+                    Reset
+                  </button>
+                  <button
+                    className={`${styles['db-analytics-btn']} ${styles['db-analytics-btn--primary']}`}
+                    onClick={handleCreate}
+                    disabled={creating}
+                  >
+                    {creating ? 'Creating…' : 'Create connection'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className={styles['db-analytics-form-card']}>
+              <div className={styles['db-analytics-form-card__header']}>
+                <span
+                  className={`${styles['db-analytics-form-card__icon']} ${styles['db-analytics-form-card__icon--csv']}`}
+                >
+                  <Icon.csv size={16} aria-hidden="true" />
+                </span>
+                <div>
+                  <h3 className={styles['db-analytics-form-card__title']}>Upload a CSV file</h3>
+                  <p className={styles['db-analytics-form-card__subtitle']}>
+                    Turn a spreadsheet into a queryable table — no database connection required.
+                  </p>
+                </div>
+              </div>
+
+              <div className={styles['db-analytics-form']}>
+                {csvError && <div className={styles['db-analytics-form__error']}>{csvError}</div>}
+
+                <label className={styles['db-analytics-form__field']}>
+                  <span className={styles['db-analytics-form__label']}>CSV file</span>
+                  <button
+                    type="button"
+                    className={`${styles['db-analytics-file-drop']} ${
+                      csvFile ? styles['db-analytics-file-drop--filled'] : ''
+                    } ${isDraggingCsv ? styles['db-analytics-file-drop--dragging'] : ''}`}
+                    onClick={() => fileInputRef.current?.click()}
+                    onDragOver={handleDragOver}
+                    onDragEnter={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                  >
+                    <span className={styles['db-analytics-file-drop__icon']}>
+                      {csvFile ? (
+                        <Icon.csv size={18} aria-hidden="true" />
+                      ) : (
+                        <Icon.upload size={18} aria-hidden="true" />
+                      )}
+                    </span>
+                    <span className={styles['db-analytics-file-drop__text']}>
+                      <span className={styles['db-analytics-file-drop__title']}>
+                        {isDraggingCsv
+                          ? 'Drop your CSV file here'
+                          : csvFile
+                          ? csvFile.name
+                          : 'Choose a .csv file'}
+                      </span>
+                      <span className={styles['db-analytics-file-drop__subtitle']}>
+                        {isDraggingCsv
+                          ? 'Release to select this file'
+                          : csvFile
+                          ? `${(csvFile.size / 1024).toFixed(1)} KB — click to change`
+                          : 'Drag & drop or click to browse — only .csv files are accepted'}
+                      </span>
+                    </span>
+                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".csv,text/csv"
+                    className={styles['db-analytics-file-drop__input']}
+                    onChange={(e) => handleFilePick(e.target.files)}
+                  />
+                </label>
+
+                <label className={styles['db-analytics-form__field']}>
+                  <span className={styles['db-analytics-form__label']}>Name</span>
+                  <input
+                    className={styles['db-analytics-form__input']}
+                    value={csvForm.name}
+                    onChange={(e) => setCsvForm((prev) => ({ ...prev, name: e.target.value }))}
+                    placeholder="e.g. Sample"
+                  />
+                </label>
+
+                <label className={styles['db-analytics-form__field']}>
+                  <span className={styles['db-analytics-form__label']}>Table name</span>
+                  <input
+                    className={styles['db-analytics-form__input']}
+                    value={csvForm.table_name}
+                    onChange={(e) => setCsvForm((prev) => ({ ...prev, table_name: e.target.value }))}
+                    placeholder="e.g. Sample Table"
+                  />
+                </label>
+
+                <p className={styles['db-analytics-form__hint']}>
+                  <Icon.infoCircle size={14} aria-hidden="true" /> Uploaded CSVs are ready to query
+                  immediately — no password or connection step needed.
+                </p>
+
+                <div className={styles['db-analytics-form__actions']}>
+                  <button
+                    className={`${styles['db-analytics-btn']} ${styles['db-analytics-btn--ghost']}`}
+                    onClick={() => {
+                      setCsvForm(emptyCsvForm);
+                      setCsvFile(null);
+                      setCsvError(null);
+                      if (fileInputRef.current) fileInputRef.current.value = '';
+                    }}
+                    disabled={csvUploading}
+                  >
+                    Reset
+                  </button>
+                  <button
+                    className={`${styles['db-analytics-btn']} ${styles['db-analytics-btn--primary']}`}
+                    onClick={handleCsvUpload}
+                    disabled={csvUploading}
+                  >
+                    {csvUploading ? 'Uploading…' : 'Upload CSV'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </aside>
+
+      {connectTarget && (
+        <ConnectPasswordModal
+          database={connectTarget}
+          onClose={() => setConnectTarget(null)}
+          onConnected={(cacheUntil) => {
+            onDatabaseConnected(connectTarget.id, cacheUntil);
+            setConnectTarget(null);
+          }}
+        />
+      )}
+
+      <DbSchemaSlider database={schemaTarget} onClose={() => setSchemaTarget(null)} />
     </div>
   );
 };
 
-export default DBAnalytics;
+export default DatabaseManagerSlider;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//ResultsPanel.module.scss
+@use '../../../styles/tokens' as t;
+
+.db-analytics-results-panel {
+  background: t.$surface-2;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+}
+
+.db-analytics-results-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 53px;
+  padding: 0 16px;
+  border-bottom: 1px solid t.$border-strong;
+  background: t.$surface-1;
+  flex-shrink: 0;
+}
+
+.db-analytics-results-panel__header-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  min-width: 0;
+}
+
+.db-analytics-results-panel__title {
+  font-size: 14px;
+  font-weight: 500;
+  margin: 0;
+  color: t.$text-primary;
+  line-height: 1.3;
+}
+
+.db-analytics-results-panel__subtitle {
+  font-size: 11px;
+  color: t.$text-muted;
+  margin: 0;
+  line-height: 1.3;
+}
+
+.db-analytics-results-panel__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+
+  // Force a classic, always-visible scrollbar rather than relying on the
+  // OS/browser's overlay scrollbar, which only paints on hover/scroll and
+  // fades out immediately after on many systems.
+  scrollbar-width: thin;
+  scrollbar-color: t.$border-stronger transparent;
+
+  &::-webkit-scrollbar {
+    width: 8px;
+    -webkit-appearance: none;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: t.$surface-0;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: t.$border-stronger;
+    border-radius: 999px;
+    border: 2px solid t.$surface-0;
+  }
+
+  &::-webkit-scrollbar-thumb:hover {
+    background: t.$text-muted;
+  }
+}
+
+.db-analytics-results-panel__error {
+  margin: 12px;
+  font-size: 12px;
+  color: #791f1f;
+  background: #fbe9e9;
+  padding: 8px 11px;
+  border-radius: t.$radius;
+}
+
+.db-analytics-chart-groups {
+  display: flex;
+  flex-direction: column;
+}
+
+.db-analytics-chart-groups__divider {
+  height: 1px;
+  margin: 4px 20px 8px;
+  background: t.$border-strong;
+}
+
+.db-analytics-chart-group__prompt {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 4px 12px 8px;
+}
+
+.db-analytics-chart-group__prompt-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: t.$surface-0;
+  color: t.$text-muted;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.db-analytics-chart-group__prompt-text {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: t.$text-primary;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.db-analytics-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 12px;
+}
+
+@media (max-width: 1500px) {
+  .db-analytics-chart-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .db-analytics-chart-card--span-2 {
+    grid-column: auto;
+  }
+}
+
+.db-analytics-chart-card {
+  border: 1px solid t.$border-strong;
+  border-radius: t.$radius-lg;
+  padding: 14px 16px 16px;
+  min-width: 0;
+  background: t.$surface-2;
+  box-shadow: 0 1px 3px rgba(11, 11, 11, 0.05);
+}
+
+.db-analytics-chart-card--span-2 {
+  grid-column: 1 / -1;
+}
+
+.db-analytics-chart-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  padding-bottom: 11px;
+  border-bottom: 0.5px solid t.$border;
+}
+
+.db-analytics-chart-card__heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.db-analytics-chart-card__icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: t.$gradient-primary;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 2px 6px rgba(79, 70, 229, 0.25);
+}
+
+.db-analytics-chart-card__title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: t.$text-primary;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.db-analytics-chart-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.db-analytics-chart-card__expand-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  border: 0.5px solid t.$border-strong;
+  background: t.$surface-0;
+  color: t.$text-secondary;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+
+  &:hover {
+    background: t.$surface-2;
+    border-color: t.$border-stronger;
+    color: t.$text-primary;
+  }
+}
+
+.db-analytics-chart-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  row-gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 0.5px solid t.$border;
+}
+
+.db-analytics-chart-legend__divider {
+  width: 1px;
+  align-self: stretch;
+  min-height: 16px;
+  background: t.$border-strong;
+  margin: 0 12px;
+  flex-shrink: 0;
+}
+
+.db-analytics-chart-legend__item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: t.$text-secondary;
+  white-space: nowrap;
+}
+
+.db-analytics-chart-legend__swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.db-analytics-chart-legend__name {
+  max-width: 140px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: t.$text-primary;
+  font-weight: 500;
+}
+
+.db-analytics-chart-legend__pct {
+  font-weight: 700;
+  color: t.$text-primary;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.db-analytics-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 48px 16px;
+  color: t.$text-muted;
+  text-align: center;
+  min-height: 100%;
+  box-sizing: border-box;
+
+  p {
+    font-size: 13px;
+    margin: 0;
+    max-width: 220px;
+  }
+}
+
+.db-analytics-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.db-analytics-kpi-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 16px 14px;
+  border-radius: t.$radius-lg;
+  background: t.$surface-0;
+  border: 1px solid t.$border;
+  overflow: hidden;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(11, 11, 11, 0.07);
+    border-color: t.$border-strong;
+  }
+}
+
+.db-analytics-kpi-card__label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  color: t.$text-secondary;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.db-analytics-kpi-card__value {
+  font-size: 25px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  color: t.$text-primary;
+}
+
+.db-analytics-table-wrap {
+  overflow-x: auto;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.db-analytics-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+
+  th {
+    text-align: left;
+    font-weight: 500;
+    color: t.$text-secondary;
+    padding: 6px 10px;
+    border-bottom: 1px solid t.$border-strong;
+    background: t.$surface-1;
+    position: sticky;
+    top: 0;
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 6px 10px;
+    border-bottom: 0.5px solid t.$border;
+    color: t.$text-primary;
+    white-space: nowrap;
+  }
+
+  tr:last-child td {
+    border-bottom: none;
+  }
+}
+
+.db-analytics-chart-card__no-data {
+  padding: 24px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: t.$text-muted;
+}
+
 
 
 
@@ -1243,6 +1953,7 @@ import { Icon, IconComponent } from '../icons';
 import ChartTypeMenu from './ChartTypeMenu';
 import ExpandChartSlider from './ExpandChartSlider';
 import ChartAskAiSlider from './ChartAskAiSlider';
+import ChartConstructingAnimation from './ChartConstructingAnimation';
 
 interface Props {
   chartGroups: ChartGroup[];
@@ -1597,18 +2308,9 @@ const ResultsPanel: React.FC<Props> = ({ chartGroups, loadError, isGenerating, s
       <div className={styles['db-analytics-results-panel__body']}>
         {loadError && <div className={styles['db-analytics-results-panel__error']}>{loadError}</div>}
 
-        {isGenerating && (
-          <div className={styles['db-analytics-generating-banner']}>
-            <Icon.chartAreaLine
-              size={18}
-              aria-hidden="true"
-              className={styles['db-analytics-empty-state__icon--generating']}
-            />
-            <span>Drawing your chart…</span>
-          </div>
-        )}
-
-        {showEmptyState && !isGenerating ? (
+        {isGenerating ? (
+          <ChartConstructingAnimation />
+        ) : showEmptyState ? (
           <div className={styles['db-analytics-empty-state']}>
             <Icon.chartAreaLine size={28} aria-hidden="true" />
             <p>Charts generated from your chat will appear here.</p>
