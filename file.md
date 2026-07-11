@@ -1,447 +1,4 @@
 // ═══════════════════════════════════════════════
-// store/uploadSlice.ts
-// Content Analytics · Upload & Inference state
-// ═══════════════════════════════════════════════
-import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
-
-// ── Server file (from /files/by-date/) ──────────
-// "tbd" = not yet inferenced, "completed" = inferenced.
-export type FileStatus = 'waiting' | 'running' | 'completed' | 'error' | 'tbd' | 'queued';
-
-export interface ServerFile {
-  id: number;
-  original_name: string;
-  inserted_at: string;
-  summary_prompt: string;
-  keywords_prompt: string;
-  faq_prompt: string;
-  progress: string | number | null;
-  dictionary_id?: number | null;
-  prompt_template_id?: number | null;
-  status: FileStatus;
-}
-
-// ── /files/by-date/ pagination params & sort keys ──
-export type FilesSortBy = 'id' | 'original_name' | 'inserted_at' | 'status';
-export type SortOrder = 'asc' | 'desc';
-
-export interface ServerFilesData {
-  queued: ServerFile[];
-  completed: ServerFile[];
-  pending: ServerFile[];
-  running: ServerFile[];
-}
-
-export interface UploadedFile {
-  id: number;
-  name: string;
-  size: string;
-  type: 'vtt' | 'srt';
-  status: 'ready' | 'running' | 'done' | 'failed';
-  summaryPrompt: string;
-  questionPrompt: string;
-}
-
-export interface BatchFile {
-  id: number;
-  name: string;
-  size: string;
-  type: 'vtt' | 'srt';
-  progress?: number;
-}
-
-export interface BatchGroup {
-  id: string;
-  status: 'running' | 'queued' | 'done' | 'pending';
-  files: BatchFile[];
-  collapsed: boolean;
-}
-
-export interface InferenceSettings {
-  generateSummary: boolean;
-  generateKeywords: boolean;
-  generateQuestions: boolean;
-  summaryStyle: string;
-  timestampInterval: string;
-  languageOutput: string;
-  mcq: boolean;
-  trueFalse: boolean;
-  shortAnswer: boolean;
-  questionCount: number;
-  keywordCount: number;
-  summaryPromptOverride: string;
-  keywordPromptOverride: string;
-  questionPromptOverride: string;
-}
-
-interface UploadState {
-  files: UploadedFile[];
-  selectedIds: number[];
-  settingsCollapsed: boolean;
-  batchVisible: boolean;
-  batchGroups: BatchGroup[];
-  settings: InferenceSettings;
-  uploadZoneCollapsed: boolean;
-
-  // ── Server files (from /files/by-date/) ──
-  // NOTE: serverFilesData is now populated exclusively by inferenceStatusSuccess
-  // (the /files/by-progress/ polling endpoint), which still returns the old
-  // bucketed shape. /files/by-date/ is paginated and returns a flat, per-file
-  // `status` — so it no longer feeds serverFilesData.
-  serverFilesData: ServerFilesData;          // raw split by status (from /files/by-progress/)
-  serverFiles: ServerFile[];             // current page of /files/by-date/ results
-  serverFilesLoading: boolean;
-  serverFilesError: string | null;
-  dateFrom: string;
-  dateTo: string;
-
-  // ── /files/by-date/ pagination, sort & search ──
-  filesPage: number;
-  filesPageSize: number;
-  filesTotal: number;
-  filesTotalPages: number;
-  filesSortBy: FilesSortBy;
-  filesSortOrder: SortOrder;
-  filesSearch: string;
-
-  // ── Selection on uploaded files ──
-  selectedServerIds: number[];
-
-  // ── Batch running state ──
-  isBatchRunning: boolean;                  // true while queued/running not empty
-  lastBatchFinishedAt: number | null;       // timestamp (Date.now()) set when batch transitions running→done
-
-  // ── Models ──
-  models: string[];
-  modelsLoading: boolean;
-  selectedModel: string;
-}
-
-function toDateStr(d: Date) { return d.toISOString().slice(0, 10); }
-function defaultFrom() { const d = new Date(); d.setMonth(d.getMonth() - 1); return toDateStr(d); }
-function defaultTo() { return toDateStr(new Date()); }
-
-const emptyData: ServerFilesData = { queued: [], completed: [], pending: [], running: [] };
-
-const initialState: UploadState = {
-  files: [],
-  selectedIds: [],
-  uploadZoneCollapsed: false,
-  settingsCollapsed: false,
-  batchVisible: false,
-  batchGroups: [],
-  settings: {
-    generateSummary: true, generateKeywords: true, generateQuestions: true,
-    summaryStyle: 'Table of Contents', timestampInterval: '5 minute segments',
-    languageOutput: 'Korean + English',
-    mcq: true, trueFalse: true, shortAnswer: false,
-    questionCount: 10, keywordCount: 15,
-    summaryPromptOverride: '', keywordPromptOverride: '', questionPromptOverride: '',
-  },
-  serverFilesData: emptyData,
-  serverFiles: [],
-  serverFilesLoading: false,
-  serverFilesError: null,
-  dateFrom: defaultFrom(),
-  dateTo: defaultTo(),
-
-  filesPage: 1,
-  filesPageSize: 100,
-  filesTotal: 0,
-  filesTotalPages: 1,
-  filesSortBy: 'id',
-  filesSortOrder: 'desc',
-  filesSearch: '',
-
-  selectedServerIds: [],
-  isBatchRunning: false,
-  lastBatchFinishedAt: null,
-  models: [],
-  modelsLoading: false,
-  selectedModel: '',
-};
-
-const uploadSlice = createSlice({
-  name: 'upload',
-  initialState,
-  reducers: {
-    // ── Inference legacy ──
-    toggleFileSelection(state, action: PayloadAction<number>) {
-      const idx = state.selectedIds.indexOf(action.payload);
-      if (idx > -1) state.selectedIds.splice(idx, 1);
-      else state.selectedIds.push(action.payload);
-    },
-    toggleSelectAll(state) {
-      const allIds = state.files.map(f => f.id);
-      state.selectedIds = state.selectedIds.length === allIds.length ? [] : allIds;
-    },
-    toggleUploadZone(state) {
-      state.uploadZoneCollapsed = !state.uploadZoneCollapsed;
-    },
-    toggleBatchGroup(state, action: PayloadAction<string>) {
-      const g = state.batchGroups.find(g => g.id === action.payload);
-      if (g) g.collapsed = !g.collapsed;
-    },
-    runInference(state) {
-      state.batchVisible = true;
-    },
-    updateSummaryPrompt(state, action: PayloadAction<string>) {
-      state.settings.summaryPromptOverride = action.payload;
-    },
-    updateKeywordPrompt(state, action: PayloadAction<string>) {
-      state.settings.keywordPromptOverride = action.payload;
-    },
-    updateQuestionPrompt(state, action: PayloadAction<string>) {
-      state.settings.questionPromptOverride = action.payload;
-    },
-    updateSettings(state, action: PayloadAction<Partial<InferenceSettings>>) {
-      state.settings = { ...state.settings, ...action.payload };
-    },
-
-    // ── Date range ──
-    setDateFrom(state, action: PayloadAction<string>) { state.dateFrom = action.payload; },
-    setDateTo(state, action: PayloadAction<string>) { state.dateTo = action.payload; },
-
-    // ── Patch progress % onto running files from /files/progress/ response ──
-    updateRunningProgress(state, action: PayloadAction<Record<string, number | string>>) {
-      const progressMap = action.payload;
-      state.serverFilesData.running = state.serverFilesData.running.map(f => {
-        const raw = progressMap[String(f.id)];
-        if (raw === undefined) return f;
-        const pct = typeof raw === 'string' ? parseFloat(raw) : raw;
-        return { ...f, progress: isNaN(pct) ? f.progress : Math.min(100, Math.max(0, pct)) };
-      });
-    },
-
-    // ── Inference-only status update (does NOT touch the FilePanel file list) ──
-    inferenceStatusSuccess(state, action: PayloadAction<ServerFilesData>) {
-      const d = action.payload;
-      // Merge any newly-completed files from the polling response into the
-      // existing completed bucket. We keep the historical /by-date/ entries
-      // and append/replace any IDs that just finished in the active batch,
-      // so FilePanel badges flip to "Inferenced" the moment Step-2 moves a
-      // file into its Completed column — without needing another API call.
-      const incomingCompleted = d.completed ?? [];
-      const incomingCompletedIds = new Set(incomingCompleted.map(f => f.id));
-      const mergedCompleted = [
-        ...state.serverFilesData.completed.filter(f => !incomingCompletedIds.has(f.id)),
-        ...incomingCompleted,
-      ];
-      state.serverFilesData = {
-        queued: d.queued ?? [],
-        running: d.running ?? [],
-        pending: d.pending ?? [],
-        completed: mergedCompleted,
-      };
-      const running = (d.queued?.length ?? 0) > 0 || (d.running?.length ?? 0) > 0;
-      // Clear selections the moment the batch becomes active so highlighted
-      // cards stop showing the blue selected state after a successful submit.
-      if (running && !state.isBatchRunning) {
-        state.selectedServerIds = [];
-      }
-      // Auto-collapse settings when a batch starts running. (Previously derived
-      // from /files/by-date/, which is now paginated and can't reliably tell us this.)
-      if (running) state.settingsCollapsed = true;
-      // When batch transitions running → done, stamp a timestamp so FilePanel
-      // knows to re-fetch /by-date/ and refresh the completed list.
-      if (!running && state.isBatchRunning) {
-        state.lastBatchFinishedAt = Date.now();
-      }
-      state.isBatchRunning = running;
-    },
-
-    // ── Server files (paginated /files/by-date/) ──
-    serverFilesLoading(state) {
-      state.serverFilesLoading = true;
-      state.serverFilesError = null;
-    },
-    serverFilesSuccess(state, action: PayloadAction<{
-      files: ServerFile[];
-      total: number;
-      page: number;
-      pageSize: number;
-      totalPages: number;
-      sortBy: FilesSortBy;
-      sortOrder: SortOrder;
-      search: string;
-    }>) {
-      const { files, total, page, pageSize, totalPages, sortBy, sortOrder, search } = action.payload;
-      state.serverFiles = files;
-      state.serverFilesLoading = false;
-      state.serverFilesError = null;
-
-      state.filesTotal = total;
-      state.filesPage = page;
-      state.filesPageSize = pageSize;
-      state.filesTotalPages = totalPages;
-      state.filesSortBy = sortBy;
-      state.filesSortOrder = sortOrder;
-      state.filesSearch = search;
-
-      // NOTE: isBatchRunning is no longer derived here — /files/by-date/ is
-      // paginated so a running/queued file may simply be on another page.
-      // isBatchRunning is set by inferenceStatusSuccess (/files/by-progress/),
-      // which always reflects the full, unpaginated set of active files.
-
-      // NOTE: selections are intentionally NOT pruned against this page's ids —
-      // a file not present here may just be on a different page, not deleted.
-      // Deletion flows already clear selectedServerIds explicitly on success.
-    },
-    serverFilesFailure(state, action: PayloadAction<string>) {
-      state.serverFilesLoading = false;
-      state.serverFilesError = action.payload;
-    },
-
-    // ── Pagination / sort / search (kept in sync for UI display; the actual
-    //     fetch is triggered imperatively by the component with these values) ──
-    setFilesPage(state, action: PayloadAction<number>) {
-      state.filesPage = action.payload;
-    },
-    setFilesPageSize(state, action: PayloadAction<number>) {
-      state.filesPageSize = action.payload;
-      state.filesPage = 1;
-    },
-    setFilesSort(state, action: PayloadAction<{ sortBy: FilesSortBy; sortOrder: SortOrder }>) {
-      state.filesSortBy = action.payload.sortBy;
-      state.filesSortOrder = action.payload.sortOrder;
-      state.filesPage = 1;
-    },
-    setFilesSearch(state, action: PayloadAction<string>) {
-      state.filesSearch = action.payload;
-      state.filesPage = 1;
-    },
-
-    // ── Server file selection ──
-    toggleServerFileSelection(state, action: PayloadAction<number>) {
-      if (state.isBatchRunning) return;  // no selection while batch running
-      const idx = state.selectedServerIds.indexOf(action.payload);
-      if (idx > -1) state.selectedServerIds.splice(idx, 1);
-      else state.selectedServerIds.push(action.payload);
-    },
-    toggleSelectAllServerFiles(state) {
-      if (state.isBatchRunning) return;
-      const allIds = state.serverFiles.map(f => f.id);
-      state.selectedServerIds = state.selectedServerIds.length === allIds.length ? [] : allIds;
-    },
-    clearServerSelection(state) {
-      state.selectedServerIds = [];
-    },
-
-    // ── Patch prompt fields on saved files ──
-    updateFilePrompts(state, action: PayloadAction<{
-      fileIds: number[];
-      summaryPrompt?: string;
-      keywordsPrompt?: string;
-      faqPrompt?: string;
-    }>) {
-      const { fileIds, summaryPrompt, keywordsPrompt, faqPrompt } = action.payload;
-      const idSet = new Set(fileIds);
-      state.serverFiles = state.serverFiles.map(f => {
-        if (!idSet.has(f.id)) return f;
-        return {
-          ...f,
-          ...(summaryPrompt !== undefined && { summary_prompt: summaryPrompt }),
-          ...(keywordsPrompt !== undefined && { keywords_prompt: keywordsPrompt }),
-          ...(faqPrompt !== undefined && { faq_prompt: faqPrompt }),
-        };
-      });
-      // Also patch inside serverFilesData buckets so the per-file preview reflects the change
-      const patchBucket = (bucket: ServerFile[]) => bucket.map(f => {
-        if (!idSet.has(f.id)) return f;
-        return {
-          ...f,
-          ...(summaryPrompt !== undefined && { summary_prompt: summaryPrompt }),
-          ...(keywordsPrompt !== undefined && { keywords_prompt: keywordsPrompt }),
-          ...(faqPrompt !== undefined && { faq_prompt: faqPrompt }),
-        };
-      });
-      state.serverFilesData.completed = patchBucket(state.serverFilesData.completed);
-      state.serverFilesData.queued = patchBucket(state.serverFilesData.queued);
-      state.serverFilesData.running = patchBucket(state.serverFilesData.running);
-      state.serverFilesData.pending = patchBucket(state.serverFilesData.pending);
-    },
-
-    // ── Patch dictionary_id on saved files (after associate/disassociate) ──
-    patchFileDictionaries(state, action: PayloadAction<Record<number, number | null>>) {
-      const map = action.payload;
-      const apply = (f: ServerFile): ServerFile =>
-        map[f.id] !== undefined ? { ...f, dictionary_id: map[f.id] } : f;
-      state.serverFiles = state.serverFiles.map(apply);
-      state.serverFilesData.completed = state.serverFilesData.completed.map(apply);
-      state.serverFilesData.queued = state.serverFilesData.queued.map(apply);
-      state.serverFilesData.running = state.serverFilesData.running.map(apply);
-      state.serverFilesData.pending = state.serverFilesData.pending.map(apply);
-    },
-
-    // ── Patch prompt_template_id on saved files (after template association) ──
-    patchFilePromptTemplate(state, action: PayloadAction<Record<number, number | null>>) {
-      const map = action.payload;
-      const apply = (f: ServerFile): ServerFile =>
-        map[f.id] !== undefined ? { ...f, prompt_template_id: map[f.id] } : f;
-      state.serverFiles = state.serverFiles.map(apply);
-      state.serverFilesData.completed = state.serverFilesData.completed.map(apply);
-      state.serverFilesData.queued = state.serverFilesData.queued.map(apply);
-      state.serverFilesData.running = state.serverFilesData.running.map(apply);
-      state.serverFilesData.pending = state.serverFilesData.pending.map(apply);
-    },
-
-    // ── Models ──
-    modelsLoading(state) {
-      state.modelsLoading = true;
-    },
-    modelsSuccess(state, action: PayloadAction<string[]>) {
-      state.models = action.payload;
-      state.modelsLoading = false;
-      if (action.payload.length > 0 && !state.selectedModel) {
-        state.selectedModel = action.payload[0];
-      }
-    },
-    modelsFailure(state) {
-      state.modelsLoading = false;
-    },
-    setSelectedModel(state, action: PayloadAction<string>) {
-      state.selectedModel = action.payload;
-    },
-  },
-});
-
-export const {
-  toggleFileSelection, toggleSelectAll,
-  toggleUploadZone, toggleBatchGroup,
-  runInference, updateSummaryPrompt, updateKeywordPrompt, updateQuestionPrompt, updateSettings,
-  setDateFrom, setDateTo,
-  inferenceStatusSuccess,
-  updateRunningProgress,
-  serverFilesLoading, serverFilesSuccess, serverFilesFailure,
-  setFilesPage, setFilesPageSize, setFilesSort, setFilesSearch,
-  toggleServerFileSelection, toggleSelectAllServerFiles, clearServerSelection,
-  updateFilePrompts,
-  patchFileDictionaries,
-  patchFilePromptTemplate,
-  modelsLoading, modelsSuccess, modelsFailure, setSelectedModel,
-} = uploadSlice.actions;
-
-export default uploadSlice.reducer;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// ═══════════════════════════════════════════════
 // pages/UploadInfer/FilePanel.tsx
 // Content Analytics · Step-1 upload + uploaded files list
 // ═══════════════════════════════════════════════
@@ -540,7 +97,7 @@ interface FilePanelProps {
   onEnterSelectMode: () => void;
   onExitSelectMode: () => void;
   onFileClick: (fileId: number) => void;
-  onDeleteComplete: (deletedIds: number[]) => void;
+  onDeleteComplete: (deletedIds: number[], all?: boolean) => void;
   activeFileId: number | null;
 }
 
@@ -566,6 +123,13 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
   const [deleteMode, setDeleteMode] = useState(false);
   const [deleteSelectedIds, setDeleteSelectedIds] = useState<number[]>([]);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // ── Delete ALL (danger zone — wipes every file on the account) ──
+  const [deleteAllConfirmOpen, setDeleteAllConfirmOpen] = useState(false);
+  const [deleteAllConfirmText, setDeleteAllConfirmText] = useState('');
+  const [isDeletingAll, setIsDeletingAll] = useState(false);
+  const [deleteAllError, setDeleteAllError] = useState<string | null>(null);
+  const DELETE_ALL_CONFIRM_PHRASE = 'DELETE ALL';
 
   // ── Export mode ──────────────────────────────
   const [exportMode, setExportMode] = useState(false);
@@ -593,7 +157,7 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
   };
 
   const enterDeleteMode = () => { setDeleteMode(true); setDeleteSelectedIds([]); };
-  const exitDeleteMode = () => { setDeleteMode(false); setDeleteSelectedIds([]); };
+  const exitDeleteMode = () => { setDeleteMode(false); setDeleteSelectedIds([]); closeDeleteAllConfirm(); };
 
   const toggleDeleteSelection = (id: number) => {
     setDeleteSelectedIds(prev =>
@@ -612,7 +176,7 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
     if (!deleteSelectedIds.length) return;
     setIsDeleting(true);
     try {
-      const res = await api.post('/files/delete', { fileID: deleteSelectedIds });
+      const res = await api.post('/files/delete', { fileID: deleteSelectedIds, all: false });
       if ((res.data as any)?.status === 'success' || res.status === 200) {
         const deleted = [...deleteSelectedIds];
         dispatch(clearServerSelection());
@@ -624,6 +188,39 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
       // silently ignore — stay in delete mode so user can retry
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  // ── Delete ALL — wipes every file on the account, ignores fileID ──
+  const openDeleteAllConfirm = () => {
+    setDeleteAllError(null);
+    setDeleteAllConfirmText('');
+    setDeleteAllConfirmOpen(true);
+  };
+  const closeDeleteAllConfirm = () => {
+    setDeleteAllConfirmOpen(false);
+    setDeleteAllConfirmText('');
+    setDeleteAllError(null);
+  };
+  const handleConfirmDeleteAll = async () => {
+    if (deleteAllConfirmText !== DELETE_ALL_CONFIRM_PHRASE) return;
+    setIsDeletingAll(true);
+    setDeleteAllError(null);
+    try {
+      const res = await api.post('/files/delete', { fileID: [], all: true });
+      if ((res.data as any)?.status === 'success' || res.status === 200) {
+        dispatch(clearServerSelection());
+        closeDeleteAllConfirm();
+        exitDeleteMode();
+        await fetchFiles({ page: 1 });
+        onDeleteComplete([], true);
+      } else {
+        setDeleteAllError(t('uploadInfer.filePanel.deleteAllFailed'));
+      }
+    } catch (err) {
+      setDeleteAllError(err instanceof Error ? err.message : t('uploadInfer.filePanel.deleteAllFailed'));
+    } finally {
+      setIsDeletingAll(false);
     }
   };
 
@@ -1075,6 +672,18 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
                   </svg>
                   {t('uploadInfer.filePanel.searchBtn')}
                 </button>
+                <button
+                  className={styles.modeTileDeleteAll}
+                  onClick={openDeleteAllConfirm}
+                  disabled={filesTotal === 0}
+                  title={t('uploadInfer.filePanel.deleteAllBtn')}
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M8 1.5l6.5 11.5h-13z" />
+                    <path d="M8 6v3.5M8 12v.1" />
+                  </svg>
+                  {t('uploadInfer.filePanel.deleteAllBtn')}
+                </button>
               </div>
               <div className={styles.modeActionsRight}>
                 <button
@@ -1452,16 +1061,58 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
         open={templateModalOpen}
         onClose={() => setTemplateModalOpen(false)}
       />
+
+      {/* ── Delete ALL confirmation — wipes every file on the account ── */}
+      {deleteAllConfirmOpen && (
+        <div className={styles.dangerOverlay} onClick={() => !isDeletingAll && closeDeleteAllConfirm()}>
+          <div className={styles.dangerModal} onClick={e => e.stopPropagation()}>
+            <div className={styles.dangerIcon}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 2l10 18H2z" />
+                <path d="M12 9v5M12 17v.1" />
+              </svg>
+            </div>
+            <div className={styles.dangerTitle}>{t('uploadInfer.filePanel.deleteAllConfirmTitle')}</div>
+            <div className={styles.dangerBody}>
+              {t('uploadInfer.filePanel.deleteAllConfirmBody')}
+            </div>
+            <label className={styles.dangerLabel}>
+              {t('uploadInfer.filePanel.deleteAllConfirmPrompt', { phrase: DELETE_ALL_CONFIRM_PHRASE })}
+            </label>
+            <input
+              type="text"
+              className={styles.dangerInput}
+              value={deleteAllConfirmText}
+              onChange={e => setDeleteAllConfirmText(e.target.value)}
+              placeholder={DELETE_ALL_CONFIRM_PHRASE}
+              autoFocus
+              disabled={isDeletingAll}
+            />
+            {deleteAllError && <div className={styles.dangerError}>{deleteAllError}</div>}
+            <div className={styles.dangerActions}>
+              <button
+                className={`${styles.btn} ${styles.btnFull}`}
+                onClick={closeDeleteAllConfirm}
+                disabled={isDeletingAll}
+              >
+                {t('uploadInfer.filePanel.cancelBtn')}
+              </button>
+              <button
+                className={`${styles.btn} ${styles.btnDanger} ${styles.btnFull}`}
+                onClick={handleConfirmDeleteAll}
+                disabled={deleteAllConfirmText !== DELETE_ALL_CONFIRM_PHRASE || isDeletingAll}
+              >
+                {isDeletingAll ? <div className={styles.miniSpinner} /> : t('uploadInfer.filePanel.deleteAllConfirmBtn')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
 export default FilePanel;
-
-
-
-
-
 
 
 
@@ -3181,6 +2832,147 @@ export default FilePanel;
   cursor: not-allowed !important;
 }
 
+// "Delete all files" trigger — deliberately louder/more solid than the
+// per-row delete tile since it's an account-wide destructive action.
+.modeTileDeleteAll {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  background: rgba(239, 68, 68, 0.14);
+  color: #ef4444;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  transition: all 0.13s;
+  user-select: none;
+  white-space: nowrap;
+
+  svg {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+  }
+
+  &:hover:not(:disabled) {
+    background: #ef4444;
+    border-color: #ef4444;
+    color: #fff;
+  }
+
+  &:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+}
+
+// ── Delete-ALL confirmation (danger zone) ───────────────────────────
+.dangerOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  padding: 16px;
+}
+
+.dangerModal {
+  width: 100%;
+  max-width: 360px;
+  background: var(--bg1);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 10px;
+  padding: 20px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 4px;
+}
+
+.dangerIcon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(239, 68, 68, 0.14);
+  color: #ef4444;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 6px;
+
+  svg {
+    width: 22px;
+    height: 22px;
+  }
+}
+
+.dangerTitle {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--t0);
+  font-family: var(--font-ui);
+}
+
+.dangerBody {
+  font-size: 13px;
+  color: var(--t2);
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+.dangerLabel {
+  align-self: flex-start;
+  font-size: 12px;
+  color: var(--t1);
+  margin-top: 4px;
+}
+
+.dangerInput {
+  width: 100%;
+  padding: 7px 10px;
+  background: var(--bg0);
+  border: 1px solid var(--bdr2);
+  border-radius: var(--r);
+  color: var(--t0);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  outline: none;
+  margin-top: 4px;
+  margin-bottom: 6px;
+  text-align: center;
+  transition: border-color 0.12s;
+
+  &:focus {
+    border-color: #ef4444;
+    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.15);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+  }
+}
+
+.dangerError {
+  font-size: 12px;
+  color: #ef4444;
+  margin-bottom: 6px;
+}
+
+.dangerActions {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  margin-top: 6px;
+}
+
 // .uploadedCardSel replaced by .hitm.active
 
 // Uploaded card disabled (batch running)
@@ -3606,6 +3398,579 @@ export default FilePanel;
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+// ═══════════════════════════════════════════════
+// pages/UploadInfer/UploadInfer.tsx
+// LectureAI · Upload & Inference page
+// ═══════════════════════════════════════════════
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useAppSelector, useAppDispatch } from '../../store/hooks';
+import { clearServerSelection } from '../../store/uploadSlice';
+import api from '../../services/api';
+import FilePanel from './FilePanel';
+import InferencePanel from './InferencePanel';
+import WorkspacePanel from './WorkspacePanel';
+import styles from './UploadInfer.module.scss';
+
+export interface FileResult {
+  summary: string;
+  keywords: string[];
+  faq: string;
+  fileName: string;
+  fileId: number;
+  insertedAt: string;
+}
+
+const UploadInfer: React.FC = () => {
+  const { t } = useTranslation();
+  const isBatchRunning = useAppSelector(s => s.upload.isBatchRunning);
+  const serverFiles = useAppSelector(s => s.upload.serverFiles);
+  const dispatch = useAppDispatch();
+
+  const [selectMode, setSelectMode] = useState(false);
+  const step2Visible = selectMode || isBatchRunning;
+
+  const [step2Minimized, setStep2Minimized] = useState(false);
+  useEffect(() => { if (step2Visible) setStep2Minimized(false); }, [step2Visible]);
+  useEffect(() => { if (!isBatchRunning) setSelectMode(false); }, [isBatchRunning]);
+  useEffect(() => { if (!selectMode) dispatch(clearServerSelection()); }, [selectMode]); // eslint-disable-line
+  useEffect(() => { return () => { dispatch(clearServerSelection()); }; }, []); // eslint-disable-line
+
+  const [fileResult, setFileResult] = useState<FileResult | null>(null);
+  const [fileLoading, setFileLoading] = useState(false);
+  const [activeFileId, setActiveFileId] = useState<number | null>(null);
+
+  const fetchFileData = useCallback(async (fileId: number) => {
+    setFileLoading(true);
+    try {
+      const res = await api.get(`/files/${fileId}`);
+      const d = (res.data as any)?.data ?? {};
+      const serverFile = serverFiles.find(f => f.id === fileId);
+      const fileName = d.original_name ?? serverFile?.original_name ?? String(fileId);
+      const insertedAt = d.inserted_at ?? serverFile?.inserted_at ?? '';
+      setFileResult({ fileId, fileName, insertedAt, summary: d.summary ?? '', keywords: d.keywords ?? [], faq: d.faq ?? '[]' });
+    } catch { setFileResult(null); } finally { setFileLoading(false); }
+  }, [serverFiles]);
+
+  const handleFileClick = useCallback(async (fileId: number) => {
+    if (fileId === activeFileId) return;
+    setActiveFileId(fileId);
+    setFileResult(null);
+    await fetchFileData(fileId);
+  }, [activeFileId, fetchFileData]);
+
+  const handleDeleteComplete = useCallback((deletedIds: number[], all?: boolean) => {
+    if (all || (activeFileId !== null && deletedIds.includes(activeFileId))) {
+      setActiveFileId(null);
+      setFileResult(null);
+    }
+  }, [activeFileId]);
+
+  const prevBatchRunning = useRef(false);
+  useEffect(() => {
+    const justFinished = prevBatchRunning.current && !isBatchRunning;
+    prevBatchRunning.current = isBatchRunning;
+    if (justFinished && activeFileId !== null) fetchFileData(activeFileId);
+  }, [isBatchRunning]); // eslint-disable-line
+
+  return (
+    <div className={styles.page}>
+      <div className={styles.ph}>
+        <div className={styles.phRow}>
+          <div>
+            <div className={styles.phTitle}>{t('uploadInfer.pageTitle')}</div>
+            <div className={styles.phSub}>{t('uploadInfer.pageSub')}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className={styles.upbody}>
+        <FilePanel
+          selectMode={selectMode}
+          onEnterSelectMode={() => setSelectMode(true)}
+          onExitSelectMode={() => setSelectMode(false)}
+          onFileClick={handleFileClick}
+          onDeleteComplete={handleDeleteComplete}
+          activeFileId={activeFileId}
+        />
+
+        <div className={
+          `${styles.step2Wrap} ` +
+          `${step2Visible ? styles.step2WrapVisible : styles.step2WrapHidden} ` +
+          `${step2Visible && step2Minimized ? styles.step2WrapMinimized : ''}`
+        }>
+          <InferencePanel
+            onClose={() => setSelectMode(false)}
+            minimized={step2Minimized}
+            onToggleMinimize={() => setStep2Minimized(v => !v)}
+          />
+        </div>
+
+        <WorkspacePanel
+          step2Visible={step2Visible}
+          step2Minimized={step2Minimized}
+          fileResult={fileResult}
+          fileLoading={fileLoading}
+          activeFileId={activeFileId}
+          onResultUpdate={patch => setFileResult(prev => prev ? { ...prev, ...patch } : prev)}
+        />
+      </div>
+    </div>
+  );
+};
+
+export default UploadInfer;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ═══════════════════════════════════════════════
+// store/uploadSlice.ts
+// Content Analytics · Upload & Inference state
+// ═══════════════════════════════════════════════
+import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+
+// ── Server file (from /files/by-date/) ──────────
+// "tbd" = not yet inferenced, "completed" = inferenced.
+export type FileStatus = 'waiting' | 'running' | 'completed' | 'error' | 'tbd' | 'queued';
+
+export interface ServerFile {
+  id: number;
+  original_name: string;
+  inserted_at: string;
+  summary_prompt: string;
+  keywords_prompt: string;
+  faq_prompt: string;
+  progress: string | number | null;
+  dictionary_id?: number | null;
+  prompt_template_id?: number | null;
+  status: FileStatus;
+}
+
+// ── /files/by-date/ pagination params & sort keys ──
+export type FilesSortBy = 'id' | 'original_name' | 'inserted_at' | 'status';
+export type SortOrder = 'asc' | 'desc';
+
+export interface ServerFilesData {
+  queued: ServerFile[];
+  completed: ServerFile[];
+  pending: ServerFile[];
+  running: ServerFile[];
+}
+
+export interface UploadedFile {
+  id: number;
+  name: string;
+  size: string;
+  type: 'vtt' | 'srt';
+  status: 'ready' | 'running' | 'done' | 'failed';
+  summaryPrompt: string;
+  questionPrompt: string;
+}
+
+export interface BatchFile {
+  id: number;
+  name: string;
+  size: string;
+  type: 'vtt' | 'srt';
+  progress?: number;
+}
+
+export interface BatchGroup {
+  id: string;
+  status: 'running' | 'queued' | 'done' | 'pending';
+  files: BatchFile[];
+  collapsed: boolean;
+}
+
+export interface InferenceSettings {
+  generateSummary: boolean;
+  generateKeywords: boolean;
+  generateQuestions: boolean;
+  summaryStyle: string;
+  timestampInterval: string;
+  languageOutput: string;
+  mcq: boolean;
+  trueFalse: boolean;
+  shortAnswer: boolean;
+  questionCount: number;
+  keywordCount: number;
+  summaryPromptOverride: string;
+  keywordPromptOverride: string;
+  questionPromptOverride: string;
+}
+
+interface UploadState {
+  files: UploadedFile[];
+  selectedIds: number[];
+  settingsCollapsed: boolean;
+  batchVisible: boolean;
+  batchGroups: BatchGroup[];
+  settings: InferenceSettings;
+  uploadZoneCollapsed: boolean;
+
+  // ── Server files (from /files/by-date/) ──
+  // NOTE: serverFilesData is now populated exclusively by inferenceStatusSuccess
+  // (the /files/by-progress/ polling endpoint), which still returns the old
+  // bucketed shape. /files/by-date/ is paginated and returns a flat, per-file
+  // `status` — so it no longer feeds serverFilesData.
+  serverFilesData: ServerFilesData;          // raw split by status (from /files/by-progress/)
+  serverFiles: ServerFile[];             // current page of /files/by-date/ results
+  serverFilesLoading: boolean;
+  serverFilesError: string | null;
+  dateFrom: string;
+  dateTo: string;
+
+  // ── /files/by-date/ pagination, sort & search ──
+  filesPage: number;
+  filesPageSize: number;
+  filesTotal: number;
+  filesTotalPages: number;
+  filesSortBy: FilesSortBy;
+  filesSortOrder: SortOrder;
+  filesSearch: string;
+
+  // ── Selection on uploaded files ──
+  selectedServerIds: number[];
+
+  // ── Batch running state ──
+  isBatchRunning: boolean;                  // true while queued/running not empty
+  lastBatchFinishedAt: number | null;       // timestamp (Date.now()) set when batch transitions running→done
+
+  // ── Models ──
+  models: string[];
+  modelsLoading: boolean;
+  selectedModel: string;
+}
+
+function toDateStr(d: Date) { return d.toISOString().slice(0, 10); }
+function defaultFrom() { const d = new Date(); d.setMonth(d.getMonth() - 1); return toDateStr(d); }
+function defaultTo() { return toDateStr(new Date()); }
+
+const emptyData: ServerFilesData = { queued: [], completed: [], pending: [], running: [] };
+
+const initialState: UploadState = {
+  files: [],
+  selectedIds: [],
+  uploadZoneCollapsed: false,
+  settingsCollapsed: false,
+  batchVisible: false,
+  batchGroups: [],
+  settings: {
+    generateSummary: true, generateKeywords: true, generateQuestions: true,
+    summaryStyle: 'Table of Contents', timestampInterval: '5 minute segments',
+    languageOutput: 'Korean + English',
+    mcq: true, trueFalse: true, shortAnswer: false,
+    questionCount: 10, keywordCount: 15,
+    summaryPromptOverride: '', keywordPromptOverride: '', questionPromptOverride: '',
+  },
+  serverFilesData: emptyData,
+  serverFiles: [],
+  serverFilesLoading: false,
+  serverFilesError: null,
+  dateFrom: defaultFrom(),
+  dateTo: defaultTo(),
+
+  filesPage: 1,
+  filesPageSize: 100,
+  filesTotal: 0,
+  filesTotalPages: 1,
+  filesSortBy: 'id',
+  filesSortOrder: 'desc',
+  filesSearch: '',
+
+  selectedServerIds: [],
+  isBatchRunning: false,
+  lastBatchFinishedAt: null,
+  models: [],
+  modelsLoading: false,
+  selectedModel: '',
+};
+
+const uploadSlice = createSlice({
+  name: 'upload',
+  initialState,
+  reducers: {
+    // ── Inference legacy ──
+    toggleFileSelection(state, action: PayloadAction<number>) {
+      const idx = state.selectedIds.indexOf(action.payload);
+      if (idx > -1) state.selectedIds.splice(idx, 1);
+      else state.selectedIds.push(action.payload);
+    },
+    toggleSelectAll(state) {
+      const allIds = state.files.map(f => f.id);
+      state.selectedIds = state.selectedIds.length === allIds.length ? [] : allIds;
+    },
+    toggleUploadZone(state) {
+      state.uploadZoneCollapsed = !state.uploadZoneCollapsed;
+    },
+    toggleBatchGroup(state, action: PayloadAction<string>) {
+      const g = state.batchGroups.find(g => g.id === action.payload);
+      if (g) g.collapsed = !g.collapsed;
+    },
+    runInference(state) {
+      state.batchVisible = true;
+    },
+    updateSummaryPrompt(state, action: PayloadAction<string>) {
+      state.settings.summaryPromptOverride = action.payload;
+    },
+    updateKeywordPrompt(state, action: PayloadAction<string>) {
+      state.settings.keywordPromptOverride = action.payload;
+    },
+    updateQuestionPrompt(state, action: PayloadAction<string>) {
+      state.settings.questionPromptOverride = action.payload;
+    },
+    updateSettings(state, action: PayloadAction<Partial<InferenceSettings>>) {
+      state.settings = { ...state.settings, ...action.payload };
+    },
+
+    // ── Date range ──
+    setDateFrom(state, action: PayloadAction<string>) { state.dateFrom = action.payload; },
+    setDateTo(state, action: PayloadAction<string>) { state.dateTo = action.payload; },
+
+    // ── Patch progress % onto running files from /files/progress/ response ──
+    updateRunningProgress(state, action: PayloadAction<Record<string, number | string>>) {
+      const progressMap = action.payload;
+      state.serverFilesData.running = state.serverFilesData.running.map(f => {
+        const raw = progressMap[String(f.id)];
+        if (raw === undefined) return f;
+        const pct = typeof raw === 'string' ? parseFloat(raw) : raw;
+        return { ...f, progress: isNaN(pct) ? f.progress : Math.min(100, Math.max(0, pct)) };
+      });
+    },
+
+    // ── Inference-only status update (does NOT touch the FilePanel file list) ──
+    inferenceStatusSuccess(state, action: PayloadAction<ServerFilesData>) {
+      const d = action.payload;
+      // Merge any newly-completed files from the polling response into the
+      // existing completed bucket. We keep the historical /by-date/ entries
+      // and append/replace any IDs that just finished in the active batch,
+      // so FilePanel badges flip to "Inferenced" the moment Step-2 moves a
+      // file into its Completed column — without needing another API call.
+      const incomingCompleted = d.completed ?? [];
+      const incomingCompletedIds = new Set(incomingCompleted.map(f => f.id));
+      const mergedCompleted = [
+        ...state.serverFilesData.completed.filter(f => !incomingCompletedIds.has(f.id)),
+        ...incomingCompleted,
+      ];
+      state.serverFilesData = {
+        queued: d.queued ?? [],
+        running: d.running ?? [],
+        pending: d.pending ?? [],
+        completed: mergedCompleted,
+      };
+      const running = (d.queued?.length ?? 0) > 0 || (d.running?.length ?? 0) > 0;
+      // Clear selections the moment the batch becomes active so highlighted
+      // cards stop showing the blue selected state after a successful submit.
+      if (running && !state.isBatchRunning) {
+        state.selectedServerIds = [];
+      }
+      // Auto-collapse settings when a batch starts running. (Previously derived
+      // from /files/by-date/, which is now paginated and can't reliably tell us this.)
+      if (running) state.settingsCollapsed = true;
+      // When batch transitions running → done, stamp a timestamp so FilePanel
+      // knows to re-fetch /by-date/ and refresh the completed list.
+      if (!running && state.isBatchRunning) {
+        state.lastBatchFinishedAt = Date.now();
+      }
+      state.isBatchRunning = running;
+    },
+
+    // ── Server files (paginated /files/by-date/) ──
+    serverFilesLoading(state) {
+      state.serverFilesLoading = true;
+      state.serverFilesError = null;
+    },
+    serverFilesSuccess(state, action: PayloadAction<{
+      files: ServerFile[];
+      total: number;
+      page: number;
+      pageSize: number;
+      totalPages: number;
+      sortBy: FilesSortBy;
+      sortOrder: SortOrder;
+      search: string;
+    }>) {
+      const { files, total, page, pageSize, totalPages, sortBy, sortOrder, search } = action.payload;
+      state.serverFiles = files;
+      state.serverFilesLoading = false;
+      state.serverFilesError = null;
+
+      state.filesTotal = total;
+      state.filesPage = page;
+      state.filesPageSize = pageSize;
+      state.filesTotalPages = totalPages;
+      state.filesSortBy = sortBy;
+      state.filesSortOrder = sortOrder;
+      state.filesSearch = search;
+
+      // NOTE: isBatchRunning is no longer derived here — /files/by-date/ is
+      // paginated so a running/queued file may simply be on another page.
+      // isBatchRunning is set by inferenceStatusSuccess (/files/by-progress/),
+      // which always reflects the full, unpaginated set of active files.
+
+      // NOTE: selections are intentionally NOT pruned against this page's ids —
+      // a file not present here may just be on a different page, not deleted.
+      // Deletion flows already clear selectedServerIds explicitly on success.
+    },
+    serverFilesFailure(state, action: PayloadAction<string>) {
+      state.serverFilesLoading = false;
+      state.serverFilesError = action.payload;
+    },
+
+    // ── Pagination / sort / search (kept in sync for UI display; the actual
+    //     fetch is triggered imperatively by the component with these values) ──
+    setFilesPage(state, action: PayloadAction<number>) {
+      state.filesPage = action.payload;
+    },
+    setFilesPageSize(state, action: PayloadAction<number>) {
+      state.filesPageSize = action.payload;
+      state.filesPage = 1;
+    },
+    setFilesSort(state, action: PayloadAction<{ sortBy: FilesSortBy; sortOrder: SortOrder }>) {
+      state.filesSortBy = action.payload.sortBy;
+      state.filesSortOrder = action.payload.sortOrder;
+      state.filesPage = 1;
+    },
+    setFilesSearch(state, action: PayloadAction<string>) {
+      state.filesSearch = action.payload;
+      state.filesPage = 1;
+    },
+
+    // ── Server file selection ──
+    toggleServerFileSelection(state, action: PayloadAction<number>) {
+      if (state.isBatchRunning) return;  // no selection while batch running
+      const idx = state.selectedServerIds.indexOf(action.payload);
+      if (idx > -1) state.selectedServerIds.splice(idx, 1);
+      else state.selectedServerIds.push(action.payload);
+    },
+    toggleSelectAllServerFiles(state) {
+      if (state.isBatchRunning) return;
+      const allIds = state.serverFiles.map(f => f.id);
+      state.selectedServerIds = state.selectedServerIds.length === allIds.length ? [] : allIds;
+    },
+    clearServerSelection(state) {
+      state.selectedServerIds = [];
+    },
+
+    // ── Patch prompt fields on saved files ──
+    updateFilePrompts(state, action: PayloadAction<{
+      fileIds: number[];
+      summaryPrompt?: string;
+      keywordsPrompt?: string;
+      faqPrompt?: string;
+    }>) {
+      const { fileIds, summaryPrompt, keywordsPrompt, faqPrompt } = action.payload;
+      const idSet = new Set(fileIds);
+      state.serverFiles = state.serverFiles.map(f => {
+        if (!idSet.has(f.id)) return f;
+        return {
+          ...f,
+          ...(summaryPrompt !== undefined && { summary_prompt: summaryPrompt }),
+          ...(keywordsPrompt !== undefined && { keywords_prompt: keywordsPrompt }),
+          ...(faqPrompt !== undefined && { faq_prompt: faqPrompt }),
+        };
+      });
+      // Also patch inside serverFilesData buckets so the per-file preview reflects the change
+      const patchBucket = (bucket: ServerFile[]) => bucket.map(f => {
+        if (!idSet.has(f.id)) return f;
+        return {
+          ...f,
+          ...(summaryPrompt !== undefined && { summary_prompt: summaryPrompt }),
+          ...(keywordsPrompt !== undefined && { keywords_prompt: keywordsPrompt }),
+          ...(faqPrompt !== undefined && { faq_prompt: faqPrompt }),
+        };
+      });
+      state.serverFilesData.completed = patchBucket(state.serverFilesData.completed);
+      state.serverFilesData.queued = patchBucket(state.serverFilesData.queued);
+      state.serverFilesData.running = patchBucket(state.serverFilesData.running);
+      state.serverFilesData.pending = patchBucket(state.serverFilesData.pending);
+    },
+
+    // ── Patch dictionary_id on saved files (after associate/disassociate) ──
+    patchFileDictionaries(state, action: PayloadAction<Record<number, number | null>>) {
+      const map = action.payload;
+      const apply = (f: ServerFile): ServerFile =>
+        map[f.id] !== undefined ? { ...f, dictionary_id: map[f.id] } : f;
+      state.serverFiles = state.serverFiles.map(apply);
+      state.serverFilesData.completed = state.serverFilesData.completed.map(apply);
+      state.serverFilesData.queued = state.serverFilesData.queued.map(apply);
+      state.serverFilesData.running = state.serverFilesData.running.map(apply);
+      state.serverFilesData.pending = state.serverFilesData.pending.map(apply);
+    },
+
+    // ── Patch prompt_template_id on saved files (after template association) ──
+    patchFilePromptTemplate(state, action: PayloadAction<Record<number, number | null>>) {
+      const map = action.payload;
+      const apply = (f: ServerFile): ServerFile =>
+        map[f.id] !== undefined ? { ...f, prompt_template_id: map[f.id] } : f;
+      state.serverFiles = state.serverFiles.map(apply);
+      state.serverFilesData.completed = state.serverFilesData.completed.map(apply);
+      state.serverFilesData.queued = state.serverFilesData.queued.map(apply);
+      state.serverFilesData.running = state.serverFilesData.running.map(apply);
+      state.serverFilesData.pending = state.serverFilesData.pending.map(apply);
+    },
+
+    // ── Models ──
+    modelsLoading(state) {
+      state.modelsLoading = true;
+    },
+    modelsSuccess(state, action: PayloadAction<string[]>) {
+      state.models = action.payload;
+      state.modelsLoading = false;
+      if (action.payload.length > 0 && !state.selectedModel) {
+        state.selectedModel = action.payload[0];
+      }
+    },
+    modelsFailure(state) {
+      state.modelsLoading = false;
+    },
+    setSelectedModel(state, action: PayloadAction<string>) {
+      state.selectedModel = action.payload;
+    },
+  },
+});
+
+export const {
+  toggleFileSelection, toggleSelectAll,
+  toggleUploadZone, toggleBatchGroup,
+  runInference, updateSummaryPrompt, updateKeywordPrompt, updateQuestionPrompt, updateSettings,
+  setDateFrom, setDateTo,
+  inferenceStatusSuccess,
+  updateRunningProgress,
+  serverFilesLoading, serverFilesSuccess, serverFilesFailure,
+  setFilesPage, setFilesPageSize, setFilesSort, setFilesSearch,
+  toggleServerFileSelection, toggleSelectAllServerFiles, clearServerSelection,
+  updateFilePrompts,
+  patchFileDictionaries,
+  patchFilePromptTemplate,
+  modelsLoading, modelsSuccess, modelsFailure, setSelectedModel,
+} = uploadSlice.actions;
+
+export default uploadSlice.reducer;
 
 
 
@@ -4469,3 +4834,1139 @@ const InferencePanel: React.FC<InferencePanelProps> = ({ onClose, minimized = fa
 };
 
 export default InferencePanel;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ═══════════════════════════════════════════════
+// pages/UploadInfer/FilePanel.tsx
+// Content Analytics · Step-1 upload + uploaded files list
+// ═══════════════════════════════════════════════
+import React, { useRef, useState, useCallback, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import {
+  toggleUploadZone,
+  setDateFrom, setDateTo,
+  serverFilesLoading, serverFilesSuccess, serverFilesFailure,
+  setFilesPage, setFilesPageSize, setFilesSort, setFilesSearch,
+  toggleServerFileSelection, toggleSelectAllServerFiles, clearServerSelection,
+  type FilesSortBy, type SortOrder,
+} from '../../store/uploadSlice';
+import api from '../../services/api';
+import styles from './FilePanel.module.scss';
+import DictionaryAssociationModal from './DictionaryAssociationModal';
+import PromptTemplateAssociationModal from './PromptTemplateAssociationModal';
+
+// ── Types ────────────────────────────────────────
+type UploadStatus = 'pending' | 'uploading' | 'success' | 'failed';
+type PanelView = 'dropzone' | 'preview' | 'uploading';
+
+interface BrowsedFile {
+  id: string;
+  file: File;
+  name: string;
+  size: string;
+  ext: 'vtt' | 'srt';
+  status: UploadStatus;
+  error?: string;
+}
+
+// ── Helpers ──────────────────────────────────────
+const ALLOWED = ['.vtt', '.srt'];
+const isAllowed = (n: string) => ALLOWED.some(e => n.toLowerCase().endsWith(e));
+const getExt = (n: string): 'vtt' | 'srt' => n.toLowerCase().endsWith('.srt') ? 'srt' : 'vtt';
+const uid = () => Math.random().toString(36).slice(2);
+const formatSize = (b: number) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
+
+const filesToBrowsed = (files: File[]): BrowsedFile[] =>
+  files.filter(f => isAllowed(f.name)).map(f => ({
+    id: uid(), file: f, name: f.name, size: formatSize(f.size), ext: getExt(f.name), status: 'pending' as UploadStatus,
+  }));
+
+// Windowed page-number list with '…' gaps, e.g. [1, '…', 4, 5, 6, '…', 20]
+const getPageNumbers = (current: number, total: number): (number | '…')[] => {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages = new Set<number>([1, total, current, current - 1, current + 1, current - 2, current + 2]);
+  const sorted = [...pages].filter(p => p >= 1 && p <= total).sort((a, b) => a - b);
+  const result: (number | '…')[] = [];
+  sorted.forEach((p, i) => {
+    if (i > 0 && p - (sorted[i - 1] as number) > 1) result.push('…');
+    result.push(p);
+  });
+  return result;
+};
+
+// ── Icons ────────────────────────────────────────
+const IconPending: React.FC = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" strokeDasharray="2 2" /></svg>;
+const IconUploading: React.FC = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" strokeOpacity="0.2" /><path d="M8 2a6 6 0 016 6" /></svg>;
+const IconSuccess: React.FC = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="8" r="6" /><path d="M5.5 8l2 2 3-3" /></svg>;
+const IconFailed: React.FC = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" /><path d="M6 6l4 4M10 6l-4 4" /></svg>;
+const IconClose: React.FC = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>;
+
+
+
+const IconChevron: React.FC<{ up?: boolean }> = ({ up }) => (
+  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"
+    style={{ transform: up ? 'rotate(180deg)' : 'none', transition: 'transform 0.22s' }}>
+    <path d="M4 6l4 4 4-4" />
+  </svg>
+);
+
+// ── Checkbox ─────────────────────────────────────
+interface CbProps { checked: boolean; indeterminate?: boolean; onChange: () => void; disabled?: boolean; }
+const Checkbox: React.FC<CbProps> = ({ checked, indeterminate, onChange, disabled }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  return (
+    <div
+      ref={ref}
+      className={`${styles.cb} ${checked ? styles.cbChecked : ''} ${indeterminate ? styles.cbIndet : ''} ${disabled ? styles.cbDisabled : ''}`}
+      onClick={e => { e.stopPropagation(); if (!disabled) onChange(); }}
+      role="checkbox" aria-checked={indeterminate ? 'mixed' : checked} tabIndex={0}
+      onKeyDown={e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); if (!disabled) onChange(); } }}
+    />
+  );
+};
+
+// ── FilePanel ────────────────────────────────────
+type SortKey = 'id' | 'name' | 'date' | 'status';
+type SortDir = 'asc' | 'desc';
+
+interface FilePanelProps {
+  selectMode: boolean;
+  onEnterSelectMode: () => void;
+  onExitSelectMode: () => void;
+  onFileClick: (fileId: number) => void;
+  onDeleteComplete: (deletedIds: number[], all?: boolean) => void;
+  activeFileId: number | null;
+}
+
+const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, onExitSelectMode, onFileClick, onDeleteComplete, activeFileId }) => {
+  const { t } = useTranslation();
+  const dispatch = useAppDispatch();
+  const {
+    uploadZoneCollapsed,
+    serverFiles,
+    serverFilesLoading: filesLoading, serverFilesError: filesError,
+    selectedServerIds, isBatchRunning,
+    dateFrom, dateTo,
+    lastBatchFinishedAt,
+    filesPage, filesPageSize, filesTotal, filesTotalPages,
+    filesSortBy, filesSortOrder, filesSearch,
+  } = useAppSelector(s => s.upload);
+
+  const [view, setView] = useState<PanelView>('dropzone');
+  const [browsed, setBrowsed] = useState<BrowsedFile[]>([]);
+  const [isDragOver, setIsDragOver] = useState(false);
+
+  // ── Delete mode ──────────────────────────────
+  const [deleteMode, setDeleteMode] = useState(false);
+  const [deleteSelectedIds, setDeleteSelectedIds] = useState<number[]>([]);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // ── Delete ALL (danger zone — wipes every file on the account) ──
+  const [deleteAllConfirmOpen, setDeleteAllConfirmOpen] = useState(false);
+  const [deleteAllConfirmText, setDeleteAllConfirmText] = useState('');
+  const [isDeletingAll, setIsDeletingAll] = useState(false);
+  const [deleteAllError, setDeleteAllError] = useState<string | null>(null);
+  const DELETE_ALL_CONFIRM_PHRASE = 'DELETE ALL';
+
+  // ── Export mode ──────────────────────────────
+  const [exportMode, setExportMode] = useState(false);
+  const [exportSelectedIds, setExportSelectedIds] = useState<number[]>([]);
+  const [isExporting, setIsExporting] = useState(false);
+
+  // ── Search ───────────────────────────────────
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // ── Dictionary association modal ─────────────
+  const [dictModalOpen, setDictModalOpen] = useState(false);
+
+  // ── Prompt template association modal ────────
+  const [templateModalOpen, setTemplateModalOpen] = useState(false);
+
+  const openSearch = () => {
+    setSearchOpen(true);
+    setTimeout(() => searchInputRef.current?.focus(), 50);
+  };
+  const closeSearch = () => {
+    setSearchOpen(false);
+    setSearchQuery('');
+  };
+
+  const enterDeleteMode = () => { setDeleteMode(true); setDeleteSelectedIds([]); };
+  const exitDeleteMode = () => { setDeleteMode(false); setDeleteSelectedIds([]); closeDeleteAllConfirm(); };
+
+  const toggleDeleteSelection = (id: number) => {
+    setDeleteSelectedIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  const allDeleteSelected = serverFiles.length > 0 && deleteSelectedIds.length === serverFiles.length;
+  const someDeleteSelected = deleteSelectedIds.length > 0 && !allDeleteSelected;
+
+  const toggleDeleteSelectAll = () => {
+    setDeleteSelectedIds(allDeleteSelected ? [] : serverFiles.map(f => f.id));
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteSelectedIds.length) return;
+    setIsDeleting(true);
+    try {
+      const res = await api.post('/files/delete', { fileID: deleteSelectedIds, all: false });
+      if ((res.data as any)?.status === 'success' || res.status === 200) {
+        const deleted = [...deleteSelectedIds];
+        dispatch(clearServerSelection());
+        await fetchFiles();
+        exitDeleteMode();
+        onDeleteComplete(deleted);
+      }
+    } catch {
+      // silently ignore — stay in delete mode so user can retry
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  // ── Delete ALL — wipes every file on the account, ignores fileID ──
+  const openDeleteAllConfirm = () => {
+    setDeleteAllError(null);
+    setDeleteAllConfirmText('');
+    setDeleteAllConfirmOpen(true);
+  };
+  const closeDeleteAllConfirm = () => {
+    setDeleteAllConfirmOpen(false);
+    setDeleteAllConfirmText('');
+    setDeleteAllError(null);
+  };
+  const handleConfirmDeleteAll = async () => {
+    if (deleteAllConfirmText !== DELETE_ALL_CONFIRM_PHRASE) return;
+    setIsDeletingAll(true);
+    setDeleteAllError(null);
+    try {
+      const res = await api.post('/files/delete', {
+        fileID: [],
+        all: true,
+        start_date: dateFrom,
+        end_date: dateTo,
+      });
+      if ((res.data as any)?.status === 'success' || res.status === 200) {
+        dispatch(clearServerSelection());
+        closeDeleteAllConfirm();
+        exitDeleteMode();
+        await fetchFiles({ page: 1 });
+        onDeleteComplete([], true);
+      } else {
+        setDeleteAllError(t('uploadInfer.filePanel.deleteAllFailed'));
+      }
+    } catch (err) {
+      setDeleteAllError(err instanceof Error ? err.message : t('uploadInfer.filePanel.deleteAllFailed'));
+    } finally {
+      setIsDeletingAll(false);
+    }
+  };
+
+  // ── Export handlers ───────────────────────────
+  const enterExportMode = () => { setExportMode(true); setExportSelectedIds([]); };
+  const exitExportMode = () => { setExportMode(false); setExportSelectedIds([]); };
+
+  const toggleExportSelection = (id: number) => {
+    setExportSelectedIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  const allExportSelected = serverFiles.length > 0 && exportSelectedIds.length === serverFiles.length;
+  const someExportSelected = exportSelectedIds.length > 0 && !allExportSelected;
+
+  const toggleExportSelectAll = () => {
+    setExportSelectedIds(allExportSelected ? [] : serverFiles.map(f => f.id));
+  };
+
+  const handleConfirmExport = async () => {
+    if (!exportSelectedIds.length) return;
+    setIsExporting(true);
+    try {
+      const res = await api.post(
+        '/export_excel',
+        { file_ids: exportSelectedIds },
+        { responseType: 'blob' },
+      );
+
+      // Use the original file name (without extension) + .xlsx
+      // For a single file: "CS401_Week03.vtt" → "CS401_Week03.xlsx"
+      // For multiple files: "export_2026-05-07.xlsx"
+      let filename: string;
+      if (exportSelectedIds.length === 1) {
+        const f = serverFiles.find(sf => sf.id === exportSelectedIds[0]);
+        const base = f ? f.original_name.replace(/\.[^.]+$/, '') : String(exportSelectedIds[0]);
+        filename = `${base}.xlsx`;
+      } else {
+        const today = new Date().toISOString().slice(0, 10);
+        filename = `export_${today}.xlsx`;
+      }
+
+      const url = URL.createObjectURL(new Blob([res.data]));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+      exitExportMode();
+    } catch {
+      // silently ignore — stay in export mode so user can retry
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+
+  // ── Fetch server files (paginated, sorted, searched) ──
+  // Any param not passed in `opts` falls back to the current redux value, so
+  // callers only need to specify what's actually changing (e.g. just `page`).
+  const fetchFiles = useCallback(async (opts?: {
+    from?: string; to?: string;
+    page?: number; pageSize?: number;
+    sortBy?: FilesSortBy; sortOrder?: SortOrder;
+    search?: string;
+  }) => {
+    const from = opts?.from ?? dateFrom;
+    const to = opts?.to ?? dateTo;
+    const page = opts?.page ?? filesPage;
+    const pageSize = opts?.pageSize ?? filesPageSize;
+    const sortBy = opts?.sortBy ?? filesSortBy;
+    const sortOrder = opts?.sortOrder ?? filesSortOrder;
+    const search = opts?.search ?? filesSearch;
+
+    dispatch(serverFilesLoading());
+    try {
+      const res = await api.post('/files/by-date/', {
+        start_date: from,
+        end_date: to,
+        page,
+        page_size: pageSize,
+        sort_by: sortBy,
+        sort_order: sortOrder,
+        ...(search ? { search } : {}),
+      });
+      const d = (res.data as any)?.data ?? {};
+      dispatch(serverFilesSuccess({
+        files: d.data ?? [],
+        total: d.total ?? 0,
+        page: d.page ?? page,
+        pageSize: d.page_size ?? pageSize,
+        totalPages: d.total_pages ?? 1,
+        sortBy, sortOrder, search,
+      }));
+    } catch (err) {
+      dispatch(serverFilesFailure(err instanceof Error ? err.message : 'Failed to load files.'));
+    }
+  }, [dispatch, dateFrom, dateTo, filesPage, filesPageSize, filesSortBy, filesSortOrder, filesSearch]);
+
+  useEffect(() => { fetchFiles({ page: 1 }); }, []); // eslint-disable-line
+
+  // Re-fetch /by-date/ whenever a batch finishes so completed statuses are up to date
+  useEffect(() => {
+    if (lastBatchFinishedAt !== null) {
+      fetchFiles();
+    }
+  }, [lastBatchFinishedAt]); // eslint-disable-line
+
+  // ── Pagination / page-size handlers ──
+  const goToPage = useCallback((p: number) => {
+    if (p < 1 || p > filesTotalPages || p === filesPage || filesLoading) return;
+    fetchFiles({ page: p });
+  }, [filesTotalPages, filesPage, filesLoading, fetchFiles]);
+
+  const handlePageSizeChange = useCallback((size: number) => {
+    dispatch(setFilesPageSize(size));
+    fetchFiles({ pageSize: size, page: 1 });
+  }, [dispatch, fetchFiles]);
+
+  // ── Browse / drop ────────────────────────────
+  const handleFiles = useCallback((files: File[]) => {
+    const valid = filesToBrowsed(files);
+    if (!valid.length) return;
+    setBrowsed(valid);
+    setView('preview');
+  }, []);
+
+  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) handleFiles(Array.from(e.target.files));
+    e.target.value = '';
+  };
+
+  const onDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDragOver(true); };
+  const onDragLeave = () => setIsDragOver(false);
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault(); setIsDragOver(false);
+    const files: File[] = [];
+    if (e.dataTransfer.items) {
+      const traverse = (entry: FileSystemEntry) => {
+        if (entry.isFile) (entry as FileSystemFileEntry).file(f => { if (isAllowed(f.name)) files.push(f); });
+        else if (entry.isDirectory) { const r = (entry as FileSystemDirectoryEntry).createReader(); r.readEntries(es => es.forEach(traverse)); }
+      };
+      Array.from(e.dataTransfer.items).forEach(item => { const e = item.webkitGetAsEntry?.(); if (e) traverse(e); });
+      setTimeout(() => { if (files.length) handleFiles(files); }, 200);
+    } else handleFiles(Array.from(e.dataTransfer.files));
+  };
+
+  // ── Upload actions ───────────────────────────
+  const removeFile = (id: string) => { const n = browsed.filter(f => f.id !== id); setBrowsed(n); if (!n.length) setView('dropzone'); };
+  const handleCancel = () => { setBrowsed([]); setView('dropzone'); };
+
+  const handleUpload = async () => {
+    setView('uploading');
+    for (const bf of browsed) {
+      setBrowsed(prev => prev.map(f => f.id === bf.id ? { ...f, status: 'uploading' } : f));
+      try {
+        const fd = new FormData(); fd.append('file', bf.file);
+        const res = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+        const ok = res.status === 200 && (res.data as any)?.status === 'Success';
+        setBrowsed(prev => prev.map(f => f.id === bf.id ? { ...f, status: ok ? 'success' : 'failed', error: ok ? undefined : 'Upload failed' } : f));
+      } catch (err) {
+        setBrowsed(prev => prev.map(f => f.id === bf.id ? { ...f, status: 'failed', error: err instanceof Error ? err.message : 'Upload failed' } : f));
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (view !== 'uploading') return;
+    if (!browsed.every(f => f.status === 'success' || f.status === 'failed')) return;
+    fetchFiles({ page: 1 });
+    const allOk = browsed.every(f => f.status === 'success');
+    if (allOk) {
+      // All files uploaded successfully — clear immediately
+      setBrowsed([]);
+      setView('dropzone');
+      return;
+    }
+    // Some failed — leave the list visible briefly so the user can read the error
+    const t = setTimeout(() => { setBrowsed([]); setView('dropzone'); }, 2500);
+    return () => clearTimeout(t);
+  }, [browsed, view]); // eslint-disable-line
+
+  const handleApply = () => fetchFiles({ page: 1 });
+
+  // Select-all state for uploaded files (scoped to the current page)
+  const allSelected = serverFiles.length > 0 && selectedServerIds.length === serverFiles.length;
+  const someSelected = selectedServerIds.length > 0 && !allSelected;
+
+  // ── Sort (server-side — maps UI key to the API's sort_by values) ──────
+  const SORT_KEY_TO_API: Record<SortKey, FilesSortBy> = {
+    id: 'id', name: 'original_name', date: 'inserted_at', status: 'status',
+  };
+  const API_TO_SORT_KEY: Record<FilesSortBy, SortKey> = {
+    id: 'id', original_name: 'name', inserted_at: 'date', status: 'status',
+  };
+  const sort = { key: API_TO_SORT_KEY[filesSortBy], dir: filesSortOrder as SortDir };
+
+  // ── exitSelectMode — clears selections then notifies parent ──
+  const exitSelectMode = useCallback(() => {
+    dispatch(clearServerSelection());
+    onExitSelectMode();
+  }, [dispatch, onExitSelectMode]);
+
+  const handleSort = useCallback((key: SortKey) => {
+    const apiKey = SORT_KEY_TO_API[key];
+    const dir: SortDir = filesSortBy === apiKey ? (filesSortOrder === 'asc' ? 'desc' : 'asc') : 'asc';
+    dispatch(setFilesSort({ sortBy: apiKey, sortOrder: dir }));
+    fetchFiles({ sortBy: apiKey, sortOrder: dir, page: 1 });
+  }, [filesSortBy, filesSortOrder, dispatch, fetchFiles]); // eslint-disable-line
+
+  // ── Search (debounced, server-side) ──────────────────────────────────
+  const skipNextSearchEffect = useRef(true);
+  useEffect(() => {
+    if (skipNextSearchEffect.current) { skipNextSearchEffect.current = false; return; }
+    const q = searchQuery.trim();
+    const handle = setTimeout(() => {
+      dispatch(setFilesSearch(q));
+      fetchFiles({ search: q, page: 1 });
+    }, 400);
+    return () => clearTimeout(handle);
+  }, [searchQuery]); // eslint-disable-line
+
+  const displayedFiles = serverFiles;
+
+  const done = browsed.filter(f => f.status === 'success').length;
+  const failed = browsed.filter(f => f.status === 'failed').length;
+  const finished = done + failed;
+
+  return (
+    <div className={styles.panel}>
+      <input ref={fileInputRef} type="file" accept=".vtt,.srt" multiple style={{ display: 'none' }} onChange={onFileChange} />
+      <input ref={folderInputRef} type="file" accept=".vtt,.srt" multiple style={{ display: 'none' }} onChange={onFileChange} {...{ webkitdirectory: 'true' }} />
+
+      {/* ══ SECTION 1: Step-1 ══ */}
+      <div className={`${styles.step1} ${uploadZoneCollapsed ? styles.step1Collapsed : ''}`}>
+        <div className={styles.step1Bar}>
+          <span className={styles.slbl}>{t('uploadInfer.filePanel.step1Label')}</span>
+          {view === 'dropzone' && (
+            <span className={`${styles.badge} ${styles.bReady}`}>{t('uploadInfer.filePanel.uploaded', { count: filesTotal })}</span>
+          )}
+          {(view === 'preview' || view === 'uploading') && (
+            <span className={`${styles.badge} ${styles.bInfo}`}>{t('uploadInfer.filePanel.selected', { count: browsed.length })}</span>
+          )}
+          <button className={styles.collapseBtn} onClick={() => dispatch(toggleUploadZone())}
+            title={uploadZoneCollapsed ? t('uploadInfer.filePanel.showUpload') : t('uploadInfer.filePanel.hideUpload')}>
+            <IconChevron up={!uploadZoneCollapsed} />
+            <span>{uploadZoneCollapsed ? t('uploadInfer.filePanel.showUpload') : t('uploadInfer.filePanel.hideUpload')}</span>
+          </button>
+        </div>
+
+        <div className={styles.step1Content}>
+          {view === 'dropzone' && (
+            <div className={`${styles.dropzone} ${isDragOver ? styles.dragOver : ''}`}
+              onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
+              onClick={() => fileInputRef.current?.click()}>
+              <div className={styles.dzIc}>
+                <svg viewBox="0 0 18 18" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" stroke="var(--blue)">
+                  <path d="M9 12V4M6 7l3-3 3 3" /><path d="M2 15h14" />
+                </svg>
+              </div>
+              <div className={styles.dzTitle}>{isDragOver ? t('uploadInfer.filePanel.dropTitle') : t('uploadInfer.filePanel.dropTitleDefault')}</div>
+              <div className={styles.dzSub}>{t('uploadInfer.filePanel.dropSub')}</div>
+              <div className={styles.dzActions} onClick={e => e.stopPropagation()}>
+                <button className={`${styles.btn} ${styles.btnP} ${styles.btnSm}`} onClick={() => fileInputRef.current?.click()}>{t('uploadInfer.filePanel.browseFiles')}</button>
+                <button className={`${styles.btn} ${styles.btnSm}`} onClick={() => folderInputRef.current?.click()}>{t('uploadInfer.filePanel.folder')}</button>
+              </div>
+            </div>
+          )}
+
+          {(view === 'preview' || view === 'uploading') && (
+            <div className={styles.previewWrap}>
+              <div className={styles.previewList}>
+                {browsed.map(bf => (
+                  <div key={bf.id} className={`${styles.fileCard} ${styles[bf.status]}`}>
+                    <div className={`${styles.extBadge} ${styles[bf.ext]}`}>{bf.ext.toUpperCase()}</div>
+                    <div className={styles.fileInfo}>
+                      <div className={styles.fileName}>{bf.name}</div>
+                      <div className={styles.fileMeta}>
+                        <span className={styles.fileSizeChip}>{bf.size}</span>
+                        {bf.status === 'failed' && bf.error && <span className={styles.fileError}>{bf.error}</span>}
+                        {bf.status === 'pending' && <span className={styles.fileStatusText}>{t('uploadInfer.filePanel.fileStatus.ready')}</span>}
+                        {bf.status === 'uploading' && <span className={styles.fileStatusText}>{t('uploadInfer.filePanel.fileStatus.uploading')}</span>}
+                        {bf.status === 'success' && <span className={styles.fileStatusTextSuccess}>{t('uploadInfer.filePanel.fileStatus.uploaded')}</span>}
+                      </div>
+                    </div>
+                    <div className={`${styles.statusIc} ${styles[bf.status]}`}>
+                      {bf.status === 'pending' && <IconPending />}
+                      {bf.status === 'uploading' && <IconUploading />}
+                      {bf.status === 'success' && <IconSuccess />}
+                      {bf.status === 'failed' && <IconFailed />}
+                    </div>
+                    {view === 'preview' && <button className={styles.removeBtn} onClick={() => removeFile(bf.id)}><IconClose /></button>}
+                  </div>
+                ))}
+              </div>
+              {view === 'preview' && (
+                <div className={styles.actionBar}>
+                  <button className={`${styles.btn} ${styles.btnP}`} onClick={handleUpload}>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                      <path d="M8 11V4M5 7l3-3 3 3" /><path d="M2.5 13.5h11" />
+                    </svg>
+                    {t('uploadInfer.filePanel.uploadBtn', { count: browsed.length })}
+                  </button>
+                  <button className={`${styles.btn} ${styles.btnDanger}`} onClick={handleCancel}>{t('uploadInfer.filePanel.cancelBtn')}</button>
+                </div>
+              )}
+              {view === 'uploading' && (
+                <div className={styles.uploadSummary}>
+                  <div className={styles.uploadProgressBar}>
+                    <div className={styles.uploadProgressFill} style={{ width: `${browsed.length ? (finished / browsed.length) * 100 : 0}%` }} />
+                  </div>
+                  <div className={styles.uploadProgressLabel}>
+                    {t('uploadInfer.filePanel.complete', { finished, total: browsed.length })}
+                    {failed > 0 && <span className={styles.failCount}>{t('uploadInfer.filePanel.failed', { count: failed })}</span>}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ══ SECTION 2: Uploaded files ══ */}
+      <div className={styles.section2}>
+
+        {/* Header */}
+        <div className={styles.section2Header}>
+
+          {/* ── Title row (always visible) ── */}
+          <div className={styles.section2TitleRow}>
+            {/* Select-all checkbox — inference mode */}
+            {selectMode && !isBatchRunning && (
+              <Checkbox
+                checked={allSelected}
+                indeterminate={someSelected}
+                onChange={() => dispatch(toggleSelectAllServerFiles())}
+                disabled={filesTotal === 0}
+              />
+            )}
+
+            {/* Select-all checkbox — export mode */}
+            {exportMode && !isBatchRunning && (
+              <Checkbox
+                checked={allExportSelected}
+                indeterminate={someExportSelected}
+                onChange={toggleExportSelectAll}
+                disabled={filesTotal === 0}
+              />
+            )}
+
+            {/* Select-all checkbox — delete mode */}
+            {deleteMode && !isBatchRunning && (
+              <Checkbox
+                checked={allDeleteSelected}
+                indeterminate={someDeleteSelected}
+                onChange={toggleDeleteSelectAll}
+                disabled={filesTotal === 0}
+              />
+            )}
+
+            <div className={styles.section2Title}>
+              {t('uploadInfer.filePanel.uploadedFiles')}
+              {!filesLoading && filesTotal > 0 && (
+                <span className={styles.filesCount}>{filesTotal}</span>
+              )}
+            </div>
+
+            {/* Search stays in title row for select mode only; export/delete have their own row */}
+            {selectMode && !isBatchRunning && (
+              <div className={styles.headerActions}>
+                <button
+                  className={`${styles.searchIconBtn} ${searchOpen ? styles.searchIconBtnActive : ''}`}
+                  onClick={openSearch}
+                  title={t('uploadInfer.filePanel.searchBtn')}
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="6.5" cy="6.5" r="4" />
+                    <path d="M11 11l2.5 2.5" />
+                  </svg>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* ── Export mode action row ── */}
+          {exportMode && !isBatchRunning && (
+            <div className={styles.modeActionsRow}>
+              <div className={styles.modeActionsLeft}>
+                <button
+                  className={`${styles.modeTile} ${styles.modeTileSearch} ${searchOpen ? styles.modeTileSearchActive : ''}`}
+                  onClick={openSearch}
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="6.5" cy="6.5" r="4" />
+                    <path d="M11 11l2.5 2.5" />
+                  </svg>
+                  {t('uploadInfer.filePanel.searchBtn')}
+                </button>
+              </div>
+              <div className={styles.modeActionsRight}>
+                <button
+                  className={`${styles.modeTile} ${styles.modeTileConfirmExport} ${exportSelectedIds.length === 0 ? styles.modeTileDisabled : ''}`}
+                  onClick={handleConfirmExport}
+                  disabled={exportSelectedIds.length === 0 || isExporting}
+                >
+                  {isExporting ? (
+                    <div className={styles.miniSpinnerGreen} />
+                  ) : (
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6z" />
+                      <path d="M9 2v4h4" />
+                      <path d="M6 9.5l1.5 2 2.5-3" />
+                    </svg>
+                  )}
+                  {exportSelectedIds.length > 0
+                    ? t('uploadInfer.filePanel.exportCount', { count: exportSelectedIds.length })
+                    : t('uploadInfer.filePanel.exportBtn')}
+                </button>
+                <button
+                  className={`${styles.modeTile} ${styles.modeTileCancel}`}
+                  onClick={exitExportMode}
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                    <path d="M4 4l8 8M12 4l-8 8" />
+                  </svg>
+                  {t('uploadInfer.filePanel.cancelBtn')}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── Delete mode action row ── */}
+          {deleteMode && !isBatchRunning && (
+            <div className={styles.modeActionsRow}>
+              <div className={styles.modeActionsLeft}>
+                <button
+                  className={`${styles.modeTile} ${styles.modeTileSearch} ${searchOpen ? styles.modeTileSearchActive : ''}`}
+                  onClick={openSearch}
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="6.5" cy="6.5" r="4" />
+                    <path d="M11 11l2.5 2.5" />
+                  </svg>
+                  {t('uploadInfer.filePanel.searchBtn')}
+                </button>
+                <button
+                  className={styles.modeTileDeleteAll}
+                  onClick={openDeleteAllConfirm}
+                  disabled={filesTotal === 0}
+                  title={t('uploadInfer.filePanel.deleteAllBtn')}
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M8 1.5l6.5 11.5h-13z" />
+                    <path d="M8 6v3.5M8 12v.1" />
+                  </svg>
+                  {t('uploadInfer.filePanel.deleteAllBtn')}
+                </button>
+              </div>
+              <div className={styles.modeActionsRight}>
+                <button
+                  className={`${styles.modeTile} ${styles.modeTileConfirmDelete} ${deleteSelectedIds.length === 0 ? styles.modeTileDisabled : ''}`}
+                  onClick={handleConfirmDelete}
+                  disabled={deleteSelectedIds.length === 0 || isDeleting}
+                >
+                  {isDeleting ? (
+                    <div className={styles.miniSpinner} />
+                  ) : (
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M3 4h10M6 4V3h4v1" />
+                      <path d="M5 4l.5 8h5l.5-8" />
+                      <path d="M7 7v3M9 7v3" />
+                    </svg>
+                  )}
+                  {deleteSelectedIds.length > 0
+                    ? t('uploadInfer.filePanel.deleteCount', { count: deleteSelectedIds.length })
+                    : t('uploadInfer.filePanel.deleteBtn')}
+                </button>
+                <button
+                  className={`${styles.modeTile} ${styles.modeTileCancel}`}
+                  onClick={exitDeleteMode}
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                    <path d="M4 4l8 8M12 4l-8 8" />
+                  </svg>
+                  {t('uploadInfer.filePanel.cancelBtn')}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── Action grid — 3×2 tiles, only in normal (idle) mode ── */}
+          {!selectMode && !deleteMode && !exportMode && !isBatchRunning && (
+            <div className={styles.actionsGrid}>
+              {/* Infer */}
+              <button
+                className={`${styles.actionTile} ${styles.actionTileInfer}`}
+                onClick={onEnterSelectMode}
+                title={t('uploadInfer.filePanel.inferenceBtn')}
+              >
+                <svg viewBox="0 0 16 16" fill="currentColor" stroke="none">
+                  <path d="M8 1l1.8 4.4L14 6.2l-3.3 2.5 1.2 4.3L8 10.8 4.1 13l1.2-4.3L2 6.2l4.2-.8z" />
+                </svg>
+                {t('uploadInfer.filePanel.inferenceBtn')}
+              </button>
+
+              {/* Dictionary */}
+              <button
+                className={`${styles.actionTile} ${styles.actionTileDictionary}`}
+                onClick={() => setDictModalOpen(true)}
+                disabled={filesTotal === 0}
+                title={t('uploadInfer.filePanel.dictionaryBtn')}
+              >
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                  strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 2.5h7.5a1.5 1.5 0 011.5 1.5v9a.5.5 0 01-.5.5H4a1 1 0 01-1-1V2.5z" />
+                  <path d="M3 11.5a1 1 0 011-1h8" />
+                  <path d="M6 5.5h3" />
+                </svg>
+                {t('uploadInfer.filePanel.dictionaryBtn')}
+              </button>
+
+              {/* Template */}
+              <button
+                className={`${styles.actionTile} ${styles.actionTileTemplate}`}
+                onClick={() => setTemplateModalOpen(true)}
+                disabled={filesTotal === 0}
+                title={t('uploadInfer.filePanel.templateBtn')}
+              >
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                  strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 2.5h10v11H3z" />
+                  <path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3" />
+                </svg>
+                {t('uploadInfer.filePanel.templateBtn')}
+              </button>
+
+              {/* Search */}
+              <button
+                className={`${styles.actionTile} ${styles.actionTileSearch} ${searchOpen ? styles.actionTileActive : ''}`}
+                onClick={openSearch}
+                title={t('uploadInfer.filePanel.searchBtn')}
+              >
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="6.5" cy="6.5" r="4" />
+                  <path d="M11 11l2.5 2.5" />
+                </svg>
+                {t('uploadInfer.filePanel.searchBtn')}
+              </button>
+
+              {/* Export */}
+              <button
+                className={`${styles.actionTile} ${styles.actionTileExport}`}
+                onClick={enterExportMode}
+                disabled={filesTotal === 0}
+                title={t('uploadInfer.filePanel.exportBtn')}
+              >
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                  strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6z" />
+                  <path d="M9 2v4h4" />
+                  <path d="M6 9.5l1.5 2 2.5-3" />
+                </svg>
+                {t('uploadInfer.filePanel.exportBtn')}
+              </button>
+
+              {/* Delete */}
+              <button
+                className={`${styles.actionTile} ${styles.actionTileDelete}`}
+                onClick={enterDeleteMode}
+                disabled={filesTotal === 0}
+                title={t('uploadInfer.filePanel.deleteBtn')}
+              >
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                  strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 4h10M6 4V3h4v1" />
+                  <path d="M5 4l.5 8h5l.5-8" />
+                  <path d="M7 7v3M9 7v3" />
+                </svg>
+                {t('uploadInfer.filePanel.deleteBtn')}
+              </button>
+            </div>
+          )}
+
+        </div>
+
+        <div className={styles.dateFilter}>
+          <div className={styles.dateField}>
+            <label className={styles.dateLabel}>{t('uploadInfer.filePanel.dateFrom')}</label>
+            <input type="date" className={styles.dateInput} value={dateFrom} max={dateTo}
+              disabled={isBatchRunning}
+              onChange={e => dispatch(setDateFrom(e.target.value))} />
+          </div>
+          <div className={styles.dateSep}>—</div>
+          <div className={styles.dateField}>
+            <label className={styles.dateLabel}>{t('uploadInfer.filePanel.dateTo')}</label>
+            <input type="date" className={styles.dateInput} value={dateTo} min={dateFrom}
+              disabled={isBatchRunning}
+              onChange={e => dispatch(setDateTo(e.target.value))} />
+          </div>
+          <button className={`${styles.btn} ${styles.btnApply}`} onClick={handleApply} disabled={filesLoading || isBatchRunning}>{t('uploadInfer.filePanel.applyDate')}</button>
+        </div>
+
+        {/* Sort header */}
+        <div className={styles.sortHeader}>
+          <span className={styles.sortHeaderLabel}>
+            <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+              <path d="M2 4h10M4 7h6M6 10h2" />
+            </svg>
+            {t('uploadInfer.filePanel.sortBy')}
+          </span>
+          <div className={styles.sortCols}>
+            {([
+              { key: 'id' as SortKey, label: t('uploadInfer.filePanel.sortId') },
+              { key: 'name' as SortKey, label: t('uploadInfer.filePanel.sortName') },
+              { key: 'date' as SortKey, label: t('uploadInfer.filePanel.sortDate') },
+              { key: 'status' as SortKey, label: t('uploadInfer.filePanel.sortStatus') },
+            ]).map(({ key, label }) => (
+              <button
+                key={key}
+                className={`${styles.sortCol} ${sort.key === key ? styles.sortColActive : ''}`}
+                onClick={() => handleSort(key)}
+              >
+                {label}
+                <svg viewBox="0 0 10 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
+                  className={sort.key === key ? (sort.dir === 'asc' ? styles.sortAsc : styles.sortDesc) : styles.sortInactive}>
+                  <path d="M5 1v10M2 8l3 3 3-3" />
+                </svg>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Search bar */}
+        <div className={`${styles.searchBar} ${searchOpen ? styles.searchBarOpen : ''}`}>
+          <div className={styles.searchBarRow}>
+            <div className={styles.searchInner}>
+              <svg className={styles.searchBarIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="6.5" cy="6.5" r="4" />
+                <path d="M11 11l2.5 2.5" />
+              </svg>
+              <input
+                ref={searchInputRef}
+                type="text"
+                className={styles.searchInput}
+                placeholder={t('uploadInfer.filePanel.searchPlaceholder')}
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+              />
+              {filesSearch && (
+                <span className={styles.searchCount}>
+                  {t('uploadInfer.filePanel.matchCount', { count: filesTotal })}
+                </span>
+              )}
+            </div>
+            <button className={styles.searchCloseBtn} onClick={closeSearch} title={t('uploadInfer.filePanel.searchBtn')}>
+              <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M2 2l8 8M10 2l-8 8" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        {/* File list */}
+        <div className={styles.uploadedBody}>
+          {filesLoading && (
+            <div className={styles.listState}><div className={styles.spinner} /><span>{t('uploadInfer.filePanel.loadingFiles')}</span></div>
+          )}
+          {!filesLoading && filesError && (
+            <div className={`${styles.listState} ${styles.errorState}`}>
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                <circle cx="8" cy="8" r="6" /><path d="M8 5v3M8 11v.5" />
+              </svg>
+              {filesError}
+            </div>
+          )}
+          {!filesLoading && !filesError && filesTotal === 0 && !filesSearch && (
+            <div className={styles.listState}>
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="2" y="2" width="12" height="12" rx="2" /><path d="M5 8h6M5 5.5h4M5 10.5h6" />
+              </svg>
+              {t('uploadInfer.filePanel.noFilesRange')}
+            </div>
+          )}
+          {!filesLoading && !filesError && filesTotal === 0 && filesSearch && (
+            <div className={styles.listState}>
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="6.5" cy="6.5" r="4" /><path d="M11 11l2.5 2.5" />
+              </svg>
+              {t('uploadInfer.filePanel.noFilesMatch', { query: filesSearch })}
+            </div>
+          )}
+          {!filesLoading && !filesError && displayedFiles.map(f => {
+            const ext = getExt(f.original_name);
+            const isChecked = selectedServerIds.includes(f.id);
+            const isDeleteChecked = deleteSelectedIds.includes(f.id);
+            const isExportChecked = exportSelectedIds.includes(f.id);
+            const selectable = selectMode && !isBatchRunning;
+            const deletable = deleteMode && !isBatchRunning;
+            const exportable = exportMode && !isBatchRunning;
+            return (
+              <div
+                key={f.id}
+                className={`${styles.hitm}
+                  ${selectable ? (isChecked ? styles.active : '') : ''}
+                  ${deletable ? (isDeleteChecked ? styles.activeDelete : '') : ''}
+                  ${exportable ? (isExportChecked ? styles.activeExport : '') : ''}
+                  ${!selectable && !deletable && !exportable ? (f.id === activeFileId ? styles.activeView : '') : ''}
+                  ${styles.hitmSelectable}`}
+                onClick={() => {
+                  if (selectable) dispatch(toggleServerFileSelection(f.id));
+                  else if (deletable) toggleDeleteSelection(f.id);
+                  else if (exportable) toggleExportSelection(f.id);
+                  else onFileClick(f.id);
+                }}
+              >
+                {selectable && (
+                  <Checkbox checked={isChecked} onChange={() => dispatch(toggleServerFileSelection(f.id))} />
+                )}
+                {deletable && (
+                  <Checkbox checked={isDeleteChecked} onChange={() => toggleDeleteSelection(f.id)} />
+                )}
+                {exportable && (
+                  <Checkbox checked={isExportChecked} onChange={() => toggleExportSelection(f.id)} />
+                )}
+                <div className={`${styles.ficon} ${styles[ext]}`}>{ext.toUpperCase()}</div>
+                <div className={styles.hi}>
+                  <div className={styles.hn}>{f.original_name}</div>
+                  <div className={styles.hm}>{f.inserted_at} · #{f.id}</div>
+                </div>
+                <span className={`${styles.badge} ${isChecked ? styles.bSelected :
+                  isDeleteChecked ? styles.bDelete :
+                    isExportChecked ? styles.bExport :
+                      f.status === 'completed' ? styles.bInferred : styles.bNotInferred
+                  }`}>
+                  {isChecked ? (
+                    <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="10" height="10">
+                      <path d="M2 6l3 3 5-5" />
+                    </svg>
+                  ) : isDeleteChecked ? (
+                    <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" width="10" height="10">
+                      <path d="M2 2l8 8M10 2l-8 8" />
+                    </svg>
+                  ) : isExportChecked ? (
+                    <>
+                      <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="9" height="9">
+                        <path d="M6 1v6M3.5 4.5L6 7l2.5-2.5" /><path d="M2 10h8" />
+                      </svg>
+                      {t('uploadInfer.filePanel.export')}
+                    </>
+                  ) : f.status === 'completed' ? (
+                    <>
+                      <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="9" height="9">
+                        <path d="M2 6l3 3 5-5" />
+                      </svg>
+                      {t('uploadInfer.filePanel.inferenced')}
+                    </>
+                  ) : t('uploadInfer.filePanel.notInferenced')}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Pagination footer */}
+        {!filesLoading && !filesError && filesTotal > 0 && (
+          <div className={styles.paginationBar}>
+            <div className={styles.pageSizeGroup}>
+              <span className={styles.pageSizeLabel}>{t('uploadInfer.filePanel.perPage')}</span>
+              <select
+                className={styles.pageSizeSelect}
+                value={filesPageSize}
+                onChange={e => handlePageSizeChange(Number(e.target.value))}
+              >
+                {[100, 150, 200].map(size => (
+                  <option key={size} value={size}>{size}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className={styles.pageNav}>
+              <button
+                className={styles.pageNavBtn}
+                onClick={() => goToPage(filesPage - 1)}
+                disabled={filesPage <= 1}
+                aria-label="Previous page"
+              >
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                  <path d="M10 3L6 8l4 5" />
+                </svg>
+              </button>
+
+              {getPageNumbers(filesPage, filesTotalPages).map((p, i) =>
+                p === '…' ? (
+                  <span key={`ellipsis-${i}`} className={styles.pageEllipsis}>…</span>
+                ) : (
+                  <button
+                    key={p}
+                    className={`${styles.pageNumBtn} ${p === filesPage ? styles.pageNumBtnActive : ''}`}
+                    onClick={() => goToPage(p as number)}
+                  >
+                    {p}
+                  </button>
+                )
+              )}
+
+              <button
+                className={styles.pageNavBtn}
+                onClick={() => goToPage(filesPage + 1)}
+                disabled={filesPage >= filesTotalPages}
+                aria-label="Next page"
+              >
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                  <path d="M6 3l4 5-4 5" />
+                </svg>
+              </button>
+            </div>
+
+            <div className={styles.pageInfo}>
+              {t('uploadInfer.filePanel.pageInfo', { page: filesPage, totalPages: filesTotalPages, total: filesTotal })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <DictionaryAssociationModal
+        open={dictModalOpen}
+        onClose={() => setDictModalOpen(false)}
+      />
+
+      <PromptTemplateAssociationModal
+        open={templateModalOpen}
+        onClose={() => setTemplateModalOpen(false)}
+      />
+
+      {/* ── Delete ALL confirmation — wipes every file on the account ── */}
+      {deleteAllConfirmOpen && (
+        <div className={styles.dangerOverlay} onClick={() => !isDeletingAll && closeDeleteAllConfirm()}>
+          <div className={styles.dangerModal} onClick={e => e.stopPropagation()}>
+            <div className={styles.dangerIcon}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 2l10 18H2z" />
+                <path d="M12 9v5M12 17v.1" />
+              </svg>
+            </div>
+            <div className={styles.dangerTitle}>{t('uploadInfer.filePanel.deleteAllConfirmTitle')}</div>
+            <div className={styles.dangerBody}>
+              {t('uploadInfer.filePanel.deleteAllConfirmBody', { from: dateFrom, to: dateTo })}
+            </div>
+            <label className={styles.dangerLabel}>
+              {t('uploadInfer.filePanel.deleteAllConfirmPrompt', { phrase: DELETE_ALL_CONFIRM_PHRASE })}
+            </label>
+            <input
+              type="text"
+              className={styles.dangerInput}
+              value={deleteAllConfirmText}
+              onChange={e => setDeleteAllConfirmText(e.target.value)}
+              placeholder={DELETE_ALL_CONFIRM_PHRASE}
+              autoFocus
+              disabled={isDeletingAll}
+            />
+            {deleteAllError && <div className={styles.dangerError}>{deleteAllError}</div>}
+            <div className={styles.dangerActions}>
+              <button
+                className={`${styles.btn} ${styles.btnFull}`}
+                onClick={closeDeleteAllConfirm}
+                disabled={isDeletingAll}
+              >
+                {t('uploadInfer.filePanel.cancelBtn')}
+              </button>
+              <button
+                className={`${styles.btn} ${styles.btnDanger} ${styles.btnFull}`}
+                onClick={handleConfirmDeleteAll}
+                disabled={deleteAllConfirmText !== DELETE_ALL_CONFIRM_PHRASE || isDeletingAll}
+              >
+                {isDeletingAll ? <div className={styles.miniSpinner} /> : t('uploadInfer.filePanel.deleteAllConfirmBtn')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default FilePanel;
