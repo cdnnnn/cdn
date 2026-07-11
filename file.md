@@ -1,3795 +1,3569 @@
 // ═══════════════════════════════════════════════
-// store/uploadSlice.ts
-// Content Analytics · Upload & Inference state
+// pages/UploadInfer/UploadInfer.tsx
+// LectureAI · Upload & Inference page
 // ═══════════════════════════════════════════════
-import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
-
-// ── Server file (from /files/by-date/) ──────────
-// "tbd" = not yet inferenced, "completed" = inferenced.
-export type FileStatus = 'waiting' | 'running' | 'completed' | 'error' | 'tbd' | 'queued';
-
-export interface ServerFile {
-  id: number;
-  original_name: string;
-  inserted_at: string;
-  summary_prompt: string;
-  keywords_prompt: string;
-  faq_prompt: string;
-  short_answers_prompt: string;
-  true_false_prompt: string;
-  progress: string | number | null;
-  dictionary_id?: number | null;
-  prompt_template_id?: number | null;
-  status: FileStatus;
-}
-
-// ── /files/by-date/ pagination params & sort keys ──
-export type FilesSortBy = 'id' | 'original_name' | 'inserted_at' | 'status';
-export type SortOrder = 'asc' | 'desc';
-
-export interface ServerFilesData {
-  queued: ServerFile[];
-  completed: ServerFile[];
-  pending: ServerFile[];
-  running: ServerFile[];
-}
-
-export interface UploadedFile {
-  id: number;
-  name: string;
-  size: string;
-  type: 'vtt' | 'srt';
-  status: 'ready' | 'running' | 'done' | 'failed';
-  summaryPrompt: string;
-  questionPrompt: string;
-}
-
-export interface BatchFile {
-  id: number;
-  name: string;
-  size: string;
-  type: 'vtt' | 'srt';
-  progress?: number;
-}
-
-export interface BatchGroup {
-  id: string;
-  status: 'running' | 'queued' | 'done' | 'pending';
-  files: BatchFile[];
-  collapsed: boolean;
-}
-
-export type TimeInterval = 5 | 10 | 15 | 20 | 30 | 45 | 60;
-
-export interface InferenceSettings {
-  generateSummary: boolean;
-  generateKeywords: boolean;
-  generateQuestions: boolean;
-  summaryStyle: string;
-  timestampInterval: string;
-  languageOutput: string;
-  mcq: boolean;
-  trueFalse: boolean;
-  shortAnswer: boolean;
-  questionCount: number;
-  keywordCount: number;
-  summaryPromptOverride: string;
-  keywordPromptOverride: string;
-  questionPromptOverride: string;
-
-  // ── New independent content types ──
-  generateShortAnswer: boolean;
-  generateTrueFalse: boolean;
-  // Only meaningful (and only sent as true) when generateKeywords is also true.
-  generateKeywordInsights: boolean;
-  timestampedSummary: boolean;
-  timeInterval: TimeInterval;
-  shortAnswerPromptOverride: string;
-  trueFalsePromptOverride: string;
-}
-
-interface UploadState {
-  files: UploadedFile[];
-  selectedIds: number[];
-  settingsCollapsed: boolean;
-  batchVisible: boolean;
-  batchGroups: BatchGroup[];
-  settings: InferenceSettings;
-  uploadZoneCollapsed: boolean;
-
-  // ── Server files (from /files/by-date/) ──
-  // NOTE: serverFilesData is now populated exclusively by inferenceStatusSuccess
-  // (the /files/by-progress/ polling endpoint), which still returns the old
-  // bucketed shape. /files/by-date/ is paginated and returns a flat, per-file
-  // `status` — so it no longer feeds serverFilesData.
-  serverFilesData: ServerFilesData;          // raw split by status (from /files/by-progress/)
-  serverFiles: ServerFile[];             // current page of /files/by-date/ results
-  serverFilesLoading: boolean;
-  serverFilesError: string | null;
-  dateFrom: string;
-  dateTo: string;
-
-  // ── /files/by-date/ pagination, sort & search ──
-  filesPage: number;
-  filesPageSize: number;
-  filesTotal: number;
-  filesTotalPages: number;
-  filesSortBy: FilesSortBy;
-  filesSortOrder: SortOrder;
-  filesSearch: string;
-
-  // ── Selection on uploaded files ──
-  selectedServerIds: number[];
-
-  // ── Batch running state ──
-  isBatchRunning: boolean;                  // true while queued/running not empty
-  lastBatchFinishedAt: number | null;       // timestamp (Date.now()) set when batch transitions running→done
-
-  // ── Models ──
-  models: string[];
-  modelsLoading: boolean;
-  selectedModel: string;
-}
-
-function toDateStr(d: Date) { return d.toISOString().slice(0, 10); }
-function defaultFrom() { const d = new Date(); d.setMonth(d.getMonth() - 1); return toDateStr(d); }
-function defaultTo() { return toDateStr(new Date()); }
-
-const emptyData: ServerFilesData = { queued: [], completed: [], pending: [], running: [] };
-
-const initialState: UploadState = {
-  files: [],
-  selectedIds: [],
-  uploadZoneCollapsed: false,
-  settingsCollapsed: false,
-  batchVisible: false,
-  batchGroups: [],
-  settings: {
-    generateSummary: true, generateKeywords: true, generateQuestions: true,
-    summaryStyle: 'Table of Contents', timestampInterval: '5 minute segments',
-    languageOutput: 'Korean + English',
-    mcq: true, trueFalse: true, shortAnswer: false,
-    questionCount: 10, keywordCount: 15,
-    summaryPromptOverride: '', keywordPromptOverride: '', questionPromptOverride: '',
-
-    generateShortAnswer: false, generateTrueFalse: false,
-    generateKeywordInsights: false,
-    timestampedSummary: false, timeInterval: 5,
-    shortAnswerPromptOverride: '', trueFalsePromptOverride: '',
-  },
-  serverFilesData: emptyData,
-  serverFiles: [],
-  serverFilesLoading: false,
-  serverFilesError: null,
-  dateFrom: defaultFrom(),
-  dateTo: defaultTo(),
-
-  filesPage: 1,
-  filesPageSize: 100,
-  filesTotal: 0,
-  filesTotalPages: 1,
-  filesSortBy: 'id',
-  filesSortOrder: 'desc',
-  filesSearch: '',
-
-  selectedServerIds: [],
-  isBatchRunning: false,
-  lastBatchFinishedAt: null,
-  models: [],
-  modelsLoading: false,
-  selectedModel: '',
-};
-
-const uploadSlice = createSlice({
-  name: 'upload',
-  initialState,
-  reducers: {
-    // ── Inference legacy ──
-    toggleFileSelection(state, action: PayloadAction<number>) {
-      const idx = state.selectedIds.indexOf(action.payload);
-      if (idx > -1) state.selectedIds.splice(idx, 1);
-      else state.selectedIds.push(action.payload);
-    },
-    toggleSelectAll(state) {
-      const allIds = state.files.map(f => f.id);
-      state.selectedIds = state.selectedIds.length === allIds.length ? [] : allIds;
-    },
-    toggleUploadZone(state) {
-      state.uploadZoneCollapsed = !state.uploadZoneCollapsed;
-    },
-    toggleBatchGroup(state, action: PayloadAction<string>) {
-      const g = state.batchGroups.find(g => g.id === action.payload);
-      if (g) g.collapsed = !g.collapsed;
-    },
-    runInference(state) {
-      state.batchVisible = true;
-    },
-    updateSummaryPrompt(state, action: PayloadAction<string>) {
-      state.settings.summaryPromptOverride = action.payload;
-    },
-    updateKeywordPrompt(state, action: PayloadAction<string>) {
-      state.settings.keywordPromptOverride = action.payload;
-    },
-    updateQuestionPrompt(state, action: PayloadAction<string>) {
-      state.settings.questionPromptOverride = action.payload;
-    },
-    updateShortAnswerPrompt(state, action: PayloadAction<string>) {
-      state.settings.shortAnswerPromptOverride = action.payload;
-    },
-    updateTrueFalsePrompt(state, action: PayloadAction<string>) {
-      state.settings.trueFalsePromptOverride = action.payload;
-    },
-    updateSettings(state, action: PayloadAction<Partial<InferenceSettings>>) {
-      state.settings = { ...state.settings, ...action.payload };
-    },
-
-    // ── Date range ──
-    setDateFrom(state, action: PayloadAction<string>) { state.dateFrom = action.payload; },
-    setDateTo(state, action: PayloadAction<string>) { state.dateTo = action.payload; },
-
-    // ── Patch progress % onto running files from /files/progress/ response ──
-    updateRunningProgress(state, action: PayloadAction<Record<string, number | string>>) {
-      const progressMap = action.payload;
-      state.serverFilesData.running = state.serverFilesData.running.map(f => {
-        const raw = progressMap[String(f.id)];
-        if (raw === undefined) return f;
-        const pct = typeof raw === 'string' ? parseFloat(raw) : raw;
-        return { ...f, progress: isNaN(pct) ? f.progress : Math.min(100, Math.max(0, pct)) };
-      });
-    },
-
-    // ── Inference-only status update (does NOT touch the FilePanel file list) ──
-    inferenceStatusSuccess(state, action: PayloadAction<ServerFilesData>) {
-      const d = action.payload;
-      // Merge any newly-completed files from the polling response into the
-      // existing completed bucket. We keep the historical /by-date/ entries
-      // and append/replace any IDs that just finished in the active batch,
-      // so FilePanel badges flip to "Inferenced" the moment Step-2 moves a
-      // file into its Completed column — without needing another API call.
-      const incomingCompleted = d.completed ?? [];
-      const incomingCompletedIds = new Set(incomingCompleted.map(f => f.id));
-      const mergedCompleted = [
-        ...state.serverFilesData.completed.filter(f => !incomingCompletedIds.has(f.id)),
-        ...incomingCompleted,
-      ];
-      state.serverFilesData = {
-        queued: d.queued ?? [],
-        running: d.running ?? [],
-        pending: d.pending ?? [],
-        completed: mergedCompleted,
-      };
-      const running = (d.queued?.length ?? 0) > 0 || (d.running?.length ?? 0) > 0;
-      // Clear selections the moment the batch becomes active so highlighted
-      // cards stop showing the blue selected state after a successful submit.
-      if (running && !state.isBatchRunning) {
-        state.selectedServerIds = [];
-      }
-      // Auto-collapse settings when a batch starts running. (Previously derived
-      // from /files/by-date/, which is now paginated and can't reliably tell us this.)
-      if (running) state.settingsCollapsed = true;
-      // When batch transitions running → done, stamp a timestamp so FilePanel
-      // knows to re-fetch /by-date/ and refresh the completed list.
-      if (!running && state.isBatchRunning) {
-        state.lastBatchFinishedAt = Date.now();
-      }
-      state.isBatchRunning = running;
-    },
-
-    // ── Server files (paginated /files/by-date/) ──
-    serverFilesLoading(state) {
-      state.serverFilesLoading = true;
-      state.serverFilesError = null;
-    },
-    serverFilesSuccess(state, action: PayloadAction<{
-      files: ServerFile[];
-      total: number;
-      page: number;
-      pageSize: number;
-      totalPages: number;
-      sortBy: FilesSortBy;
-      sortOrder: SortOrder;
-      search: string;
-    }>) {
-      const { files, total, page, pageSize, totalPages, sortBy, sortOrder, search } = action.payload;
-      state.serverFiles = files;
-      state.serverFilesLoading = false;
-      state.serverFilesError = null;
-
-      state.filesTotal = total;
-      state.filesPage = page;
-      state.filesPageSize = pageSize;
-      state.filesTotalPages = totalPages;
-      state.filesSortBy = sortBy;
-      state.filesSortOrder = sortOrder;
-      state.filesSearch = search;
-
-      // NOTE: isBatchRunning is no longer derived here — /files/by-date/ is
-      // paginated so a running/queued file may simply be on another page.
-      // isBatchRunning is set by inferenceStatusSuccess (/files/by-progress/),
-      // which always reflects the full, unpaginated set of active files.
-
-      // NOTE: selections are intentionally NOT pruned against this page's ids —
-      // a file not present here may just be on a different page, not deleted.
-      // Deletion flows already clear selectedServerIds explicitly on success.
-    },
-    serverFilesFailure(state, action: PayloadAction<string>) {
-      state.serverFilesLoading = false;
-      state.serverFilesError = action.payload;
-    },
-
-    // ── Pagination / sort / search (kept in sync for UI display; the actual
-    //     fetch is triggered imperatively by the component with these values) ──
-    setFilesPage(state, action: PayloadAction<number>) {
-      state.filesPage = action.payload;
-    },
-    setFilesPageSize(state, action: PayloadAction<number>) {
-      state.filesPageSize = action.payload;
-      state.filesPage = 1;
-    },
-    setFilesSort(state, action: PayloadAction<{ sortBy: FilesSortBy; sortOrder: SortOrder }>) {
-      state.filesSortBy = action.payload.sortBy;
-      state.filesSortOrder = action.payload.sortOrder;
-      state.filesPage = 1;
-    },
-    setFilesSearch(state, action: PayloadAction<string>) {
-      state.filesSearch = action.payload;
-      state.filesPage = 1;
-    },
-
-    // ── Server file selection ──
-    toggleServerFileSelection(state, action: PayloadAction<number>) {
-      if (state.isBatchRunning) return;  // no selection while batch running
-      const idx = state.selectedServerIds.indexOf(action.payload);
-      if (idx > -1) state.selectedServerIds.splice(idx, 1);
-      else state.selectedServerIds.push(action.payload);
-    },
-    toggleSelectAllServerFiles(state) {
-      if (state.isBatchRunning) return;
-      const pageIds = state.serverFiles.map(f => f.id);
-      if (pageIds.length === 0) return;
-      const selectedSet = new Set(state.selectedServerIds);
-      const allPageSelected = pageIds.every(id => selectedSet.has(id));
-      if (allPageSelected) {
-        // Uncheck — remove only this page's ids, leave other pages' selections alone.
-        const pageIdSet = new Set(pageIds);
-        state.selectedServerIds = state.selectedServerIds.filter(id => !pageIdSet.has(id));
-      } else {
-        // Check — add this page's ids on top of whatever's already selected elsewhere.
-        pageIds.forEach(id => { if (!selectedSet.has(id)) state.selectedServerIds.push(id); });
-      }
-    },
-    clearServerSelection(state) {
-      state.selectedServerIds = [];
-    },
-
-    // ── Patch prompt fields on saved files ──
-    updateFilePrompts(state, action: PayloadAction<{
-      fileIds: number[];
-      summaryPrompt?: string;
-      keywordsPrompt?: string;
-      faqPrompt?: string;
-      shortAnswerPrompt?: string;
-      trueFalsePrompt?: string;
-    }>) {
-      const { fileIds, summaryPrompt, keywordsPrompt, faqPrompt, shortAnswerPrompt, trueFalsePrompt } = action.payload;
-      const idSet = new Set(fileIds);
-      state.serverFiles = state.serverFiles.map(f => {
-        if (!idSet.has(f.id)) return f;
-        return {
-          ...f,
-          ...(summaryPrompt !== undefined && { summary_prompt: summaryPrompt }),
-          ...(keywordsPrompt !== undefined && { keywords_prompt: keywordsPrompt }),
-          ...(faqPrompt !== undefined && { faq_prompt: faqPrompt }),
-          ...(shortAnswerPrompt !== undefined && { short_answers_prompt: shortAnswerPrompt }),
-          ...(trueFalsePrompt !== undefined && { true_false_prompt: trueFalsePrompt }),
-        };
-      });
-      // Also patch inside serverFilesData buckets so the per-file preview reflects the change
-      const patchBucket = (bucket: ServerFile[]) => bucket.map(f => {
-        if (!idSet.has(f.id)) return f;
-        return {
-          ...f,
-          ...(summaryPrompt !== undefined && { summary_prompt: summaryPrompt }),
-          ...(keywordsPrompt !== undefined && { keywords_prompt: keywordsPrompt }),
-          ...(faqPrompt !== undefined && { faq_prompt: faqPrompt }),
-          ...(shortAnswerPrompt !== undefined && { short_answers_prompt: shortAnswerPrompt }),
-          ...(trueFalsePrompt !== undefined && { true_false_prompt: trueFalsePrompt }),
-        };
-      });
-      state.serverFilesData.completed = patchBucket(state.serverFilesData.completed);
-      state.serverFilesData.queued = patchBucket(state.serverFilesData.queued);
-      state.serverFilesData.running = patchBucket(state.serverFilesData.running);
-      state.serverFilesData.pending = patchBucket(state.serverFilesData.pending);
-    },
-
-
-    // ── Patch dictionary_id on saved files (after associate/disassociate) ──
-    patchFileDictionaries(state, action: PayloadAction<Record<number, number | null>>) {
-      const map = action.payload;
-      const apply = (f: ServerFile): ServerFile =>
-        map[f.id] !== undefined ? { ...f, dictionary_id: map[f.id] } : f;
-      state.serverFiles = state.serverFiles.map(apply);
-      state.serverFilesData.completed = state.serverFilesData.completed.map(apply);
-      state.serverFilesData.queued = state.serverFilesData.queued.map(apply);
-      state.serverFilesData.running = state.serverFilesData.running.map(apply);
-      state.serverFilesData.pending = state.serverFilesData.pending.map(apply);
-    },
-
-    // ── Patch prompt_template_id on saved files (after template association) ──
-    patchFilePromptTemplate(state, action: PayloadAction<Record<number, number | null>>) {
-      const map = action.payload;
-      const apply = (f: ServerFile): ServerFile =>
-        map[f.id] !== undefined ? { ...f, prompt_template_id: map[f.id] } : f;
-      state.serverFiles = state.serverFiles.map(apply);
-      state.serverFilesData.completed = state.serverFilesData.completed.map(apply);
-      state.serverFilesData.queued = state.serverFilesData.queued.map(apply);
-      state.serverFilesData.running = state.serverFilesData.running.map(apply);
-      state.serverFilesData.pending = state.serverFilesData.pending.map(apply);
-    },
-
-    // ── Models ──
-    modelsLoading(state) {
-      state.modelsLoading = true;
-    },
-    modelsSuccess(state, action: PayloadAction<string[]>) {
-      state.models = action.payload;
-      state.modelsLoading = false;
-      if (action.payload.length > 0 && !state.selectedModel) {
-        state.selectedModel = action.payload[0];
-      }
-    },
-    modelsFailure(state) {
-      state.modelsLoading = false;
-    },
-    setSelectedModel(state, action: PayloadAction<string>) {
-      state.selectedModel = action.payload;
-    },
-  },
-});
-
-export const {
-  toggleFileSelection, toggleSelectAll,
-  toggleUploadZone, toggleBatchGroup,
-  runInference, updateSummaryPrompt, updateKeywordPrompt, updateQuestionPrompt,
-  updateShortAnswerPrompt, updateTrueFalsePrompt, updateSettings,
-  setDateFrom, setDateTo,
-  inferenceStatusSuccess,
-  updateRunningProgress,
-  serverFilesLoading, serverFilesSuccess, serverFilesFailure,
-  setFilesPage, setFilesPageSize, setFilesSort, setFilesSearch,
-  toggleServerFileSelection, toggleSelectAllServerFiles, clearServerSelection,
-  updateFilePrompts,
-  patchFileDictionaries,
-  patchFilePromptTemplate,
-  modelsLoading, modelsSuccess, modelsFailure, setSelectedModel,
-} = uploadSlice.actions;
-
-export default uploadSlice.reducer;
-
-
-
-
-
-
-
-
-
-
-
-
-// ═══════════════════════════════════════════════
-// pages/UploadInfer/InferencePanel.tsx
-// Content Analytics · Inference configuration + batch status
-// ═══════════════════════════════════════════════
-import React, { useEffect, useRef, useCallback, useState } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useAppDispatch, useAppSelector } from '../../store/hooks';
-import {
-  inferenceStatusSuccess, updateRunningProgress,
-  updateSummaryPrompt, updateKeywordPrompt, updateQuestionPrompt,
-  updateShortAnswerPrompt, updateTrueFalsePrompt, updateSettings,
-  modelsLoading, modelsSuccess, modelsFailure, setSelectedModel,
-  updateFilePrompts,
-  type ServerFile, type ServerFilesData, type TimeInterval,
-} from '../../store/uploadSlice';
+import { useAppSelector, useAppDispatch } from '../../store/hooks';
+import { clearServerSelection } from '../../store/uploadSlice';
 import api from '../../services/api';
-import styles from './InferencePanel.module.scss';
-import { addToast } from '../../store/toastSlice';
+import FilePanel from './FilePanel';
+import InferencePanel from './InferencePanel';
+import WorkspacePanel from './WorkspacePanel';
+import styles from './UploadInfer.module.scss';
 
-// ── Batch status columns ──────────────────────────
-const StatusCard: React.FC<{ file: ServerFile; variant: 'queued' | 'running' | 'completed'; onStop?: (id: number) => void; stopping?: boolean }> = ({ file, variant, onStop, stopping }) => {
+// ── Keyword Insights (from GET /files/{id}) ──────
+export interface KGEdge { type: string; source: string; target: string; }
+export interface KGNode { id: string; label: string; title?: string; value?: number; }
+export interface KnowledgeGraph { edges: KGEdge[]; nodes: KGNode[]; }
+export interface WordCloudData { wordcloud: [string, number][]; complexity_map: Record<string, string>; }
+export interface TimelineDataset { data: number[]; label: string; }
+export interface TimelineData { labels: string[]; datasets: TimelineDataset[]; timestamped: boolean; }
+export interface HeatmapData { matrix: number[][]; keywords: string[]; segments: string[]; timestamped: boolean; }
+export interface ClusterItem { id: string; label: string; value: number; }
+export interface ClustersData { clusters: Record<string, ClusterItem[]>; }
+export interface FrequencyItem { count: number; keyword: string; relative_pct: number; first_mention_pct: number; }
+export interface FrequencyData { data: FrequencyItem[]; }
+export interface PrereqEdge { reason: string; enables: string; prerequisite: string; }
+export interface PrereqNode { id: string; label: string; value: number; }
+export interface PrerequisitesData { edges: PrereqEdge[]; nodes: PrereqNode[]; }
+export interface ImportanceComplexityItem { reason: string; keyword: string; frequency: number; complexity: string; importance: number; }
+export interface ImportanceComplexityData { data: ImportanceComplexityItem[]; }
+export interface CooccuranceData { metrix: number[][]; keywords: string[]; }
+export interface GlossaryItem { term: string; definition: string; first_mention_ms: number; }
+export interface GlossaryData { glossary: GlossaryItem[]; }
+
+export interface KeywordInsights {
+  enriched_keywords: unknown | null;
+  knowledge_graph: KnowledgeGraph | null;
+  word_cloud: WordCloudData | null;
+  timeline: TimelineData | null;
+  heatmap: HeatmapData | null;
+  clusters: ClustersData | null;
+  frequency: FrequencyData | null;
+  prerequisites: PrerequisitesData | null;
+  importance_complexity: ImportanceComplexityData | null;
+  cooccurance: CooccuranceData | null;
+  congnitive_Load: unknown | null;
+  segments: { segments: unknown[] } | null;
+  glossary: GlossaryData | null;
+}
+
+export interface FileResult {
+  summary: string;
+  keywords: string[];
+  faq: string;
+  shortAnswer: string;
+  trueFalse: string;
+  timestampedSummary: string;
+  keywordInsights: KeywordInsights | null;
+  fileName: string;
+  fileId: number;
+  insertedAt: string;
+}
+
+const UploadInfer: React.FC = () => {
   const { t } = useTranslation();
-  const ext = file.original_name.toLowerCase().endsWith('.srt') ? 'srt' : 'vtt';
+  const isBatchRunning = useAppSelector(s => s.upload.isBatchRunning);
+  const serverFiles = useAppSelector(s => s.upload.serverFiles);
+  const dispatch = useAppDispatch();
+
+  const [selectMode, setSelectMode] = useState(false);
+  const step2Visible = selectMode || isBatchRunning;
+
+  const [step2Minimized, setStep2Minimized] = useState(false);
+  useEffect(() => { if (step2Visible) setStep2Minimized(false); }, [step2Visible]);
+  useEffect(() => { if (!isBatchRunning) setSelectMode(false); }, [isBatchRunning]);
+  useEffect(() => { if (!selectMode) dispatch(clearServerSelection()); }, [selectMode]); // eslint-disable-line
+  useEffect(() => { return () => { dispatch(clearServerSelection()); }; }, []); // eslint-disable-line
+
+  const [fileResult, setFileResult] = useState<FileResult | null>(null);
+  const [fileLoading, setFileLoading] = useState(false);
+  const [activeFileId, setActiveFileId] = useState<number | null>(null);
+
+  const fetchFileData = useCallback(async (fileId: number) => {
+    setFileLoading(true);
+    try {
+      const res = await api.get(`/files/${fileId}`);
+      const d = (res.data as any)?.data ?? {};
+      const serverFile = serverFiles.find(f => f.id === fileId);
+      const fileName = d.original_name ?? serverFile?.original_name ?? String(fileId);
+      const insertedAt = d.inserted_at ?? serverFile?.inserted_at ?? '';
+      setFileResult({
+        fileId, fileName, insertedAt,
+        summary: d.summary ?? '',
+        keywords: d.keywords ?? [],
+        faq: d.faq ?? '[]',
+        shortAnswer: d.short_answer ?? '[]',
+        trueFalse: d.true_false ?? '[]',
+        // NOTE: backend key is genuinely "timstamped_summary" (missing an "e") — match it exactly.
+        timestampedSummary: d.timstamped_summary ?? '[]',
+        keywordInsights: d.keyword_insights ?? null,
+      });
+    } catch { setFileResult(null); } finally { setFileLoading(false); }
+  }, [serverFiles]);
+
+  const handleFileClick = useCallback(async (fileId: number) => {
+    if (fileId === activeFileId) return;
+    setActiveFileId(fileId);
+    setFileResult(null);
+    await fetchFileData(fileId);
+  }, [activeFileId, fetchFileData]);
+
+  const handleDeleteComplete = useCallback((deletedIds: number[], all?: boolean) => {
+    if (all || (activeFileId !== null && deletedIds.includes(activeFileId))) {
+      setActiveFileId(null);
+      setFileResult(null);
+    }
+  }, [activeFileId]);
+
+  const prevBatchRunning = useRef(false);
+  useEffect(() => {
+    const justFinished = prevBatchRunning.current && !isBatchRunning;
+    prevBatchRunning.current = isBatchRunning;
+    if (justFinished && activeFileId !== null) fetchFileData(activeFileId);
+  }, [isBatchRunning]); // eslint-disable-line
+
   return (
-    <div className={`${styles.statusCardWrap} ${styles[variant + 'Wrap']}`}>
-      <div className={`${styles.statusCard} ${styles[variant]}`}>
-
-        {/* Left icon — ext badge for queued/running, green check for completed */}
-        {variant === 'completed' ? (
-          <div className={styles.completedCheck}>
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 8l3.5 3.5L13 5" />
-            </svg>
+    <div className={styles.page}>
+      <div className={styles.ph}>
+        <div className={styles.phRow}>
+          <div>
+            <div className={styles.phTitle}>{t('uploadInfer.pageTitle')}</div>
+            <div className={styles.phSub}>{t('uploadInfer.pageSub')}</div>
           </div>
-        ) : (
-          <div className={`${styles.statusExt} ${styles[ext]}`}>{ext.toUpperCase()}</div>
-        )}
+        </div>
+      </div>
 
-        <div className={styles.statusInfo}>
-          <div className={styles.statusNameRow}>
-            <span className={`${styles.statusIdBadge} ${styles['statusIdBadge_' + variant]}`}>#{file.id}</span>
-            <div className={styles.statusName}>{file.original_name}</div>
-          </div>
+      <div className={styles.upbody}>
+        <FilePanel
+          selectMode={selectMode}
+          onEnterSelectMode={() => setSelectMode(true)}
+          onExitSelectMode={() => setSelectMode(false)}
+          onFileClick={handleFileClick}
+          onDeleteComplete={handleDeleteComplete}
+          activeFileId={activeFileId}
+        />
 
-          {variant === 'running' && typeof file.progress === 'number' && (
-            <div className={styles.statusProgress}>
-              <div className={styles.statusBar}>
-                <div className={styles.statusFill} style={{ width: `${file.progress}%` }} />
-              </div>
-              <span className={styles.statusPct}>{file.progress}%</span>
-            </div>
-          )}
-
-          {variant === 'queued' && (
-            <div className={styles.queuedMeta}>
-              <span className={styles.queuedDot} />
-              {t('uploadInfer.inferencePanel.waitingQueue')}
-            </div>
-          )}
-
-          {variant === 'completed' && (
-            <div className={styles.completedMeta}>{file.inserted_at}</div>
-          )}
-
-          {variant === 'running' && typeof file.progress !== 'number' && (
-            <div className={styles.statusDate}>{file.inserted_at}</div>
-          )}
+        <div className={
+          `${styles.step2Wrap} ` +
+          `${step2Visible ? styles.step2WrapVisible : styles.step2WrapHidden} ` +
+          `${step2Visible && step2Minimized ? styles.step2WrapMinimized : ''}`
+        }>
+          <InferencePanel
+            onClose={() => setSelectMode(false)}
+            minimized={step2Minimized}
+            onToggleMinimize={() => setStep2Minimized(v => !v)}
+          />
         </div>
 
-        {/* Stop button — queued files only */}
-        {variant === 'queued' && onStop && (
-          <button
-            className={styles.stopBtn}
-            onClick={() => onStop(file.id)}
-            disabled={stopping}
-            title={t('uploadInfer.inferencePanel.stopFile')}
-          >
-            {stopping ? (
-              <span className={styles.stopSpinner} />
-            ) : (
-              <svg viewBox="0 0 16 16" fill="currentColor" stroke="none">
-                <rect x="4" y="4" width="8" height="8" rx="1.5" />
-              </svg>
-            )}
-          </button>
-        )}
-
+        <WorkspacePanel
+          step2Visible={step2Visible}
+          step2Minimized={step2Minimized}
+          fileResult={fileResult}
+          fileLoading={fileLoading}
+          activeFileId={activeFileId}
+          onResultUpdate={patch => setFileResult(prev => prev ? { ...prev, ...patch } : prev)}
+        />
       </div>
     </div>
   );
 };
 
-// ── InferencePanel ───────────────────────────────
-interface InferencePanelProps {
-  onClose: () => void;
-  minimized?: boolean;
-  onToggleMinimize?: () => void;
+export default UploadInfer;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ═══════════════════════════════════════════════
+// pages/UploadInfer/WorkspacePanel.tsx
+// LectureAI · Step-3 Workspace Result panel
+// ═══════════════════════════════════════════════
+import React, { useState, useMemo, useRef, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
+import { marked } from 'marked';
+import api from '../../services/api';
+import type { FileResult, WordCloudData, ClustersData, FrequencyData, ImportanceComplexityData, GlossaryData, KeywordInsights } from './UploadInfer';
+import styles from './WorkspacePanel.module.scss';
+
+marked.setOptions({ breaks: false, gfm: true });
+
+interface Props {
+    step2Visible?: boolean;
+    step2Minimized?: boolean;
+    fileResult: FileResult | null;
+    fileLoading: boolean;
+    activeFileId: number | null;
+    onResultUpdate?: (patch: Partial<Pick<FileResult, 'summary' | 'keywords'>>) => void;
 }
 
-const InferencePanel: React.FC<InferencePanelProps> = ({ onClose, minimized = false, onToggleMinimize }) => {
-  const { t } = useTranslation();
-  const dispatch = useAppDispatch();
-  const {
-    settings,
-    selectedServerIds, isBatchRunning,
-    serverFiles,
-    models, modelsLoading: mlLoading, selectedModel,
-    dateFrom, dateTo,
-  } = useAppSelector(s => s.upload);
+// TABS labels are now driven by i18n — see tabLabels() inside WorkspacePanel
+const TAB_IDS = ['summary', 'keywords', 'assessment', 'shortAnswer', 'trueFalse', 'timestampedSummary', 'keywordInsights'] as const;
+type TabId = typeof TAB_IDS[number];
 
-  const [running, setRunning] = React.useState(false);
-  const [stoppingIds, setStoppingIds] = React.useState<Set<number>>(new Set());
 
-  // ── Prompt save state ──────────────────────────
-  const [promptSaving, setPromptSaving] = useState(false);
-  const [promptSaveError, setPromptSaveError] = useState<string | null>(null);
-  const promptSnapshot = useRef({ summary: '', keyword: '', question: '', shortAnswer: '', trueFalse: '' });
-  const promptsDirty =
-    settings.summaryPromptOverride !== promptSnapshot.current.summary ||
-    settings.keywordPromptOverride !== promptSnapshot.current.keyword ||
-    settings.questionPromptOverride !== promptSnapshot.current.question ||
-    settings.shortAnswerPromptOverride !== promptSnapshot.current.shortAnswer ||
-    settings.trueFalsePromptOverride !== promptSnapshot.current.trueFalse;
+interface FaqItem {
+    question: string;
+    options: Record<string, string>;
+    correct_answer: string;
+    explanation: string;
+}
 
-  const emptyBatch: ServerFilesData = { queued: [], running: [], completed: [], pending: [] };
-  const [batchData, setBatchData] = React.useState<ServerFilesData>(emptyBatch);
-  const [countdown, setCountdown] = React.useState(10);
-  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const n = selectedServerIds.length;
-  const canRunInference = n > 0 && !isBatchRunning && !!selectedModel;
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // ── Fetch models ────────────────────────────
-  const fetchModels = useCallback(async () => {
-    dispatch(modelsLoading());
+function parseFaq(raw: string): FaqItem[] {
+    if (!raw || raw === '[]') return [];
     try {
-      const res = await api.get('/get_models');
-      const result = (res.data as any)?.result ?? [];
-      dispatch(modelsSuccess(result));
+        // eslint-disable-next-line no-eval
+        const result = eval(raw);
+        if (Array.isArray(result)) return result as FaqItem[];
+        return [];
     } catch {
-      dispatch(modelsFailure());
+        // Fallback: try direct JSON parse (if API returns valid JSON)
+        try { return JSON.parse(raw) as FaqItem[]; } catch { }
+        return [];
     }
-  }, [dispatch]); // eslint-disable-line
+}
 
-  useEffect(() => { fetchModels(); }, []); // eslint-disable-line
-
-  // ── Polling helper ───────────────────────────
-  const fetchFilesForPolling = useCallback(async () => {
+// ── Permissive parser for the newer python-repr-style fields (short_answer,
+//    true_false, timestamped_summary). Handles True/False/None literals that
+//    plain eval() can't, and tries strict JSON first since that's cheaper
+//    and safer whenever the backend does send valid JSON. ──
+function parsePyList<T>(raw: string): T[] {
+    if (!raw || raw === '[]') return [];
     try {
-      const statusRes = await api.post('/files/by-progress/', { start_date: dateFrom, end_date: dateTo });
-      const d = (statusRes.data as any)?.data;
-      const data: ServerFilesData = {
-        queued: d?.queued ?? [],
-        completed: d?.completed ?? [],
-        pending: d?.pending ?? [],
-        running: d?.running ?? [],
-      };
-      dispatch(inferenceStatusSuccess(data));
-      setBatchData(data);
-
-      const stillRunning = data.running.length > 0 || data.queued.length > 0;
-
-      if (data.running.length > 0) {
-        const runningIds = data.running.map(f => f.id);
-        try {
-          const progressRes = await api.post('/files/progress/', { file_ids: runningIds });
-          const progressMap = (progressRes.data as any)?.result ?? {};
-          dispatch(updateRunningProgress(progressMap));
-          setBatchData(prev => ({
-            ...prev,
-            running: prev.running.map(f => {
-              const raw = progressMap[String(f.id)];
-              if (raw === undefined) return f;
-              const pct = typeof raw === 'string' ? parseFloat(raw) : raw;
-              return { ...f, progress: isNaN(pct) ? f.progress : Math.min(100, Math.max(0, pct)) };
-            }),
-          }));
-        } catch {
-          // progress fetch failing is non-critical — silently ignore
-        }
-      }
-
-      if (!stillRunning) setBatchData(emptyBatch);
-      return stillRunning;
-    } catch {
-      return false;
-    }
-  }, [dispatch, dateFrom, dateTo]);
-
-  const stopCountdown = useCallback(() => {
-    if (countdownRef.current) {
-      clearInterval(countdownRef.current);
-      countdownRef.current = null;
-    }
-  }, []);
-
-  const startCountdown = useCallback(() => {
-    stopCountdown();
-    setCountdown(10);
-    countdownRef.current = setInterval(() => {
-      setCountdown(prev => (prev <= 1 ? 10 : prev - 1));
-    }, 1000);
-  }, [stopCountdown]);
-
-  const stopPolling = useCallback(() => {
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-    }
-    stopCountdown();
-    setCountdown(10);
-  }, [stopCountdown]);
-
-  const startPolling = useCallback(() => {
-    stopPolling();
-    startCountdown();
-    pollingRef.current = setInterval(async () => {
-      const stillRunning = await fetchFilesForPolling();
-      if (!stillRunning) stopPolling();
-      else startCountdown();
-    }, 10000);
-  }, [fetchFilesForPolling, stopPolling, startCountdown]);
-
-  useEffect(() => {
-    if (isBatchRunning) {
-      fetchFilesForPolling().then(stillRunning => {
-        if (stillRunning) startPolling();
-        else stopPolling();
-      });
-    } else {
-      stopPolling();
-    }
-    return stopPolling;
-  }, [isBatchRunning]); // eslint-disable-line
-
-  // ── One-time bootstrap check on mount ──
-  // /files/by-date/ is now paginated and no longer tells us whether a batch
-  // is running (a running/queued file may simply be on another page), so we
-  // can't rely on its response to seed isBatchRunning like before. Ask
-  // /files/by-progress/ directly once on mount to catch a batch that was
-  // already running before this page loaded (e.g. after a refresh).
-  useEffect(() => {
-    fetchFilesForPolling().then(stillRunning => { if (stillRunning) startPolling(); });
-  }, []); // eslint-disable-line
-
-  // ── Stop a queued file ───────────────────────
-  const handleStop = useCallback(async (fileId: number) => {
-    setStoppingIds(prev => new Set(prev).add(fileId));
+        const result = JSON.parse(raw);
+        if (Array.isArray(result)) return result as T[];
+    } catch { /* not valid JSON — fall through to python-ish eval */ }
     try {
-      await api.patch('/files/stop', { fileID: [fileId] });
-    } catch (err: any) {
-      if (err?.response?.status === 403) {
-        dispatch(addToast(t('uploadInfer.inferencePanel.stopAlready'), 'error'));
-      } else {
-        console.error('Stop file failed:', err);
-      }
-    } finally {
-      await fetchFilesForPolling();
-      setStoppingIds(prev => { const s = new Set(prev); s.delete(fileId); return s; });
+        const normalized = raw
+            .replace(/\bTrue\b/g, 'true')
+            .replace(/\bFalse\b/g, 'false')
+            .replace(/\bNone\b/g, 'null');
+        // eslint-disable-next-line no-eval
+        const result = eval('(' + normalized + ')');
+        if (Array.isArray(result)) return result as T[];
+    } catch { /* give up */ }
+    return [];
+}
+
+interface ShortAnswerItem { question: string; answer: string; }
+interface TrueFalseItem { statement: string; is_true: boolean; explanation: string; }
+interface TimestampSegment { start_time: string; end_time: string; summary: string; }
+
+const CHIP_COLORS = [
+    'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
+    'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
+    'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)',
+    'linear-gradient(135deg, #fa709a 0%, #fee140 100%)',
+    'linear-gradient(135deg, #30cfd0 0%, #330867 100%)',
+    'linear-gradient(135deg, #a8edea 0%, #fed6e3 100%)',
+    'linear-gradient(135deg, #ff9a56 0%, #ff6a88 100%)',
+    'linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%)',
+    'linear-gradient(135deg, #a1c4fd 0%, #c2e9fb 100%)',
+];
+
+function seededColorIndex(str: string): number {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+    return hash % CHIP_COLORS.length;
+}
+
+// ── Copy / Download helpers ───────────────────────────────
+function copyText(text: string) {
+    if (navigator.clipboard) { navigator.clipboard.writeText(text).catch(() => fallbackCopy(text)); }
+    else fallbackCopy(text);
+}
+function fallbackCopy(text: string) {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch { }
+    document.body.removeChild(ta);
+}
+function downloadFile(content: string, filename: string, mime: string) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+function wrapHtml(body: string, title: string): string {
+    return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${title}</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:900px;margin:40px auto;padding:20px;background:#f8f9fa;color:#333}</style></head><body>${body}</body></html>`;
+}
+
+// ── Format helpers ────────────────────────────────────────
+type Formatted = { content: string; filename: string; mime: string };
+
+function formatSummary(summary: string, fmt: string, base = 'summary'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    if (fmt === 'html') return { content: wrapHtml(marked.parse(summary) as string, 'Summary'), filename: `${base}_summary_${ts}.html`, mime: 'text/html' };
+    if (fmt === 'json') return { content: JSON.stringify({ type: 'summary', content: summary, timestamp: new Date().toISOString() }, null, 2), filename: `${base}_summary_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'md') return { content: summary, filename: `${base}_summary_${ts}.md`, mime: 'text/markdown' };
+    return { content: summary, filename: `${base}_summary_${ts}.txt`, mime: 'text/plain' };
+}
+
+function formatKeywords(keywords: string[], fmt: string, base = 'keywords'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    if (fmt === 'html') return { content: wrapHtml(`<div style="display:flex;flex-wrap:wrap;gap:10px">${keywords.map(k => `<span style="padding:6px 14px;border-radius:20px;background:linear-gradient(135deg,#8b5cf6,#a78bfa);color:#fff;font-weight:600">${k}</span>`).join('')}</div>`, 'Keywords'), filename: `${base}_keywords_${ts}.html`, mime: 'text/html' };
+    if (fmt === 'json') return { content: JSON.stringify({ type: 'keywords', keywords, timestamp: new Date().toISOString() }, null, 2), filename: `${base}_keywords_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'md') return { content: '# Keywords\n\n' + keywords.map(k => `- ${k}`).join('\n'), filename: `${base}_keywords_${ts}.md`, mime: 'text/markdown' };
+    return { content: keywords.join('\n'), filename: `${base}_keywords_${ts}.txt`, mime: 'text/plain' };
+}
+
+function formatAssessment(faqRaw: string, fmt: string, base = 'assessment'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    const items = parseFaq(faqRaw);
+    if (fmt === 'json') return { content: JSON.stringify(items, null, 2), filename: `${base}_assessment_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'html') {
+        const body = items.map((q, i) =>
+            `<div style="background:#fff;border-radius:12px;padding:24px;margin-bottom:20px;box-shadow:0 2px 8px rgba(0,0,0,.08);border-left:4px solid #8b5cf6">
+             <div style="font-weight:700;font-size:16px;margin-bottom:14px"><span style="background:linear-gradient(135deg,#8b5cf6,#a78bfa);color:#fff;padding:3px 10px;border-radius:6px;margin-right:10px;font-size:13px">Q${i + 1}</span>${q.question}</div>
+             ${Object.entries(q.options).map(([k, v]) => `<div style="padding:10px 14px;margin:6px 0;border-radius:8px;border:1px solid ${k === q.correct_answer ? '#10b981' : '#e5e7eb'};background:${k === q.correct_answer ? 'rgba(16,185,129,.08)' : '#f9fafb'}"><b style="color:${k === q.correct_answer ? '#10b981' : '#8b5cf6'}">${k}.</b> ${v}${k === q.correct_answer ? ' <span style="background:#10b981;color:#fff;padding:1px 7px;border-radius:4px;font-size:11px">✓</span>' : ''}</div>`).join('')}
+             <div style="margin-top:14px;padding:12px 16px;background:rgba(139,92,246,.06);border-left:3px solid #8b5cf6;border-radius:0 8px 8px 0;font-size:13px"><b style="color:#8b5cf6;font-size:11px;text-transform:uppercase">Explanation</b><br/>${q.explanation}</div>
+             </div>`
+        ).join('');
+        return { content: wrapHtml(body, 'Assessment Questions'), filename: `${base}_assessment_${ts}.html`, mime: 'text/html' };
     }
-  }, [fetchFilesForPolling]);
+    // txt
+    const txt = items.map((q, i) =>
+        `Q${i + 1}. ${q.question}\n` +
+        Object.entries(q.options).map(([k, v]) => `  ${k}. ${v}${k === q.correct_answer ? ' ✓' : ''}`).join('\n') +
+        `\n\nAnswer: ${q.correct_answer}\nExplanation: ${q.explanation}`
+    ).join('\n\n' + '─'.repeat(60) + '\n\n');
+    return { content: txt, filename: `${base}_assessment_${ts}.txt`, mime: 'text/plain' };
+}
 
-  // ── Run inference ────────────────────────────
-  const handleRun = async () => {
-    if (!canRunInference) return;
-    setRunning(true);
-    try {
-      await api.post('/batch_process', {
-        all: false, // always false for now — file_ids-driven runs only
-        file_ids: selectedServerIds,
-        start_date: dateFrom,
-        end_date: dateTo,
-        model_name: selectedModel,
-        summary_prompt: settings.summaryPromptOverride,
-        faq_prompt: settings.questionPromptOverride,
-        keywords_prompt: settings.keywordPromptOverride,
-        short_answers_prompt: settings.shortAnswerPromptOverride,
-        true_false_prompt: settings.trueFalsePromptOverride,
-        generate_summary: settings.generateSummary,
-        generate_keywords: settings.generateKeywords,
-        generate_faq: settings.generateQuestions,
-        generate_short_answer: settings.generateShortAnswer,
-        generate_true_false: settings.generateTrueFalse,
-        // Only meaningful — and only ever sent true — when Keywords itself is on.
-        generate_keyword_insights: settings.generateKeywords && settings.generateKeywordInsights,
-        timestamped_summary: settings.timestampedSummary,
-        time_interval: settings.timeInterval,
-      });
-      const stillRunning = await fetchFilesForPolling();
-      if (stillRunning) startPolling();
-      dispatch(addToast(t('uploadInfer.inferencePanel.inferenceStarted'), 'success'));
-    } catch (err) {
-      console.error('Batch process failed:', err);
-    } finally {
-      setRunning(false);
+function formatShortAnswer(raw: string, fmt: string, base = 'short_answer'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    const items = parsePyList<ShortAnswerItem>(raw);
+    if (fmt === 'json') return { content: JSON.stringify(items, null, 2), filename: `${base}_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'html') {
+        const body = items.map((item, i) =>
+            `<div style="background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.08);border-left:4px solid #4facfe">
+             <div style="font-weight:700;font-size:15px;margin-bottom:10px"><span style="background:#4facfe;color:#fff;padding:3px 10px;border-radius:6px;margin-right:10px;font-size:13px">Q${i + 1}</span>${item.question}</div>
+             <div style="padding:10px 14px;background:rgba(79,172,254,.08);border-radius:8px;font-size:13px"><b style="color:#4facfe">Answer:</b> ${item.answer}</div>
+             </div>`
+        ).join('');
+        return { content: wrapHtml(body, 'Short Answer Questions'), filename: `${base}_${ts}.html`, mime: 'text/html' };
     }
-  };
+    const txt = items.map((item, i) => `Q${i + 1}. ${item.question}\nA: ${item.answer}`).join('\n\n' + '─'.repeat(60) + '\n\n');
+    return { content: txt, filename: `${base}_${ts}.txt`, mime: 'text/plain' };
+}
 
-  // ── Run button sub-label ─────────────────────
-  const runBtnSubLabel = (() => {
-    if (n === 0) return t('uploadInfer.inferencePanel.selectFilesFirst');
-    if (!selectedModel) return t('uploadInfer.inferencePanel.noModelSelected');
-    return `${n} file${n !== 1 ? 's' : ''} ready`;
-  })();
-
-  const promptMode = n === 1 ? 'Single file — autofilled · edit to override.' : 'Multiple files — enter here to override all.';
-  const promptModeColor = n === 1 ? 'var(--blue)' : 'var(--amber)';
-
-  // ── Auto-fill prompts when exactly 1 file is selected ────────────
-  const prevSelectionCount = useRef(0);
-  useEffect(() => {
-    const prev = prevSelectionCount.current;
-    prevSelectionCount.current = n;
-
-    if (n === 1) {
-      const file = serverFiles.find(f => f.id === selectedServerIds[0]);
-      if (file) {
-        const s = file.summary_prompt ?? '';
-        const k = file.keywords_prompt ?? '';
-        const q = file.faq_prompt ?? '';
-        const sa = file.short_answers_prompt ?? '';
-        const tf = file.true_false_prompt ?? '';
-        dispatch(updateSummaryPrompt(s));
-        dispatch(updateKeywordPrompt(k));
-        dispatch(updateQuestionPrompt(q));
-        dispatch(updateShortAnswerPrompt(sa));
-        dispatch(updateTrueFalsePrompt(tf));
-        promptSnapshot.current = { summary: s, keyword: k, question: q, shortAnswer: sa, trueFalse: tf };
-      }
-    } else if (n !== prev) {
-      dispatch(updateSummaryPrompt(''));
-      dispatch(updateKeywordPrompt(''));
-      dispatch(updateQuestionPrompt(''));
-      dispatch(updateShortAnswerPrompt(''));
-      dispatch(updateTrueFalsePrompt(''));
-      promptSnapshot.current = { summary: '', keyword: '', question: '', shortAnswer: '', trueFalse: '' };
+function formatTrueFalse(raw: string, fmt: string, base = 'true_false'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    const items = parsePyList<TrueFalseItem>(raw);
+    if (fmt === 'json') return { content: JSON.stringify(items, null, 2), filename: `${base}_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'html') {
+        const body = items.map((item, i) =>
+            `<div style="background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.08);border-left:4px solid #43e97b">
+             <div style="font-weight:700;font-size:15px;margin-bottom:10px"><span style="background:#43e97b;color:#fff;padding:3px 10px;border-radius:6px;margin-right:10px;font-size:13px">${i + 1}</span>${item.statement}</div>
+             <div style="padding:10px 14px;background:rgba(67,233,123,.08);border-radius:8px;font-size:13px"><b style="color:#43e97b">Answer:</b> ${item.is_true ? 'True' : 'False'}</div>
+             <div style="margin-top:10px;font-size:13px;color:#666"><b>Explanation:</b> ${item.explanation}</div>
+             </div>`
+        ).join('');
+        return { content: wrapHtml(body, 'True / False Questions'), filename: `${base}_${ts}.html`, mime: 'text/html' };
     }
-    setPromptSaveError(null);
-  }, [selectedServerIds]); // eslint-disable-line
+    const txt = items.map((item, i) => `${i + 1}. ${item.statement}\nAnswer: ${item.is_true ? 'True' : 'False'}\nExplanation: ${item.explanation}`).join('\n\n' + '─'.repeat(60) + '\n\n');
+    return { content: txt, filename: `${base}_${ts}.txt`, mime: 'text/plain' };
+}
 
-  // ── Per-file prompt preview expand/collapse ──
-  const [summaryExpanded, setSummaryExpanded] = useState(false);
-  const [keywordExpanded, setKeywordExpanded] = useState(false);
-  const [questionExpanded, setQuestionExpanded] = useState(false);
-  const [shortAnswerExpanded, setShortAnswerExpanded] = useState(false);
-  const [trueFalseExpanded, setTrueFalseExpanded] = useState(false);
+function formatTimestampedSummary(raw: string, fmt: string, base = 'timestamped_summary'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    const items = parsePyList<TimestampSegment>(raw);
+    if (fmt === 'json') return { content: JSON.stringify(items, null, 2), filename: `${base}_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'md') return { content: items.map(s => `### ${s.start_time} – ${s.end_time}\n\n${s.summary}`).join('\n\n'), filename: `${base}_${ts}.md`, mime: 'text/markdown' };
+    const txt = items.map(s => `[${s.start_time} – ${s.end_time}]\n${s.summary}`).join('\n\n');
+    return { content: txt, filename: `${base}_${ts}.txt`, mime: 'text/plain' };
+}
 
-  const prevSelectedCount = useRef(selectedServerIds.length);
-  useEffect(() => {
-    if (selectedServerIds.length !== prevSelectedCount.current) {
-      prevSelectedCount.current = selectedServerIds.length;
-      setSummaryExpanded(false);
-      setKeywordExpanded(false);
-      setQuestionExpanded(false);
-      setShortAnswerExpanded(false);
-      setTrueFalseExpanded(false);
-    }
-  });
 
-  const selectedFiles = serverFiles.filter(f => selectedServerIds.includes(f.id));
+const SUMMARY_FMTS = [{ k: 'txt', l: 'Text' }, { k: 'md', l: 'Markdown' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const KEYWORDS_FMTS = [{ k: 'txt', l: 'Text' }, { k: 'md', l: 'Markdown' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const ASSESSMENT_FMTS = [{ k: 'txt', l: 'Plain Text' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const SHORT_ANSWER_FMTS = [{ k: 'txt', l: 'Plain Text' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const TRUE_FALSE_FMTS = [{ k: 'txt', l: 'Plain Text' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const TIMESTAMPED_SUMMARY_FMTS = [{ k: 'txt', l: 'Text' }, { k: 'md', l: 'Markdown' }, { k: 'json', l: 'JSON' }];
 
-  const handlePromptCancel = () => {
-    dispatch(updateSummaryPrompt(promptSnapshot.current.summary));
-    dispatch(updateKeywordPrompt(promptSnapshot.current.keyword));
-    dispatch(updateQuestionPrompt(promptSnapshot.current.question));
-    dispatch(updateShortAnswerPrompt(promptSnapshot.current.shortAnswer));
-    dispatch(updateTrueFalsePrompt(promptSnapshot.current.trueFalse));
-    setPromptSaveError(null);
-  };
+// ── ActionBtn ─────────────────────────────────────────────
+const ActionBtn: React.FC<{ title: string; onClick: () => void; active?: boolean; children: React.ReactNode }> = ({ title, onClick, active, children }) => (
+    <button className={`${styles.actionBtn} ${active ? styles.actionBtnActive : ''}`} title={title} onClick={e => { e.stopPropagation(); onClick(); }}>
+        {children}
+    </button>
+);
 
-  const handlePromptSave = async () => {
-    setPromptSaving(true);
-    setPromptSaveError(null);
-    try {
-      const payload: Record<string, unknown> = {
-        file_ids: selectedServerIds,
-      };
-      if (settings.generateSummary) payload.summary_prompt = settings.summaryPromptOverride;
-      if (settings.generateKeywords) payload.keywords_prompt = settings.keywordPromptOverride;
-      if (settings.generateQuestions) payload.faq_prompt = settings.questionPromptOverride;
-      if (settings.generateShortAnswer) payload.short_answers_prompt = settings.shortAnswerPromptOverride;
-      if (settings.generateTrueFalse) payload.true_false_prompt = settings.trueFalsePromptOverride;
-
-      await api.post('/prompt_update', payload);
-
-      dispatch(updateFilePrompts({
-        fileIds: selectedServerIds,
-        ...(settings.generateSummary && { summaryPrompt: settings.summaryPromptOverride }),
-        ...(settings.generateKeywords && { keywordsPrompt: settings.keywordPromptOverride }),
-        ...(settings.generateQuestions && { faqPrompt: settings.questionPromptOverride }),
-        ...(settings.generateShortAnswer && { shortAnswerPrompt: settings.shortAnswerPromptOverride }),
-        ...(settings.generateTrueFalse && { trueFalsePrompt: settings.trueFalsePromptOverride }),
-      }));
-
-      promptSnapshot.current = {
-        summary: settings.summaryPromptOverride,
-        keyword: settings.keywordPromptOverride,
-        question: settings.questionPromptOverride,
-        shortAnswer: settings.shortAnswerPromptOverride,
-        trueFalse: settings.trueFalsePromptOverride,
-      };
-    } catch {
-      setPromptSaveError(t('uploadInfer.inferencePanel.promptSaveFail'));
-    } finally {
-      setPromptSaving(false);
-    }
-  };
-
-  return (
-    <div className={`${styles.infpanel} ${minimized ? styles.infpanelMinimized : ''}`}>
-
-      {/* ── Minimized rail ── */}
-      {minimized ? (
-        <button
-          type="button"
-          className={styles.minRail}
-          onClick={onToggleMinimize}
-          title={t('uploadInfer.inferencePanel.expandStep2')}
-          aria-label={t('uploadInfer.inferencePanel.expandStep2')}
-        >
-          <span className={styles.minRailIcon}>
+// ── FormatIcon ────────────────────────────────────────────
+// Small colored glyph rendered next to each format option in the
+// Copy / Download dropdowns. Each format has a recognisable hue.
+const FORMAT_ICONS: Record<string, { color: string; bg: string; node: React.ReactNode }> = {
+    txt: {
+        color: '#64748b',
+        bg: 'rgba(100, 116, 139, 0.12)',
+        node: (
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-              strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M6 4l4 4-4 4" />
+                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 2.5h6.5L13 6v7.5A1 1 0 0112 14.5H3a1 1 0 01-1-1v-10a1 1 0 011-1z" />
+                <path d="M9 2.5V6h4" />
+                <path d="M5 9h6M5 11.5h4" />
             </svg>
-          </span>
-          <span className={styles.minRailLabel}>
-            {t('uploadInfer.inferencePanel.step2Label').replace('Configuration', '').replace('2 —', '2 —')}
-            {isBatchRunning && <span className={styles.minRailDot} />}
-          </span>
-        </button>
-      ) : (
-        <>
-
-          {/* ── Header ── */}
-          <div className={styles.infpanelHead}>
-            <div>
-              <div className={styles.slbl}>
-                {isBatchRunning ? (
-                  <span className={styles.inferenceRunningLabel}>{t('uploadInfer.inferencePanel.step2Running')}</span>
-                ) : t('uploadInfer.inferencePanel.step2Label')}
-              </div>
-              <div className={styles.selSummary}>
-                {t('uploadInfer.inferencePanel.filesSelected', { count: n })}
-                {isBatchRunning && <span className={styles.batchRunPill}><span className={styles.batchRunDot} />{t('uploadInfer.inferencePanel.batchRunPill')}</span>}
-              </div>
-            </div>
-            <div className={styles.headActions}>
-              {!isBatchRunning && (
-                <>
-                  {/* ── Run Inference button — large, self-describing ── */}
-                  <button
-                    className={`${styles.runBtn} ${canRunInference ? styles.runBtnReady : styles.runBtnDisabled}`}
-                    onClick={handleRun}
-                    disabled={!canRunInference}
-                    aria-label={`Run inference on ${n} file${n !== 1 ? 's' : ''}`}
-                  >
-                    <span className={styles.runBtnIconWrap}>
-                      <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
-                        <path d="M5 3l8 5-8 5V3z" fill="currentColor" />
-                      </svg>
-                    </span>
-                    <span className={styles.runBtnText}>
-                      <span className={styles.runBtnTitle}>Run inference</span>
-                      <span className={styles.runBtnSub}>{runBtnSubLabel}</span>
-                    </span>
-                  </button>
-
-                  {onToggleMinimize && (
-                    <button
-                      className={styles.minimizeStepBtn}
-                      onClick={onToggleMinimize}
-                      title={t('uploadInfer.inferencePanel.minimizeStep2')}
-                      aria-label={t('uploadInfer.inferencePanel.minimizeStep2')}
-                    >
-                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                        strokeWidth="1.6" strokeLinecap="round">
-                        <path d="M3 8h10" />
-                      </svg>
-                    </button>
-                  )}
-                  <button
-                    className={styles.closeStepBtn}
-                    onClick={onClose}
-                    title={t('uploadInfer.inferencePanel.closeStep2')}
-                  >
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                      <path d="M4 4l8 8M12 4l-8 8" />
-                    </svg>
-                  </button>
-                </>
-              )}
-              {isBatchRunning && onToggleMinimize && (
-                <button
-                  className={styles.minimizeStepBtn}
-                  onClick={onToggleMinimize}
-                  title={t('uploadInfer.inferencePanel.minimizeStep2')}
-                  aria-label={t('uploadInfer.inferencePanel.minimizeStep2')}
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                    strokeWidth="1.6" strokeLinecap="round">
-                    <path d="M3 8h10" />
-                  </svg>
-                </button>
-              )}
-            </div>
-          </div>
-
-
-          {/* ── Main body ── */}
-          <div className={`${styles.infpanelBody} ${isBatchRunning ? styles.infpanelBodyRunning : styles.infpanelBodyConfig}`}>
-
-            {/* ── Submitting overlay — shown while awaiting /batch_process ── */}
-            {running && (
-              <div className={styles.submittingOverlay}>
-                <div className={styles.submittingCard}>
-                  <div className={styles.submittingSpinner} />
-                  <div className={styles.submittingTitle}>{t('uploadInfer.inferencePanel.submitting')}</div>
-                  <div className={styles.submittingDesc}>
-                    {t('uploadInfer.inferencePanel.submittingDesc', { count: n }).split('\n').map((line, i) => <React.Fragment key={i}>{line}{i === 0 && <br />}</React.Fragment>)}
-                  </div>
-                  <div className={styles.submittingFiles}>
-                    {selectedServerIds.slice(0, 5).map((id, i) => {
-                      const f = serverFiles.find(sf => sf.id === id);
-                      return f ? (
-                        <div key={id} className={styles.submittingFile}>
-                          <span className={styles.submittingDot} style={{ animationDelay: `${i * 0.15}s` }} />
-                          {f.original_name}
-                        </div>
-                      ) : null;
-                    })}
-                    {selectedServerIds.length > 5 && (
-                      <div className={styles.submittingMore}>+{selectedServerIds.length - 5} more</div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Selection banner — hidden while batch running or submitting */}
-            {!isBatchRunning && !running && <div className={styles.selBanner}>
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="var(--blue)" strokeWidth="1.5" strokeLinecap="round">
-                <path d="M2 8h12M8 3l5 5-5 5" />
-              </svg>
-              <span className={styles.selCt}>{n} file{n !== 1 ? 's' : ''}</span>
-              <span className={styles.selNm}>
-                {n === 0 ? t('uploadInfer.inferencePanel.selBannerEmpty') : `${n} file${n !== 1 ? 's' : ''} selected for inference`}
-              </span>
-            </div>}
-
-            {/* ── Settings — hidden while batch running or submitting ── */}
-            {!isBatchRunning && !running && <div className={styles.infSettingsWrap}>
-              <div className={styles.settingsGrid}>
-
-                {/* Generate content card */}
-                <div className={styles.card}>
-                  <div className={styles.cardT}>{t('uploadInfer.inferencePanel.generateContent')}</div>
-
-                  {/* Summary */}
-                  <div
-                    className={`${styles.cr} ${settings.generateSummary ? styles.ck : ''} ${styles.mb8}`}
-                    onClick={() => dispatch(updateSettings({ generateSummary: !settings.generateSummary }))}
-                  >
-                    <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateSummary')}</label>
-                  </div>
-
-                  {/* Keywords + nested Keyword Insights */}
-                  <div
-                    className={`${styles.cr} ${settings.generateKeywords ? styles.ck : ''} ${styles.mb8}`}
-                    onClick={() => dispatch(updateSettings({
-                      generateKeywords: !settings.generateKeywords,
-                      // Force the nested toggle off when the parent turns off,
-                      // so a stale "on" state can never leak into the request.
-                      ...(settings.generateKeywords ? { generateKeywordInsights: false } : {}),
-                    }))}
-                  >
-                    <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateKeywords')}</label>
-                  </div>
-                  {settings.generateKeywords && (
-                    <div
-                      className={`${styles.crNested} ${settings.generateKeywordInsights ? styles.ck : ''} ${styles.mb8}`}
-                      onClick={(e) => { e.stopPropagation(); dispatch(updateSettings({ generateKeywordInsights: !settings.generateKeywordInsights })); }}
-                    >
-                      <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateKeywordInsights')}</label>
-                    </div>
-                  )}
-
-                  {/* Assessment Questions */}
-                  <div
-                    className={`${styles.cr} ${settings.generateQuestions ? styles.ck : ''} ${styles.mb8}`}
-                    onClick={() => dispatch(updateSettings({ generateQuestions: !settings.generateQuestions }))}
-                  >
-                    <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateQuestions')}</label>
-                  </div>
-
-                  {/* Short Answer */}
-                  <div
-                    className={`${styles.cr} ${settings.generateShortAnswer ? styles.ck : ''} ${styles.mb8}`}
-                    onClick={() => dispatch(updateSettings({ generateShortAnswer: !settings.generateShortAnswer }))}
-                  >
-                    <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateShortAnswer')}</label>
-                  </div>
-
-                  {/* True/False */}
-                  <div
-                    className={`${styles.cr} ${settings.generateTrueFalse ? styles.ck : ''} ${styles.mb8}`}
-                    onClick={() => dispatch(updateSettings({ generateTrueFalse: !settings.generateTrueFalse }))}
-                  >
-                    <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateTrueFalse')}</label>
-                  </div>
-
-                  {/* Timestamp Summary + nested interval dropdown */}
-                  <div
-                    className={`${styles.cr} ${settings.timestampedSummary ? styles.ck : ''} ${styles.mb8}`}
-                    onClick={() => dispatch(updateSettings({ timestampedSummary: !settings.timestampedSummary }))}
-                  >
-                    <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.timestampedSummary')}</label>
-                  </div>
-                  {settings.timestampedSummary && (
-                    <div className={styles.nestedField} onClick={(e) => e.stopPropagation()}>
-                      <label>{t('uploadInfer.inferencePanel.timeInterval')}</label>
-                      <select
-                        className={styles.fc}
-                        value={settings.timeInterval}
-                        onChange={e => dispatch(updateSettings({ timeInterval: Number(e.target.value) as TimeInterval }))}
-                      >
-                        {([5, 10, 15, 20, 30, 45, 60] as const).map(min => (
-                          <option key={min} value={min}>{t('uploadInfer.inferencePanel.minutesOption', { count: min })}</option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-                </div>
-
-                {/* Output settings card */}
-                <div className={styles.card}>
-                  <div className={styles.cardT}>{t('uploadInfer.inferencePanel.outputSettings')}</div>
-
-                  {/* Model dropdown */}
-                  <div className={styles.fg}>
-                    <div className={styles.modelLabelRow}>
-                      <label className={styles.fl}>
-                        {t('uploadInfer.inferencePanel.modelLabel')} {mlLoading && <span className={styles.loadingDot}>…</span>}
-                      </label>
-                      <button
-                        className={styles.refreshBtn}
-                        onClick={fetchModels}
-                        disabled={mlLoading}
-                        title={t('uploadInfer.inferencePanel.refreshModels')}
-                      >
-                        <svg
-                          viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                          strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"
-                          className={mlLoading ? styles.spinning : undefined}
-                        >
-                          <path d="M13.5 8A5.5 5.5 0 1 1 10 3.07" />
-                          <path d="M10 2v3h3" />
-                        </svg>
-                        Refresh
-                      </button>
-                    </div>
-                    <select className={styles.fc} value={selectedModel}
-                      onChange={e => dispatch(setSelectedModel(e.target.value))}
-                      disabled={mlLoading || models.length === 0}>
-                      {models.length === 0
-                        ? <option value="">{t('uploadInfer.inferencePanel.noModelsOption')}</option>
-                        : models.map(m => <option key={m} value={m}>{m}</option>)
-                      }
-                    </select>
-                    {!mlLoading && models.length === 0 && (
-                      <div className={styles.modelWarn}>
-                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                          <path d="M8 2L14 13H2L8 2z" /><path d="M8 7v3M8 11.5v.1" />
-                        </svg>
-                        {t('uploadInfer.inferencePanel.noModels')}
-                      </div>
-                    )}
-                    {!mlLoading && models.length > 0 && (
-                      <div className={styles.modelOk}>
-                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                          <circle cx="8" cy="8" r="5.5" /><path d="M5.5 8l2 2 3-3" />
-                        </svg>
-                        {t('uploadInfer.inferencePanel.modelsAvailable', { count: models.length })}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Prompt overrides */}
-              <div className={`${styles.card} ${styles.mb12}`}>
-                <div className={styles.cardT}>
-                  Prompt overrides{' '}
-                  {n > 0 && <span className={styles.promptMode} style={{ color: promptModeColor }}>{promptMode}</span>}
-                </div>
-                <div className={styles.promptStack}>
-
-                  {settings.generateSummary && (
-                    <div className={styles.fg}>
-                      <div className={styles.flRow}>
-                        <label className={styles.fl}>
-                          {t('uploadInfer.inferencePanel.summaryPrompt')} <span className={styles.optTag}>{t('uploadInfer.inferencePanel.optional')}</span>
-                        </label>
-                        {n > 1 && (
-                          <button
-                            className={`${styles.perFileBtn} ${summaryExpanded ? styles.perFileBtnActive : ''}`}
-                            onClick={(e) => { e.stopPropagation(); setSummaryExpanded(v => !v); }}
-                            title={summaryExpanded ? 'Collapse per-file prompts' : 'View per-file prompts'}
-                          >
-                            <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                              <rect x="1.5" y="2" width="11" height="10" rx="2" />
-                              <path d="M4 5h6M4 7.5h4" />
-                            </svg>
-                            {summaryExpanded ? 'Hide' : t('uploadInfer.inferencePanel.perFile')}
-                            <svg className={`${styles.perFileChevron} ${summaryExpanded ? styles.perFileChevronOpen : ''}`} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                              <path d="M2 3.5l3 3 3-3" />
-                            </svg>
-                          </button>
-                        )}
-                      </div>
-                      <div className={`${styles.perFilePanel} ${summaryExpanded ? styles.perFilePanelOpen : ''}`}>
-                        <div className={styles.perFilePanelInner}>
-                          {selectedFiles.map(f => (
-                            <div key={f.id} className={styles.perFileRow}>
-                              <div className={styles.perFileName}>{f.original_name}</div>
-                              <div className={styles.perFilePrompt}>{f.summary_prompt || <span className={styles.perFileEmpty}>{t('uploadInfer.inferencePanel.noPromptSet')}</span>}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                      <textarea className={styles.fc} rows={3}
-                        value={settings.summaryPromptOverride}
-                        placeholder={n === 1 ? t('uploadInfer.inferencePanel.autofillPlaceholder') : t('uploadInfer.inferencePanel.manualPlaceholder')}
-                        onChange={e => dispatch(updateSummaryPrompt(e.target.value))} />
-                    </div>
-                  )}
-
-                  {settings.generateKeywords && (
-                    <div className={styles.fg}>
-                      <div className={styles.flRow}>
-                        <label className={styles.fl}>
-                          {t('uploadInfer.inferencePanel.keywordPrompt')} <span className={styles.optTag}>{t('uploadInfer.inferencePanel.optional')}</span>
-                        </label>
-                        {n > 1 && (
-                          <button
-                            className={`${styles.perFileBtn} ${keywordExpanded ? styles.perFileBtnActive : ''}`}
-                            onClick={(e) => { e.stopPropagation(); setKeywordExpanded(v => !v); }}
-                            title={keywordExpanded ? 'Collapse per-file prompts' : 'View per-file prompts'}
-                          >
-                            <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                              <rect x="1.5" y="2" width="11" height="10" rx="2" />
-                              <path d="M4 5h6M4 7.5h4" />
-                            </svg>
-                            {keywordExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.perFile')}
-                            <svg className={`${styles.perFileChevron} ${keywordExpanded ? styles.perFileChevronOpen : ''}`} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                              <path d="M2 3.5l3 3 3-3" />
-                            </svg>
-                          </button>
-                        )}
-                      </div>
-                      <div className={`${styles.perFilePanel} ${keywordExpanded ? styles.perFilePanelOpen : ''}`}>
-                        <div className={styles.perFilePanelInner}>
-                          {selectedFiles.map(f => (
-                            <div key={f.id} className={styles.perFileRow}>
-                              <div className={styles.perFileName}>{f.original_name}</div>
-                              <div className={styles.perFilePrompt}>{f.keywords_prompt || <span className={styles.perFileEmpty}>No prompt set</span>}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                      <textarea className={styles.fc} rows={3}
-                        value={settings.keywordPromptOverride}
-                        placeholder={n === 1 ? 'Autofilled from file — edit to override…' : 'Leave blank to use per-file prompts…'}
-                        onChange={e => dispatch(updateKeywordPrompt(e.target.value))} />
-                    </div>
-                  )}
-
-                  {settings.generateQuestions && (
-                    <div className={`${styles.fg} ${styles.mb0}`}>
-                      <div className={styles.flRow}>
-                        <label className={styles.fl}>
-                          {t('uploadInfer.inferencePanel.questionPrompt')} <span className={styles.optTag}>{t('uploadInfer.inferencePanel.optional')}</span>
-                        </label>
-                        {n > 1 && (
-                          <button
-                            className={`${styles.perFileBtn} ${questionExpanded ? styles.perFileBtnActive : ''}`}
-                            onClick={(e) => { e.stopPropagation(); setQuestionExpanded(v => !v); }}
-                            title={questionExpanded ? 'Collapse per-file prompts' : 'View per-file prompts'}
-                          >
-                            <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                              <rect x="1.5" y="2" width="11" height="10" rx="2" />
-                              <path d="M4 5h6M4 7.5h4" />
-                            </svg>
-                            {questionExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.perFile')}
-                            <svg className={`${styles.perFileChevron} ${questionExpanded ? styles.perFileChevronOpen : ''}`} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                              <path d="M2 3.5l3 3 3-3" />
-                            </svg>
-                          </button>
-                        )}
-                      </div>
-                      <div className={`${styles.perFilePanel} ${questionExpanded ? styles.perFilePanelOpen : ''}`}>
-                        <div className={styles.perFilePanelInner}>
-                          {selectedFiles.map(f => (
-                            <div key={f.id} className={styles.perFileRow}>
-                              <div className={styles.perFileName}>{f.original_name}</div>
-                              <div className={styles.perFilePrompt}>{f.faq_prompt || <span className={styles.perFileEmpty}>No prompt set</span>}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                      <textarea className={styles.fc} rows={3}
-                        value={settings.questionPromptOverride}
-                        placeholder={n === 1 ? 'Autofilled from file — edit to override…' : 'Leave blank to use per-file prompts…'}
-                        onChange={e => dispatch(updateQuestionPrompt(e.target.value))} />
-                    </div>
-                  )}
-
-                  {settings.generateShortAnswer && (
-                    <div className={`${styles.fg} ${styles.mb0}`}>
-                      <div className={styles.flRow}>
-                        <label className={styles.fl}>
-                          {t('uploadInfer.inferencePanel.shortAnswerPrompt')} <span className={styles.optTag}>{t('uploadInfer.inferencePanel.optional')}</span>
-                        </label>
-                        {n > 1 && (
-                          <button
-                            className={`${styles.perFileBtn} ${shortAnswerExpanded ? styles.perFileBtnActive : ''}`}
-                            onClick={(e) => { e.stopPropagation(); setShortAnswerExpanded(v => !v); }}
-                            title={shortAnswerExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.viewPerFile')}
-                          >
-                            <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                              <rect x="1.5" y="2" width="11" height="10" rx="2" />
-                              <path d="M4 5h6M4 7.5h4" />
-                            </svg>
-                            {shortAnswerExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.perFile')}
-                            <svg className={`${styles.perFileChevron} ${shortAnswerExpanded ? styles.perFileChevronOpen : ''}`} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                              <path d="M2 3.5l3 3 3-3" />
-                            </svg>
-                          </button>
-                        )}
-                      </div>
-                      <div className={`${styles.perFilePanel} ${shortAnswerExpanded ? styles.perFilePanelOpen : ''}`}>
-                        <div className={styles.perFilePanelInner}>
-                          {selectedFiles.map(f => (
-                            <div key={f.id} className={styles.perFileRow}>
-                              <div className={styles.perFileName}>{f.original_name}</div>
-                              <div className={styles.perFilePrompt}>{f.short_answers_prompt || <span className={styles.perFileEmpty}>{t('uploadInfer.inferencePanel.noPromptSet')}</span>}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                      <textarea className={styles.fc} rows={3}
-                        value={settings.shortAnswerPromptOverride}
-                        placeholder={n === 1 ? t('uploadInfer.inferencePanel.autofillPlaceholder') : t('uploadInfer.inferencePanel.manualPlaceholder')}
-                        onChange={e => dispatch(updateShortAnswerPrompt(e.target.value))} />
-                    </div>
-                  )}
-
-                  {settings.generateTrueFalse && (
-                    <div className={`${styles.fg} ${styles.mb0}`}>
-                      <div className={styles.flRow}>
-                        <label className={styles.fl}>
-                          {t('uploadInfer.inferencePanel.trueFalsePrompt')} <span className={styles.optTag}>{t('uploadInfer.inferencePanel.optional')}</span>
-                        </label>
-                        {n > 1 && (
-                          <button
-                            className={`${styles.perFileBtn} ${trueFalseExpanded ? styles.perFileBtnActive : ''}`}
-                            onClick={(e) => { e.stopPropagation(); setTrueFalseExpanded(v => !v); }}
-                            title={trueFalseExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.viewPerFile')}
-                          >
-                            <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                              <rect x="1.5" y="2" width="11" height="10" rx="2" />
-                              <path d="M4 5h6M4 7.5h4" />
-                            </svg>
-                            {trueFalseExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.perFile')}
-                            <svg className={`${styles.perFileChevron} ${trueFalseExpanded ? styles.perFileChevronOpen : ''}`} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                              <path d="M2 3.5l3 3 3-3" />
-                            </svg>
-                          </button>
-                        )}
-                      </div>
-                      <div className={`${styles.perFilePanel} ${trueFalseExpanded ? styles.perFilePanelOpen : ''}`}>
-                        <div className={styles.perFilePanelInner}>
-                          {selectedFiles.map(f => (
-                            <div key={f.id} className={styles.perFileRow}>
-                              <div className={styles.perFileName}>{f.original_name}</div>
-                              <div className={styles.perFilePrompt}>{f.true_false_prompt || <span className={styles.perFileEmpty}>{t('uploadInfer.inferencePanel.noPromptSet')}</span>}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                      <textarea className={styles.fc} rows={3}
-                        value={settings.trueFalsePromptOverride}
-                        placeholder={n === 1 ? t('uploadInfer.inferencePanel.autofillPlaceholder') : t('uploadInfer.inferencePanel.manualPlaceholder')}
-                        onChange={e => dispatch(updateTrueFalsePrompt(e.target.value))} />
-                    </div>
-                  )}
-
-                  {!settings.generateSummary && !settings.generateKeywords && !settings.generateQuestions
-                    && !settings.generateShortAnswer && !settings.generateTrueFalse && (
-                    <div className={styles.noPromptHint}>{t('uploadInfer.inferencePanel.noContentHint')}</div>
-                  )}
-
-                </div>
-
-                {/* Save / Cancel bar */}
-                {n > 0 && (settings.generateSummary || settings.generateKeywords || settings.generateQuestions
-                  || settings.generateShortAnswer || settings.generateTrueFalse) && (
-                  <div className={styles.promptActions}>
-                    {promptSaveError && (
-                      <span className={styles.promptSaveError}>{promptSaveError}</span>
-                    )}
-                    <button
-                      className={`${styles.btn} ${styles.btnSm} ${styles.btnGhost}`}
-                      onClick={handlePromptCancel}
-                      disabled={!promptsDirty || promptSaving}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      className={`${styles.btn} ${styles.btnSm} ${styles.btnPrimary}`}
-                      onClick={handlePromptSave}
-                      disabled={!promptsDirty || promptSaving}
-                    >
-                      {promptSaving ? (
-                        <><span className={styles.btnSpinner} />{t('uploadInfer.inferencePanel.saving')}</>
-                      ) : t('uploadInfer.inferencePanel.savePrompts')}
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>}
-
-            {/* ══ 3-Column batch status ══ */}
-            {isBatchRunning && (
-              <div className={styles.batchSection}>
-                <div className={styles.batchSectionTitle}>
-                  <span className={styles.liveLabel}>{t('uploadInfer.inferencePanel.inferenceStatus')}</span>
-                  {isBatchRunning && (
-                    <span className={styles.liveStatus}>
-                      <span className={styles.liveDot} />
-                      Live
-                      <span className={styles.liveSep}>·</span>
-                      {t('uploadInfer.inferencePanel.refreshingIn', { sec: countdown })}
-                      {batchData.running.length > 0 && (
-                        <><span className={styles.liveSep}>·</span>
-                          <span className={styles.liveFiles}>
-                            {t('uploadInfer.inferencePanel.filesRunning', { count: batchData.running.length })}
-                          </span></>
-                      )}
-                    </span>
-                  )}
-                </div>
-                <div className={styles.batchColumns}>
-
-                  {/* Queued */}
-                  <div className={styles.batchCol}>
-                    <div className={`${styles.batchColHead} ${styles.headQueued}`}>
-                      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
-                        <circle cx="7" cy="7" r="5" /><path d="M7 4v3.5l2 1.5" />
-                      </svg>
-                      Queued
-                      <span className={styles.batchColCount}>{batchData.queued.length}</span>
-                    </div>
-                    <div className={styles.batchColBody}>
-                      {batchData.queued.length === 0
-                        ? <div className={styles.batchEmpty}>—</div>
-                        : batchData.queued.map(f => (
-                          <StatusCard
-                            key={f.id}
-                            file={f}
-                            variant="queued"
-                            onStop={handleStop}
-                            stopping={stoppingIds.has(f.id)}
-                          />
-                        ))
-                      }
-                    </div>
-                  </div>
-
-                  {/* Running */}
-                  <div className={styles.batchCol}>
-                    <div className={`${styles.batchColHead} ${styles.headRunning}`}>
-                      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
-                        <circle cx="7" cy="7" r="5" /><path d="M7 4v3M7 9.5v.2" />
-                      </svg>
-                      Running
-                      <span className={styles.batchColCount}>{batchData.running.length}</span>
-                    </div>
-                    <div className={styles.batchColBody}>
-                      {batchData.running.length === 0
-                        ? <div className={styles.batchEmpty}>—</div>
-                        : batchData.running.map(f => <StatusCard key={f.id} file={f} variant="running" />)
-                      }
-                    </div>
-                  </div>
-
-                  {/* Completed */}
-                  <div className={styles.batchCol}>
-                    <div className={`${styles.batchColHead} ${styles.headCompleted}`}>
-                      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="7" cy="7" r="5" /><path d="M4.5 7l2 2 3-3" />
-                      </svg>
-                      Completed
-                      <span className={styles.batchColCount}>{batchData.completed.length}</span>
-                    </div>
-                    <div className={styles.batchColBody}>
-                      {batchData.completed.length === 0
-                        ? <div className={styles.batchEmpty}>—</div>
-                        : batchData.completed.map(f => <StatusCard key={f.id} file={f} variant="completed" />)
-                      }
-                    </div>
-                  </div>
-
-                </div>
-              </div>
-            )}
-
-          </div>
-        </>
-      )}
-    </div>
-  );
+        ),
+    },
+    md: {
+        color: '#3b82f6',
+        bg: 'rgba(59, 130, 246, 0.14)',
+        node: (
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="1.5" y="3.5" width="13" height="9" rx="1.5" />
+                <path d="M4 10.5V6l1.75 2.5L7.5 6v4.5" />
+                <path d="M10.25 6v4.5M8.75 9l1.5 1.5L11.75 9" />
+            </svg>
+        ),
+    },
+    html: {
+        color: '#e34f26',
+        bg: 'rgba(227, 79, 38, 0.14)',
+        node: (
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M2.5 2l1 12 4.5 1.3L12.5 14l1-12z" />
+                <path d="M5 5.5h6L10.6 11l-2.6.8L5.4 11l-.15-2" />
+            </svg>
+        ),
+    },
+    json: {
+        color: '#f59e0b',
+        bg: 'rgba(245, 158, 11, 0.14)',
+        node: (
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M6 2.5C4.5 2.5 4 3.5 4 5v1.5C4 7.5 3 8 2 8c1 0 2 .5 2 1.5V11c0 1.5.5 2.5 2 2.5" />
+                <path d="M10 2.5c1.5 0 2 1 2 2.5v1.5C12 7.5 13 8 14 8c-1 0-2 .5-2 1.5V11c0 1.5-.5 2.5-2 2.5" />
+            </svg>
+        ),
+    },
 };
 
-export default InferencePanel;
-
-
-
-
-
-
-
-
-
-
-// ═══════════════════════════════════════════════
-// InferencePanel.module.scss
-// ═══════════════════════════════════════════════
-@use '../../styles/mixins' as m;
-
-// ── Panel shell ──
-.infpanel {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  position: relative;
-}
-
-// ── Inference Running label in step header ──
-.inferenceRunningLabel {
-  background: linear-gradient(90deg, var(--blue), #a78bfa, var(--amber));
-  background-size: 200% auto;
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  animation: labelShimmer 2.5s linear infinite;
-  font-weight: 700;
-}
-
-@keyframes labelShimmer {
-  0% {
-    background-position: 0% center;
-  }
-
-  100% {
-    background-position: 200% center;
-  }
-}
-
-// ── Panel header ──
-.infpanelHead {
-  padding: 13px 18px 10px;
-  border-bottom: none;
-  background: var(--bg1);
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  position: relative;
-
-  &::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-        rgba(139, 92, 246, 0.0) 0%,
-        rgba(139, 92, 246, 0.6) 20%,
-        rgba(56, 196, 186, 0.7) 50%,
-        rgba(240, 160, 48, 0.6) 80%,
-        rgba(240, 160, 48, 0.0) 100%);
-    pointer-events: none;
-  }
-}
-
-.slbl {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--t2);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  @include m.mono;
-  margin-bottom: 2px;
-}
-
-.selSummary {
-  font-size: 13px;
-  color: var(--t1);
-}
-
-.headActions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.closeStepBtn {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  flex-shrink: 0;
-  transition: all 0.14s;
-
-  svg {
-    width: 13px;
-    height: 13px;
-  }
-
-  &:hover {
-    background: rgba(239, 68, 68, 0.08);
-    border-color: rgba(239, 68, 68, 0.3);
-    color: #ef4444;
-  }
-}
-
-// ══════════════════════════════════════
-// RUN INFERENCE BUTTON
-// ══════════════════════════════════════
-
-.runBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 16px 8px 10px;
-  border-radius: 10px;
-  border: 1px solid transparent;
-  background: var(--blue);
-  color: #ffffff;
-  font-family: var(--font-ui);
-  cursor: pointer;
-  transition: background 0.15s, box-shadow 0.15s, opacity 0.15s, border-color 0.15s;
-  white-space: nowrap;
-  user-select: none;
-  flex-shrink: 0;
-
-  &:hover:not(:disabled) {
-    background: #6bb3f5;
-  }
-
-  &:active:not(:disabled) {
-    background: #4a90d9;
-  }
-}
-
-// Icon chip inside the button
-.runBtnIconWrap {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.18);
-  flex-shrink: 0;
-  transition: background 0.14s;
-
-  svg {
-    display: block;
-  }
-
-  .runBtn:hover:not(:disabled) & {
-    background: rgba(255, 255, 255, 0.25);
-  }
-}
-
-// Two-line text stack
-.runBtnText {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  line-height: 1.2;
-  gap: 2px;
-}
-
-.runBtnTitle {
-  font-size: 14px;
-  font-weight: 700;
-  letter-spacing: -0.1px;
-}
-
-.runBtnSub {
-  font-size: 11px;
-  font-weight: 500;
-  opacity: 0.82;
-  font-family: var(--font-mono);
-}
-
-// Ready state — glowing outline pulse to draw the eye
-.runBtnReady {
-  box-shadow:
-    0 0 0 1px rgba(91, 164, 239, 0.7),
-    0 2px 12px rgba(91, 164, 239, 0.35);
-  animation: runReadyPulse 2.4s ease-in-out infinite;
-}
-
-@keyframes runReadyPulse {
-
-  0%,
-  100% {
-    box-shadow:
-      0 0 0 1px rgba(91, 164, 239, 0.7),
-      0 2px 12px rgba(91, 164, 239, 0.30);
-  }
-
-  50% {
-    box-shadow:
-      0 0 0 2px rgba(91, 164, 239, 0.55),
-      0 4px 20px rgba(91, 164, 239, 0.50);
-  }
-}
-
-// Disabled state — muted, clearly not actionable, sub-label explains why
-.runBtnDisabled {
-  opacity: 0.48;
-  cursor: not-allowed;
-  pointer-events: none;
-  box-shadow: none;
-}
-
-// Large screen tweaks
-@media (min-width: 1920px) {
-  .runBtnTitle {
-    font-size: 15px;
-  }
-
-  .runBtnSub {
-    font-size: 12px;
-  }
-
-  .runBtnIconWrap {
-    width: 32px;
-    height: 32px;
-  }
-
-  .runBtn {
-    padding: 9px 18px 9px 11px;
-    gap: 11px;
-    border-radius: 11px;
-  }
-}
-
-// ── Main body ──
-.infpanelBody {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  padding: 14px 18px 0;
-}
-
-// Configuration mode — body itself scrolls, batch section is absent
-.infpanelBodyConfig {
-  overflow-y: auto;
-  @include m.scrollbar;
-}
-
-// Running mode — no scroll on body; each batch column scrolls independently
-.infpanelBodyRunning {
-  overflow: hidden;
-}
-
-// ── Selection banner ──
-.selBanner {
-  background: var(--bg2);
-  border: 1px solid var(--blue-bdr);
-  border-radius: var(--rl);
-  padding: 9px 13px;
-  margin-bottom: 13px;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-}
-
-.selCt {
-  font-size: 13px;
-  color: var(--blue);
-  font-weight: 600;
-  @include m.mono;
-  flex-shrink: 0;
-}
-
-.selNm {
-  font-size: 12px;
-  color: var(--t2);
-  @include m.mono;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-}
-
-// ── Collapsible settings wrap ──
-.infSettingsWrap {
-  padding-bottom: 16px;
-  flex-shrink: 0;
-}
-
-.settingsGrid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 11px;
-  margin-bottom: 12px;
-}
-
-.promptGrid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 11px;
-}
-
-.promptStack {
-  display: flex;
-  flex-direction: column;
-  gap: 11px;
-}
-
-.noPromptHint {
-  font-size: 13px;
-  color: var(--t2);
-  font-family: var(--font-mono);
-  text-align: center;
-  padding: 10px 0 2px;
-}
-
-// ── Card ──
-.card {
-  background: var(--bg1);
-  border: 1px solid var(--bdr);
-  border-radius: var(--rl);
-  padding: 14px 16px;
-}
-
-.cardT {
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--t2);
-  margin-bottom: 12px;
-  @include m.mono;
-}
-
-.promptMode {
-  font-size: 12px;
-  margin-left: 8px;
-  font-weight: 400;
-  text-transform: none;
-  letter-spacing: 0;
-  @include m.mono;
-}
-
-// ── Form ──
-.fg {
-  margin-bottom: 11px;
-}
-
-.mb0 {
-  margin-bottom: 0 !important;
-}
-
-.mb8 {
-  margin-bottom: 8px;
-}
-
-.mb12 {
-  margin-bottom: 12px !important;
-}
-
-.flRow {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 4px;
-}
-
-.fl {
-  display: block;
-  font-size: 13px;
-  color: var(--t1);
-  margin-bottom: 0;
-  font-weight: 500;
-}
-
-.fc {
-  width: 100%;
-  padding: 7px 11px;
-  background: var(--bg0);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 13px;
-  transition: border-color 0.12s;
-  outline: none;
-  appearance: none;
-
-  &:focus {
-    border-color: var(--blue);
-    box-shadow: 0 0 0 3px rgba(91, 164, 239, 0.07);
-  }
-
-  &::placeholder {
-    color: var(--t2);
-  }
-}
-
-select.fc {
-  cursor: pointer;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='7'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%234e5668' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 10px center;
-  padding-right: 26px;
-}
-
-textarea.fc {
-  resize: vertical;
-  min-height: 56px;
-  line-height: 1.6;
-}
-
-.optTag {
-  font-size: 12px;
-  color: var(--t2);
-  margin-left: 4px;
-  font-weight: 400;
-  @include m.mono;
-}
-
-// ── Checkboxes ──
-.cr {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 0;
-  cursor: pointer;
-  user-select: none;
-
-  label {
-    font-size: 13px;
-    color: var(--t1);
-    cursor: pointer;
-  }
-}
-
-.cb {
-  width: 14px;
-  height: 14px;
-  border: 1.5px solid var(--bdr2);
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  transition: all 0.12s;
-}
-
-.ck {
-  .cb {
-    background: var(--blue);
-    border-color: var(--blue);
-
-    &::after {
-      content: '';
-      width: 7px;
-      height: 4px;
-      border-left: 1.5px solid #0b0d10;
-      border-bottom: 1.5px solid #0b0d10;
-      transform: rotate(-45deg) translate(0, -1px);
-      display: block;
-    }
-  }
-
-  label {
-    color: var(--t0);
-  }
-}
-
-// Nested option, e.g. "Keyword Insights" under Keywords — indented, only
-// rendered while its parent checkbox is on.
-.crNested {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 0 3px 20px;
-  cursor: pointer;
-  user-select: none;
-  position: relative;
-
-  &::before {
-    content: '';
-    position: absolute;
-    left: 6px;
-    top: 0;
-    bottom: 50%;
-    width: 8px;
-    border-left: 1.5px solid var(--bdr2);
-    border-bottom: 1.5px solid var(--bdr2);
-    border-radius: 0 0 0 4px;
-  }
-
-  label {
-    font-size: 12.5px;
-    color: var(--t1);
-    cursor: pointer;
-  }
-
-  &.ck label {
-    color: var(--t0);
-  }
-}
-
-// Nested field, e.g. the Timestamp Summary Interval dropdown — indented to
-// visually sit under its parent checkbox.
-.nestedField {
-  padding-left: 20px;
-  margin-bottom: 8px;
-
-  label {
-    display: block;
-    font-size: 11.5px;
-    color: var(--t2);
-    margin-bottom: 4px;
-  }
-
-  select {
-    max-width: 200px;
-  }
-}
-
-// ── Range sliders ──
-.rangeInput {
-  -webkit-appearance: none;
-  width: 100%;
-  height: 3px;
-  background: var(--bg4);
-  border-radius: 99px;
-  outline: none;
-  cursor: pointer;
-  display: block;
-  margin-top: 4px;
-
-  &::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    width: 14px;
-    height: 14px;
-    background: var(--blue);
-    border-radius: 50%;
-    border: 2px solid var(--bg0);
-    cursor: pointer;
-    box-shadow: 0 0 0 2px rgba(91, 164, 239, 0.25);
-  }
-}
-
-.slim {
-  display: flex;
-  justify-content: space-between;
-  font-size: 12px;
-  color: var(--t2);
-  margin-top: 3px;
-  @include m.mono;
-}
-
-.sv {
-  @include m.mono;
-  font-size: 13px;
-  color: var(--blue);
-}
-
-.qTypeLabel {
-  font-size: 13px;
-  color: var(--t1);
-  font-weight: 500;
-  margin-bottom: 5px;
-}
-
-.dimLabel {
-  color: var(--t2) !important;
-}
-
-.feasibilityTag {
-  font-size: 10px;
-  background: var(--amber-dim);
-  color: var(--amber);
-  padding: 1px 5px;
-  border-radius: 99px;
-  margin-left: 3px;
-}
-
-// ── Divider ──
-.divider {
-  border: none;
-  height: 1px;
-  margin: 12px 0;
-  background: linear-gradient(90deg,
-      rgba(139, 92, 246, 0.0) 0%,
-      rgba(139, 92, 246, 0.35) 25%,
-      rgba(56, 196, 186, 0.4) 50%,
-      rgba(240, 160, 48, 0.35) 75%,
-      rgba(240, 160, 48, 0.0) 100%);
-}
-
-// ── Callout ──
-.callout {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 9px 12px;
-  border-radius: var(--r);
-  font-size: 13px;
-  margin-bottom: 10px;
-}
-
-.cInfo {
-  background: var(--blue-dim);
-  border: 1px solid var(--blue-bdr);
-  color: var(--blue);
-}
-
-// ── Generic utility buttons (used for save/cancel etc.) ──
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 6px 13px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t1);
-  font-family: var(--font-ui);
-  font-size: 13px;
-  cursor: pointer;
-  transition: all 0.12s;
-  white-space: nowrap;
-  user-select: none;
-
-  &:hover {
-    background: var(--bg3);
-    color: var(--t0);
-    border-color: var(--bdr3);
-  }
-}
-
-.btnP {
-  background: var(--blue);
-  color: #ffffff;
-  border-color: var(--blue);
-  font-weight: 600;
-
-  &:hover {
-    background: #a78bfa;
-    border-color: #a78bfa;
-    color: #ffffff;
-  }
-
-  &:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-    pointer-events: none;
-  }
-}
-
-// ── Batch running pill in header ─────────────────
-.batchRunPill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: var(--amber);
-  background: var(--amber-dim);
-  border: 1px solid var(--amber-bdr);
-  padding: 1px 8px;
-  border-radius: 99px;
-  margin-left: 10px;
-  font-family: var(--font-mono);
-  vertical-align: middle;
-}
-
-.batchRunDot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--amber);
-  animation: breathe 1.2s ease-in-out infinite;
-}
-
-@keyframes breathe {
-
-  0%,
-  100% {
-    opacity: 1;
-  }
-
-  50% {
-    opacity: 0.35;
-  }
-}
-
-// ── Model loading indicator ───────────────────────
-.loadingDot {
-  font-size: 13px;
-  color: var(--t2);
-  font-family: var(--font-mono);
-}
-
-// ══════════════════════════════════════
-// 3-COLUMN BATCH STATUS
-// ══════════════════════════════════════
-.batchSection {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  margin-top: 16px;
-  animation: fadeIn 0.2s ease;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.batchSectionTitle {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--t2);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  font-family: var(--font-mono);
-  margin-bottom: 10px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-shrink: 0;
-  flex-wrap: wrap;
-}
-
-.liveLabel {
-  flex-shrink: 0;
-}
-
-// ── Live status pill ─────────────────────────────
-.liveStatus {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--green);
-  background: var(--green-dim);
-  border: 1px solid var(--green-bdr);
-  padding: 2px 9px 2px 7px;
-  border-radius: 99px;
-  font-family: var(--font-mono);
-  text-transform: none;
-  letter-spacing: 0;
-  white-space: nowrap;
-}
-
-.liveDot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--green);
-  flex-shrink: 0;
-  animation: livePulse 1.4s ease-in-out infinite;
-}
-
-@keyframes livePulse {
-
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-
-  50% {
-    opacity: 0.4;
-    transform: scale(0.75);
-  }
-}
-
-.liveSep {
-  color: var(--green);
-  opacity: 0.4;
-  font-size: 12px;
-}
-
-.liveCountdown {
-  color: var(--green);
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  min-width: 2ch;
-  display: inline-block;
-  text-align: right;
-}
-
-.liveFiles {
-  color: var(--green);
-  opacity: 0.85;
-}
-
-.batchColumns {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-  flex: 1;
-  overflow: hidden;
-  min-height: 0;
-}
-
-.batchCol {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-
-// Column headers
-.batchColHead {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 700;
-  padding: 6px 10px;
-  border-radius: 8px;
-  font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  flex-shrink: 0;
-
-  svg {
-    width: 12px;
-    height: 12px;
-    flex-shrink: 0;
-  }
-
-  &.headQueued {
-    background: rgba(240, 160, 48, 0.08);
-    color: var(--amber);
-    border: 1px solid var(--amber-bdr);
-
-    svg {
-      stroke: var(--amber);
-    }
-  }
-
-  &.headRunning {
-    background: var(--blue-dim);
-    color: var(--blue);
-    border: 1px solid var(--blue-bdr);
-
-    svg {
-      stroke: var(--blue);
-    }
-  }
-
-  &.headCompleted {
-    background: var(--green-dim);
-    color: var(--green);
-    border: 1px solid var(--green-bdr);
-
-    svg {
-      stroke: var(--green);
-    }
-  }
-}
-
-.batchColCount {
-  margin-left: auto;
-  font-size: 13px;
-  font-weight: 700;
-  min-width: 16px;
-  text-align: center;
-}
-
-.batchColBody {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  flex: 1;
-  overflow-y: auto;
-  padding-bottom: 14px;
-  @include m.scrollbar;
-}
-
-.batchEmpty {
-  text-align: center;
-  font-size: 13px;
-  color: var(--t2);
-  font-family: var(--font-mono);
-  padding: 12px 0;
-}
-
-// ── Status card wrapper (handles enter/exit animation) ──
-.statusCardWrap {
-  position: relative;
-  border-radius: 10px;
-}
-
-// ── Queued: slow breathing amber dashed-style border ──
-.queuedWrap {
-  padding: 2px;
-  background: conic-gradient(from 0deg,
-      rgba(240, 160, 48, 0.7) 0deg,
-      rgba(240, 160, 48, 0.15) 60deg,
-      rgba(240, 160, 48, 0.05) 120deg,
-      rgba(240, 160, 48, 0.15) 180deg,
-      rgba(240, 160, 48, 0.05) 240deg,
-      rgba(240, 160, 48, 0.15) 300deg,
-      rgba(240, 160, 48, 0.7) 360deg);
-  animation: queuedBreath 2.8s ease-in-out infinite;
-}
-
-@keyframes queuedBreath {
-
-  0%,
-  100% {
-    opacity: 0.5;
-  }
-
-  50% {
-    opacity: 1;
-  }
-}
-
-// ── Completed: static clean green gradient border, no animation ──
-.completedWrap {
-  padding: 2px;
-  background: linear-gradient(135deg,
-      rgba(74, 222, 128, 0.9) 0%,
-      rgba(74, 222, 128, 0.3) 40%,
-      rgba(74, 222, 128, 0.6) 70%,
-      rgba(74, 222, 128, 0.9) 100%);
-}
-
-// ── Animated gradient border for running cards ──
-.runningWrap {
-  border-radius: 10px;
-  padding: 2px;
-  background: conic-gradient(from var(--border-angle, 0deg),
-      transparent 0deg,
-      transparent 30deg,
-      #5ba4ef 50deg,
-      #a78bfa 65deg,
-      #f0a030 80deg,
-      transparent 100deg,
-      transparent 360deg);
-  animation: borderBeamSpin 2.4s linear infinite;
-}
-
-@property --border-angle {
-  syntax: '<angle>';
-  initial-value: 0deg;
-  inherits: false;
-}
-
-@keyframes borderBeamSpin {
-  to {
-    --border-angle: 360deg;
-  }
-}
-
-// Status cards
-.statusCard {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  border: 1px solid;
-  min-width: 0;
-  position: relative;
-
-  &.queued {
-    background: var(--bg1);
-    border-color: transparent;
-    border-radius: 8px;
-  }
-
-  &.running {
-    background: var(--bg1);
-    border-color: transparent;
-    border-radius: 8px;
-  }
-
-  &.completed {
-    background: var(--bg1);
-    border-color: transparent;
-    border-radius: 8px;
-  }
-}
-
-.statusExt {
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 800;
-  font-family: var(--font-mono);
-  flex-shrink: 0;
-
-  &.vtt {
-    background: var(--blue-dim);
-    color: var(--blue);
-  }
-
-  &.srt {
-    background: var(--green-dim);
-    color: var(--green);
-  }
-}
-
-// ── Completed check icon ──
-.completedCheck {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  background: var(--green-dim);
-  border: 1.5px solid var(--green-bdr);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  color: var(--green);
-
-  svg {
-    width: 13px;
-    height: 13px;
-  }
-}
-
-// ── Queued "waiting" meta line ──
-.queuedMeta {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10px;
-  color: var(--amber);
-  font-family: var(--font-mono);
-  opacity: 0.8;
-}
-
-.queuedDot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--amber);
-  flex-shrink: 0;
-  animation: queuedDotPulse 1.6s ease-in-out infinite;
-}
-
-@keyframes queuedDotPulse {
-
-  0%,
-  100% {
-    opacity: 0.3;
-    transform: scale(0.8);
-  }
-
-  50% {
-    opacity: 1;
-    transform: scale(1.1);
-  }
-}
-
-// ── Completed date meta ──
-.completedMeta {
-  font-size: 10px;
-  color: var(--green);
-  font-family: var(--font-mono);
-  opacity: 0.75;
-}
-
-.statusInfo {
-  flex: 1;
-  min-width: 0;
-}
-
-.statusNameRow {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-  margin-bottom: 3px;
-  overflow: hidden;
-}
-
-.statusName {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--t0);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1;
-  min-width: 0;
-}
-
-.statusIdBadge {
-  font-size: 10px;
-  font-weight: 700;
-  font-family: var(--font-mono);
-  border-radius: 4px;
-  padding: 1px 5px;
-  flex-shrink: 0;
-  white-space: nowrap;
-  letter-spacing: 0.02em;
-  color: var(--blue);
-  background: var(--blue-dim);
-  border: 1px solid var(--blue-bdr);
-}
-
-.statusIdBadge_queued {
-  color: var(--amber);
-  background: rgba(240, 160, 48, 0.12);
-  border-color: rgba(240, 160, 48, 0.3);
-}
-
-.statusIdBadge_running {
-  color: var(--blue);
-  background: var(--blue-dim);
-  border-color: var(--blue-bdr);
-}
-
-.statusIdBadge_completed {
-  color: var(--green);
-  background: var(--green-dim);
-  border-color: var(--green-bdr);
-}
-
-.statusDate {
-  font-size: 10px;
-  color: var(--t2);
-  font-family: var(--font-mono);
-}
-
-.statusProgress {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.statusBar {
-  flex: 1;
-  height: 3px;
-  background: var(--bg4);
-  border-radius: 99px;
-  overflow: hidden;
-}
-
-.statusFill {
-  height: 100%;
-  background: var(--blue);
-  border-radius: 99px;
-  transition: width 0.4s ease;
-}
-
-.statusPct {
-  font-size: 10px;
-  color: var(--blue);
-  font-family: var(--font-mono);
-  flex-shrink: 0;
-}
-
-// ── Model row (label + refresh) ──────────────────
-.modelLabelRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 4px;
-
-  .fl {
-    margin-bottom: 0;
-  }
-}
-
-.refreshBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: 99px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  cursor: pointer;
-  transition: all 0.12s;
-  flex-shrink: 0;
-
-  svg {
-    width: 10px;
-    height: 10px;
-    flex-shrink: 0;
-    transition: transform 0.12s;
-  }
-
-  &:hover:not(:disabled) {
-    background: var(--bg3);
-    color: var(--t1);
-    border-color: var(--bdr3);
-  }
-
-  &:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-  }
-}
-
-.spinning {
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-// ── Model status messages ─────────────────────────
-.modelWarn {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  margin-top: 7px;
-  padding: 7px 10px;
-  border-radius: var(--r);
-  background: var(--amber-dim);
-  border: 1px solid var(--amber-bdr);
-  color: var(--amber);
-  font-size: 13px;
-  line-height: 1.5;
-
-  svg {
-    width: 12px;
-    height: 12px;
-    flex-shrink: 0;
-    margin-top: 1px;
-    stroke: var(--amber);
-  }
-}
-
-.modelOk {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 6px;
-  font-size: 12px;
-  color: var(--t2);
-  font-family: var(--font-mono);
-
-  svg {
-    width: 11px;
-    height: 11px;
-    flex-shrink: 0;
-    stroke: var(--green);
-  }
-}
-
-// ══════════════════════════════════════
-// SUBMITTING OVERLAY
-// ══════════════════════════════════════
-.submittingOverlay {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(var(--bg0-rgb, 11, 13, 16), 0.82);
-  backdrop-filter: blur(4px);
-  z-index: 20;
-  animation: fadeIn 0.18s ease;
-}
-
-.submittingCard {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  padding: 28px 32px;
-  background: var(--bg1);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--rxl, 12px);
-  max-width: 320px;
-  width: 90%;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.28);
-  text-align: center;
-}
-
-.submittingSpinner {
-  width: 36px;
-  height: 36px;
-  border: 3px solid var(--bdr2);
-  border-top-color: var(--blue);
-  border-right-color: rgba(139, 92, 246, 0.5);
-  border-radius: 50%;
-  animation: spin 0.75s linear infinite;
-  flex-shrink: 0;
-}
-
-.submittingTitle {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--t0);
-  letter-spacing: -0.2px;
-}
-
-.submittingDesc {
-  font-size: 13px;
-  color: var(--t2);
-  font-family: var(--font-mono);
-  line-height: 1.65;
-}
-
-.submittingFiles {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  width: 100%;
-  margin-top: 2px;
-}
-
-.submittingFile {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--t1);
-  font-family: var(--font-mono);
-  background: var(--bg2);
-  border: 1px solid var(--bdr);
-  border-radius: var(--r);
-  padding: 5px 10px;
-  text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.submittingDot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--blue);
-  flex-shrink: 0;
-  animation: breathe 1.2s ease-in-out infinite;
-}
-
-.submittingMore {
-  font-size: 12px;
-  color: var(--t2);
-  font-family: var(--font-mono);
-  text-align: center;
-  padding: 2px 0;
-}
-
-// ── Stop button on queued file cards ─────────────────────
-.stopBtn {
-  width: 24px;
-  height: 24px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 6px;
-  border: 1px solid rgba(239, 68, 68, 0.35);
-  background: rgba(239, 68, 68, 0.08);
-  color: #ef4444;
-  cursor: pointer;
-  padding: 0;
-  transition: all 0.15s;
-  margin-left: auto;
-
-  svg {
-    width: 9px;
-    height: 9px;
-  }
-
-  &:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.18);
-    border-color: rgba(239, 68, 68, 0.6);
-    box-shadow: 0 0 6px rgba(239, 68, 68, 0.2);
-  }
-
-  &:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-}
-
-.stopSpinner {
-  width: 10px;
-  height: 10px;
-  border: 1.5px solid rgba(239, 68, 68, 0.3);
-  border-top-color: #ef4444;
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  flex-shrink: 0;
-}
-
-// ── Large screen overrides (> 1900px) ────────────────────
-@media (min-width: 1920px) {
-  .slbl {
-    font-size: 13px;
-  }
-
-  .selSummary {
-    font-size: 14px;
-  }
-
-  .selCt {
-    font-size: 14px;
-  }
-
-  .selNm {
-    font-size: 13px;
-  }
-
-  .cardT {
-    font-size: 11px;
-  }
-
-  .fl {
-    font-size: 14px;
-  }
-
-  .fc {
-    font-size: 14px;
-  }
-
-  .optTag {
-    font-size: 13px;
-  }
-
-  .cr label {
-    font-size: 14px;
-  }
-
-  .slim {
-    font-size: 13px;
-  }
-
-  .sv {
-    font-size: 14px;
-  }
-
-  .qTypeLabel {
-    font-size: 14px;
-  }
-
-  .noPromptHint {
-    font-size: 14px;
-  }
-
-  .btn {
-    font-size: 14px;
-  }
-
-  .batchSectionTitle {
-    font-size: 13px;
-  }
-
-  .batchColHead {
-    font-size: 13px;
-  }
-
-  .batchColCount {
-    font-size: 14px;
-  }
-
-  .batchEmpty {
-    font-size: 14px;
-  }
-
-  .statusName {
-    font-size: 14px;
-  }
-
-  .statusIdBadge {
-    font-size: 11px;
-  }
-
-  .statusDate {
-    font-size: 11px;
-  }
-
-  .statusPct {
-    font-size: 11px;
-  }
-
-  .queuedMeta {
-    font-size: 11px;
-  }
-
-  .completedMeta {
-    font-size: 11px;
-  }
-
-  .loadingDot {
-    font-size: 14px;
-  }
-
-  .refreshBtn {
-    font-size: 13px;
-  }
-
-  .modelWarn {
-    font-size: 14px;
-  }
-
-  .modelOk {
-    font-size: 13px;
-  }
-
-  .submittingTitle {
-    font-size: 15px;
-  }
-
-  .submittingDesc {
-    font-size: 14px;
-  }
-
-  .submittingFile {
-    font-size: 14px;
-  }
-
-  .submittingMore {
-    font-size: 13px;
-  }
-
-  .liveStatus {
-    font-size: 13px;
-  }
-}
-
-// ── Per-file prompt preview ───────────────────
-.perFileBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: 8px;
-  padding: 2px 8px 2px 6px;
-  border-radius: 5px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  font-size: 11px;
-  font-family: var(--font-ui);
-  cursor: pointer;
-  vertical-align: middle;
-  transition: all 0.14s;
-
-  svg:first-child {
-    width: 12px;
-    height: 12px;
-    flex-shrink: 0;
-  }
-}
-
-.perFileBtn:hover {
-  background: var(--bg3);
-  border-color: var(--bdr3);
-  color: var(--t0);
-}
-
-.perFileBtnActive {
-  background: var(--blue-dim);
-  border-color: var(--blue-bdr);
-  color: var(--blue);
-}
-
-.perFileBtnActive:hover {
-  background: var(--blue-dim);
-  border-color: var(--blue);
-  color: var(--blue);
-}
-
-.perFileChevron {
-  width: 10px;
-  height: 10px;
-  flex-shrink: 0;
-  transition: transform 0.18s ease;
-}
-
-.perFileChevronOpen {
-  transform: rotate(180deg);
-}
-
-// Animated expand container
-.perFilePanel {
-  display: grid;
-  grid-template-rows: 0fr;
-  opacity: 0;
-  transition:
-    grid-template-rows 0.22s cubic-bezier(0.4, 0, 0.2, 1),
-    opacity 0.18s ease,
-    margin 0.2s ease;
-  margin-bottom: 0;
-}
-
-.perFilePanelOpen {
-  grid-template-rows: 1fr;
-  opacity: 1;
-  margin-bottom: 6px;
-}
-
-.perFilePanelInner {
-  min-height: 0;
-  overflow: hidden;
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  background: var(--bg1);
-  max-height: 200px;
-  overflow-y: auto;
-}
-
-.perFileRow {
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--bdr1);
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-
-  &:last-child {
-    border-bottom: none;
-  }
-}
-
-.perFileName {
-  font-size: 11px;
-  font-family: var(--font-mono);
-  color: var(--t2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.perFilePrompt {
-  font-size: 12px;
-  color: var(--t0);
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.perFileEmpty {
-  font-size: 12px;
-  color: var(--t2);
-  font-style: italic;
-  opacity: 0.6;
-}
-
-@media (min-width: 1920px) {
-  .perFileBtn {
-    font-size: 12px;
-  }
-
-  .perFileName {
-    font-size: 12px;
-  }
-
-  .perFilePrompt {
-    font-size: 13px;
-  }
-
-  .perFileEmpty {
-    font-size: 13px;
-  }
-}
-
-// ── Prompt save / cancel bar ──────────────────
-.promptActions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 10px 12px 12px;
-  border-top: 1px solid var(--bdr1);
-  margin-top: 4px;
-}
-
-.promptSaveError {
-  flex: 1;
-  font-size: 12px;
-  color: var(--red, #ef4444);
-  margin-right: 4px;
-}
-
-.btnSm {
-  height: 30px;
-  padding: 0 14px;
-  font-size: 12px;
-  border-radius: 6px;
-  border: 1px solid transparent;
-  font-family: var(--font-ui);
-  font-weight: 500;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  transition: all 0.14s;
-
-  &:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-}
-
-.btnGhost {
-  background: transparent;
-  border-color: var(--bdr2);
-  color: var(--t1);
-
-  &:hover:not(:disabled) {
-    background: var(--bg3);
-    border-color: var(--bdr3);
-  }
-}
-
-.btnPrimary {
-  background: var(--blue);
-  border-color: var(--blue);
-  color: #fff;
-
-  &:hover:not(:disabled) {
-    opacity: 0.88;
-  }
-}
-
-.btnSpinner {
-  width: 11px;
-  height: 11px;
-  border: 1.5px solid rgba(255, 255, 255, 0.35);
-  border-top-color: #fff;
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  flex-shrink: 0;
-}
-
-@media (min-width: 1920px) {
-  .btnSm {
-    height: 34px;
-    font-size: 13px;
-    padding: 0 16px;
-  }
-
-  .promptSaveError {
-    font-size: 13px;
-  }
-}
-
-// ─────────────────────────────────────────────
-// Minimize / minimized rail
-// ─────────────────────────────────────────────
-
-.minimizeStepBtn {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  flex-shrink: 0;
-  transition: all 0.14s;
-
-  svg {
-    width: 13px;
-    height: 13px;
-  }
-
-  &:hover {
-    background: var(--bg3);
-    border-color: var(--bdr3);
-    color: var(--t0);
-  }
-}
-
-.infpanelMinimized {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.minRail {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 14px;
-  padding: 14px 0;
-  width: 100%;
-  background: var(--bg2);
-  border: 1px solid var(--bdr);
-  border-radius: var(--rl);
-  color: var(--t1);
-  cursor: pointer;
-  transition: background 0.14s, border-color 0.14s, color 0.14s;
-
-  &:hover {
-    background: var(--bg3);
-    border-color: var(--bdr2);
-    color: var(--t0);
-  }
-}
-
-.minRailIcon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  border: 1px solid var(--bdr2);
-  color: var(--t2);
-  flex-shrink: 0;
-
-  svg {
-    width: 14px;
-    height: 14px;
-  }
-
-  .minRail:hover & {
-    color: var(--t0);
-    border-color: var(--bdr3);
-  }
-}
-
-.minRailLabel {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  color: var(--t1);
-  white-space: nowrap;
-  user-select: none;
-}
-
-.minRailDot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--amber);
-  animation: minRailPulse 1.2s infinite;
-}
-
-@keyframes minRailPulse {
-
-  0%,
-  100% {
-    opacity: 1;
-  }
-
-  50% {
-    opacity: 0.4;
-  }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// ═══════════════════════════════════════════════
-// pages/UploadInfer/PromptTemplateAssociationModal.tsx
-// Content Analytics · Bulk file ↔ prompt-template association
-// ═══════════════════════════════════════════════
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import { useAppDispatch, useAppSelector } from '../../store/hooks';
-import { updateFilePrompts, patchFilePromptTemplate } from '../../store/uploadSlice';
-import { addToast } from '../../store/toastSlice';
-import api from '../../services/api';
-import styles from './PromptTemplateAssociationModal.module.scss';
-
-interface PromptTemplateListItem {
-    id: number; ms_user_id: number; name: string; description: string;
-    summary_prompt: string; keywords_prompt: string; faq_prompt: string;
-    short_answers_prompt: string; true_false_prompt: string;
-    inserted_at: string; updated_at: string; is_default?: boolean;
-}
-interface PromptTemplateDetail {
-    id: number; ms_user_id: number; name: string; description: string;
-    summary_prompt: string; keyword_prompt?: string; keywords_prompt?: string;
-    faq_prompt: string; short_answers_prompt?: string; true_false_prompt?: string;
-    inserted_at: string; updated_at: string; is_default?: boolean;
-}
-interface Props { open: boolean; onClose: () => void; }
-
-const NO_TEMPLATE = -1;
-
-const PromptTemplateAssociationModal: React.FC<Props> = ({ open, onClose }) => {
-    const dispatch = useAppDispatch();
-    const { t } = useTranslation();
-    const { serverFiles, dateFrom, dateTo } = useAppSelector(s => s.upload);
-
-    const [templates, setTemplates] = useState<PromptTemplateListItem[]>([]);
-    const [templatesLoading, setTemplatesLoading] = useState(false);
-    const [templatesError, setTemplatesError] = useState<string | null>(null);
-    const [selection, setSelection] = useState<Record<number, number>>({});
-    const initialSelectionRef = useRef<Record<number, number>>({});
-    const [bulkValue, setBulkValue] = useState<number>(NO_TEMPLATE);
-    const [saving, setSaving] = useState(false);
-    const [detailTemplateId, setDetailTemplateId] = useState<number | null>(null);
-    const [detailData, setDetailData] = useState<PromptTemplateDetail | null>(null);
-    const [detailLoading, setDetailLoading] = useState(false);
-    const [detailError, setDetailError] = useState<string | null>(null);
-
-    // ── Associate ALL — every file in the current date range, bypasses the
-    //     per-row preview entirely and hits the backend directly. ──
-    const [isAssociatingAll, setIsAssociatingAll] = useState(false);
-    const [associateAllError, setAssociateAllError] = useState<string | null>(null);
-
+const FormatIcon: React.FC<{ fmt: string }> = ({ fmt }) => {
+    const def = FORMAT_ICONS[fmt];
+    if (!def) return null;
+    return (
+        <span
+            className={styles.fmtIcon}
+            style={{ color: def.color, background: def.bg }}
+            aria-hidden="true"
+        >
+            {def.node}
+        </span>
+    );
+};
+
+// ── Dropdown ──────────────────────────────────────────────
+const Dropdown: React.FC<{
+    icon: React.ReactNode; title: string; label: string;
+    fmts: { k: string; l: string }[];
+    onSelect: (k: string) => void; active?: boolean;
+}> = ({ icon, title, label, fmts, onSelect, active }) => {
+    const [open, setOpen] = useState(false);
+    const ref = useRef<HTMLDivElement>(null);
     useEffect(() => {
-        if (!open) return;
-        const init: Record<number, number> = {};
-        serverFiles.forEach(f => { init[f.id] = f.prompt_template_id ?? NO_TEMPLATE; });
-        setSelection(init);
-        initialSelectionRef.current = init;
-        setBulkValue(NO_TEMPLATE);
-        setDetailTemplateId(null); setDetailData(null); setDetailError(null);
-        setAssociateAllError(null);
-
-        let cancelled = false;
-        (async () => {
-            setTemplatesLoading(true); setTemplatesError(null);
-            try {
-                const res = await api.get('/prompt_template/list_template');
-                const list: PromptTemplateListItem[] = (res.data as any)?.templates ?? [];
-                if (!cancelled) setTemplates(Array.isArray(list) ? list : []);
-            } catch {
-                if (!cancelled) setTemplatesError(t('uploadInfer.templateModal.loadFail'));
-            } finally { if (!cancelled) setTemplatesLoading(false); }
-        })();
-        return () => { cancelled = true; };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [open]);
-
-    useEffect(() => {
-        if (!open) return;
-        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); } };
-        window.addEventListener('keydown', onKey, true);
-        return () => window.removeEventListener('keydown', onKey, true);
-    }, [open]);
-
-    const dirtyIds = useMemo(() => {
-        const init = initialSelectionRef.current;
-        return Object.keys(selection).map(Number).filter(id => selection[id] !== init[id]);
-    }, [selection]);
-    const isDirty = dirtyIds.length > 0;
-
-    const handleRowChange = useCallback((fileId: number, templateId: number) => {
-        setSelection(prev => ({ ...prev, [fileId]: templateId }));
+        const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+        document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h);
     }, []);
+    return (
+        <div className={styles.dropdownWrap} ref={ref}>
+            <ActionBtn title={title} onClick={() => setOpen(o => !o)} active={open || active}>{icon}</ActionBtn>
+            {open && (
+                <div className={styles.dropdown}>
+                    <div className={styles.dropdownLabel}>{label}</div>
+                    {fmts.map(f => (
+                        <button
+                            key={f.k}
+                            className={styles.dropdownItem}
+                            onClick={() => { onSelect(f.k); setOpen(false); }}
+                        >
+                            <FormatIcon fmt={f.k} />
+                            <span className={styles.dropdownItemLabel}>{f.l}</span>
+                        </button>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
 
-    const handleApplyToAll = useCallback(() => {
-        setSelection(prev => {
-            const next = { ...prev };
-            Object.keys(next).forEach(k => { next[Number(k)] = bulkValue; });
-            return next;
-        });
-    }, [bulkValue]);
+// ── Icons ─────────────────────────────────────────────────
+const IcoEdit = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M7 2.5H3.5A1.5 1.5 0 002 4v8.5A1.5 1.5 0 003.5 14H12a1.5 1.5 0 001.5-1.5V9" />
+        <path d="M11.5 1.5a1.414 1.414 0 012 2L8 9l-2.5.5.5-2.5 5.5-5.5z" />
+    </svg>
+);
+const IcoCopy = ({ success }: { success: boolean }) => success ? (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={styles.successIcon}><path d="M3 8l3.5 3.5L13 4" /></svg>
+) : (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="5" y="5" width="8" height="9" rx="1.5" />
+        <path d="M10 5V4a1 1 0 00-1-1H4a1.5 1.5 0 00-1.5 1.5V11a1 1 0 001 1h1" />
+    </svg>
+);
+const IcoDownload = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M8 2v8M5 7l3 3 3-3" />
+        <path d="M2 12v1.5A1.5 1.5 0 003.5 15h9a1.5 1.5 0 001.5-1.5V12" />
+    </svg>
+);
 
-    const handleViewDetails = useCallback(async (templateId: number) => {
-        if (detailTemplateId === templateId) { setDetailTemplateId(null); setDetailData(null); setDetailError(null); return; }
-        setDetailTemplateId(templateId); setDetailData(null); setDetailError(null); setDetailLoading(true);
-        try {
-            const res = await api.get(`/prompt_template/${templateId}`);
-            const d: PromptTemplateDetail | undefined = (res.data as any);
-            if (d && d.id !== undefined) setDetailData(d);
-            else setDetailError(t('uploadInfer.templateModal.noDetailsReturned'));
-        } catch { setDetailError(t('uploadInfer.templateModal.detailLoadFail')); }
-        finally { setDetailLoading(false); }
-    }, [detailTemplateId, t]);
+// ── TabToolbar: edit + copy + download ───────────────────
+const TabToolbar: React.FC<{
+    onEdit?: () => void;
+    fmts: { k: string; l: string }[];
+    onCopy: (k: string) => void;
+    onDownload: (k: string) => void;
+    copied: boolean;
+}> = ({ onEdit, fmts, onCopy, onDownload, copied }) => {
+    const { t } = useTranslation();
+    return (
+        <div className={styles.tabToolbar}>
+            {onEdit && <ActionBtn title={t('uploadInfer.workspacePanel.edit')} onClick={onEdit}><IcoEdit /></ActionBtn>}
+            <Dropdown icon={<IcoCopy success={copied} />} title={t('uploadInfer.workspacePanel.copy')} label={t('uploadInfer.workspacePanel.copyAs')} fmts={fmts} onSelect={onCopy} active={copied} />
+            <Dropdown icon={<IcoDownload />} title={t('uploadInfer.workspacePanel.download')} label={t('uploadInfer.workspacePanel.downloadAs')} fmts={fmts} onSelect={onDownload} />
+        </div>
+    );
+};
 
-    const handleSave = useCallback(async () => {
-        if (!isDirty || saving) return;
+// ── Stable keyword chip ───────────────────────────────────
+const KeywordChip: React.FC<{ kw: string; isNew: boolean }> = ({ kw, isNew }) => (
+    <span className={`${styles.keywordPill} ${isNew ? styles.keywordPillNew : ''}`}
+        style={{ background: CHIP_COLORS[seededColorIndex(kw)] }}>
+        {kw}
+    </span>
+);
+
+const ChipGrid: React.FC<{ kws: string[]; prevSet?: Set<string> }> = ({ kws, prevSet }) => {
+    const { t } = useTranslation();
+    return kws.length > 0 ? (
+        <div className={styles.keywordGrid}>
+            {kws.map(kw => <KeywordChip key={kw} kw={kw} isNew={prevSet ? !prevSet.has(kw) : false} />)}
+        </div>
+    ) : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noKeywords')}</div>;
+};
+
+// ── Tab: Summary ──────────────────────────────────────────
+const TabSummary: React.FC<{ summary: string; fileId: number; onSaved: (s: string) => void }> = ({ summary, fileId, onSaved }) => {
+    const { t } = useTranslation();
+    const [editing, setEditing] = useState(false);
+    const [draft, setDraft] = useState(summary);
+    const [saving, setSaving] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    const html = useMemo(() => marked.parse(draft) as string, [draft]);
+    const viewHtml = useMemo(() => marked.parse(summary) as string, [summary]);
+
+    const handleSave = async () => {
         setSaving(true);
-        const associateGroups: Record<number, number[]> = {};
-        for (const id of dirtyIds) {
-            const v = selection[id];
-            if (v === NO_TEMPLATE) continue;
-            if (!associateGroups[v]) associateGroups[v] = [];
-            associateGroups[v].push(id);
+        try { await api.post('/files/update', { fileID: String(fileId), summary: draft }); onSaved(draft); setEditing(false); }
+        finally { setSaving(false); }
+    };
+    const handleCopy = (fmt: string) => { copyText(formatSummary(summary, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatSummary(summary, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!summary && !editing) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noSummary')}</div>;
+
+    return (
+        <div className={`${styles.tabContent} ${editing ? styles.editMode : ''}`}>
+            {!editing ? (
+                <>
+                    <TabToolbar onEdit={() => { setDraft(summary); setEditing(true); }} fmts={SUMMARY_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+                    <div className={styles.summaryMd} dangerouslySetInnerHTML={{ __html: viewHtml }} />
+                </>
+            ) : (
+                <div className={styles.editLayout}>
+                    <div className={styles.editCol}>
+                        <div className={styles.editColHeader}><span className={styles.editColLabel}>{t('uploadInfer.workspacePanel.editColPreview')}</span><span className={styles.editColTag}>{t('uploadInfer.workspacePanel.markdownRenderer')}</span></div>
+                        <div className={styles.editPreview}><div className={styles.summaryMd} dangerouslySetInnerHTML={{ __html: html }} /></div>
+                    </div>
+                    <div className={styles.editCol}>
+                        <div className={styles.editColHeader}><span className={styles.editColLabel}>{t('uploadInfer.workspacePanel.editColEdit')}</span><span className={styles.editColTag}>{t('uploadInfer.workspacePanel.markdownTag')}</span></div>
+                        <textarea className={styles.editTextarea} value={draft} onChange={e => setDraft(e.target.value)} spellCheck={false} />
+                    </div>
+                    <div className={styles.editFooter}>
+                        <button className={styles.cancelBtn} onClick={() => setEditing(false)} disabled={saving}>{t('uploadInfer.workspacePanel.cancel')}</button>
+                        <button className={styles.saveBtn} onClick={handleSave} disabled={saving}>
+                            {saving ? <><span className={styles.inlineSpinner} />{t('uploadInfer.workspacePanel.saving')}</> : t('uploadInfer.workspacePanel.save')}
+                        </button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Tab: Keywords ─────────────────────────────────────────
+const TabKeywords: React.FC<{ keywords: string[]; fileId: number; onSaved: (kws: string[]) => void }> = ({ keywords, fileId, onSaved }) => {
+    const { t } = useTranslation();
+    const [editing, setEditing] = useState(false);
+    const [draft, setDraft] = useState(keywords.join('\n'));
+    const [saving, setSaving] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    // prevSetSnapshot holds the keyword set from the PREVIOUS render of ChipGrid
+    // so only truly new chips get the pop animation
+    const prevSetSnapshot = useRef<Set<string>>(new Set(keywords));
+
+    const draftKeywords = useMemo(() => draft.split('\n').map(k => k.trim()).filter(Boolean), [draft]);
+
+    // After each render, schedule an update of the snapshot so the *next*
+    // render can compare against what's currently visible
+    useEffect(() => {
+        const id = setTimeout(() => { prevSetSnapshot.current = new Set(draftKeywords); }, 0);
+        return () => clearTimeout(id);
+    }, [draftKeywords]);
+
+    const handleSave = async () => {
+        setSaving(true);
+        try { await api.post('/files/update', { fileID: String(fileId), keywords: draftKeywords }); onSaved(draftKeywords); setEditing(false); }
+        finally { setSaving(false); }
+    };
+    const handleCopy = (fmt: string) => { copyText(formatKeywords(keywords, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatKeywords(keywords, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!keywords.length && !editing) return <div className={styles.tabEmpty}>No keywords available.</div>;
+
+    return (
+        <div className={`${styles.tabContent} ${editing ? styles.editMode : ''}`}>
+            {!editing ? (
+                <>
+                    <TabToolbar onEdit={() => { setDraft(keywords.join('\n')); prevSetSnapshot.current = new Set(keywords); setEditing(true); }} fmts={KEYWORDS_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+                    <ChipGrid kws={keywords} />
+                </>
+            ) : (
+                <div className={styles.editLayout}>
+                    <div className={styles.editCol}>
+                        <div className={styles.editColHeader}><span className={styles.editColLabel}>{t('uploadInfer.workspacePanel.editColPreview')}</span><span className={styles.editColTag}>{t('uploadInfer.workspacePanel.chipView')}</span></div>
+                        <div className={styles.editPreview}>
+                            <ChipGrid kws={draftKeywords} prevSet={prevSetSnapshot.current} />
+                        </div>
+                    </div>
+                    <div className={styles.editCol}>
+                        <div className={styles.editColHeader}><span className={styles.editColLabel}>{t('uploadInfer.workspacePanel.editColEdit')}</span><span className={styles.editColTag}>{t('uploadInfer.workspacePanel.onePerLine')}</span></div>
+                        <textarea className={styles.editTextarea} value={draft} onChange={e => setDraft(e.target.value)} spellCheck={false} placeholder={t('uploadInfer.workspacePanel.keywordPlaceholder')} />
+                    </div>
+                    <div className={styles.editFooter}>
+                        <button className={styles.cancelBtn} onClick={() => setEditing(false)} disabled={saving}>{t('uploadInfer.workspacePanel.cancel')}</button>
+                        <button className={styles.saveBtn} onClick={handleSave} disabled={saving}>
+                            {saving ? <><span className={styles.inlineSpinner} />{t('uploadInfer.workspacePanel.saving')}</> : t('uploadInfer.workspacePanel.save')}
+                        </button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Tab: Assessment ───────────────────────────────────────
+type AssessMode = 'mcq' | 'all';
+
+const TabAssessment: React.FC<{ faq: string }> = ({ faq }) => {
+    const { t } = useTranslation();
+    const items = useMemo(() => parseFaq(faq), [faq]);
+
+    // Always default to MCQ; reset when faq changes (new file)
+    const [mode, setMode] = useState<AssessMode>('mcq');
+    const [current, setCurrent] = useState(0);
+    const [selected, setSelected] = useState<string | null>(null);
+    const [revealed, setRevealed] = useState(false);
+    const [complete, setComplete] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    const prevFaq = useRef(faq);
+    useEffect(() => {
+        if (faq !== prevFaq.current) {
+            prevFaq.current = faq;
+            setMode('mcq');
+            setCurrent(0); setSelected(null); setRevealed(false); setComplete(false);
         }
-        const entries = Object.entries(associateGroups);
-        if (entries.length === 0) { setSaving(false); onClose(); return; }
-        try {
-            await Promise.all(entries.map(([templateIdStr, fileIds]) =>
-                api.post('/prompt_template/associate', { file_ids: fileIds, template_id: Number(templateIdStr), all: false })
-            ));
-            const templatePatch: Record<number, number | null> = {};
-            entries.forEach(([templateIdStr, fileIds]) => {
-                const tmpl = templates.find(t => t.id === Number(templateIdStr));
-                fileIds.forEach(id => { templatePatch[id] = Number(templateIdStr); });
-                if (!tmpl) return;
-                dispatch(updateFilePrompts({
-                    fileIds,
-                    summaryPrompt: tmpl.summary_prompt,
-                    keywordsPrompt: tmpl.keywords_prompt,
-                    faqPrompt: tmpl.faq_prompt,
-                    shortAnswerPrompt: tmpl.short_answers_prompt,
-                    trueFalsePrompt: tmpl.true_false_prompt,
-                }));
-            });
-            dispatch(patchFilePromptTemplate(templatePatch));
-            dispatch(addToast(t('uploadInfer.templateModal.saveSuccess'), 'success'));
-            onClose();
-        } catch {
-            dispatch(addToast(t('uploadInfer.templateModal.saveFail'), 'error'));
-        } finally { setSaving(false); }
-    }, [isDirty, saving, dirtyIds, selection, templates, dispatch, onClose, t]);
+    }, [faq]);
 
-    // ── Associate ALL files in [dateFrom, dateTo] with bulkValue — skips the
-    //     per-row preview/save flow and applies directly on the backend. ──
-    const handleAssociateAll = useCallback(async () => {
-        if (bulkValue === NO_TEMPLATE || saving || isAssociatingAll) return;
-        setIsAssociatingAll(true);
-        setAssociateAllError(null);
-        try {
-            await api.post('/prompt_template/associate', {
-                template_id: bulkValue,
-                all: true,
-                start_date: dateFrom,
-                end_date: dateTo,
-            });
-            const tmpl = templates.find(x => x.id === bulkValue);
-            // Best-effort local patch for whatever's currently loaded — files on
-            // other pages will reflect the change next time they're fetched.
-            const templatePatch: Record<number, number | null> = {};
-            const fileIds = serverFiles.map(f => f.id);
-            fileIds.forEach(id => { templatePatch[id] = bulkValue; });
-            dispatch(patchFilePromptTemplate(templatePatch));
-            if (tmpl) {
-                dispatch(updateFilePrompts({
-                    fileIds,
-                    summaryPrompt: tmpl.summary_prompt,
-                    keywordsPrompt: tmpl.keywords_prompt,
-                    faqPrompt: tmpl.faq_prompt,
-                    shortAnswerPrompt: tmpl.short_answers_prompt,
-                    trueFalsePrompt: tmpl.true_false_prompt,
-                }));
-            }
-            dispatch(addToast(t('uploadInfer.templateModal.associateAllSuccess'), 'success'));
-            onClose();
-        } catch {
-            setAssociateAllError(t('uploadInfer.templateModal.associateAllFail'));
-        } finally {
-            setIsAssociatingAll(false);
-        }
-    }, [bulkValue, saving, isAssociatingAll, dateFrom, dateTo, serverFiles, templates, dispatch, onClose, t]);
+    const handleCopy = (fmt: string) => { copyText(formatAssessment(faq, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatAssessment(faq, fmt); downloadFile(f.content, f.filename, f.mime); };
 
-    const handleCloseClick = useCallback(() => { if (saving) return; onClose(); }, [saving, onClose]);
-    const handleBackdropClick = useCallback((e: React.MouseEvent) => { e.stopPropagation(); }, []);
-    const handleDialogClick = useCallback((e: React.MouseEvent) => { e.stopPropagation(); }, []);
+    if (!items.length) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noQuestions')}</div>;
 
-    if (!open) return null;
+    // ── MCQ helpers ───────────────────────────────────────
+    const q = items[current];
+    const isLast = current === items.length - 1;
+    const progress = Math.round(((current + (complete ? 1 : 0)) / items.length) * 100);
 
-    const templateName = (id: number) => {
-        if (id === NO_TEMPLATE) return t('uploadInfer.templateModal.noneRow');
-        const tmpl = templates.find(x => x.id === id);
-        return tmpl ? tmpl.name : `Template #${id}`;
+    const handleSelect = (key: string) => { if (revealed) return; setSelected(key); setRevealed(true); };
+    const handleNext = () => { if (isLast) setComplete(true); else { setCurrent(c => c + 1); setSelected(null); setRevealed(false); } };
+    const handleRestart = () => { setCurrent(0); setSelected(null); setRevealed(false); setComplete(false); };
+    const getOptClass = (key: string) => {
+        if (!revealed) return selected === key ? styles.faqOptSelected : '';
+        if (key === q.correct_answer && selected === key) return styles.faqOptCorrect;
+        if (key === q.correct_answer) return styles.faqOptCorrectAlt;
+        if (key === selected) return styles.faqOptWrong;
+        return '';
     };
 
     return (
-        <div className={styles.backdrop} onMouseDown={handleBackdropClick} role="presentation">
-            <div className={styles.dialog} onMouseDown={handleDialogClick} role="dialog" aria-modal="true" aria-labelledby="template-modal-title">
-
-                {/* Header */}
-                <div className={styles.header}>
-                    <div className={styles.headerText}>
-                        <div className={styles.title} id="template-modal-title">{t('uploadInfer.templateModal.title')}</div>
-                        <div className={styles.subtitle}>{t('uploadInfer.templateModal.subtitle')}</div>
-                    </div>
-                    <button className={styles.closeBtn} onClick={handleCloseClick} disabled={saving}
-                        title={saving ? t('uploadInfer.templateModal.closeSaving') : t('uploadInfer.templateModal.close')}
-                        aria-label={t('uploadInfer.templateModal.close')}>
-                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                            <path d="M4 4l8 8M12 4l-8 8" />
-                        </svg>
-                    </button>
-                </div>
-
-                {/* Bulk bar — applies to files currently loaded in this modal (preview, needs Save) */}
-                <div className={styles.bulkBar}>
-                    <span className={styles.bulkLabel}>{t('uploadInfer.templateModal.applyToAll')}</span>
-                    <select className={styles.bulkSelect} value={bulkValue}
-                        onChange={e => setBulkValue(Number(e.target.value))}
-                        disabled={saving || templatesLoading || serverFiles.length === 0}>
-                        <option value={NO_TEMPLATE}>{t('uploadInfer.templateModal.noneOption')}</option>
-                        {templates.map(tmpl => <option key={tmpl.id} value={tmpl.id}>{tmpl.name}</option>)}
-                    </select>
-                    <button className={styles.bulkApplyBtn} onClick={handleApplyToAll} disabled={saving || serverFiles.length === 0}>
-                        {t('uploadInfer.templateModal.applyBtn')}
-                    </button>
-                    <span className={styles.bulkHint}>
-                        {isDirty
-                            ? t('uploadInfer.templateModal.changes', { count: dirtyIds.length })
-                            : t('uploadInfer.templateModal.noChanges')}
-                    </span>
-                </div>
-
-                {/* Associate ALL bar — applies immediately to every file in the date
-                    range on the backend, including files not currently loaded here */}
-                <div className={styles.associateAllBar}>
-                    <span className={styles.bulkLabel}>
-                        {t('uploadInfer.templateModal.associateAllLabel', { from: dateFrom, to: dateTo })}
-                    </span>
+        <div className={styles.tabContent}>
+            {/* Toolbar row: mode tabs left, copy/download right */}
+            <div className={styles.assessHeader}>
+                <div className={styles.assessModeTabs}>
                     <button
-                        className={styles.associateAllBtn}
-                        onClick={handleAssociateAll}
-                        disabled={bulkValue === NO_TEMPLATE || saving || isAssociatingAll}
+                        className={`${styles.assessModeTab} ${mode === 'mcq' ? styles.assessModeTabActive : ''}`}
+                        onClick={() => setMode('mcq')}
                     >
-                        {isAssociatingAll ? <span className={styles.spinnerSm} /> : t('uploadInfer.templateModal.associateAllBtn')}
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="8" cy="8" r="6" />
+                            <path d="M6 8.5l1.5 1.5L10.5 6" />
+                        </svg>
+                        MCQ
                     </button>
-                    {associateAllError && <span className={styles.associateAllError}>{associateAllError}</span>}
+                    <button
+                        className={`${styles.assessModeTab} ${mode === 'all' ? styles.assessModeTabActive : ''}`}
+                        onClick={() => setMode('all')}
+                    >
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M2 4h12M2 8h12M2 12h8" />
+                        </svg>
+                        View All
+                    </button>
                 </div>
+                <TabToolbar fmts={ASSESSMENT_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+            </div>
 
-                {/* Body */}
-                <div className={styles.body}>
-                    <div className={`${styles.listPane} ${detailTemplateId !== null ? styles.listPaneNarrow : ''}`}>
-                        <div className={styles.listHead}>
-                            <div className={styles.colFile}>{t('uploadInfer.templateModal.colFile')}</div>
-                            <div className={styles.colTemplate}>{t('uploadInfer.templateModal.colTemplate')}</div>
-                            <div className={styles.colActions} />
+            {/* ── MCQ mode ── */}
+            {mode === 'mcq' && (
+                complete ? (
+                    <div className={styles.assessComplete}>
+                        <div className={styles.assessCompleteIcon}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
                         </div>
-
-                        {templatesLoading && (
-                            <div className={styles.listState}>
-                                <div className={styles.spinner} /><span>{t('uploadInfer.templateModal.loadingTemplates')}</span>
-                            </div>
-                        )}
-                        {templatesError && <div className={`${styles.listState} ${styles.errorState}`}>{templatesError}</div>}
-                        {!templatesLoading && serverFiles.length === 0 && (
-                            <div className={styles.listState}>{t('uploadInfer.templateModal.noFiles')}</div>
-                        )}
-
-                        {!templatesLoading && !templatesError && serverFiles.map(f => {
-                            const current = selection[f.id] ?? NO_TEMPLATE;
-                            const initial = initialSelectionRef.current[f.id] ?? NO_TEMPLATE;
-                            const rowDirty = current !== initial;
-                            const hasTemplate = current !== NO_TEMPLATE;
-                            return (
-                                <div key={f.id} className={`${styles.row} ${rowDirty ? styles.rowDirty : ''}`}>
-                                    <div className={styles.colFile} title={f.original_name}>
-                                        <span className={styles.fileName}>{f.original_name}</span>
-                                        {initial !== NO_TEMPLATE && (
-                                            <span className={styles.currentBadge} title={t('uploadInfer.templateModal.mapped')}>
-                                                {t('uploadInfer.templateModal.mapped')}
-                                            </span>
-                                        )}
-                                    </div>
-                                    <div className={styles.colTemplate}>
-                                        <select className={styles.rowSelect} value={current}
-                                            onChange={e => handleRowChange(f.id, Number(e.target.value))} disabled={saving}>
-                                            <option value={NO_TEMPLATE}>{t('uploadInfer.templateModal.noneRow')}</option>
-                                            {templates.map(tmpl => <option key={tmpl.id} value={tmpl.id}>{tmpl.name}</option>)}
-                                        </select>
-                                    </div>
-                                    <div className={styles.colActions}>
-                                        {hasTemplate && (
-                                            <button className={styles.viewBtn} onClick={() => handleViewDetails(current)}
-                                                disabled={saving} title={t('uploadInfer.templateModal.viewDetails')}>
-                                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                                    <path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8s-2.5 4.5-6.5 4.5S1.5 8 1.5 8z" />
-                                                    <circle cx="8" cy="8" r="2" />
-                                                </svg>
-                                            </button>
-                                        )}
-                                    </div>
-                                </div>
-                            );
-                        })}
+                        <div className={styles.assessCompleteTitle}>{t('uploadInfer.workspacePanel.assessCompleteTitle')}</div>
+                        <div className={styles.assessCompleteDesc}>{t('uploadInfer.workspacePanel.assessCompleteDesc', { count: items.length })}</div>
+                        <button className={styles.assessRestartBtn} onClick={handleRestart}>{t('uploadInfer.workspacePanel.restart')}</button>
                     </div>
-
-                    {/* Detail drawer */}
-                    {detailTemplateId !== null && (
-                        <div className={styles.detailPane}>
-                            <div className={styles.detailHead}>
-                                <div className={styles.detailTitle}>{detailData?.name ?? templateName(detailTemplateId)}</div>
-                                <button className={styles.detailClose}
-                                    onClick={() => { setDetailTemplateId(null); setDetailData(null); }}
-                                    title={t('uploadInfer.templateModal.detailClose')}
-                                    aria-label={t('uploadInfer.templateModal.detailClose')}>
-                                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                                        <path d="M4 4l8 8M12 4l-8 8" />
-                                    </svg>
-                                </button>
+                ) : (
+                    <>
+                        <div className={styles.assessProgress}>
+                            <div className={styles.assessProgressTrack}>
+                                <div className={styles.assessProgressFill} style={{ width: `${progress}%` }} />
                             </div>
-                            {detailLoading && (
-                                <div className={styles.listState}>
-                                    <div className={styles.spinner} /><span>{t('uploadInfer.templateModal.loadingDetails')}</span>
+                            <span className={styles.assessProgressLabel}>{current + 1} / {items.length}</span>
+                        </div>
+                        <div className={styles.faqCard}>
+                            <div className={styles.faqQ}>
+                                <span className={styles.faqNum}>Q{current + 1}</span>
+                                {q.question}
+                            </div>
+                            <div className={styles.faqOptions}>
+                                {Object.entries(q.options).map(([key, val]) => (
+                                    <button key={key} className={`${styles.faqOpt} ${getOptClass(key)}`} onClick={() => handleSelect(key)} disabled={revealed}>
+                                        <span className={styles.faqOptKey}>{key}</span>
+                                        <span className={styles.faqOptVal}>{val}</span>
+                                        {revealed && key === q.correct_answer && <svg className={styles.faqCheckIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 8l3.5 3.5L13 4" /></svg>}
+                                        {revealed && key === selected && key !== q.correct_answer && <svg className={styles.faqXIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>}
+                                    </button>
+                                ))}
+                            </div>
+                            {revealed && (
+                                <div className={styles.faqExplain}>
+                                    <div className={styles.faqExplainLabel}>
+                                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" /><path d="M8 7v4M8 5.5v.5" /></svg>
+                                        Explanation
+                                    </div>
+                                    <p className={styles.faqExplainText}>{q.explanation}</p>
                                 </div>
                             )}
-                            {detailError && <div className={`${styles.listState} ${styles.errorState}`}>{detailError}</div>}
-                            {detailData && (
-                                <>
-                                    <div className={styles.detailMeta}>
-                                        <div><span className={styles.metaLabel}>{t('uploadInfer.templateModal.metaId')}</span> {detailData.id}</div>
-                                        <div><span className={styles.metaLabel}>{t('uploadInfer.templateModal.metaUpdated')}</span> {detailData.updated_at}</div>
-                                        {detailData.description && (
-                                            <div><span className={styles.metaLabel}>{t('uploadInfer.templateModal.metaDescription')}</span> {detailData.description}</div>
+                        </div>
+                        {revealed && (
+                            <button className={`${styles.assessNextBtn} ${isLast ? styles.assessDoneBtn : ''}`} onClick={handleNext}>
+                                {isLast ? t('uploadInfer.workspacePanel.finish') : t('uploadInfer.workspacePanel.next')}
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                    {isLast ? <path d="M3 8l3.5 3.5L13 4" /> : <path d="M3 8h10M9 4l4 4-4 4" />}
+                                </svg>
+                            </button>
+                        )}
+                    </>
+                )
+            )}
+
+            {/* ── View All mode ── */}
+            {mode === 'all' && (
+                <div className={styles.viewAllList}>
+                    {items.map((item, idx) => (
+                        <div key={idx} className={styles.viewAllCard}>
+                            {/* Question */}
+                            <div className={styles.viewAllQ}>
+                                <span className={styles.faqNum}>Q{idx + 1}</span>
+                                {item.question}
+                            </div>
+
+                            {/* Options */}
+                            <div className={styles.faqOptions}>
+                                {Object.entries(item.options).map(([key, val]) => (
+                                    <div
+                                        key={key}
+                                        className={`${styles.faqOpt} ${key === item.correct_answer ? styles.faqOptCorrectAlt : styles.viewAllOptNeutral}`}
+                                    >
+                                        <span className={`${styles.faqOptKey} ${key === item.correct_answer ? styles.faqOptKeyCorrect : ''}`}>{key}</span>
+                                        <span className={styles.faqOptVal}>{val}</span>
+                                        {key === item.correct_answer && (
+                                            <svg className={styles.faqCheckIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                                <path d="M3 8l3.5 3.5L13 4" />
+                                            </svg>
                                         )}
                                     </div>
-                                    <div className={styles.promptBlocks}>
-                                        {[
-                                            { label: t('uploadInfer.templateModal.summaryPrompt'), text: detailData.summary_prompt },
-                                            { label: t('uploadInfer.templateModal.keywordPrompt'), text: detailData.keywords_prompt ?? detailData.keyword_prompt ?? '—' },
-                                            { label: t('uploadInfer.templateModal.faqPrompt'), text: detailData.faq_prompt },
-                                            { label: t('uploadInfer.templateModal.shortAnswerPrompt'), text: detailData.short_answers_prompt ?? '—' },
-                                            { label: t('uploadInfer.templateModal.trueFalsePrompt'), text: detailData.true_false_prompt ?? '—' },
-                                        ].map(block => (
-                                            <div key={block.label} className={styles.promptBlock}>
-                                                <div className={styles.promptLabel}>{block.label}</div>
-                                                <div className={styles.promptText}>{block.text || '—'}</div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </>
+                                ))}
+                            </div>
+
+                            {/* Explanation */}
+                            <div className={styles.faqExplain}>
+                                <div className={styles.faqExplainLabel}>
+                                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                                        <circle cx="8" cy="8" r="6" /><path d="M8 7v4M8 5.5v.5" />
+                                    </svg>
+                                    Explanation
+                                </div>
+                                <p className={styles.faqExplainText}>{item.explanation}</p>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Tab: Short Answer ──────────────────────────────────────
+const TabShortAnswer: React.FC<{ raw: string }> = ({ raw }) => {
+    const { t } = useTranslation();
+    const items = useMemo(() => parsePyList<ShortAnswerItem>(raw), [raw]);
+    const [revealedIds, setRevealedIds] = useState<Set<number>>(new Set());
+    const [copied, setCopied] = useState(false);
+
+    const prevRaw = useRef(raw);
+    useEffect(() => { if (raw !== prevRaw.current) { prevRaw.current = raw; setRevealedIds(new Set()); } }, [raw]);
+
+    const toggleReveal = (idx: number) => setRevealedIds(prev => {
+        const next = new Set(prev);
+        if (next.has(idx)) next.delete(idx); else next.add(idx);
+        return next;
+    });
+    const allRevealed = items.length > 0 && revealedIds.size === items.length;
+    const toggleAll = () => setRevealedIds(allRevealed ? new Set() : new Set(items.map((_, i) => i)));
+
+    const handleCopy = (fmt: string) => { copyText(formatShortAnswer(raw, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatShortAnswer(raw, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!items.length) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noShortAnswer')}</div>;
+
+    return (
+        <div className={styles.tabContent}>
+            <div className={styles.assessHeader}>
+                <button className={styles.revealAllBtn} onClick={toggleAll}>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8s-2.5 4.5-6.5 4.5S1.5 8 1.5 8z" /><circle cx="8" cy="8" r="2" />
+                    </svg>
+                    {allRevealed ? t('uploadInfer.workspacePanel.hideAllAnswers') : t('uploadInfer.workspacePanel.showAllAnswers')}
+                </button>
+                <TabToolbar fmts={SHORT_ANSWER_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+            </div>
+            <div className={styles.viewAllList}>
+                {items.map((item, idx) => {
+                    const revealed = revealedIds.has(idx);
+                    return (
+                        <div key={idx} className={styles.viewAllCard}>
+                            <div className={styles.viewAllQ}>
+                                <span className={styles.faqNum}>Q{idx + 1}</span>
+                                {item.question}
+                            </div>
+                            {revealed ? (
+                                <div className={styles.shortAnswerBox}>
+                                    <div className={styles.shortAnswerLabel}>{t('uploadInfer.workspacePanel.answer')}</div>
+                                    <p className={styles.shortAnswerText}>{item.answer}</p>
+                                </div>
+                            ) : (
+                                <button className={styles.revealBtn} onClick={() => toggleReveal(idx)}>
+                                    {t('uploadInfer.workspacePanel.revealAnswer')}
+                                </button>
                             )}
                         </div>
-                    )}
-                </div>
-
-                {/* Footer */}
-                <div className={styles.footer}>
-                    {saving && (
-                        <span className={styles.savingHint}>
-                            <span className={styles.spinnerSm} />{t('uploadInfer.templateModal.savingHint')}
-                        </span>
-                    )}
-                    <button className={`${styles.btn} ${styles.btnGhost}`} onClick={handleCloseClick} disabled={saving}>
-                        {t('uploadInfer.templateModal.cancel')}
-                    </button>
-                    <button className={`${styles.btn} ${styles.btnPrimary}`} onClick={handleSave} disabled={!isDirty || saving}>
-                        {saving ? t('uploadInfer.templateModal.saving') : t('uploadInfer.templateModal.save')}
-                    </button>
-                </div>
+                    );
+                })}
             </div>
         </div>
     );
 };
 
-export default PromptTemplateAssociationModal;
+// ── Tab: True / False ────────────────────────────────────────
+type TfMode = 'quiz' | 'all';
+
+const TabTrueFalse: React.FC<{ raw: string }> = ({ raw }) => {
+    const { t } = useTranslation();
+    const items = useMemo(() => parsePyList<TrueFalseItem>(raw), [raw]);
+
+    const [mode, setMode] = useState<TfMode>('quiz');
+    const [current, setCurrent] = useState(0);
+    const [selected, setSelected] = useState<'true' | 'false' | null>(null);
+    const [revealed, setRevealed] = useState(false);
+    const [complete, setComplete] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    const prevRaw = useRef(raw);
+    useEffect(() => {
+        if (raw !== prevRaw.current) {
+            prevRaw.current = raw;
+            setMode('quiz');
+            setCurrent(0); setSelected(null); setRevealed(false); setComplete(false);
+        }
+    }, [raw]);
+
+    const handleCopy = (fmt: string) => { copyText(formatTrueFalse(raw, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatTrueFalse(raw, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!items.length) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noTrueFalse')}</div>;
+
+    const q = items[current];
+    const correctKey: 'true' | 'false' = q.is_true ? 'true' : 'false';
+    const isLast = current === items.length - 1;
+    const progress = Math.round(((current + (complete ? 1 : 0)) / items.length) * 100);
+
+    const handleSelect = (key: 'true' | 'false') => { if (revealed) return; setSelected(key); setRevealed(true); };
+    const handleNext = () => { if (isLast) setComplete(true); else { setCurrent(c => c + 1); setSelected(null); setRevealed(false); } };
+    const handleRestart = () => { setCurrent(0); setSelected(null); setRevealed(false); setComplete(false); };
+    const getOptClass = (key: 'true' | 'false') => {
+        if (!revealed) return selected === key ? styles.faqOptSelected : '';
+        if (key === correctKey && selected === key) return styles.faqOptCorrect;
+        if (key === correctKey) return styles.faqOptCorrectAlt;
+        if (key === selected) return styles.faqOptWrong;
+        return '';
+    };
+
+    return (
+        <div className={styles.tabContent}>
+            <div className={styles.assessHeader}>
+                <div className={styles.assessModeTabs}>
+                    <button className={`${styles.assessModeTab} ${mode === 'quiz' ? styles.assessModeTabActive : ''}`} onClick={() => setMode('quiz')}>
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="8" cy="8" r="6" /><path d="M6 8.5l1.5 1.5L10.5 6" />
+                        </svg>
+                        {t('uploadInfer.workspacePanel.quizMode')}
+                    </button>
+                    <button className={`${styles.assessModeTab} ${mode === 'all' ? styles.assessModeTabActive : ''}`} onClick={() => setMode('all')}>
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M2 4h12M2 8h12M2 12h8" />
+                        </svg>
+                        {t('uploadInfer.workspacePanel.viewAll')}
+                    </button>
+                </div>
+                <TabToolbar fmts={TRUE_FALSE_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+            </div>
+
+            {mode === 'quiz' && (
+                complete ? (
+                    <div className={styles.assessComplete}>
+                        <div className={styles.assessCompleteIcon}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                        </div>
+                        <div className={styles.assessCompleteTitle}>{t('uploadInfer.workspacePanel.assessCompleteTitle')}</div>
+                        <div className={styles.assessCompleteDesc}>{t('uploadInfer.workspacePanel.assessCompleteDesc', { count: items.length })}</div>
+                        <button className={styles.assessRestartBtn} onClick={handleRestart}>{t('uploadInfer.workspacePanel.restart')}</button>
+                    </div>
+                ) : (
+                    <>
+                        <div className={styles.assessProgress}>
+                            <div className={styles.assessProgressTrack}><div className={styles.assessProgressFill} style={{ width: `${progress}%` }} /></div>
+                            <span className={styles.assessProgressLabel}>{current + 1} / {items.length}</span>
+                        </div>
+                        <div className={styles.faqCard}>
+                            <div className={styles.faqQ}>
+                                <span className={styles.faqNum}>{current + 1}</span>
+                                {q.statement}
+                            </div>
+                            <div className={styles.tfOptions}>
+                                {(['true', 'false'] as const).map(key => (
+                                    <button key={key} className={`${styles.tfOpt} ${getOptClass(key)}`} onClick={() => handleSelect(key)} disabled={revealed}>
+                                        <span className={styles.tfOptLabel}>{key === 'true' ? t('uploadInfer.workspacePanel.true') : t('uploadInfer.workspacePanel.false')}</span>
+                                        {revealed && key === correctKey && <svg className={styles.faqCheckIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 8l3.5 3.5L13 4" /></svg>}
+                                        {revealed && key === selected && key !== correctKey && <svg className={styles.faqXIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>}
+                                    </button>
+                                ))}
+                            </div>
+                            {revealed && (
+                                <div className={styles.faqExplain}>
+                                    <div className={styles.faqExplainLabel}>
+                                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" /><path d="M8 7v4M8 5.5v.5" /></svg>
+                                        {t('uploadInfer.workspacePanel.explanation')}
+                                    </div>
+                                    <p className={styles.faqExplainText}>{q.explanation}</p>
+                                </div>
+                            )}
+                        </div>
+                        {revealed && (
+                            <button className={`${styles.assessNextBtn} ${isLast ? styles.assessDoneBtn : ''}`} onClick={handleNext}>
+                                {isLast ? t('uploadInfer.workspacePanel.finish') : t('uploadInfer.workspacePanel.next')}
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                    {isLast ? <path d="M3 8l3.5 3.5L13 4" /> : <path d="M3 8h10M9 4l4 4-4 4" />}
+                                </svg>
+                            </button>
+                        )}
+                    </>
+                )
+            )}
+
+            {mode === 'all' && (
+                <div className={styles.viewAllList}>
+                    {items.map((item, idx) => {
+                        const ck: 'true' | 'false' = item.is_true ? 'true' : 'false';
+                        return (
+                            <div key={idx} className={styles.viewAllCard}>
+                                <div className={styles.viewAllQ}>
+                                    <span className={styles.faqNum}>{idx + 1}</span>
+                                    {item.statement}
+                                </div>
+                                <div className={styles.tfOptions}>
+                                    {(['true', 'false'] as const).map(key => (
+                                        <div key={key} className={`${styles.tfOpt} ${key === ck ? styles.faqOptCorrectAlt : styles.viewAllOptNeutral}`}>
+                                            <span className={styles.tfOptLabel}>{key === 'true' ? t('uploadInfer.workspacePanel.true') : t('uploadInfer.workspacePanel.false')}</span>
+                                            {key === ck && <svg className={styles.faqCheckIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 8l3.5 3.5L13 4" /></svg>}
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className={styles.faqExplain}>
+                                    <div className={styles.faqExplainLabel}>
+                                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" /><path d="M8 7v4M8 5.5v.5" /></svg>
+                                        {t('uploadInfer.workspacePanel.explanation')}
+                                    </div>
+                                    <p className={styles.faqExplainText}>{item.explanation}</p>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Tab: Timestamped Summary ─────────────────────────────────
+const TabTimestampedSummary: React.FC<{ raw: string }> = ({ raw }) => {
+    const { t } = useTranslation();
+    const items = useMemo(() => parsePyList<TimestampSegment>(raw), [raw]);
+    const [copied, setCopied] = useState(false);
+
+    const handleCopy = (fmt: string) => { copyText(formatTimestampedSummary(raw, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatTimestampedSummary(raw, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!items.length) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noTimestampedSummary')}</div>;
+
+    return (
+        <div className={styles.tabContent}>
+            <TabToolbar fmts={TIMESTAMPED_SUMMARY_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+            <div className={styles.tsList}>
+                {items.map((seg, idx) => (
+                    <div key={idx} className={styles.tsRow}>
+                        <div className={styles.tsRail}>
+                            <div className={styles.tsDot} />
+                            {idx < items.length - 1 && <div className={styles.tsLine} />}
+                        </div>
+                        <div className={styles.tsCard}>
+                            <div className={styles.tsRange}>{seg.start_time} <span className={styles.tsArrow}>→</span> {seg.end_time}</div>
+                            <p className={styles.tsText}>{seg.summary}</p>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+
+// ── Keyword Insights: shared node-link graph (used for Knowledge Graph & Prerequisites) ──
+interface GNode { id: string; label: string; value?: number; }
+interface GEdge { source: string; target: string; label?: string; }
+
+function buildGraphNodes(nodes: GNode[], edges: GEdge[]): GNode[] {
+    const norm = (s: string) => s.trim().toLowerCase();
+    const byKey = new Map<string, GNode>();
+    const byId = new Map<string, GNode>();
+    nodes.forEach(n => {
+        byKey.set(norm(n.id), n); byKey.set(norm(n.label), n); byId.set(n.id, n);
+    });
+    edges.forEach(e => {
+        [e.source, e.target].forEach(ref => {
+            const k = norm(ref);
+            if (!byKey.has(k)) {
+                const synth: GNode = { id: ref, label: ref, value: 1 };
+                byKey.set(k, synth); byId.set(ref, synth);
+            }
+        });
+    });
+    return Array.from(byId.values());
+}
+
+const NodeLinkGraph: React.FC<{ nodes: GNode[]; edges: GEdge[] }> = ({ nodes, edges }) => {
+    const { t } = useTranslation();
+    const allNodes = useMemo(() => buildGraphNodes(nodes, edges), [nodes, edges]);
+    if (allNodes.length === 0) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+
+    const W = 640, H = 420, cx = W / 2, cy = H / 2;
+    const r = Math.min(W, H) / 2 - 70;
+    const positioned = allNodes.map((n, i) => {
+        const angle = (2 * Math.PI * i) / allNodes.length - Math.PI / 2;
+        return { ...n, x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) };
+    });
+    const posByKey = new Map<string, typeof positioned[number]>();
+    positioned.forEach(p => { posByKey.set(p.id.trim().toLowerCase(), p); posByKey.set(p.label.trim().toLowerCase(), p); });
+
+    return (
+        <div className={styles.graphWrap}>
+            <svg viewBox={`0 0 ${W} ${H}`} className={styles.graphSvg}>
+                {edges.map((e, i) => {
+                    const s = posByKey.get(e.source.trim().toLowerCase());
+                    const tg = posByKey.get(e.target.trim().toLowerCase());
+                    if (!s || !tg) return null;
+                    return (
+                        <line key={i} x1={s.x} y1={s.y} x2={tg.x} y2={tg.y} className={styles.graphEdge}>
+                            {e.label && <title>{e.label}</title>}
+                        </line>
+                    );
+                })}
+                {positioned.map(n => {
+                    const rad = 12 + Math.min(16, (n.value ?? 1) * 2);
+                    return (
+                        <g key={n.id} className={styles.graphNode}>
+                            <circle cx={n.x} cy={n.y} r={rad}><title>{n.label}</title></circle>
+                            <text x={n.x} y={n.y + rad + 13} textAnchor="middle">{n.label}</text>
+                        </g>
+                    );
+                })}
+            </svg>
+        </div>
+    );
+};
+
+// ── Keyword Insights: shared matrix/heatmap grid (Timeline, Heatmap, Co-occurrence) ──
+const MatrixGrid: React.FC<{ rowLabels: string[]; colLabels: string[]; matrix: number[][] }> = ({ rowLabels, colLabels, matrix }) => {
+    const { t } = useTranslation();
+    if (!rowLabels.length || !colLabels.length) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+    const max = Math.max(1, ...matrix.flat().filter(v => typeof v === 'number'));
+    return (
+        <div className={styles.matrixScroll}>
+            <div className={styles.matrixGrid} style={{ gridTemplateColumns: `140px repeat(${colLabels.length}, minmax(28px, 1fr))` }}>
+                <div className={styles.matrixCorner} />
+                {colLabels.map((c, i) => <div key={i} className={styles.matrixColHead} title={c}>{c}</div>)}
+                {rowLabels.map((r, ri) => (
+                    <React.Fragment key={ri}>
+                        <div className={styles.matrixRowHead} title={r}>{r}</div>
+                        {colLabels.map((c, ci) => {
+                            const v = matrix[ri]?.[ci] ?? 0;
+                            const alpha = v > 0 ? Math.min(1, 0.22 + (v / max) * 0.78) : 0;
+                            return <div key={ci} className={styles.matrixCell} style={{ background: `rgba(91, 164, 239, ${alpha})` }} title={`${r} · ${c}: ${v}`} />;
+                        })}
+                    </React.Fragment>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+// ── Keyword Insights: word cloud ──
+const WordCloudView: React.FC<{ data: WordCloudData }> = ({ data }) => {
+    const { t } = useTranslation();
+    const entries = data.wordcloud ?? [];
+    if (!entries.length) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+    const counts = entries.map(([, c]) => c);
+    const min = Math.min(...counts), max = Math.max(...counts);
+    const scale = (c: number) => (min === max ? 20 : 13 + ((c - min) / (max - min)) * 24);
+    const complexityColor = (word: string) => {
+        const lvl = (data.complexity_map?.[word] || '').toLowerCase();
+        if (lvl === 'easy') return 'var(--green)';
+        if (lvl === 'medium') return 'var(--amber)';
+        if (lvl === 'hard') return 'var(--red)';
+        return 'var(--blue)';
+    };
+    return (
+        <div className={styles.wordCloud}>
+            {entries.map(([word, count], i) => (
+                <span key={i} className={styles.wcWord} style={{ fontSize: `${scale(count)}px`, color: complexityColor(word) }} title={`${word}: ${count}`}>
+                    {word}
+                </span>
+            ))}
+        </div>
+    );
+};
+
+// ── Keyword Insights: clusters ──
+const ClustersView: React.FC<{ data: ClustersData }> = ({ data }) => {
+    const { t } = useTranslation();
+    const entries = Object.entries(data.clusters ?? {});
+    if (!entries.length) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+    return (
+        <div className={styles.clusterGrid}>
+            {entries.map(([key, items], i) => (
+                <div key={key + i} className={styles.clusterCard}>
+                    <div className={styles.clusterTitle}>{key}</div>
+                    <div className={styles.clusterChips}>
+                        {items.map((it, j) => <span key={j} className={styles.clusterChip} title={`value: ${it.value}`}>{it.label}</span>)}
+                    </div>
+                </div>
+            ))}
+        </div>
+    );
+};
+
+// ── Keyword Insights: frequency bars ──
+const FrequencyBars: React.FC<{ data: FrequencyData }> = ({ data }) => {
+    const { t } = useTranslation();
+    const items = data.data ?? [];
+    if (!items.length) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+    const sorted = [...items].sort((a, b) => b.relative_pct - a.relative_pct);
+    return (
+        <div className={styles.freqList}>
+            {sorted.map((it, i) => (
+                <div key={i} className={styles.freqRow}>
+                    <div className={styles.freqLabel} title={it.keyword}>{it.keyword}</div>
+                    <div className={styles.freqBarTrack}><div className={styles.freqBarFill} style={{ width: `${Math.min(100, it.relative_pct)}%` }} /></div>
+                    <div className={styles.freqMeta}>
+                        <span>{it.count}×</span>
+                        <span className={styles.freqDim}>{t('uploadInfer.workspacePanel.firstMentionAt', { pct: Math.round(it.first_mention_pct) })}</span>
+                    </div>
+                </div>
+            ))}
+        </div>
+    );
+};
+
+// ── Keyword Insights: importance vs complexity scatter ──
+const ImportanceComplexityScatter: React.FC<{ data: ImportanceComplexityData }> = ({ data }) => {
+    const { t } = useTranslation();
+    const items = data.data ?? [];
+    if (!items.length) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+
+    const order = ['Easy', 'Medium', 'Hard'];
+    const complexities = Array.from(new Set(items.map(it => it.complexity)))
+        .sort((a, b) => {
+            const ai = order.indexOf(a), bi = order.indexOf(b);
+            if (ai === -1 && bi === -1) return a.localeCompare(b);
+            if (ai === -1) return 1;
+            if (bi === -1) return -1;
+            return ai - bi;
+        });
+
+    const W = 580, H = 320, padL = 20, padR = 20, padT = 24, padB = 36;
+    const maxImportance = Math.max(1, ...items.map(it => it.importance));
+    const maxFreq = Math.max(1, ...items.map(it => it.frequency));
+    const xFor = (c: string) => {
+        const idx = complexities.indexOf(c);
+        const slot = (W - padL - padR) / Math.max(1, complexities.length);
+        return padL + slot * (idx + 0.5);
+    };
+    const yFor = (imp: number) => H - padB - (imp / maxImportance) * (H - padB - padT);
+
+    return (
+        <div className={styles.scatterWrap}>
+            <svg viewBox={`0 0 ${W} ${H}`} className={styles.scatterSvg}>
+                <line x1={padL} y1={H - padB} x2={W - padR} y2={H - padB} className={styles.scatterAxis} />
+                <line x1={padL} y1={padT} x2={padL} y2={H - padB} className={styles.scatterAxis} />
+                {complexities.map((c, i) => (
+                    <text key={i} x={xFor(c)} y={H - padB + 18} textAnchor="middle" className={styles.scatterAxisLabel}>{c}</text>
+                ))}
+                <text x={padL} y={padT - 8} className={styles.scatterAxisLabel}>{t('uploadInfer.workspacePanel.importanceAxis')}</text>
+                {items.map((it, i) => {
+                    const rad = 5 + (it.frequency / maxFreq) * 9;
+                    return (
+                        <g key={i}>
+                            <circle cx={xFor(it.complexity)} cy={yFor(it.importance)} r={rad} className={styles.scatterDot}>
+                                <title>{`${it.keyword} — importance ${it.importance}, ${it.complexity}, freq ${it.frequency}`}</title>
+                            </circle>
+                            <text x={xFor(it.complexity)} y={yFor(it.importance) - rad - 5} textAnchor="middle" className={styles.scatterDotLabel}>{it.keyword}</text>
+                        </g>
+                    );
+                })}
+            </svg>
+        </div>
+    );
+};
+
+// ── Keyword Insights: glossary ──
+const GlossaryView: React.FC<{ data: GlossaryData }> = ({ data }) => {
+    const { t } = useTranslation();
+    const items = data.glossary ?? [];
+    if (!items.length) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+    const fmtTime = (ms: number) => {
+        const totalSec = Math.floor(ms / 1000);
+        const m = Math.floor(totalSec / 60), s = totalSec % 60;
+        return `${m}:${String(s).padStart(2, '0')}`;
+    };
+    return (
+        <div className={styles.glossaryList}>
+            {items.map((it, i) => (
+                <div key={i} className={styles.glossaryRow}>
+                    <div className={styles.glossaryTerm}>{it.term}<span className={styles.glossaryTime}>{fmtTime(it.first_mention_ms)}</span></div>
+                    <div className={styles.glossaryDef}>{it.definition}</div>
+                </div>
+            ))}
+        </div>
+    );
+};
+
+// ── Tab: Keyword Insights ────────────────────────────────────
+const KI_SUBTABS = ['graph', 'wordcloud', 'timeline', 'heatmap', 'clusters', 'frequency', 'prerequisites', 'importance', 'cooccurrence', 'glossary'] as const;
+type KiSubTab = typeof KI_SUBTABS[number];
+
+const TabKeywordInsights: React.FC<{ data: KeywordInsights | null }> = ({ data }) => {
+    const { t } = useTranslation();
+    const [sub, setSub] = useState<KiSubTab>('graph');
+
+    if (!data) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noKeywordInsights')}</div>;
+
+    return (
+        <div className={styles.tabContent}>
+            <div className={styles.kiSubNav}>
+                {KI_SUBTABS.map(id => (
+                    <button key={id} className={`${styles.kiSubTab} ${sub === id ? styles.kiSubTabActive : ''}`} onClick={() => setSub(id)}>
+                        {t(`uploadInfer.workspacePanel.kiTabs.${id}`)}
+                    </button>
+                ))}
+            </div>
+            <div className={styles.kiBody}>
+                {sub === 'graph' && (data.knowledge_graph
+                    ? <NodeLinkGraph nodes={data.knowledge_graph.nodes} edges={data.knowledge_graph.edges.map(e => ({ source: e.source, target: e.target, label: e.type }))} />
+                    : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'wordcloud' && (data.word_cloud ? <WordCloudView data={data.word_cloud} /> : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'timeline' && (data.timeline
+                    ? <MatrixGrid rowLabels={data.timeline.datasets.map(d => d.label)} colLabels={data.timeline.labels} matrix={data.timeline.datasets.map(d => d.data)} />
+                    : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'heatmap' && (data.heatmap
+                    ? <MatrixGrid rowLabels={data.heatmap.keywords} colLabels={data.heatmap.segments} matrix={data.heatmap.matrix} />
+                    : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'clusters' && (data.clusters ? <ClustersView data={data.clusters} /> : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'frequency' && (data.frequency ? <FrequencyBars data={data.frequency} /> : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'prerequisites' && (data.prerequisites
+                    ? <NodeLinkGraph nodes={data.prerequisites.nodes} edges={data.prerequisites.edges.map(e => ({ source: e.prerequisite, target: e.enables, label: e.reason }))} />
+                    : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'importance' && (data.importance_complexity ? <ImportanceComplexityScatter data={data.importance_complexity} /> : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'cooccurrence' && (data.cooccurance
+                    ? <MatrixGrid rowLabels={data.cooccurance.keywords} colLabels={data.cooccurance.keywords} matrix={data.cooccurance.metrix} />
+                    : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'glossary' && (data.glossary ? <GlossaryView data={data.glossary} /> : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+            </div>
+        </div>
+    );
+};
+
+// ── Main panel ────────────────────────────────────────────
+const WorkspacePanel: React.FC<Props> = ({ step2Visible = true, step2Minimized = false, fileResult, fileLoading, activeFileId, onResultUpdate }) => {
+    const { t } = useTranslation();
+    const [activeTab, setActiveTab] = useState<TabId>('summary');
+
+    return (
+        <div className={`${styles.wspanel} ${(!step2Visible || step2Minimized) ? styles.wspanelExpanded : ''} ${step2Visible ? styles.wspanelWithStep2 : ''}`}>
+            <div className={styles.wspanelHead}>
+                <div className={styles.headLeft}>
+                    {fileResult ? (
+                        <>
+                            <div className={styles.wsftitle}>{fileResult.fileName}</div>
+                            <div className={styles.wsmeta}>
+                                <span className={styles.wsmetaId}>#{fileResult.fileId}</span>
+                                {fileResult.insertedAt && (<><span className={styles.wsmetaSep}>·</span><span className={styles.wsmetaDate}>{fileResult.insertedAt}</span></>)}
+                            </div>
+                        </>
+                    ) : (
+                        <>
+                            <div className={styles.wsftitleEmpty}>—</div>
+                            <div className={styles.wsmeta}><span className={styles.wsmetaHint}>{t('uploadInfer.workspacePanel.clickToView')}</span></div>
+                        </>
+                    )}
+                </div>
+            </div>
+
+            <div className={styles.wsptabs}>
+                {TAB_IDS.map(tabId => (
+                    <button key={tabId} className={`${styles.tab} ${activeTab === tabId ? styles.active : ''}`} onClick={() => setActiveTab(tabId)}>
+                        {t(`uploadInfer.workspacePanel.tabs.${tabId}`)}
+                    </button>
+                ))}
+            </div>
+
+            <div className={styles.wsbody}>
+                {fileLoading && (
+                    <div className={styles.wsSpinner}><div className={styles.spinner} /><span>{t('uploadInfer.workspacePanel.loadingFile')}</span></div>
+                )}
+                {!fileLoading && !fileResult && (
+                    <div className={styles.wsEmpty}>
+                        <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="8" y="6" width="32" height="36" rx="3" /><path d="M16 16h16M16 23h16M16 30h10" />
+                        </svg>
+                        <div className={styles.wsEmptyTitle}>{t('uploadInfer.workspacePanel.noFileSelected')}</div>
+                        <div className={styles.wsEmptyDesc}>{t('uploadInfer.workspacePanel.noFileDesc')}</div>
+                    </div>
+                )}
+                {!fileLoading && fileResult && (
+                    <>
+                        {activeTab === 'summary' && <TabSummary summary={fileResult.summary} fileId={fileResult.fileId} onSaved={s => onResultUpdate?.({ summary: s })} />}
+                        {activeTab === 'keywords' && <TabKeywords keywords={fileResult.keywords} fileId={fileResult.fileId} onSaved={kw => onResultUpdate?.({ keywords: kw })} />}
+                        {activeTab === 'assessment' && <TabAssessment faq={fileResult.faq} />}
+                        {activeTab === 'shortAnswer' && <TabShortAnswer raw={fileResult.shortAnswer} />}
+                        {activeTab === 'trueFalse' && <TabTrueFalse raw={fileResult.trueFalse} />}
+                        {activeTab === 'timestampedSummary' && <TabTimestampedSummary raw={fileResult.timestampedSummary} />}
+                        {activeTab === 'keywordInsights' && <TabKeywordInsights data={fileResult.keywordInsights} />}
+                    </>
+                )}
+            </div>
+        </div>
+    );
+};
+
+export default WorkspacePanel;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ═══════════════════════════════════════════════
+// pages/UploadInfer/WorkspacePanel.module.scss
+// LectureAI · Step-3 Workspace Result panel
+// ═══════════════════════════════════════════════
+@use '../../styles/mixins' as m;
+
+// ── Keyframes ────────────────────────────────────────────
+@keyframes fadein {
+    from {
+        opacity: 0;
+        transform: translateY(2px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes float {
+
+    0%,
+    100% {
+        transform: translateY(0);
+    }
+
+    50% {
+        transform: translateY(-8px);
+    }
+}
+
+@keyframes wsSpin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes chipFadeIn {
+    from {
+        opacity: 0;
+        transform: scale(0.8) translateY(-6px);
+    }
+
+    to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+}
+
+@keyframes explanationSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-6px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes iconPop {
+    0% {
+        transform: scale(0);
+        opacity: 0;
+    }
+
+    60% {
+        transform: scale(1.2);
+    }
+
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+@keyframes completeFadeIn {
+    from {
+        opacity: 0;
+        transform: scale(0.95);
+    }
+
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+@keyframes iconBounce {
+
+    0%,
+    100% {
+        transform: scale(1);
+    }
+
+    50% {
+        transform: scale(1.1);
+    }
+}
+
+// ── Panel shell ──────────────────────────────────────────
+.wspanel {
+    width: 360px;
+    flex-shrink: 0;
+    border-left: none;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--bg0);
+    transition: width 0.25s ease;
+    position: relative;
+
+    // Gradient border — only visible when step-2 panel is open beside it
+    &::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        width: 1px;
+        background: linear-gradient(180deg,
+                rgba(139, 92, 246, 0.0) 0%,
+                rgba(139, 92, 246, 0.7) 20%,
+                rgba(56, 196, 186, 0.8) 55%,
+                rgba(240, 160, 48, 0.7) 85%,
+                rgba(240, 160, 48, 0.0) 100%);
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.32s ease;
+    }
+}
+
+// Border fades in only when step-2 is visible next to workspace
+.wspanelWithStep2::before {
+    opacity: 1;
+}
+
+.wspanelExpanded {
+    width: auto;
+    flex: 1;
+}
+
+// ── Header — unchanged from original ────────────────────
+.wspanelHead {
+    padding: 12px 18px 9px;
+    border-bottom: 1px solid var(--bdr);
+    background: var(--bg1);
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.headLeft {
+    flex: 1;
+    min-width: 0;
+}
+
+.wsftitle {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--t0);
+    letter-spacing: -0.2px;
+    @include m.truncate;
+    line-height: 1.3;
+}
+
+.wsftitleEmpty {
+    font-size: 18px;
+    font-weight: 300;
+    color: var(--t2);
+    opacity: 0.4;
+}
+
+.wsmeta {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 5px;
+    flex-wrap: wrap;
+}
+
+.wsmetaId {
+    display: inline-flex;
+    align-items: center;
+    font-size: 10px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    color: #a78bfa;
+    background: rgba(167, 139, 250, 0.12);
+    border: 1px solid rgba(167, 139, 250, 0.3);
+    border-radius: 4px;
+    padding: 1px 6px;
+    flex-shrink: 0;
+    letter-spacing: 0.02em;
+}
+
+.wsmetaSep {
+    color: var(--t2);
+    opacity: 0.4;
+    font-size: 13px;
+}
+
+.wsmetaDate {
+    font-size: 13px;
+    color: var(--t2);
+    font-family: var(--font-mono);
+}
+
+.wsmetaHint {
+    font-size: 13px;
+    color: var(--t2);
+    font-family: var(--font-mono);
+    opacity: 0.6;
+    font-style: italic;
+}
+
+// ── Tab bar ─────────────────────────────────────────────
+.wsptabs {
+    display: flex;
+    border-bottom: 1px solid var(--bdr);
+    background: var(--bg1);
+    padding: 0 16px;
+    flex-shrink: 0;
+}
+
+.tab {
+    padding: 0 14px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    font-size: 14px;
+    color: var(--t2);
+    cursor: pointer;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    font-family: var(--font-ui);
+    transition: all 0.12s;
+    user-select: none;
+    white-space: nowrap;
+
+    &:hover {
+        color: var(--t1);
+    }
+
+    &.active {
+        color: var(--blue);
+        border-bottom-color: var(--blue);
+        font-weight: 500;
+    }
+}
+
+// ── Tab body ─────────────────────────────────────────────
+.wsbody {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 18px;
+    background: var(--bg0);
+    @include m.scrollbar;
+    animation: fadein 0.15s ease;
+    display: flex;
+    flex-direction: column;
+}
+
+// ── Empty state ──────────────────────────────────────────
+.wsEmpty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    text-align: center;
+
+    svg {
+        width: 44px;
+        height: 44px;
+        color: var(--t2);
+        opacity: 0.25;
+        flex-shrink: 0;
+        animation: float 3s ease-in-out infinite;
+    }
+}
+
+.wsEmptyTitle {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--t1);
+}
+
+.wsEmptyDesc {
+    font-size: 14px;
+    color: var(--t2);
+    @include m.mono;
+    line-height: 1.6;
+    max-width: 200px;
+}
+
+// ── Loading spinner ──────────────────────────────────────
+.wsSpinner {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: var(--t2);
+    font-size: 14px;
+    @include m.mono;
+}
+
+.spinner {
+    width: 28px;
+    height: 28px;
+    border: 2.5px solid var(--bdr2);
+    border-top-color: var(--blue);
+    border-radius: 50%;
+    animation: wsSpin 0.7s linear infinite;
+    flex-shrink: 0;
+}
+
+// ── Tab content wrapper ──────────────────────────────────
+.tabContent {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    animation: fadein 0.15s ease;
+}
+
+.tabEmpty {
+    font-size: 14px;
+    color: var(--t2);
+    @include m.mono;
+    padding: 24px 0;
+    text-align: center;
+}
+
+// ── Summary — marked library output ─────────────────────
+// Font sizes and spacing match Angular .markdown-content-inline exactly
+.summaryMd {
+    font-size: 14px;
+    color: var(--t1);
+    line-height: 1.7;
+
+    // ── Paragraphs ──────────────────────────────────────
+    // Angular: margin: 8px 0, line-height: 1.7
+    p {
+        margin: 8px 0;
+        line-height: 1.7;
+
+        &:first-child {
+            margin-top: 0;
+        }
+
+        &:last-child {
+            margin-bottom: 0;
+        }
+    }
+
+    // ── Headings ─────────────────────────────────────────
+    // Angular h1: 18px, margin 12px 0 8px 0, padding-bottom 6px
+    h1 {
+        font-size: 18px;
+        font-weight: 700;
+        color: var(--blue);
+        margin: 12px 0 8px;
+        padding-bottom: 6px;
+        border-bottom: 2px solid rgba(139, 92, 246, 0.3);
+        line-height: 1.3;
+        position: relative;
+
+        &:first-child {
+            margin-top: 0;
+        }
+
+        &::before {
+            content: '';
+            position: absolute;
+            bottom: -2px;
+            left: 0;
+            width: 60px;
+            height: 2px;
+            background: var(--blue);
+        }
+    }
+
+    // Angular h2: 16px, margin 10px 0 6px 0, padding-left 12px
+    h2 {
+        font-size: 16px;
+        font-weight: 700;
+        color: #9f7aea;
+        margin: 10px 0 6px;
+        padding-left: 12px;
+        line-height: 1.3;
+        position: relative;
+
+        &:first-child {
+            margin-top: 0;
+        }
+
+        &::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 4px;
+            height: 18px;
+            background: linear-gradient(180deg, var(--blue), #a78bfa);
+            border-radius: 2px;
+        }
+    }
+
+    // Angular h3: 14px, margin 8px 0 4px 0
+    h3 {
+        font-size: 14px;
+        font-weight: 700;
+        color: #a78bfa;
+        margin: 8px 0 4px;
+        line-height: 1.3;
+
+        &:first-child {
+            margin-top: 0;
+        }
+    }
+
+    // Angular h4/h5/h6: 13px, margin 6px 0 4px 0
+    h4,
+    h5,
+    h6 {
+        font-size: 14px;
+        font-weight: 600;
+        color: #b794f4;
+        margin: 6px 0 4px;
+        line-height: 1.3;
+
+        &:first-child {
+            margin-top: 0;
+        }
+    }
+
+    // ── Lists ────────────────────────────────────────────
+    // Angular: margin 8px 0, padding-left 20px
+    ul,
+    ol {
+        margin: 8px 0;
+        padding-left: 20px;
+
+        &:last-child {
+            margin-bottom: 0;
+        }
+    }
+
+    // Angular li: margin 4px 0, line-height 1.6, padding-left 8px
+    li {
+        margin: 4px 0;
+        line-height: 1.6;
+        padding-left: 8px;
+
+        ul,
+        ol {
+            margin-top: 4px;
+            margin-bottom: 4px;
+        }
+    }
+
+    ul li::marker {
+        color: var(--blue);
+        font-weight: bold;
+    }
+
+    ol li::marker {
+        color: var(--blue);
+        font-weight: bold;
+    }
+
+    // ── Inline formatting ────────────────────────────────
+    // Angular strong: color primary, background gradient, padding 2px 4px
+    strong {
+        font-weight: 700;
+        color: var(--blue);
+        background: linear-gradient(135deg,
+                rgba(139, 92, 246, 0.1),
+                rgba(167, 139, 250, 0.05));
+        padding: 2px 4px;
+        border-radius: 3px;
+    }
+
+    em {
+        font-style: italic;
+        color: #a78bfa;
+    }
+
+    // ── HR ───────────────────────────────────────────────
+    // Angular: height 2px, gradient, margin 16px 0, opacity 0.3
+    hr {
+        border: none;
+        height: 2px;
+        background: linear-gradient(90deg, transparent, var(--blue), transparent);
+        margin: 16px 0;
+        opacity: 0.3;
+    }
+
+    // ── Blockquote ───────────────────────────────────────
+    // Angular: border-left 3px, padding 12px 12px 12px 16px, margin 12px 0
+    blockquote {
+        border-left: 3px solid var(--blue);
+        margin: 12px 0;
+        padding: 12px 12px 12px 16px;
+        background: linear-gradient(135deg,
+                rgba(139, 92, 246, 0.08),
+                rgba(167, 139, 250, 0.05));
+        border-radius: 0 6px 6px 0;
+        font-style: italic;
+        opacity: 0.9;
+        position: relative;
+
+        &::before {
+            content: '"';
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            font-size: 32px;
+            color: var(--blue);
+            opacity: 0.3;
+            font-family: Georgia, serif;
+            line-height: 0;
+        }
+
+        // marked wraps blockquote text in <p>
+        p {
+            margin: 0;
+            line-height: 1.6;
+        }
+    }
+
+    // ── Inline code ──────────────────────────────────────
+    // Angular: padding 3px 8px, font-size 0.9em (~11.7px), border rgba purple
+    code {
+        font-family: var(--font-mono);
+        font-size: 0.9em;
+        background: linear-gradient(135deg,
+                rgba(139, 92, 246, 0.15),
+                rgba(167, 139, 250, 0.1));
+        border: 1px solid rgba(139, 92, 246, 0.3);
+        border-radius: 4px;
+        padding: 3px 8px;
+        color: var(--blue);
+        font-weight: 500;
+    }
+
+    // ── Code block ───────────────────────────────────────
+    // Angular: padding 14px, margin 12px 0, border rgba purple
+    pre {
+        background: linear-gradient(135deg,
+                rgba(139, 92, 246, 0.08),
+                rgba(167, 139, 250, 0.05));
+        border: 1px solid rgba(139, 92, 246, 0.25);
+        border-radius: 8px;
+        padding: 14px;
+        overflow-x: auto;
+        margin: 12px 0;
+        position: relative;
+
+        &:last-child {
+            margin-bottom: 0;
+        }
+
+        // Angular pre::before — purple left accent bar
+        &::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background: linear-gradient(180deg, var(--blue), #a78bfa);
+            border-radius: 8px 0 0 8px;
+        }
+
+        code {
+            background: transparent;
+            border: none;
+            padding: 0;
+            font-size: 0.9em;
+            color: var(--t1);
+            font-weight: normal;
+        }
+    }
+
+    // ── Tables ───────────────────────────────────────────
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 12px 0;
+        border-radius: 6px;
+        overflow: hidden;
+    }
+
+    th,
+    td {
+        padding: 10px 12px;
+        border: 1px solid rgba(139, 92, 246, 0.2);
+        text-align: left;
+    }
+
+    th {
+        background: linear-gradient(135deg,
+                rgba(139, 92, 246, 0.15),
+                rgba(167, 139, 250, 0.1));
+        font-weight: 700;
+        color: var(--blue);
+        border-bottom: 2px solid rgba(139, 92, 246, 0.3);
+    }
+
+    tr:hover {
+        background: rgba(139, 92, 246, 0.03);
+    }
+
+    // ── Links ────────────────────────────────────────────
+    a {
+        color: var(--blue);
+        text-decoration: none;
+        font-weight: 500;
+        border-bottom: 1px solid transparent;
+        transition: border-color 0.2s, color 0.2s;
+
+        &:hover {
+            color: #9f7aea;
+            border-bottom-color: var(--blue);
+        }
+    }
+
+    // First child: no top margin
+    >*:first-child {
+        margin-top: 0;
+    }
+
+    // Last child: no bottom margin
+    >*:last-child {
+        margin-bottom: 0;
+    }
+}
+
+// ── Keywords — gradient chips ────────────────────────────
+.keywordGrid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+}
+
+.keywordPill {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    @include m.mono;
+    color: #fff;
+    // background set inline via style prop (gradient)
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.15);
+    animation: chipFadeIn 0.25s ease-out;
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.2s, box-shadow 0.2s;
+    cursor: default;
+
+    // shine on hover
+    &::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: -100%;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(90deg,
+                transparent,
+                rgba(255, 255, 255, 0.25),
+                transparent);
+        transition: left 0.42s ease;
+    }
+
+    &:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+
+        &::before {
+            left: 100%;
+        }
+    }
+}
+
+// ── Assessment — progress bar ────────────────────────────
+.assessProgress {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.assessProgressTrack {
+    flex: 1;
+    height: 4px;
+    background: var(--bg3);
+    border-radius: 99px;
+    overflow: hidden;
+}
+
+.assessProgressFill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--blue), #a78bfa);
+    border-radius: 99px;
+    transition: width 0.3s ease;
+}
+
+.assessProgressLabel {
+    font-size: 13px;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    color: var(--blue);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+// ── Assessment — question card ───────────────────────────
+.faqCard {
+    background: var(--bg1);
+    border: 1px solid var(--bdr);
+    border-radius: var(--r);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    animation: fadeInUp 0.2s ease-out;
+    transition: border-color 0.15s, box-shadow 0.15s;
+
+    &:hover {
+        border-color: var(--blue-bdr);
+        box-shadow: 0 2px 8px rgba(139, 92, 246, 0.07);
+    }
+}
+
+.faqQ {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--t0);
+    line-height: 1.5;
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+.faqNum {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--blue);
+    background: var(--blue-dim);
+    border: 1px solid var(--blue-bdr);
+    border-radius: 4px;
+    padding: 1px 6px;
+    flex-shrink: 0;
+    margin-top: 2px;
+    @include m.mono;
+}
+
+.faqOptions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+// ── Option button — base ─────────────────────────────────
+.faqOpt {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 13px;
+    color: var(--t1);
+    padding: 7px 10px;
+    border-radius: 6px;
+    border: 2px solid var(--bdr);
+    background: var(--bg0);
+    cursor: pointer;
+    text-align: left;
+    font-family: var(--font-ui);
+    width: 100%;
+    transition: border-color 0.15s, background 0.15s, transform 0.15s;
+
+    &:hover:not(:disabled) {
+        border-color: var(--blue-bdr);
+        background: var(--blue-dim);
+        transform: translateX(2px);
+    }
+
+    &:disabled {
+        cursor: default;
+    }
+}
+
+// Circle key badge
+.faqOptKey {
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: var(--bg3);
+    border: 1.5px solid var(--bdr2);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--t1);
+    @include m.mono;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.faqOptVal {
+    flex: 1;
+    line-height: 1.45;
+}
+
+// ── Option states ────────────────────────────────────────
+.faqOptSelected {
+    border-color: var(--blue-bdr);
+    background: var(--blue-dim);
+
+    .faqOptKey {
+        background: var(--blue);
+        border-color: var(--blue);
+        color: #fff;
+    }
+}
+
+.faqOptCorrect {
+    border-color: var(--green-bdr);
+    background: var(--green-dim);
+
+    .faqOptKey {
+        background: var(--green);
+        border-color: var(--green);
+        color: #fff;
+    }
+
+    .faqOptVal {
+        color: var(--green);
+        font-weight: 600;
+    }
+}
+
+.faqOptCorrectAlt {
+    border-color: var(--green-bdr);
+    background: var(--green-dim);
+
+    .faqOptKey {
+        background: var(--green);
+        border-color: var(--green);
+        color: #fff;
+    }
+
+    .faqOptVal {
+        color: var(--green);
+        font-weight: 600;
+    }
+}
+
+.faqOptWrong {
+    border-color: var(--red-bdr);
+    background: var(--red-dim);
+
+    .faqOptKey {
+        background: var(--red);
+        border-color: var(--red);
+        color: #fff;
+    }
+
+    .faqOptVal {
+        color: var(--red);
+        font-weight: 600;
+    }
+}
+
+// ── Check / X icons ──────────────────────────────────────
+.faqCheckIcon,
+.faqXIcon {
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+    margin-left: auto;
+    animation: iconPop 0.25s ease-out;
+}
+
+.faqCheckIcon {
+    color: var(--green);
+}
+
+.faqXIcon {
+    color: var(--red);
+}
+
+// ── Explanation box ──────────────────────────────────────
+.faqExplain {
+    background: var(--bg0);
+    border: 1px solid var(--bdr);
+    border-left: 3px solid var(--blue-bdr);
+    border-radius: 0 5px 5px 0;
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    animation: explanationSlideIn 0.2s ease-out;
+}
+
+.faqExplainLabel {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--blue);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    @include m.mono;
+
+    svg {
+        width: 12px;
+        height: 12px;
+        flex-shrink: 0;
+    }
+}
+
+.faqExplainText {
+    font-size: 13px;
+    color: var(--t2);
+    line-height: 1.6;
+    @include m.mono;
+    margin: 0;
+}
+
+// ── Next / Finish button ─────────────────────────────────
+.assessNextBtn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 6px 14px; // matches .btnSm padding scale
+    border-radius: var(--r);
+    border: none;
+    background: var(--blue);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: var(--font-ui);
+    cursor: pointer;
+    align-self: flex-end;
+    animation: fadein 0.15s ease;
+    box-shadow: 0 2px 6px rgba(91, 164, 239, 0.28);
+    transition: opacity 0.12s, transform 0.15s, box-shadow 0.15s;
+
+    svg {
+        width: 12px;
+        height: 12px;
+    }
+
+    &:hover {
+        opacity: 0.9;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 10px rgba(91, 164, 239, 0.35);
+    }
+}
+
+.assessDoneBtn {
+    background: var(--green);
+    box-shadow: 0 2px 6px rgba(74, 222, 128, 0.28);
+
+    &:hover {
+        box-shadow: 0 4px 10px rgba(74, 222, 128, 0.35);
+    }
+}
+
+// ── Complete screen ──────────────────────────────────────
+.assessComplete {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 28px 16px;
+    text-align: center;
+    animation: completeFadeIn 0.3s ease-out;
+}
+
+.assessCompleteIcon {
+    width: 56px;
+    height: 56px;
+    background: var(--green-dim);
+    border: 2px solid var(--green-bdr);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: iconBounce 0.5s ease-out;
+
+    svg {
+        width: 32px;
+        height: 32px;
+        color: var(--green);
+    }
+}
+
+.assessCompleteTitle {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--t0);
+}
+
+.assessCompleteDesc {
+    font-size: 14px;
+    color: var(--t2);
+    @include m.mono;
+}
+
+.assessRestartBtn {
+    margin-top: 4px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 20px;
+    border-radius: var(--r);
+    border: 1px solid var(--bdr2);
+    background: transparent;
+    color: var(--t1);
+    font-size: 14px;
+    font-family: var(--font-ui);
+    cursor: pointer;
+    transition: all 0.12s;
+
+    &:hover {
+        background: var(--bg3);
+        color: var(--t0);
+        border-color: var(--bdr3);
+    }
+}
+
+// (tabToolbar and editIconBtn replaced by actionBtn/dropdown system below)
+
+// ── Edit mode layout ─────────────────────────────────────
+.editMode {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.editLayout {
+    display: flex;
+    gap: 12px;
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    padding-bottom: 52px; // room for fixed footer
+}
+
+.editCol {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.editColHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.editColLabel {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--t2);
+}
+
+.editColTag {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--t2);
+    opacity: 0.55;
+    font-style: italic;
+    text-transform: none;
+    letter-spacing: 0;
+}
+
+.editTextarea {
+    flex: 1;
+    resize: none;
+    background: var(--bg1);
+    border: 1px solid var(--bdr);
+    border-radius: var(--r);
+    color: var(--t1);
+    font-size: 13px;
+    font-family: var(--font-mono);
+    line-height: 1.6;
+    padding: 10px 12px;
+    outline: none;
+    min-height: 280px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+
+    &:focus {
+        border-color: var(--blue-bdr);
+        box-shadow: 0 0 0 2px rgba(91, 164, 239, 0.12);
+    }
+}
+
+.editPreview {
+    flex: 1;
+    background: var(--bg1);
+    border: 1px solid var(--bdr);
+    border-radius: var(--r);
+    padding: 10px 12px;
+    overflow-y: auto;
+    min-height: 280px;
+}
+
+// ── Fixed footer inside edit layout ──────────────────────
+.editFooter {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    border-top: 1px solid var(--bdr);
+    background: var(--bg1);
+    padding: 0 4px;
+    border-radius: 0 0 var(--r) var(--r);
+}
+
+.cancelBtn {
+    padding: 6px 14px;
+    border-radius: var(--r);
+    border: 1px solid var(--bdr2);
+    background: transparent;
+    color: var(--t1);
+    font-size: 13px;
+    font-family: var(--font-ui);
+    cursor: pointer;
+    transition: all 0.12s;
+
+    &:hover:not(:disabled) {
+        background: var(--bg3);
+        border-color: var(--bdr3);
+    }
+
+    &:disabled {
+        opacity: 0.4;
+        cursor: default;
+    }
+}
+
+.saveBtn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 16px;
+    border-radius: var(--r);
+    border: none;
+    background: var(--blue);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: var(--font-ui);
+    cursor: pointer;
+    transition: opacity 0.12s;
+    box-shadow: 0 2px 6px rgba(91, 164, 239, 0.28);
+
+    &:hover:not(:disabled) {
+        opacity: 0.88;
+    }
+
+    &:disabled {
+        opacity: 0.55;
+        cursor: default;
+    }
+}
+
+// ── Inline spinner for save button ───────────────────────
+.inlineSpinner {
+    width: 11px;
+    height: 11px;
+    border: 1.5px solid rgba(255, 255, 255, 0.35);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: wsSpin 0.65s linear infinite;
+    flex-shrink: 0;
+}
+
+// ── Tab toolbar — icon-only buttons ──────────────────────
+.tabToolbar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    justify-content: flex-end;
+    margin-bottom: 6px;
+}
+
+.actionBtn {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 7px;
+    border: 1px solid var(--bdr2);
+    background: transparent;
+    color: var(--t2);
+    cursor: pointer;
+    padding: 0;
+    transition: all 0.15s;
+    flex-shrink: 0;
+
+    svg {
+        width: 13px;
+        height: 13px;
+    }
+
+    &:hover {
+        background: var(--blue-dim);
+        border-color: var(--blue-bdr);
+        color: var(--blue);
+    }
+}
+
+.actionBtnActive {
+    background: var(--blue-dim);
+    border-color: var(--blue-bdr);
+    color: var(--blue);
+}
+
+.successIcon {
+    color: var(--green) !important;
+}
+
+// ── Dropdown ──────────────────────────────────────────────
+.dropdownWrap {
+    position: relative;
+}
+
+.dropdown {
+    position: absolute;
+    top: calc(100% + 5px);
+    right: 0;
+    min-width: 168px;
+    background: var(--bg1);
+    border: 1px solid var(--bdr);
+    border-radius: var(--r);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+    z-index: 50;
+    overflow: hidden;
+    animation: ddFade 0.12s ease;
+}
+
+@keyframes ddFade {
+    from {
+        opacity: 0;
+        transform: translateY(-4px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.dropdownLabel {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--t2);
+    padding: 7px 11px 4px;
+    opacity: 0.6;
+}
+
+.dropdownItem {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    text-align: left;
+    padding: 7px 11px;
+    font-size: 13px;
+    color: var(--t1);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-family: var(--font-ui);
+    transition: background 0.1s, color 0.1s;
+
+    &:hover {
+        background: var(--blue-dim);
+        color: var(--blue);
+    }
+}
+
+.dropdownItemLabel {
+    flex: 1;
+    min-width: 0;
+}
+
+// Per-format colored glyph in copy/download menus
+.fmtIcon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    flex-shrink: 0;
+    transition: transform 0.12s ease;
+
+    svg {
+        width: 13px;
+        height: 13px;
+    }
+}
+
+.dropdownItem:hover .fmtIcon {
+    transform: scale(1.06);
+}
+
+// ── Keyword pill — new chip animation ────────────────────
+.keywordPillNew {
+    animation: chipFadeIn 0.25s ease-out;
+}
+
+// ── Assessment header row (mode tabs + toolbar) ───────────
+.assessHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    gap: 8px;
+}
+
+// ── Mode toggle tabs ──────────────────────────────────────
+.assessModeTabs {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    background: var(--bg2);
+    border: 1px solid var(--bdr);
+    border-radius: 8px;
+    padding: 3px;
+}
+
+.assessModeTab {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: var(--t2);
+    font-size: 12px;
+    font-weight: 500;
+    font-family: var(--font-ui);
+    cursor: pointer;
+    transition: all 0.15s;
+
+    svg {
+        width: 12px;
+        height: 12px;
+        flex-shrink: 0;
+    }
+
+    &:hover {
+        color: var(--t1);
+    }
+}
+
+.assessModeTabActive {
+    background: var(--bg0);
+    color: var(--blue);
+    font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+
+    svg {
+        stroke: var(--blue);
+    }
+}
+
+// ── View All list ─────────────────────────────────────────
+.viewAllList {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    animation: fadein 0.15s ease;
+}
+
+.viewAllCard {
+    background: var(--bg1);
+    border: 1px solid var(--bdr);
+    border-radius: var(--r);
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+
+    &:hover {
+        border-color: var(--blue-bdr);
+        box-shadow: 0 2px 8px rgba(139, 92, 246, 0.07);
+    }
+}
+
+.viewAllQ {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--t0);
+    line-height: 1.5;
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+// Neutral option style for View All (non-correct options)
+.viewAllOptNeutral {
+    cursor: default !important;
+    opacity: 0.65;
+
+    &:hover {
+        transform: none !important;
+        border-color: var(--bdr) !important;
+        background: var(--bg0) !important;
+    }
+}
+
+// Correct key badge in View All mode
+.faqOptKeyCorrect {
+    background: var(--green) !important;
+    border-color: var(--green) !important;
+    color: #fff !important;
+}
+
+// ── Large screen overrides (> 1900px) ────────────────────
+@media (min-width: 1920px) {
+    .wspanel {
+        width: 400px;
+    }
+
+    .wsftitle {
+        font-size: 18px;
+    }
+
+    .wsftitleEmpty {
+        font-size: 20px;
+    }
+
+    .wsmetaId {
+        font-size: 11px;
+    }
+
+    .wsmetaDate {
+        font-size: 14px;
+    }
+
+    .wsmetaHint {
+        font-size: 14px;
+    }
+
+    .tab {
+        font-size: 15px;
+    }
+
+    .wsEmptyTitle {
+        font-size: 18px;
+    }
+
+    .wsEmptyDesc {
+        font-size: 15px;
+    }
+
+    .wsSpinner {
+        font-size: 15px;
+    }
+
+    .tabEmpty {
+        font-size: 15px;
+    }
+
+    .summaryMd {
+        font-size: 15px;
+
+        h1 {
+            font-size: 20px;
+        }
+
+        h2 {
+            font-size: 17px;
+        }
+
+        h3 {
+            font-size: 15px;
+        }
+
+        h4,
+        h5,
+        h6 {
+            font-size: 15px;
+        }
+    }
+
+    .keywordPill {
+        font-size: 14px;
+    }
+
+    .assessProgressLabel {
+        font-size: 14px;
+    }
+
+    .faqQ {
+        font-size: 15px;
+    }
+
+    .faqNum {
+        font-size: 14px;
+    }
+
+    .faqOpt {
+        font-size: 14px;
+    }
+
+    .faqOptKey {
+        font-size: 14px;
+    }
+
+    .faqExplainLabel {
+        font-size: 14px;
+    }
+
+    .faqExplainText {
+        font-size: 14px;
+    }
+
+    .assessNextBtn {
+        font-size: 14px;
+    }
+
+    .assessCompleteTitle {
+        font-size: 18px;
+    }
+
+    .assessCompleteDesc {
+        font-size: 15px;
+    }
+
+    .assessRestartBtn {
+        font-size: 15px;
+    }
+
+    .dropdownItem {
+        font-size: 14px;
+    }
+
+    .dropdownLabel {
+        font-size: 11px;
+    }
+
+    .assessModeTab {
+        font-size: 13px;
+    }
+
+    .viewAllQ {
+        font-size: 15px;
+    }
+
+    .editColLabel {
+        font-size: 12px;
+    }
+
+    .editColTag {
+        font-size: 11px;
+    }
+
+    .editTextarea {
+        font-size: 14px;
+    }
+
+    .cancelBtn {
+        font-size: 14px;
+    }
+
+    .saveBtn {
+        font-size: 14px;
+    }
+}
+// ═══════════════════════════════════════════════
+// New content types — Short Answer, True/False,
+// Timestamped Summary, Keyword Insights
+// ═══════════════════════════════════════════════
+
+// ── Short Answer ──────────────────────────────────
+.revealAllBtn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--bdr2);
+    background: var(--bg0);
+    color: var(--t1);
+    font-size: 12.5px;
+    font-weight: 600;
+    font-family: var(--font-ui);
+    cursor: pointer;
+    transition: all 0.13s;
+
+    svg { width: 14px; height: 14px; }
+
+    &:hover {
+        border-color: var(--blue-bdr);
+        color: var(--blue);
+        background: var(--blue-dim);
+    }
+}
+
+.revealBtn {
+    margin-top: 10px;
+    padding: 7px 14px;
+    border-radius: 6px;
+    border: 1px dashed var(--bdr2);
+    background: transparent;
+    color: var(--t2);
+    font-size: 12.5px;
+    font-weight: 600;
+    font-family: var(--font-ui);
+    cursor: pointer;
+    transition: all 0.13s;
+
+    &:hover {
+        border-color: var(--blue-bdr);
+        border-style: solid;
+        color: var(--blue);
+        background: var(--blue-dim);
+    }
+}
+
+.shortAnswerBox {
+    margin-top: 10px;
+    padding: 12px 14px;
+    background: rgba(79, 172, 254, 0.08);
+    border-left: 3px solid #4facfe;
+    border-radius: 0 8px 8px 0;
+}
+
+.shortAnswerLabel {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #4facfe;
+    margin-bottom: 4px;
+    @include m.mono;
+}
+
+.shortAnswerText {
+    font-size: 13.5px;
+    color: var(--t0);
+    line-height: 1.55;
+    margin: 0;
+}
+
+// ── True / False ──────────────────────────────────
+.tfOptions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.tfOpt {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--t1);
+    padding: 16px 10px;
+    border-radius: 8px;
+    border: 2px solid var(--bdr);
+    background: var(--bg0);
+    cursor: pointer;
+    text-align: center;
+    font-family: var(--font-ui);
+    transition: border-color 0.15s, background 0.15s, transform 0.15s;
+
+    &:hover:not(:disabled) {
+        border-color: var(--blue-bdr);
+        background: var(--blue-dim);
+        transform: translateY(-1px);
+    }
+
+    &:disabled {
+        cursor: default;
+    }
+}
+
+.tfOptLabel {
+    letter-spacing: 0.02em;
+}
+
+// ── Timestamped Summary ───────────────────────────
+.tsList {
+    display: flex;
+    flex-direction: column;
+    margin-top: 4px;
+}
+
+.tsRow {
+    display: flex;
+    gap: 14px;
+}
+
+.tsRail {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex-shrink: 0;
+    padding-top: 6px;
+}
+
+.tsDot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--blue);
+    box-shadow: 0 0 0 3px var(--blue-dim);
+    flex-shrink: 0;
+}
+
+.tsLine {
+    width: 2px;
+    flex: 1;
+    background: var(--bdr2);
+    margin-top: 2px;
+}
+
+.tsCard {
+    flex: 1;
+    padding-bottom: 20px;
+}
+
+.tsRange {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--blue);
+    margin-bottom: 4px;
+    @include m.mono;
+}
+
+.tsArrow {
+    color: var(--t2);
+    margin: 0 2px;
+}
+
+.tsText {
+    font-size: 13.5px;
+    color: var(--t1);
+    line-height: 1.6;
+    margin: 0;
+}
+
+// ── Keyword Insights: sub-nav ─────────────────────
+.kiSubNav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--bdr);
+}
+
+.kiSubTab {
+    padding: 5px 11px;
+    border-radius: 99px;
+    border: 1px solid var(--bdr2);
+    background: var(--bg0);
+    color: var(--t2);
+    font-size: 12px;
+    font-weight: 600;
+    font-family: var(--font-ui);
+    cursor: pointer;
+    transition: all 0.13s;
+    white-space: nowrap;
+
+    &:hover {
+        color: var(--t0);
+        border-color: var(--bdr3, var(--bdr2));
+    }
+}
+
+.kiSubTabActive {
+    background: var(--blue-dim);
+    border-color: var(--blue-bdr);
+    color: var(--blue);
+}
+
+.kiBody {
+    min-height: 200px;
+}
+
+// ── Keyword Insights: node-link graph ─────────────
+.graphWrap {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+}
+
+.graphSvg {
+    width: 100%;
+    max-width: 640px;
+    height: auto;
+}
+
+.graphEdge {
+    stroke: var(--bdr2);
+    stroke-width: 1.4;
+}
+
+.graphNode {
+    circle {
+        fill: var(--blue-dim);
+        stroke: var(--blue);
+        stroke-width: 1.6;
+        transition: fill 0.15s;
+    }
+
+    text {
+        font-size: 10.5px;
+        fill: var(--t1);
+        font-family: var(--font-ui);
+        pointer-events: none;
+    }
+
+    &:hover circle {
+        fill: var(--blue);
+    }
+}
+
+// ── Keyword Insights: matrix / heatmap grid ───────
+.matrixScroll {
+    overflow-x: auto;
+    @include m.scrollbar;
+}
+
+.matrixGrid {
+    display: grid;
+    gap: 2px;
+    width: max-content;
+    min-width: 100%;
+}
+
+.matrixCorner {
+    background: transparent;
+}
+
+.matrixColHead {
+    font-size: 10px;
+    color: var(--t2);
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-height: 90px;
+    padding: 4px 2px;
+    text-align: left;
+    @include m.mono;
+}
+
+.matrixRowHead {
+    font-size: 11.5px;
+    color: var(--t1);
+    padding: 4px 8px 4px 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 140px;
+    display: flex;
+    align-items: center;
+}
+
+.matrixCell {
+    min-width: 28px;
+    aspect-ratio: 1;
+    border-radius: 3px;
+    border: 1px solid var(--bdr);
+}
+
+// ── Keyword Insights: word cloud ──────────────────
+.wordCloud {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 12px 18px;
+    padding: 24px 12px;
+}
+
+.wcWord {
+    font-weight: 700;
+    font-family: var(--font-ui);
+    line-height: 1;
+    cursor: default;
+    transition: transform 0.15s;
+
+    &:hover {
+        transform: scale(1.08);
+    }
+}
+
+// ── Keyword Insights: clusters ────────────────────
+.clusterGrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px;
+}
+
+.clusterCard {
+    padding: 12px 14px;
+    background: var(--bg0);
+    border: 1px solid var(--bdr);
+    border-radius: 10px;
+}
+
+.clusterTitle {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--t2);
+    margin-bottom: 8px;
+    @include m.mono;
+}
+
+.clusterChips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.clusterChip {
+    padding: 3px 9px;
+    border-radius: 99px;
+    background: var(--blue-dim);
+    border: 1px solid var(--blue-bdr);
+    color: var(--blue);
+    font-size: 11.5px;
+    font-weight: 600;
+}
+
+// ── Keyword Insights: frequency bars ──────────────
+.freqList {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.freqRow {
+    display: grid;
+    grid-template-columns: 130px 1fr 130px;
+    align-items: center;
+    gap: 12px;
+}
+
+.freqLabel {
+    font-size: 12.5px;
+    color: var(--t1);
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.freqBarTrack {
+    height: 10px;
+    background: var(--bg0);
+    border: 1px solid var(--bdr);
+    border-radius: 99px;
+    overflow: hidden;
+}
+
+.freqBarFill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--blue), #a78bfa);
+    border-radius: 99px;
+}
+
+.freqMeta {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    font-size: 11px;
+    color: var(--t1);
+    justify-content: flex-end;
+    @include m.mono;
+}
+
+.freqDim {
+    color: var(--t2);
+}
+
+// ── Keyword Insights: importance/complexity scatter ──
+.scatterWrap {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+}
+
+.scatterSvg {
+    width: 100%;
+    max-width: 580px;
+    height: auto;
+}
+
+.scatterAxis {
+    stroke: var(--bdr2);
+    stroke-width: 1.4;
+}
+
+.scatterAxisLabel {
+    font-size: 10.5px;
+    fill: var(--t2);
+    font-family: var(--font-ui);
+}
+
+.scatterDot {
+    fill: var(--blue-dim);
+    stroke: var(--blue);
+    stroke-width: 1.6;
+}
+
+.scatterDotLabel {
+    font-size: 9.5px;
+    fill: var(--t1);
+    font-family: var(--font-ui);
+    pointer-events: none;
+}
+
+// ── Keyword Insights: glossary ────────────────────
+.glossaryList {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.glossaryRow {
+    padding: 10px 14px;
+    background: var(--bg0);
+    border: 1px solid var(--bdr);
+    border-radius: 8px;
+}
+
+.glossaryTerm {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13.5px;
+    font-weight: 700;
+    color: var(--t0);
+    margin-bottom: 4px;
+}
+
+.glossaryTime {
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--t2);
+    background: var(--bg1);
+    border: 1px solid var(--bdr2);
+    border-radius: 99px;
+    padding: 1px 7px;
+    @include m.mono;
+}
+
+.glossaryDef {
+    font-size: 13px;
+    color: var(--t1);
+    line-height: 1.55;
+}
