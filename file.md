@@ -1,1181 +1,361 @@
 // ═══════════════════════════════════════════════
-// pages/UploadInfer/FilePanel.tsx
-// Content Analytics · Step-1 upload + uploaded files list
+// pages/UploadInfer/DictionaryAssociationModal.tsx
+// Content Analytics · Bulk file ↔ dictionary association
 // ═══════════════════════════════════════════════
-import React, { useRef, useState, useCallback, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
-import {
-  toggleUploadZone,
-  setDateFrom, setDateTo,
-  serverFilesLoading, serverFilesSuccess, serverFilesFailure,
-  setFilesPage, setFilesPageSize, setFilesSort, setFilesSearch,
-  toggleServerFileSelection, toggleSelectAllServerFiles, clearServerSelection,
-  type FilesSortBy, type SortOrder,
-} from '../../store/uploadSlice';
+import { patchFileDictionaries } from '../../store/uploadSlice';
+import { addToast } from '../../store/toastSlice';
 import api from '../../services/api';
-import styles from './FilePanel.module.scss';
-import DictionaryAssociationModal from './DictionaryAssociationModal';
-import PromptTemplateAssociationModal from './PromptTemplateAssociationModal';
+import styles from './DictionaryAssociationModal.module.scss';
 
-// ── Types ────────────────────────────────────────
-type UploadStatus = 'pending' | 'uploading' | 'success' | 'failed';
-type PanelView = 'dropzone' | 'preview' | 'uploading';
-
-interface BrowsedFile {
-  id: string;
-  file: File;
-  name: string;
-  size: string;
-  ext: 'vtt' | 'srt';
-  status: UploadStatus;
-  error?: string;
+interface DictionaryListItem { dictionary_id: number; dictionary_name: string; }
+interface DictionaryTerm { wrong_term: string; correct_term: string; }
+interface DictionaryDetail {
+    dictionary_id: number; dictionary_name: string;
+    dictionary_terms: DictionaryTerm[]; created_at: string; updated_at: string;
 }
+interface Props { open: boolean; onClose: () => void; }
 
-// ── Helpers ──────────────────────────────────────
-const ALLOWED = ['.vtt', '.srt'];
-const isAllowed = (n: string) => ALLOWED.some(e => n.toLowerCase().endsWith(e));
-const getExt = (n: string): 'vtt' | 'srt' => n.toLowerCase().endsWith('.srt') ? 'srt' : 'vtt';
-const uid = () => Math.random().toString(36).slice(2);
-const formatSize = (b: number) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
+const NO_DICT = -1;
 
-const filesToBrowsed = (files: File[]): BrowsedFile[] =>
-  files.filter(f => isAllowed(f.name)).map(f => ({
-    id: uid(), file: f, name: f.name, size: formatSize(f.size), ext: getExt(f.name), status: 'pending' as UploadStatus,
-  }));
+const DictionaryAssociationModal: React.FC<Props> = ({ open, onClose }) => {
+    const dispatch = useAppDispatch();
+    const { t } = useTranslation();
+    const { serverFiles, dateFrom, dateTo } = useAppSelector(s => s.upload);
 
-// Windowed page-number list with '…' gaps, e.g. [1, '…', 4, 5, 6, '…', 20]
-const getPageNumbers = (current: number, total: number): (number | '…')[] => {
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
-  const pages = new Set<number>([1, total, current, current - 1, current + 1, current - 2, current + 2]);
-  const sorted = [...pages].filter(p => p >= 1 && p <= total).sort((a, b) => a - b);
-  const result: (number | '…')[] = [];
-  sorted.forEach((p, i) => {
-    if (i > 0 && p - (sorted[i - 1] as number) > 1) result.push('…');
-    result.push(p);
-  });
-  return result;
-};
+    const [dicts, setDicts] = useState<DictionaryListItem[]>([]);
+    const [dictsLoading, setDictsLoading] = useState(false);
+    const [dictsError, setDictsError] = useState<string | null>(null);
+    const [selection, setSelection] = useState<Record<number, number>>({});
+    const initialSelectionRef = useRef<Record<number, number>>({});
+    const [bulkValue, setBulkValue] = useState<number>(NO_DICT);
+    const [saving, setSaving] = useState(false);
+    const [detailDictId, setDetailDictId] = useState<number | null>(null);
+    const [detailData, setDetailData] = useState<DictionaryDetail | null>(null);
+    const [detailLoading, setDetailLoading] = useState(false);
+    const [detailError, setDetailError] = useState<string | null>(null);
 
-// ── Icons ────────────────────────────────────────
-const IconPending: React.FC = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" strokeDasharray="2 2" /></svg>;
-const IconUploading: React.FC = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" strokeOpacity="0.2" /><path d="M8 2a6 6 0 016 6" /></svg>;
-const IconSuccess: React.FC = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="8" r="6" /><path d="M5.5 8l2 2 3-3" /></svg>;
-const IconFailed: React.FC = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" /><path d="M6 6l4 4M10 6l-4 4" /></svg>;
-const IconClose: React.FC = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>;
+    // ── Associate ALL — every file in the current date range, bypasses the
+    //     per-row preview entirely and hits the backend directly. ──
+    const [isAssociatingAll, setIsAssociatingAll] = useState(false);
+    const [associateAllError, setAssociateAllError] = useState<string | null>(null);
 
+    useEffect(() => {
+        if (!open) return;
+        const init: Record<number, number> = {};
+        serverFiles.forEach(f => { init[f.id] = f.dictionary_id ?? NO_DICT; });
+        setSelection(init);
+        initialSelectionRef.current = init;
+        setBulkValue(NO_DICT);
+        setDetailDictId(null); setDetailData(null); setDetailError(null);
+        setAssociateAllError(null);
 
+        let cancelled = false;
+        (async () => {
+            setDictsLoading(true); setDictsError(null);
+            try {
+                const res = await api.get('/dictionary/list');
+                const list: DictionaryListItem[] = (res.data as any)?.data ?? (res.data as any)?.result ?? [];
+                if (!cancelled) setDicts(Array.isArray(list) ? list : []);
+            } catch {
+                if (!cancelled) setDictsError(t('uploadInfer.dictModal.loadFail'));
+            } finally { if (!cancelled) setDictsLoading(false); }
+        })();
+        return () => { cancelled = true; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open]);
 
-const IconChevron: React.FC<{ up?: boolean }> = ({ up }) => (
-  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"
-    style={{ transform: up ? 'rotate(180deg)' : 'none', transition: 'transform 0.22s' }}>
-    <path d="M4 6l4 4 4-4" />
-  </svg>
-);
+    useEffect(() => {
+        if (!open) return;
+        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); } };
+        window.addEventListener('keydown', onKey, true);
+        return () => window.removeEventListener('keydown', onKey, true);
+    }, [open]);
 
-// ── Checkbox ─────────────────────────────────────
-interface CbProps { checked: boolean; indeterminate?: boolean; onChange: () => void; disabled?: boolean; }
-const Checkbox: React.FC<CbProps> = ({ checked, indeterminate, onChange, disabled }) => {
-  const ref = useRef<HTMLDivElement>(null);
-  return (
-    <div
-      ref={ref}
-      className={`${styles.cb} ${checked ? styles.cbChecked : ''} ${indeterminate ? styles.cbIndet : ''} ${disabled ? styles.cbDisabled : ''}`}
-      onClick={e => { e.stopPropagation(); if (!disabled) onChange(); }}
-      role="checkbox" aria-checked={indeterminate ? 'mixed' : checked} tabIndex={0}
-      onKeyDown={e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); if (!disabled) onChange(); } }}
-    />
-  );
-};
+    const dirtyIds = useMemo(() => {
+        const init = initialSelectionRef.current;
+        return Object.keys(selection).map(Number).filter(id => selection[id] !== init[id]);
+    }, [selection]);
+    const isDirty = dirtyIds.length > 0;
 
-// ── FilePanel ────────────────────────────────────
-type SortKey = 'id' | 'name' | 'date' | 'status';
-type SortDir = 'asc' | 'desc';
+    const handleRowChange = useCallback((fileId: number, dictId: number) => {
+        setSelection(prev => ({ ...prev, [fileId]: dictId }));
+    }, []);
 
-interface FilePanelProps {
-  selectMode: boolean;
-  onEnterSelectMode: () => void;
-  onExitSelectMode: () => void;
-  onFileClick: (fileId: number) => void;
-  onDeleteComplete: (deletedIds: number[], all?: boolean) => void;
-  activeFileId: number | null;
-}
+    const handleApplyToAll = useCallback(() => {
+        setSelection(prev => {
+            const next = { ...prev };
+            Object.keys(next).forEach(k => { next[Number(k)] = bulkValue; });
+            return next;
+        });
+    }, [bulkValue]);
 
-const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, onExitSelectMode, onFileClick, onDeleteComplete, activeFileId }) => {
-  const { t } = useTranslation();
-  const dispatch = useAppDispatch();
-  const {
-    uploadZoneCollapsed,
-    serverFiles,
-    serverFilesLoading: filesLoading, serverFilesError: filesError,
-    selectedServerIds, isBatchRunning,
-    dateFrom, dateTo,
-    lastBatchFinishedAt,
-    filesPage, filesPageSize, filesTotal, filesTotalPages,
-    filesSortBy, filesSortOrder, filesSearch,
-  } = useAppSelector(s => s.upload);
+    const handleViewDetails = useCallback(async (dictId: number) => {
+        if (detailDictId === dictId) { setDetailDictId(null); setDetailData(null); setDetailError(null); return; }
+        setDetailDictId(dictId); setDetailData(null); setDetailError(null); setDetailLoading(true);
+        try {
+            const res = await api.get(`/dictionary/${dictId}`);
+            const d: DictionaryDetail | undefined = (res.data as any)?.data;
+            if (d) setDetailData(d);
+            else setDetailError(t('uploadInfer.dictModal.noDetailsReturned'));
+        } catch { setDetailError(t('uploadInfer.dictModal.detailLoadFail')); }
+        finally { setDetailLoading(false); }
+    }, [detailDictId, t]);
 
-  const [view, setView] = useState<PanelView>('dropzone');
-  const [browsed, setBrowsed] = useState<BrowsedFile[]>([]);
-  const [isDragOver, setIsDragOver] = useState(false);
+    const handleSave = useCallback(async () => {
+        if (!isDirty || saving) return;
+        setSaving(true);
+        const associateGroups: Record<number, number[]> = {};
+        const disassociateIds: number[] = [];
+        for (const id of dirtyIds) {
+            const v = selection[id];
+            if (v === NO_DICT) disassociateIds.push(id);
+            else { if (!associateGroups[v]) associateGroups[v] = []; associateGroups[v].push(id); }
+        }
+        try {
+            const calls: Promise<unknown>[] = [];
+            for (const [dictIdStr, fileIds] of Object.entries(associateGroups)) {
+                calls.push(api.post('/dictionary/associate', { file_ids: fileIds, dictionary_id: Number(dictIdStr), all: false }));
+            }
+            for (const id of disassociateIds) { calls.push(api.post('/dictionary/disassociate', { file_ids: id })); }
+            await Promise.all(calls);
+            const patch: Record<number, number | null> = {};
+            for (const [dictIdStr, fileIds] of Object.entries(associateGroups)) { fileIds.forEach(id => { patch[id] = Number(dictIdStr); }); }
+            disassociateIds.forEach(id => { patch[id] = null; });
+            dispatch(patchFileDictionaries(patch));
+            dispatch(addToast(t('uploadInfer.dictModal.saveSuccess'), 'success'));
+            onClose();
+        } catch {
+            dispatch(addToast(t('uploadInfer.dictModal.saveFail'), 'error'));
+        } finally { setSaving(false); }
+    }, [isDirty, saving, dirtyIds, selection, dispatch, onClose, t]);
 
-  // ── Delete mode ──────────────────────────────
-  const [deleteMode, setDeleteMode] = useState(false);
-  const [deleteSelectedIds, setDeleteSelectedIds] = useState<number[]>([]);
-  const [isDeleting, setIsDeleting] = useState(false);
+    // ── Associate ALL files in [dateFrom, dateTo] with bulkValue — skips the
+    //     per-row preview/save flow and applies directly on the backend. ──
+    const handleAssociateAll = useCallback(async () => {
+        if (bulkValue === NO_DICT || saving || isAssociatingAll) return;
+        setIsAssociatingAll(true);
+        setAssociateAllError(null);
+        try {
+            await api.post('/dictionary/associate', {
+                dictionary_id: bulkValue,
+                all: true,
+                start_date: dateFrom,
+                end_date: dateTo,
+            });
+            // Best-effort local patch for whatever's currently loaded — files on
+            // other pages will reflect the change next time they're fetched.
+            const patch: Record<number, number | null> = {};
+            serverFiles.forEach(f => { patch[f.id] = bulkValue; });
+            dispatch(patchFileDictionaries(patch));
+            dispatch(addToast(t('uploadInfer.dictModal.associateAllSuccess'), 'success'));
+            onClose();
+        } catch {
+            setAssociateAllError(t('uploadInfer.dictModal.associateAllFail'));
+        } finally {
+            setIsAssociatingAll(false);
+        }
+    }, [bulkValue, saving, isAssociatingAll, dateFrom, dateTo, serverFiles, dispatch, onClose, t]);
 
-  // ── Delete ALL (danger zone — wipes every file on the account) ──
-  const [deleteAllConfirmOpen, setDeleteAllConfirmOpen] = useState(false);
-  const [deleteAllConfirmText, setDeleteAllConfirmText] = useState('');
-  const [isDeletingAll, setIsDeletingAll] = useState(false);
-  const [deleteAllError, setDeleteAllError] = useState<string | null>(null);
-  const DELETE_ALL_CONFIRM_PHRASE = 'DELETE ALL';
-  const isDeleteAllPhraseMatched = deleteAllConfirmText.trim() === DELETE_ALL_CONFIRM_PHRASE;
+    const handleCloseClick = useCallback(() => { if (saving) return; onClose(); }, [saving, onClose]);
+    const handleBackdropClick = useCallback((e: React.MouseEvent) => { e.stopPropagation(); }, []);
+    const handleDialogClick = useCallback((e: React.MouseEvent) => { e.stopPropagation(); }, []);
 
-  // ── Export mode ──────────────────────────────
-  const [exportMode, setExportMode] = useState(false);
-  const [exportSelectedIds, setExportSelectedIds] = useState<number[]>([]);
-  const [isExporting, setIsExporting] = useState(false);
+    if (!open) return null;
 
-  // ── Search ───────────────────────────────────
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const searchInputRef = useRef<HTMLInputElement>(null);
+    const dictName = (id: number) => {
+        if (id === NO_DICT) return t('uploadInfer.dictModal.noneRow');
+        const d = dicts.find(x => x.dictionary_id === id);
+        return d ? d.dictionary_name : `Dictionary #${id}`;
+    };
 
-  // ── Dictionary association modal ─────────────
-  const [dictModalOpen, setDictModalOpen] = useState(false);
+    return (
+        <div className={styles.backdrop} onMouseDown={handleBackdropClick} role="presentation">
+            <div className={styles.dialog} onMouseDown={handleDialogClick} role="dialog" aria-modal="true" aria-labelledby="dict-modal-title">
 
-  // ── Prompt template association modal ────────
-  const [templateModalOpen, setTemplateModalOpen] = useState(false);
-
-  const openSearch = () => {
-    setSearchOpen(true);
-    setTimeout(() => searchInputRef.current?.focus(), 50);
-  };
-  const closeSearch = () => {
-    setSearchOpen(false);
-    setSearchQuery('');
-  };
-
-  const enterDeleteMode = () => { setDeleteMode(true); setDeleteSelectedIds([]); };
-  const exitDeleteMode = () => { setDeleteMode(false); setDeleteSelectedIds([]); closeDeleteAllConfirm(); };
-
-  const toggleDeleteSelection = (id: number) => {
-    setDeleteSelectedIds(prev =>
-      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-    );
-  };
-
-  const allDeleteSelected = serverFiles.length > 0 && deleteSelectedIds.length === serverFiles.length;
-  const someDeleteSelected = deleteSelectedIds.length > 0 && !allDeleteSelected;
-
-  const toggleDeleteSelectAll = () => {
-    setDeleteSelectedIds(allDeleteSelected ? [] : serverFiles.map(f => f.id));
-  };
-
-  const handleConfirmDelete = async () => {
-    if (!deleteSelectedIds.length) return;
-    setIsDeleting(true);
-    try {
-      const res = await api.post('/files/delete', { fileID: deleteSelectedIds, all: false });
-      if ((res.data as any)?.status === 'success' || res.status === 200) {
-        const deleted = [...deleteSelectedIds];
-        dispatch(clearServerSelection());
-        await fetchFiles();
-        exitDeleteMode();
-        onDeleteComplete(deleted);
-      }
-    } catch {
-      // silently ignore — stay in delete mode so user can retry
-    } finally {
-      setIsDeleting(false);
-    }
-  };
-
-  // ── Delete ALL — wipes every file on the account, ignores fileID ──
-  const openDeleteAllConfirm = () => {
-    setDeleteAllError(null);
-    setDeleteAllConfirmText('');
-    setDeleteAllConfirmOpen(true);
-  };
-  const closeDeleteAllConfirm = () => {
-    setDeleteAllConfirmOpen(false);
-    setDeleteAllConfirmText('');
-    setDeleteAllError(null);
-  };
-  const handleConfirmDeleteAll = async () => {
-    if (!isDeleteAllPhraseMatched) return;
-    setIsDeletingAll(true);
-    setDeleteAllError(null);
-    try {
-      const res = await api.post('/files/delete', {
-        all: true,
-        start_date: dateFrom,
-        end_date: dateTo,
-      });
-      if ((res.data as any)?.status === 'success' || res.status === 200) {
-        dispatch(clearServerSelection());
-        closeDeleteAllConfirm();
-        exitDeleteMode();
-        await fetchFiles({ page: 1 });
-        onDeleteComplete([], true);
-      } else {
-        setDeleteAllError(t('uploadInfer.filePanel.deleteAllFailed'));
-      }
-    } catch (err) {
-      setDeleteAllError(err instanceof Error ? err.message : t('uploadInfer.filePanel.deleteAllFailed'));
-    } finally {
-      setIsDeletingAll(false);
-    }
-  };
-
-  // ── Export handlers ───────────────────────────
-  const enterExportMode = () => { setExportMode(true); setExportSelectedIds([]); setExportAllError(null); };
-  const exitExportMode = () => { setExportMode(false); setExportSelectedIds([]); setExportAllError(null); };
-
-  const toggleExportSelection = (id: number) => {
-    setExportSelectedIds(prev =>
-      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-    );
-  };
-
-  const allExportSelected = serverFiles.length > 0 && exportSelectedIds.length === serverFiles.length;
-  const someExportSelected = exportSelectedIds.length > 0 && !allExportSelected;
-
-  const toggleExportSelectAll = () => {
-    setExportSelectedIds(allExportSelected ? [] : serverFiles.map(f => f.id));
-  };
-
-  const handleConfirmExport = async () => {
-    if (!exportSelectedIds.length) return;
-    setIsExporting(true);
-    try {
-      const res = await api.post(
-        '/export_excel',
-        { file_ids: exportSelectedIds, all: false },
-        { responseType: 'blob' },
-      );
-
-      // Use the original file name (without extension) + .xlsx
-      // For a single file: "CS401_Week03.vtt" → "CS401_Week03.xlsx"
-      // For multiple files: "export_2026-05-07.xlsx"
-      let filename: string;
-      if (exportSelectedIds.length === 1) {
-        const f = serverFiles.find(sf => sf.id === exportSelectedIds[0]);
-        const base = f ? f.original_name.replace(/\.[^.]+$/, '') : String(exportSelectedIds[0]);
-        filename = `${base}.xlsx`;
-      } else {
-        const today = new Date().toISOString().slice(0, 10);
-        filename = `export_${today}.xlsx`;
-      }
-
-      const url = URL.createObjectURL(new Blob([res.data]));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-
-      exitExportMode();
-    } catch {
-      // silently ignore — stay in export mode so user can retry
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
-  // ── Export ALL — every file in the current date range, ignores file_ids ──
-  const [isExportingAll, setIsExportingAll] = useState(false);
-  const [exportAllError, setExportAllError] = useState<string | null>(null);
-
-  const handleExportAll = async () => {
-    setIsExportingAll(true);
-    setExportAllError(null);
-    try {
-      const res = await api.post(
-        '/export_excel',
-        { all: true, start_date: dateFrom, end_date: dateTo },
-        { responseType: 'blob' },
-      );
-
-      const filename = `export_all_${dateFrom}_${dateTo}.xlsx`;
-      const url = URL.createObjectURL(new Blob([res.data]));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-
-      exitExportMode();
-    } catch (err) {
-      setExportAllError(err instanceof Error ? err.message : t('uploadInfer.filePanel.exportAllFailed'));
-    } finally {
-      setIsExportingAll(false);
-    }
-  };
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const folderInputRef = useRef<HTMLInputElement>(null);
-
-  // ── Fetch server files (paginated, sorted, searched) ──
-  // Any param not passed in `opts` falls back to the current redux value, so
-  // callers only need to specify what's actually changing (e.g. just `page`).
-  const fetchFiles = useCallback(async (opts?: {
-    from?: string; to?: string;
-    page?: number; pageSize?: number;
-    sortBy?: FilesSortBy; sortOrder?: SortOrder;
-    search?: string;
-  }) => {
-    const from = opts?.from ?? dateFrom;
-    const to = opts?.to ?? dateTo;
-    const page = opts?.page ?? filesPage;
-    const pageSize = opts?.pageSize ?? filesPageSize;
-    const sortBy = opts?.sortBy ?? filesSortBy;
-    const sortOrder = opts?.sortOrder ?? filesSortOrder;
-    const search = opts?.search ?? filesSearch;
-
-    dispatch(serverFilesLoading());
-    try {
-      const res = await api.post('/files/by-date/', {
-        start_date: from,
-        end_date: to,
-        page,
-        page_size: pageSize,
-        sort_by: sortBy,
-        sort_order: sortOrder,
-        ...(search ? { search } : {}),
-      });
-      const d = (res.data as any)?.data ?? {};
-      dispatch(serverFilesSuccess({
-        files: d.data ?? [],
-        total: d.total ?? 0,
-        page: d.page ?? page,
-        pageSize: d.page_size ?? pageSize,
-        totalPages: d.total_pages ?? 1,
-        sortBy, sortOrder, search,
-      }));
-    } catch (err) {
-      dispatch(serverFilesFailure(err instanceof Error ? err.message : 'Failed to load files.'));
-    }
-  }, [dispatch, dateFrom, dateTo, filesPage, filesPageSize, filesSortBy, filesSortOrder, filesSearch]);
-
-  useEffect(() => { fetchFiles({ page: 1 }); }, []); // eslint-disable-line
-
-  // Re-fetch /by-date/ whenever a batch finishes so completed statuses are up to date
-  useEffect(() => {
-    if (lastBatchFinishedAt !== null) {
-      fetchFiles();
-    }
-  }, [lastBatchFinishedAt]); // eslint-disable-line
-
-  // ── Pagination / page-size handlers ──
-  const goToPage = useCallback((p: number) => {
-    if (p < 1 || p > filesTotalPages || p === filesPage || filesLoading) return;
-    fetchFiles({ page: p });
-  }, [filesTotalPages, filesPage, filesLoading, fetchFiles]);
-
-  const handlePageSizeChange = useCallback((size: number) => {
-    dispatch(setFilesPageSize(size));
-    fetchFiles({ pageSize: size, page: 1 });
-  }, [dispatch, fetchFiles]);
-
-  // ── Browse / drop ────────────────────────────
-  const handleFiles = useCallback((files: File[]) => {
-    const valid = filesToBrowsed(files);
-    if (!valid.length) return;
-    setBrowsed(valid);
-    setView('preview');
-  }, []);
-
-  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) handleFiles(Array.from(e.target.files));
-    e.target.value = '';
-  };
-
-  const onDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDragOver(true); };
-  const onDragLeave = () => setIsDragOver(false);
-  const onDrop = (e: React.DragEvent) => {
-    e.preventDefault(); setIsDragOver(false);
-    const files: File[] = [];
-    if (e.dataTransfer.items) {
-      const traverse = (entry: FileSystemEntry) => {
-        if (entry.isFile) (entry as FileSystemFileEntry).file(f => { if (isAllowed(f.name)) files.push(f); });
-        else if (entry.isDirectory) { const r = (entry as FileSystemDirectoryEntry).createReader(); r.readEntries(es => es.forEach(traverse)); }
-      };
-      Array.from(e.dataTransfer.items).forEach(item => { const e = item.webkitGetAsEntry?.(); if (e) traverse(e); });
-      setTimeout(() => { if (files.length) handleFiles(files); }, 200);
-    } else handleFiles(Array.from(e.dataTransfer.files));
-  };
-
-  // ── Upload actions ───────────────────────────
-  const removeFile = (id: string) => { const n = browsed.filter(f => f.id !== id); setBrowsed(n); if (!n.length) setView('dropzone'); };
-  const handleCancel = () => { setBrowsed([]); setView('dropzone'); };
-
-  const handleUpload = async () => {
-    setView('uploading');
-    for (const bf of browsed) {
-      setBrowsed(prev => prev.map(f => f.id === bf.id ? { ...f, status: 'uploading' } : f));
-      try {
-        const fd = new FormData(); fd.append('file', bf.file);
-        const res = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-        const ok = res.status === 200 && (res.data as any)?.status === 'Success';
-        setBrowsed(prev => prev.map(f => f.id === bf.id ? { ...f, status: ok ? 'success' : 'failed', error: ok ? undefined : 'Upload failed' } : f));
-      } catch (err) {
-        setBrowsed(prev => prev.map(f => f.id === bf.id ? { ...f, status: 'failed', error: err instanceof Error ? err.message : 'Upload failed' } : f));
-      }
-    }
-  };
-
-  useEffect(() => {
-    if (view !== 'uploading') return;
-    if (!browsed.every(f => f.status === 'success' || f.status === 'failed')) return;
-    fetchFiles({ page: 1 });
-    const allOk = browsed.every(f => f.status === 'success');
-    if (allOk) {
-      // All files uploaded successfully — clear immediately
-      setBrowsed([]);
-      setView('dropzone');
-      return;
-    }
-    // Some failed — leave the list visible briefly so the user can read the error
-    const t = setTimeout(() => { setBrowsed([]); setView('dropzone'); }, 2500);
-    return () => clearTimeout(t);
-  }, [browsed, view]); // eslint-disable-line
-
-  const handleApply = () => fetchFiles({ page: 1 });
-
-  // Select-all state for uploaded files (scoped to the current page)
-  const allSelected = serverFiles.length > 0 && selectedServerIds.length === serverFiles.length;
-  const someSelected = selectedServerIds.length > 0 && !allSelected;
-
-  // ── Sort (server-side — maps UI key to the API's sort_by values) ──────
-  const SORT_KEY_TO_API: Record<SortKey, FilesSortBy> = {
-    id: 'id', name: 'original_name', date: 'inserted_at', status: 'status',
-  };
-  const API_TO_SORT_KEY: Record<FilesSortBy, SortKey> = {
-    id: 'id', original_name: 'name', inserted_at: 'date', status: 'status',
-  };
-  const sort = { key: API_TO_SORT_KEY[filesSortBy], dir: filesSortOrder as SortDir };
-
-  // ── exitSelectMode — clears selections then notifies parent ──
-  const exitSelectMode = useCallback(() => {
-    dispatch(clearServerSelection());
-    onExitSelectMode();
-  }, [dispatch, onExitSelectMode]);
-
-  const handleSort = useCallback((key: SortKey) => {
-    const apiKey = SORT_KEY_TO_API[key];
-    const dir: SortDir = filesSortBy === apiKey ? (filesSortOrder === 'asc' ? 'desc' : 'asc') : 'asc';
-    dispatch(setFilesSort({ sortBy: apiKey, sortOrder: dir }));
-    fetchFiles({ sortBy: apiKey, sortOrder: dir, page: 1 });
-  }, [filesSortBy, filesSortOrder, dispatch, fetchFiles]); // eslint-disable-line
-
-  // ── Search (debounced, server-side) ──────────────────────────────────
-  const skipNextSearchEffect = useRef(true);
-  useEffect(() => {
-    if (skipNextSearchEffect.current) { skipNextSearchEffect.current = false; return; }
-    const q = searchQuery.trim();
-    const handle = setTimeout(() => {
-      dispatch(setFilesSearch(q));
-      fetchFiles({ search: q, page: 1 });
-    }, 400);
-    return () => clearTimeout(handle);
-  }, [searchQuery]); // eslint-disable-line
-
-  const displayedFiles = serverFiles;
-
-  const done = browsed.filter(f => f.status === 'success').length;
-  const failed = browsed.filter(f => f.status === 'failed').length;
-  const finished = done + failed;
-
-  return (
-    <div className={styles.panel}>
-      <input ref={fileInputRef} type="file" accept=".vtt,.srt" multiple style={{ display: 'none' }} onChange={onFileChange} />
-      <input ref={folderInputRef} type="file" accept=".vtt,.srt" multiple style={{ display: 'none' }} onChange={onFileChange} {...{ webkitdirectory: 'true' }} />
-
-      {/* ══ SECTION 1: Step-1 ══ */}
-      <div className={`${styles.step1} ${uploadZoneCollapsed ? styles.step1Collapsed : ''}`}>
-        <div className={styles.step1Bar}>
-          <span className={styles.slbl}>{t('uploadInfer.filePanel.step1Label')}</span>
-          {view === 'dropzone' && (
-            <span className={`${styles.badge} ${styles.bReady}`}>{t('uploadInfer.filePanel.uploaded', { count: filesTotal })}</span>
-          )}
-          {(view === 'preview' || view === 'uploading') && (
-            <span className={`${styles.badge} ${styles.bInfo}`}>{t('uploadInfer.filePanel.selected', { count: browsed.length })}</span>
-          )}
-          <button className={styles.collapseBtn} onClick={() => dispatch(toggleUploadZone())}
-            title={uploadZoneCollapsed ? t('uploadInfer.filePanel.showUpload') : t('uploadInfer.filePanel.hideUpload')}>
-            <IconChevron up={!uploadZoneCollapsed} />
-            <span>{uploadZoneCollapsed ? t('uploadInfer.filePanel.showUpload') : t('uploadInfer.filePanel.hideUpload')}</span>
-          </button>
-        </div>
-
-        <div className={styles.step1Content}>
-          {view === 'dropzone' && (
-            <div className={`${styles.dropzone} ${isDragOver ? styles.dragOver : ''}`}
-              onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
-              onClick={() => fileInputRef.current?.click()}>
-              <div className={styles.dzIc}>
-                <svg viewBox="0 0 18 18" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" stroke="var(--blue)">
-                  <path d="M9 12V4M6 7l3-3 3 3" /><path d="M2 15h14" />
-                </svg>
-              </div>
-              <div className={styles.dzTitle}>{isDragOver ? t('uploadInfer.filePanel.dropTitle') : t('uploadInfer.filePanel.dropTitleDefault')}</div>
-              <div className={styles.dzSub}>{t('uploadInfer.filePanel.dropSub')}</div>
-              <div className={styles.dzActions} onClick={e => e.stopPropagation()}>
-                <button className={`${styles.btn} ${styles.btnP} ${styles.btnSm}`} onClick={() => fileInputRef.current?.click()}>{t('uploadInfer.filePanel.browseFiles')}</button>
-                <button className={`${styles.btn} ${styles.btnSm}`} onClick={() => folderInputRef.current?.click()}>{t('uploadInfer.filePanel.folder')}</button>
-              </div>
-            </div>
-          )}
-
-          {(view === 'preview' || view === 'uploading') && (
-            <div className={styles.previewWrap}>
-              <div className={styles.previewList}>
-                {browsed.map(bf => (
-                  <div key={bf.id} className={`${styles.fileCard} ${styles[bf.status]}`}>
-                    <div className={`${styles.extBadge} ${styles[bf.ext]}`}>{bf.ext.toUpperCase()}</div>
-                    <div className={styles.fileInfo}>
-                      <div className={styles.fileName}>{bf.name}</div>
-                      <div className={styles.fileMeta}>
-                        <span className={styles.fileSizeChip}>{bf.size}</span>
-                        {bf.status === 'failed' && bf.error && <span className={styles.fileError}>{bf.error}</span>}
-                        {bf.status === 'pending' && <span className={styles.fileStatusText}>{t('uploadInfer.filePanel.fileStatus.ready')}</span>}
-                        {bf.status === 'uploading' && <span className={styles.fileStatusText}>{t('uploadInfer.filePanel.fileStatus.uploading')}</span>}
-                        {bf.status === 'success' && <span className={styles.fileStatusTextSuccess}>{t('uploadInfer.filePanel.fileStatus.uploaded')}</span>}
-                      </div>
+                {/* Header */}
+                <div className={styles.header}>
+                    <div className={styles.headerText}>
+                        <div className={styles.title} id="dict-modal-title">{t('uploadInfer.dictModal.title')}</div>
+                        <div className={styles.subtitle}>{t('uploadInfer.dictModal.subtitle')}</div>
                     </div>
-                    <div className={`${styles.statusIc} ${styles[bf.status]}`}>
-                      {bf.status === 'pending' && <IconPending />}
-                      {bf.status === 'uploading' && <IconUploading />}
-                      {bf.status === 'success' && <IconSuccess />}
-                      {bf.status === 'failed' && <IconFailed />}
+                    <button className={styles.closeBtn} onClick={handleCloseClick} disabled={saving}
+                        title={saving ? t('uploadInfer.dictModal.closeSaving') : t('uploadInfer.dictModal.close')}
+                        aria-label={t('uploadInfer.dictModal.close')}>
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                            <path d="M4 4l8 8M12 4l-8 8" />
+                        </svg>
+                    </button>
+                </div>
+
+                {/* Bulk bar — applies to files currently loaded in this modal (preview, needs Save) */}
+                <div className={styles.bulkBar}>
+                    <span className={styles.bulkLabel}>{t('uploadInfer.dictModal.applyToAll')}</span>
+                    <select className={styles.bulkSelect} value={bulkValue}
+                        onChange={e => setBulkValue(Number(e.target.value))}
+                        disabled={saving || dictsLoading || serverFiles.length === 0}>
+                        <option value={NO_DICT}>{t('uploadInfer.dictModal.noneOption')}</option>
+                        {dicts.map(d => <option key={d.dictionary_id} value={d.dictionary_id}>{d.dictionary_name}</option>)}
+                    </select>
+                    <button className={styles.bulkApplyBtn} onClick={handleApplyToAll} disabled={saving || serverFiles.length === 0}>
+                        {t('uploadInfer.dictModal.applyBtn')}
+                    </button>
+                    <span className={styles.bulkHint}>
+                        {isDirty
+                            ? t('uploadInfer.dictModal.changes', { count: dirtyIds.length })
+                            : t('uploadInfer.dictModal.noChanges')}
+                    </span>
+                </div>
+
+                {/* Associate ALL bar — applies immediately to every file in the date
+                    range on the backend, including files not currently loaded here */}
+                <div className={styles.associateAllBar}>
+                    <span className={styles.bulkLabel}>
+                        {t('uploadInfer.dictModal.associateAllLabel', { from: dateFrom, to: dateTo })}
+                    </span>
+                    <button
+                        className={styles.associateAllBtn}
+                        onClick={handleAssociateAll}
+                        disabled={bulkValue === NO_DICT || saving || isAssociatingAll}
+                    >
+                        {isAssociatingAll ? <span className={styles.spinnerSm} /> : t('uploadInfer.dictModal.associateAllBtn')}
+                    </button>
+                    {associateAllError && <span className={styles.associateAllError}>{associateAllError}</span>}
+                </div>
+
+                {/* Body */}
+                <div className={styles.body}>
+                    <div className={`${styles.listPane} ${detailDictId !== null ? styles.listPaneNarrow : ''}`}>
+                        <div className={styles.listHead}>
+                            <div className={styles.colFile}>{t('uploadInfer.dictModal.colFile')}</div>
+                            <div className={styles.colDict}>{t('uploadInfer.dictModal.colDict')}</div>
+                            <div className={styles.colActions} />
+                        </div>
+
+                        {dictsLoading && (
+                            <div className={styles.listState}>
+                                <div className={styles.spinner} /><span>{t('uploadInfer.dictModal.loadingDicts')}</span>
+                            </div>
+                        )}
+                        {dictsError && <div className={`${styles.listState} ${styles.errorState}`}>{dictsError}</div>}
+                        {!dictsLoading && serverFiles.length === 0 && (
+                            <div className={styles.listState}>{t('uploadInfer.dictModal.noFiles')}</div>
+                        )}
+
+                        {!dictsLoading && !dictsError && serverFiles.map(f => {
+                            const current = selection[f.id] ?? NO_DICT;
+                            const initial = initialSelectionRef.current[f.id] ?? NO_DICT;
+                            const rowDirty = current !== initial;
+                            const hasDict = current !== NO_DICT;
+                            return (
+                                <div key={f.id} className={`${styles.row} ${rowDirty ? styles.rowDirty : ''}`}>
+                                    <div className={styles.colFile} title={f.original_name}>
+                                        <span className={styles.fileName}>{f.original_name}</span>
+                                        {initial !== NO_DICT && (
+                                            <span className={styles.currentBadge} title={t('uploadInfer.dictModal.associated')}>
+                                                {t('uploadInfer.dictModal.associated')}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <div className={styles.colDict}>
+                                        <select className={styles.rowSelect} value={current}
+                                            onChange={e => handleRowChange(f.id, Number(e.target.value))} disabled={saving}>
+                                            <option value={NO_DICT}>{t('uploadInfer.dictModal.noneRow')}</option>
+                                            {dicts.map(d => <option key={d.dictionary_id} value={d.dictionary_id}>{d.dictionary_name}</option>)}
+                                        </select>
+                                    </div>
+                                    <div className={styles.colActions}>
+                                        {hasDict && (
+                                            <button className={styles.viewBtn} onClick={() => handleViewDetails(current)}
+                                                disabled={saving} title={t('uploadInfer.dictModal.viewDetails')}>
+                                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                                    <path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8s-2.5 4.5-6.5 4.5S1.5 8 1.5 8z" />
+                                                    <circle cx="8" cy="8" r="2" />
+                                                </svg>
+                                            </button>
+                                        )}
+                                        {initial !== NO_DICT && current !== NO_DICT && (
+                                            <button className={styles.disBtn} onClick={() => handleRowChange(f.id, NO_DICT)}
+                                                disabled={saving} title={t('uploadInfer.dictModal.disassociate')}>
+                                                {t('uploadInfer.dictModal.disassociate')}
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        })}
                     </div>
-                    {view === 'preview' && <button className={styles.removeBtn} onClick={() => removeFile(bf.id)}><IconClose /></button>}
-                  </div>
-                ))}
-              </div>
-              {view === 'preview' && (
-                <div className={styles.actionBar}>
-                  <button className={`${styles.btn} ${styles.btnP}`} onClick={handleUpload}>
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                      <path d="M8 11V4M5 7l3-3 3 3" /><path d="M2.5 13.5h11" />
-                    </svg>
-                    {t('uploadInfer.filePanel.uploadBtn', { count: browsed.length })}
-                  </button>
-                  <button className={`${styles.btn} ${styles.btnDanger}`} onClick={handleCancel}>{t('uploadInfer.filePanel.cancelBtn')}</button>
+
+                    {/* Detail drawer */}
+                    {detailDictId !== null && (
+                        <div className={styles.detailPane}>
+                            <div className={styles.detailHead}>
+                                <div className={styles.detailTitle}>{detailData?.dictionary_name ?? dictName(detailDictId)}</div>
+                                <button className={styles.detailClose}
+                                    onClick={() => { setDetailDictId(null); setDetailData(null); }}
+                                    title={t('uploadInfer.dictModal.detailClose')}
+                                    aria-label={t('uploadInfer.dictModal.detailClose')}>
+                                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                                        <path d="M4 4l8 8M12 4l-8 8" />
+                                    </svg>
+                                </button>
+                            </div>
+                            {detailLoading && (
+                                <div className={styles.listState}>
+                                    <div className={styles.spinner} /><span>{t('uploadInfer.dictModal.loadingDetails')}</span>
+                                </div>
+                            )}
+                            {detailError && <div className={`${styles.listState} ${styles.errorState}`}>{detailError}</div>}
+                            {detailData && (
+                                <>
+                                    <div className={styles.detailMeta}>
+                                        <div><span className={styles.metaLabel}>{t('uploadInfer.dictModal.metaId')}</span> {detailData.dictionary_id}</div>
+                                        <div><span className={styles.metaLabel}>{t('uploadInfer.dictModal.metaUpdated')}</span> {detailData.updated_at}</div>
+                                        <div><span className={styles.metaLabel}>{t('uploadInfer.dictModal.metaTerms')}</span> {detailData.dictionary_terms.length}</div>
+                                    </div>
+                                    <div className={styles.termsTable}>
+                                        <div className={styles.termsHead}>
+                                            <span>{t('uploadInfer.dictModal.wrongTerm')}</span>
+                                            <span>{t('uploadInfer.dictModal.correctTerm')}</span>
+                                        </div>
+                                        {detailData.dictionary_terms.length === 0 ? (
+                                            <div className={styles.listState}>{t('uploadInfer.dictModal.noTerms')}</div>
+                                        ) : detailData.dictionary_terms.map((term, i) => (
+                                            <div key={i} className={styles.termRow}>
+                                                <span className={styles.termWrong}>{term.wrong_term}</span>
+                                                <span className={styles.termArrow}>→</span>
+                                                <span className={styles.termRight}>{term.correct_term}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    )}
                 </div>
-              )}
-              {view === 'uploading' && (
-                <div className={styles.uploadSummary}>
-                  <div className={styles.uploadProgressBar}>
-                    <div className={styles.uploadProgressFill} style={{ width: `${browsed.length ? (finished / browsed.length) * 100 : 0}%` }} />
-                  </div>
-                  <div className={styles.uploadProgressLabel}>
-                    {t('uploadInfer.filePanel.complete', { finished, total: browsed.length })}
-                    {failed > 0 && <span className={styles.failCount}>{t('uploadInfer.filePanel.failed', { count: failed })}</span>}
-                  </div>
+
+                {/* Footer */}
+                <div className={styles.footer}>
+                    {saving && (
+                        <span className={styles.savingHint}>
+                            <span className={styles.spinnerSm} />{t('uploadInfer.dictModal.savingHint')}
+                        </span>
+                    )}
+                    <button className={`${styles.btn} ${styles.btnGhost}`} onClick={handleCloseClick} disabled={saving}>
+                        {t('uploadInfer.dictModal.cancel')}
+                    </button>
+                    <button className={`${styles.btn} ${styles.btnPrimary}`} onClick={handleSave} disabled={!isDirty || saving}>
+                        {saving ? t('uploadInfer.dictModal.saving') : t('uploadInfer.dictModal.save')}
+                    </button>
                 </div>
-              )}
             </div>
-          )}
         </div>
-      </div>
-
-      {/* ══ SECTION 2: Uploaded files ══ */}
-      <div className={styles.section2}>
-
-        {/* Header */}
-        <div className={styles.section2Header}>
-
-          {/* ── Title row (always visible) ── */}
-          <div className={styles.section2TitleRow}>
-            {/* Select-all checkbox — inference mode */}
-            {selectMode && !isBatchRunning && (
-              <Checkbox
-                checked={allSelected}
-                indeterminate={someSelected}
-                onChange={() => dispatch(toggleSelectAllServerFiles())}
-                disabled={filesTotal === 0}
-              />
-            )}
-
-            {/* Select-all checkbox — export mode */}
-            {exportMode && !isBatchRunning && (
-              <Checkbox
-                checked={allExportSelected}
-                indeterminate={someExportSelected}
-                onChange={toggleExportSelectAll}
-                disabled={filesTotal === 0}
-              />
-            )}
-
-            {/* Select-all checkbox — delete mode */}
-            {deleteMode && !isBatchRunning && (
-              <Checkbox
-                checked={allDeleteSelected}
-                indeterminate={someDeleteSelected}
-                onChange={toggleDeleteSelectAll}
-                disabled={filesTotal === 0}
-              />
-            )}
-
-            <div className={styles.section2Title}>
-              {t('uploadInfer.filePanel.uploadedFiles')}
-              {!filesLoading && filesTotal > 0 && (
-                <span className={styles.filesCount}>{filesTotal}</span>
-              )}
-            </div>
-
-            {/* Search stays in title row for select mode only; export/delete have their own row */}
-            {selectMode && !isBatchRunning && (
-              <div className={styles.headerActions}>
-                <button
-                  className={`${styles.searchIconBtn} ${searchOpen ? styles.searchIconBtnActive : ''}`}
-                  onClick={openSearch}
-                  title={t('uploadInfer.filePanel.searchBtn')}
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="6.5" cy="6.5" r="4" />
-                    <path d="M11 11l2.5 2.5" />
-                  </svg>
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* ── Export mode action row ── */}
-          {exportMode && !isBatchRunning && (
-            <div className={styles.modeActionsRow}>
-              <div className={styles.modeActionsLeft}>
-                <button
-                  className={`${styles.modeTile} ${styles.modeTileSearch} ${searchOpen ? styles.modeTileSearchActive : ''}`}
-                  onClick={openSearch}
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="6.5" cy="6.5" r="4" />
-                    <path d="M11 11l2.5 2.5" />
-                  </svg>
-                  {t('uploadInfer.filePanel.searchBtn')}
-                </button>
-                <button
-                  className={styles.modeTileExportAll}
-                  onClick={handleExportAll}
-                  disabled={filesTotal === 0 || isExportingAll || isExporting}
-                  title={t('uploadInfer.filePanel.exportAllBtn')}
-                >
-                  {isExportingAll ? (
-                    <div className={styles.miniSpinnerGreen} />
-                  ) : (
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6z" />
-                      <path d="M9 2v4h4" />
-                      <path d="M6 9.5l1.5 2 2.5-3" />
-                    </svg>
-                  )}
-                  {t('uploadInfer.filePanel.exportAllBtn')}
-                </button>
-                {exportAllError && <span className={styles.modeActionsError}>{exportAllError}</span>}
-              </div>
-              <div className={styles.modeActionsRight}>
-                <button
-                  className={`${styles.modeTile} ${styles.modeTileConfirmExport} ${exportSelectedIds.length === 0 ? styles.modeTileDisabled : ''}`}
-                  onClick={handleConfirmExport}
-                  disabled={exportSelectedIds.length === 0 || isExporting}
-                >
-                  {isExporting ? (
-                    <div className={styles.miniSpinnerGreen} />
-                  ) : (
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6z" />
-                      <path d="M9 2v4h4" />
-                      <path d="M6 9.5l1.5 2 2.5-3" />
-                    </svg>
-                  )}
-                  {exportSelectedIds.length > 0
-                    ? t('uploadInfer.filePanel.exportCount', { count: exportSelectedIds.length })
-                    : t('uploadInfer.filePanel.exportBtn')}
-                </button>
-                <button
-                  className={`${styles.modeTile} ${styles.modeTileCancel}`}
-                  onClick={exitExportMode}
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                    <path d="M4 4l8 8M12 4l-8 8" />
-                  </svg>
-                  {t('uploadInfer.filePanel.cancelBtn')}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* ── Delete mode action row ── */}
-          {deleteMode && !isBatchRunning && (
-            <div className={styles.modeActionsRow}>
-              <div className={styles.modeActionsLeft}>
-                <button
-                  className={`${styles.modeTile} ${styles.modeTileSearch} ${searchOpen ? styles.modeTileSearchActive : ''}`}
-                  onClick={openSearch}
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="6.5" cy="6.5" r="4" />
-                    <path d="M11 11l2.5 2.5" />
-                  </svg>
-                  {t('uploadInfer.filePanel.searchBtn')}
-                </button>
-                <button
-                  className={styles.modeTileDeleteAll}
-                  onClick={openDeleteAllConfirm}
-                  disabled={filesTotal === 0}
-                  title={t('uploadInfer.filePanel.deleteAllBtn')}
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M8 1.5l6.5 11.5h-13z" />
-                    <path d="M8 6v3.5M8 12v.1" />
-                  </svg>
-                  {t('uploadInfer.filePanel.deleteAllBtn')}
-                </button>
-              </div>
-              <div className={styles.modeActionsRight}>
-                <button
-                  className={`${styles.modeTile} ${styles.modeTileConfirmDelete} ${deleteSelectedIds.length === 0 ? styles.modeTileDisabled : ''}`}
-                  onClick={handleConfirmDelete}
-                  disabled={deleteSelectedIds.length === 0 || isDeleting}
-                >
-                  {isDeleting ? (
-                    <div className={styles.miniSpinner} />
-                  ) : (
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M3 4h10M6 4V3h4v1" />
-                      <path d="M5 4l.5 8h5l.5-8" />
-                      <path d="M7 7v3M9 7v3" />
-                    </svg>
-                  )}
-                  {deleteSelectedIds.length > 0
-                    ? t('uploadInfer.filePanel.deleteCount', { count: deleteSelectedIds.length })
-                    : t('uploadInfer.filePanel.deleteBtn')}
-                </button>
-                <button
-                  className={`${styles.modeTile} ${styles.modeTileCancel}`}
-                  onClick={exitDeleteMode}
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                    <path d="M4 4l8 8M12 4l-8 8" />
-                  </svg>
-                  {t('uploadInfer.filePanel.cancelBtn')}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* ── Action grid — 3×2 tiles, only in normal (idle) mode ── */}
-          {!selectMode && !deleteMode && !exportMode && !isBatchRunning && (
-            <div className={styles.actionsGrid}>
-              {/* Infer */}
-              <button
-                className={`${styles.actionTile} ${styles.actionTileInfer}`}
-                onClick={onEnterSelectMode}
-                title={t('uploadInfer.filePanel.inferenceBtn')}
-              >
-                <svg viewBox="0 0 16 16" fill="currentColor" stroke="none">
-                  <path d="M8 1l1.8 4.4L14 6.2l-3.3 2.5 1.2 4.3L8 10.8 4.1 13l1.2-4.3L2 6.2l4.2-.8z" />
-                </svg>
-                {t('uploadInfer.filePanel.inferenceBtn')}
-              </button>
-
-              {/* Dictionary */}
-              <button
-                className={`${styles.actionTile} ${styles.actionTileDictionary}`}
-                onClick={() => setDictModalOpen(true)}
-                disabled={filesTotal === 0}
-                title={t('uploadInfer.filePanel.dictionaryBtn')}
-              >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                  strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 2.5h7.5a1.5 1.5 0 011.5 1.5v9a.5.5 0 01-.5.5H4a1 1 0 01-1-1V2.5z" />
-                  <path d="M3 11.5a1 1 0 011-1h8" />
-                  <path d="M6 5.5h3" />
-                </svg>
-                {t('uploadInfer.filePanel.dictionaryBtn')}
-              </button>
-
-              {/* Template */}
-              <button
-                className={`${styles.actionTile} ${styles.actionTileTemplate}`}
-                onClick={() => setTemplateModalOpen(true)}
-                disabled={filesTotal === 0}
-                title={t('uploadInfer.filePanel.templateBtn')}
-              >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                  strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 2.5h10v11H3z" />
-                  <path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3" />
-                </svg>
-                {t('uploadInfer.filePanel.templateBtn')}
-              </button>
-
-              {/* Search */}
-              <button
-                className={`${styles.actionTile} ${styles.actionTileSearch} ${searchOpen ? styles.actionTileActive : ''}`}
-                onClick={openSearch}
-                title={t('uploadInfer.filePanel.searchBtn')}
-              >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="6.5" cy="6.5" r="4" />
-                  <path d="M11 11l2.5 2.5" />
-                </svg>
-                {t('uploadInfer.filePanel.searchBtn')}
-              </button>
-
-              {/* Export */}
-              <button
-                className={`${styles.actionTile} ${styles.actionTileExport}`}
-                onClick={enterExportMode}
-                disabled={filesTotal === 0}
-                title={t('uploadInfer.filePanel.exportBtn')}
-              >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                  strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6z" />
-                  <path d="M9 2v4h4" />
-                  <path d="M6 9.5l1.5 2 2.5-3" />
-                </svg>
-                {t('uploadInfer.filePanel.exportBtn')}
-              </button>
-
-              {/* Delete */}
-              <button
-                className={`${styles.actionTile} ${styles.actionTileDelete}`}
-                onClick={enterDeleteMode}
-                disabled={filesTotal === 0}
-                title={t('uploadInfer.filePanel.deleteBtn')}
-              >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                  strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 4h10M6 4V3h4v1" />
-                  <path d="M5 4l.5 8h5l.5-8" />
-                  <path d="M7 7v3M9 7v3" />
-                </svg>
-                {t('uploadInfer.filePanel.deleteBtn')}
-              </button>
-            </div>
-          )}
-
-        </div>
-
-        <div className={styles.dateFilter}>
-          <div className={styles.dateField}>
-            <label className={styles.dateLabel}>{t('uploadInfer.filePanel.dateFrom')}</label>
-            <input type="date" className={styles.dateInput} value={dateFrom} max={dateTo}
-              disabled={isBatchRunning}
-              onChange={e => dispatch(setDateFrom(e.target.value))} />
-          </div>
-          <div className={styles.dateSep}>—</div>
-          <div className={styles.dateField}>
-            <label className={styles.dateLabel}>{t('uploadInfer.filePanel.dateTo')}</label>
-            <input type="date" className={styles.dateInput} value={dateTo} min={dateFrom}
-              disabled={isBatchRunning}
-              onChange={e => dispatch(setDateTo(e.target.value))} />
-          </div>
-          <button className={`${styles.btn} ${styles.btnApply}`} onClick={handleApply} disabled={filesLoading || isBatchRunning}>{t('uploadInfer.filePanel.applyDate')}</button>
-        </div>
-
-        {/* Sort header */}
-        <div className={styles.sortHeader}>
-          <span className={styles.sortHeaderLabel}>
-            <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-              <path d="M2 4h10M4 7h6M6 10h2" />
-            </svg>
-            {t('uploadInfer.filePanel.sortBy')}
-          </span>
-          <div className={styles.sortCols}>
-            {([
-              { key: 'id' as SortKey, label: t('uploadInfer.filePanel.sortId') },
-              { key: 'name' as SortKey, label: t('uploadInfer.filePanel.sortName') },
-              { key: 'date' as SortKey, label: t('uploadInfer.filePanel.sortDate') },
-              { key: 'status' as SortKey, label: t('uploadInfer.filePanel.sortStatus') },
-            ]).map(({ key, label }) => (
-              <button
-                key={key}
-                className={`${styles.sortCol} ${sort.key === key ? styles.sortColActive : ''}`}
-                onClick={() => handleSort(key)}
-              >
-                {label}
-                <svg viewBox="0 0 10 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
-                  className={sort.key === key ? (sort.dir === 'asc' ? styles.sortAsc : styles.sortDesc) : styles.sortInactive}>
-                  <path d="M5 1v10M2 8l3 3 3-3" />
-                </svg>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Search bar */}
-        <div className={`${styles.searchBar} ${searchOpen ? styles.searchBarOpen : ''}`}>
-          <div className={styles.searchBarRow}>
-            <div className={styles.searchInner}>
-              <svg className={styles.searchBarIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="6.5" cy="6.5" r="4" />
-                <path d="M11 11l2.5 2.5" />
-              </svg>
-              <input
-                ref={searchInputRef}
-                type="text"
-                className={styles.searchInput}
-                placeholder={t('uploadInfer.filePanel.searchPlaceholder')}
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-              />
-              {filesSearch && (
-                <span className={styles.searchCount}>
-                  {t('uploadInfer.filePanel.matchCount', { count: filesTotal })}
-                </span>
-              )}
-            </div>
-            <button className={styles.searchCloseBtn} onClick={closeSearch} title={t('uploadInfer.filePanel.searchBtn')}>
-              <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <path d="M2 2l8 8M10 2l-8 8" />
-              </svg>
-            </button>
-          </div>
-        </div>
-
-        {/* File list */}
-        <div className={styles.uploadedBody}>
-          {filesLoading && (
-            <div className={styles.listState}><div className={styles.spinner} /><span>{t('uploadInfer.filePanel.loadingFiles')}</span></div>
-          )}
-          {!filesLoading && filesError && (
-            <div className={`${styles.listState} ${styles.errorState}`}>
-              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                <circle cx="8" cy="8" r="6" /><path d="M8 5v3M8 11v.5" />
-              </svg>
-              {filesError}
-            </div>
-          )}
-          {!filesLoading && !filesError && filesTotal === 0 && !filesSearch && (
-            <div className={styles.listState}>
-              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="2" y="2" width="12" height="12" rx="2" /><path d="M5 8h6M5 5.5h4M5 10.5h6" />
-              </svg>
-              {t('uploadInfer.filePanel.noFilesRange')}
-            </div>
-          )}
-          {!filesLoading && !filesError && filesTotal === 0 && filesSearch && (
-            <div className={styles.listState}>
-              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="6.5" cy="6.5" r="4" /><path d="M11 11l2.5 2.5" />
-              </svg>
-              {t('uploadInfer.filePanel.noFilesMatch', { query: filesSearch })}
-            </div>
-          )}
-          {!filesLoading && !filesError && displayedFiles.map(f => {
-            const ext = getExt(f.original_name);
-            const isChecked = selectedServerIds.includes(f.id);
-            const isDeleteChecked = deleteSelectedIds.includes(f.id);
-            const isExportChecked = exportSelectedIds.includes(f.id);
-            const selectable = selectMode && !isBatchRunning;
-            const deletable = deleteMode && !isBatchRunning;
-            const exportable = exportMode && !isBatchRunning;
-            return (
-              <div
-                key={f.id}
-                className={`${styles.hitm}
-                  ${selectable ? (isChecked ? styles.active : '') : ''}
-                  ${deletable ? (isDeleteChecked ? styles.activeDelete : '') : ''}
-                  ${exportable ? (isExportChecked ? styles.activeExport : '') : ''}
-                  ${!selectable && !deletable && !exportable ? (f.id === activeFileId ? styles.activeView : '') : ''}
-                  ${styles.hitmSelectable}`}
-                onClick={() => {
-                  if (selectable) dispatch(toggleServerFileSelection(f.id));
-                  else if (deletable) toggleDeleteSelection(f.id);
-                  else if (exportable) toggleExportSelection(f.id);
-                  else onFileClick(f.id);
-                }}
-              >
-                {selectable && (
-                  <Checkbox checked={isChecked} onChange={() => dispatch(toggleServerFileSelection(f.id))} />
-                )}
-                {deletable && (
-                  <Checkbox checked={isDeleteChecked} onChange={() => toggleDeleteSelection(f.id)} />
-                )}
-                {exportable && (
-                  <Checkbox checked={isExportChecked} onChange={() => toggleExportSelection(f.id)} />
-                )}
-                <div className={`${styles.ficon} ${styles[ext]}`}>{ext.toUpperCase()}</div>
-                <div className={styles.hi}>
-                  <div className={styles.hn}>{f.original_name}</div>
-                  <div className={styles.hm}>{f.inserted_at} · #{f.id}</div>
-                </div>
-                <span className={`${styles.badge} ${isChecked ? styles.bSelected :
-                  isDeleteChecked ? styles.bDelete :
-                    isExportChecked ? styles.bExport :
-                      f.status === 'completed' ? styles.bInferred : styles.bNotInferred
-                  }`}>
-                  {isChecked ? (
-                    <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="10" height="10">
-                      <path d="M2 6l3 3 5-5" />
-                    </svg>
-                  ) : isDeleteChecked ? (
-                    <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" width="10" height="10">
-                      <path d="M2 2l8 8M10 2l-8 8" />
-                    </svg>
-                  ) : isExportChecked ? (
-                    <>
-                      <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="9" height="9">
-                        <path d="M6 1v6M3.5 4.5L6 7l2.5-2.5" /><path d="M2 10h8" />
-                      </svg>
-                      {t('uploadInfer.filePanel.export')}
-                    </>
-                  ) : f.status === 'completed' ? (
-                    <>
-                      <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="9" height="9">
-                        <path d="M2 6l3 3 5-5" />
-                      </svg>
-                      {t('uploadInfer.filePanel.inferenced')}
-                    </>
-                  ) : t('uploadInfer.filePanel.notInferenced')}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Pagination footer */}
-        {!filesLoading && !filesError && filesTotal > 0 && (
-          <div className={styles.paginationBar}>
-            <div className={styles.pageSizeGroup}>
-              <span className={styles.pageSizeLabel}>{t('uploadInfer.filePanel.perPage')}</span>
-              <select
-                className={styles.pageSizeSelect}
-                value={filesPageSize}
-                onChange={e => handlePageSizeChange(Number(e.target.value))}
-              >
-                {[100, 150, 200].map(size => (
-                  <option key={size} value={size}>{size}</option>
-                ))}
-              </select>
-            </div>
-
-            <div className={styles.pageNav}>
-              <button
-                className={styles.pageNavBtn}
-                onClick={() => goToPage(filesPage - 1)}
-                disabled={filesPage <= 1}
-                aria-label="Previous page"
-              >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                  <path d="M10 3L6 8l4 5" />
-                </svg>
-              </button>
-
-              {getPageNumbers(filesPage, filesTotalPages).map((p, i) =>
-                p === '…' ? (
-                  <span key={`ellipsis-${i}`} className={styles.pageEllipsis}>…</span>
-                ) : (
-                  <button
-                    key={p}
-                    className={`${styles.pageNumBtn} ${p === filesPage ? styles.pageNumBtnActive : ''}`}
-                    onClick={() => goToPage(p as number)}
-                  >
-                    {p}
-                  </button>
-                )
-              )}
-
-              <button
-                className={styles.pageNavBtn}
-                onClick={() => goToPage(filesPage + 1)}
-                disabled={filesPage >= filesTotalPages}
-                aria-label="Next page"
-              >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                  <path d="M6 3l4 5-4 5" />
-                </svg>
-              </button>
-            </div>
-
-            <div className={styles.pageInfo}>
-              {t('uploadInfer.filePanel.pageInfo', { page: filesPage, totalPages: filesTotalPages, total: filesTotal })}
-            </div>
-          </div>
-        )}
-      </div>
-
-      <DictionaryAssociationModal
-        open={dictModalOpen}
-        onClose={() => setDictModalOpen(false)}
-      />
-
-      <PromptTemplateAssociationModal
-        open={templateModalOpen}
-        onClose={() => setTemplateModalOpen(false)}
-      />
-
-      {/* ── Delete ALL confirmation — wipes every file on the account ── */}
-      {deleteAllConfirmOpen && (
-        <div className={styles.dangerOverlay} onClick={() => !isDeletingAll && closeDeleteAllConfirm()}>
-          <div className={styles.dangerModal} onClick={e => e.stopPropagation()}>
-            <div className={styles.dangerIcon}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 2l10 18H2z" />
-                <path d="M12 9v5M12 17v.1" />
-              </svg>
-            </div>
-            <div className={styles.dangerTitle}>{t('uploadInfer.filePanel.deleteAllConfirmTitle')}</div>
-            <div className={styles.dangerBody}>
-              {t('uploadInfer.filePanel.deleteAllConfirmBody', { from: dateFrom, to: dateTo })}
-            </div>
-            <label className={styles.dangerLabel}>
-              {t('uploadInfer.filePanel.deleteAllConfirmPrompt', { phrase: DELETE_ALL_CONFIRM_PHRASE })}
-            </label>
-            <input
-              type="text"
-              className={styles.dangerInput}
-              value={deleteAllConfirmText}
-              onChange={e => setDeleteAllConfirmText(e.target.value)}
-              placeholder={DELETE_ALL_CONFIRM_PHRASE}
-              autoFocus
-              autoComplete="off"
-              autoCorrect="off"
-              autoCapitalize="off"
-              spellCheck={false}
-              disabled={isDeletingAll}
-            />
-            {deleteAllError && <div className={styles.dangerError}>{deleteAllError}</div>}
-            <div className={styles.dangerActions}>
-              <button
-                className={`${styles.btn} ${styles.btnFull}`}
-                onClick={closeDeleteAllConfirm}
-                disabled={isDeletingAll}
-              >
-                {t('uploadInfer.filePanel.cancelBtn')}
-              </button>
-              <button
-                type="button"
-                className={`${styles.btn} ${styles.btnDanger} ${styles.btnFull}`}
-                onClick={handleConfirmDeleteAll}
-                disabled={!isDeleteAllPhraseMatched || isDeletingAll}
-                aria-disabled={!isDeleteAllPhraseMatched || isDeletingAll}
-              >
-                {isDeletingAll ? <div className={styles.miniSpinner} /> : t('uploadInfer.filePanel.deleteAllConfirmBtn')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+    );
 };
 
-export default FilePanel;
-
-
+export default DictionaryAssociationModal;
 
 
 
@@ -1188,2339 +368,1588 @@ export default FilePanel;
 
 
 // ═══════════════════════════════════════════════
-// FilePanel.module.scss
-// Content Analytics · Upload panel — two sections
+// pages/UploadInfer/DictionaryAssociationModal.module.scss
 // ═══════════════════════════════════════════════
-@use '../../styles/mixins' as m;
 
-// ── Outer panel shell ─────────────────────────
-.panel {
-  width: 360px;
-  flex-shrink: 0;
-  border-right: none;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--bg0);
-  position: relative;
-
-  &::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 1px;
-    background: linear-gradient(180deg,
-        rgba(139, 92, 246, 0.0) 0%,
-        rgba(139, 92, 246, 0.6) 20%,
-        rgba(56, 196, 186, 0.7) 55%,
-        rgba(240, 160, 48, 0.6) 85%,
-        rgba(240, 160, 48, 0.0) 100%);
-    pointer-events: none;
-    z-index: 1;
-  }
-}
-
-// ══════════════════════════════════════
-// SECTION 1 — Step header + upload zone
-// ══════════════════════════════════════
-.step1 {
-  flex-shrink: 0;
-  border-bottom: none;
-  background: var(--bg1);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  position: relative;
-
-  &::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-        rgba(139, 92, 246, 0.0) 0%,
-        rgba(139, 92, 246, 0.6) 20%,
-        rgba(56, 196, 186, 0.7) 50%,
-        rgba(240, 160, 48, 0.6) 80%,
-        rgba(240, 160, 48, 0.0) 100%);
-    pointer-events: none;
-  }
-}
-
-// ── Step-1 header bar (original design) ──────
-.step1Bar {
-  padding: 10px 14px;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  border-bottom: none;
-  background: var(--bg1);
-  flex-shrink: 0;
-  transition: opacity 0.2s;
-  position: relative;
-
-  &::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-        rgba(139, 92, 246, 0.0) 0%,
-        rgba(139, 92, 246, 0.6) 20%,
-        rgba(56, 196, 186, 0.7) 50%,
-        rgba(240, 160, 48, 0.6) 80%,
-        rgba(240, 160, 48, 0.0) 100%);
-    pointer-events: none;
-  }
-
-  .step1Collapsed & {
-    border-bottom-color: transparent;
-  }
-}
-
-.slbl {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--t2);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  @include m.mono;
-}
-
-// Collapse toggle button — matches original
-.collapseBtn {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-left: auto;
-  padding: 3px 8px;
-  border-radius: 99px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  font-size: 12px;
-  @include m.mono;
-  cursor: pointer;
-  transition: all 0.12s;
-  user-select: none;
-  flex-shrink: 0;
-
-  svg {
-    width: 10px;
-    height: 10px;
-  }
-
-  &:hover {
-    background: var(--bg3);
-    color: var(--t1);
-    border-color: var(--bdr3);
-  }
-}
-
-// ── Collapsible content area ──────────────────
-.step1Content {
-  overflow: hidden;
-  max-height: 320px;
-  opacity: 1;
-  transition:
-    max-height 0.28s cubic-bezier(0.4, 0, 0.2, 1),
-    opacity 0.2s ease,
-    padding 0.22s ease;
-
-  .step1Collapsed & {
-    max-height: 0;
-    opacity: 0;
-    pointer-events: none;
-  }
-}
-
-// ── Drop zone (original style) ────────────────
-.dropzone {
-  border: 1.5px dashed var(--bdr2);
-  border-radius: var(--rxl);
-  padding: 24px 20px;
-  margin: 12px 14px;
-  text-align: center;
-  background: var(--bg1);
-  cursor: pointer;
-  transition: all 0.18s;
-  position: relative;
-  overflow: hidden;
-
-  &::before {
-    content: '';
-    position: absolute;
+.backdrop {
+    position: fixed;
     inset: 0;
-    background: radial-gradient(ellipse at 50% 0%, rgba(139, 92, 246, 0.04), transparent 65%);
-    pointer-events: none;
-  }
+    background: rgba(5, 10, 40, 0.62);
+    backdrop-filter: blur(2px);
+    z-index: 9000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+}
 
-  &:hover,
-  &.dragOver {
-    border-color: var(--blue);
+.dialog {
+    background: var(--bg1);
+    border: 1px solid var(--bdr2);
+    border-radius: var(--rxl);
+    box-shadow: var(--shadow);
+    width: 100%;
+    max-width: 900px;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    font-family: var(--font-ui);
+    color: var(--t0);
+}
+
+// ── Header ─────────────────────────────────────
+.header {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 18px 20px 14px;
+    border-bottom: 1px solid var(--bdr);
+}
+
+.headerText {
+    flex: 1;
+    min-width: 0;
+}
+
+.title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--t0);
+    letter-spacing: 0.1px;
+}
+
+.subtitle {
+    margin-top: 3px;
+    font-size: 12.5px;
+    color: var(--t2);
+}
+
+.closeBtn {
+    width: 30px;
+    height: 30px;
+    border-radius: var(--r);
+    border: 1px solid var(--bdr2);
     background: var(--bg2);
-  }
+    color: var(--t1);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
 
-  &.dragOver {
+    svg {
+        width: 14px;
+        height: 14px;
+    }
+
+    &:hover:not(:disabled) {
+        background: var(--bg3);
+        color: var(--t0);
+        border-color: var(--bdr3);
+    }
+
+    &:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+    }
+}
+
+// ── Bulk bar ───────────────────────────────────
+.bulkBar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 20px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--bdr);
+    flex-wrap: wrap;
+}
+
+.bulkLabel {
+    font-size: 12.5px;
+    color: var(--t1);
+    font-weight: 500;
+}
+
+.bulkSelect {
+    flex: 0 1 280px;
+    min-width: 200px;
+    height: 32px;
+    padding: 0 28px 0 10px;
+    border-radius: var(--r);
+    border: 1px solid var(--bdr2);
+    background: var(--bg1);
+    color: var(--t0);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%237a90cc' stroke-width='1.5' stroke-linecap='round'%3E%3Cpath d='M3 5l3 3 3-3'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    background-size: 12px;
+
+    &:focus-visible {
+        outline: none;
+        border-color: var(--blue-bdr);
+        box-shadow: 0 0 0 2px var(--blue-dim);
+    }
+
+    &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+}
+
+.bulkApplyBtn {
+    height: 32px;
+    padding: 0 14px;
+    border-radius: var(--r);
+    border: 1px solid var(--blue-bdr);
     background: var(--blue-dim);
-  }
-}
-
-.dzIc {
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
-  background: var(--blue-dim);
-  border: 1px solid var(--blue-bdr);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin: 0 auto 11px;
-
-  svg {
-    width: 18px;
-    height: 18px;
-  }
-}
-
-.dzTitle {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--t0);
-  margin-bottom: 4px;
-}
-
-.dzSub {
-  font-size: 13px;
-  color: var(--t2);
-  @include m.mono;
-}
-
-.chips {
-  display: flex;
-  justify-content: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-top: 10px;
-}
-
-.chip {
-  font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 99px;
-  background: var(--bg3);
-  border: 1px solid var(--bdr);
-  color: var(--t2);
-  @include m.mono;
-}
-
-.dzActions {
-  display: flex;
-  gap: 8px;
-  justify-content: center;
-  margin-top: 11px;
-  position: relative;
-  z-index: 1;
-}
-
-// ── Preview / uploading ───────────────────────
-.previewWrap {
-  display: flex;
-  flex-direction: column;
-  animation: fadeSlide 0.18s ease;
-}
-
-.previewList {
-  max-height: 240px;
-  overflow-y: auto;
-  padding: 8px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  @include m.scrollbar;
-}
-
-// Browsed file card
-.fileCard {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 11px;
-  background: var(--bg2);
-  border: 1px solid var(--bdr);
-  border-radius: var(--rxl);
-  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
-  position: relative;
-  overflow: hidden;
-
-  // Subtle shimmer background
-  &::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: radial-gradient(ellipse at 0% 50%, rgba(139, 92, 246, 0.04), transparent 70%);
-    pointer-events: none;
-  }
-
-  // Left accent bar
-  &::after {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 8px;
-    bottom: 8px;
-    width: 3px;
-    border-radius: 0 3px 3px 0;
-    background: var(--bdr2);
-    transition: background 0.2s;
-  }
-
-  &.uploading {
-    border-color: rgba(139, 92, 246, 0.35);
-    background: rgba(139, 92, 246, 0.05);
-    box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.12) inset;
-
-    &::after {
-      background: linear-gradient(180deg, var(--blue), #a78bfa);
-    }
-
-    &::before {
-      background: radial-gradient(ellipse at 0% 50%, rgba(139, 92, 246, 0.08), transparent 70%);
-    }
-  }
-
-  &.success {
-    border-color: var(--green-bdr);
-    background: var(--green-dim);
-
-    &::after {
-      background: var(--green);
-    }
-
-    &::before {
-      background: radial-gradient(ellipse at 0% 50%, rgba(52, 211, 153, 0.08), transparent 70%);
-    }
-  }
-
-  &.failed {
-    border-color: var(--red-bdr);
-    background: var(--red-dim);
-
-    &::after {
-      background: var(--red);
-    }
-
-    &::before {
-      background: radial-gradient(ellipse at 0% 50%, rgba(239, 68, 68, 0.08), transparent 70%);
-    }
-  }
-}
-
-// Extension badge (shared between browsed + uploaded cards)
-.extBadge {
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 800;
-  @include m.mono;
-  flex-shrink: 0;
-  letter-spacing: 0.03em;
-  position: relative;
-  z-index: 1;
-
-  &.vtt {
-    background: linear-gradient(135deg, rgba(91, 164, 239, 0.18) 0%, rgba(139, 92, 246, 0.14) 100%);
     color: var(--blue);
-    border: 1px solid rgba(91, 164, 239, 0.3);
-    box-shadow: 0 1px 4px rgba(91, 164, 239, 0.12);
-  }
+    font-size: 12.5px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s;
 
-  &.srt {
-    background: linear-gradient(135deg, rgba(52, 211, 153, 0.18) 0%, rgba(56, 196, 186, 0.14) 100%);
-    color: var(--green);
-    border: 1px solid rgba(52, 211, 153, 0.3);
-    box-shadow: 0 1px 4px rgba(52, 211, 153, 0.12);
-  }
+    &:hover:not(:disabled) {
+        background: var(--bg3);
+    }
+
+    &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
 }
 
-.fileInfo {
-  flex: 1;
-  min-width: 0;
+.bulkHint {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--t2);
+    font-style: italic;
 }
 
-.fileNameRow {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
+// ── Associate ALL bar — distinct amber accent since this applies
+//    immediately on the backend rather than previewing in the row list ──
+.associateAllBar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 20px;
+    background: rgba(240, 160, 48, 0.06);
+    border-bottom: 1px solid var(--bdr);
+    flex-wrap: wrap;
+}
+
+.associateAllBtn {
+    height: 30px;
+    padding: 0 14px;
+    border-radius: var(--r);
+    border: 1px solid rgba(240, 160, 48, 0.4);
+    background: rgba(240, 160, 48, 0.12);
+    color: var(--amber);
+    font-size: 12.5px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+
+    &:hover:not(:disabled) {
+        background: var(--amber);
+        border-color: var(--amber);
+        color: #fff;
+    }
+
+    &:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+    }
+}
+
+.associateAllError {
+    font-size: 12px;
+    color: #ef4444;
+}
+
+// ── Body ───────────────────────────────────────
+.body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    overflow: hidden;
+}
+
+.listPane {
+    flex: 1;
+    min-width: 0;
+    overflow-y: auto;
+    padding: 6px 8px 12px;
+    transition: flex-basis 0.2s;
+}
+
+.listPaneNarrow {
+    flex: 1.1;
+}
+
+.listHead {
+    display: grid;
+    grid-template-columns: 1fr 220px 140px;
+    gap: 10px;
+    padding: 8px 12px;
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--t2);
+    border-bottom: 1px solid var(--bdr);
+    position: sticky;
+    top: 0;
+    background: var(--bg1);
+    z-index: 1;
+}
+
+.row {
+    display: grid;
+    grid-template-columns: 1fr 220px 140px;
+    gap: 10px;
+    align-items: center;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--bdr);
+    transition: background 0.12s;
+
+    &:hover {
+        background: var(--bg2);
+    }
+}
+
+.rowDirty {
+    background: var(--amber-dim);
+
+    &:hover {
+        background: var(--amber-dim);
+    }
+}
+
+.colFile {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
 }
 
 .fileName {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--t0);
-  @include m.truncate;
-  margin-bottom: 1px;
-  flex: 1;
-  min-width: 0;
-}
-
-.fileId {
-  font-size: 10px;
-  color: var(--t2);
-  @include m.mono;
-  flex-shrink: 0;
-  opacity: 0.65;
-}
-
-// ── File ID badge (shown before ext badge in card) ──
-.fileIdBadge {
-  font-size: 10px;
-  font-weight: 700;
-  font-family: var(--font-mono);
-  color: #a78bfa;
-  background: rgba(167, 139, 250, 0.12);
-  border: 1px solid rgba(167, 139, 250, 0.3);
-  border-radius: 4px;
-  padding: 1px 5px;
-  flex-shrink: 0;
-  white-space: nowrap;
-  letter-spacing: 0.02em;
-}
-
-.fileMeta {
-  font-size: 12px;
-  color: var(--t2);
-  @include m.mono;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 2px;
-  flex-wrap: wrap;
-}
-
-.fileSizeChip {
-  font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 99px;
-  background: var(--bg3);
-  border: 1px solid var(--bdr);
-  color: var(--t2);
-}
-
-.fileStatusText {
-  font-size: 11px;
-  color: var(--t2);
-  opacity: 0.7;
-}
-
-.fileStatusTextSuccess {
-  font-size: 11px;
-  color: var(--green);
-  font-weight: 600;
-}
-
-.fileError {
-  color: var(--red);
-}
-
-// Status icon (upload progress)
-.statusIc {
-  width: 18px;
-  height: 18px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  svg {
-    width: 15px;
-    height: 15px;
-  }
-
-  &.pending {
-    color: var(--t2);
-  }
-
-  &.uploading {
-    color: var(--blue);
-    animation: spin 0.9s linear infinite;
-  }
-
-  &.success {
-    color: var(--green);
-  }
-
-  &.failed {
-    color: var(--red);
-  }
-}
-
-.removeBtn {
-  width: 22px;
-  height: 22px;
-  border-radius: 5px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  padding: 0;
-  transition: all 0.12s;
-
-  svg {
-    width: 10px;
-    height: 10px;
-  }
-
-  &:hover {
-    background: var(--red-dim);
-    border-color: var(--red-bdr);
-    color: var(--red);
-  }
-}
-
-// Action bar (Upload / Cancel)
-.actionBar {
-  display: flex;
-  gap: 7px;
-  padding: 10px;
-  border-top: none;
-  background: var(--bg1);
-  position: relative;
-
-  &::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-        rgba(139, 92, 246, 0.0) 0%,
-        rgba(139, 92, 246, 0.6) 20%,
-        rgba(56, 196, 186, 0.7) 50%,
-        rgba(240, 160, 48, 0.6) 80%,
-        rgba(240, 160, 48, 0.0) 100%);
-    pointer-events: none;
-  }
-}
-
-// Upload progress bar
-.uploadSummary {
-  padding: 8px 10px 10px;
-  border-top: none;
-  background: var(--bg1);
-  position: relative;
-
-  &::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-        rgba(139, 92, 246, 0.0) 0%,
-        rgba(139, 92, 246, 0.6) 20%,
-        rgba(56, 196, 186, 0.7) 50%,
-        rgba(240, 160, 48, 0.6) 80%,
-        rgba(240, 160, 48, 0.0) 100%);
-    pointer-events: none;
-  }
-}
-
-.uploadProgressBar {
-  height: 3px;
-  background: var(--bg3);
-  border-radius: 99px;
-  overflow: hidden;
-  margin-bottom: 6px;
-}
-
-.uploadProgressFill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--blue), #a78bfa);
-  border-radius: 99px;
-  transition: width 0.4s ease;
-}
-
-.uploadProgressLabel {
-  font-size: 12px;
-  color: var(--t2);
-  @include m.mono;
-}
-
-.failCount {
-  color: var(--red);
-}
-
-// ══════════════════════════════════════
-// SECTION 2 — Uploaded files list
-// ══════════════════════════════════════
-.section2 {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--bg0);
-}
-
-// Section 2 header — stacked: title row + action row/grid below
-.section2Header {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 0;
-  border-bottom: none;
-  background: var(--bg1);
-  flex-shrink: 0;
-  position: relative;
-
-  &::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-        rgba(139, 92, 246, 0.0) 0%,
-        rgba(139, 92, 246, 0.6) 20%,
-        rgba(56, 196, 186, 0.7) 50%,
-        rgba(240, 160, 48, 0.6) 80%,
-        rgba(240, 160, 48, 0.0) 100%);
-    pointer-events: none;
-  }
-}
-
-// Title row — checkbox + title + optional search icon
-.section2TitleRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px 8px;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.section2Title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--t2);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  @include m.mono;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.filesCount {
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--blue);
-  background: var(--blue-dim);
-  border: 1px solid var(--blue-bdr);
-  padding: 1px 6px;
-  border-radius: 99px;
-}
-
-
-
-// ── Action grid (Option C — 3×2 icon + label tiles) ──────────
-.actionsGrid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 4px;
-  padding: 0 10px 8px;
-}
-
-.actionTile {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  padding: 5px 2px 4px;
-  border-radius: 6px;
-  border: 1px solid var(--bdr);
-  background: var(--bg3);
-  color: var(--t2);
-  font-size: 9px;
-  font-weight: 500;
-  font-family: var(--font-ui);
-  letter-spacing: 0.01em;
-  cursor: pointer;
-  transition: all 0.13s;
-  user-select: none;
-
-  svg {
-    width: 12px;
-    height: 12px;
-    flex-shrink: 0;
-  }
-
-  &:hover:not(:disabled) {
-    background: var(--bg2);
-    border-color: var(--bdr2);
+    font-size: 13px;
     color: var(--t0);
-  }
-
-  &:active:not(:disabled) {
-    transform: scale(0.97);
-  }
-
-  &:disabled {
-    opacity: 0.3;
-    cursor: not-allowed;
-  }
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
-// Infer — blue tint
-.actionTileInfer {
-  border-color: var(--blue-bdr);
-  background: var(--blue-dim);
-  color: var(--blue);
-  animation: inferPulse 2.4s ease-in-out infinite;
-
-  &:hover:not(:disabled) {
-    background: var(--blue);
-    border-color: var(--blue);
-    color: #fff;
-    animation: none;
-  }
-}
-
-// Dictionary — violet tint
-.actionTileDictionary {
-  color: var(--violet);
-  border-color: var(--violet-dim);
-  background: var(--violet-dim);
-
-  &:hover:not(:disabled) {
-    background: var(--violet);
-    border-color: var(--violet);
-    color: #fff;
-  }
-}
-
-// Template — teal tint
-.actionTileTemplate {
-  color: var(--teal);
-  border-color: var(--teal-bdr);
-  background: var(--teal-dim);
-
-  &:hover:not(:disabled) {
-    background: var(--teal);
-    border-color: var(--teal);
-    color: #fff;
-  }
-}
-
-// Search — amber tint
-.actionTileSearch {
-  color: var(--amber);
-  border-color: rgba(240, 160, 48, 0.25);
-  background: rgba(240, 160, 48, 0.08);
-
-  &:hover:not(:disabled) {
-    background: rgba(240, 160, 48, 0.18);
-    border-color: rgba(240, 160, 48, 0.45);
-  }
-}
-
-// Active search
-.actionTileActive {
-  background: rgba(240, 160, 48, 0.15) !important;
-  border-color: rgba(240, 160, 48, 0.45) !important;
-}
-
-// Export — green tint
-.actionTileExport {
-  color: var(--green);
-  border-color: var(--green-bdr);
-  background: var(--green-dim);
-
-  &:hover:not(:disabled) {
-    background: var(--green);
-    border-color: var(--green);
-    color: #fff;
-  }
-}
-
-// Delete — red tint
-.actionTileDelete {
-  color: #ef4444;
-  border-color: rgba(239, 68, 68, 0.22);
-  background: rgba(239, 68, 68, 0.07);
-
-  &:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.15);
-    border-color: rgba(239, 68, 68, 0.4);
-  }
-}
-
-// ── Delete icon button (used inside mode-bar) ─────────────────
-.deleteIconBtn {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  flex-shrink: 0;
-  transition: all 0.15s;
-
-  svg {
-    width: 14px;
-    height: 14px;
-  }
-
-  &:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.1);
-    border-color: rgba(239, 68, 68, 0.35);
-    color: #ef4444;
-  }
-
-  &:disabled {
-    opacity: 0.3;
-    cursor: default;
-  }
-}
-
-// Confirm-delete state — always red, solid
-.deleteIconBtnConfirm {
-  border-color: rgba(239, 68, 68, 0.45);
-  background: rgba(239, 68, 68, 0.12);
-  color: #ef4444;
-
-  &:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.22);
-    border-color: rgba(239, 68, 68, 0.7);
-    box-shadow: 0 0 8px rgba(239, 68, 68, 0.25);
-  }
-}
-
-.deleteIconBtnDisabled {
-  opacity: 0.4 !important;
-  cursor: default !important;
-}
-
-// ── Export icon button (used inside mode-bar) ─────────────────
-.exportIconBtn {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  flex-shrink: 0;
-  transition: all 0.15s;
-
-  svg {
-    width: 14px;
-    height: 14px;
-  }
-
-  &:hover:not(:disabled) {
-    background: rgba(78, 200, 122, 0.10);
-    border-color: rgba(78, 200, 122, 0.35);
+.currentBadge {
+    flex-shrink: 0;
+    padding: 2px 7px;
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
     color: var(--green);
-  }
-
-  &:disabled {
-    opacity: 0.3;
-    cursor: default;
-  }
-}
-
-// Confirm-export state — always green, solid
-.exportIconBtnConfirm {
-  border-color: rgba(78, 200, 122, 0.45);
-  background: rgba(78, 200, 122, 0.10);
-  color: var(--green);
-
-  &:hover:not(:disabled) {
-    background: rgba(78, 200, 122, 0.20);
-    border-color: rgba(78, 200, 122, 0.70);
-    box-shadow: 0 0 8px rgba(78, 200, 122, 0.22);
-  }
-}
-
-.exportIconBtnDisabled {
-  opacity: 0.4 !important;
-  cursor: default !important;
-}
-
-.miniSpinner {
-  width: 12px;
-  height: 12px;
-  border: 1.5px solid rgba(239, 68, 68, 0.3);
-  border-top-color: #ef4444;
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  flex-shrink: 0;
-}
-
-.miniSpinnerGreen {
-  width: 12px;
-  height: 12px;
-  border: 1.5px solid rgba(78, 200, 122, 0.3);
-  border-top-color: #4ec87a;
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  flex-shrink: 0;
-}
-
-
-@keyframes inferPulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(91, 164, 239, 0.4); }
-  50%       { box-shadow: 0 0 0 4px rgba(91, 164, 239, 0); }
-}
-
-// ── Cancel icon button (used inside mode-bar) ─────────────────
-.cancelIconBtn {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  border: 1px solid rgba(239, 68, 68, 0.35);
-  background: rgba(239, 68, 68, 0.08);
-  color: #ef4444;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  flex-shrink: 0;
-  transition: all 0.15s;
-
-  svg {
-    width: 13px;
-    height: 13px;
-  }
-
-  &:hover {
-    background: rgba(239, 68, 68, 0.16);
-    border-color: rgba(239, 68, 68, 0.6);
-    box-shadow: 0 0 6px rgba(239, 68, 68, 0.2);
-  }
-}
-
-// Cards get pointer cursor only when in selection mode
-.uploadedCardWrapSelectable {
-  cursor: pointer;
-}
-
-// Date range filter — sits above section2Header
-.dateFilter {
-  display: flex;
-  align-items: flex-end;
-  gap: 6px;
-  padding: 8px 12px 7px;
-  border-bottom: none;
-  background: var(--bg1);
-  flex-shrink: 0;
-  position: relative;
-
-  &::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-        rgba(139, 92, 246, 0.0) 0%,
-        rgba(139, 92, 246, 0.6) 20%,
-        rgba(56, 196, 186, 0.7) 50%,
-        rgba(240, 160, 48, 0.6) 80%,
-        rgba(240, 160, 48, 0.0) 100%);
-    pointer-events: none;
-  }
-
-  &::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-        rgba(139, 92, 246, 0.0) 0%,
-        rgba(139, 92, 246, 0.6) 20%,
-        rgba(56, 196, 186, 0.7) 50%,
-        rgba(240, 160, 48, 0.6) 80%,
-        rgba(240, 160, 48, 0.0) 100%);
-    pointer-events: none;
-  }
-}
-
-.dateField {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  flex: 1;
-  min-width: 0;
-}
-
-.dateLabel {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--t2);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  @include m.mono;
-}
-
-.dateInput {
-  width: 100%;
-  padding: 4px 7px;
-  background: var(--bg0);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 13px;
-  outline: none;
-  appearance: none;
-  transition: border-color 0.12s;
-  cursor: pointer;
-
-  &:focus {
-    border-color: var(--blue);
-    box-shadow: 0 0 0 2px var(--blue-dim);
-  }
-
-  &::-webkit-calendar-picker-indicator {
-    opacity: 0.7;
-    cursor: pointer;
-    filter: var(--date-icon-filter);
-  }
-}
-
-.dateSep {
-  font-size: 13px;
-  color: var(--t2);
-  padding-bottom: 4px;
-  flex-shrink: 0;
-}
-
-.btnApply {
-  align-self: flex-end;
-  padding: 4px 10px !important;
-  font-size: 13px !important;
-  flex-shrink: 0;
-}
-
-// Uploaded file cards
-.uploadedBody {
-  flex: 1;
-  overflow-y: auto;
-  padding: 8px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  @include m.scrollbar;
-}
-
-// ── Uploaded card wrap — carries the static green gradient border ──
-// ── Uploaded file card — mirrors HistoryPanel .hitm ──────────────
-.hitm {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 9px;
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  transition: all 0.12s;
-  margin-bottom: 3px;
-  user-select: none;
-
-  &:hover {
-    background: var(--bg2);
-    border-color: var(--bdr);
-  }
-
-  &.active {
-    background: rgba(91, 164, 239, 0.06);
-    border-color: var(--blue-bdr);
-
-    &::before {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 6px;
-      bottom: 6px;
-      width: 3px;
-      border-radius: 0 3px 3px 0;
-      background: linear-gradient(180deg, var(--blue), #a78bfa);
-    }
-  }
-
-  // Normal-mode file view highlight — distinct purple/amber accent
-  &.activeView {
-    background: rgba(167, 139, 250, 0.06);
-    border-color: rgba(167, 139, 250, 0.3);
-
-    &::before {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 6px;
-      bottom: 6px;
-      width: 3px;
-      border-radius: 0 3px 3px 0;
-      background: linear-gradient(180deg, #a78bfa, var(--amber));
-    }
-  }
-
-  // Delete mode selected — red accent
-  &.activeDelete {
-    background: rgba(239, 68, 68, 0.05);
-    border-color: rgba(239, 68, 68, 0.3);
-
-    &::before {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 6px;
-      bottom: 6px;
-      width: 3px;
-      border-radius: 0 3px 3px 0;
-      background: linear-gradient(180deg, #ef4444, #f97316);
-    }
-  }
-
-  // Export mode selected — green accent
-  &.activeExport {
-    background: rgba(78, 200, 122, 0.05);
-    border-color: rgba(78, 200, 122, 0.28);
-
-    &::before {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 6px;
-      bottom: 6px;
-      width: 3px;
-      border-radius: 0 3px 3px 0;
-      background: linear-gradient(180deg, #4ec87a, #38c4ba);
-    }
-  }
-}
-
-.hitmSelectable {
-  cursor: pointer;
-}
-
-// ── Ext icon ──
-.ficon {
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 700;
-  @include m.mono;
-  flex-shrink: 0;
-
-  &.vtt {
-    background: var(--blue-dim);
-    color: var(--blue);
-  }
-
-  &.srt {
     background: var(--green-dim);
+    border: 1px solid var(--green-bdr);
+    border-radius: 4px;
+}
+
+.colDict {
+    display: flex;
+    align-items: center;
+}
+
+.rowSelect {
+    width: 100%;
+    height: 30px;
+    padding: 0 26px 0 9px;
+    border-radius: var(--r);
+    border: 1px solid var(--bdr2);
+    background: var(--bg2);
+    color: var(--t0);
+    font-size: 12.5px;
+    font-family: inherit;
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%237a90cc' stroke-width='1.5' stroke-linecap='round'%3E%3Cpath d='M3 5l3 3 3-3'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    background-size: 11px;
+
+    &:focus-visible {
+        outline: none;
+        border-color: var(--blue-bdr);
+        box-shadow: 0 0 0 2px var(--blue-dim);
+    }
+
+    &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+}
+
+.colActions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+}
+
+.viewBtn {
+    width: 28px;
+    height: 28px;
+    border-radius: var(--r);
+    border: 1px solid var(--bdr2);
+    background: var(--bg2);
+    color: var(--t1);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    svg {
+        width: 14px;
+        height: 14px;
+    }
+
+    &:hover:not(:disabled) {
+        background: var(--blue-dim);
+        color: var(--blue);
+        border-color: var(--blue-bdr);
+    }
+
+    &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+}
+
+.disBtn {
+    height: 28px;
+    padding: 0 10px;
+    font-size: 11.5px;
+    font-weight: 500;
+    border-radius: var(--r);
+    border: 1px solid var(--red-bdr);
+    background: transparent;
+    color: var(--red);
+    cursor: pointer;
+    font-family: inherit;
+
+    &:hover:not(:disabled) {
+        background: var(--red-dim);
+    }
+
+    &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+}
+
+// ── Detail drawer ──────────────────────────────
+.detailPane {
+    width: 360px;
+    flex-shrink: 0;
+    border-left: 1px solid var(--bdr);
+    background: var(--bg2);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.detailHead {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--bdr);
+}
+
+.detailTitle {
+    flex: 1;
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--t0);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.detailClose {
+    width: 26px;
+    height: 26px;
+    border-radius: 5px;
+    border: 1px solid var(--bdr2);
+    background: var(--bg1);
+    color: var(--t1);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    svg {
+        width: 12px;
+        height: 12px;
+    }
+
+    &:hover {
+        background: var(--bg3);
+        color: var(--t0);
+    }
+}
+
+.detailMeta {
+    padding: 10px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--t1);
+    border-bottom: 1px solid var(--bdr);
+}
+
+.metaLabel {
+    color: var(--t2);
+    margin-right: 6px;
+}
+
+.termsTable {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 6px 8px;
+}
+
+.termsHead {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    padding: 8px 10px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--t2);
+    border-bottom: 1px solid var(--bdr);
+    position: sticky;
+    top: 0;
+    background: var(--bg2);
+}
+
+.termRow {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 8px;
+    align-items: center;
+    padding: 7px 10px;
+    font-size: 12.5px;
+    border-bottom: 1px solid var(--bdr);
+}
+
+.termWrong {
+    color: var(--red);
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+
+.termArrow {
+    color: var(--t2);
+    font-size: 11px;
+}
+
+.termRight {
     color: var(--green);
-  }
+    font-family: var(--font-mono);
+    font-size: 12px;
 }
 
-// ── File info ──
-.hi {
-  flex: 1;
-  min-width: 0;
-}
-
-.hn {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--t0);
-  @include m.truncate;
-}
-
-.hm {
-  font-size: 12px;
-  color: var(--t2);
-  margin-top: 2px;
-  @include m.mono;
-}
-
-// Empty / loading / error state
+// ── List states (loading/error/empty) ──────────
 .listState {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 32px 16px;
-  font-size: 13px;
-  color: var(--t2);
-  @include m.mono;
-  text-align: center;
-
-  svg {
-    width: 18px;
-    height: 18px;
-    opacity: 0.5;
-  }
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 28px 16px;
+    font-size: 13px;
+    color: var(--t2);
 }
 
 .errorState {
-  color: var(--red);
-
-  svg {
-    opacity: 0.7;
-  }
+    color: var(--red);
 }
 
 .spinner {
-  width: 18px;
-  height: 18px;
-  border: 2px solid var(--bdr2);
-  border-top-color: var(--blue);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--bdr2);
+    border-top-color: var(--blue);
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
 }
 
-// ── Search icon button ──────────────────────────
-.searchIconBtn {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  flex-shrink: 0;
-  transition: all 0.15s;
-
-  svg {
-    width: 13px;
-    height: 13px;
-  }
-
-  &:hover {
-    background: var(--bg3);
-    border-color: var(--bdr3);
-    color: var(--t0);
-  }
+.spinnerSm {
+    width: 12px;
+    height: 12px;
+    border: 2px solid var(--bdr2);
+    border-top-color: var(--blue);
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+    display: inline-block;
+    vertical-align: middle;
+    margin-right: 6px;
 }
 
-.searchIconBtnActive {
-  border-color: var(--blue-bdr);
-  background: var(--blue-dim);
-  color: var(--blue);
-
-  &:hover {
-    background: var(--blue-dim);
-    border-color: var(--blue);
-    color: var(--blue);
-  }
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
 }
 
-// ── Search bar (slides in below sortHeader) ──────
-.searchBar {
-  display: grid;
-  grid-template-rows: 0fr;
-  opacity: 0;
-  transition:
-    grid-template-rows 0.22s cubic-bezier(0.4, 0, 0.2, 1),
-    opacity 0.18s ease;
-  overflow: hidden;
-  padding: 0 10px;
+// ── Footer ─────────────────────────────────────
+.footer {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 20px;
+    border-top: 1px solid var(--bdr);
+    background: var(--bg1);
 }
 
-.searchBarOpen {
-  grid-template-rows: 1fr;
-  opacity: 1;
-  padding: 6px 10px 4px;
+.savingHint {
+    margin-right: auto;
+    font-size: 12px;
+    color: var(--amber);
+    display: inline-flex;
+    align-items: center;
 }
 
-// Flex row: input box + close button
-.searchBarRow {
-  min-height: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.searchInner {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--bg2);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  padding: 0 8px;
-  transition: border-color 0.15s, box-shadow 0.15s;
-
-  &:focus-within {
-    border-color: var(--blue);
-    box-shadow: 0 0 0 2px var(--blue-dim);
-  }
-}
-
-.searchBarIcon {
-  width: 12px;
-  height: 12px;
-  flex-shrink: 0;
-  color: var(--t2);
-  opacity: 0.6;
-}
-
-.searchInput {
-  flex: 1;
-  min-width: 0;
-  padding: 6px 0;
-  background: transparent;
-  border: none;
-  outline: none;
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 13px;
-
-  &::placeholder {
-    color: var(--t2);
-    opacity: 0.55;
-  }
-}
-
-.searchCloseBtn {
-  width: 20px;
-  height: 20px;
-  border-radius: 5px;
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  background: rgba(239, 68, 68, 0.08);
-  color: #ef4444;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  flex-shrink: 0;
-  transition: all 0.12s;
-
-  svg {
-    width: 8px;
-    height: 8px;
-  }
-
-  &:hover {
-    background: rgba(239, 68, 68, 0.18);
-    border-color: rgba(239, 68, 68, 0.6);
-    box-shadow: 0 0 6px rgba(239, 68, 68, 0.2);
-  }
-}
-
-.searchCount {
-  font-size: 11px;
-  color: var(--t2);
-  font-family: var(--font-mono);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 99px;
-  font-weight: 500;
-  border: 1px solid transparent;
-  white-space: nowrap;
-  @include m.mono;
-}
-
-.bReady {
-  background: var(--green-dim);
-  color: var(--green);
-  border-color: var(--green-bdr);
-}
-
-// Inferenced — green (file has completed inference)
-.bInferred {
-  background: var(--green-dim);
-  color: var(--green);
-  border-color: var(--green-bdr);
-}
-
-// Not Inferenced — amber (file uploaded but not yet processed)
-.bNotInferred {
-  background: rgba(240, 160, 48, 0.1);
-  color: var(--amber);
-  border-color: rgba(240, 160, 48, 0.3);
-}
-
-.bSelected {
-  background: var(--blue-dim);
-  color: var(--blue);
-  border-color: var(--blue-bdr);
-  font-weight: 600;
-}
-
-.bDelete {
-  background: rgba(239, 68, 68, 0.1);
-  color: #ef4444;
-  border-color: rgba(239, 68, 68, 0.3);
-  font-weight: 600;
-}
-
-.bExport {
-  background: var(--green-dim);
-  color: var(--green);
-  border-color: var(--green-bdr);
-  font-weight: 600;
-  gap: 4px;
-}
-
-.bInfo {
-  background: var(--blue-dim);
-  color: var(--blue);
-  border-color: var(--blue-bdr);
-}
-
-// ── Buttons ───────────────────────────────────
 .btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  padding: 6px 13px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t1);
-  font-family: var(--font-ui);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.12s;
-  white-space: nowrap;
-  user-select: none;
+    height: 32px;
+    padding: 0 16px;
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: var(--r);
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    border: 1px solid transparent;
 
-  svg {
-    width: 11px;
-    height: 11px;
-  }
-
-  &:hover {
-    background: var(--bg3);
-    color: var(--t0);
-    border-color: var(--bdr3);
-  }
-
-  &:disabled {
-    opacity: 0.45;
-    cursor: default;
-  }
+    &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
 }
 
-.btnP {
-  background: var(--blue);
-  color: #fff;
-  border-color: var(--blue);
-  font-weight: 600;
-
-  &:hover {
-    background: #a78bfa;
-    border-color: #a78bfa;
-    color: #fff;
-  }
-}
-
-.btnSm {
-  padding: 4px 10px;
-  font-size: 13px;
-}
-
-.btnFull {
-  flex: 1;
-}
-
-.btnDanger {
-  color: var(--red);
-  border-color: var(--red-bdr);
-
-  &:hover {
-    background: var(--red-dim);
-    border-color: var(--red);
-  }
-
-  &:disabled {
-    color: var(--t2);
-    border-color: var(--bdr2);
+.btnGhost {
     background: transparent;
-    opacity: 0.4;
-    cursor: not-allowed;
-    pointer-events: none;
+    color: var(--t1);
+    border-color: var(--bdr2);
+    margin-left: auto;
+
+    &:hover:not(:disabled) {
+        background: var(--bg2);
+        color: var(--t0);
+        border-color: var(--bdr3);
+    }
+}
+
+.btnPrimary {
+    background: var(--blue);
+    color: var(--bg0);
+    border-color: var(--blue);
+
+    &:hover:not(:disabled) {
+        filter: brightness(1.08);
+    }
+}
+
+// ── Light theme tweaks ─────────────────────────
+:global(html.light) {
+    .backdrop {
+        background: rgba(20, 20, 30, 0.45);
+    }
+
+    .btnPrimary {
+        color: #fff;
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ═══════════════════════════════════════════════
+// pages/UploadInfer/PromptTemplateAssociationModal.tsx
+// Content Analytics · Bulk file ↔ prompt-template association
+// ═══════════════════════════════════════════════
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import { updateFilePrompts, patchFilePromptTemplate } from '../../store/uploadSlice';
+import { addToast } from '../../store/toastSlice';
+import api from '../../services/api';
+import styles from './PromptTemplateAssociationModal.module.scss';
+
+interface PromptTemplateListItem {
+    id: number; ms_user_id: number; name: string; description: string;
+    summary_prompt: string; keyword_prompt: string; faq_prompt: string;
+    inserted_at: string; updated_at: string;
+}
+interface PromptTemplateDetail {
+    id: number; ms_user_id: number; name: string; description: string;
+    summary_prompt: string; keyword_prompt?: string; keywords_prompt?: string;
+    faq_prompt: string; inserted_at: string; updated_at: string;
+}
+interface Props { open: boolean; onClose: () => void; }
+
+const NO_TEMPLATE = -1;
+
+const PromptTemplateAssociationModal: React.FC<Props> = ({ open, onClose }) => {
+    const dispatch = useAppDispatch();
+    const { t } = useTranslation();
+    const { serverFiles, dateFrom, dateTo } = useAppSelector(s => s.upload);
+
+    const [templates, setTemplates] = useState<PromptTemplateListItem[]>([]);
+    const [templatesLoading, setTemplatesLoading] = useState(false);
+    const [templatesError, setTemplatesError] = useState<string | null>(null);
+    const [selection, setSelection] = useState<Record<number, number>>({});
+    const initialSelectionRef = useRef<Record<number, number>>({});
+    const [bulkValue, setBulkValue] = useState<number>(NO_TEMPLATE);
+    const [saving, setSaving] = useState(false);
+    const [detailTemplateId, setDetailTemplateId] = useState<number | null>(null);
+    const [detailData, setDetailData] = useState<PromptTemplateDetail | null>(null);
+    const [detailLoading, setDetailLoading] = useState(false);
+    const [detailError, setDetailError] = useState<string | null>(null);
+
+    // ── Associate ALL — every file in the current date range, bypasses the
+    //     per-row preview entirely and hits the backend directly. ──
+    const [isAssociatingAll, setIsAssociatingAll] = useState(false);
+    const [associateAllError, setAssociateAllError] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (!open) return;
+        const init: Record<number, number> = {};
+        serverFiles.forEach(f => { init[f.id] = f.prompt_template_id ?? NO_TEMPLATE; });
+        setSelection(init);
+        initialSelectionRef.current = init;
+        setBulkValue(NO_TEMPLATE);
+        setDetailTemplateId(null); setDetailData(null); setDetailError(null);
+        setAssociateAllError(null);
+
+        let cancelled = false;
+        (async () => {
+            setTemplatesLoading(true); setTemplatesError(null);
+            try {
+                const res = await api.get('/prompt_template/list_templates');
+                const list: PromptTemplateListItem[] = (res.data as any)?.templates ?? [];
+                if (!cancelled) setTemplates(Array.isArray(list) ? list : []);
+            } catch {
+                if (!cancelled) setTemplatesError(t('uploadInfer.templateModal.loadFail'));
+            } finally { if (!cancelled) setTemplatesLoading(false); }
+        })();
+        return () => { cancelled = true; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open]);
+
+    useEffect(() => {
+        if (!open) return;
+        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); } };
+        window.addEventListener('keydown', onKey, true);
+        return () => window.removeEventListener('keydown', onKey, true);
+    }, [open]);
+
+    const dirtyIds = useMemo(() => {
+        const init = initialSelectionRef.current;
+        return Object.keys(selection).map(Number).filter(id => selection[id] !== init[id]);
+    }, [selection]);
+    const isDirty = dirtyIds.length > 0;
+
+    const handleRowChange = useCallback((fileId: number, templateId: number) => {
+        setSelection(prev => ({ ...prev, [fileId]: templateId }));
+    }, []);
+
+    const handleApplyToAll = useCallback(() => {
+        setSelection(prev => {
+            const next = { ...prev };
+            Object.keys(next).forEach(k => { next[Number(k)] = bulkValue; });
+            return next;
+        });
+    }, [bulkValue]);
+
+    const handleViewDetails = useCallback(async (templateId: number) => {
+        if (detailTemplateId === templateId) { setDetailTemplateId(null); setDetailData(null); setDetailError(null); return; }
+        setDetailTemplateId(templateId); setDetailData(null); setDetailError(null); setDetailLoading(true);
+        try {
+            const res = await api.get(`/prompt_template/${templateId}`);
+            const d: PromptTemplateDetail | undefined = (res.data as any);
+            if (d && d.id !== undefined) setDetailData(d);
+            else setDetailError(t('uploadInfer.templateModal.noDetailsReturned'));
+        } catch { setDetailError(t('uploadInfer.templateModal.detailLoadFail')); }
+        finally { setDetailLoading(false); }
+    }, [detailTemplateId, t]);
+
+    const handleSave = useCallback(async () => {
+        if (!isDirty || saving) return;
+        setSaving(true);
+        const associateGroups: Record<number, number[]> = {};
+        for (const id of dirtyIds) {
+            const v = selection[id];
+            if (v === NO_TEMPLATE) continue;
+            if (!associateGroups[v]) associateGroups[v] = [];
+            associateGroups[v].push(id);
+        }
+        const entries = Object.entries(associateGroups);
+        if (entries.length === 0) { setSaving(false); onClose(); return; }
+        try {
+            await Promise.all(entries.map(([templateIdStr, fileIds]) =>
+                api.post('/prompt_template/associate', { file_ids: fileIds, template_id: Number(templateIdStr), all: false })
+            ));
+            const templatePatch: Record<number, number | null> = {};
+            entries.forEach(([templateIdStr, fileIds]) => {
+                const tmpl = templates.find(t => t.id === Number(templateIdStr));
+                fileIds.forEach(id => { templatePatch[id] = Number(templateIdStr); });
+                if (!tmpl) return;
+                dispatch(updateFilePrompts({ fileIds, summaryPrompt: tmpl.summary_prompt, keywordsPrompt: tmpl.keyword_prompt, faqPrompt: tmpl.faq_prompt }));
+            });
+            dispatch(patchFilePromptTemplate(templatePatch));
+            dispatch(addToast(t('uploadInfer.templateModal.saveSuccess'), 'success'));
+            onClose();
+        } catch {
+            dispatch(addToast(t('uploadInfer.templateModal.saveFail'), 'error'));
+        } finally { setSaving(false); }
+    }, [isDirty, saving, dirtyIds, selection, templates, dispatch, onClose, t]);
+
+    // ── Associate ALL files in [dateFrom, dateTo] with bulkValue — skips the
+    //     per-row preview/save flow and applies directly on the backend. ──
+    const handleAssociateAll = useCallback(async () => {
+        if (bulkValue === NO_TEMPLATE || saving || isAssociatingAll) return;
+        setIsAssociatingAll(true);
+        setAssociateAllError(null);
+        try {
+            await api.post('/prompt_template/associate', {
+                template_id: bulkValue,
+                all: true,
+                start_date: dateFrom,
+                end_date: dateTo,
+            });
+            const tmpl = templates.find(x => x.id === bulkValue);
+            // Best-effort local patch for whatever's currently loaded — files on
+            // other pages will reflect the change next time they're fetched.
+            const templatePatch: Record<number, number | null> = {};
+            const fileIds = serverFiles.map(f => f.id);
+            fileIds.forEach(id => { templatePatch[id] = bulkValue; });
+            dispatch(patchFilePromptTemplate(templatePatch));
+            if (tmpl) {
+                dispatch(updateFilePrompts({ fileIds, summaryPrompt: tmpl.summary_prompt, keywordsPrompt: tmpl.keyword_prompt, faqPrompt: tmpl.faq_prompt }));
+            }
+            dispatch(addToast(t('uploadInfer.templateModal.associateAllSuccess'), 'success'));
+            onClose();
+        } catch {
+            setAssociateAllError(t('uploadInfer.templateModal.associateAllFail'));
+        } finally {
+            setIsAssociatingAll(false);
+        }
+    }, [bulkValue, saving, isAssociatingAll, dateFrom, dateTo, serverFiles, templates, dispatch, onClose, t]);
+
+    const handleCloseClick = useCallback(() => { if (saving) return; onClose(); }, [saving, onClose]);
+    const handleBackdropClick = useCallback((e: React.MouseEvent) => { e.stopPropagation(); }, []);
+    const handleDialogClick = useCallback((e: React.MouseEvent) => { e.stopPropagation(); }, []);
+
+    if (!open) return null;
+
+    const templateName = (id: number) => {
+        if (id === NO_TEMPLATE) return t('uploadInfer.templateModal.noneRow');
+        const tmpl = templates.find(x => x.id === id);
+        return tmpl ? tmpl.name : `Template #${id}`;
+    };
+
+    return (
+        <div className={styles.backdrop} onMouseDown={handleBackdropClick} role="presentation">
+            <div className={styles.dialog} onMouseDown={handleDialogClick} role="dialog" aria-modal="true" aria-labelledby="template-modal-title">
+
+                {/* Header */}
+                <div className={styles.header}>
+                    <div className={styles.headerText}>
+                        <div className={styles.title} id="template-modal-title">{t('uploadInfer.templateModal.title')}</div>
+                        <div className={styles.subtitle}>{t('uploadInfer.templateModal.subtitle')}</div>
+                    </div>
+                    <button className={styles.closeBtn} onClick={handleCloseClick} disabled={saving}
+                        title={saving ? t('uploadInfer.templateModal.closeSaving') : t('uploadInfer.templateModal.close')}
+                        aria-label={t('uploadInfer.templateModal.close')}>
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                            <path d="M4 4l8 8M12 4l-8 8" />
+                        </svg>
+                    </button>
+                </div>
+
+                {/* Bulk bar — applies to files currently loaded in this modal (preview, needs Save) */}
+                <div className={styles.bulkBar}>
+                    <span className={styles.bulkLabel}>{t('uploadInfer.templateModal.applyToAll')}</span>
+                    <select className={styles.bulkSelect} value={bulkValue}
+                        onChange={e => setBulkValue(Number(e.target.value))}
+                        disabled={saving || templatesLoading || serverFiles.length === 0}>
+                        <option value={NO_TEMPLATE}>{t('uploadInfer.templateModal.noneOption')}</option>
+                        {templates.map(tmpl => <option key={tmpl.id} value={tmpl.id}>{tmpl.name}</option>)}
+                    </select>
+                    <button className={styles.bulkApplyBtn} onClick={handleApplyToAll} disabled={saving || serverFiles.length === 0}>
+                        {t('uploadInfer.templateModal.applyBtn')}
+                    </button>
+                    <span className={styles.bulkHint}>
+                        {isDirty
+                            ? t('uploadInfer.templateModal.changes', { count: dirtyIds.length })
+                            : t('uploadInfer.templateModal.noChanges')}
+                    </span>
+                </div>
+
+                {/* Associate ALL bar — applies immediately to every file in the date
+                    range on the backend, including files not currently loaded here */}
+                <div className={styles.associateAllBar}>
+                    <span className={styles.bulkLabel}>
+                        {t('uploadInfer.templateModal.associateAllLabel', { from: dateFrom, to: dateTo })}
+                    </span>
+                    <button
+                        className={styles.associateAllBtn}
+                        onClick={handleAssociateAll}
+                        disabled={bulkValue === NO_TEMPLATE || saving || isAssociatingAll}
+                    >
+                        {isAssociatingAll ? <span className={styles.spinnerSm} /> : t('uploadInfer.templateModal.associateAllBtn')}
+                    </button>
+                    {associateAllError && <span className={styles.associateAllError}>{associateAllError}</span>}
+                </div>
+
+                {/* Body */}
+                <div className={styles.body}>
+                    <div className={`${styles.listPane} ${detailTemplateId !== null ? styles.listPaneNarrow : ''}`}>
+                        <div className={styles.listHead}>
+                            <div className={styles.colFile}>{t('uploadInfer.templateModal.colFile')}</div>
+                            <div className={styles.colTemplate}>{t('uploadInfer.templateModal.colTemplate')}</div>
+                            <div className={styles.colActions} />
+                        </div>
+
+                        {templatesLoading && (
+                            <div className={styles.listState}>
+                                <div className={styles.spinner} /><span>{t('uploadInfer.templateModal.loadingTemplates')}</span>
+                            </div>
+                        )}
+                        {templatesError && <div className={`${styles.listState} ${styles.errorState}`}>{templatesError}</div>}
+                        {!templatesLoading && serverFiles.length === 0 && (
+                            <div className={styles.listState}>{t('uploadInfer.templateModal.noFiles')}</div>
+                        )}
+
+                        {!templatesLoading && !templatesError && serverFiles.map(f => {
+                            const current = selection[f.id] ?? NO_TEMPLATE;
+                            const initial = initialSelectionRef.current[f.id] ?? NO_TEMPLATE;
+                            const rowDirty = current !== initial;
+                            const hasTemplate = current !== NO_TEMPLATE;
+                            return (
+                                <div key={f.id} className={`${styles.row} ${rowDirty ? styles.rowDirty : ''}`}>
+                                    <div className={styles.colFile} title={f.original_name}>
+                                        <span className={styles.fileName}>{f.original_name}</span>
+                                        {initial !== NO_TEMPLATE && (
+                                            <span className={styles.currentBadge} title={t('uploadInfer.templateModal.mapped')}>
+                                                {t('uploadInfer.templateModal.mapped')}
+                                            </span>
+                                        )}
+                                    </div>
+                                    <div className={styles.colTemplate}>
+                                        <select className={styles.rowSelect} value={current}
+                                            onChange={e => handleRowChange(f.id, Number(e.target.value))} disabled={saving}>
+                                            <option value={NO_TEMPLATE}>{t('uploadInfer.templateModal.noneRow')}</option>
+                                            {templates.map(tmpl => <option key={tmpl.id} value={tmpl.id}>{tmpl.name}</option>)}
+                                        </select>
+                                    </div>
+                                    <div className={styles.colActions}>
+                                        {hasTemplate && (
+                                            <button className={styles.viewBtn} onClick={() => handleViewDetails(current)}
+                                                disabled={saving} title={t('uploadInfer.templateModal.viewDetails')}>
+                                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                                    <path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8s-2.5 4.5-6.5 4.5S1.5 8 1.5 8z" />
+                                                    <circle cx="8" cy="8" r="2" />
+                                                </svg>
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+
+                    {/* Detail drawer */}
+                    {detailTemplateId !== null && (
+                        <div className={styles.detailPane}>
+                            <div className={styles.detailHead}>
+                                <div className={styles.detailTitle}>{detailData?.name ?? templateName(detailTemplateId)}</div>
+                                <button className={styles.detailClose}
+                                    onClick={() => { setDetailTemplateId(null); setDetailData(null); }}
+                                    title={t('uploadInfer.templateModal.detailClose')}
+                                    aria-label={t('uploadInfer.templateModal.detailClose')}>
+                                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                                        <path d="M4 4l8 8M12 4l-8 8" />
+                                    </svg>
+                                </button>
+                            </div>
+                            {detailLoading && (
+                                <div className={styles.listState}>
+                                    <div className={styles.spinner} /><span>{t('uploadInfer.templateModal.loadingDetails')}</span>
+                                </div>
+                            )}
+                            {detailError && <div className={`${styles.listState} ${styles.errorState}`}>{detailError}</div>}
+                            {detailData && (
+                                <>
+                                    <div className={styles.detailMeta}>
+                                        <div><span className={styles.metaLabel}>{t('uploadInfer.templateModal.metaId')}</span> {detailData.id}</div>
+                                        <div><span className={styles.metaLabel}>{t('uploadInfer.templateModal.metaUpdated')}</span> {detailData.updated_at}</div>
+                                        {detailData.description && (
+                                            <div><span className={styles.metaLabel}>{t('uploadInfer.templateModal.metaDescription')}</span> {detailData.description}</div>
+                                        )}
+                                    </div>
+                                    <div className={styles.promptBlocks}>
+                                        {[
+                                            { label: t('uploadInfer.templateModal.summaryPrompt'), text: detailData.summary_prompt },
+                                            { label: t('uploadInfer.templateModal.keywordPrompt'), text: detailData.keywords_prompt ?? detailData.keyword_prompt ?? '—' },
+                                            { label: t('uploadInfer.templateModal.faqPrompt'), text: detailData.faq_prompt },
+                                        ].map(block => (
+                                            <div key={block.label} className={styles.promptBlock}>
+                                                <div className={styles.promptLabel}>{block.label}</div>
+                                                <div className={styles.promptText}>{block.text || '—'}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    )}
+                </div>
+
+                {/* Footer */}
+                <div className={styles.footer}>
+                    {saving && (
+                        <span className={styles.savingHint}>
+                            <span className={styles.spinnerSm} />{t('uploadInfer.templateModal.savingHint')}
+                        </span>
+                    )}
+                    <button className={`${styles.btn} ${styles.btnGhost}`} onClick={handleCloseClick} disabled={saving}>
+                        {t('uploadInfer.templateModal.cancel')}
+                    </button>
+                    <button className={`${styles.btn} ${styles.btnPrimary}`} onClick={handleSave} disabled={!isDirty || saving}>
+                        {saving ? t('uploadInfer.templateModal.saving') : t('uploadInfer.templateModal.save')}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+export default PromptTemplateAssociationModal;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ═══════════════════════════════════════════════
+// pages/UploadInfer/PromptTemplateAssociationModal.module.scss
+// ═══════════════════════════════════════════════
+
+.backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(5, 10, 40, 0.62);
+    backdrop-filter: blur(2px);
+    z-index: 9000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+}
+
+.dialog {
+    background: var(--bg1);
+    border: 1px solid var(--bdr2);
+    border-radius: var(--rxl);
+    box-shadow: var(--shadow);
+    width: 100%;
+    max-width: 900px;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    font-family: var(--font-ui);
+    color: var(--t0);
+}
+
+// ── Header ─────────────────────────────────────
+.header {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 18px 20px 14px;
+    border-bottom: 1px solid var(--bdr);
+}
+
+.headerText {
+    flex: 1;
+    min-width: 0;
+}
+
+.title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--t0);
+    letter-spacing: 0.1px;
+}
+
+.subtitle {
+    margin-top: 3px;
+    font-size: 12.5px;
+    color: var(--t2);
+}
+
+.closeBtn {
+    width: 30px;
+    height: 30px;
+    border-radius: var(--r);
+    border: 1px solid var(--bdr2);
+    background: var(--bg2);
+    color: var(--t1);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+
+    svg {
+        width: 14px;
+        height: 14px;
+    }
+
+    &:hover:not(:disabled) {
+        background: var(--bg3);
+        color: var(--t0);
+        border-color: var(--bdr3);
+    }
+
+    &:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+    }
+}
+
+// ── Bulk bar ───────────────────────────────────
+.bulkBar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 20px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--bdr);
+    flex-wrap: wrap;
+}
+
+.bulkLabel {
+    font-size: 12.5px;
+    color: var(--t1);
+    font-weight: 500;
+}
+
+.bulkSelect {
+    flex: 0 1 280px;
+    min-width: 200px;
+    height: 32px;
+    padding: 0 28px 0 10px;
+    border-radius: var(--r);
+    border: 1px solid var(--bdr2);
+    background: var(--bg1);
+    color: var(--t0);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%237a90cc' stroke-width='1.5' stroke-linecap='round'%3E%3Cpath d='M3 5l3 3 3-3'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    background-size: 12px;
+
+    &:focus-visible {
+        outline: none;
+        border-color: var(--teal-bdr);
+        box-shadow: 0 0 0 2px var(--teal-dim);
+    }
+
+    &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+}
+
+.bulkApplyBtn {
+    height: 32px;
+    padding: 0 14px;
+    border-radius: var(--r);
+    border: 1px solid var(--teal-bdr);
+    background: var(--teal-dim);
+    color: var(--teal);
+    font-size: 12.5px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s;
+
+    &:hover:not(:disabled) {
+        background: var(--bg3);
+    }
+
+    &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+}
+
+.bulkHint {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--t2);
+    font-style: italic;
+}
+
+// ── Associate ALL bar — distinct amber accent since this applies
+//    immediately on the backend rather than previewing in the row list ──
+.associateAllBar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 20px;
+    background: rgba(240, 160, 48, 0.06);
+    border-bottom: 1px solid var(--bdr);
+    flex-wrap: wrap;
+}
+
+.associateAllBtn {
+    height: 30px;
+    padding: 0 14px;
+    border-radius: var(--r);
+    border: 1px solid rgba(240, 160, 48, 0.4);
+    background: rgba(240, 160, 48, 0.12);
+    color: var(--amber);
+    font-size: 12.5px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+
+    &:hover:not(:disabled) {
+        background: var(--amber);
+        border-color: var(--amber);
+        color: #fff;
+    }
+
+    &:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+    }
+}
+
+.associateAllError {
+    font-size: 12px;
+    color: #ef4444;
+}
+
+// ── Body ───────────────────────────────────────
+.body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    overflow: hidden;
+}
+
+.listPane {
+    flex: 1;
+    min-width: 0;
+    overflow-y: auto;
+    padding: 6px 8px 12px;
+    transition: flex-basis 0.2s;
+}
+
+.listPaneNarrow {
+    flex: 1.1;
+}
+
+.listHead {
+    display: grid;
+    grid-template-columns: 1fr 220px 60px;
+    gap: 10px;
+    padding: 8px 12px;
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--t2);
+    border-bottom: 1px solid var(--bdr);
+    position: sticky;
+    top: 0;
+    background: var(--bg1);
+    z-index: 1;
+}
+
+.row {
+    display: grid;
+    grid-template-columns: 1fr 220px 60px;
+    gap: 10px;
+    align-items: center;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--bdr);
+    transition: background 0.12s;
 
     &:hover {
-      background: transparent;
-      border-color: var(--bdr2);
+        background: var(--bg2);
     }
-  }
 }
 
-// ── Animations ───────────────────────────────
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
+.rowDirty {
+    background: var(--teal-dim);
 
-@keyframes fadeSlide {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-// ── Checkbox component ──────────────────────────
-.cb {
-  width: 14px;
-  height: 14px;
-  border: 1.5px solid var(--cb-bdr);
-  border-radius: 4px;
-  flex-shrink: 0;
-  cursor: pointer;
-  transition: all 0.12s;
-  position: relative;
-  outline: none;
-
-  &:hover:not(.cbDisabled) {
-    border-color: var(--blue);
-  }
-
-  &:focus-visible {
-    box-shadow: 0 0 0 2px var(--blue-dim);
-  }
-
-  &.cbChecked {
-    background: var(--blue);
-    border-color: var(--blue);
-
-    &::after {
-      content: '';
-      position: absolute;
-      left: 2px;
-      top: 5px;
-      width: 7px;
-      height: 4px;
-      border-left: 1.5px solid #fff;
-      border-bottom: 1.5px solid #fff;
-      transform: rotate(-45deg) translate(0, -1px);
+    &:hover {
+        background: var(--teal-dim);
     }
-  }
-
-  &.cbIndet {
-    background: var(--blue);
-    border-color: var(--blue);
-
-    &::after {
-      content: '';
-      position: absolute;
-      left: 2px;
-      top: 5px;
-      width: 8px;
-      height: 1.5px;
-      background: #fff;
-    }
-  }
-
-  &.cbDisabled {
-    opacity: 0.35;
-    cursor: not-allowed;
-    pointer-events: none;
-  }
 }
 
-// Grouped action buttons — used inside mode-bar (title row)
-.headerActions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: auto;
-  flex-shrink: 0;
+.colFile {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
 }
 
-// ── Mode action row: search LEFT, confirm+cancel RIGHT ────────
-.modeActionsRow {
-  display: flex;
-  align-items: center;
-  box-sizing: border-box;
-  width: 100%;
-  padding: 0 10px 8px;
-  min-width: 0;
-}
-
-.modeActionsRight {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: auto;
-  flex-shrink: 0;
-}
-
-.modeActionsLeft {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  flex-wrap: wrap;
-}
-
-// Base tile — icon + label side by side
-.modeTile {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 9px;
-  border-radius: 6px;
-  border: 1px solid var(--bdr);
-  background: var(--bg3);
-  color: var(--t2);
-  font-size: 11px;
-  font-weight: 500;
-  font-family: var(--font-ui);
-  cursor: pointer;
-  transition: all 0.13s;
-  user-select: none;
-  white-space: nowrap;
-
-  svg {
-    width: 12px;
-    height: 12px;
-    flex-shrink: 0;
-  }
-
-  &:active:not(:disabled) {
-    transform: scale(0.97);
-  }
-
-  &:disabled {
-    opacity: 0.3;
-    cursor: not-allowed;
-  }
-}
-
-// Search tile — amber tint (left side)
-.modeTileSearch {
-  color: var(--amber);
-  border-color: rgba(240, 160, 48, 0.25);
-  background: rgba(240, 160, 48, 0.08);
-
-  &:hover {
-    background: rgba(240, 160, 48, 0.16);
-    border-color: rgba(240, 160, 48, 0.45);
-  }
-}
-
-.modeTileSearchActive {
-  background: rgba(240, 160, 48, 0.15);
-  border-color: rgba(240, 160, 48, 0.45);
-}
-
-// Confirm export — green
-.modeTileConfirmExport {
-  color: var(--green);
-  border-color: var(--green-bdr);
-  background: var(--green-dim);
-
-  &:hover:not(:disabled) {
-    background: var(--green);
-    border-color: var(--green);
-    color: #fff;
-  }
-}
-
-// Confirm delete — red
-.modeTileConfirmDelete {
-  color: #ef4444;
-  border-color: rgba(239, 68, 68, 0.25);
-  background: rgba(239, 68, 68, 0.08);
-
-  &:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.18);
-    border-color: rgba(239, 68, 68, 0.5);
-  }
-}
-
-// Cancel
-.modeTileCancel {
-  color: var(--t2);
-  border-color: var(--bdr2);
-  background: transparent;
-
-  &:hover {
-    background: var(--bg2);
-    border-color: var(--bdr3);
+.fileName {
+    font-size: 13px;
     color: var(--t0);
-  }
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
-// Disabled state
-.modeTileDisabled {
-  opacity: 0.35 !important;
-  cursor: not-allowed !important;
-}
-
-// "Export all files" trigger — mirrors modeTileDeleteAll but green/non-destructive
-.modeTileExportAll {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 9px;
-  border-radius: 6px;
-  border: 1px solid var(--green-bdr);
-  background: var(--green-dim);
-  color: var(--green);
-  font-size: 11px;
-  font-weight: 600;
-  font-family: var(--font-ui);
-  cursor: pointer;
-  transition: all 0.13s;
-  user-select: none;
-  white-space: nowrap;
-
-  svg {
-    width: 12px;
-    height: 12px;
+.currentBadge {
     flex-shrink: 0;
-  }
-
-  &:hover:not(:disabled) {
-    background: var(--green);
-    border-color: var(--green);
-    color: #fff;
-  }
-
-  &:disabled {
-    opacity: 0.35;
-    cursor: not-allowed;
-  }
+    padding: 2px 7px;
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--teal);
+    background: var(--teal-dim);
+    border: 1px solid var(--teal-bdr);
+    border-radius: 4px;
 }
 
-.modeActionsError {
-  font-size: 11px;
-  color: #ef4444;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 160px;
+.colTemplate {
+    display: flex;
+    align-items: center;
 }
 
-// "Delete all files" trigger — deliberately louder/more solid than the
-// per-row delete tile since it's an account-wide destructive action.
-.modeTileDeleteAll {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 9px;
-  border-radius: 6px;
-  border: 1px solid rgba(239, 68, 68, 0.5);
-  background: rgba(239, 68, 68, 0.14);
-  color: #ef4444;
-  font-size: 11px;
-  font-weight: 600;
-  font-family: var(--font-ui);
-  cursor: pointer;
-  transition: all 0.13s;
-  user-select: none;
-  white-space: nowrap;
+.rowSelect {
+    width: 100%;
+    height: 30px;
+    padding: 0 26px 0 9px;
+    border-radius: var(--r);
+    border: 1px solid var(--bdr2);
+    background: var(--bg2);
+    color: var(--t0);
+    font-size: 12.5px;
+    font-family: inherit;
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%237a90cc' stroke-width='1.5' stroke-linecap='round'%3E%3Cpath d='M3 5l3 3 3-3'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    background-size: 11px;
 
-  svg {
-    width: 12px;
-    height: 12px;
-    flex-shrink: 0;
-  }
+    &:focus-visible {
+        outline: none;
+        border-color: var(--teal-bdr);
+        box-shadow: 0 0 0 2px var(--teal-dim);
+    }
 
-  &:hover:not(:disabled) {
-    background: #ef4444;
-    border-color: #ef4444;
-    color: #fff;
-  }
-
-  &:disabled {
-    opacity: 0.3;
-    cursor: not-allowed;
-  }
+    &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
 }
 
-// ── Delete-ALL confirmation (danger zone) ───────────────────────────
-.dangerOverlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(2px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 200;
-  padding: 16px;
+.colActions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
 }
 
-.dangerModal {
-  width: 100%;
-  max-width: 360px;
-  background: var(--bg1);
-  border: 1px solid rgba(239, 68, 68, 0.4);
-  border-radius: 10px;
-  padding: 20px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  gap: 4px;
-}
-
-.dangerIcon {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background: rgba(239, 68, 68, 0.14);
-  color: #ef4444;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 6px;
-
-  svg {
-    width: 22px;
-    height: 22px;
-  }
-}
-
-.dangerTitle {
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--t0);
-  font-family: var(--font-ui);
-}
-
-.dangerBody {
-  font-size: 13px;
-  color: var(--t2);
-  line-height: 1.5;
-  margin-bottom: 8px;
-}
-
-.dangerLabel {
-  align-self: flex-start;
-  font-size: 12px;
-  color: var(--t1);
-  margin-top: 4px;
-}
-
-.dangerInput {
-  width: 100%;
-  padding: 7px 10px;
-  background: var(--bg0);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 13px;
-  outline: none;
-  margin-top: 4px;
-  margin-bottom: 6px;
-  text-align: center;
-  transition: border-color 0.12s;
-
-  &:focus {
-    border-color: #ef4444;
-    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.15);
-  }
-
-  &:disabled {
-    opacity: 0.6;
-  }
-}
-
-.dangerError {
-  font-size: 12px;
-  color: #ef4444;
-  margin-bottom: 6px;
-}
-
-.dangerActions {
-  display: flex;
-  gap: 8px;
-  width: 100%;
-  margin-top: 6px;
-}
-
-// .uploadedCardSel replaced by .hitm.active
-
-// Uploaded card disabled (batch running)
-.uploadedCardDisabled {
-  cursor: default !important;
-  opacity: 0.65;
-  pointer-events: none;
-}
-
-// ── Sort header ─────────────────────────────────────
-.sortHeader {
-  display: flex;
-  align-items: center;
-  background: var(--bg2);
-  border: 1px solid var(--bdr);
-  border-radius: var(--r);
-  padding: 0 8px;
-  gap: 6px;
-  flex-shrink: 0;
-  margin-bottom: 6px;
-  overflow: hidden;
-}
-
-.sortHeaderLabel {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--t2);
-  font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  padding: 6px 0;
-  white-space: nowrap;
-  flex-shrink: 0;
-  border-right: 1px solid var(--bdr);
-  padding-right: 8px;
-
-  svg {
-    width: 11px;
-    height: 11px;
-    opacity: 0.6;
-  }
-}
-
-.sortCols {
-  display: flex;
-  flex: 1;
-}
-
-.sortCol {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  padding: 6px 4px;
-  background: transparent;
-  border: none;
-  border-right: 1px solid var(--bdr);
-  color: var(--t2);
-  font-size: 12px;
-  font-family: var(--font-mono);
-  cursor: pointer;
-  transition: all 0.12s;
-
-  &:last-child {
-    border-right: none;
-  }
-
-  svg {
-    width: 8px;
-    height: 10px;
-    flex-shrink: 0;
-    transition: transform 0.2s;
-  }
-
-  &:hover {
-    background: var(--bg3);
-    color: var(--t1);
-  }
-}
-
-.sortColActive {
-  background: var(--blue-dim);
-  color: var(--blue);
-  font-weight: 600;
-
-  &:hover {
-    background: var(--blue-dim);
-  }
-}
-
-.sortInactive {
-  opacity: 0.25;
-}
-
-.sortAsc {
-  transform: rotate(180deg);
-}
-
-// arrow up
-.sortDesc {
-  transform: rotate(0deg);
-}
-
-// arrow down (default path direction)
-// ── Small screen overrides (height < 1000px) ─────────────────
-@media (max-height: 999px) {
-
-  // Step-1 bar — tighter
-  .step1Bar {
-    padding: 7px 14px;
-  }
-
-  // Dropzone — much more compact
-  .dropzone {
-    padding: 10px 16px;
-    margin: 6px 10px;
-  }
-
-  .dzIc {
+.viewBtn {
     width: 28px;
     height: 28px;
-    margin-bottom: 6px;
+    border-radius: var(--r);
+    border: 1px solid var(--bdr2);
+    background: var(--bg2);
+    color: var(--t1);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 
     svg {
-      width: 14px;
-      height: 14px;
+        width: 14px;
+        height: 14px;
     }
-  }
 
-  .dzTitle {
-    font-size: 12px;
-    margin-bottom: 2px;
-  }
-
-  .dzSub {
-    font-size: 11px;
-  }
-
-  .dzActions {
-    margin-top: 7px;
-    gap: 6px;
-  }
-
-  // Action grid — tighter
-  .actionsGrid {
-    padding: 0 8px 6px;
-    gap: 3px;
-  }
-
-  .actionTile {
-    padding: 4px 2px 3px;
-    gap: 2px;
-    font-size: 8px;
-
-    svg {
-      width: 11px;
-      height: 11px;
+    &:hover:not(:disabled) {
+        background: var(--teal-dim);
+        color: var(--teal);
+        border-color: var(--teal-bdr);
     }
-  }
 
-  // Section2 title row
-  .section2TitleRow {
-    padding: 7px 14px 6px;
-  }
-
-  // Mode action row
-  .modeActionsRow {
-    padding: 0 8px 6px;
-  }
-
-  // Date filter — tighter
-  .dateFilter {
-    padding: 5px 10px 5px;
-    gap: 5px;
-  }
-
-  .dateInput {
-    padding: 3px 6px;
-    font-size: 12px;
-  }
-
-  // Sort header — tighter
-  .sortHeader {
-    margin-bottom: 4px;
-  }
-
-  .sortCol {
-    padding: 4px 4px;
-    font-size: 11px;
-  }
-
-  .sortHeaderLabel {
-    padding: 4px 0;
-    padding-right: 6px;
-    font-size: 9px;
-  }
-
-  // File list — tighter items, ensure it can grow
-  .uploadedBody {
-    padding: 4px 8px;
-    gap: 2px;
-  }
-
-  .hitm {
-    padding: 5px 8px;
-    margin-bottom: 1px;
-  }
-
-  .ficon {
-    width: 22px;
-    height: 22px;
-    font-size: 9px;
-  }
-
-  .hn {
-    font-size: 12px;
-  }
-
-  .hm {
-    font-size: 11px;
-    margin-top: 1px;
-  }
-
-  .badge {
-    font-size: 10px;
-    padding: 1px 6px;
-  }
+    &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
 }
 
-// ── Pagination footer (bottom of the uploaded-files list) ──────────
-.paginationBar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 10px;
-  border-top: 1px solid var(--bdr2);
-  background: var(--bg1);
-  flex-shrink: 0;
-  flex-wrap: wrap;
+// ── Detail drawer ──────────────────────────────
+.detailPane {
+    width: 360px;
+    flex-shrink: 0;
+    border-left: 1px solid var(--bdr);
+    background: var(--bg2);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
-.pageSizeGroup {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
+.detailHead {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--bdr);
 }
 
-.pageSizeLabel {
-  font-size: 11px;
-  color: var(--t2);
-  white-space: nowrap;
-}
-
-.pageSizeSelect {
-  padding: 3px 6px;
-  background: var(--bg0);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  outline: none;
-  cursor: pointer;
-  transition: border-color 0.12s;
-
-  &:focus {
-    border-color: var(--blue);
-    box-shadow: 0 0 0 2px var(--blue-dim);
-  }
-}
-
-.pageNav {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex-wrap: wrap;
-  justify-content: center;
-}
-
-.pageNavBtn,
-.pageNumBtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 24px;
-  height: 24px;
-  padding: 0 6px;
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--t1);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.12s;
-  user-select: none;
-
-  svg {
-    width: 11px;
-    height: 11px;
-  }
-
-  &:hover:not(:disabled) {
-    background: var(--bg3);
+.detailTitle {
+    flex: 1;
+    font-size: 13.5px;
+    font-weight: 600;
     color: var(--t0);
-    border-color: var(--bdr3);
-  }
-
-  &:disabled {
-    opacity: 0.35;
-    cursor: default;
-  }
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
-.pageNumBtnActive {
-  background: var(--blue-dim);
-  border-color: var(--blue-bdr);
-  color: var(--blue);
-  font-weight: 700;
+.detailClose {
+    width: 26px;
+    height: 26px;
+    border-radius: 5px;
+    border: 1px solid var(--bdr2);
+    background: var(--bg1);
+    color: var(--t1);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 
-  &:hover:not(:disabled) {
-    background: var(--blue-dim);
-    color: var(--blue);
-  }
+    svg {
+        width: 12px;
+        height: 12px;
+    }
+
+    &:hover {
+        background: var(--bg3);
+        color: var(--t0);
+    }
 }
 
-.pageEllipsis {
-  color: var(--t2);
-  font-size: 12px;
-  padding: 0 2px;
-  user-select: none;
+.detailMeta {
+    padding: 10px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--t1);
+    border-bottom: 1px solid var(--bdr);
 }
 
-.pageInfo {
-  font-size: 11px;
-  color: var(--t2);
-  white-space: nowrap;
-  flex-shrink: 0;
-  @include m.mono;
+.metaLabel {
+    color: var(--t2);
+    margin-right: 6px;
 }
 
-@media (min-width: 1920px) {
-  .panel {
-    width: 400px;
-  }
+// ── Prompt preview blocks (summary / keyword / faq) ──
+.promptBlocks {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 14px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
 
-  .section1Title {
-    font-size: 14px;
-  }
+.promptBlock {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
 
-  .section2Title {
-    font-size: 14px;
-  }
+.promptLabel {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--t2);
+}
 
-  .uploadHint {
+.promptText {
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--t0);
+    background: var(--bg1);
+    border: 1px solid var(--bdr);
+    border-radius: var(--r);
+    padding: 9px 10px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+// ── List states (loading/error/empty) ──────────
+.listState {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 28px 16px;
     font-size: 13px;
-  }
+    color: var(--t2);
+}
 
-  .uploadZoneText {
-    font-size: 14px;
-  }
+.errorState {
+    color: var(--red);
+}
 
-  .sortHeaderLabel {
+.spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--bdr2);
+    border-top-color: var(--teal);
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+}
+
+.spinnerSm {
+    width: 12px;
+    height: 12px;
+    border: 2px solid var(--bdr2);
+    border-top-color: var(--teal);
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+    display: inline-block;
+    vertical-align: middle;
+    margin-right: 6px;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+// ── Footer ─────────────────────────────────────
+.footer {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 20px;
+    border-top: 1px solid var(--bdr);
+    background: var(--bg1);
+}
+
+.savingHint {
+    margin-right: auto;
     font-size: 12px;
-  }
+    color: var(--amber);
+    display: inline-flex;
+    align-items: center;
+}
 
-  .sortBtn {
+.btn {
+    height: 32px;
+    padding: 0 16px;
     font-size: 13px;
-  }
+    font-weight: 600;
+    border-radius: var(--r);
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    border: 1px solid transparent;
 
-  .fileName {
-    font-size: 14px;
-  }
+    &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+}
 
-  .fileMeta {
-    font-size: 12px;
-  }
+.btnGhost {
+    background: transparent;
+    color: var(--t1);
+    border-color: var(--bdr2);
+    margin-left: auto;
 
-  .fileDate {
-    font-size: 12px;
-  }
+    &:hover:not(:disabled) {
+        background: var(--bg2);
+        color: var(--t0);
+        border-color: var(--bdr3);
+    }
+}
 
-  .badge {
-    font-size: 13px;
-  }
+.btnPrimary {
+    background: var(--teal);
+    color: var(--bg0);
+    border-color: var(--teal);
 
-  .btn {
-    font-size: 13px;
-  }
+    &:hover:not(:disabled) {
+        filter: brightness(1.08);
+    }
+}
 
-  .listState {
-    font-size: 14px;
-  }
+// ── Light theme tweaks ─────────────────────────
+:global(html.light) {
+    .backdrop {
+        background: rgba(20, 20, 30, 0.45);
+    }
 
-  .searchInput {
-    font-size: 14px;
-  }
-
-  .searchCount {
-    font-size: 12px;
-  }
-
-  .dateLabel {
-    font-size: 12px;
-  }
-
-  .dateInput {
-    font-size: 13px;
-  }
-
-  .emptyState {
-    font-size: 14px;
-  }
+    .btnPrimary {
+        color: #fff;
+    }
 }
