@@ -1,189 +1,4 @@
-// ═══════════════════════════════════════════════
-// pages/UploadInfer/UploadInfer.tsx
-// LectureAI · Upload & Inference page
-// ═══════════════════════════════════════════════
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useTranslation } from 'react-i18next';
-import { useAppSelector, useAppDispatch } from '../../store/hooks';
-import { clearServerSelection } from '../../store/uploadSlice';
-import api from '../../services/api';
-import FilePanel from './FilePanel';
-import InferencePanel from './InferencePanel';
-import WorkspacePanel from './WorkspacePanel';
-import styles from './UploadInfer.module.scss';
-
-// ── Keyword Insights (from GET /files/{id}) ──────
-export interface KGEdge { type: string; source: string; target: string; }
-export interface KGNode { id: string; label: string; title?: string; value?: number; }
-export interface KnowledgeGraph { edges: KGEdge[]; nodes: KGNode[]; }
-export interface WordCloudData { wordcloud: [string, number][]; complexity_map: Record<string, string>; }
-export interface TimelineDataset { data: number[]; label: string; }
-export interface TimelineData { labels: string[]; datasets: TimelineDataset[]; timestamped: boolean; }
-export interface HeatmapData { matrix: number[][]; keywords: string[]; segments: string[]; timestamped: boolean; }
-export interface ClusterItem { id: string; label: string; value: number; }
-export interface ClustersData { clusters: Record<string, ClusterItem[]>; }
-export interface FrequencyItem { count: number; keyword: string; relative_pct: number; first_mention_pct: number; }
-export interface FrequencyData { data: FrequencyItem[]; }
-export interface PrereqEdge { reason: string; enables: string; prerequisite: string; }
-export interface PrereqNode { id: string; label: string; value: number; }
-export interface PrerequisitesData { edges: PrereqEdge[]; nodes: PrereqNode[]; }
-export interface ImportanceComplexityItem { reason: string; keyword: string; frequency: number; complexity: string; importance: number; }
-export interface ImportanceComplexityData { data: ImportanceComplexityItem[]; }
-export interface CooccuranceData { metrix: number[][]; keywords: string[]; }
-export interface GlossaryItem { term: string; definition: string; first_mention_ms: number; }
-export interface GlossaryData { glossary: GlossaryItem[]; }
-
-export interface KeywordInsights {
-  enriched_keywords: unknown | null;
-  knowledge_graph: KnowledgeGraph | null;
-  word_cloud: WordCloudData | null;
-  timeline: TimelineData | null;
-  heatmap: HeatmapData | null;
-  clusters: ClustersData | null;
-  frequency: FrequencyData | null;
-  prerequisites: PrerequisitesData | null;
-  importance_complexity: ImportanceComplexityData | null;
-  cooccurance: CooccuranceData | null;
-  congnitive_Load: unknown | null;
-  segments: { segments: unknown[] } | null;
-  glossary: GlossaryData | null;
-}
-
-export interface FileResult {
-  summary: string;
-  keywords: string[];
-  faq: string;
-  shortAnswer: string;
-  trueFalse: string;
-  timestampedSummary: string;
-  keywordInsights: KeywordInsights | null;
-  fileName: string;
-  fileId: number;
-  insertedAt: string;
-}
-
-const UploadInfer: React.FC = () => {
-  const { t } = useTranslation();
-  const isBatchRunning = useAppSelector(s => s.upload.isBatchRunning);
-  const serverFiles = useAppSelector(s => s.upload.serverFiles);
-  const dispatch = useAppDispatch();
-
-  const [selectMode, setSelectMode] = useState(false);
-  const step2Visible = selectMode || isBatchRunning;
-
-  const [step2Minimized, setStep2Minimized] = useState(false);
-  useEffect(() => { if (step2Visible) setStep2Minimized(false); }, [step2Visible]);
-  useEffect(() => { if (!isBatchRunning) setSelectMode(false); }, [isBatchRunning]);
-  useEffect(() => { if (!selectMode) dispatch(clearServerSelection()); }, [selectMode]); // eslint-disable-line
-  useEffect(() => { return () => { dispatch(clearServerSelection()); }; }, []); // eslint-disable-line
-
-  const [fileResult, setFileResult] = useState<FileResult | null>(null);
-  const [fileLoading, setFileLoading] = useState(false);
-  const [activeFileId, setActiveFileId] = useState<number | null>(null);
-
-  const fetchFileData = useCallback(async (fileId: number) => {
-    setFileLoading(true);
-    try {
-      const res = await api.get(`/files/${fileId}`);
-      const d = (res.data as any)?.data ?? {};
-      const serverFile = serverFiles.find(f => f.id === fileId);
-      const fileName = d.original_name ?? serverFile?.original_name ?? String(fileId);
-      const insertedAt = d.inserted_at ?? serverFile?.inserted_at ?? '';
-      setFileResult({
-        fileId, fileName, insertedAt,
-        summary: d.summary ?? '',
-        keywords: d.keywords ?? [],
-        faq: d.faq ?? '[]',
-        shortAnswer: d.short_answer ?? '[]',
-        trueFalse: d.true_false ?? '[]',
-        // NOTE: backend key is genuinely "timstamped_summary" (missing an "e") — match it exactly.
-        timestampedSummary: d.timstamped_summary ?? '[]',
-        keywordInsights: d.keyword_insights ?? null,
-      });
-    } catch { setFileResult(null); } finally { setFileLoading(false); }
-  }, [serverFiles]);
-
-  const handleFileClick = useCallback(async (fileId: number) => {
-    if (fileId === activeFileId) return;
-    setActiveFileId(fileId);
-    setFileResult(null);
-    await fetchFileData(fileId);
-  }, [activeFileId, fetchFileData]);
-
-  const handleDeleteComplete = useCallback((deletedIds: number[], all?: boolean) => {
-    if (all || (activeFileId !== null && deletedIds.includes(activeFileId))) {
-      setActiveFileId(null);
-      setFileResult(null);
-    }
-  }, [activeFileId]);
-
-  const prevBatchRunning = useRef(false);
-  useEffect(() => {
-    const justFinished = prevBatchRunning.current && !isBatchRunning;
-    prevBatchRunning.current = isBatchRunning;
-    if (justFinished && activeFileId !== null) fetchFileData(activeFileId);
-  }, [isBatchRunning]); // eslint-disable-line
-
-  return (
-    <div className={styles.page}>
-      <div className={styles.ph}>
-        <div className={styles.phRow}>
-          <div>
-            <div className={styles.phTitle}>{t('uploadInfer.pageTitle')}</div>
-            <div className={styles.phSub}>{t('uploadInfer.pageSub')}</div>
-          </div>
-        </div>
-      </div>
-
-      <div className={styles.upbody}>
-        <FilePanel
-          selectMode={selectMode}
-          onEnterSelectMode={() => setSelectMode(true)}
-          onExitSelectMode={() => setSelectMode(false)}
-          onFileClick={handleFileClick}
-          onDeleteComplete={handleDeleteComplete}
-          activeFileId={activeFileId}
-        />
-
-        <div className={
-          `${styles.step2Wrap} ` +
-          `${step2Visible ? styles.step2WrapVisible : styles.step2WrapHidden} ` +
-          `${step2Visible && step2Minimized ? styles.step2WrapMinimized : ''}`
-        }>
-          <InferencePanel
-            onClose={() => setSelectMode(false)}
-            minimized={step2Minimized}
-            onToggleMinimize={() => setStep2Minimized(v => !v)}
-          />
-        </div>
-
-        <WorkspacePanel
-          step2Visible={step2Visible}
-          step2Minimized={step2Minimized}
-          fileResult={fileResult}
-          fileLoading={fileLoading}
-          activeFileId={activeFileId}
-          onResultUpdate={patch => setFileResult(prev => prev ? { ...prev, ...patch } : prev)}
-        />
-      </div>
-    </div>
-  );
-};
-
-export default UploadInfer;
-
-
-
-
-
-
-
-
-
-
-
-
-
+npm install @xyflow/react
 
 
 
@@ -191,9 +6,14 @@ export default UploadInfer;
 // pages/UploadInfer/WorkspacePanel.tsx
 // LectureAI · Step-3 Workspace Result panel
 // ═══════════════════════════════════════════════
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { marked } from 'marked';
+import {
+    ReactFlow, Background, Controls, MiniMap, Handle, Position, applyNodeChanges,
+    type Node as RFNode, type Edge as RFEdge, type NodeChange,
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
 import api from '../../services/api';
 import type { FileResult, WordCloudData, ClustersData, FrequencyData, ImportanceComplexityData, GlossaryData, KeywordInsights } from './UploadInfer';
 import styles from './WorkspacePanel.module.scss';
@@ -1121,43 +941,102 @@ function buildGraphNodes(nodes: GNode[], edges: GEdge[]): GNode[] {
     return Array.from(byId.values());
 }
 
+// Custom node — a labeled circle sized by `value`, with an invisible
+// handle on all 4 sides (each doubling as source+target) so edges can
+// connect from whichever side actually faces the other node.
+const MindMapNode: React.FC<{ data: { label: string; value?: number } }> = ({ data }) => {
+    const size = 34 + Math.min(26, (data.value ?? 1) * 4);
+    return (
+        <div className={styles.rfNode} style={{ width: size, height: size }} title={data.label}>
+            <Handle type="target" position={Position.Top} id="top-target" className={styles.rfHandle} />
+            <Handle type="source" position={Position.Top} id="top-source" className={styles.rfHandle} />
+            <Handle type="target" position={Position.Right} id="right-target" className={styles.rfHandle} />
+            <Handle type="source" position={Position.Right} id="right-source" className={styles.rfHandle} />
+            <Handle type="target" position={Position.Bottom} id="bottom-target" className={styles.rfHandle} />
+            <Handle type="source" position={Position.Bottom} id="bottom-source" className={styles.rfHandle} />
+            <Handle type="target" position={Position.Left} id="left-target" className={styles.rfHandle} />
+            <Handle type="source" position={Position.Left} id="left-source" className={styles.rfHandle} />
+            <span className={styles.rfNodeLabel}>{data.label}</span>
+        </div>
+    );
+};
+const RF_NODE_TYPES = { mindmap: MindMapNode };
+
+type Side = 'top' | 'right' | 'bottom' | 'left';
+const OPPOSITE_SIDE: Record<Side, Side> = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' };
+function pickHandleSide(sx: number, sy: number, tx: number, ty: number): Side {
+    const deg = (Math.atan2(ty - sy, tx - sx) * 180) / Math.PI;
+    if (deg > -45 && deg <= 45) return 'right';
+    if (deg > 45 && deg <= 135) return 'bottom';
+    if (deg > 135 || deg <= -135) return 'left';
+    return 'top';
+}
+
 const NodeLinkGraph: React.FC<{ nodes: GNode[]; edges: GEdge[] }> = ({ nodes, edges }) => {
     const { t } = useTranslation();
     const allNodes = useMemo(() => buildGraphNodes(nodes, edges), [nodes, edges]);
-    if (allNodes.length === 0) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
 
-    const W = 640, H = 420, cx = W / 2, cy = H / 2;
-    const r = Math.min(W, H) / 2 - 70;
-    const positioned = allNodes.map((n, i) => {
-        const angle = (2 * Math.PI * i) / allNodes.length - Math.PI / 2;
-        return { ...n, x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) };
-    });
-    const posByKey = new Map<string, typeof positioned[number]>();
-    positioned.forEach(p => { posByKey.set(p.id.trim().toLowerCase(), p); posByKey.set(p.label.trim().toLowerCase(), p); });
+    const initial = useMemo(() => {
+        const W = 700, H = 460, cx = W / 2, cy = H / 2;
+        const r = Math.min(W, H) / 2 - 70;
+        const positioned = allNodes.map((n, i) => {
+            const angle = (2 * Math.PI * i) / Math.max(1, allNodes.length) - Math.PI / 2;
+            return { ...n, x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) };
+        });
+        const posByKey = new Map<string, typeof positioned[number]>();
+        positioned.forEach(p => { posByKey.set(p.id.trim().toLowerCase(), p); posByKey.set(p.label.trim().toLowerCase(), p); });
+
+        const rfNodes: RFNode[] = positioned.map(n => ({
+            id: n.id,
+            type: 'mindmap',
+            position: { x: n.x, y: n.y },
+            data: { label: n.label, value: n.value },
+        }));
+
+        const rfEdges: RFEdge[] = [];
+        edges.forEach((e, i) => {
+            const s = posByKey.get(e.source.trim().toLowerCase());
+            const tg = posByKey.get(e.target.trim().toLowerCase());
+            if (!s || !tg) return;
+            const side = pickHandleSide(s.x, s.y, tg.x, tg.y);
+            rfEdges.push({
+                id: `e${i}-${s.id}-${tg.id}`,
+                source: s.id,
+                target: tg.id,
+                sourceHandle: `${side}-source`,
+                targetHandle: `${OPPOSITE_SIDE[side]}-target`,
+                type: 'straight',
+                label: e.label,
+                style: { stroke: 'var(--bdr2)' },
+                labelStyle: { fill: 'var(--t2)', fontSize: 10 },
+                labelBgStyle: { fill: 'var(--bg1)' },
+            });
+        });
+        return { rfNodes, rfEdges };
+    }, [allNodes, edges]);
+
+    const [rfNodes, setRfNodes] = useState<RFNode[]>(initial.rfNodes);
+    useEffect(() => { setRfNodes(initial.rfNodes); }, [initial.rfNodes]);
+    const onNodesChange = useCallback((changes: NodeChange[]) => setRfNodes(nds => applyNodeChanges(changes, nds)), []);
+
+    if (allNodes.length === 0) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
 
     return (
         <div className={styles.graphWrap}>
-            <svg viewBox={`0 0 ${W} ${H}`} className={styles.graphSvg}>
-                {edges.map((e, i) => {
-                    const s = posByKey.get(e.source.trim().toLowerCase());
-                    const tg = posByKey.get(e.target.trim().toLowerCase());
-                    if (!s || !tg) return null;
-                    return (
-                        <line key={i} x1={s.x} y1={s.y} x2={tg.x} y2={tg.y} className={styles.graphEdge}>
-                            {e.label && <title>{e.label}</title>}
-                        </line>
-                    );
-                })}
-                {positioned.map(n => {
-                    const rad = 12 + Math.min(16, (n.value ?? 1) * 2);
-                    return (
-                        <g key={n.id} className={styles.graphNode}>
-                            <circle cx={n.x} cy={n.y} r={rad}><title>{n.label}</title></circle>
-                            <text x={n.x} y={n.y + rad + 13} textAnchor="middle">{n.label}</text>
-                        </g>
-                    );
-                })}
-            </svg>
+            <ReactFlow
+                nodes={rfNodes}
+                edges={initial.rfEdges}
+                onNodesChange={onNodesChange}
+                nodeTypes={RF_NODE_TYPES}
+                fitView
+                minZoom={0.3}
+                maxZoom={2}
+                proOptions={{ hideAttribution: true }}
+            >
+                <Background gap={16} size={1} color="var(--bdr)" />
+                <Controls showInteractive={false} />
+                {allNodes.length > 8 && <MiniMap pannable zoomable style={{ background: 'var(--bg0)' }} />}
+            </ReactFlow>
         </div>
     );
 };
@@ -1372,6 +1251,75 @@ const TabKeywordInsights: React.FC<{ data: KeywordInsights | null }> = ({ data }
     );
 };
 
+// ── Scrollable tab bar — the fixed-width flex row silently clipped tabs
+//    once there were more than ~3; this adds horizontal scroll with arrow
+//    buttons + edge fades so every tab stays reachable. ──
+const ScrollableTabs: React.FC<{ activeTab: TabId; onChange: (id: TabId) => void }> = ({ activeTab, onChange }) => {
+    const { t } = useTranslation();
+    const trackRef = useRef<HTMLDivElement>(null);
+    const [canScrollLeft, setCanScrollLeft] = useState(false);
+    const [canScrollRight, setCanScrollRight] = useState(false);
+
+    const updateScrollState = () => {
+        const el = trackRef.current;
+        if (!el) return;
+        setCanScrollLeft(el.scrollLeft > 2);
+        setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 2);
+    };
+
+    useEffect(() => {
+        updateScrollState();
+        const el = trackRef.current;
+        if (!el) return;
+        const onResize = () => updateScrollState();
+        window.addEventListener('resize', onResize);
+        el.addEventListener('scroll', updateScrollState);
+        return () => { window.removeEventListener('resize', onResize); el.removeEventListener('scroll', updateScrollState); };
+    }, []);
+
+    // Keep the active tab in view when it changes (e.g. arrow-key navigation)
+    useEffect(() => {
+        const el = trackRef.current;
+        if (!el) return;
+        const activeEl = el.querySelector<HTMLElement>(`[data-tab-id="${activeTab}"]`);
+        activeEl?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+        // Re-check arrow visibility after the scroll settles
+        const id = setTimeout(updateScrollState, 300);
+        return () => clearTimeout(id);
+    }, [activeTab]);
+
+    const scrollBy = (dx: number) => trackRef.current?.scrollBy({ left: dx, behavior: 'smooth' });
+
+    return (
+        <div className={styles.wsptabsWrap}>
+            {canScrollLeft && (
+                <button className={`${styles.tabScrollBtn} ${styles.tabScrollBtnLeft}`} onClick={() => scrollBy(-160)} aria-label="Scroll tabs left">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M10 3L6 8l4 5" /></svg>
+                </button>
+            )}
+            <div className={styles.wsptabs} ref={trackRef}>
+                {TAB_IDS.map(tabId => (
+                    <button
+                        key={tabId}
+                        data-tab-id={tabId}
+                        className={`${styles.tab} ${activeTab === tabId ? styles.active : ''}`}
+                        onClick={() => onChange(tabId)}
+                    >
+                        {t(`uploadInfer.workspacePanel.tabs.${tabId}`)}
+                    </button>
+                ))}
+            </div>
+            {canScrollLeft && <div className={`${styles.tabFade} ${styles.tabFadeLeft}`} />}
+            {canScrollRight && <div className={`${styles.tabFade} ${styles.tabFadeRight}`} />}
+            {canScrollRight && (
+                <button className={`${styles.tabScrollBtn} ${styles.tabScrollBtnRight}`} onClick={() => scrollBy(160)} aria-label="Scroll tabs right">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 3l4 5-4 5" /></svg>
+                </button>
+            )}
+        </div>
+    );
+};
+
 // ── Main panel ────────────────────────────────────────────
 const WorkspacePanel: React.FC<Props> = ({ step2Visible = true, step2Minimized = false, fileResult, fileLoading, activeFileId, onResultUpdate }) => {
     const { t } = useTranslation();
@@ -1398,13 +1346,7 @@ const WorkspacePanel: React.FC<Props> = ({ step2Visible = true, step2Minimized =
                 </div>
             </div>
 
-            <div className={styles.wsptabs}>
-                {TAB_IDS.map(tabId => (
-                    <button key={tabId} className={`${styles.tab} ${activeTab === tabId ? styles.active : ''}`} onClick={() => setActiveTab(tabId)}>
-                        {t(`uploadInfer.workspacePanel.tabs.${tabId}`)}
-                    </button>
-                ))}
-            </div>
+            <ScrollableTabs activeTab={activeTab} onChange={setActiveTab} />
 
             <div className={styles.wsbody}>
                 {fileLoading && (
@@ -1436,8 +1378,6 @@ const WorkspacePanel: React.FC<Props> = ({ step2Visible = true, step2Minimized =
 };
 
 export default WorkspacePanel;
-
-
 
 
 
@@ -1689,12 +1629,69 @@ export default WorkspacePanel;
 }
 
 // ── Tab bar ─────────────────────────────────────────────
-.wsptabs {
+.wsptabsWrap {
+    position: relative;
     display: flex;
+    align-items: center;
     border-bottom: 1px solid var(--bdr);
     background: var(--bg1);
-    padding: 0 16px;
     flex-shrink: 0;
+}
+
+.wsptabs {
+    display: flex;
+    padding: 0 16px;
+    flex: 1;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+
+    &::-webkit-scrollbar {
+        display: none;
+    }
+}
+
+.tabFade {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 28px;
+    pointer-events: none;
+    z-index: 1;
+}
+
+.tabFadeLeft {
+    left: 28px;
+    background: linear-gradient(90deg, var(--bg1), transparent);
+}
+
+.tabFadeRight {
+    right: 28px;
+    background: linear-gradient(270deg, var(--bg1), transparent);
+}
+
+.tabScrollBtn {
+    flex-shrink: 0;
+    width: 28px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: var(--bg1);
+    color: var(--t2);
+    cursor: pointer;
+    z-index: 2;
+    transition: color 0.12s;
+
+    svg {
+        width: 13px;
+        height: 13px;
+    }
+
+    &:hover {
+        color: var(--t0);
+    }
 }
 
 .tab {
@@ -1712,6 +1709,7 @@ export default WorkspacePanel;
     transition: all 0.12s;
     user-select: none;
     white-space: nowrap;
+    flex-shrink: 0;
 
     &:hover {
         color: var(--t1);
@@ -3289,42 +3287,105 @@ export default WorkspacePanel;
     min-height: 200px;
 }
 
-// ── Keyword Insights: node-link graph ─────────────
+// ── Keyword Insights: node-link graph (React Flow mindmap) ──
 .graphWrap {
     width: 100%;
-    display: flex;
-    justify-content: center;
-}
+    height: 480px;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid var(--bdr);
+    background: var(--bg0);
 
-.graphSvg {
-    width: 100%;
-    max-width: 640px;
-    height: auto;
-}
+    :global(.react-flow__attribution) {
+        display: none;
+    }
 
-.graphEdge {
-    stroke: var(--bdr2);
-    stroke-width: 1.4;
-}
+    :global(.react-flow__controls) {
+        background: var(--bg1);
+        border: 1px solid var(--bdr2);
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: none;
+    }
 
-.graphNode {
-    circle {
-        fill: var(--blue-dim);
+    :global(.react-flow__controls-button) {
+        background: var(--bg1);
+        border-bottom: 1px solid var(--bdr2);
+        color: var(--t1);
+
+        &:hover {
+            background: var(--bg3);
+        }
+
+        svg {
+            fill: var(--t1);
+        }
+    }
+
+    :global(.react-flow__minimap) {
+        border-radius: 8px;
+        border: 1px solid var(--bdr2);
+        overflow: hidden;
+    }
+
+    :global(.react-flow__edge-path) {
+        stroke: var(--bdr2);
+    }
+
+    :global(.react-flow__edge:hover) .react-flow__edge-path,
+    :global(.react-flow__edge.selected) .react-flow__edge-path {
         stroke: var(--blue);
-        stroke-width: 1.6;
-        transition: fill 0.15s;
     }
 
-    text {
-        font-size: 10.5px;
-        fill: var(--t1);
-        font-family: var(--font-ui);
-        pointer-events: none;
+    :global(.react-flow__edge-text) {
+        fill: var(--t2);
+    }
+}
+
+.rfNode {
+    border-radius: 50%;
+    background: var(--blue-dim);
+    border: 1.6px solid var(--blue);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+    position: relative;
+    transition: background 0.15s;
+
+    &:active {
+        cursor: grabbing;
     }
 
-    &:hover circle {
-        fill: var(--blue);
+    &:hover {
+        background: var(--blue);
+
+        .rfNodeLabel {
+            color: var(--t0);
+        }
     }
+}
+
+.rfNodeLabel {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 4px;
+    font-size: 10.5px;
+    color: var(--t1);
+    white-space: nowrap;
+    font-family: var(--font-ui);
+    pointer-events: none;
+}
+
+.rfHandle {
+    width: 6px !important;
+    height: 6px !important;
+    min-width: 0 !important;
+    background: transparent !important;
+    border: none !important;
+    opacity: 0;
 }
 
 // ── Keyword Insights: matrix / heatmap grid ───────
