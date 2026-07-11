@@ -501,7 +501,20 @@
       "deleteAllFailed": "Delete failed. Please try again.",
       "matchCount": "{{count}} files",
       "pageInfo": "Page {{page}} of {{totalPages}} · {{total}} files",
-      "perPage": "Per page"
+      "perPage": "Per page",
+      "selectedTotal": "{{count}} of {{total}} selected",
+      "selectAllFiles": "Select all",
+      "clearAllFiles": "Clear all",
+      "inferenceMode": "Select for Inference",
+      "deleteMode": "Delete Files",
+      "exportMode": "Export Files",
+      "exitMode": "Exit",
+      "noFilesSelected": "No files selected",
+      "runInferenceBtn": "Run Inference",
+      "confirmDeleteBtn": "Confirm Delete",
+      "confirmExportBtn": "Confirm Export",
+      "paginationPrev": "Previous",
+      "paginationNext": "Next"
     },
     "inferencePanel": {
       "step2Label": "Step 2 — Inference Configuration",
@@ -966,6 +979,8 @@
     }
   }
 }
+
+
 
 
 
@@ -1485,7 +1500,20 @@
       "deleteAllFailed": "삭제에 실패했습니다. 다시 시도해 주세요.",
       "matchCount": "파일 {{count}}개",
       "pageInfo": "{{page}} / {{totalPages}} 페이지 · 총 {{total}}개",
-      "perPage": "페이지당"
+      "perPage": "페이지당",
+      "selectedTotal": "{{total}}개 중 {{count}}개 선택됨",
+      "selectAllFiles": "전체 선택",
+      "clearAllFiles": "전체 해제",
+      "inferenceMode": "추론을 위해 선택",
+      "deleteMode": "파일 삭제",
+      "exportMode": "파일 내보내기",
+      "exitMode": "나가기",
+      "noFilesSelected": "선택된 파일 없음",
+      "runInferenceBtn": "추론 실행",
+      "confirmDeleteBtn": "삭제 확인",
+      "confirmExportBtn": "내보내기 확인",
+      "paginationPrev": "이전",
+      "paginationNext": "다음"
     },
     "inferencePanel": {
       "step2Label": "2단계 — 추론 설정",
