@@ -682,7 +682,11 @@
       "tabs": {
         "summary": "Summary",
         "keywords": "Keywords",
-        "assessment": "Assessment Questions"
+        "assessment": "Assessment Questions",
+        "shortAnswer": "Short Answer",
+        "trueFalse": "True / False",
+        "timestampedSummary": "Timestamped Summary",
+        "keywordInsights": "Keyword Insights"
       },
       "noSummary": "No summary available.",
       "noKeywords": "No keywords available.",
@@ -726,7 +730,19 @@
       "noKeywordInsights": "No keyword insights available.",
       "noData": "No data available.",
       "firstMentionAt": "First mention at {{pct}}%",
-      "importanceAxis": "Importance"
+      "importanceAxis": "Importance",
+      "kiTabs": {
+        "graph": "Knowledge Graph",
+        "wordcloud": "Word Cloud",
+        "timeline": "Timeline",
+        "heatmap": "Heatmap",
+        "clusters": "Clusters",
+        "frequency": "Frequency",
+        "prerequisites": "Prerequisites",
+        "importance": "Importance",
+        "cooccurrence": "Co-occurrence",
+        "glossary": "Glossary"
+      }
     }
   },
   "stt": {
@@ -1003,12 +1019,6 @@
     }
   }
 }
-
-
-
-
-
-
 
 
 
@@ -1701,7 +1711,11 @@
       "tabs": {
         "summary": "요약",
         "keywords": "키워드",
-        "assessment": "평가 문항"
+        "assessment": "평가 문항",
+        "shortAnswer": "단답형",
+        "trueFalse": "진위형",
+        "timestampedSummary": "타임스탬프 요약",
+        "keywordInsights": "키워드 인사이트"
       },
       "noSummary": "요약을 사용할 수 없습니다.",
       "noKeywords": "키워드를 사용할 수 없습니다.",
@@ -1745,7 +1759,19 @@
       "noKeywordInsights": "키워드 인사이트가 없습니다.",
       "noData": "데이터가 없습니다.",
       "firstMentionAt": "첫 언급 {{pct}}%",
-      "importanceAxis": "중요도"
+      "importanceAxis": "중요도",
+      "kiTabs": {
+        "graph": "지식 그래프",
+        "wordcloud": "워드 클라우드",
+        "timeline": "타임라인",
+        "heatmap": "히트맵",
+        "clusters": "클러스터",
+        "frequency": "빈도",
+        "prerequisites": "선수 지식",
+        "importance": "중요도",
+        "cooccurrence": "동시 출현",
+        "glossary": "용어집"
+      }
     }
   },
   "stt": {
