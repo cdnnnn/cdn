@@ -1,396 +1,451 @@
-//ChartAskAiSlider.tsx
-import React, { useEffect, useRef, useState, KeyboardEvent } from 'react';
-import { useTranslation } from 'react-i18next';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import styles from './ChartAskAiSlider.module.scss';
-import { ChartResult, ChartType } from '../types';
-import { Icon, IconComponent } from '../icons';
-import { renderChart, getChartIcon } from './ResultsPanel';
-import { api } from '../../../services/api';
+//ChatPanel.module.scss
+@use '../../../styles/tokens' as t;
 
-interface QaEntry {
-  id: string;
-  question: string;
-  answer?: string;
-  loading?: boolean;
-  error?: string | null;
+.db-analytics-chat-panel {
+  background: t.$surface-2;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
 }
 
-interface Props {
-  sessionId: string | null;
-  chart: ChartResult | null;
-  displayType: ChartType;
-  onClose: () => void;
+.db-analytics-chat-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 53px;
+  padding: 0 16px;
+  border-bottom: 1px solid t.$border-strong;
+  background: t.$surface-1;
+  flex-shrink: 0;
 }
 
-const ChartAskAiSlider: React.FC<Props> = ({ sessionId, chart, displayType, onClose }) => {
-  const { t } = useTranslation();
-  const [draft, setDraft] = useState('');
-  const [entries, setEntries] = useState<QaEntry[]>([]);
-  const [isAsking, setIsAsking] = useState(false);
-  const threadEndRef = useRef<HTMLDivElement>(null);
+.db-analytics-chat-panel__header-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  min-width: 0;
+}
 
-  // Reset the conversation whenever a different chart is opened, so
-  // previous questions don't linger against the wrong chart.
-  useEffect(() => {
-    setEntries([]);
-    setDraft('');
-    setIsAsking(false);
-  }, [chart?.id]);
+.db-analytics-chat-panel__title {
+  font-size: 14px;
+  font-weight: 500;
+  margin: 0;
+  color: t.$text-primary;
+  line-height: 1.3;
+}
 
-  useEffect(() => {
-    threadEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [entries]);
+.db-analytics-chat-panel__subtitle {
+  font-size: 11px;
+  color: t.$text-muted;
+  margin: 0;
+  line-height: 1.3;
+}
 
-  if (!chart) return null;
+.db-analytics-chat-panel__thread {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
 
-  const ChartIcon: IconComponent = getChartIcon(displayType);
+.db-analytics-chat-panel__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 48px 16px;
+  color: t.$text-muted;
+  text-align: center;
+  flex: 1;
 
-  const submit = async () => {
-    const question = draft.trim();
-    if (!question || isAsking || !sessionId) return;
+  p {
+    font-size: 13px;
+    margin: 0;
+    max-width: 220px;
+  }
+}
 
-    const entryId = `qa-${Date.now()}`;
-    setEntries((prev) => [...prev, { id: entryId, question, loading: true }]);
-    setDraft('');
-    setIsAsking(true);
+.db-analytics-chat-bubble {
+  display: flex;
+  gap: 8px;
+  max-width: 92%;
+}
 
-    try {
-      const res = await api.getChartInsight(sessionId, { chart, question });
-      setEntries((prev) =>
-        prev.map((e) => (e.id === entryId ? { ...e, loading: false, answer: res.insight } : e))
-      );
-    } catch (err) {
-      setEntries((prev) =>
-        prev.map((e) =>
-          e.id === entryId
-            ? {
-                ...e,
-                loading: false,
-                error: err instanceof Error ? err.message : t('db_analytics.chartAskAiSlider.genericError'),
-              }
-            : e
-        )
-      );
-    } finally {
-      setIsAsking(false);
+.db-analytics-chat-bubble--user {
+  align-self: flex-end;
+  flex-direction: row-reverse;
+
+  .db-analytics-chat-bubble__content {
+    background: t.$accent-bg;
+    border: 1px solid rgba(79, 70, 229, 0.14);
+  }
+
+  .db-analytics-chat-bubble__text {
+    color: t.$text-primary;
+  }
+}
+
+.db-analytics-chat-bubble--assistant {
+  align-self: flex-start;
+}
+
+.db-analytics-chat-bubble__avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #eeedfe;
+  color: #3c3489;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.db-analytics-chat-bubble__content {
+  background: t.$surface-0;
+  border-radius: t.$radius-lg;
+  padding: 10px 12px;
+}
+
+.db-analytics-chat-bubble__text {
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0;
+  color: t.$text-primary;
+}
+
+.db-analytics-chat-bubble__markdown {
+  font-size: 13px;
+  line-height: 1.6;
+  color: t.$text-primary;
+
+  > *:first-child {
+    margin-top: 0;
+  }
+
+  > *:last-child {
+    margin-bottom: 0;
+  }
+
+  p {
+    margin: 0 0 8px;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-weight: 600;
+    line-height: 1.35;
+    margin: 14px 0 6px;
+  }
+
+  h1 {
+    font-size: 17px;
+  }
+
+  h2 {
+    font-size: 15px;
+  }
+
+  h3,
+  h4 {
+    font-size: 13.5px;
+  }
+
+  ul,
+  ol {
+    margin: 0 0 8px;
+    padding-left: 20px;
+  }
+
+  li {
+    margin: 2px 0;
+  }
+
+  li > p {
+    margin: 0;
+  }
+
+  strong {
+    font-weight: 600;
+  }
+
+  em {
+    font-style: italic;
+  }
+
+  a {
+    color: t.$accent;
+    text-decoration: underline;
+
+    &:hover {
+      color: #185fa5;
     }
-  };
+  }
 
-  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      submit();
+  blockquote {
+    margin: 8px 0;
+    padding: 4px 12px;
+    border-left: 3px solid t.$border-strong;
+    color: t.$text-secondary;
+  }
+
+  code {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 12px;
+    background: t.$surface-1;
+    border: 0.5px solid t.$border;
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+
+  pre {
+    margin: 8px 0;
+    padding: 10px 12px;
+    background: t.$surface-1;
+    border: 0.5px solid t.$border-strong;
+    border-radius: t.$radius;
+    overflow-x: auto;
+
+    code {
+      background: none;
+      border: none;
+      padding: 0;
+      font-size: 12px;
     }
-  };
+  }
 
-  return (
-    <div className={styles['db-analytics-chart-ask-overlay']} role="dialog" aria-modal="true">
-      <div className={styles['db-analytics-chart-ask-overlay__backdrop']} onClick={onClose} />
-      <aside className={styles['db-analytics-chart-ask-panel']}>
-        <div className={styles['db-analytics-chart-ask-panel__header']}>
-          <div className={styles['db-analytics-chart-ask-panel__heading']}>
-            <span className={styles['db-analytics-chart-ask-panel__icon']}>
-              <Icon.askAi size={16} aria-hidden="true" />
-            </span>
-            <div>
-              <h2 className={styles['db-analytics-chart-ask-panel__title']}>{t('db_analytics.chartAskAiSlider.title')}</h2>
-              <span className={styles['db-analytics-chart-ask-panel__subtitle']}>{chart.title}</span>
-            </div>
-          </div>
-          <button
-            className={styles['db-analytics-chart-ask-panel__close-btn']}
-            aria-label={t('db_analytics.chartAskAiSlider.close')}
-            onClick={onClose}
-          >
-            <Icon.close size={18} aria-hidden="true" />
-          </button>
-        </div>
+  hr {
+    border: none;
+    border-top: 0.5px solid t.$border;
+    margin: 12px 0;
+  }
 
-        <div className={styles['db-analytics-chart-ask-panel__body']}>
-          <div className={styles['db-analytics-chart-ask-panel__chart-col']}>
-            <div className={styles['db-analytics-chart-ask-panel__chart-card']}>
-              <div className={styles['db-analytics-chart-ask-panel__chart-card-header']}>
-                <span className={styles['db-analytics-chart-ask-panel__chart-card-icon']}>
-                  <ChartIcon size={13} aria-hidden="true" />
-                </span>
-                <h3>{chart.title}</h3>
-              </div>
-              {renderChart(chart, 280, displayType)}
-            </div>
-          </div>
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 8px 0;
+    font-size: 12px;
+  }
 
-          <div className={styles['db-analytics-chart-ask-panel__chat-col']}>
-            <div className={styles['db-analytics-chart-ask-panel__thread']}>
-              {entries.length === 0 ? (
-                <div className={styles['db-analytics-chart-ask-panel__empty']}>
-                  <Icon.askAi size={26} aria-hidden="true" />
-                  <p>{t('db_analytics.chartAskAiSlider.emptyPrompt')}</p>
-                </div>
-              ) : (
-                entries.map((entry) => (
-                  <div key={entry.id} className={styles['db-analytics-chart-ask-panel__qa']}>
-                    <div className={styles['db-analytics-chart-ask-panel__question']}>
-                      <p>{entry.question}</p>
-                    </div>
-                    <div className={styles['db-analytics-chart-ask-panel__answer']}>
-                      <span className={styles['db-analytics-chart-ask-panel__answer-avatar']}>
-                        <Icon.sparkles size={13} aria-hidden="true" />
-                      </span>
-                      <div className={styles['db-analytics-chart-ask-panel__answer-content']}>
-                        {entry.loading ? (
-                          <span className={styles['db-analytics-chart-ask-panel__thinking']}>
-                            <Icon.loader
-                              size={13}
-                              aria-hidden="true"
-                              className={styles['db-analytics-chart-ask-panel__spin']}
-                            />
-                            {t('db_analytics.chartAskAiSlider.thinking')}
-                          </span>
-                        ) : entry.error ? (
-                          <span className={styles['db-analytics-chart-ask-panel__error']}>{entry.error}</span>
-                        ) : (
-                          <div className={styles['db-analytics-chart-ask-panel__markdown']}>
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.answer ?? ''}</ReactMarkdown>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))
-              )}
-              <div ref={threadEndRef} />
-            </div>
+  th,
+  td {
+    text-align: left;
+    padding: 6px 8px;
+    border: 0.5px solid t.$border-strong;
+  }
 
-            <div className={styles['db-analytics-chart-ask-panel__composer']}>
-              <textarea
-                className={styles['db-analytics-chart-ask-panel__input']}
-                placeholder={t('db_analytics.chartAskAiSlider.placeholder')}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={handleKeyDown}
-                rows={2}
-                disabled={isAsking}
-              />
-              <button
-                className={styles['db-analytics-chart-ask-panel__send-btn']}
-                onClick={submit}
-                aria-label={t('db_analytics.chartAskAiSlider.ask')}
-                disabled={isAsking || !draft.trim()}
-              >
-                {isAsking ? (
-                  <Icon.loader size={14} aria-hidden="true" className={styles['db-analytics-chart-ask-panel__spin']} />
-                ) : (
-                  <Icon.send size={14} aria-hidden="true" />
-                )}
-                {t('db_analytics.chartAskAiSlider.ask')}
-              </button>
-            </div>
-          </div>
-        </div>
-      </aside>
-    </div>
-  );
-};
-
-export default ChartAskAiSlider;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//ChartConstructingAnimation.tsx
-import React from 'react';
-import { useTranslation } from 'react-i18next';
-import styles from './ChartConstructingAnimation.module.scss';
-
-// Four bars plus a line series, drawn on the same plot, on a continuous
-// loop: bars grow from the baseline (staggered), then a line draws itself
-// across their tops with a point "popping in" at each vertex, everything
-// holds briefly, fades/shrinks out, and the cycle restarts. All pieces
-// share one CSS custom property (--cycle-duration) with matching
-// percentage-based keyframes (see the .module.scss) and
-// `animation-iteration-count: infinite`, so every repeat stays in sync.
-const BAR_X = [40, 90, 140, 190];
-const BAR_HEIGHTS = [70, 110, 55, 90];
-const BASELINE_Y = 150;
-const LINE_POINTS = [
-  { x: 40, y: 60 },
-  { x: 90, y: 40 },
-  { x: 140, y: 85 },
-  { x: 190, y: 30 },
-];
-const BAR_WIDTH = 22;
-const CYCLE_DURATION_SECONDS = 3.6;
-
-const ChartConstructingAnimation: React.FC = () => {
-  const { t } = useTranslation();
-  const linePath = LINE_POINTS.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
-  const cycleDurationVar = { ['--cycle-duration' as string]: `${CYCLE_DURATION_SECONDS}s` };
-
-  return (
-    <div className={styles['db-analytics-chart-draw']}>
-      <svg viewBox="0 0 230 170" className={styles['db-analytics-chart-draw__svg']}>
-        <g className={styles['db-analytics-chart-draw__erase-group']} style={cycleDurationVar}>
-          <line
-            x1={20}
-            y1={BASELINE_Y}
-            x2={210}
-            y2={BASELINE_Y}
-            className={styles['db-analytics-chart-draw__axis']}
-          />
-
-          {BAR_X.map((x, i) => {
-            const height = BAR_HEIGHTS[i];
-            return (
-              <rect
-                key={i}
-                x={x - BAR_WIDTH / 2}
-                y={BASELINE_Y - height}
-                width={BAR_WIDTH}
-                height={height}
-                rx={3}
-                className={styles['db-analytics-chart-draw__bar']}
-                style={{ transformOrigin: `${x}px ${BASELINE_Y}px`, ...cycleDurationVar }}
-              />
-            );
-          })}
-
-          <path d={linePath} className={styles['db-analytics-chart-draw__line']} style={cycleDurationVar} />
-          {LINE_POINTS.map((p, i) => (
-            <circle
-              key={i}
-              cx={p.x}
-              cy={p.y}
-              r={3.5}
-              className={styles['db-analytics-chart-draw__dot']}
-              style={cycleDurationVar}
-            />
-          ))}
-        </g>
-      </svg>
-      <p className={styles['db-analytics-chart-draw__caption']}>{t('db_analytics.resultsPanel.drawingChart')}</p>
-    </div>
-  );
-};
-
-export default ChartConstructingAnimation;
-
-
-
-
-
-
-
-
-
-
-
-
-//ChartTypeMenu.tsx
-import React, { useEffect, useRef, useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import styles from './ChartTypeMenu.module.scss';
-import { ChartType } from '../types';
-import { Icon, IconComponent } from '../icons';
-import { getChartIcon, SWITCHABLE_CHART_TYPES } from './ResultsPanel';
-
-interface Props {
-  value: ChartType;
-  onChange: (type: ChartType) => void;
+  th {
+    background: t.$surface-1;
+    font-weight: 600;
+  }
 }
 
-const ChartTypeMenu: React.FC<Props> = ({ value, onChange }) => {
-  const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
+.db-analytics-chat-bubble__chart-ref {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: t.$text-secondary;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 0.5px solid t.$border;
+}
 
-  useEffect(() => {
-    if (!open) return;
-    const onClickOutside = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', onClickOutside);
-    return () => document.removeEventListener('mousedown', onClickOutside);
-  }, [open]);
+.db-analytics-db-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(237, 161, 0, 0.35);
+  border-radius: t.$radius-lg;
+  background: #fdf6e8;
+  flex-shrink: 0;
+}
 
-  const getTypeLabel = (type: ChartType) => t(`db_analytics.chartTypeMenu.types.${type}`, { defaultValue: type });
+.db-analytics-db-notice__icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #f7e6bd;
+  color: #8a5a00;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
 
-  const CurrentIcon: IconComponent = getChartIcon(value);
+.db-analytics-db-notice__body {
+  flex: 1;
+  min-width: 0;
+}
 
-  return (
-    <div className={styles['db-analytics-chart-type-menu']} ref={rootRef}>
-      <button
-        type="button"
-        className={styles['db-analytics-chart-type-menu__trigger']}
-        onClick={() => setOpen((o) => !o)}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        title={t('db_analytics.chartTypeMenu.changeType')}
-      >
-        <CurrentIcon size={12} aria-hidden="true" />
-        <span>{getTypeLabel(value)}</span>
-        <Icon.arrowRight
-          size={11}
-          aria-hidden="true"
-          className={styles['db-analytics-chart-type-menu__chevron']}
-        />
-      </button>
+.db-analytics-db-notice__title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #6b4400;
+  margin: 0 0 2px;
+}
 
-      {open && (
-        <ul className={styles['db-analytics-chart-type-menu__list']} role="listbox">
-          {SWITCHABLE_CHART_TYPES.map((option) => {
-            const OptionIcon = getChartIcon(option.value);
-            const isSelected = option.value === value;
-            return (
-              <li key={option.value}>
-                <button
-                  type="button"
-                  className={`${styles['db-analytics-chart-type-menu__option']} ${
-                    isSelected ? styles['db-analytics-chart-type-menu__option--selected'] : ''
-                  }`}
-                  role="option"
-                  aria-selected={isSelected}
-                  onClick={() => {
-                    onChange(option.value);
-                    setOpen(false);
-                  }}
-                >
-                  <OptionIcon size={13} aria-hidden="true" />
-                  <span>{getTypeLabel(option.value)}</span>
-                  {isSelected && <Icon.check size={12} aria-hidden="true" />}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </div>
-  );
-};
+.db-analytics-db-notice__desc {
+  font-size: 12px;
+  color: #8a5a00;
+  margin: 0;
+  line-height: 1.5;
 
-export default ChartTypeMenu;
+  strong {
+    font-weight: 600;
+  }
+}
 
+.db-analytics-db-notice__action {
+  align-self: center;
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b4400;
+  background: #fff;
+  border: 1px solid rgba(237, 161, 0, 0.4);
+  padding: 7px 13px;
+  border-radius: t.$radius;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease;
 
+  &:hover {
+    background: #fef8ea;
+    border-color: rgba(237, 161, 0, 0.6);
+  }
+}
 
+.db-analytics-chat-composer {
+  border-top: 0.5px solid t.$border;
+  padding: 12px;
+  flex-shrink: 0;
+}
 
+.db-analytics-chat-composer__box {
+  border: 0.5px solid t.$border-strong;
+  border-radius: t.$radius-lg;
+  background: t.$surface-1;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 
+  &:focus-within {
+    border-color: t.$accent;
+    box-shadow: 0 0 0 2px rgba(42, 120, 214, 0.15);
+  }
 
+  &:has(.db-analytics-chat-composer__input:disabled) {
+    opacity: 0.6;
+    background: t.$surface-0;
+  }
+}
+
+.db-analytics-chat-composer__input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  border: none;
+  border-radius: t.$radius-lg t.$radius-lg 0 0;
+  padding: 10px 12px 4px;
+  font-size: 13px;
+  font-family: inherit;
+  color: t.$text-primary;
+  background: transparent;
+
+  &:focus {
+    outline: none;
+  }
+
+  &::placeholder {
+    color: t.$text-muted;
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+  }
+}
+
+.db-analytics-chat-composer__box-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 8px 8px 12px;
+}
+
+.db-analytics-chat-composer__hint {
+  font-size: 11px;
+  color: t.$text-muted;
+  min-width: 0;
+}
+
+.db-analytics-chat-composer__hint--pending {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: t.$accent;
+  font-weight: 500;
+}
+
+.db-analytics-chat-composer__send-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: t.$gradient-primary;
+  color: #fff;
+  border: none;
+  border-radius: t.$radius;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(79, 70, 229, 0.25);
+  flex-shrink: 0;
+
+  &:hover:not(:disabled) {
+    filter: brightness(1.08);
+    box-shadow: 0 2px 6px rgba(79, 70, 229, 0.35);
+  }
+
+  &:active:not(:disabled) {
+    filter: brightness(0.96);
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+    box-shadow: none;
+  }
+}
+
+.db-analytics-chat-panel__spin {
+  animation: db-analytics-chat-panel-spin 0.8s linear infinite;
+}
+
+@keyframes db-analytics-chat-panel-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
 
 
 
@@ -621,39 +676,41 @@ const ChatPanel: React.FC<Props> = ({
       )}
 
       <div className={styles['db-analytics-chat-composer']}>
-        <textarea
-          className={styles['db-analytics-chat-composer__input']}
-          placeholder={composerPlaceholder}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={handleKeyDown}
-          rows={3}
-          disabled={composerDisabled}
-        />
-        <div className={styles['db-analytics-chat-composer__actions']}>
-          <span className={styles['db-analytics-chat-composer__hint']}>
-            {!isStreaming && isAwaitingResponseUnit ? (
-              <span className={styles['db-analytics-chat-composer__hint--pending']}>
-                <Icon.sparkles size={11} aria-hidden="true" className={styles['db-analytics-chat-panel__spin']} />
-                {t('db_analytics.chatPanel.composer.preparingFollowups')}
-              </span>
-            ) : (
-              t('db_analytics.chatPanel.composer.hint')
-            )}
-          </span>
-          <button
-            className={styles['db-analytics-chat-composer__send-btn']}
-            onClick={submit}
-            aria-label={t('db_analytics.chatPanel.composer.sendLabel')}
-            disabled={composerDisabled || !draft.trim()}
-          >
-            {isStreaming ? (
-              <Icon.loader size={14} aria-hidden="true" className={styles['db-analytics-chat-panel__spin']} />
-            ) : (
-              <Icon.send size={14} aria-hidden="true" />
-            )}
-            {t('db_analytics.chatPanel.composer.send')}
-          </button>
+        <div className={styles['db-analytics-chat-composer__box']}>
+          <textarea
+            className={styles['db-analytics-chat-composer__input']}
+            placeholder={composerPlaceholder}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={handleKeyDown}
+            rows={3}
+            disabled={composerDisabled}
+          />
+          <div className={styles['db-analytics-chat-composer__box-footer']}>
+            <span className={styles['db-analytics-chat-composer__hint']}>
+              {!isStreaming && isAwaitingResponseUnit ? (
+                <span className={styles['db-analytics-chat-composer__hint--pending']}>
+                  <Icon.sparkles size={11} aria-hidden="true" className={styles['db-analytics-chat-panel__spin']} />
+                  {t('db_analytics.chatPanel.composer.preparingFollowups')}
+                </span>
+              ) : (
+                t('db_analytics.chatPanel.composer.hint')
+              )}
+            </span>
+            <button
+              className={styles['db-analytics-chat-composer__send-btn']}
+              onClick={submit}
+              aria-label={t('db_analytics.chatPanel.composer.sendLabel')}
+              disabled={composerDisabled || !draft.trim()}
+            >
+              {isStreaming ? (
+                <Icon.loader size={14} aria-hidden="true" className={styles['db-analytics-chat-panel__spin']} />
+              ) : (
+                <Icon.send size={14} aria-hidden="true" />
+              )}
+              {t('db_analytics.chatPanel.composer.send')}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -663,276 +720,6 @@ const ChatPanel: React.FC<Props> = ({
 export default ChatPanel;
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//ConnectPasswordModal.tsx
-import React, { useState } from 'react';
-import { useTranslation, Trans } from 'react-i18next';
-import styles from './ConnectPasswordModal.module.scss';
-import { DatabaseItem } from '../types';
-import { api } from '../../../services/api';
-import { Icon } from '../icons';
-
-interface Props {
-  database: DatabaseItem;
-  onClose: () => void;
-  onConnected: (cacheUntil: string) => void;
-}
-
-const ConnectPasswordModal: React.FC<Props> = ({ database, onClose, onConnected }) => {
-  const { t } = useTranslation();
-  const [password, setPassword] = useState('');
-  const [connecting, setConnecting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleConnect = async () => {
-    if (!password) {
-      setError(t('db_analytics.connectPasswordModal.errorRequired'));
-      return;
-    }
-    setConnecting(true);
-    setError(null);
-    try {
-      const res = await api.connectDatabase(database.id, password);
-      onConnected(res.cache_until);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t('db_analytics.connectPasswordModal.genericError'));
-    } finally {
-      setConnecting(false);
-    }
-  };
-
-  return (
-    <div className={styles['db-analytics-modal-overlay']} role="dialog" aria-modal="true">
-      <div className={styles['db-analytics-modal-overlay__backdrop']} onClick={onClose} />
-      <div className={styles['db-analytics-modal-card']}>
-        <div className={styles['db-analytics-modal-card__header']}>
-          <h3 className={styles['db-analytics-modal-card__title']}>
-            {t('db_analytics.connectPasswordModal.title', { name: database.name })}
-          </h3>
-          <button
-            className={styles['db-analytics-modal-card__close-btn']}
-            aria-label={t('db_analytics.connectPasswordModal.close')}
-            onClick={onClose}
-          >
-            <Icon.close size={16} aria-hidden="true" />
-          </button>
-        </div>
-        <div className={styles['db-analytics-modal-card__body']}>
-          <p className={styles['db-analytics-modal-card__desc']}>
-            <Trans
-              i18nKey="connectPasswordModal.description"
-              values={{ username: database.username, dbName: database.db_name }}
-              components={{ strong: <strong /> }}
-            />
-          </p>
-          {error && <div className={styles['db-analytics-modal-card__error']}>{error}</div>}
-          <label className={styles['db-analytics-modal-card__field']}>
-            <span className={styles['db-analytics-modal-card__label']}>
-              {t('db_analytics.connectPasswordModal.passwordLabel')}
-            </span>
-            <input
-              className={styles['db-analytics-modal-card__input']}
-              type="password"
-              value={password}
-              autoFocus
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleConnect()}
-              placeholder={t('db_analytics.connectPasswordModal.passwordPlaceholder')}
-            />
-          </label>
-        </div>
-        <div className={styles['db-analytics-modal-card__actions']}>
-          <button
-            className={`${styles['db-analytics-modal-btn']} ${styles['db-analytics-modal-btn--ghost']}`}
-            onClick={onClose}
-            disabled={connecting}
-          >
-            {t('db_analytics.connectPasswordModal.cancel')}
-          </button>
-          <button
-            className={`${styles['db-analytics-modal-btn']} ${styles['db-analytics-modal-btn--primary']}`}
-            onClick={handleConnect}
-            disabled={connecting}
-          >
-            {connecting ? t('db_analytics.connectPasswordModal.connecting') : t('db_analytics.connectPasswordModal.connect')}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-export default ConnectPasswordModal;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//DatabaseList.tsx
-import React, { useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import styles from './DatabaseList.module.scss';
-import { DatabaseItem } from '../types';
-import { Icon } from '../icons';
-import { getDbTypeMeta } from '../dbTypeMeta';
-import SkeletonListItem from './SkeletonListItem';
-import DbSchemaSlider from './DbSchemaSlider';
-
-interface Props {
-  databases: DatabaseItem[];
-  onManage: () => void;
-  disabled?: boolean;
-  loading?: boolean;
-}
-
-const DatabaseList: React.FC<Props> = ({ databases, onManage, disabled, loading }) => {
-  const { t } = useTranslation();
-  const isDisabled = !!disabled || !!loading;
-  const disabledTitle = loading
-    ? t('db_analytics.databaseList.loadingDatabases')
-    : disabled
-    ? t('db_analytics.databaseList.waitForResponse')
-    : undefined;
-  const [schemaTarget, setSchemaTarget] = useState<DatabaseItem | null>(null);
-
-  return (
-    <div className={styles['db-analytics-db-panel']}>
-      <div className={styles['db-analytics-db-panel__header']}>
-        <h2 className={styles['db-analytics-db-panel__title']}>{t('db_analytics.databaseList.title')}</h2>
-        <div className={styles['db-analytics-db-panel__header-actions']}>
-          <button
-            className={styles['db-analytics-db-panel__icon-btn']}
-            aria-label={t('db_analytics.databaseList.manageDatabases')}
-            onClick={onManage}
-            disabled={isDisabled}
-            title={isDisabled ? disabledTitle : t('db_analytics.databaseList.manageDatabases')}
-          >
-            <Icon.settings size={15} aria-hidden="true" />
-          </button>
-          <button
-            className={styles['db-analytics-db-panel__icon-btn']}
-            aria-label={t('db_analytics.databaseList.addDatabaseConnection')}
-            onClick={onManage}
-            disabled={isDisabled}
-            title={isDisabled ? disabledTitle : t('db_analytics.databaseList.addDatabase')}
-          >
-            <Icon.plus size={16} aria-hidden="true" />
-          </button>
-        </div>
-      </div>
-      <div className={styles['db-analytics-db-panel__body']}>
-        {loading ? (
-          <SkeletonListItem variant="db" count={4} />
-        ) : databases.length === 0 ? (
-          <div className={styles['db-analytics-db-panel__empty']}>
-            <span className={styles['db-analytics-db-panel__empty-icon']}>
-              <Icon.database size={18} aria-hidden="true" />
-            </span>
-            <p>{t('db_analytics.databaseList.emptyTitle')}</p>
-            <button
-              className={styles['db-analytics-db-panel__link']}
-              onClick={onManage}
-              disabled={isDisabled}
-              title={disabledTitle}
-            >
-              {t('db_analytics.databaseList.connectADatabase')}
-            </button>
-          </div>
-        ) : (
-          <ul className={styles['db-analytics-db-list']}>
-            {databases.map((db, index) => {
-              const typeMeta = getDbTypeMeta(db.db_type);
-              const isCsv = db.db_type === 'csv';
-              const schemaEnabled = isCsv || db.connected;
-              const statusLabel = isCsv
-                ? t('db_analytics.databaseList.status.ready')
-                : db.connected
-                ? t('db_analytics.databaseList.status.connected')
-                : t('db_analytics.databaseList.status.disconnected');
-              return (
-                <li key={db.id ? `${db.id}-${index}` : `db-${index}`} className={styles['db-analytics-db-item']}>
-                  <div
-                    className={`${styles['db-analytics-db-item__icon']} ${
-                      styles[`db-analytics-db-item__icon--${typeMeta.modifier}`] ?? ''
-                    }`}
-                  >
-                    {isCsv ? (
-                      <Icon.csv size={14} aria-hidden="true" />
-                    ) : (
-                      <Icon.database size={14} aria-hidden="true" />
-                    )}
-                  </div>
-                  <div className={styles['db-analytics-db-item__info']}>
-                    <span className={styles['db-analytics-db-item__name']}>{db.name}</span>
-                    <span className={styles['db-analytics-db-item__meta']}>
-                      <span
-                        className={`${styles['db-analytics-db-item__type-badge']} ${
-                          styles[`db-analytics-db-item__type-badge--${typeMeta.modifier}`] ?? ''
-                        }`}
-                      >
-                        {typeMeta.label}
-                      </span>
-                      <span className={styles['db-analytics-db-item__db-name']}>{db.db_name}</span>
-                    </span>
-                  </div>
-                  <div className={styles['db-analytics-db-item__actions']}>
-                    <button
-                      type="button"
-                      className={styles['db-analytics-db-item__schema-btn']}
-                      onClick={() => schemaEnabled && setSchemaTarget(db)}
-                      disabled={!schemaEnabled}
-                      aria-label={t('db_analytics.databaseList.viewSchemaAndErDiagram')}
-                      title={schemaEnabled ? t('db_analytics.databaseList.viewSchema') : t('db_analytics.databaseList.connectToViewSchema')}
-                    >
-                      <Icon.schema size={13} aria-hidden="true" />
-                    </button>
-                    <span
-                      className={`${styles['db-analytics-db-status-dot']} ${
-                        schemaEnabled
-                          ? styles['db-analytics-db-status-dot--connected']
-                          : styles['db-analytics-db-status-dot--disconnected']
-                      }`}
-                      title={statusLabel}
-                      aria-label={statusLabel}
-                    />
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
-
-      <DbSchemaSlider database={schemaTarget} onClose={() => setSchemaTarget(null)} />
-    </div>
-  );
-};
-
-export default DatabaseList;
 
 
 
@@ -1381,8 +1168,16 @@ const DatabaseManagerSlider: React.FC<Props> = ({
                     <input
                       className={styles['db-analytics-form__input']}
                       type="number"
-                      value={form.port}
-                      onChange={(e) => updateField('port', Number(e.target.value))}
+                      value={form.port === 0 ? '' : form.port}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        // Allow the field to be fully cleared while typing —
+                        // coercing an empty string to 0 immediately (via
+                        // Number('')) was forcing a visible "0" back into
+                        // the input on every keystroke, including at the
+                        // very start of typing a new value.
+                        updateField('port', raw === '' ? 0 : Number(raw));
+                      }}
                     />
                   </label>
                 </div>
@@ -1592,1337 +1387,221 @@ export default DatabaseManagerSlider;
 
 
 
-//DbSchemaSlider.tsx
-import React, { useEffect, useMemo, useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import styles from './DbSchemaSlider.module.scss';
-import { DatabaseItem, DbSchema } from '../types';
-import { Icon } from '../icons';
-import { api } from '../../../services/api';
-import SchemaErDiagram from './SchemaErDiagram';
 
-interface Props {
-  database: DatabaseItem | null;
-  onClose: () => void;
+
+
+
+//SuggestedPrompts.module.scss
+@use '../../../styles/tokens' as t;
+
+.db-analytics-suggested-prompts {
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 8px 4px 4px;
 }
 
-type Tab = 'tables' | 'diagram';
+.db-analytics-suggested-prompts__intro {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 16px;
 
-const DbSchemaSlider: React.FC<Props> = ({ database, onClose }) => {
-  const { t } = useTranslation();
-  const [tab, setTab] = useState<Tab>('tables');
-  const [schema, setSchema] = useState<DbSchema | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [expandedTable, setExpandedTable] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!database) return;
-    let cancelled = false;
-    setSchema(null);
-    setError(null);
-    setTab('tables');
-    setExpandedTable(null);
-    setLoading(true);
-
-    api
-      .getSchema(database.id)
-      .then((res) => {
-        if (!cancelled) {
-          setSchema(res);
-          setExpandedTable(res.tables[0]?.name ?? null);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : t('db_analytics.dbSchemaSlider.genericError'));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [database?.id]);
-
-  const totalRows = useMemo(
-    () => schema?.tables.reduce((sum, t) => sum + (t.row_count ?? 0), 0) ?? 0,
-    [schema]
-  );
-
-  if (!database) return null;
-
-  return (
-    <div className={styles['db-analytics-schema-overlay']} role="dialog" aria-modal="true">
-      <div className={styles['db-analytics-schema-overlay__backdrop']} onClick={onClose} />
-      <aside className={styles['db-analytics-schema-panel']}>
-        <div className={styles['db-analytics-schema-panel__header']}>
-          <div className={styles['db-analytics-schema-panel__heading']}>
-            <span className={styles['db-analytics-schema-panel__icon']}>
-              <Icon.schema size={16} aria-hidden="true" />
-            </span>
-            <div>
-              <h2 className={styles['db-analytics-schema-panel__title']}>{database.name}</h2>
-              <span className={styles['db-analytics-schema-panel__subtitle']}>
-                {t('db_analytics.dbSchemaSlider.subtitle')}
-              </span>
-            </div>
-          </div>
-          <button
-            className={styles['db-analytics-schema-panel__close-btn']}
-            aria-label={t('db_analytics.dbSchemaSlider.close')}
-            onClick={onClose}
-          >
-            <Icon.close size={18} aria-hidden="true" />
-          </button>
-        </div>
-
-        <div className={styles['db-analytics-schema-tabs']}>
-          <button
-            className={`${styles['db-analytics-schema-tabs__item']} ${
-              tab === 'tables' ? styles['db-analytics-schema-tabs__item--active'] : ''
-            }`}
-            onClick={() => setTab('tables')}
-          >
-            <Icon.table size={14} aria-hidden="true" />
-            {t('db_analytics.dbSchemaSlider.tabs.tables')}
-            {schema && <span className={styles['db-analytics-schema-tabs__count']}>{schema.tables.length}</span>}
-          </button>
-          <button
-            className={`${styles['db-analytics-schema-tabs__item']} ${
-              tab === 'diagram' ? styles['db-analytics-schema-tabs__item--active'] : ''
-            }`}
-            onClick={() => setTab('diagram')}
-          >
-            <Icon.schema size={14} aria-hidden="true" />
-            {t('db_analytics.dbSchemaSlider.tabs.erDiagram')}
-          </button>
-        </div>
-
-        <div className={styles['db-analytics-schema-panel__body']}>
-          {loading && (
-            <div className={styles['db-analytics-schema-empty']}>
-              <Icon.loader size={22} aria-hidden="true" className={styles['db-analytics-schema-spin']} />
-              <p>{t('db_analytics.dbSchemaSlider.loadingSchema')}</p>
-            </div>
-          )}
-
-          {!loading && error && (
-            <div className={styles['db-analytics-schema-empty']}>
-              <Icon.infoCircle size={22} aria-hidden="true" />
-              <p>{error}</p>
-            </div>
-          )}
-
-          {!loading && !error && schema && schema.tables.length === 0 && (
-            <div className={styles['db-analytics-schema-empty']}>
-              <Icon.table size={22} aria-hidden="true" />
-              <p>{t('db_analytics.dbSchemaSlider.noTablesFound')}</p>
-            </div>
-          )}
-
-          {!loading && !error && schema && schema.tables.length > 0 && tab === 'tables' && (
-            <>
-              <div className={styles['db-analytics-schema-summary']}>
-                <span>
-                  <strong>{schema.tables.length}</strong>{' '}
-                  {schema.tables.length === 1 ? t('db_analytics.dbSchemaSlider.tableLabel') : t('db_analytics.dbSchemaSlider.tableLabelPlural')}
-                </span>
-                <span className={styles['db-analytics-schema-summary__dot']}>&middot;</span>
-                <span>{t('db_analytics.dbSchemaSlider.totalRows', { count: totalRows })}</span>
-              </div>
-
-              <div className={styles['db-analytics-schema-table-list']}>
-                {schema.tables.map((table) => {
-                  const isOpen = expandedTable === table.name;
-                  return (
-                    <div key={table.name} className={styles['db-analytics-schema-table']}>
-                      <button
-                        className={styles['db-analytics-schema-table__header']}
-                        onClick={() => setExpandedTable(isOpen ? null : table.name)}
-                        aria-expanded={isOpen}
-                      >
-                        <span className={styles['db-analytics-schema-table__icon']}>
-                          <Icon.table size={13} aria-hidden="true" />
-                        </span>
-                        <span className={styles['db-analytics-schema-table__name']}>{table.name}</span>
-                        <span className={styles['db-analytics-schema-table__meta']}>
-                          {t('db_analytics.dbSchemaSlider.columnCount', { count: table.columns.length })} &middot;{' '}
-                          {t('db_analytics.dbSchemaSlider.rowCount', { count: table.row_count })}
-                        </span>
-                        <Icon.arrowRight
-                          size={13}
-                          aria-hidden="true"
-                          className={`${styles['db-analytics-schema-table__chevron']} ${
-                            isOpen ? styles['db-analytics-schema-table__chevron--open'] : ''
-                          }`}
-                        />
-                      </button>
-
-                      {isOpen && (
-                        <div className={styles['db-analytics-schema-table__body']}>
-                          <table className={styles['db-analytics-schema-columns']}>
-                            <thead>
-                              <tr>
-                                <th>{t('db_analytics.dbSchemaSlider.table.columnHeader')}</th>
-                                <th>{t('db_analytics.dbSchemaSlider.table.typeHeader')}</th>
-                                <th>{t('db_analytics.dbSchemaSlider.table.nullableHeader')}</th>
-                                <th>{t('db_analytics.dbSchemaSlider.table.defaultHeader')}</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {table.columns.map((col) => (
-                                <tr key={col.name}>
-                                  <td>
-                                    <span className={styles['db-analytics-schema-columns__name']}>
-                                      {col.primary_key && (
-                                        <span
-                                          className={styles['db-analytics-schema-columns__pk']}
-                                          title={t('db_analytics.dbSchemaSlider.table.primaryKey')}
-                                        >
-                                          {t('db_analytics.dbSchemaSlider.table.pkAbbr')}
-                                        </span>
-                                      )}
-                                      {col.name}
-                                    </span>
-                                  </td>
-                                  <td>
-                                    <span className={styles['db-analytics-schema-columns__type']}>{col.type}</span>
-                                  </td>
-                                  <td>
-                                    {col.nullable
-                                      ? t('db_analytics.dbSchemaSlider.table.nullableYes')
-                                      : t('db_analytics.dbSchemaSlider.table.nullableNo')}
-                                  </td>
-                                  <td>{col.default ?? '—'}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </>
-          )}
-
-          {!loading && !error && schema && schema.tables.length > 0 && tab === 'diagram' && (
-            <SchemaErDiagram tables={schema.tables} />
-          )}
-        </div>
-      </aside>
-    </div>
-  );
-};
-
-export default DbSchemaSlider;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//ExpandChartSlider.tsx
-import React from 'react';
-import { useTranslation } from 'react-i18next';
-import styles from './ExpandChartSlider.module.scss';
-import { ChartResult, ChartType } from '../types';
-import { Icon, IconComponent } from '../icons';
-import { renderChart, getChartIcon } from './ResultsPanel';
-
-interface Props {
-  chart: ChartResult | null;
-  displayType: ChartType;
-  onClose: () => void;
+  p {
+    font-size: 13px;
+    color: t.$text-secondary;
+    margin: 0;
+  }
 }
 
-const ExpandChartSlider: React.FC<Props> = ({ chart, displayType, onClose }) => {
-  const { t } = useTranslation();
-  if (!chart) return null;
-
-  const ChartIcon: IconComponent = getChartIcon(displayType);
-
-  return (
-    <div className={styles['db-analytics-expand-overlay']} role="dialog" aria-modal="true">
-      <div className={styles['db-analytics-expand-overlay__backdrop']} onClick={onClose} />
-      <aside className={styles['db-analytics-expand-panel']}>
-        <div className={styles['db-analytics-expand-panel__header']}>
-          <div className={styles['db-analytics-expand-panel__heading']}>
-            <span className={styles['db-analytics-expand-panel__icon']}>
-              <ChartIcon size={16} aria-hidden="true" />
-            </span>
-            <div>
-              <h2 className={styles['db-analytics-expand-panel__title']}>{chart.title}</h2>
-              <span className={styles['db-analytics-expand-panel__badge']}>
-                {t(`db_analytics.chartTypeMenu.types.${displayType}`, { defaultValue: displayType })}
-              </span>
-            </div>
-          </div>
-          <button
-            className={styles['db-analytics-expand-panel__close-btn']}
-            aria-label={t('db_analytics.expandChartSlider.close')}
-            onClick={onClose}
-          >
-            <Icon.close size={18} aria-hidden="true" />
-          </button>
-        </div>
-
-        <div className={styles['db-analytics-expand-panel__body']}>
-          {renderChart(chart, 440, displayType)}
-        </div>
-      </aside>
-    </div>
-  );
-};
-
-export default ExpandChartSlider;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//FollowupChips.tsx
-import React from 'react';
-import { useTranslation } from 'react-i18next';
-import styles from './FollowupChips.module.scss';
-import { Icon } from '../icons';
-
-interface Props {
-  followups: string[];
-  loading?: boolean;
-  onSelect: (text: string) => void;
+.db-analytics-suggested-prompts__badge {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: t.$gradient-primary;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
-const FollowupChips: React.FC<Props> = ({ followups = [], loading, onSelect }) => {
-  const { t } = useTranslation();
-  if (!loading && followups.length === 0) return null;
-
-  return (
-    <div className={styles['db-analytics-followups']}>
-      <span className={styles['db-analytics-followups__label']}>
-        <Icon.sparkles size={12} aria-hidden="true" />
-        {loading ? t('db_analytics.followupChips.finding') : t('db_analytics.followupChips.continueExploring')}
-      </span>
-      {!loading && (
-        <div className={styles['db-analytics-followups__list']}>
-          {followups.map((text, i) => (
-            <button key={i} className={styles['db-analytics-followups__chip']} onClick={() => onSelect(text)}>
-              <span className={styles['db-analytics-followups__chip-icon']}>
-                <Icon.messageCircle size={12} aria-hidden="true" />
-              </span>
-              <span className={styles['db-analytics-followups__chip-text']}>{text}</span>
-              <span className={styles['db-analytics-followups__chip-arrow']}>
-                <Icon.arrowRight size={13} aria-hidden="true" />
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-};
-
-export default FollowupChips;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//ResultsPanel.tsx
-import React, { useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import i18n from '../../../i18n';
-import {
-  LineChart,
-  Line,
-  BarChart,
-  Bar,
-  AreaChart,
-  Area,
-  ScatterChart,
-  Scatter,
-  PieChart,
-  Pie,
-  Cell,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-} from 'recharts';
-import styles from './ResultsPanel.module.scss';
-import { ChartResult, ChartType, ChartGroup } from '../types';
-import { Icon, IconComponent } from '../icons';
-import ChartTypeMenu from './ChartTypeMenu';
-import ExpandChartSlider from './ExpandChartSlider';
-import ChartAskAiSlider from './ChartAskAiSlider';
-import ChartConstructingAnimation from './ChartConstructingAnimation';
-
-interface Props {
-  chartGroups: ChartGroup[];
-  loadError?: string | null;
-  isGenerating?: boolean;
-  sessionId: string | null;
+.db-analytics-suggested-prompts__spin {
+  animation: db-analytics-suggested-prompts-spin 0.8s linear infinite;
+  color: t.$text-muted;
 }
 
-const chartTypeIcon: Partial<Record<ChartType, IconComponent>> = {
-  kpi: Icon.gauge,
-  line: Icon.chartLine,
-  bar: Icon.chartBar,
-  pie: Icon.chartPie,
-  area: Icon.chartArea,
-  scatter: Icon.chartDots,
-  table: Icon.table,
-};
+@keyframes db-analytics-suggested-prompts-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
 
-const FALLBACK_ICON: IconComponent = Icon.chartAreaLine;
+.db-analytics-suggested-prompts__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
 
-export const getChartIcon = (type: ChartResult['chart_type']): IconComponent =>
-  chartTypeIcon[type] ?? FALLBACK_ICON;
+.db-analytics-suggested-prompts__card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  text-align: left;
+  padding: 12px 14px;
+  border: 1px solid t.$border-strong;
+  border-radius: t.$radius-lg;
+  background: t.$surface-2;
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+  position: relative;
+  overflow: hidden;
 
-// Graph types a person can switch a card to from its header dropdown.
-// KPI and table are left out — they're structurally different (not a
-// category/series plot) and switching into them from a plotted chart
-// wouldn't produce anything meaningful. Labels are resolved through i18n at
-// render time in ChartTypeMenu (see chartTypeMenu.types.* keys) — this array
-// only carries the stable `value`s plus an English fallback label.
-export const SWITCHABLE_CHART_TYPES: { value: ChartType; label: string }[] = [
-  { value: 'bar', label: 'Bar' },
-  { value: 'line', label: 'Line' },
-  { value: 'area', label: 'Area' },
-  { value: 'pie', label: 'Pie' },
-  { value: 'scatter', label: 'Scatter' },
-];
-
-// A richer, more vivid categorical palette than the previous muted set —
-// each series/slice gets a distinct, saturated hue that still reads well
-// against the light surface.
-const SERIES_COLORS = [
-  '#4f46e5', // indigo
-  '#0aa36f', // green
-  '#e08a00', // amber
-  '#dc4646', // red
-  '#0c8fce', // sky blue
-  '#a238c9', // violet
-  '#d1385c', // rose
-];
-
-const tooltipStyle = {
-  background: '#ffffff',
-  border: '1px solid rgba(11,11,11,0.08)',
-  borderRadius: 10,
-  fontSize: 12,
-  boxShadow: '0 6px 20px rgba(11,11,11,0.10)',
-  padding: '8px 12px',
-};
-
-const formatKpiValue = (value: number) => {
-  if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (Math.abs(value) >= 1000) return value.toLocaleString();
-  if (!Number.isInteger(value)) return value.toFixed(1);
-  return String(value);
-};
-
-const renderKpi = (chart: ChartResult) => (
-  <div className={styles['db-analytics-kpi-grid']}>
-    {chart.data.map((row, i) => {
-      const label = String(row[chart.x_axis ?? 'metric']);
-      const value = Number(row[chart.y_axis ?? 'value']);
-      return (
-        <div key={i} className={styles['db-analytics-kpi-card']}>
-          <span className={styles['db-analytics-kpi-card__label']}>{label}</span>
-          <span className={styles['db-analytics-kpi-card__value']}>{formatKpiValue(value)}</span>
-        </div>
-      );
-    })}
-  </div>
-);
-
-// When the API doesn't provide an explicit `series` list (it can be null),
-// fall back to every numeric column in the data besides the x-axis key.
-const deriveSeriesKeys = (chart: ChartResult, xKey: string): string[] => {
-  if (chart.series && chart.series.length > 0) return chart.series;
-  if (!chart.data || chart.data.length === 0) return [];
-
-  const sample = chart.data[0];
-  return Object.keys(sample).filter((key) => key !== xKey && typeof sample[key] === 'number');
-};
-
-const axisTick = { fontSize: 11.5, fill: '#8b8a84', fontWeight: 500 };
-const axisLine = { stroke: '#d8d7cf' };
-
-// Resolves which fields to use for a pie slice's label and value. Prefers
-// the API-given x_axis/y_axis, but only if that key actually exists on the
-// data — a null/missing/incorrect axis field (common on pie responses,
-// since they don't always set x_axis/y_axis the way category charts do)
-// used to silently default to 'name'/'value', which is wrong whenever the
-// real fields are named something else (e.g. 'region', 'total'). Falls back
-// to the first string-valued key for the name and the first numeric-valued
-// key for the value.
-const resolvePieKeys = (chart: ChartResult): { nameKey: string; valueKey: string } => {
-  const sample = chart.data[0] ?? {};
-  const keys = Object.keys(sample);
-
-  const nameKey =
-    chart.x_axis && keys.includes(chart.x_axis)
-      ? chart.x_axis
-      : keys.find((k) => typeof sample[k] === 'string') ?? keys[0] ?? 'name';
-
-  const valueKey =
-    chart.y_axis && keys.includes(chart.y_axis)
-      ? chart.y_axis
-      : keys.find((k) => k !== nameKey && typeof sample[k] === 'number') ?? 'value';
-
-  return { nameKey, valueKey };
-};
-
-// renderChart is a plain function (not a component), called both from this
-// file's JSX map and from ExpandChartSlider/ChartAskAiSlider, so it can't
-// use the useTranslation() hook. It reads directly off the shared i18next
-// instance instead, which works outside of React's render/hook lifecycle
-// and still re-resolves to the current language on every call.
-export const renderChart = (chart: ChartResult, height = 220, overrideType?: ChartType) => {
-  const xKey = chart.x_axis ?? 'name';
-  const seriesKeys = deriveSeriesKeys(chart, xKey);
-  const gradientPrefix = `db-analytics-grad-${chart.id}`;
-  const effectiveType = overrideType ?? chart.chart_type;
-
-  if (!chart.data || chart.data.length === 0) {
-    return (
-      <div className={styles['db-analytics-chart-card__no-data']}>{i18n.t('db_analytics.resultsPanel.noDataForChart')}</div>
-    );
+  &::before {
+    content: '';
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 3px;
+    background: t.$gradient-primary;
+    opacity: 0;
+    transition: opacity 0.15s ease;
   }
 
-  if (effectiveType === 'kpi') {
-    return renderKpi(chart);
-  }
+  &:hover {
+    border-color: t.$border-stronger;
+    box-shadow: 0 3px 10px rgba(79, 70, 229, 0.1);
+    transform: translateY(-1px);
 
-  if (effectiveType === 'line') {
-    if (seriesKeys.length === 0) {
-      return (
-        <div className={styles['db-analytics-chart-card__no-data']}>{i18n.t('db_analytics.resultsPanel.noSeriesFound')}</div>
-      );
+    &::before {
+      opacity: 1;
     }
-    return (
-      <ResponsiveContainer width="100%" height={height}>
-        <LineChart data={chart.data} margin={{ top: 8, right: 12, left: -16, bottom: 0 }}>
-          <CartesianGrid stroke="#ece9df" vertical={false} />
-          <XAxis dataKey={xKey} tick={axisTick} axisLine={axisLine} tickLine={false} />
-          <YAxis tick={axisTick} axisLine={false} tickLine={false} />
-          <Tooltip contentStyle={tooltipStyle} cursor={{ stroke: '#d8d7cf', strokeWidth: 1 }} />
-          {seriesKeys.map((key, i) => (
-            <Line
-              key={key}
-              type="monotone"
-              dataKey={key}
-              stroke={SERIES_COLORS[i % SERIES_COLORS.length]}
-              strokeWidth={1.5}
-              dot={{ r: 2.5, strokeWidth: 1.5, stroke: '#fff', fill: SERIES_COLORS[i % SERIES_COLORS.length] }}
-              activeDot={{ r: 5, strokeWidth: 1.5, stroke: '#fff' }}
-            />
-          ))}
-        </LineChart>
-      </ResponsiveContainer>
-    );
-  }
 
-  if (effectiveType === 'area') {
-    if (seriesKeys.length === 0) {
-      return (
-        <div className={styles['db-analytics-chart-card__no-data']}>{i18n.t('db_analytics.resultsPanel.noSeriesFound')}</div>
-      );
-    }
-    return (
-      <ResponsiveContainer width="100%" height={height}>
-        <AreaChart data={chart.data} margin={{ top: 8, right: 12, left: -16, bottom: 0 }}>
-          <defs>
-            {seriesKeys.map((key, i) => (
-              <linearGradient key={key} id={`${gradientPrefix}-${i}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={SERIES_COLORS[i % SERIES_COLORS.length]} stopOpacity={0.35} />
-                <stop offset="100%" stopColor={SERIES_COLORS[i % SERIES_COLORS.length]} stopOpacity={0.02} />
-              </linearGradient>
-            ))}
-          </defs>
-          <CartesianGrid stroke="#ece9df" vertical={false} />
-          <XAxis dataKey={xKey} tick={axisTick} axisLine={axisLine} tickLine={false} />
-          <YAxis tick={axisTick} axisLine={false} tickLine={false} />
-          <Tooltip contentStyle={tooltipStyle} cursor={{ stroke: '#d8d7cf', strokeWidth: 1 }} />
-          {seriesKeys.map((key, i) => (
-            <Area
-              key={key}
-              type="monotone"
-              dataKey={key}
-              stackId={chart.stacked ? 'stack' : undefined}
-              stroke={SERIES_COLORS[i % SERIES_COLORS.length]}
-              fill={`url(#${gradientPrefix}-${i})`}
-              strokeWidth={1.5}
-            />
-          ))}
-        </AreaChart>
-      </ResponsiveContainer>
-    );
-  }
+    .db-analytics-suggested-prompts__cta {
+      color: t.$accent;
 
-  if (effectiveType === 'bar') {
-    if (seriesKeys.length === 0) {
-      return (
-        <div className={styles['db-analytics-chart-card__no-data']}>{i18n.t('db_analytics.resultsPanel.noSeriesFound')}</div>
-      );
-    }
-    return (
-      <ResponsiveContainer width="100%" height={height}>
-        <BarChart data={chart.data} margin={{ top: 8, right: 12, left: -16, bottom: 0 }} barGap={6}>
-          <defs>
-            {seriesKeys.map((key, i) => (
-              <linearGradient key={key} id={`${gradientPrefix}-bar-${i}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={SERIES_COLORS[i % SERIES_COLORS.length]} stopOpacity={1} />
-                <stop offset="100%" stopColor={SERIES_COLORS[i % SERIES_COLORS.length]} stopOpacity={0.7} />
-              </linearGradient>
-            ))}
-          </defs>
-          <CartesianGrid stroke="#ece9df" vertical={false} />
-          <XAxis dataKey={xKey} tick={axisTick} axisLine={axisLine} tickLine={false} />
-          <YAxis tick={axisTick} axisLine={false} tickLine={false} />
-          <Tooltip contentStyle={tooltipStyle} cursor={{ fill: 'rgba(79, 70, 229, 0.06)' }} />
-          {seriesKeys.map((key, i) => (
-            <Bar
-              key={key}
-              dataKey={key}
-              stackId={chart.stacked ? 'stack' : undefined}
-              fill={`url(#${gradientPrefix}-bar-${i})`}
-              radius={[6, 6, 0, 0]}
-              maxBarSize={32}
-            />
-          ))}
-        </BarChart>
-      </ResponsiveContainer>
-    );
-  }
-
-  if (effectiveType === 'scatter') {
-    return (
-      <ResponsiveContainer width="100%" height={height}>
-        <ScatterChart margin={{ top: 8, right: 12, left: -16, bottom: 0 }}>
-          <CartesianGrid stroke="#ece9df" />
-          <XAxis dataKey={xKey} tick={axisTick} axisLine={axisLine} tickLine={false} />
-          <YAxis dataKey={chart.y_axis ?? undefined} tick={axisTick} axisLine={false} tickLine={false} />
-          <Tooltip contentStyle={tooltipStyle} cursor={{ strokeDasharray: '3 3' }} />
-          <Scatter data={chart.data} fill={SERIES_COLORS[0]} fillOpacity={0.8} />
-        </ScatterChart>
-      </ResponsiveContainer>
-    );
-  }
-
-  if (effectiveType === 'table') {
-    const columns = chart.data.length > 0 ? Object.keys(chart.data[0]) : [];
-    return (
-      <div className={styles['db-analytics-table-wrap']}>
-        <table className={styles['db-analytics-table']}>
-          <thead>
-            <tr>
-              {columns.map((col) => (
-                <th key={col}>{col}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {chart.data.map((row, i) => (
-              <tr key={i}>
-                {columns.map((col) => (
-                  <td key={col}>{String(row[col])}</td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    );
-  }
-
-  // pie (default/fallback)
-  const { nameKey, valueKey } = resolvePieKeys(chart);
-  const total = chart.data.reduce((sum, d) => sum + Number(d[valueKey] ?? 0), 0);
-
-  return (
-    <>
-      <ResponsiveContainer width="100%" height={height - 20}>
-        <PieChart>
-          <Pie
-            data={chart.data}
-            dataKey={valueKey}
-            nameKey={nameKey}
-            innerRadius={50}
-            outerRadius={82}
-            paddingAngle={2}
-            strokeWidth={1.5}
-            stroke="#fcfcfb"
-            label={({ percent }) => (percent > 0.06 ? `${Math.round(percent * 100)}%` : '')}
-            labelLine={false}
-          >
-            {chart.data.map((_, i) => (
-              <Cell key={i} fill={SERIES_COLORS[i % SERIES_COLORS.length]} />
-            ))}
-          </Pie>
-          <Tooltip contentStyle={tooltipStyle} />
-        </PieChart>
-      </ResponsiveContainer>
-      <div className={styles['db-analytics-chart-legend']}>
-        {chart.data.map((d, i) => (
-          <React.Fragment key={i}>
-            {i > 0 && <span className={styles['db-analytics-chart-legend__divider']} aria-hidden="true" />}
-            <span className={styles['db-analytics-chart-legend__item']}>
-              <span
-                className={styles['db-analytics-chart-legend__swatch']}
-                style={{ background: SERIES_COLORS[i % SERIES_COLORS.length] }}
-              />
-              <span className={styles['db-analytics-chart-legend__name']}>{String(d[nameKey])}</span>
-              <span className={styles['db-analytics-chart-legend__pct']}>
-                {total > 0 ? Math.round((Number(d[valueKey]) / total) * 100) : 0}%
-              </span>
-            </span>
-          </React.Fragment>
-        ))}
-      </div>
-    </>
-  );
-};
-
-const ResultsPanel: React.FC<Props> = ({ chartGroups, loadError, isGenerating, sessionId }) => {
-  const { t } = useTranslation();
-  const showEmptyState = chartGroups.length === 0;
-  const [typeOverrides, setTypeOverrides] = useState<Record<string, ChartType>>({});
-  const [expandedChartKey, setExpandedChartKey] = useState<string | null>(null);
-  const [askAiChartKey, setAskAiChartKey] = useState<string | null>(null);
-
-  // Chart ids aren't guaranteed unique across the whole session — the
-  // backend can reuse the same id (e.g. a generic "revenue_kpis") for
-  // charts belonging to different prompts/groups. Using chart.id alone as
-  // the key for type overrides / expand / ask-AI state meant switching one
-  // card's type silently changed every other card that happened to share
-  // that id. This composite key scopes state to one specific card instance.
-  const getChartKey = (groupId: string, chart: ChartResult, index: number) => `${groupId}::${chart.id}::${index}`;
-
-  const getDisplayType = (key: string, chart: ChartResult): ChartType => typeOverrides[key] ?? chart.chart_type;
-
-  const chartsByKey = new Map<string, ChartResult>();
-  chartGroups.forEach((group) => {
-    group.graphs.forEach((chart, index) => {
-      chartsByKey.set(getChartKey(group.id, chart, index), chart);
-    });
-  });
-
-  const expandedChart = expandedChartKey ? chartsByKey.get(expandedChartKey) ?? null : null;
-  const expandedDisplayType = expandedChart && expandedChartKey ? getDisplayType(expandedChartKey, expandedChart) : 'bar';
-  const askAiChart = askAiChartKey ? chartsByKey.get(askAiChartKey) ?? null : null;
-  const askAiDisplayType = askAiChart && askAiChartKey ? getDisplayType(askAiChartKey, askAiChart) : 'bar';
-
-  return (
-    <div className={styles['db-analytics-results-panel']}>
-      <div className={styles['db-analytics-results-panel__header']}>
-        <div className={styles['db-analytics-results-panel__header-text']}>
-          <h2 className={styles['db-analytics-results-panel__title']}>{t('db_analytics.resultsPanel.title')}</h2>
-          <p className={styles['db-analytics-results-panel__subtitle']}>{t('db_analytics.resultsPanel.subtitle')}</p>
-        </div>
-      </div>
-      <div className={styles['db-analytics-results-panel__body']}>
-        {loadError && <div className={styles['db-analytics-results-panel__error']}>{loadError}</div>}
-
-        {isGenerating ? (
-          <ChartConstructingAnimation />
-        ) : showEmptyState ? (
-          <div className={styles['db-analytics-empty-state']}>
-            <Icon.chartAreaLine size={28} aria-hidden="true" />
-            <p>{t('db_analytics.resultsPanel.emptyState')}</p>
-          </div>
-        ) : (
-          <div className={styles['db-analytics-chart-groups']}>
-            {chartGroups.map((group, groupIndex) => (
-              <React.Fragment key={group.id}>
-                {groupIndex > 0 && <div className={styles['db-analytics-chart-groups__divider']} aria-hidden="true" />}
-                <section className={styles['db-analytics-chart-group']}>
-                  {group.prompt && (
-                    <div className={styles['db-analytics-chart-group__prompt']}>
-                      <span className={styles['db-analytics-chart-group__prompt-label']}>
-                        {t('db_analytics.resultsPanel.prompt')}
-                      </span>
-                      <p className={styles['db-analytics-chart-group__prompt-text']}>{group.prompt}</p>
-                    </div>
-                  )}
-                  <div className={styles['db-analytics-chart-grid']}>
-                    {group.graphs.map((chart, index) => {
-                      const chartKey = getChartKey(group.id, chart, index);
-                      const displayType = getDisplayType(chartKey, chart);
-                      const canSwitchType = chart.chart_type !== 'kpi' && chart.chart_type !== 'table';
-                      return (
-                        <div
-                          key={chartKey}
-                          className={`${styles['db-analytics-chart-card']} ${
-                            chart.chart_type === 'kpi' ? styles['db-analytics-chart-card--span-2'] : ''
-                          }`}
-                        >
-                          <div className={styles['db-analytics-chart-card__header']}>
-                            <div className={styles['db-analytics-chart-card__heading']}>
-                              <span className={styles['db-analytics-chart-card__icon']}>
-                                {(() => {
-                                  const ChartIcon = getChartIcon(displayType);
-                                  return <ChartIcon size={14} aria-hidden="true" />;
-                                })()}
-                              </span>
-                              <h3 className={styles['db-analytics-chart-card__title']}>{chart.title}</h3>
-                            </div>
-                            <div className={styles['db-analytics-chart-card__actions']}>
-                              {canSwitchType && (
-                                <ChartTypeMenu
-                                  value={displayType}
-                                  onChange={(type) =>
-                                    setTypeOverrides((prev) => ({ ...prev, [chartKey]: type }))
-                                  }
-                                />
-                              )}
-                              {chart.chart_type !== 'kpi' && (
-                                <>
-                                  <button
-                                    type="button"
-                                    className={styles['db-analytics-chart-card__expand-btn']}
-                                    onClick={() => setAskAiChartKey(chartKey)}
-                                    aria-label={t('db_analytics.resultsPanel.askAiAboutChart')}
-                                    title={t('db_analytics.resultsPanel.askAi')}
-                                  >
-                                    <Icon.askAi size={14} aria-hidden="true" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className={styles['db-analytics-chart-card__expand-btn']}
-                                    onClick={() => setExpandedChartKey(chartKey)}
-                                    aria-label={t('db_analytics.resultsPanel.expandChart')}
-                                    title={t('db_analytics.resultsPanel.expand')}
-                                  >
-                                    <Icon.expand size={14} aria-hidden="true" />
-                                  </button>
-                                </>
-                              )}
-                            </div>
-                          </div>
-                          {renderChart(chart, 220, displayType)}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </section>
-              </React.Fragment>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <ExpandChartSlider
-        chart={expandedChart}
-        displayType={expandedDisplayType}
-        onClose={() => setExpandedChartKey(null)}
-      />
-
-      <ChartAskAiSlider
-        sessionId={sessionId}
-        chart={askAiChart}
-        displayType={askAiDisplayType}
-        onClose={() => setAskAiChartKey(null)}
-      />
-    </div>
-  );
-};
-
-export default ResultsPanel;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//SchemaErDiagram.tsx
-import React, { useMemo } from 'react';
-import { useTranslation } from 'react-i18next';
-import styles from './SchemaErDiagram.module.scss';
-import { DbTable } from '../types';
-import { Icon } from '../icons';
-
-interface Props {
-  tables: DbTable[];
-}
-
-interface Relationship {
-  fromTable: string;
-  fromColumn: string;
-  toTable: string;
-  toColumn: string;
-}
-
-// Infers foreign-key-style relationships purely from naming conventions,
-// since the schema endpoint doesn't return explicit FK metadata. A column
-// like `customer_id` on `orders` is treated as pointing at the `id` (or
-// `customer_id`) primary key column on a table named `customer`/`customers`.
-function inferRelationships(tables: DbTable[]): Relationship[] {
-  const tableByName = new Map(tables.map((t) => [t.name.toLowerCase(), t]));
-  const relationships: Relationship[] = [];
-
-  for (const table of tables) {
-    for (const column of table.columns) {
-      if (column.primary_key) continue;
-      const match = column.name.match(/^(.+?)_id$/i);
-      if (!match) continue;
-
-      const base = match[1].toLowerCase();
-      const candidates = [base, `${base}s`, base.replace(/s$/, '')];
-      const targetName = candidates.find((c) => tableByName.has(c) && c !== table.name.toLowerCase());
-      if (!targetName) continue;
-
-      const targetTable = tableByName.get(targetName);
-      if (!targetTable) continue;
-
-      const targetPk = targetTable.columns.find((c) => c.primary_key) ?? targetTable.columns[0];
-      if (!targetPk) continue;
-
-      relationships.push({
-        fromTable: table.name,
-        fromColumn: column.name,
-        toTable: targetTable.name,
-        toColumn: targetPk.name,
-      });
-    }
-  }
-
-  return relationships;
-}
-
-const CARD_WIDTH = 220;
-const CARD_HEADER_HEIGHT = 34;
-const ROW_HEIGHT = 22;
-const COL_GAP_X = 80;
-const ROW_GAP_Y = 40;
-const MAX_VISIBLE_COLUMNS = 6;
-
-const SchemaErDiagram: React.FC<Props> = ({ tables }) => {
-  const { t } = useTranslation();
-  const relationships = useMemo(() => inferRelationships(tables), [tables]);
-
-  // Simple grid layout: wrap tables into rows of up to 3, sized to fit each
-  // table's own column count so nothing overlaps.
-  const layout = useMemo(() => {
-    const perRow = tables.length <= 4 ? 2 : 3;
-    const positions = new Map<string, { x: number; y: number; height: number }>();
-    const rowHeights: number[] = [];
-    let currentRowMax = 0;
-
-    tables.forEach((table, i) => {
-      const visibleCols = Math.min(table.columns.length, MAX_VISIBLE_COLUMNS);
-      const extra = table.columns.length > MAX_VISIBLE_COLUMNS ? ROW_HEIGHT : 0;
-      const height = CARD_HEADER_HEIGHT + visibleCols * ROW_HEIGHT + extra + 10;
-      currentRowMax = Math.max(currentRowMax, height);
-
-      if ((i + 1) % perRow === 0 || i === tables.length - 1) {
-        rowHeights.push(currentRowMax);
-        currentRowMax = 0;
+      svg {
+        transform: translateX(2px);
       }
-    });
+    }
+  }
 
-    let rowIndex = 0;
-    let colIndex = 0;
-    let yOffset = 20;
-
-    tables.forEach((table, i) => {
-      const visibleCols = Math.min(table.columns.length, MAX_VISIBLE_COLUMNS);
-      const extra = table.columns.length > MAX_VISIBLE_COLUMNS ? ROW_HEIGHT : 0;
-      const height = CARD_HEADER_HEIGHT + visibleCols * ROW_HEIGHT + extra + 10;
-
-      const x = 24 + colIndex * (CARD_WIDTH + COL_GAP_X);
-      const y = yOffset;
-      positions.set(table.name, { x, y, height });
-
-      colIndex++;
-      if ((i + 1) % perRow === 0 || i === tables.length - 1) {
-        yOffset += rowHeights[rowIndex] + ROW_GAP_Y;
-        rowIndex++;
-        colIndex = 0;
-      }
-    });
-
-    const totalWidth = 24 * 2 + perRow * CARD_WIDTH + (perRow - 1) * COL_GAP_X;
-    const totalHeight = yOffset + 20;
-
-    return { positions, totalWidth, totalHeight };
-  }, [tables]);
-
-  const getColumnY = (tableName: string, columnName: string): number | null => {
-    const pos = layout.positions.get(tableName);
-    const table = tables.find((t) => t.name === tableName);
-    if (!pos || !table) return null;
-    const idx = table.columns.findIndex((c) => c.name === columnName);
-    if (idx === -1 || idx >= MAX_VISIBLE_COLUMNS) return pos.y + CARD_HEADER_HEIGHT / 2;
-    return pos.y + CARD_HEADER_HEIGHT + idx * ROW_HEIGHT + ROW_HEIGHT / 2;
-  };
-
-  if (tables.length === 0) return null;
-
-  return (
-    <div className={styles['db-analytics-er-diagram']}>
-      <div className={styles['db-analytics-er-diagram__scroll']}>
-        <svg
-          width={layout.totalWidth}
-          height={layout.totalHeight}
-          viewBox={`0 0 ${layout.totalWidth} ${layout.totalHeight}`}
-          className={styles['db-analytics-er-diagram__svg']}
-        >
-          <defs>
-            <marker id="er-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-              <path d="M0,0 L6,3 L0,6 Z" className={styles['db-analytics-er-diagram__arrow']} />
-            </marker>
-          </defs>
-
-          {relationships.map((rel, i) => {
-            const fromPos = layout.positions.get(rel.fromTable);
-            const toPos = layout.positions.get(rel.toTable);
-            const fromY = getColumnY(rel.fromTable, rel.fromColumn);
-            const toY = getColumnY(rel.toTable, rel.toColumn);
-            if (!fromPos || !toPos || fromY === null || toY === null) return null;
-
-            const fromOnLeft = fromPos.x < toPos.x;
-            const startX = fromOnLeft ? fromPos.x + CARD_WIDTH : fromPos.x;
-            const endX = fromOnLeft ? toPos.x : toPos.x + CARD_WIDTH;
-            const midX = (startX + endX) / 2;
-
-            const path = `M ${startX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${endX} ${toY}`;
-
-            return (
-              <path
-                key={i}
-                d={path}
-                className={styles['db-analytics-er-diagram__link']}
-                markerEnd="url(#er-arrow)"
-              />
-            );
-          })}
-
-          {tables.map((table) => {
-            const pos = layout.positions.get(table.name);
-            if (!pos) return null;
-            const visibleColumns = table.columns.slice(0, MAX_VISIBLE_COLUMNS);
-            const hiddenCount = table.columns.length - visibleColumns.length;
-
-            return (
-              <g key={table.name} transform={`translate(${pos.x}, ${pos.y})`}>
-                <rect
-                  width={CARD_WIDTH}
-                  height={pos.height}
-                  rx={10}
-                  className={styles['db-analytics-er-diagram__card']}
-                />
-                <rect width={CARD_WIDTH} height={CARD_HEADER_HEIGHT} rx={10} className={styles['db-analytics-er-diagram__card-header']} />
-                <rect y={CARD_HEADER_HEIGHT - 10} width={CARD_WIDTH} height={10} className={styles['db-analytics-er-diagram__card-header']} />
-                <text x={12} y={CARD_HEADER_HEIGHT / 2 + 4} className={styles['db-analytics-er-diagram__card-title']}>
-                  {table.name}
-                </text>
-                <text
-                  x={CARD_WIDTH - 12}
-                  y={CARD_HEADER_HEIGHT / 2 + 4}
-                  textAnchor="end"
-                  className={styles['db-analytics-er-diagram__card-count']}
-                >
-                  {table.row_count.toLocaleString()}
-                </text>
-
-                {visibleColumns.map((col, i) => (
-                  <g key={col.name} transform={`translate(0, ${CARD_HEADER_HEIGHT + i * ROW_HEIGHT})`}>
-                    {i % 2 === 1 && (
-                      <rect width={CARD_WIDTH} height={ROW_HEIGHT} className={styles['db-analytics-er-diagram__row-alt']} />
-                    )}
-                    {col.primary_key && (
-                      <text x={12} y={ROW_HEIGHT / 2 + 4} className={styles['db-analytics-er-diagram__pk']}>
-                        {t('db_analytics.dbSchemaSlider.table.pkAbbr')}
-                      </text>
-                    )}
-                    <text
-                      x={col.primary_key ? 34 : 12}
-                      y={ROW_HEIGHT / 2 + 4}
-                      className={styles['db-analytics-er-diagram__col-name']}
-                    >
-                      {col.name}
-                    </text>
-                    <text
-                      x={CARD_WIDTH - 12}
-                      y={ROW_HEIGHT / 2 + 4}
-                      textAnchor="end"
-                      className={styles['db-analytics-er-diagram__col-type']}
-                    >
-                      {col.type}
-                    </text>
-                  </g>
-                ))}
-
-                {hiddenCount > 0 && (
-                  <text
-                    x={12}
-                    y={CARD_HEADER_HEIGHT + visibleColumns.length * ROW_HEIGHT + ROW_HEIGHT / 2 + 4}
-                    className={styles['db-analytics-er-diagram__more']}
-                  >
-                    {t('db_analytics.schemaErDiagram.moreColumns', { count: hiddenCount })}
-                  </text>
-                )}
-              </g>
-            );
-          })}
-        </svg>
-      </div>
-
-      {relationships.length === 0 && (
-        <div className={styles['db-analytics-er-diagram__note']}>
-          <Icon.infoCircle size={13} aria-hidden="true" />
-          {t('db_analytics.schemaErDiagram.noRelationships')}
-        </div>
-      )}
-    </div>
-  );
-};
-
-export default SchemaErDiagram;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//SessionHistory.tsx
-import React, { useEffect, useRef, useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import styles from './SessionHistory.module.scss';
-import { SessionItem, DatabaseItem } from '../types';
-import { Icon } from '../icons';
-import SkeletonListItem from './SkeletonListItem';
-
-interface Props {
-  sessions: SessionItem[];
-  databases: DatabaseItem[];
-  activeSessionId: string | null;
-  onSelect: (id: string) => void;
-  onNewSession: () => void;
-  disabled?: boolean;
-  loading?: boolean;
+  &:active {
+    transform: translateY(0);
+  }
 }
 
-const SessionHistory: React.FC<Props> = ({
-  sessions,
-  databases,
-  activeSessionId,
-  onSelect,
-  onNewSession,
-  disabled,
-  loading,
-}) => {
-  const { t, i18n } = useTranslation();
-  const [openDbListFor, setOpenDbListFor] = useState<string | null>(null);
-  const popoverRef = useRef<HTMLDivElement>(null);
+.db-analytics-suggested-prompts__card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
 
-  const formatSessionDate = (iso: string) => {
-    const date = new Date(iso);
-    return date.toLocaleDateString(i18n.language, {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-    });
-  };
+.db-analytics-suggested-prompts__label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: t.$text-primary;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
-  useEffect(() => {
-    if (!openDbListFor) return;
-    const onClickOutside = (e: MouseEvent) => {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
-        setOpenDbListFor(null);
-      }
-    };
-    document.addEventListener('mousedown', onClickOutside);
-    return () => document.removeEventListener('mousedown', onClickOutside);
-  }, [openDbListFor]);
+.db-analytics-suggested-prompts__db {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  color: t.$text-secondary;
+  background: t.$surface-0;
+  border: 0.5px solid t.$border;
+  padding: 2px 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 
-  const getSessionDatabases = (session: SessionItem): DatabaseItem[] => {
-    const ids = session.db_ids ?? [];
-    return databases.filter((db) => ids.includes(db.id));
-  };
+.db-analytics-suggested-prompts__text-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
 
-  return (
-    <div className={styles['db-analytics-session-panel']}>
-      <div className={styles['db-analytics-session-panel__header']}>
-        <h2 className={styles['db-analytics-session-panel__title']}>{t('db_analytics.sessionHistory.title')}</h2>
-        <button
-          className={styles['db-analytics-session-panel__icon-btn']}
-          aria-label={t('db_analytics.sessionHistory.newSession')}
-          onClick={onNewSession}
-          disabled={disabled || loading}
-          title={
-            loading
-              ? t('db_analytics.sessionHistory.loadingSessions')
-              : disabled
-              ? t('db_analytics.sessionHistory.waitForResponse')
-              : undefined
-          }
-        >
-          <Icon.plus size={16} aria-hidden="true" />
-        </button>
-      </div>
-      <div className={styles['db-analytics-session-panel__body']}>
-        {loading ? (
-          <SkeletonListItem variant="session" count={4} />
-        ) : sessions.length === 0 ? (
-          <div className={styles['db-analytics-session-panel__empty']}>
-            <span className={styles['db-analytics-session-panel__empty-icon']}>
-              <Icon.messageCircle size={18} aria-hidden="true" />
-            </span>
-            <p>{t('db_analytics.sessionHistory.emptyTitle')}</p>
-            <span>{t('db_analytics.sessionHistory.emptyDesc')}</span>
-          </div>
-        ) : (
-          <ul className={styles['db-analytics-session-list']}>
-            {sessions.map((session, index) => {
-              const isActive = session.id === activeSessionId;
-              const sessionDbs = getSessionDatabases(session);
-              const isPopoverOpen = openDbListFor === session.id;
-              return (
-                <li
-                  key={session.id ? `${session.id}-${index}` : `session-${index}`}
-                  className={styles['db-analytics-session-item-wrap']}
-                >
-                  <button
-                    className={`${styles['db-analytics-session-item']} ${
-                      isActive ? styles['db-analytics-session-item--active'] : ''
-                    }`}
-                    onClick={() => onSelect(session.id)}
-                    disabled={disabled}
-                    title={disabled ? t('db_analytics.sessionHistory.waitForResponse') : undefined}
-                  >
-                    <span className={styles['db-analytics-session-item__icon-wrap']}>
-                      <Icon.messageCircle size={15} aria-hidden="true" />
-                    </span>
-                    <span className={styles['db-analytics-session-item__text']}>
-                      <span className={styles['db-analytics-session-item__title']}>{session.name}</span>
-                      <span className={styles['db-analytics-session-item__meta']}>
-                        <span
-                          className={styles['db-analytics-session-item__db-pill']}
-                          role="button"
-                          tabIndex={0}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setOpenDbListFor(isPopoverOpen ? null : session.id);
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setOpenDbListFor(isPopoverOpen ? null : session.id);
-                            }
-                          }}
-                          title={t('db_analytics.sessionHistory.viewConnectedDatabases')}
-                        >
-                          <Icon.database size={10} aria-hidden="true" />
-                          {(session.db_ids ?? []).length}
-                        </span>
-                        <span className={styles['db-analytics-session-item__time']}>
-                          {formatSessionDate(session.created_at)}
-                        </span>
-                      </span>
-                    </span>
-                  </button>
+.db-analytics-suggested-prompts__text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: t.$text-secondary;
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 
-                  {isPopoverOpen && (
-                    <div ref={popoverRef} className={styles['db-analytics-session-db-popover']}>
-                      <span className={styles['db-analytics-session-db-popover__title']}>
-                        {t('db_analytics.sessionHistory.connectedDatabasesPopoverTitle')}
-                      </span>
-                      {sessionDbs.length === 0 ? (
-                        <span className={styles['db-analytics-session-db-popover__empty']}>
-                          {t('db_analytics.sessionHistory.connectedDatabasesEmpty')}
-                        </span>
-                      ) : (
-                        <ul className={styles['db-analytics-session-db-popover__list']}>
-                          {sessionDbs.map((db) => (
-                            <li key={db.id} className={styles['db-analytics-session-db-popover__item']}>
-                              <Icon.database size={11} aria-hidden="true" />
-                              <span className={styles['db-analytics-session-db-popover__name']}>{db.name}</span>
-                              <span
-                                className={`${styles['db-analytics-session-db-popover__status']} ${
-                                  db.connected ? styles['db-analytics-session-db-popover__status--on'] : ''
-                                }`}
-                              />
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
-    </div>
-  );
-};
+.db-analytics-suggested-prompts__text--expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
 
-export default SessionHistory;
+.db-analytics-suggested-prompts__expand-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  color: t.$text-muted;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-top: 1px;
+  transition: background 0.12s ease, color 0.12s ease;
+
+  &:hover {
+    background: t.$surface-0;
+    color: t.$accent;
+  }
+
+  &:focus-visible {
+    outline: 2px solid t.$accent;
+    outline-offset: 1px;
+  }
+}
+
+.db-analytics-suggested-prompts__expand-icon {
+  transform: rotate(90deg);
+  transition: transform 0.15s ease;
+}
+
+.db-analytics-suggested-prompts__expand-icon--open {
+  transform: rotate(-90deg);
+}
+
+.db-analytics-suggested-prompts__cta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: t.$text-muted;
+  transition: color 0.15s ease;
+
+  svg {
+    transition: transform 0.15s ease;
+  }
+}
+
+
+
+
 
 
 
@@ -2936,7 +1615,7 @@ export default SessionHistory;
 
 
 //SuggestedPrompts.tsx
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import styles from './SuggestedPrompts.module.scss';
 import { SuggestedPrompt } from '../types';
@@ -2951,6 +1630,22 @@ interface Props {
 
 const SuggestedPrompts: React.FC<Props> = ({ prompts = [], loading, error, onSelect }) => {
   const { t } = useTranslation();
+  const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
+  const [overflowingIndices, setOverflowingIndices] = useState<Set<number>>(new Set());
+  const textRefs = useRef<Record<number, HTMLParagraphElement | null>>({});
+
+  // Only show the expand toggle on cards whose text is actually clamped —
+  // a short prompt that already fits in two lines doesn't need one.
+  useEffect(() => {
+    const next = new Set<number>();
+    prompts.forEach((_, i) => {
+      const el = textRefs.current[i];
+      if (el && el.scrollHeight > el.clientHeight + 1) {
+        next.add(i);
+      }
+    });
+    setOverflowingIndices(next);
+  }, [prompts]);
 
   if (loading) {
     return (
@@ -2981,26 +1676,77 @@ const SuggestedPrompts: React.FC<Props> = ({ prompts = [], loading, error, onSel
       </div>
 
       <div className={styles['db-analytics-suggested-prompts__grid']}>
-        {prompts.map((prompt, i) => (
-          <button
-            key={`${prompt.label}-${i}`}
-            className={styles['db-analytics-suggested-prompts__card']}
-            onClick={() => onSelect(prompt)}
-          >
-            <div className={styles['db-analytics-suggested-prompts__card-top']}>
-              <span className={styles['db-analytics-suggested-prompts__label']}>{prompt.label}</span>
-              <span className={styles['db-analytics-suggested-prompts__db']}>
-                <Icon.database size={11} aria-hidden="true" />
-                {prompt.db_name}
+        {prompts.map((prompt, i) => {
+          const isExpanded = expandedIndex === i;
+          const canExpand = overflowingIndices.has(i);
+          return (
+            <button
+              key={`${prompt.label}-${i}`}
+              className={styles['db-analytics-suggested-prompts__card']}
+              onClick={() => onSelect(prompt)}
+            >
+              <div className={styles['db-analytics-suggested-prompts__card-top']}>
+                <span className={styles['db-analytics-suggested-prompts__label']}>{prompt.label}</span>
+                <span className={styles['db-analytics-suggested-prompts__db']}>
+                  <Icon.database size={11} aria-hidden="true" />
+                  {prompt.db_name}
+                </span>
+              </div>
+              <div className={styles['db-analytics-suggested-prompts__text-row']}>
+                <p
+                  ref={(el) => {
+                    textRefs.current[i] = el;
+                  }}
+                  className={`${styles['db-analytics-suggested-prompts__text']} ${
+                    isExpanded ? styles['db-analytics-suggested-prompts__text--expanded'] : ''
+                  }`}
+                >
+                  {prompt.text}
+                </p>
+                {canExpand && (
+                  <span
+                    className={styles['db-analytics-suggested-prompts__expand-btn']}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={
+                      isExpanded
+                        ? t('db_analytics.suggestedPrompts.showLess')
+                        : t('db_analytics.suggestedPrompts.showMore')
+                    }
+                    title={
+                      isExpanded
+                        ? t('db_analytics.suggestedPrompts.showLess')
+                        : t('db_analytics.suggestedPrompts.showMore')
+                    }
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setExpandedIndex(isExpanded ? null : i);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setExpandedIndex(isExpanded ? null : i);
+                      }
+                    }}
+                  >
+                    <Icon.arrowRight
+                      size={12}
+                      aria-hidden="true"
+                      className={`${styles['db-analytics-suggested-prompts__expand-icon']} ${
+                        isExpanded ? styles['db-analytics-suggested-prompts__expand-icon--open'] : ''
+                      }`}
+                    />
+                  </span>
+                )}
+              </div>
+              <span className={styles['db-analytics-suggested-prompts__cta']}>
+                {t('db_analytics.suggestedPrompts.askThis')}
+                <Icon.arrowRight size={13} aria-hidden="true" />
               </span>
-            </div>
-            <p className={styles['db-analytics-suggested-prompts__text']}>{prompt.text}</p>
-            <span className={styles['db-analytics-suggested-prompts__cta']}>
-              {t('db_analytics.suggestedPrompts.askThis')}
-              <Icon.arrowRight size={13} aria-hidden="true" />
-            </span>
-          </button>
-        ))}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -3009,564 +1755,6 @@ const SuggestedPrompts: React.FC<Props> = ({ prompts = [], loading, error, onSel
 export default SuggestedPrompts;
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-//DBAnalytics.tsx
-import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { useTranslation } from 'react-i18next';
-import styles from './DBAnalytics.module.scss';
-import SessionHistory from './components/SessionHistory';
-import DatabaseList from './components/DatabaseList';
-import ChatPanel from './components/ChatPanel';
-import ResultsPanel from './components/ResultsPanel';
-import DatabaseManagerSlider from './components/DatabaseManagerSlider';
-import NewSessionSlider from './components/NewSessionSlider';
-import LanguageSwitcher from './components/LanguageSwitcher';
-import { ChatMessage, ChartGroup, DatabaseItem, SessionItem, SuggestedPrompt } from './types';
-import { api, MissingDbConnectionError } from '../../services/api';
-import { Icon } from './icons';
-
-const STREAM_MESSAGE_ID = 'stream-in-progress';
-const CHAT_COL_MIN_WIDTH = 380;
-const CHAT_COL_DEFAULT_WIDTH = 380;
-// Leaves the nav column (300px) and a sensible minimum for the results
-// column so dragging the handle all the way right can't squeeze column 3
-// down to nothing.
-const RESULTS_COL_MIN_WIDTH = 320;
-const NAV_COL_WIDTH = 300;
-
-const DBAnalytics: React.FC = () => {
-  const { t } = useTranslation();
-  const [sessions, setSessions] = useState<SessionItem[]>([]);
-  const [databases, setDatabases] = useState<DatabaseItem[]>([]);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  const [messagesLoading, setMessagesLoading] = useState(false);
-  const [messagesError, setMessagesError] = useState<string | null>(null);
-
-  const [suggestedPrompts, setSuggestedPrompts] = useState<SuggestedPrompt[]>([]);
-  const [suggestedPromptsLoading, setSuggestedPromptsLoading] = useState(false);
-  const [suggestedPromptsError, setSuggestedPromptsError] = useState<string | null>(null);
-
-  // --- Live query streaming state ---
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [streamSteps, setStreamSteps] = useState<string[]>([]);
-  const [streamError, setStreamError] = useState<string | null>(null);
-
-  // Populated when the query endpoint responds 424 because one or more of
-  // the session's databases isn't connected. Cleared whenever the session
-  // changes or the missing databases get reconnected.
-  const [queryMissingDbIds, setQueryMissingDbIds] = useState<string[]>([]);
-
-  // --- Follow-up questions state (shown after the latest assistant reply,
-  // and also on initial load for sessions that already have a conversation) ---
-  const [followups, setFollowups] = useState<string[]>([]);
-  const [followupsLoading, setFollowupsLoading] = useState(false);
-
-  // True for the whole span of "select a session and wait for its history
-  // plus starter prompts / follow-ups to arrive" or "send a message and
-  // wait for the streamed answer plus its follow-up suggestions" — treated
-  // as one unit of work so the composer stays locked the entire time,
-  // rather than unlocking the moment streaming/history-loading finishes but
-  // before the trailing suggestion fetch has actually landed.
-  const isAwaitingResponseUnit = messagesLoading || isStreaming || suggestedPromptsLoading || followupsLoading;
-
-  const [dbSliderOpen, setDbSliderOpen] = useState(false);
-  const [sessionSliderOpen, setSessionSliderOpen] = useState(false);
-
-  // --- Resizable chat column (column 2) ---
-  const [chatColWidth, setChatColWidth] = useState(CHAT_COL_DEFAULT_WIDTH);
-  const [isResizing, setIsResizing] = useState(false);
-  const bodyRef = useRef<HTMLDivElement>(null);
-  const dragStartXRef = useRef(0);
-  const dragStartWidthRef = useRef(CHAT_COL_DEFAULT_WIDTH);
-
-  // Tracks the session any in-flight async work (stream, follow-ups, message
-  // refresh) belongs to. Every async callback checks this before touching
-  // state, so results for a session the user has since navigated away from
-  // never leak into the currently active session's view.
-  const activeSessionRef = useRef<string | null>(null);
-
-  // Cancels the actual in-flight `getMessages` network request (not just
-  // discarding its result) whenever the user selects a different session
-  // before the previous one's history has finished loading — e.g. rapidly
-  // clicking through multiple session cards.
-  const messagesAbortRef = useRef<AbortController | null>(null);
-
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const [dbList, sessionList] = await Promise.all([api.listDatabases(), api.listSessions()]);
-      setDatabases(dbList);
-      setSessions(sessionList);
-      setActiveSessionId((prev) => prev ?? (sessionList.length > 0 ? sessionList[0].id : null));
-    } catch (err) {
-      setLoadError(err instanceof Error ? err.message : 'Failed to load data.');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
-
-  const fetchSuggestedPrompts = useCallback((sessionId: string, isStale: () => boolean) => {
-    setSuggestedPromptsLoading(true);
-    setSuggestedPromptsError(null);
-    api
-      .getSuggestedPrompts(sessionId)
-      .then((res) => {
-        if (!isStale()) setSuggestedPrompts(res.prompts);
-      })
-      .catch((err) => {
-        if (!isStale()) {
-          setSuggestedPromptsError(err instanceof Error ? err.message : 'Failed to load suggested prompts.');
-        }
-      })
-      .finally(() => {
-        if (!isStale()) setSuggestedPromptsLoading(false);
-      });
-  }, []);
-
-  const fetchFollowups = useCallback((sessionId: string, isStale: () => boolean) => {
-    setFollowupsLoading(true);
-    api
-      .getFollowups(sessionId)
-      .then((res) => {
-        if (!isStale()) setFollowups(res.followups);
-      })
-      .catch(() => {
-        // Follow-ups are a nice-to-have; fail silently.
-      })
-      .finally(() => {
-        if (!isStale()) setFollowupsLoading(false);
-      });
-  }, []);
-
-  const loadSessionData = useCallback(
-    (sessionId: string) => {
-      activeSessionRef.current = sessionId;
-      const isStale = () => activeSessionRef.current !== sessionId;
-
-      // Cancel whatever getMessages request is still in flight from a
-      // previously selected session — this is a real network-level abort,
-      // not just a "discard the result" guard, so switching between session
-      // cards quickly doesn't leave multiple stacked requests running.
-      messagesAbortRef.current?.abort();
-      const controller = new AbortController();
-      messagesAbortRef.current = controller;
-
-      setMessages([]);
-      setSuggestedPrompts([]);
-      setSuggestedPromptsError(null);
-      setFollowups([]);
-      setFollowupsLoading(false);
-      setStreamSteps([]);
-      setStreamError(null);
-      setIsStreaming(false);
-      setQueryMissingDbIds([]);
-      setMessagesLoading(true);
-      setMessagesError(null);
-
-      api
-        .getMessages(sessionId, controller.signal)
-        .then((msgs) => {
-          if (isStale()) return;
-          setMessages(msgs);
-
-          if (msgs.length === 0) {
-            fetchSuggestedPrompts(sessionId, isStale);
-          } else {
-            fetchFollowups(sessionId, isStale);
-          }
-        })
-        .catch((err) => {
-          // A cancelled request (because the user picked another session
-          // before this one resolved) isn't a real error — nothing to show,
-          // the newer request's own handler already owns the UI state.
-          if (controller.signal.aborted) return;
-          if (isStale()) return;
-          setMessagesError(err instanceof Error ? err.message : 'Failed to load messages.');
-          setMessages([]);
-          // A brand-new session's messages endpoint can 404 briefly right
-          // after creation (same server propagation lag seen elsewhere) even
-          // though the session itself exists and has no conversation yet.
-          // Don't let that failure also hide starter prompts — treat it the
-          // same as an empty conversation and try to fetch them anyway.
-          fetchSuggestedPrompts(sessionId, isStale);
-        })
-        .finally(() => {
-          if (controller.signal.aborted) return;
-          if (!isStale()) setMessagesLoading(false);
-        });
-    },
-    [fetchSuggestedPrompts, fetchFollowups]
-  );
-
-  // Load chat history whenever the active session changes, and — depending
-  // on whether it already has a conversation — either show starter prompts
-  // (empty session) or fetch follow-up questions right away (existing session).
-  useEffect(() => {
-    if (!activeSessionId) {
-      activeSessionRef.current = null;
-      setMessages([]);
-      setSuggestedPrompts([]);
-      setSuggestedPromptsError(null);
-      setFollowups([]);
-      setFollowupsLoading(false);
-      setStreamSteps([]);
-      setStreamError(null);
-      setIsStreaming(false);
-      setQueryMissingDbIds([]);
-      setMessagesLoading(false);
-      return;
-    }
-    loadSessionData(activeSessionId);
-  }, [activeSessionId, loadSessionData]);
-
-  const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
-
-  // Databases this session depends on that are currently disconnected —
-  // checked proactively from the session's db_ids on load, and reactively
-  // whenever the query endpoint reports missing connections via a 424.
-  const disconnectedSessionDbs: DatabaseItem[] = activeSession
-    ? databases.filter(
-        (db) =>
-          ((activeSession.db_ids ?? []).includes(db.id) || queryMissingDbIds.includes(db.id)) &&
-          !db.connected &&
-          db.db_type !== 'csv'
-      )
-    : [];
-  const isBlockedByDisconnectedDb = disconnectedSessionDbs.length > 0;
-
-  // Column 3 groups graphs by the prompt that produced them — every
-  // assistant response that came back with at least one graph gets its own
-  // section, labeled with the user's question, newest first. Responses that
-  // didn't produce any graphs are skipped entirely (nothing to show).
-  const chartGroups: ChartGroup[] = (() => {
-    const groups: ChartGroup[] = [];
-    let pendingPrompt = '';
-
-    for (const msg of messages) {
-      if (msg.role === 'user') {
-        pendingPrompt = msg.content;
-        continue;
-      }
-      if (msg.role === 'assistant' && msg.graphs && msg.graphs.length > 0) {
-        groups.push({ id: msg.id, prompt: pendingPrompt, graphs: msg.graphs });
-      }
-    }
-
-    return groups.reverse();
-  })();
-
-  const handleSelectSession = (id: string) => {
-    if (isStreaming) return;
-    setActiveSessionId(id);
-  };
-
-  const handleSendMessage = async (text: string) => {
-    const sessionId = activeSessionId;
-    if (!sessionId || isAwaitingResponseUnit || isBlockedByDisconnectedDb) return;
-
-    const isStale = () => activeSessionRef.current !== sessionId;
-
-    const userMsg: ChatMessage = {
-      id: `local-${Date.now()}`,
-      role: 'user',
-      content: text,
-      graphs: [],
-      created_at: new Date().toISOString(),
-    };
-    setMessages((prev) => [...prev, userMsg]);
-    // Once a message is sent, starter prompts and any previous followups no longer apply.
-    setSuggestedPrompts([]);
-    setFollowups([]);
-
-    setIsStreaming(true);
-    setStreamSteps([]);
-    setStreamError(null);
-
-    let sawMessageEvent = false;
-    let streamFailed = false;
-
-    // Upserts the single in-progress assistant bubble with the latest text
-    // seen so far, so the response prints incrementally as events arrive
-    // instead of only appearing once the whole stream finishes.
-    const upsertStreamingMessage = (text: string) => {
-      setMessages((prev) => {
-        const withoutProvisional = prev.filter((m) => m.id !== STREAM_MESSAGE_ID);
-        return [
-          ...withoutProvisional,
-          {
-            id: STREAM_MESSAGE_ID,
-            role: 'assistant',
-            content: text,
-            graphs: [],
-            created_at: new Date().toISOString(),
-          },
-        ];
-      });
-    };
-
-    try {
-      for await (const event of api.streamQuery(sessionId, text)) {
-        if (isStale()) return;
-
-        if (event.type === 'step') {
-          setStreamSteps((prev) => [...prev, event.step]);
-        } else if (event.type === 'message') {
-          sawMessageEvent = true;
-          upsertStreamingMessage(event.step);
-        } else if (event.type === 'error') {
-          streamFailed = true;
-          setStreamError(event.message);
-        } else if (event.type === 'done') {
-          break;
-        }
-      }
-    } catch (err) {
-      if (!isStale()) {
-        streamFailed = true;
-        if (err instanceof MissingDbConnectionError) {
-          setQueryMissingDbIds(err.missingDbIds);
-          setStreamError(null);
-          // The query never actually ran — remove the optimistic user
-          // message so the thread doesn't imply it was processed.
-          setMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
-        } else {
-          setStreamError(err instanceof Error ? err.message : 'Something went wrong while running your query.');
-        }
-      }
-    }
-
-    if (isStale()) return;
-
-    setIsStreaming(false);
-    setStreamSteps([]);
-
-    if (!sawMessageEvent || streamFailed) {
-      // Nothing usable streamed back — drop the placeholder bubble if present.
-      setMessages((prev) => prev.filter((m) => m.id !== STREAM_MESSAGE_ID));
-    } else {
-      // Reconcile with the server's message list to swap the provisional
-      // bubble for the real message (real id + any graphs attached to it,
-      // since the stream itself doesn't carry graphs).
-      try {
-        const freshMessages = await api.getMessages(sessionId);
-        if (!isStale()) setMessages(freshMessages);
-      } catch {
-        // Keep the provisional message on screen if the refresh fails — the
-        // user still sees the answer, just without graphs until they retry.
-      }
-    }
-
-    if (isStale() || streamFailed || !sawMessageEvent) return;
-
-    // Once the stream completes, fetch fresh follow-up question suggestions.
-    setFollowupsLoading(true);
-    try {
-      const res = await api.getFollowups(sessionId);
-      if (!isStale()) setFollowups(res.followups);
-    } catch {
-      // Follow-ups are a nice-to-have; fail silently rather than blocking the chat.
-    } finally {
-      if (!isStale()) setFollowupsLoading(false);
-    }
-  };
-
-  const handleDatabaseCreated = (db: DatabaseItem) => {
-    setDatabases((prev) => [...prev, db]);
-  };
-
-  const handleDatabaseConnected = (dbId: string, cacheUntil: string) => {
-    setDatabases((prev) =>
-      prev.map((db) => (db.id === dbId ? { ...db, connected: true, cache_until: cacheUntil } : db))
-    );
-  };
-
-  const handleDatabaseDisconnected = (dbId: string) => {
-    setDatabases((prev) =>
-      prev.map((db) => (db.id === dbId ? { ...db, connected: false, cache_until: null } : db))
-    );
-  };
-
-  const handleSessionCreated = (session: SessionItem) => {
-    // De-duplicate defensively: if a rapid double-submit (or any other
-    // race) ever produces two session entries with the same id, keep only
-    // the newest one rather than showing duplicate rows in the list.
-    setSessions((prev) => [session, ...prev.filter((s) => s.id !== session.id)]);
-    setSessionSliderOpen(false);
-
-    if (session.id === activeSessionId) {
-      // Selecting "the same" session id wouldn't normally re-trigger the
-      // data-loading effect (React bails out on an unchanged state value),
-      // which would leave a stale view showing no messages/prompts for a
-      // session that's actually brand new. Force the effect to run again
-      // for this session explicitly.
-      loadSessionData(session.id);
-    } else {
-      setActiveSessionId(session.id);
-    }
-  };
-
-  const handleResizeStart = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    dragStartXRef.current = e.clientX;
-    dragStartWidthRef.current = chatColWidth;
-    setIsResizing(true);
-  };
-
-  useEffect(() => {
-    if (!isResizing) return;
-
-    const handlePointerMove = (e: PointerEvent) => {
-      const delta = e.clientX - dragStartXRef.current;
-      const bodyWidth = bodyRef.current?.clientWidth ?? Infinity;
-      const maxWidth = Math.max(CHAT_COL_MIN_WIDTH, bodyWidth - NAV_COL_WIDTH - RESULTS_COL_MIN_WIDTH);
-      const nextWidth = Math.min(maxWidth, Math.max(CHAT_COL_MIN_WIDTH, dragStartWidthRef.current + delta));
-      setChatColWidth(nextWidth);
-    };
-
-    const handlePointerUp = () => setIsResizing(false);
-
-    window.addEventListener('pointermove', handlePointerMove);
-    window.addEventListener('pointerup', handlePointerUp);
-    return () => {
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', handlePointerUp);
-    };
-  }, [isResizing]);
-
-  return (
-    <div className={styles['db-analytics']}>
-      <header className={styles['db-analytics__feature-header']}>
-        <div className={styles['db-analytics__feature-header-main']}>
-          <span className={styles['db-analytics__feature-header-icon']}>
-            <Icon.databaseInsights size={18} aria-hidden="true" />
-          </span>
-          <div className={styles['db-analytics__feature-header-text']}>
-            <h1 className={styles['db-analytics__feature-header-title']}>{t('db_analytics.app.title')}</h1>
-            <p className={styles['db-analytics__feature-header-subtitle']}>{t('db_analytics.app.subtitle')}</p>
-          </div>
-        </div>
-        <div className={styles['db-analytics__feature-header-actions']}>
-          <LanguageSwitcher />
-          <span className={styles['db-analytics__feature-header-badge']}>
-            <span className={styles['db-analytics__feature-header-badge-dot']} aria-hidden="true" />
-            <span className={styles['db-analytics__feature-header-badge-text']}>
-              {t('db_analytics.app.databasesConnected', { count: databases.filter((db) => db.connected).length })}
-            </span>
-          </span>
-        </div>
-      </header>
-
-
-      <main
-        ref={bodyRef}
-        className={`${styles['db-analytics__body']} ${isResizing ? styles['db-analytics--resizing'] : ''}`}
-        style={{ ['--db-analytics-chat-col-width' as string]: `${chatColWidth}px` }}
-      >
-        <section className={`${styles['db-analytics__col']} ${styles['db-analytics__col--nav']}`}>
-          <SessionHistory
-            sessions={sessions}
-            databases={databases}
-            activeSessionId={activeSessionId}
-            onSelect={handleSelectSession}
-            onNewSession={() => setSessionSliderOpen(true)}
-            disabled={isStreaming}
-            loading={loading}
-          />
-          <DatabaseList
-            databases={databases}
-            onManage={() => setDbSliderOpen(true)}
-            disabled={isStreaming}
-            loading={loading}
-          />
-        </section>
-
-        <section className={`${styles['db-analytics__col']} ${styles['db-analytics__col--chat']}`}>
-          <div
-            className={`${styles['db-analytics__resize-handle']} ${
-              isResizing ? styles['db-analytics__resize-handle--active'] : ''
-            }`}
-            onPointerDown={handleResizeStart}
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize chat panel"
-            title="Drag to resize"
-          />
-          <ChatPanel
-            sessionTitle={activeSession?.name ?? (loading ? 'Loading…' : 'No session selected')}
-            messages={messages}
-            loading={loading || messagesLoading}
-            hasActiveSession={!!activeSessionId}
-            suggestedPrompts={suggestedPrompts}
-            suggestedPromptsLoading={suggestedPromptsLoading}
-            suggestedPromptsError={suggestedPromptsError}
-            isStreaming={isStreaming}
-            isAwaitingResponseUnit={isAwaitingResponseUnit}
-            streamSteps={streamSteps}
-            streamError={streamError}
-            followups={followups}
-            followupsLoading={followupsLoading}
-            disconnectedDatabases={disconnectedSessionDbs}
-            onManageDatabases={() => setDbSliderOpen(true)}
-            onSend={handleSendMessage}
-          />
-        </section>
-
-        <section className={`${styles['db-analytics__col']} ${styles['db-analytics__col--results']}`}>
-          <ResultsPanel
-            chartGroups={chartGroups}
-            loadError={loadError ?? messagesError}
-            isGenerating={isStreaming}
-            sessionId={activeSessionId}
-          />
-        </section>
-      </main>
-
-      <DatabaseManagerSlider
-        open={dbSliderOpen}
-        databases={databases}
-        onClose={() => setDbSliderOpen(false)}
-        onDatabaseCreated={handleDatabaseCreated}
-        onDatabaseConnected={handleDatabaseConnected}
-        onDatabaseDisconnected={handleDatabaseDisconnected}
-      />
-
-      <NewSessionSlider
-        open={sessionSliderOpen}
-        databases={databases}
-        onClose={() => setSessionSliderOpen(false)}
-        onCreated={handleSessionCreated}
-        onManageDatabases={() => {
-          setSessionSliderOpen(false);
-          setDbSliderOpen(true);
-        }}
-      />
-    </div>
-  );
-};
-
-export default DBAnalytics;
 
 
 
@@ -3647,7 +1835,9 @@ export default DBAnalytics;
     "suggestedPrompts": {
       "finding": "Finding good questions to start with…",
       "intro": "Not sure where to start? Try one of these.",
-      "askThis": "Ask this"
+      "askThis": "Ask this",
+      "showMore": "Show full prompt",
+      "showLess": "Show less"
     },
     "followupChips": {
       "finding": "Finding follow-up questions…",
@@ -3847,13 +2037,6 @@ export default DBAnalytics;
 
 
 
-
-
-
-
-
-
-
 {
   "db_analytics": {
     "app": {
@@ -3919,7 +2102,9 @@ export default DBAnalytics;
     "suggestedPrompts": {
       "finding": "시작하기 좋은 질문을 찾는 중…",
       "intro": "무엇을 물어봐야 할지 모르시겠나요? 아래 중 하나를 선택해 보세요.",
-      "askThis": "이 질문하기"
+      "askThis": "이 질문하기",
+      "showMore": "전체 프롬프트 보기",
+      "showLess": "간략히 보기"
     },
     "followupChips": {
       "finding": "후속 질문을 찾는 중…",
