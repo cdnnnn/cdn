@@ -126,12 +126,13 @@
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
 .db-analytics-db-manage-item {
+  min-width: 0;
   padding: 16px;
   border: 1px solid t.$border-strong;
   border-radius: t.$radius-lg;
@@ -245,8 +246,8 @@
 
 .db-analytics-db-manage-item__meta-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
   margin: 14px 0 0;
   padding: 12px 14px;
   background: t.$surface-0;
