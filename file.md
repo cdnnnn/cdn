@@ -186,7 +186,7 @@
   &:hover:not(:disabled) {
     background: t.$accent-bg;
     border-color: t.$accent;
-    color: t.$accent;
+    color: t.$text-primary;
   }
 
   &:disabled {
@@ -201,6 +201,7 @@
   border-color: transparent;
 
   &:hover:not(:disabled) {
+    background: t.$gradient-primary;
     filter: brightness(1.08);
     color: #fff;
     border-color: transparent;
