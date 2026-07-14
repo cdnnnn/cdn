@@ -1,20 +1,1313 @@
+//DatabaseList.module.scss
+@use '../../../styles/tokens' as t;
+
+.db-analytics-db-panel {
+  background: t.$surface-2;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+}
+
+.db-analytics-db-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 53px;
+  padding: 0 16px;
+  border-bottom: 1px solid t.$border-strong;
+  background: t.$surface-1;
+  flex-shrink: 0;
+}
+
+.db-analytics-db-panel__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  margin: 0;
+  color: t.$text-primary;
+}
+
+.db-analytics-db-panel__refresh-spin {
+  color: t.$text-muted;
+  animation: db-analytics-db-panel-refresh-spin 0.8s linear infinite;
+}
+
+@keyframes db-analytics-db-panel-refresh-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.db-analytics-db-panel__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.db-analytics-db-panel__icon-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: t.$radius;
+  border: 0.5px solid t.$border-strong;
+  background: transparent;
+  color: t.$text-secondary;
+  cursor: pointer;
+  font-size: 15px;
+  flex-shrink: 0;
+
+  &:hover:not(:disabled) {
+    background: t.$surface-0;
+    border-color: t.$border-strong;
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+}
+
+.db-analytics-db-panel__body {
+  padding: 8px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.db-analytics-db-panel__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 32px 16px;
+  gap: 3px;
+
+  p {
+    font-size: 13px;
+    font-weight: 600;
+    color: t.$text-primary;
+    margin: 4px 0 2px;
+  }
+}
+
+.db-analytics-db-panel__empty-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: t.$surface-0;
+  color: t.$text-muted;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.db-analytics-db-panel__link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: t.$accent;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    color: #185fa5;
+    text-decoration: underline;
+  }
+
+  &:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    text-decoration: none;
+  }
+}
+
+.db-analytics-db-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.db-analytics-db-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 8px;
+  border-radius: t.$radius;
+  transition: background 0.15s ease;
+
+  &:hover {
+    background: t.$surface-0;
+  }
+}
+
+.db-analytics-db-item__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.db-analytics-db-item__connect-row {
+  display: flex;
+  justify-content: flex-end;
+  padding-left: 40px;
+}
+
+.db-analytics-db-item__connect-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 0.5px solid t.$border-strong;
+  background: t.$surface-2;
+  color: t.$text-secondary;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+
+  &:hover:not(:disabled) {
+    background: t.$surface-0;
+    border-color: t.$border-stronger;
+    color: t.$text-primary;
+  }
+
+  &:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+}
+
+.db-analytics-db-item__connect-btn--primary {
+  background: t.$gradient-primary;
+  color: #fff;
+  border-color: transparent;
+
+  &:hover:not(:disabled) {
+    filter: brightness(1.08);
+    color: #fff;
+    border-color: transparent;
+  }
+}
+
+.db-analytics-db-item__spin {
+  animation: db-analytics-db-item-spin 0.8s linear infinite;
+}
+
+@keyframes db-analytics-db-item-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.db-analytics-db-item__icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  background: t.$indigo-bg;
+  color: t.$indigo-fg;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.db-analytics-db-item__icon--mysql {
+  background: t.$blue-bg;
+  color: t.$blue-fg;
+}
+
+.db-analytics-db-item__icon--postgres {
+  background: t.$violet-bg;
+  color: t.$violet-fg;
+}
+
+.db-analytics-db-item__icon--mssql {
+  background: t.$amber-bg;
+  color: t.$amber-fg;
+}
+
+.db-analytics-db-item__icon--csv {
+  background: t.$green-bg;
+  color: t.$green-fg;
+}
+
+.db-analytics-db-item__info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.db-analytics-db-item__name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: t.$text-primary;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.db-analytics-db-item__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.db-analytics-db-item__type-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  color: t.$text-secondary;
+  background: t.$surface-0;
+  border: 0.5px solid t.$border;
+}
+
+.db-analytics-db-item__type-badge--mysql {
+  color: t.$blue-fg;
+  background: t.$blue-bg;
+  border-color: transparent;
+}
+
+.db-analytics-db-item__type-badge--postgres {
+  color: t.$violet-fg;
+  background: t.$violet-bg;
+  border-color: transparent;
+}
+
+.db-analytics-db-item__type-badge--mssql {
+  color: t.$amber-fg;
+  background: t.$amber-bg;
+  border-color: transparent;
+}
+
+.db-analytics-db-item__type-badge--csv {
+  color: t.$green-fg;
+  background: t.$green-bg;
+  border-color: transparent;
+}
+
+.db-analytics-db-item__db-name {
+  font-size: 10.5px;
+  color: t.$text-muted;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.db-analytics-db-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 2px t.$surface-2;
+}
+
+.db-analytics-db-status-dot--connected {
+  background: t.$success;
+}
+
+.db-analytics-db-status-dot--disconnected {
+  background: t.$danger;
+}
+
+.db-analytics-db-item__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.db-analytics-db-item__schema-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 0.5px solid t.$border-strong;
+  background: transparent;
+  color: t.$text-muted;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+
+  &:hover:not(:disabled) {
+    background: t.$surface-2;
+    border-color: t.$border-stronger;
+    color: t.$accent;
+  }
+
+  &:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+}
+
+
+
+
+
+
+
+
+//DatabaseList.tsx
+import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import styles from './DatabaseList.module.scss';
+import { DatabaseItem } from '../types';
+import { Icon } from '../icons';
+import { getDbTypeMeta } from '../dbTypeMeta';
+import { api } from '../../../services/api';
+import SkeletonListItem from './SkeletonListItem';
+import DbSchemaSlider from './DbSchemaSlider';
+import ConnectPasswordModal from './ConnectPasswordModal';
+
+interface Props {
+  databases: DatabaseItem[];
+  onManage: () => void;
+  disabled?: boolean;
+  loading?: boolean;
+  refreshing?: boolean;
+  onDatabaseConnected: (dbId: string, cacheUntil: string) => void;
+  onDatabaseDisconnected: (dbId: string) => void;
+}
+
+const DatabaseList: React.FC<Props> = ({
+  databases,
+  onManage,
+  disabled,
+  loading,
+  refreshing,
+  onDatabaseConnected,
+  onDatabaseDisconnected,
+}) => {
+  const { t } = useTranslation();
+  const isDisabled = !!disabled || !!loading || !!refreshing;
+  const disabledTitle = loading
+    ? t('db_analytics.databaseList.loadingDatabases')
+    : refreshing
+    ? t('db_analytics.databaseList.refreshingDatabases')
+    : disabled
+    ? t('db_analytics.databaseList.waitForResponse')
+    : undefined;
+  const [schemaTarget, setSchemaTarget] = useState<DatabaseItem | null>(null);
+  const [connectTarget, setConnectTarget] = useState<DatabaseItem | null>(null);
+  const [busyDbId, setBusyDbId] = useState<string | null>(null);
+
+  const handleDisconnect = async (db: DatabaseItem) => {
+    setBusyDbId(db.id);
+    try {
+      await api.disconnectDatabase(db.id);
+      onDatabaseDisconnected(db.id);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setBusyDbId(null);
+    }
+  };
+
+  return (
+    <div className={styles['db-analytics-db-panel']}>
+      <div className={styles['db-analytics-db-panel__header']}>
+        <h2 className={styles['db-analytics-db-panel__title']}>
+          {t('db_analytics.databaseList.title')}
+          {refreshing && (
+            <Icon.loader
+              size={12}
+              aria-hidden="true"
+              className={styles['db-analytics-db-panel__refresh-spin']}
+            />
+          )}
+        </h2>
+        <div className={styles['db-analytics-db-panel__header-actions']}>
+          <button
+            className={styles['db-analytics-db-panel__icon-btn']}
+            aria-label={t('db_analytics.databaseList.manageDatabases')}
+            onClick={onManage}
+            disabled={isDisabled}
+            title={isDisabled ? disabledTitle : t('db_analytics.databaseList.manageDatabases')}
+          >
+            <Icon.settings size={15} aria-hidden="true" />
+          </button>
+          <button
+            className={styles['db-analytics-db-panel__icon-btn']}
+            aria-label={t('db_analytics.databaseList.addDatabaseConnection')}
+            onClick={onManage}
+            disabled={isDisabled}
+            title={isDisabled ? disabledTitle : t('db_analytics.databaseList.addDatabase')}
+          >
+            <Icon.plus size={16} aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+      <div className={styles['db-analytics-db-panel__body']}>
+        {loading ? (
+          <SkeletonListItem variant="db" count={4} />
+        ) : databases.length === 0 ? (
+          <div className={styles['db-analytics-db-panel__empty']}>
+            <span className={styles['db-analytics-db-panel__empty-icon']}>
+              <Icon.database size={18} aria-hidden="true" />
+            </span>
+            <p>{t('db_analytics.databaseList.emptyTitle')}</p>
+            <button
+              className={styles['db-analytics-db-panel__link']}
+              onClick={onManage}
+              disabled={isDisabled}
+              title={disabledTitle}
+            >
+              {t('db_analytics.databaseList.connectADatabase')}
+            </button>
+          </div>
+        ) : (
+          <ul className={styles['db-analytics-db-list']}>
+            {databases.map((db, index) => {
+              const typeMeta = getDbTypeMeta(db.db_type);
+              const isCsv = db.db_type === 'csv';
+              const schemaEnabled = isCsv || db.connected;
+              const isBusy = busyDbId === db.id;
+              const statusLabel = isCsv
+                ? t('db_analytics.databaseList.status.ready')
+                : db.connected
+                ? t('db_analytics.databaseList.status.connected')
+                : t('db_analytics.databaseList.status.disconnected');
+              return (
+                <li key={db.id ? `${db.id}-${index}` : `db-${index}`} className={styles['db-analytics-db-item']}>
+                  <div className={styles['db-analytics-db-item__row']}>
+                    <div
+                      className={`${styles['db-analytics-db-item__icon']} ${
+                        styles[`db-analytics-db-item__icon--${typeMeta.modifier}`] ?? ''
+                      }`}
+                    >
+                      {isCsv ? (
+                        <Icon.csv size={14} aria-hidden="true" />
+                      ) : (
+                        <Icon.database size={14} aria-hidden="true" />
+                      )}
+                    </div>
+                    <div className={styles['db-analytics-db-item__info']}>
+                      <span className={styles['db-analytics-db-item__name']}>{db.name}</span>
+                      <span className={styles['db-analytics-db-item__meta']}>
+                        <span
+                          className={`${styles['db-analytics-db-item__type-badge']} ${
+                            styles[`db-analytics-db-item__type-badge--${typeMeta.modifier}`] ?? ''
+                          }`}
+                        >
+                          {typeMeta.label}
+                        </span>
+                        <span className={styles['db-analytics-db-item__db-name']}>{db.db_name}</span>
+                      </span>
+                    </div>
+                    <div className={styles['db-analytics-db-item__actions']}>
+                      <button
+                        type="button"
+                        className={styles['db-analytics-db-item__schema-btn']}
+                        onClick={() => schemaEnabled && setSchemaTarget(db)}
+                        disabled={!schemaEnabled}
+                        aria-label={t('db_analytics.databaseList.viewSchemaAndErDiagram')}
+                        title={
+                          schemaEnabled
+                            ? t('db_analytics.databaseList.viewSchema')
+                            : t('db_analytics.databaseList.connectToViewSchema')
+                        }
+                      >
+                        <Icon.schema size={13} aria-hidden="true" />
+                      </button>
+                      <span
+                        className={`${styles['db-analytics-db-status-dot']} ${
+                          schemaEnabled
+                            ? styles['db-analytics-db-status-dot--connected']
+                            : styles['db-analytics-db-status-dot--disconnected']
+                        }`}
+                        title={statusLabel}
+                        aria-label={statusLabel}
+                      />
+                    </div>
+                  </div>
+
+                  {!isCsv && (
+                    <div className={styles['db-analytics-db-item__connect-row']}>
+                      {db.connected ? (
+                        <button
+                          type="button"
+                          className={styles['db-analytics-db-item__connect-btn']}
+                          onClick={() => handleDisconnect(db)}
+                          disabled={isDisabled || isBusy}
+                        >
+                          {isBusy ? (
+                            <Icon.loader size={11} aria-hidden="true" className={styles['db-analytics-db-item__spin']} />
+                          ) : (
+                            <Icon.check size={11} aria-hidden="true" />
+                          )}
+                          {isBusy
+                            ? t('db_analytics.databaseList.disconnecting')
+                            : t('db_analytics.databaseList.disconnect')}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className={`${styles['db-analytics-db-item__connect-btn']} ${styles['db-analytics-db-item__connect-btn--primary']}`}
+                          onClick={() => setConnectTarget(db)}
+                          disabled={isDisabled}
+                        >
+                          {t('db_analytics.databaseList.connect')}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
+      <DbSchemaSlider database={schemaTarget} onClose={() => setSchemaTarget(null)} />
+
+      {connectTarget && (
+        <ConnectPasswordModal
+          database={connectTarget}
+          onClose={() => setConnectTarget(null)}
+          onConnected={(cacheUntil) => {
+            onDatabaseConnected(connectTarget.id, cacheUntil);
+            setConnectTarget(null);
+          }}
+        />
+      )}
+    </div>
+  );
+};
+
+export default DatabaseList;
+
+
+
+
+
+
+
+
+
+
+
+
+//DbSchemaSlider.module.scss
+@use '../../../styles/tokens' as t;
+
+.db-analytics-schema-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.db-analytics-schema-overlay__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(11, 11, 11, 0.32);
+  animation: db-analytics-schema-fade-in 0.15s ease;
+}
+
+@keyframes db-analytics-schema-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.db-analytics-schema-panel {
+  position: relative;
+  max-width: 100vw;
+  height: 100%;
+  background: t.$surface-2;
+  display: flex;
+  flex-direction: column;
+  box-shadow: -8px 0 24px rgba(11, 11, 11, 0.14);
+  animation: db-analytics-schema-slide-in 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.db-analytics-schema-panel--resizing {
+  animation: none;
+  transition: none;
+}
+
+.db-analytics-schema-panel__resize-handle {
+  position: absolute;
+  top: 0;
+  left: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 5;
+  touch-action: none;
+  background: transparent;
+
+  &::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 50%;
+    width: 2px;
+    height: 100%;
+    transform: translateX(-50%);
+    background: transparent;
+    transition: background 0.12s ease;
+  }
+
+  &:hover::after {
+    background: t.$accent;
+  }
+}
+
+.db-analytics-schema-panel__resize-handle--active::after {
+  background: t.$accent;
+}
+
+@keyframes db-analytics-schema-slide-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.db-analytics-schema-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 64px;
+  padding: 0 20px;
+  border-bottom: 1px solid t.$border-strong;
+  background: t.$surface-1;
+  flex-shrink: 0;
+}
+
+.db-analytics-schema-panel__heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.db-analytics-schema-panel__icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: t.$gradient-primary;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 2px 6px rgba(79, 70, 229, 0.25);
+}
+
+.db-analytics-schema-panel__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: t.$text-primary;
+  margin: 0 0 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+
+.db-analytics-schema-panel__subtitle {
+  font-size: 11.5px;
+  color: t.$text-muted;
+}
+
+.db-analytics-schema-panel__close-btn {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: t.$radius;
+  border: 0.5px solid t.$border-strong;
+  background: transparent;
+  color: t.$text-secondary;
+  cursor: pointer;
+  flex-shrink: 0;
+
+  &:hover {
+    background: t.$surface-0;
+  }
+}
+
+.db-analytics-schema-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 12px 20px 0;
+  border-bottom: 1px solid t.$border-strong;
+  background: t.$surface-1;
+  flex-shrink: 0;
+}
+
+.db-analytics-schema-tabs__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: t.$text-muted;
+  padding: 10px 14px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+
+  &:hover {
+    color: t.$text-primary;
+  }
+}
+
+.db-analytics-schema-tabs__item--active {
+  color: t.$text-primary;
+  border-bottom-color: t.$text-primary;
+}
+
+.db-analytics-schema-tabs__count {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: t.$text-secondary;
+  background: t.$surface-0;
+  border: 0.5px solid t.$border;
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+.db-analytics-schema-panel__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 20px;
+}
+
+.db-analytics-schema-panel__body--full-bleed {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+}
+
+.db-analytics-schema-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 60px 20px;
+  color: t.$text-muted;
+  text-align: center;
+
+  p {
+    font-size: 13px;
+    margin: 0;
+    max-width: 260px;
+  }
+}
+
+.db-analytics-schema-spin {
+  animation: db-analytics-schema-spin 0.8s linear infinite;
+}
+
+@keyframes db-analytics-schema-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.db-analytics-schema-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: t.$text-secondary;
+  margin-bottom: 14px;
+
+  strong {
+    color: t.$text-primary;
+    font-weight: 700;
+  }
+}
+
+.db-analytics-schema-summary__dot {
+  color: t.$text-muted;
+}
+
+.db-analytics-schema-table-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.db-analytics-schema-table {
+  border: 1px solid t.$border-strong;
+  border-radius: t.$radius-lg;
+  overflow: hidden;
+}
+
+.db-analytics-schema-table__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 14px;
+  background: t.$surface-1;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+
+  &:hover {
+    background: t.$surface-0;
+  }
+}
+
+.db-analytics-schema-table__icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: t.$accent-bg;
+  color: #0c447c;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.db-analytics-schema-table__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: t.$text-primary;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+.db-analytics-schema-table__meta {
+  flex: 1;
+  text-align: right;
+  font-size: 11px;
+  color: t.$text-muted;
+}
+
+.db-analytics-schema-table__chevron {
+  color: t.$text-muted;
+  transform: rotate(90deg);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+
+.db-analytics-schema-table__chevron--open {
+  transform: rotate(-90deg);
+}
+
+.db-analytics-schema-table__body {
+  padding: 4px 0;
+  border-top: 1px solid t.$border;
+}
+
+.db-analytics-schema-columns {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+
+  th {
+    text-align: left;
+    font-weight: 600;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    color: t.$text-muted;
+    padding: 8px 14px 6px;
+  }
+
+  td {
+    padding: 6px 14px;
+    color: t.$text-primary;
+    border-top: 0.5px solid t.$border;
+  }
+
+  tr:first-child td {
+    border-top: none;
+  }
+}
+
+.db-analytics-schema-columns__name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-weight: 500;
+}
+
+.db-analytics-schema-columns__pk {
+  font-size: 9px;
+  font-weight: 700;
+  color: t.$accent;
+  background: t.$accent-bg;
+  padding: 1px 5px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.db-analytics-schema-columns__type {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  color: t.$text-secondary;
+  font-size: 11px;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//DbSchemaSlider.tsx
+import React, { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import styles from './DbSchemaSlider.module.scss';
+import { DatabaseItem, DbSchema } from '../types';
+import { Icon } from '../icons';
+import { api } from '../../../services/api';
+import SchemaErDiagram from './SchemaErDiagram';
+import { useResizableWidth } from '../hooks/useResizableWidth';
+
+interface Props {
+  database: DatabaseItem | null;
+  onClose: () => void;
+}
+
+type Tab = 'tables' | 'diagram';
+
+const DbSchemaSlider: React.FC<Props> = ({ database, onClose }) => {
+  const { t } = useTranslation();
+  const [tab, setTab] = useState<Tab>('tables');
+  const [schema, setSchema] = useState<DbSchema | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [expandedTable, setExpandedTable] = useState<string | null>(null);
+  const { width, isResizing, handlePointerDown } = useResizableWidth({
+    defaultWidth: 800,
+    minWidth: 480,
+    maxWidth: 'viewport',
+  });
+  // Sticky for the rest of this panel's lifetime once the person starts
+  // dragging — not just tied to the live isResizing flag. If it were tied
+  // to isResizing alone, the moment a drag ends the class list changes
+  // again, which re-triggers the base slide-in @keyframes from its 0%
+  // state (translateX(100%)) and produces a visible snap-back-then-forward
+  // instead of just settling at the new width.
+  const [hasResizedOnce, setHasResizedOnce] = useState(false);
+  useEffect(() => {
+    if (isResizing) setHasResizedOnce(true);
+  }, [isResizing]);
+
+  useEffect(() => {
+    if (!database) return;
+    let cancelled = false;
+    setSchema(null);
+    setError(null);
+    setTab('tables');
+    setExpandedTable(null);
+    setLoading(true);
+
+    api
+      .getSchema(database.id)
+      .then((res) => {
+        if (!cancelled) {
+          setSchema(res);
+          setExpandedTable(res.tables[0]?.name ?? null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : t('db_analytics.dbSchemaSlider.genericError'));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [database?.id]);
+
+  const totalRows = useMemo(
+    () => schema?.tables.reduce((sum, t) => sum + (t.row_count ?? 0), 0) ?? 0,
+    [schema]
+  );
+
+  if (!database) return null;
+
+  return (
+    <div className={styles['db-analytics-schema-overlay']} role="dialog" aria-modal="true">
+      <div className={styles['db-analytics-schema-overlay__backdrop']} onClick={onClose} />
+      <aside
+        className={`${styles['db-analytics-schema-panel']} ${
+          hasResizedOnce ? styles['db-analytics-schema-panel--resizing'] : ''
+        }`}
+        style={{ width: `${width}px` }}
+      >
+        <div
+          className={`${styles['db-analytics-schema-panel__resize-handle']} ${
+            isResizing ? styles['db-analytics-schema-panel__resize-handle--active'] : ''
+          }`}
+          onPointerDown={handlePointerDown}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t('db_analytics.dbSchemaSlider.resizeHandle')}
+          title={t('db_analytics.dbSchemaSlider.resizeHandle')}
+        />
+        <div className={styles['db-analytics-schema-panel__header']}>
+          <div className={styles['db-analytics-schema-panel__heading']}>
+            <span className={styles['db-analytics-schema-panel__icon']}>
+              <Icon.schema size={16} aria-hidden="true" />
+            </span>
+            <div>
+              <h2 className={styles['db-analytics-schema-panel__title']}>{database.name}</h2>
+              <span className={styles['db-analytics-schema-panel__subtitle']}>
+                {t('db_analytics.dbSchemaSlider.subtitle')}
+              </span>
+            </div>
+          </div>
+          <button
+            className={styles['db-analytics-schema-panel__close-btn']}
+            aria-label={t('db_analytics.dbSchemaSlider.close')}
+            onClick={onClose}
+          >
+            <Icon.close size={18} aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className={styles['db-analytics-schema-tabs']}>
+          <button
+            className={`${styles['db-analytics-schema-tabs__item']} ${
+              tab === 'tables' ? styles['db-analytics-schema-tabs__item--active'] : ''
+            }`}
+            onClick={() => setTab('tables')}
+          >
+            <Icon.table size={14} aria-hidden="true" />
+            {t('db_analytics.dbSchemaSlider.tabs.tables')}
+            {schema && <span className={styles['db-analytics-schema-tabs__count']}>{schema.tables.length}</span>}
+          </button>
+          <button
+            className={`${styles['db-analytics-schema-tabs__item']} ${
+              tab === 'diagram' ? styles['db-analytics-schema-tabs__item--active'] : ''
+            }`}
+            onClick={() => setTab('diagram')}
+          >
+            <Icon.schema size={14} aria-hidden="true" />
+            {t('db_analytics.dbSchemaSlider.tabs.erDiagram')}
+          </button>
+        </div>
+
+        <div
+          className={`${styles['db-analytics-schema-panel__body']} ${
+            tab === 'diagram' ? styles['db-analytics-schema-panel__body--full-bleed'] : ''
+          }`}
+        >
+          {loading && (
+            <div className={styles['db-analytics-schema-empty']}>
+              <Icon.loader size={22} aria-hidden="true" className={styles['db-analytics-schema-spin']} />
+              <p>{t('db_analytics.dbSchemaSlider.loadingSchema')}</p>
+            </div>
+          )}
+
+          {!loading && error && (
+            <div className={styles['db-analytics-schema-empty']}>
+              <Icon.infoCircle size={22} aria-hidden="true" />
+              <p>{error}</p>
+            </div>
+          )}
+
+          {!loading && !error && schema && schema.tables.length === 0 && (
+            <div className={styles['db-analytics-schema-empty']}>
+              <Icon.table size={22} aria-hidden="true" />
+              <p>{t('db_analytics.dbSchemaSlider.noTablesFound')}</p>
+            </div>
+          )}
+
+          {!loading && !error && schema && schema.tables.length > 0 && tab === 'tables' && (
+            <>
+              <div className={styles['db-analytics-schema-summary']}>
+                <span>
+                  <strong>{schema.tables.length}</strong>{' '}
+                  {schema.tables.length === 1 ? t('db_analytics.dbSchemaSlider.tableLabel') : t('db_analytics.dbSchemaSlider.tableLabelPlural')}
+                </span>
+                <span className={styles['db-analytics-schema-summary__dot']}>&middot;</span>
+                <span>{t('db_analytics.dbSchemaSlider.totalRows', { count: totalRows })}</span>
+              </div>
+
+              <div className={styles['db-analytics-schema-table-list']}>
+                {schema.tables.map((table) => {
+                  const isOpen = expandedTable === table.name;
+                  return (
+                    <div key={table.name} className={styles['db-analytics-schema-table']}>
+                      <button
+                        className={styles['db-analytics-schema-table__header']}
+                        onClick={() => setExpandedTable(isOpen ? null : table.name)}
+                        aria-expanded={isOpen}
+                      >
+                        <span className={styles['db-analytics-schema-table__icon']}>
+                          <Icon.table size={13} aria-hidden="true" />
+                        </span>
+                        <span className={styles['db-analytics-schema-table__name']}>{table.name}</span>
+                        <span className={styles['db-analytics-schema-table__meta']}>
+                          {t('db_analytics.dbSchemaSlider.columnCount', { count: table.columns.length })} &middot;{' '}
+                          {t('db_analytics.dbSchemaSlider.rowCount', { count: table.row_count })}
+                        </span>
+                        <Icon.arrowRight
+                          size={13}
+                          aria-hidden="true"
+                          className={`${styles['db-analytics-schema-table__chevron']} ${
+                            isOpen ? styles['db-analytics-schema-table__chevron--open'] : ''
+                          }`}
+                        />
+                      </button>
+
+                      {isOpen && (
+                        <div className={styles['db-analytics-schema-table__body']}>
+                          <table className={styles['db-analytics-schema-columns']}>
+                            <thead>
+                              <tr>
+                                <th>{t('db_analytics.dbSchemaSlider.table.columnHeader')}</th>
+                                <th>{t('db_analytics.dbSchemaSlider.table.typeHeader')}</th>
+                                <th>{t('db_analytics.dbSchemaSlider.table.nullableHeader')}</th>
+                                <th>{t('db_analytics.dbSchemaSlider.table.defaultHeader')}</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {table.columns.map((col) => (
+                                <tr key={col.name}>
+                                  <td>
+                                    <span className={styles['db-analytics-schema-columns__name']}>
+                                      {col.primary_key && (
+                                        <span
+                                          className={styles['db-analytics-schema-columns__pk']}
+                                          title={t('db_analytics.dbSchemaSlider.table.primaryKey')}
+                                        >
+                                          {t('db_analytics.dbSchemaSlider.table.pkAbbr')}
+                                        </span>
+                                      )}
+                                      {col.name}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    <span className={styles['db-analytics-schema-columns__type']}>{col.type}</span>
+                                  </td>
+                                  <td>
+                                    {col.nullable
+                                      ? t('db_analytics.dbSchemaSlider.table.nullableYes')
+                                      : t('db_analytics.dbSchemaSlider.table.nullableNo')}
+                                  </td>
+                                  <td>{col.default ?? '—'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {!loading && !error && schema && schema.tables.length > 0 && tab === 'diagram' && (
+            <SchemaErDiagram tables={schema.tables} />
+          )}
+        </div>
+      </aside>
+    </div>
+  );
+};
+
+export default DbSchemaSlider;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 //SchemaErDiagram.module.scss
 @use '../../../styles/tokens' as t;
 
 .db-analytics-er-diagram {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 0;
   position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
 }
 
 .db-analytics-er-diagram__scroll {
   overflow: hidden;
-  border: 1px solid t.$border-strong;
-  border-radius: t.$radius-lg;
+  border: none;
+  border-radius: 0;
   background: t.$surface-1;
   width: 100%;
-  height: 560px;
+  height: 100%;
+  flex: 1;
   cursor: grab;
 
   &:active {
@@ -158,7 +1451,9 @@
   gap: 6px;
   font-size: 11.5px;
   color: t.$text-muted;
-  padding: 8px 2px;
+  padding: 8px 20px;
+  flex-shrink: 0;
+  border-top: 0.5px solid t.$border;
 }
 
 
@@ -172,440 +1467,585 @@
 
 
 
-//SchemaErDiagram.tsx
-import React, { useMemo, useState } from 'react';
+//DBAnalytics.tsx
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { TransformWrapper, TransformComponent, useControls } from 'react-zoom-pan-pinch';
-import styles from './SchemaErDiagram.module.scss';
-import { DbTable } from '../types';
-import { Icon } from '../icons';
+import styles from './DBAnalytics.module.scss';
+import SessionHistory from './components/SessionHistory';
+import DatabaseList from './components/DatabaseList';
+import ChatPanel from './components/ChatPanel';
+import ResultsPanel from './components/ResultsPanel';
+import DatabaseManagerSlider from './components/DatabaseManagerSlider';
+import NewSessionSlider from './components/NewSessionSlider';
+import LanguageSwitcher from './components/LanguageSwitcher';
+import { ChatMessage, ChartGroup, DatabaseItem, SessionItem, SuggestedPrompt } from './types';
+import { api, MissingDbConnectionError } from '../../services/api';
+import { Icon } from './icons';
 
-interface Props {
-  tables: DbTable[];
-}
+const STREAM_MESSAGE_ID = 'stream-in-progress';
+const CHAT_COL_MIN_WIDTH = 380;
+const CHAT_COL_DEFAULT_WIDTH = 380;
+// Leaves the nav column (300px) and a sensible minimum for the results
+// column so dragging the handle all the way right can't squeeze column 3
+// down to nothing.
+const RESULTS_COL_MIN_WIDTH = 320;
+const NAV_COL_WIDTH = 300;
 
-interface Relationship {
-  fromTable: string;
-  fromColumn: string;
-  toTable: string;
-  toColumn: string;
-}
+const DBAnalytics: React.FC = () => {
+  const { t } = useTranslation();
+  const [sessions, setSessions] = useState<SessionItem[]>([]);
+  const [databases, setDatabases] = useState<DatabaseItem[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
 
-// Infers foreign-key-style relationships purely from naming conventions,
-// since the schema endpoint doesn't return explicit FK metadata. A column
-// like `customer_id` on `orders` is treated as pointing at the `id` (or
-// `customer_id`) primary key column on a table named `customer`/`customers`.
-function inferRelationships(tables: DbTable[]): Relationship[] {
-  const tableByName = new Map(tables.map((t) => [t.name.toLowerCase(), t]));
-  const relationships: Relationship[] = [];
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // Distinct from `loading` (the initial full-app load) — tracks a
+  // subsequent, database-list-only refresh triggered after creating a
+  // connection or uploading a CSV, so column 1 can show a brief loading
+  // state without re-triggering the whole app's first-load skeleton.
+  const [databasesRefreshing, setDatabasesRefreshing] = useState(false);
 
-  for (const table of tables) {
-    for (const column of table.columns) {
-      if (column.primary_key) continue;
-      const match = column.name.match(/^(.+?)_id$/i);
-      if (!match) continue;
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [messagesError, setMessagesError] = useState<string | null>(null);
 
-      const base = match[1].toLowerCase();
-      const candidates = [base, `${base}s`, base.replace(/s$/, '')];
-      const targetName = candidates.find((c) => tableByName.has(c) && c !== table.name.toLowerCase());
-      if (!targetName) continue;
+  const [suggestedPrompts, setSuggestedPrompts] = useState<SuggestedPrompt[]>([]);
+  const [suggestedPromptsLoading, setSuggestedPromptsLoading] = useState(false);
+  const [suggestedPromptsError, setSuggestedPromptsError] = useState<string | null>(null);
 
-      const targetTable = tableByName.get(targetName);
-      if (!targetTable) continue;
+  // --- Live query streaming state ---
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [streamSteps, setStreamSteps] = useState<string[]>([]);
+  const [streamError, setStreamError] = useState<string | null>(null);
 
-      const targetPk = targetTable.columns.find((c) => c.primary_key) ?? targetTable.columns[0];
-      if (!targetPk) continue;
+  // Populated when the query endpoint responds 424 because one or more of
+  // the session's databases isn't connected. Cleared whenever the session
+  // changes or the missing databases get reconnected.
+  const [queryMissingDbIds, setQueryMissingDbIds] = useState<string[]>([]);
 
-      relationships.push({
-        fromTable: table.name,
-        fromColumn: column.name,
-        toTable: targetTable.name,
-        toColumn: targetPk.name,
-      });
+  // --- Follow-up questions state (shown after the latest assistant reply,
+  // and also on initial load for sessions that already have a conversation) ---
+  const [followups, setFollowups] = useState<string[]>([]);
+  const [followupsLoading, setFollowupsLoading] = useState(false);
+
+  // True for the whole span of "select a session and wait for its history
+  // plus starter prompts / follow-ups to arrive" or "send a message and
+  // wait for the streamed answer plus its follow-up suggestions" — treated
+  // as one unit of work so the composer stays locked the entire time,
+  // rather than unlocking the moment streaming/history-loading finishes but
+  // before the trailing suggestion fetch has actually landed.
+  const isAwaitingResponseUnit = messagesLoading || isStreaming || suggestedPromptsLoading || followupsLoading;
+
+  const [dbSliderOpen, setDbSliderOpen] = useState(false);
+  const [sessionSliderOpen, setSessionSliderOpen] = useState(false);
+
+  // --- Resizable chat column (column 2) ---
+  const [chatColWidth, setChatColWidth] = useState(CHAT_COL_DEFAULT_WIDTH);
+  const [isResizing, setIsResizing] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const dragStartXRef = useRef(0);
+  const dragStartWidthRef = useRef(CHAT_COL_DEFAULT_WIDTH);
+
+  // Tracks the session any in-flight async work (stream, follow-ups, message
+  // refresh) belongs to. Every async callback checks this before touching
+  // state, so results for a session the user has since navigated away from
+  // never leak into the currently active session's view.
+  const activeSessionRef = useRef<string | null>(null);
+
+  // Cancels the actual in-flight `getMessages` network request (not just
+  // discarding its result) whenever the user selects a different session
+  // before the previous one's history has finished loading — e.g. rapidly
+  // clicking through multiple session cards.
+  const messagesAbortRef = useRef<AbortController | null>(null);
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const [dbList, sessionList] = await Promise.all([api.listDatabases(), api.listSessions()]);
+      setDatabases(dbList);
+      setSessions(sessionList);
+      setActiveSessionId((prev) => prev ?? (sessionList.length > 0 ? sessionList[0].id : null));
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Failed to load data.');
+    } finally {
+      setLoading(false);
     }
-  }
+  }, []);
 
-  return relationships;
-}
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
-const CARD_WIDTH = 240;
-const CARD_HEADER_HEIGHT = 34;
-const ROW_HEIGHT = 24;
-const COL_GAP_X = 110;
-const ROW_GAP_Y = 56;
+  // Re-fetches just the database list from the server. Used after creating
+  // a connection or uploading a CSV — rather than trusting the single
+  // object the create/upload response hands back (which has repeatedly
+  // come back with missing/stale fields right after creation on this
+  // backend) and splicing it into local state, this pulls the authoritative
+  // list so column 1 always reflects what the server actually has.
+  const refreshDatabases = useCallback(async () => {
+    setDatabasesRefreshing(true);
+    try {
+      const dbList = await api.listDatabases();
+      setDatabases(dbList);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Failed to refresh databases.');
+    } finally {
+      setDatabasesRefreshing(false);
+    }
+  }, []);
 
-// A distinct color per relationship line, cycling through a small palette
-// so that when several tables connect to the same hub table, each line
-// stays visually distinguishable rather than blurring into one mass.
-const LINK_COLORS = ['#4f46e5', '#0aa36f', '#e08a00', '#dc4646', '#0c8fce', '#a238c9', '#d1385c'];
+  const fetchSuggestedPrompts = useCallback((sessionId: string, isStale: () => boolean) => {
+    setSuggestedPromptsLoading(true);
+    setSuggestedPromptsError(null);
+    api
+      .getSuggestedPrompts(sessionId)
+      .then((res) => {
+        if (!isStale()) setSuggestedPrompts(res.prompts);
+      })
+      .catch((err) => {
+        if (!isStale()) {
+          setSuggestedPromptsError(err instanceof Error ? err.message : 'Failed to load suggested prompts.');
+        }
+      })
+      .finally(() => {
+        if (!isStale()) setSuggestedPromptsLoading(false);
+      });
+  }, []);
 
-// Must render inside <TransformWrapper> to access useControls(). A compact
-// floating toolbar — zoom in, zoom out, reset to fit, plus a live
-// percentage readout — anchored to a corner of the diagram viewport.
-const ZoomControls: React.FC<{ zoomPercent: number }> = ({ zoomPercent }) => {
-  const { t } = useTranslation();
-  const { zoomIn, zoomOut, resetTransform } = useControls();
+  const fetchFollowups = useCallback((sessionId: string, isStale: () => boolean) => {
+    setFollowupsLoading(true);
+    api
+      .getFollowups(sessionId)
+      .then((res) => {
+        if (!isStale()) setFollowups(res.followups);
+      })
+      .catch(() => {
+        // Follow-ups are a nice-to-have; fail silently.
+      })
+      .finally(() => {
+        if (!isStale()) setFollowupsLoading(false);
+      });
+  }, []);
 
-  return (
-    <div className={styles['db-analytics-er-diagram__zoom-controls']}>
-      <button
-        type="button"
-        className={styles['db-analytics-er-diagram__zoom-btn']}
-        onClick={() => zoomOut()}
-        aria-label={t('db_analytics.schemaErDiagram.zoomOut')}
-        title={t('db_analytics.schemaErDiagram.zoomOut')}
-      >
-        <Icon.zoomOut size={14} aria-hidden="true" />
-      </button>
-      <span className={styles['db-analytics-er-diagram__zoom-level']}>{zoomPercent}%</span>
-      <button
-        type="button"
-        className={styles['db-analytics-er-diagram__zoom-btn']}
-        onClick={() => zoomIn()}
-        aria-label={t('db_analytics.schemaErDiagram.zoomIn')}
-        title={t('db_analytics.schemaErDiagram.zoomIn')}
-      >
-        <Icon.zoomIn size={14} aria-hidden="true" />
-      </button>
-      <span className={styles['db-analytics-er-diagram__zoom-divider']} aria-hidden="true" />
-      <button
-        type="button"
-        className={styles['db-analytics-er-diagram__zoom-btn']}
-        onClick={() => resetTransform()}
-        aria-label={t('db_analytics.schemaErDiagram.resetZoom')}
-        title={t('db_analytics.schemaErDiagram.resetZoom')}
-      >
-        <Icon.zoomReset size={14} aria-hidden="true" />
-      </button>
-    </div>
+  const loadSessionData = useCallback(
+    (sessionId: string) => {
+      activeSessionRef.current = sessionId;
+      const isStale = () => activeSessionRef.current !== sessionId;
+
+      // Cancel whatever getMessages request is still in flight from a
+      // previously selected session — this is a real network-level abort,
+      // not just a "discard the result" guard, so switching between session
+      // cards quickly doesn't leave multiple stacked requests running.
+      messagesAbortRef.current?.abort();
+      const controller = new AbortController();
+      messagesAbortRef.current = controller;
+
+      setMessages([]);
+      setSuggestedPrompts([]);
+      setSuggestedPromptsError(null);
+      setFollowups([]);
+      setFollowupsLoading(false);
+      setStreamSteps([]);
+      setStreamError(null);
+      setIsStreaming(false);
+      setQueryMissingDbIds([]);
+      setMessagesLoading(true);
+      setMessagesError(null);
+
+      api
+        .getMessages(sessionId, controller.signal)
+        .then((msgs) => {
+          if (isStale()) return;
+          setMessages(msgs);
+
+          if (msgs.length === 0) {
+            fetchSuggestedPrompts(sessionId, isStale);
+          } else {
+            fetchFollowups(sessionId, isStale);
+          }
+        })
+        .catch((err) => {
+          // A cancelled request (because the user picked another session
+          // before this one resolved) isn't a real error — nothing to show,
+          // the newer request's own handler already owns the UI state.
+          if (controller.signal.aborted) return;
+          if (isStale()) return;
+          setMessagesError(err instanceof Error ? err.message : 'Failed to load messages.');
+          setMessages([]);
+          // A brand-new session's messages endpoint can 404 briefly right
+          // after creation (same server propagation lag seen elsewhere) even
+          // though the session itself exists and has no conversation yet.
+          // Don't let that failure also hide starter prompts — treat it the
+          // same as an empty conversation and try to fetch them anyway.
+          fetchSuggestedPrompts(sessionId, isStale);
+        })
+        .finally(() => {
+          if (controller.signal.aborted) return;
+          if (!isStale()) setMessagesLoading(false);
+        });
+    },
+    [fetchSuggestedPrompts, fetchFollowups]
   );
-};
 
-const SchemaErDiagram: React.FC<Props> = ({ tables }) => {
-  const { t } = useTranslation();
-  const [zoomPercent, setZoomPercent] = useState(100);
-  const relationships = useMemo(() => inferRelationships(tables), [tables]);
+  // Load chat history whenever the active session changes, and — depending
+  // on whether it already has a conversation — either show starter prompts
+  // (empty session) or fetch follow-up questions right away (existing session).
+  useEffect(() => {
+    if (!activeSessionId) {
+      activeSessionRef.current = null;
+      setMessages([]);
+      setSuggestedPrompts([]);
+      setSuggestedPromptsError(null);
+      setFollowups([]);
+      setFollowupsLoading(false);
+      setStreamSteps([]);
+      setStreamError(null);
+      setIsStreaming(false);
+      setQueryMissingDbIds([]);
+      setMessagesLoading(false);
+      return;
+    }
+    loadSessionData(activeSessionId);
+  }, [activeSessionId, loadSessionData]);
 
-  // Grid layout: wrap tables into rows, sized to fully fit each table's own
-  // column count (no truncation) so nothing overlaps and every column is
-  // visible without a "+n more" fallback.
-  const layout = useMemo(() => {
-    const perRow = tables.length <= 3 ? tables.length || 1 : tables.length <= 6 ? 3 : 4;
-    const positions = new Map<string, { x: number; y: number; height: number }>();
-    const rowHeights: number[] = [];
-    let currentRowMax = 0;
+  const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
 
-    tables.forEach((table, i) => {
-      const height = CARD_HEADER_HEIGHT + table.columns.length * ROW_HEIGHT + 10;
-      currentRowMax = Math.max(currentRowMax, height);
+  // Databases this session depends on that are currently disconnected —
+  // checked proactively from the session's db_ids on load, and reactively
+  // whenever the query endpoint reports missing connections via a 424.
+  const disconnectedSessionDbs: DatabaseItem[] = activeSession
+    ? databases.filter(
+        (db) =>
+          ((activeSession.db_ids ?? []).includes(db.id) || queryMissingDbIds.includes(db.id)) &&
+          !db.connected &&
+          db.db_type !== 'csv'
+      )
+    : [];
+  const isBlockedByDisconnectedDb = disconnectedSessionDbs.length > 0;
 
-      if ((i + 1) % perRow === 0 || i === tables.length - 1) {
-        rowHeights.push(currentRowMax);
-        currentRowMax = 0;
+  // Column 3 groups graphs by the prompt that produced them — every
+  // assistant response that came back with at least one graph gets its own
+  // section, labeled with the user's question, newest first. Responses that
+  // didn't produce any graphs are skipped entirely (nothing to show).
+  const chartGroups: ChartGroup[] = (() => {
+    const groups: ChartGroup[] = [];
+    let pendingPrompt = '';
+
+    for (const msg of messages) {
+      if (msg.role === 'user') {
+        pendingPrompt = msg.content;
+        continue;
       }
-    });
-
-    let rowIndex = 0;
-    let colIndex = 0;
-    let yOffset = 20;
-
-    tables.forEach((table, i) => {
-      const height = CARD_HEADER_HEIGHT + table.columns.length * ROW_HEIGHT + 10;
-      const x = 24 + colIndex * (CARD_WIDTH + COL_GAP_X);
-      const y = yOffset;
-      positions.set(table.name, { x, y, height });
-
-      colIndex++;
-      if ((i + 1) % perRow === 0 || i === tables.length - 1) {
-        yOffset += rowHeights[rowIndex] + ROW_GAP_Y;
-        rowIndex++;
-        colIndex = 0;
+      if (msg.role === 'assistant' && msg.graphs && msg.graphs.length > 0) {
+        groups.push({ id: msg.id, prompt: pendingPrompt, graphs: msg.graphs });
       }
-    });
+    }
 
-    const totalWidth = 24 * 2 + perRow * CARD_WIDTH + Math.max(0, perRow - 1) * COL_GAP_X;
-    const totalHeight = yOffset + 20;
+    return groups.reverse();
+  })();
 
-    return { positions, totalWidth, totalHeight, perRow };
-  }, [tables]);
-
-  const getColumnY = (tableName: string, columnName: string): number | null => {
-    const pos = layout.positions.get(tableName);
-    const table = tables.find((t) => t.name === tableName);
-    if (!pos || !table) return null;
-    const idx = table.columns.findIndex((c) => c.name === columnName);
-    if (idx === -1) return pos.y + CARD_HEADER_HEIGHT / 2;
-    return pos.y + CARD_HEADER_HEIGHT + idx * ROW_HEIGHT + ROW_HEIGHT / 2;
+  const handleSelectSession = (id: string) => {
+    if (isStreaming) return;
+    setActiveSessionId(id);
   };
 
-  if (tables.length === 0) return null;
+  const handleSendMessage = async (text: string) => {
+    const sessionId = activeSessionId;
+    if (!sessionId || isAwaitingResponseUnit || isBlockedByDisconnectedDb) return;
+
+    const isStale = () => activeSessionRef.current !== sessionId;
+
+    const userMsg: ChatMessage = {
+      id: `local-${Date.now()}`,
+      role: 'user',
+      content: text,
+      graphs: [],
+      created_at: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, userMsg]);
+    // Once a message is sent, starter prompts and any previous followups no longer apply.
+    setSuggestedPrompts([]);
+    setFollowups([]);
+
+    setIsStreaming(true);
+    setStreamSteps([]);
+    setStreamError(null);
+
+    let sawMessageEvent = false;
+    let streamFailed = false;
+
+    // Upserts the single in-progress assistant bubble with the latest text
+    // seen so far, so the response prints incrementally as events arrive
+    // instead of only appearing once the whole stream finishes.
+    const upsertStreamingMessage = (text: string) => {
+      setMessages((prev) => {
+        const withoutProvisional = prev.filter((m) => m.id !== STREAM_MESSAGE_ID);
+        return [
+          ...withoutProvisional,
+          {
+            id: STREAM_MESSAGE_ID,
+            role: 'assistant',
+            content: text,
+            graphs: [],
+            created_at: new Date().toISOString(),
+          },
+        ];
+      });
+    };
+
+    try {
+      for await (const event of api.streamQuery(sessionId, text)) {
+        if (isStale()) return;
+
+        if (event.type === 'step') {
+          setStreamSteps((prev) => [...prev, event.step]);
+        } else if (event.type === 'message') {
+          sawMessageEvent = true;
+          upsertStreamingMessage(event.step);
+        } else if (event.type === 'error') {
+          streamFailed = true;
+          setStreamError(event.message);
+        } else if (event.type === 'done') {
+          break;
+        }
+      }
+    } catch (err) {
+      if (!isStale()) {
+        streamFailed = true;
+        if (err instanceof MissingDbConnectionError) {
+          setQueryMissingDbIds(err.missingDbIds);
+          setStreamError(null);
+          // The query never actually ran — remove the optimistic user
+          // message so the thread doesn't imply it was processed.
+          setMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
+        } else {
+          setStreamError(err instanceof Error ? err.message : 'Something went wrong while running your query.');
+        }
+      }
+    }
+
+    if (isStale()) return;
+
+    setIsStreaming(false);
+    setStreamSteps([]);
+
+    if (!sawMessageEvent || streamFailed) {
+      // Nothing usable streamed back — drop the placeholder bubble if present.
+      setMessages((prev) => prev.filter((m) => m.id !== STREAM_MESSAGE_ID));
+    } else {
+      // Reconcile with the server's message list to swap the provisional
+      // bubble for the real message (real id + any graphs attached to it,
+      // since the stream itself doesn't carry graphs).
+      try {
+        const freshMessages = await api.getMessages(sessionId);
+        if (!isStale()) setMessages(freshMessages);
+      } catch {
+        // Keep the provisional message on screen if the refresh fails — the
+        // user still sees the answer, just without graphs until they retry.
+      }
+    }
+
+    if (isStale() || streamFailed || !sawMessageEvent) return;
+
+    // Once the stream completes, fetch fresh follow-up question suggestions.
+    setFollowupsLoading(true);
+    try {
+      const res = await api.getFollowups(sessionId);
+      if (!isStale()) setFollowups(res.followups);
+    } catch {
+      // Follow-ups are a nice-to-have; fail silently rather than blocking the chat.
+    } finally {
+      if (!isStale()) setFollowupsLoading(false);
+    }
+  };
+
+  const handleDatabaseCreated = (db: DatabaseItem) => {
+    // Splice the returned object in immediately so the UI feels responsive,
+    // then refresh from the server right after — the create/upload response
+    // has repeatedly come back with incomplete fields on this backend, and
+    // a CSV upload in particular can produce a database whose shape isn't
+    // fully known client-side (e.g. "separate" mode). The refresh is the
+    // authoritative source of truth; this optimistic append just avoids a
+    // blank-feeling gap before it resolves.
+    setDatabases((prev) => [...prev, db]);
+    refreshDatabases();
+  };
+
+  const handleDatabaseConnected = (dbId: string, cacheUntil: string) => {
+    setDatabases((prev) =>
+      prev.map((db) => (db.id === dbId ? { ...db, connected: true, cache_until: cacheUntil } : db))
+    );
+  };
+
+  const handleDatabaseDisconnected = (dbId: string) => {
+    setDatabases((prev) =>
+      prev.map((db) => (db.id === dbId ? { ...db, connected: false, cache_until: null } : db))
+    );
+  };
+
+  const handleSessionCreated = (session: SessionItem) => {
+    // De-duplicate defensively: if a rapid double-submit (or any other
+    // race) ever produces two session entries with the same id, keep only
+    // the newest one rather than showing duplicate rows in the list.
+    setSessions((prev) => [session, ...prev.filter((s) => s.id !== session.id)]);
+    setSessionSliderOpen(false);
+
+    if (session.id === activeSessionId) {
+      // Selecting "the same" session id wouldn't normally re-trigger the
+      // data-loading effect (React bails out on an unchanged state value),
+      // which would leave a stale view showing no messages/prompts for a
+      // session that's actually brand new. Force the effect to run again
+      // for this session explicitly.
+      loadSessionData(session.id);
+    } else {
+      setActiveSessionId(session.id);
+    }
+  };
+
+  const handleResizeStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    dragStartXRef.current = e.clientX;
+    dragStartWidthRef.current = chatColWidth;
+    setIsResizing(true);
+  };
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handlePointerMove = (e: PointerEvent) => {
+      const delta = e.clientX - dragStartXRef.current;
+      const bodyWidth = bodyRef.current?.clientWidth ?? Infinity;
+      const maxWidth = Math.max(CHAT_COL_MIN_WIDTH, bodyWidth - NAV_COL_WIDTH - RESULTS_COL_MIN_WIDTH);
+      const nextWidth = Math.min(maxWidth, Math.max(CHAT_COL_MIN_WIDTH, dragStartWidthRef.current + delta));
+      setChatColWidth(nextWidth);
+    };
+
+    const handlePointerUp = () => setIsResizing(false);
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+  }, [isResizing]);
 
   return (
-    <div className={styles['db-analytics-er-diagram']}>
-      <TransformWrapper
-        initialScale={1}
-        minScale={0.25}
-        maxScale={2.5}
-        limitToBounds={false}
-        centerOnInit
-        wheel={{ step: 0.12 }}
-        doubleClick={{ mode: 'zoomIn', step: 0.5 }}
-        onTransformed={(_, state) => setZoomPercent(Math.round(state.scale * 100))}
-      >
-        <ZoomControls zoomPercent={zoomPercent} />
-        <TransformComponent
-          wrapperClass={styles['db-analytics-er-diagram__scroll']}
-          contentClass={styles['db-analytics-er-diagram__content']}
-        >
-        <svg
-          width={layout.totalWidth}
-          height={layout.totalHeight}
-          viewBox={`0 0 ${layout.totalWidth} ${layout.totalHeight}`}
-          className={styles['db-analytics-er-diagram__svg']}
-        >
-          <defs>
-            {LINK_COLORS.map((color, i) => (
-              <marker
-                key={color}
-                id={`er-arrow-${i}`}
-                markerWidth="9"
-                markerHeight="9"
-                refX="7"
-                refY="3.5"
-                orient="auto"
-              >
-                <path d="M0,0 L7,3.5 L0,7 Z" fill={color} />
-              </marker>
-            ))}
-          </defs>
-
-          {relationships.map((rel, i) => {
-            const fromPos = layout.positions.get(rel.fromTable);
-            const toPos = layout.positions.get(rel.toTable);
-            const fromY = getColumnY(rel.fromTable, rel.fromColumn);
-            const toY = getColumnY(rel.toTable, rel.toColumn);
-            if (!fromPos || !toPos || fromY === null || toY === null) return null;
-
-            const color = LINK_COLORS[i % LINK_COLORS.length];
-            const sameRow = Math.abs(fromPos.y - toPos.y) < 4;
-            const fromOnLeft = fromPos.x < toPos.x;
-
-            let path: string;
-            let labelX: number;
-            let labelY: number;
-
-            if (sameRow || fromPos.x !== toPos.x) {
-              // Tables sit in different columns — connect the facing
-              // vertical edges with a smooth S-curve, attaching to the
-              // exact row of the relevant column on each side.
-              const startX = fromOnLeft ? fromPos.x + CARD_WIDTH : fromPos.x;
-              const endX = fromOnLeft ? toPos.x : toPos.x + CARD_WIDTH;
-              const midX = (startX + endX) / 2;
-              path = `M ${startX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${endX} ${toY}`;
-              labelX = midX;
-              labelY = (fromY + toY) / 2;
-            } else {
-              // Tables stacked in the same column — route around the side
-              // instead of drawing straight through the cards in between.
-              const bulgeX = fromPos.x + CARD_WIDTH + 46 + (i % 3) * 14;
-              path = `M ${fromPos.x + CARD_WIDTH} ${fromY} C ${bulgeX} ${fromY}, ${bulgeX} ${toY}, ${toPos.x + CARD_WIDTH} ${toY}`;
-              labelX = bulgeX;
-              labelY = (fromY + toY) / 2;
-            }
-
-            return (
-              <g key={i} className={styles['db-analytics-er-diagram__link-group']}>
-                <path
-                  d={path}
-                  className={styles['db-analytics-er-diagram__link']}
-                  style={{ stroke: color }}
-                  markerEnd={`url(#er-arrow-${i % LINK_COLORS.length})`}
-                />
-                <circle cx={labelX} cy={labelY} r={9} className={styles['db-analytics-er-diagram__link-badge']} style={{ fill: color }} />
-                <text
-                  x={labelX}
-                  y={labelY + 3}
-                  textAnchor="middle"
-                  className={styles['db-analytics-er-diagram__link-badge-text']}
-                >
-                  FK
-                </text>
-              </g>
-            );
-          })}
-
-          {tables.map((table) => {
-            const pos = layout.positions.get(table.name);
-            if (!pos) return null;
-
-            return (
-              <g key={table.name} transform={`translate(${pos.x}, ${pos.y})`}>
-                <rect
-                  width={CARD_WIDTH}
-                  height={pos.height}
-                  rx={10}
-                  className={styles['db-analytics-er-diagram__card']}
-                />
-                <rect width={CARD_WIDTH} height={CARD_HEADER_HEIGHT} rx={10} className={styles['db-analytics-er-diagram__card-header']} />
-                <rect y={CARD_HEADER_HEIGHT - 10} width={CARD_WIDTH} height={10} className={styles['db-analytics-er-diagram__card-header']} />
-                <text x={12} y={CARD_HEADER_HEIGHT / 2 + 4} className={styles['db-analytics-er-diagram__card-title']}>
-                  {table.name}
-                </text>
-                <text
-                  x={CARD_WIDTH - 12}
-                  y={CARD_HEADER_HEIGHT / 2 + 4}
-                  textAnchor="end"
-                  className={styles['db-analytics-er-diagram__card-count']}
-                >
-                  {table.row_count.toLocaleString()}
-                </text>
-
-                {table.columns.map((col, i) => (
-                  <g key={col.name} transform={`translate(0, ${CARD_HEADER_HEIGHT + i * ROW_HEIGHT})`}>
-                    {i % 2 === 1 && (
-                      <rect width={CARD_WIDTH} height={ROW_HEIGHT} className={styles['db-analytics-er-diagram__row-alt']} />
-                    )}
-                    {col.primary_key && (
-                      <text x={12} y={ROW_HEIGHT / 2 + 4} className={styles['db-analytics-er-diagram__pk']}>
-                        {t('db_analytics.dbSchemaSlider.table.pkAbbr')}
-                      </text>
-                    )}
-                    <text
-                      x={col.primary_key ? 34 : 12}
-                      y={ROW_HEIGHT / 2 + 4}
-                      className={styles['db-analytics-er-diagram__col-name']}
-                    >
-                      {col.name}
-                    </text>
-                    <text
-                      x={CARD_WIDTH - 12}
-                      y={ROW_HEIGHT / 2 + 4}
-                      textAnchor="end"
-                      className={styles['db-analytics-er-diagram__col-type']}
-                    >
-                      {col.type}
-                    </text>
-                  </g>
-                ))}
-              </g>
-            );
-          })}
-        </svg>
-        </TransformComponent>
-      </TransformWrapper>
-
-      {relationships.length === 0 && (
-        <div className={styles['db-analytics-er-diagram__note']}>
-          <Icon.infoCircle size={13} aria-hidden="true" />
-          {t('db_analytics.schemaErDiagram.noRelationships')}
+    <div className={styles['db-analytics']}>
+      <header className={styles['db-analytics__feature-header']}>
+        <div className={styles['db-analytics__feature-header-main']}>
+          <span className={styles['db-analytics__feature-header-icon']}>
+            <Icon.databaseInsights size={18} aria-hidden="true" />
+          </span>
+          <div className={styles['db-analytics__feature-header-text']}>
+            <h1 className={styles['db-analytics__feature-header-title']}>{t('db_analytics.app.title')}</h1>
+            <p className={styles['db-analytics__feature-header-subtitle']}>{t('db_analytics.app.subtitle')}</p>
+          </div>
         </div>
-      )}
+        <div className={styles['db-analytics__feature-header-actions']}>
+          <LanguageSwitcher />
+          <span className={styles['db-analytics__feature-header-badge']}>
+            <span className={styles['db-analytics__feature-header-badge-dot']} aria-hidden="true" />
+            <span className={styles['db-analytics__feature-header-badge-text']}>
+              {t('db_analytics.app.databasesConnected', { count: databases.filter((db) => db.connected).length })}
+            </span>
+          </span>
+        </div>
+      </header>
+
+
+      <main
+        ref={bodyRef}
+        className={`${styles['db-analytics__body']} ${isResizing ? styles['db-analytics--resizing'] : ''}`}
+        style={{ ['--db-analytics-chat-col-width' as string]: `${chatColWidth}px` }}
+      >
+        <section className={`${styles['db-analytics__col']} ${styles['db-analytics__col--nav']}`}>
+          <SessionHistory
+            sessions={sessions}
+            databases={databases}
+            activeSessionId={activeSessionId}
+            onSelect={handleSelectSession}
+            onNewSession={() => setSessionSliderOpen(true)}
+            disabled={isStreaming}
+            loading={loading}
+          />
+          <DatabaseList
+            databases={databases}
+            onManage={() => setDbSliderOpen(true)}
+            disabled={isStreaming}
+            loading={loading}
+            refreshing={databasesRefreshing}
+            onDatabaseConnected={handleDatabaseConnected}
+            onDatabaseDisconnected={handleDatabaseDisconnected}
+          />
+        </section>
+
+        <section className={`${styles['db-analytics__col']} ${styles['db-analytics__col--chat']}`}>
+          <div
+            className={`${styles['db-analytics__resize-handle']} ${
+              isResizing ? styles['db-analytics__resize-handle--active'] : ''
+            }`}
+            onPointerDown={handleResizeStart}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize chat panel"
+            title="Drag to resize"
+          />
+          <ChatPanel
+            sessionTitle={activeSession?.name ?? (loading ? 'Loading…' : 'No session selected')}
+            messages={messages}
+            loading={loading || messagesLoading}
+            hasActiveSession={!!activeSessionId}
+            suggestedPrompts={suggestedPrompts}
+            suggestedPromptsLoading={suggestedPromptsLoading}
+            suggestedPromptsError={suggestedPromptsError}
+            isStreaming={isStreaming}
+            isAwaitingResponseUnit={isAwaitingResponseUnit}
+            streamSteps={streamSteps}
+            streamError={streamError}
+            followups={followups}
+            followupsLoading={followupsLoading}
+            disconnectedDatabases={disconnectedSessionDbs}
+            onManageDatabases={() => setDbSliderOpen(true)}
+            onSend={handleSendMessage}
+          />
+        </section>
+
+        <section className={`${styles['db-analytics__col']} ${styles['db-analytics__col--results']}`}>
+          <ResultsPanel
+            chartGroups={chartGroups}
+            loadError={loadError ?? messagesError}
+            isGenerating={isStreaming}
+            sessionId={activeSessionId}
+          />
+        </section>
+      </main>
+
+      <DatabaseManagerSlider
+        open={dbSliderOpen}
+        databases={databases}
+        onClose={() => setDbSliderOpen(false)}
+        onDatabaseCreated={handleDatabaseCreated}
+        onDatabaseConnected={handleDatabaseConnected}
+        onDatabaseDisconnected={handleDatabaseDisconnected}
+      />
+
+      <NewSessionSlider
+        open={sessionSliderOpen}
+        databases={databases}
+        onClose={() => setSessionSliderOpen(false)}
+        onCreated={handleSessionCreated}
+        onManageDatabases={() => {
+          setSessionSliderOpen(false);
+          setDbSliderOpen(true);
+        }}
+      />
     </div>
   );
 };
 
-export default SchemaErDiagram;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//icons.tsx
-// Central place for every SVG icon used across the DBAnalytics feature.
-// Swaps the old Tabler icon-font (`<i className="ti ti-x" />`) for real
-// inline SVG components from lucide-react.
-import React from 'react';
-import {
-  Plus,
-  X,
-  Check,
-  Database,
-  DatabaseZap,
-  Settings,
-  Info,
-  Loader2,
-  MessageCircle,
-  Sparkles,
-  BarChart3,
-  Send,
-  AreaChart,
-  Gauge,
-  LineChart,
-  PieChart,
-  Table,
-  ScatterChart,
-  Lightbulb,
-  ArrowRight,
-  Upload,
-  FileSpreadsheet,
-  Maximize2,
-  Network,
-  ZoomIn,
-  ZoomOut,
-  RotateCcw,
-  type LucideProps,
-} from 'lucide-react';
-
-export type IconComponent = React.FC<LucideProps>;
-
-export const Icon = {
-  plus: Plus,
-  close: X,
-  check: Check,
-  database: Database,
-  databaseInsights: DatabaseZap,
-  settings: Settings,
-  infoCircle: Info,
-  loader: Loader2,
-  messageCircle: MessageCircle,
-  sparkles: Sparkles,
-  chartBar: BarChart3,
-  send: Send,
-  chartAreaLine: AreaChart,
-  gauge: Gauge,
-  chartLine: LineChart,
-  chartPie: PieChart,
-  chartArea: AreaChart,
-  chartDots: ScatterChart,
-  table: Table,
-  lightbulb: Lightbulb,
-  arrowRight: ArrowRight,
-  upload: Upload,
-  csv: FileSpreadsheet,
-  expand: Maximize2,
-  askAi: Sparkles,
-  schema: Network,
-  zoomIn: ZoomIn,
-  zoomOut: ZoomOut,
-  zoomReset: RotateCcw,
-} as const;
-
-export type IconName = keyof typeof Icon;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+export default DBAnalytics;
 
 
 
@@ -653,7 +2093,10 @@ export type IconName = keyof typeof Icon;
         "connected": "Connected",
         "disconnected": "Disconnected"
       },
-      "refreshingDatabases": "Refreshing databases…"
+      "refreshingDatabases": "Refreshing databases…",
+      "connect": "Connect",
+      "disconnect": "Disconnect",
+      "disconnecting": "Disconnecting…"
     },
     "chatPanel": {
       "newSession": "New session",
@@ -900,13 +2343,6 @@ export type IconName = keyof typeof Icon;
 
 
 
-
-
-
-
-
-
-
 {
   "db_analytics": {
     "app": {
@@ -942,7 +2378,10 @@ export type IconName = keyof typeof Icon;
         "connected": "연결됨",
         "disconnected": "연결 끊김"
       },
-      "refreshingDatabases": "데이터베이스 새로고침 중…"
+      "refreshingDatabases": "데이터베이스 새로고침 중…",
+      "connect": "연결",
+      "disconnect": "연결 해제",
+      "disconnecting": "연결 해제 중…"
     },
     "chatPanel": {
       "newSession": "새 세션",
@@ -1166,8 +2605,3 @@ export type IconName = keyof typeof Icon;
     }
   }
 }
-
-
-
-
-"react-zoom-pan-pinch": "^3.6.1"
