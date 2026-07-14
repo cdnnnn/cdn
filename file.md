@@ -1,748 +1,1069 @@
-//DatabaseManagerSlider.tsx
-import React, { useRef, useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import styles from './DatabaseManagerSlider.module.scss';
-import { DatabaseItem } from '../types';
-import { api, CreateDbPayload, CsvUploadMode } from '../../../services/api';
-import ConnectPasswordModal from './ConnectPasswordModal';
-import DbSchemaSlider from './DbSchemaSlider';
-import { Icon } from '../icons';
-import { getDbTypeMeta } from '../dbTypeMeta';
+//DatabaseList.module.scss
+@use '../../../styles/tokens' as t;
 
-interface Props {
-  open: boolean;
-  databases: DatabaseItem[];
-  onClose: () => void;
-  onDatabaseCreated: (db: DatabaseItem) => void;
-  onDatabaseConnected: (dbId: string, cacheUntil: string) => void;
-  onDatabaseDisconnected: (dbId: string) => void;
+.db-analytics-db-panel {
+  background: t.$surface-2;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
 }
 
-type Tab = 'existing' | 'new' | 'csv';
+.db-analytics-db-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 53px;
+  padding: 0 16px;
+  border-bottom: 1px solid t.$border-strong;
+  background: t.$surface-1;
+  flex-shrink: 0;
+}
 
-// Options for the database-type switch on the "New connection" form.
-// Adding another engine later is just one more entry here. Labels ("MySQL",
-// "PostgreSQL", "MSSQL") are proper product names and intentionally not
-// translated — see the note in dbTypeMeta.ts.
-const DB_TYPE_OPTIONS: { value: CreateDbPayload['db_type']; label: string }[] = [
-  { value: 'mysql', label: 'MySQL' },
-  { value: 'postgres', label: 'PostgreSQL' },
-  { value: 'mssql', label: 'MSSQL' },
-];
+.db-analytics-db-panel__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  margin: 0;
+  color: t.$text-primary;
+}
 
-// Standard default ports per engine — used to pre-fill the port field, and
-// to detect whether the user has left it untouched (so switching db type
-// doesn't clobber a value they typed in on purpose).
-const DEFAULT_PORTS: Record<CreateDbPayload['db_type'], number> = {
-  mysql: 3306,
-  postgres: 5432,
-  mssql: 1433,
-};
+.db-analytics-db-panel__refresh-spin {
+  color: t.$text-muted;
+  animation: db-analytics-db-panel-refresh-spin 0.8s linear infinite;
+}
 
-// Options for the CSV upload mode switch. "combined" merges every selected
-// file into one table under a single connection; "separate" keeps each
-// file as its own table within that same connection.
-const CSV_MODE_OPTIONS: { value: CsvUploadMode; labelKey: string }[] = [
-  { value: 'combined', labelKey: 'db_analytics.databaseManagerSlider.csvUpload.modeCombined' },
-  { value: 'separate', labelKey: 'db_analytics.databaseManagerSlider.csvUpload.modeSeparate' },
-];
+@keyframes db-analytics-db-panel-refresh-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
 
-// Server-enforced CSV upload limits, mirrored here so the person gets
-// immediate feedback client-side instead of waiting on a round trip that
-// will fail anyway.
-const CSV_MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024; // 50MB per file
-const CSV_MAX_FILE_COUNT = 20;
+.db-analytics-db-panel__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 
-const emptyForm: CreateDbPayload = {
-  name: '',
-  db_name: '',
-  db_type: 'mysql',
-  host: '',
-  port: DEFAULT_PORTS.mysql,
-  username: '',
-};
+.db-analytics-db-panel__icon-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: t.$radius;
+  border: 0.5px solid t.$border-strong;
+  background: transparent;
+  color: t.$text-secondary;
+  cursor: pointer;
+  font-size: 15px;
+  flex-shrink: 0;
 
-const emptyCsvForm: { name: string; mode: CsvUploadMode } = {
-  name: '',
-  mode: 'combined',
-};
+  &:hover:not(:disabled) {
+    background: t.$surface-0;
+    border-color: t.$border-strong;
+  }
 
-const DatabaseManagerSlider: React.FC<Props> = ({
-  open,
-  databases,
-  onClose,
-  onDatabaseCreated,
-  onDatabaseConnected,
-  onDatabaseDisconnected,
-}) => {
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+}
+
+.db-analytics-db-panel__body {
+  padding: 8px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.db-analytics-db-panel__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 32px 16px;
+  gap: 3px;
+
+  p {
+    font-size: 13px;
+    font-weight: 600;
+    color: t.$text-primary;
+    margin: 4px 0 2px;
+  }
+}
+
+.db-analytics-db-panel__empty-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: t.$surface-0;
+  color: t.$text-muted;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.db-analytics-db-panel__link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: t.$accent;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    color: #185fa5;
+    text-decoration: underline;
+  }
+
+  &:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    text-decoration: none;
+  }
+}
+
+.db-analytics-db-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.db-analytics-db-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: t.$radius;
+  transition: background 0.15s ease;
+
+  &:hover {
+    background: t.$surface-0;
+  }
+}
+
+.db-analytics-db-item__icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  background: t.$indigo-bg;
+  color: t.$indigo-fg;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.db-analytics-db-item__icon--mysql {
+  background: t.$blue-bg;
+  color: t.$blue-fg;
+}
+
+.db-analytics-db-item__icon--postgres {
+  background: t.$violet-bg;
+  color: t.$violet-fg;
+}
+
+.db-analytics-db-item__icon--mssql {
+  background: t.$amber-bg;
+  color: t.$amber-fg;
+}
+
+.db-analytics-db-item__icon--csv {
+  background: t.$green-bg;
+  color: t.$green-fg;
+}
+
+.db-analytics-db-item__info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.db-analytics-db-item__name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: t.$text-primary;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.db-analytics-db-item__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.db-analytics-db-item__type-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  color: t.$text-secondary;
+  background: t.$surface-0;
+  border: 0.5px solid t.$border;
+}
+
+.db-analytics-db-item__type-badge--mysql {
+  color: t.$blue-fg;
+  background: t.$blue-bg;
+  border-color: transparent;
+}
+
+.db-analytics-db-item__type-badge--postgres {
+  color: t.$violet-fg;
+  background: t.$violet-bg;
+  border-color: transparent;
+}
+
+.db-analytics-db-item__type-badge--mssql {
+  color: t.$amber-fg;
+  background: t.$amber-bg;
+  border-color: transparent;
+}
+
+.db-analytics-db-item__type-badge--csv {
+  color: t.$green-fg;
+  background: t.$green-bg;
+  border-color: transparent;
+}
+
+.db-analytics-db-item__db-name {
+  font-size: 10.5px;
+  color: t.$text-muted;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.db-analytics-db-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 2px t.$surface-2;
+}
+
+.db-analytics-db-status-dot--connected {
+  background: t.$success;
+}
+
+.db-analytics-db-status-dot--disconnected {
+  background: t.$danger;
+}
+
+.db-analytics-db-item__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.db-analytics-db-item__schema-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 0.5px solid t.$border-strong;
+  background: transparent;
+  color: t.$text-muted;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+
+  &:hover:not(:disabled) {
+    background: t.$surface-2;
+    border-color: t.$border-stronger;
+    color: t.$accent;
+  }
+
+  &:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+//DatabaseList.tsx
+import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import styles from './DatabaseList.module.scss';
+import { DatabaseItem } from '../types';
+import { Icon } from '../icons';
+import { getDbTypeMeta } from '../dbTypeMeta';
+import SkeletonListItem from './SkeletonListItem';
+import DbSchemaSlider from './DbSchemaSlider';
+
+interface Props {
+  databases: DatabaseItem[];
+  onManage: () => void;
+  disabled?: boolean;
+  loading?: boolean;
+  refreshing?: boolean;
+}
+
+const DatabaseList: React.FC<Props> = ({ databases, onManage, disabled, loading, refreshing }) => {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<Tab>('existing');
-  const [form, setForm] = useState<CreateDbPayload>(emptyForm);
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
-  const [busyDbId, setBusyDbId] = useState<string | null>(null);
-  const [connectTarget, setConnectTarget] = useState<DatabaseItem | null>(null);
+  const isDisabled = !!disabled || !!loading || !!refreshing;
+  const disabledTitle = loading
+    ? t('db_analytics.databaseList.loadingDatabases')
+    : refreshing
+    ? t('db_analytics.databaseList.refreshingDatabases')
+    : disabled
+    ? t('db_analytics.databaseList.waitForResponse')
+    : undefined;
   const [schemaTarget, setSchemaTarget] = useState<DatabaseItem | null>(null);
 
-  const [csvForm, setCsvForm] = useState(emptyCsvForm);
-  const [csvFiles, setCsvFiles] = useState<File[]>([]);
-  const [csvUploading, setCsvUploading] = useState(false);
-  const [csvError, setCsvError] = useState<string | null>(null);
-  const [isDraggingCsv, setIsDraggingCsv] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  if (!open) return null;
-
-  const updateField = <K extends keyof CreateDbPayload>(key: K, value: CreateDbPayload[K]) => {
-    setForm((prev) => ({ ...prev, [key]: value }));
-  };
-
-  const handleDbTypeChange = (nextType: CreateDbPayload['db_type']) => {
-    setForm((prev) => {
-      const wasOnDefaultPort = prev.port === DEFAULT_PORTS[prev.db_type];
-      return {
-        ...prev,
-        db_type: nextType,
-        port: wasOnDefaultPort ? DEFAULT_PORTS[nextType] : prev.port,
-      };
-    });
-  };
-
-  const handleCreate = async () => {
-    setCreateError(null);
-    if (!form.name.trim() || !form.db_name.trim() || !form.host.trim() || !form.username.trim()) {
-      setCreateError(t('db_analytics.databaseManagerSlider.newConnection.errorRequiredFields'));
-      return;
-    }
-    setCreating(true);
-    try {
-      const created = await api.createDatabase(form);
-      onDatabaseCreated(created);
-      setForm(emptyForm);
-      setTab('existing');
-    } catch (err) {
-      setCreateError(err instanceof Error ? err.message : t('db_analytics.databaseManagerSlider.newConnection.genericError'));
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  const handleDisconnect = async (db: DatabaseItem) => {
-    setBusyDbId(db.id);
-    try {
-      await api.disconnectDatabase(db.id);
-      onDatabaseDisconnected(db.id);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setBusyDbId(null);
-    }
-  };
-
-  const handleFilePick = (fileList: FileList | null) => {
-    if (!fileList || fileList.length === 0) return;
-    const incoming = Array.from(fileList);
-
-    const nonCsv = incoming.filter((f) => !f.name.toLowerCase().endsWith('.csv'));
-    if (nonCsv.length > 0) {
-      setCsvError(t('db_analytics.databaseManagerSlider.csvUpload.errorOnlyCsv'));
-      return;
-    }
-
-    const tooLarge = incoming.filter((f) => f.size > CSV_MAX_FILE_SIZE_BYTES);
-    if (tooLarge.length > 0) {
-      setCsvError(
-        t('db_analytics.databaseManagerSlider.csvUpload.errorFileTooLarge', {
-          names: tooLarge.map((f) => f.name).join(', '),
-          maxSize: 50,
-        })
-      );
-      return;
-    }
-
-    setCsvFiles((prev) => {
-      // Avoid adding an exact duplicate (same name + size) if the person
-      // drags/selects overlapping files across multiple picks.
-      const existingKeys = new Set(prev.map((f) => `${f.name}:${f.size}`));
-      const deduped = incoming.filter((f) => !existingKeys.has(`${f.name}:${f.size}`));
-      const combined = [...prev, ...deduped];
-
-      if (combined.length > CSV_MAX_FILE_COUNT) {
-        setCsvError(
-          t('db_analytics.databaseManagerSlider.csvUpload.errorTooManyFiles', { max: CSV_MAX_FILE_COUNT })
-        );
-        // Keep only up to the limit rather than silently dropping the
-        // person's selection entirely — they can remove a few and retry.
-        return combined.slice(0, CSV_MAX_FILE_COUNT);
-      }
-
-      setCsvError(null);
-      return combined;
-    });
-  };
-
-  const handleRemoveFile = (index: number) => {
-    setCsvFiles((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const handleDragOver = (e: React.DragEvent<HTMLButtonElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!isDraggingCsv) setIsDraggingCsv(true);
-  };
-
-  const handleDragLeave = (e: React.DragEvent<HTMLButtonElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    // Ignore dragleave events fired when moving between child elements of
-    // the drop zone — only actually clear the state once the pointer has
-    // left the drop zone itself.
-    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
-    setIsDraggingCsv(false);
-  };
-
-  const handleDrop = (e: React.DragEvent<HTMLButtonElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDraggingCsv(false);
-    handleFilePick(e.dataTransfer.files);
-  };
-
-  const handleCsvUpload = async () => {
-    setCsvError(null);
-    if (csvFiles.length === 0) {
-      setCsvError(t('db_analytics.databaseManagerSlider.csvUpload.errorSelectFile'));
-      return;
-    }
-    if (!csvForm.name.trim()) {
-      setCsvError(t('db_analytics.databaseManagerSlider.csvUpload.errorRequiredFields'));
-      return;
-    }
-    setCsvUploading(true);
-    try {
-      const created = await api.uploadCsv({
-        files: csvFiles,
-        name: csvForm.name.trim(),
-        mode: csvForm.mode,
-      });
-      onDatabaseCreated(created);
-      setCsvForm(emptyCsvForm);
-      setCsvFiles([]);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      setTab('existing');
-    } catch (err) {
-      setCsvError(err instanceof Error ? err.message : t('db_analytics.databaseManagerSlider.csvUpload.genericError'));
-    } finally {
-      setCsvUploading(false);
-    }
-  };
-
   return (
-    <div className={styles['db-analytics-slider-overlay']} role="dialog" aria-modal="true">
-      <div className={styles['db-analytics-slider-overlay__backdrop']} onClick={onClose} />
-      <aside className={styles['db-analytics-slider-panel']}>
-        <div className={styles['db-analytics-slider-panel__header']}>
-          <h2 className={styles['db-analytics-slider-panel__title']}>{t('db_analytics.databaseManagerSlider.title')}</h2>
-          <button
-            className={styles['db-analytics-slider-panel__close-btn']}
-            aria-label={t('db_analytics.databaseManagerSlider.close')}
-            onClick={onClose}
-          >
-            <Icon.close size={16} aria-hidden="true" />
-          </button>
-        </div>
-
-        <div className={styles['db-analytics-slider-tabs']}>
-          <button
-            className={`${styles['db-analytics-slider-tabs__item']} ${
-              tab === 'existing' ? styles['db-analytics-slider-tabs__item--active'] : ''
-            }`}
-            onClick={() => setTab('existing')}
-          >
-            {t('db_analytics.databaseManagerSlider.tabs.existing')}
-          </button>
-          <button
-            className={`${styles['db-analytics-slider-tabs__item']} ${
-              tab === 'new' ? styles['db-analytics-slider-tabs__item--active'] : ''
-            }`}
-            onClick={() => setTab('new')}
-          >
-            <Icon.plus size={14} aria-hidden="true" />
-            {t('db_analytics.databaseManagerSlider.tabs.new')}
-          </button>
-          <button
-            className={`${styles['db-analytics-slider-tabs__item']} ${
-              tab === 'csv' ? styles['db-analytics-slider-tabs__item--active'] : ''
-            }`}
-            onClick={() => setTab('csv')}
-          >
-            <Icon.upload size={14} aria-hidden="true" />
-            {t('db_analytics.databaseManagerSlider.tabs.csv')}
-          </button>
-        </div>
-
-        <div className={styles['db-analytics-slider-panel__body']}>
-          {tab === 'existing' ? (
-            <ul className={styles['db-analytics-db-manage-list']}>
-              {databases.length === 0 && (
-                <li className={styles['db-analytics-db-manage-empty']}>
-                  <span className={styles['db-analytics-db-manage-empty__icon']}>
-                    <Icon.database size={22} aria-hidden="true" />
-                  </span>
-                  <p className={styles['db-analytics-db-manage-empty__title']}>
-                    {t('db_analytics.databaseManagerSlider.emptyTitle')}
-                  </p>
-                  <p className={styles['db-analytics-db-manage-empty__desc']}>
-                    {t('db_analytics.databaseManagerSlider.emptyDesc')}
-                  </p>
-                </li>
-              )}
-              {databases.map((db, index) => {
-                const typeMeta = getDbTypeMeta(db.db_type);
-                const isCsv = db.db_type === 'csv';
-                return (
-                  <li key={db.id ? `${db.id}-${index}` : `db-${index}`} className={styles['db-analytics-db-manage-item']}>
-                    <div className={styles['db-analytics-db-manage-item__top']}>
-                      <div className={styles['db-analytics-db-manage-item__identity']}>
-                        <div
-                          className={`${styles['db-analytics-db-manage-item__icon']} ${
-                            styles[`db-analytics-db-manage-item__icon--${typeMeta.modifier}`] ?? ''
-                          }`}
-                        >
-                          {isCsv ? (
-                            <Icon.csv size={17} aria-hidden="true" />
-                          ) : (
-                            <Icon.database size={17} aria-hidden="true" />
-                          )}
-                        </div>
-                        <div className={styles['db-analytics-db-manage-item__name-block']}>
-                          <span className={styles['db-analytics-db-manage-item__name']}>{db.name}</span>
-                          <span
-                            className={`${styles['db-analytics-db-manage-item__type-badge']} ${
-                              styles[`db-analytics-db-manage-item__type-badge--${typeMeta.modifier}`] ?? ''
-                            }`}
-                          >
-                            {typeMeta.label}
-                          </span>
-                        </div>
-                      </div>
-                      {isCsv ? (
-                        <span
-                          className={`${styles['db-analytics-db-status']} ${styles['db-analytics-db-status--connected']}`}
-                        >
-                          <span className={styles['db-analytics-db-status__dot']} aria-hidden="true" />
-                          {t('db_analytics.databaseList.status.ready')}
-                        </span>
-                      ) : (
-                        <span
-                          className={`${styles['db-analytics-db-status']} ${
-                            db.connected
-                              ? styles['db-analytics-db-status--connected']
-                              : styles['db-analytics-db-status--disconnected']
-                          }`}
-                        >
-                          <span className={styles['db-analytics-db-status__dot']} aria-hidden="true" />
-                          {db.connected ? t('db_analytics.databaseList.status.connected') : t('db_analytics.databaseList.status.disconnected')}
-                        </span>
-                      )}
-                    </div>
-
-                    <dl className={styles['db-analytics-db-manage-item__meta-grid']}>
-                      <div className={styles['db-analytics-db-manage-item__meta-cell']}>
-                        <dt>{isCsv ? t('db_analytics.databaseManagerSlider.table') : t('db_analytics.databaseManagerSlider.database')}</dt>
-                        <dd>{db.db_name}</dd>
-                      </div>
-                      {!isCsv && (
-                        <div className={styles['db-analytics-db-manage-item__meta-cell']}>
-                          <dt>{t('db_analytics.databaseManagerSlider.port')}</dt>
-                          <dd>{db.port}</dd>
-                        </div>
-                      )}
-                      <div className={styles['db-analytics-db-manage-item__meta-cell']}>
-                        <dt>{isCsv ? t('db_analytics.databaseManagerSlider.source') : t('db_analytics.databaseManagerSlider.user')}</dt>
-                        <dd>{isCsv ? t('db_analytics.databaseManagerSlider.csvUploadSource') : db.username}</dd>
-                      </div>
-                    </dl>
-
-                    <div className={styles['db-analytics-db-manage-item__footer']}>
-                      <button
-                        type="button"
-                        className={`${styles['db-analytics-btn']} ${styles['db-analytics-btn--icon']}`}
-                        onClick={() => setSchemaTarget(db)}
-                        disabled={!isCsv && !db.connected}
-                        title={
-                          isCsv || db.connected
-                            ? t('db_analytics.databaseList.viewSchema')
-                            : t('db_analytics.databaseList.connectToViewSchema')
-                        }
-                        aria-label={t('db_analytics.databaseList.viewSchemaAndErDiagram')}
-                      >
-                        <Icon.schema size={14} aria-hidden="true" />
-                      </button>
-                      {!isCsv &&
-                        (db.connected ? (
-                          <button
-                            className={`${styles['db-analytics-btn']} ${styles['db-analytics-btn--ghost']} ${styles['db-analytics-btn--sm']}`}
-                            onClick={() => handleDisconnect(db)}
-                            disabled={busyDbId === db.id}
-                          >
-                            {busyDbId === db.id
-                              ? t('db_analytics.databaseManagerSlider.disconnecting')
-                              : t('db_analytics.databaseManagerSlider.disconnect')}
-                          </button>
-                        ) : (
-                          <button
-                            className={`${styles['db-analytics-btn']} ${styles['db-analytics-btn--primary']} ${styles['db-analytics-btn--sm']}`}
-                            onClick={() => setConnectTarget(db)}
-                          >
-                            {t('db_analytics.databaseManagerSlider.connect')}
-                          </button>
-                        ))}
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          ) : tab === 'new' ? (
-            <div className={styles['db-analytics-form-card']}>
-              <div className={styles['db-analytics-form-card__header']}>
-                <span className={styles['db-analytics-form-card__icon']}>
-                  <Icon.database size={16} aria-hidden="true" />
-                </span>
-                <div>
-                  <h3 className={styles['db-analytics-form-card__title']}>
-                    {t('db_analytics.databaseManagerSlider.newConnection.title')}
-                  </h3>
-                  <p className={styles['db-analytics-form-card__subtitle']}>
-                    {t('db_analytics.databaseManagerSlider.newConnection.subtitle')}
-                  </p>
-                </div>
-              </div>
-
-              <div className={styles['db-analytics-form']}>
-                {createError && <div className={styles['db-analytics-form__error']}>{createError}</div>}
-
-                <label className={styles['db-analytics-form__field']}>
-                  <span className={styles['db-analytics-form__label']}>
-                    {t('db_analytics.databaseManagerSlider.newConnection.connectionName')}
-                  </span>
-                  <input
-                    className={styles['db-analytics-form__input']}
-                    value={form.name}
-                    onChange={(e) => updateField('name', e.target.value)}
-                    placeholder={t('db_analytics.databaseManagerSlider.newConnection.connectionNamePlaceholder')}
-                  />
-                </label>
-
-                <div className={styles['db-analytics-form__field']}>
-                  <span className={styles['db-analytics-form__label']}>
-                    {t('db_analytics.databaseManagerSlider.newConnection.databaseType')}
-                  </span>
-                  <div
-                    className={styles['db-analytics-type-switch']}
-                    role="radiogroup"
-                    aria-label={t('db_analytics.databaseManagerSlider.newConnection.databaseType')}
-                  >
-                    {DB_TYPE_OPTIONS.map((option) => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        role="radio"
-                        aria-checked={form.db_type === option.value}
-                        className={`${styles['db-analytics-type-switch__option']} ${
-                          form.db_type === option.value ? styles['db-analytics-type-switch__option--active'] : ''
-                        }`}
-                        onClick={() => handleDbTypeChange(option.value)}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className={styles['db-analytics-form__row']}>
-                  <label className={styles['db-analytics-form__field']}>
-                    <span className={styles['db-analytics-form__label']}>
-                      {t('db_analytics.databaseManagerSlider.newConnection.host')}
-                    </span>
-                    <input
-                      className={styles['db-analytics-form__input']}
-                      value={form.host}
-                      onChange={(e) => updateField('host', e.target.value)}
-                      placeholder={t('db_analytics.databaseManagerSlider.newConnection.hostPlaceholder')}
-                    />
-                  </label>
-                  <label
-                    className={`${styles['db-analytics-form__field']} ${styles['db-analytics-form__field--narrow']}`}
-                  >
-                    <span className={styles['db-analytics-form__label']}>
-                      {t('db_analytics.databaseManagerSlider.newConnection.port')}
-                    </span>
-                    <input
-                      className={styles['db-analytics-form__input']}
-                      type="number"
-                      value={form.port === 0 ? '' : form.port}
-                      onChange={(e) => {
-                        const raw = e.target.value;
-                        // Allow the field to be fully cleared while typing —
-                        // coercing an empty string to 0 immediately (via
-                        // Number('')) was forcing a visible "0" back into
-                        // the input on every keystroke, including at the
-                        // very start of typing a new value.
-                        updateField('port', raw === '' ? 0 : Number(raw));
-                      }}
-                    />
-                  </label>
-                </div>
-
-                <label className={styles['db-analytics-form__field']}>
-                  <span className={styles['db-analytics-form__label']}>
-                    {t('db_analytics.databaseManagerSlider.newConnection.databaseName')}
-                  </span>
-                  <input
-                    className={styles['db-analytics-form__input']}
-                    value={form.db_name}
-                    onChange={(e) => updateField('db_name', e.target.value)}
-                    placeholder={t('db_analytics.databaseManagerSlider.newConnection.databaseNamePlaceholder')}
-                  />
-                </label>
-
-                <label className={styles['db-analytics-form__field']}>
-                  <span className={styles['db-analytics-form__label']}>
-                    {t('db_analytics.databaseManagerSlider.newConnection.username')}
-                  </span>
-                  <input
-                    className={styles['db-analytics-form__input']}
-                    value={form.username}
-                    onChange={(e) => updateField('username', e.target.value)}
-                    placeholder={t('db_analytics.databaseManagerSlider.newConnection.usernamePlaceholder')}
-                  />
-                </label>
-
-                <p className={styles['db-analytics-form__hint']}>
-                  <Icon.infoCircle size={14} aria-hidden="true" />{' '}
-                  {t('db_analytics.databaseManagerSlider.newConnection.passwordHint')}
-                </p>
-
-                <div className={styles['db-analytics-form__actions']}>
-                  <button
-                    className={`${styles['db-analytics-btn']} ${styles['db-analytics-btn--ghost']}`}
-                    onClick={() => setForm(emptyForm)}
-                    disabled={creating}
-                  >
-                    {t('db_analytics.databaseManagerSlider.newConnection.reset')}
-                  </button>
-                  <button
-                    className={`${styles['db-analytics-btn']} ${styles['db-analytics-btn--primary']}`}
-                    onClick={handleCreate}
-                    disabled={creating}
-                  >
-                    {creating
-                      ? t('db_analytics.databaseManagerSlider.newConnection.creating')
-                      : t('db_analytics.databaseManagerSlider.newConnection.createConnection')}
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className={styles['db-analytics-form-card']}>
-              <div className={styles['db-analytics-form-card__header']}>
-                <span
-                  className={`${styles['db-analytics-form-card__icon']} ${styles['db-analytics-form-card__icon--csv']}`}
-                >
-                  <Icon.csv size={16} aria-hidden="true" />
-                </span>
-                <div>
-                  <h3 className={styles['db-analytics-form-card__title']}>
-                    {t('db_analytics.databaseManagerSlider.csvUpload.title')}
-                  </h3>
-                  <p className={styles['db-analytics-form-card__subtitle']}>
-                    {t('db_analytics.databaseManagerSlider.csvUpload.subtitle')}
-                  </p>
-                </div>
-              </div>
-
-              <div className={styles['db-analytics-form']}>
-                {csvError && <div className={styles['db-analytics-form__error']}>{csvError}</div>}
-
-                <label className={styles['db-analytics-form__field']}>
-                  <span className={styles['db-analytics-form__label']}>
-                    {t('db_analytics.databaseManagerSlider.csvUpload.fileLabel')}
-                  </span>
-                  <span className={styles['db-analytics-form__field-hint']}>
-                    <Icon.infoCircle size={12} aria-hidden="true" />
-                    {t('db_analytics.databaseManagerSlider.csvUpload.limitsHint', {
-                      maxSize: 50,
-                      maxCount: CSV_MAX_FILE_COUNT,
-                    })}
-                  </span>
-                  <button
-                    type="button"
-                    className={`${styles['db-analytics-file-drop']} ${
-                      csvFiles.length > 0 ? styles['db-analytics-file-drop--filled'] : ''
-                    } ${isDraggingCsv ? styles['db-analytics-file-drop--dragging'] : ''}`}
-                    onClick={() => fileInputRef.current?.click()}
-                    onDragOver={handleDragOver}
-                    onDragEnter={handleDragOver}
-                    onDragLeave={handleDragLeave}
-                    onDrop={handleDrop}
-                  >
-                    <span className={styles['db-analytics-file-drop__icon']}>
-                      {csvFiles.length > 0 ? (
-                        <Icon.csv size={18} aria-hidden="true" />
-                      ) : (
-                        <Icon.upload size={18} aria-hidden="true" />
-                      )}
-                    </span>
-                    <span className={styles['db-analytics-file-drop__text']}>
-                      <span className={styles['db-analytics-file-drop__title']}>
-                        {isDraggingCsv
-                          ? t('db_analytics.databaseManagerSlider.csvUpload.dropHere')
-                          : csvFiles.length > 0
-                          ? t('db_analytics.databaseManagerSlider.csvUpload.filesSelectedCount', {
-                              count: csvFiles.length,
-                              max: CSV_MAX_FILE_COUNT,
-                            })
-                          : t('db_analytics.databaseManagerSlider.csvUpload.chooseFile')}
-                      </span>
-                      <span className={styles['db-analytics-file-drop__subtitle']}>
-                        {isDraggingCsv
-                          ? t('db_analytics.databaseManagerSlider.csvUpload.releaseToSelect')
-                          : csvFiles.length > 0
-                          ? t('db_analytics.databaseManagerSlider.csvUpload.addMoreFiles')
-                          : t('db_analytics.databaseManagerSlider.csvUpload.dragOrClick')}
-                      </span>
-                    </span>
-                  </button>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".csv,text/csv"
-                    multiple
-                    className={styles['db-analytics-file-drop__input']}
-                    onChange={(e) => {
-                      handleFilePick(e.target.files);
-                      // Reset so picking the exact same file(s) again after
-                      // removing them from the list still fires onChange.
-                      e.target.value = '';
-                    }}
-                  />
-                </label>
-
-                {csvFiles.length > 0 && (
-                  <ul className={styles['db-analytics-csv-file-list']}>
-                    {csvFiles.map((file, i) => (
-                      <li key={`${file.name}-${file.size}-${i}`} className={styles['db-analytics-csv-file-list__item']}>
-                        <Icon.csv size={13} aria-hidden="true" />
-                        <span className={styles['db-analytics-csv-file-list__name']}>{file.name}</span>
-                        <span className={styles['db-analytics-csv-file-list__size']}>
-                          {(file.size / 1024).toFixed(1)} KB
-                        </span>
-                        <button
-                          type="button"
-                          className={styles['db-analytics-csv-file-list__remove']}
-                          onClick={() => handleRemoveFile(i)}
-                          aria-label={t('db_analytics.databaseManagerSlider.csvUpload.removeFile', { name: file.name })}
-                          disabled={csvUploading}
-                        >
-                          <Icon.close size={12} aria-hidden="true" />
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-
-                <label className={styles['db-analytics-form__field']}>
-                  <span className={styles['db-analytics-form__label']}>
-                    {t('db_analytics.databaseManagerSlider.csvUpload.nameLabel')}
-                  </span>
-                  <input
-                    className={styles['db-analytics-form__input']}
-                    value={csvForm.name}
-                    onChange={(e) => setCsvForm((prev) => ({ ...prev, name: e.target.value }))}
-                    placeholder={t('db_analytics.databaseManagerSlider.csvUpload.namePlaceholder')}
-                  />
-                </label>
-
-                <div className={styles['db-analytics-form__field']}>
-                  <span className={styles['db-analytics-form__label']}>
-                    {t('db_analytics.databaseManagerSlider.csvUpload.modeLabel')}
-                  </span>
-                  <div className={styles['db-analytics-type-switch']} role="radiogroup" aria-label={t('db_analytics.databaseManagerSlider.csvUpload.modeLabel')}>
-                    {CSV_MODE_OPTIONS.map((option) => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        role="radio"
-                        aria-checked={csvForm.mode === option.value}
-                        className={`${styles['db-analytics-type-switch__option']} ${
-                          csvForm.mode === option.value ? styles['db-analytics-type-switch__option--active'] : ''
-                        }`}
-                        onClick={() => setCsvForm((prev) => ({ ...prev, mode: option.value }))}
-                      >
-                        {t(option.labelKey)}
-                      </button>
-                    ))}
-                  </div>
-                  <p className={styles['db-analytics-form__field-hint']}>
-                    {csvForm.mode === 'combined'
-                      ? t('db_analytics.databaseManagerSlider.csvUpload.modeCombinedHint')
-                      : t('db_analytics.databaseManagerSlider.csvUpload.modeSeparateHint')}
-                  </p>
-                </div>
-
-                <p className={styles['db-analytics-form__hint']}>
-                  <Icon.infoCircle size={14} aria-hidden="true" /> {t('db_analytics.databaseManagerSlider.csvUpload.hint')}
-                </p>
-
-                <div className={styles['db-analytics-form__actions']}>
-                  <button
-                    className={`${styles['db-analytics-btn']} ${styles['db-analytics-btn--ghost']}`}
-                    onClick={() => {
-                      setCsvForm(emptyCsvForm);
-                      setCsvFiles([]);
-                      setCsvError(null);
-                      if (fileInputRef.current) fileInputRef.current.value = '';
-                    }}
-                    disabled={csvUploading}
-                  >
-                    {t('db_analytics.databaseManagerSlider.csvUpload.reset')}
-                  </button>
-                  <button
-                    className={`${styles['db-analytics-btn']} ${styles['db-analytics-btn--primary']}`}
-                    onClick={handleCsvUpload}
-                    disabled={csvUploading}
-                  >
-                    {csvUploading
-                      ? t('db_analytics.databaseManagerSlider.csvUpload.uploading')
-                      : t('db_analytics.databaseManagerSlider.csvUpload.upload')}
-                  </button>
-                </div>
-              </div>
-            </div>
+    <div className={styles['db-analytics-db-panel']}>
+      <div className={styles['db-analytics-db-panel__header']}>
+        <h2 className={styles['db-analytics-db-panel__title']}>
+          {t('db_analytics.databaseList.title')}
+          {refreshing && (
+            <Icon.loader
+              size={12}
+              aria-hidden="true"
+              className={styles['db-analytics-db-panel__refresh-spin']}
+            />
           )}
+        </h2>
+        <div className={styles['db-analytics-db-panel__header-actions']}>
+          <button
+            className={styles['db-analytics-db-panel__icon-btn']}
+            aria-label={t('db_analytics.databaseList.manageDatabases')}
+            onClick={onManage}
+            disabled={isDisabled}
+            title={isDisabled ? disabledTitle : t('db_analytics.databaseList.manageDatabases')}
+          >
+            <Icon.settings size={15} aria-hidden="true" />
+          </button>
+          <button
+            className={styles['db-analytics-db-panel__icon-btn']}
+            aria-label={t('db_analytics.databaseList.addDatabaseConnection')}
+            onClick={onManage}
+            disabled={isDisabled}
+            title={isDisabled ? disabledTitle : t('db_analytics.databaseList.addDatabase')}
+          >
+            <Icon.plus size={16} aria-hidden="true" />
+          </button>
         </div>
-      </aside>
-
-      {connectTarget && (
-        <ConnectPasswordModal
-          database={connectTarget}
-          onClose={() => setConnectTarget(null)}
-          onConnected={(cacheUntil) => {
-            onDatabaseConnected(connectTarget.id, cacheUntil);
-            setConnectTarget(null);
-          }}
-        />
-      )}
+      </div>
+      <div className={styles['db-analytics-db-panel__body']}>
+        {loading ? (
+          <SkeletonListItem variant="db" count={4} />
+        ) : databases.length === 0 ? (
+          <div className={styles['db-analytics-db-panel__empty']}>
+            <span className={styles['db-analytics-db-panel__empty-icon']}>
+              <Icon.database size={18} aria-hidden="true" />
+            </span>
+            <p>{t('db_analytics.databaseList.emptyTitle')}</p>
+            <button
+              className={styles['db-analytics-db-panel__link']}
+              onClick={onManage}
+              disabled={isDisabled}
+              title={disabledTitle}
+            >
+              {t('db_analytics.databaseList.connectADatabase')}
+            </button>
+          </div>
+        ) : (
+          <ul className={styles['db-analytics-db-list']}>
+            {databases.map((db, index) => {
+              const typeMeta = getDbTypeMeta(db.db_type);
+              const isCsv = db.db_type === 'csv';
+              const schemaEnabled = isCsv || db.connected;
+              const statusLabel = isCsv
+                ? t('db_analytics.databaseList.status.ready')
+                : db.connected
+                ? t('db_analytics.databaseList.status.connected')
+                : t('db_analytics.databaseList.status.disconnected');
+              return (
+                <li key={db.id ? `${db.id}-${index}` : `db-${index}`} className={styles['db-analytics-db-item']}>
+                  <div
+                    className={`${styles['db-analytics-db-item__icon']} ${
+                      styles[`db-analytics-db-item__icon--${typeMeta.modifier}`] ?? ''
+                    }`}
+                  >
+                    {isCsv ? (
+                      <Icon.csv size={14} aria-hidden="true" />
+                    ) : (
+                      <Icon.database size={14} aria-hidden="true" />
+                    )}
+                  </div>
+                  <div className={styles['db-analytics-db-item__info']}>
+                    <span className={styles['db-analytics-db-item__name']}>{db.name}</span>
+                    <span className={styles['db-analytics-db-item__meta']}>
+                      <span
+                        className={`${styles['db-analytics-db-item__type-badge']} ${
+                          styles[`db-analytics-db-item__type-badge--${typeMeta.modifier}`] ?? ''
+                        }`}
+                      >
+                        {typeMeta.label}
+                      </span>
+                      <span className={styles['db-analytics-db-item__db-name']}>{db.db_name}</span>
+                    </span>
+                  </div>
+                  <div className={styles['db-analytics-db-item__actions']}>
+                    <button
+                      type="button"
+                      className={styles['db-analytics-db-item__schema-btn']}
+                      onClick={() => schemaEnabled && setSchemaTarget(db)}
+                      disabled={!schemaEnabled}
+                      aria-label={t('db_analytics.databaseList.viewSchemaAndErDiagram')}
+                      title={schemaEnabled ? t('db_analytics.databaseList.viewSchema') : t('db_analytics.databaseList.connectToViewSchema')}
+                    >
+                      <Icon.schema size={13} aria-hidden="true" />
+                    </button>
+                    <span
+                      className={`${styles['db-analytics-db-status-dot']} ${
+                        schemaEnabled
+                          ? styles['db-analytics-db-status-dot--connected']
+                          : styles['db-analytics-db-status-dot--disconnected']
+                      }`}
+                      title={statusLabel}
+                      aria-label={statusLabel}
+                    />
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
 
       <DbSchemaSlider database={schemaTarget} onClose={() => setSchemaTarget(null)} />
     </div>
   );
 };
 
-export default DatabaseManagerSlider;
+export default DatabaseList;
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//DBAnalytics.tsx
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
+import styles from './DBAnalytics.module.scss';
+import SessionHistory from './components/SessionHistory';
+import DatabaseList from './components/DatabaseList';
+import ChatPanel from './components/ChatPanel';
+import ResultsPanel from './components/ResultsPanel';
+import DatabaseManagerSlider from './components/DatabaseManagerSlider';
+import NewSessionSlider from './components/NewSessionSlider';
+import LanguageSwitcher from './components/LanguageSwitcher';
+import { ChatMessage, ChartGroup, DatabaseItem, SessionItem, SuggestedPrompt } from './types';
+import { api, MissingDbConnectionError } from '../../services/api';
+import { Icon } from './icons';
+
+const STREAM_MESSAGE_ID = 'stream-in-progress';
+const CHAT_COL_MIN_WIDTH = 380;
+const CHAT_COL_DEFAULT_WIDTH = 380;
+// Leaves the nav column (300px) and a sensible minimum for the results
+// column so dragging the handle all the way right can't squeeze column 3
+// down to nothing.
+const RESULTS_COL_MIN_WIDTH = 320;
+const NAV_COL_WIDTH = 300;
+
+const DBAnalytics: React.FC = () => {
+  const { t } = useTranslation();
+  const [sessions, setSessions] = useState<SessionItem[]>([]);
+  const [databases, setDatabases] = useState<DatabaseItem[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // Distinct from `loading` (the initial full-app load) — tracks a
+  // subsequent, database-list-only refresh triggered after creating a
+  // connection or uploading a CSV, so column 1 can show a brief loading
+  // state without re-triggering the whole app's first-load skeleton.
+  const [databasesRefreshing, setDatabasesRefreshing] = useState(false);
+
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [messagesError, setMessagesError] = useState<string | null>(null);
+
+  const [suggestedPrompts, setSuggestedPrompts] = useState<SuggestedPrompt[]>([]);
+  const [suggestedPromptsLoading, setSuggestedPromptsLoading] = useState(false);
+  const [suggestedPromptsError, setSuggestedPromptsError] = useState<string | null>(null);
+
+  // --- Live query streaming state ---
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [streamSteps, setStreamSteps] = useState<string[]>([]);
+  const [streamError, setStreamError] = useState<string | null>(null);
+
+  // Populated when the query endpoint responds 424 because one or more of
+  // the session's databases isn't connected. Cleared whenever the session
+  // changes or the missing databases get reconnected.
+  const [queryMissingDbIds, setQueryMissingDbIds] = useState<string[]>([]);
+
+  // --- Follow-up questions state (shown after the latest assistant reply,
+  // and also on initial load for sessions that already have a conversation) ---
+  const [followups, setFollowups] = useState<string[]>([]);
+  const [followupsLoading, setFollowupsLoading] = useState(false);
+
+  // True for the whole span of "select a session and wait for its history
+  // plus starter prompts / follow-ups to arrive" or "send a message and
+  // wait for the streamed answer plus its follow-up suggestions" — treated
+  // as one unit of work so the composer stays locked the entire time,
+  // rather than unlocking the moment streaming/history-loading finishes but
+  // before the trailing suggestion fetch has actually landed.
+  const isAwaitingResponseUnit = messagesLoading || isStreaming || suggestedPromptsLoading || followupsLoading;
+
+  const [dbSliderOpen, setDbSliderOpen] = useState(false);
+  const [sessionSliderOpen, setSessionSliderOpen] = useState(false);
+
+  // --- Resizable chat column (column 2) ---
+  const [chatColWidth, setChatColWidth] = useState(CHAT_COL_DEFAULT_WIDTH);
+  const [isResizing, setIsResizing] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const dragStartXRef = useRef(0);
+  const dragStartWidthRef = useRef(CHAT_COL_DEFAULT_WIDTH);
+
+  // Tracks the session any in-flight async work (stream, follow-ups, message
+  // refresh) belongs to. Every async callback checks this before touching
+  // state, so results for a session the user has since navigated away from
+  // never leak into the currently active session's view.
+  const activeSessionRef = useRef<string | null>(null);
+
+  // Cancels the actual in-flight `getMessages` network request (not just
+  // discarding its result) whenever the user selects a different session
+  // before the previous one's history has finished loading — e.g. rapidly
+  // clicking through multiple session cards.
+  const messagesAbortRef = useRef<AbortController | null>(null);
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const [dbList, sessionList] = await Promise.all([api.listDatabases(), api.listSessions()]);
+      setDatabases(dbList);
+      setSessions(sessionList);
+      setActiveSessionId((prev) => prev ?? (sessionList.length > 0 ? sessionList[0].id : null));
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Failed to load data.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  // Re-fetches just the database list from the server. Used after creating
+  // a connection or uploading a CSV — rather than trusting the single
+  // object the create/upload response hands back (which has repeatedly
+  // come back with missing/stale fields right after creation on this
+  // backend) and splicing it into local state, this pulls the authoritative
+  // list so column 1 always reflects what the server actually has.
+  const refreshDatabases = useCallback(async () => {
+    setDatabasesRefreshing(true);
+    try {
+      const dbList = await api.listDatabases();
+      setDatabases(dbList);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Failed to refresh databases.');
+    } finally {
+      setDatabasesRefreshing(false);
+    }
+  }, []);
+
+  const fetchSuggestedPrompts = useCallback((sessionId: string, isStale: () => boolean) => {
+    setSuggestedPromptsLoading(true);
+    setSuggestedPromptsError(null);
+    api
+      .getSuggestedPrompts(sessionId)
+      .then((res) => {
+        if (!isStale()) setSuggestedPrompts(res.prompts);
+      })
+      .catch((err) => {
+        if (!isStale()) {
+          setSuggestedPromptsError(err instanceof Error ? err.message : 'Failed to load suggested prompts.');
+        }
+      })
+      .finally(() => {
+        if (!isStale()) setSuggestedPromptsLoading(false);
+      });
+  }, []);
+
+  const fetchFollowups = useCallback((sessionId: string, isStale: () => boolean) => {
+    setFollowupsLoading(true);
+    api
+      .getFollowups(sessionId)
+      .then((res) => {
+        if (!isStale()) setFollowups(res.followups);
+      })
+      .catch(() => {
+        // Follow-ups are a nice-to-have; fail silently.
+      })
+      .finally(() => {
+        if (!isStale()) setFollowupsLoading(false);
+      });
+  }, []);
+
+  const loadSessionData = useCallback(
+    (sessionId: string) => {
+      activeSessionRef.current = sessionId;
+      const isStale = () => activeSessionRef.current !== sessionId;
+
+      // Cancel whatever getMessages request is still in flight from a
+      // previously selected session — this is a real network-level abort,
+      // not just a "discard the result" guard, so switching between session
+      // cards quickly doesn't leave multiple stacked requests running.
+      messagesAbortRef.current?.abort();
+      const controller = new AbortController();
+      messagesAbortRef.current = controller;
+
+      setMessages([]);
+      setSuggestedPrompts([]);
+      setSuggestedPromptsError(null);
+      setFollowups([]);
+      setFollowupsLoading(false);
+      setStreamSteps([]);
+      setStreamError(null);
+      setIsStreaming(false);
+      setQueryMissingDbIds([]);
+      setMessagesLoading(true);
+      setMessagesError(null);
+
+      api
+        .getMessages(sessionId, controller.signal)
+        .then((msgs) => {
+          if (isStale()) return;
+          setMessages(msgs);
+
+          if (msgs.length === 0) {
+            fetchSuggestedPrompts(sessionId, isStale);
+          } else {
+            fetchFollowups(sessionId, isStale);
+          }
+        })
+        .catch((err) => {
+          // A cancelled request (because the user picked another session
+          // before this one resolved) isn't a real error — nothing to show,
+          // the newer request's own handler already owns the UI state.
+          if (controller.signal.aborted) return;
+          if (isStale()) return;
+          setMessagesError(err instanceof Error ? err.message : 'Failed to load messages.');
+          setMessages([]);
+          // A brand-new session's messages endpoint can 404 briefly right
+          // after creation (same server propagation lag seen elsewhere) even
+          // though the session itself exists and has no conversation yet.
+          // Don't let that failure also hide starter prompts — treat it the
+          // same as an empty conversation and try to fetch them anyway.
+          fetchSuggestedPrompts(sessionId, isStale);
+        })
+        .finally(() => {
+          if (controller.signal.aborted) return;
+          if (!isStale()) setMessagesLoading(false);
+        });
+    },
+    [fetchSuggestedPrompts, fetchFollowups]
+  );
+
+  // Load chat history whenever the active session changes, and — depending
+  // on whether it already has a conversation — either show starter prompts
+  // (empty session) or fetch follow-up questions right away (existing session).
+  useEffect(() => {
+    if (!activeSessionId) {
+      activeSessionRef.current = null;
+      setMessages([]);
+      setSuggestedPrompts([]);
+      setSuggestedPromptsError(null);
+      setFollowups([]);
+      setFollowupsLoading(false);
+      setStreamSteps([]);
+      setStreamError(null);
+      setIsStreaming(false);
+      setQueryMissingDbIds([]);
+      setMessagesLoading(false);
+      return;
+    }
+    loadSessionData(activeSessionId);
+  }, [activeSessionId, loadSessionData]);
+
+  const activeSession = sessions.find((s) => s.id === activeSessionId) ?? null;
+
+  // Databases this session depends on that are currently disconnected —
+  // checked proactively from the session's db_ids on load, and reactively
+  // whenever the query endpoint reports missing connections via a 424.
+  const disconnectedSessionDbs: DatabaseItem[] = activeSession
+    ? databases.filter(
+        (db) =>
+          ((activeSession.db_ids ?? []).includes(db.id) || queryMissingDbIds.includes(db.id)) &&
+          !db.connected &&
+          db.db_type !== 'csv'
+      )
+    : [];
+  const isBlockedByDisconnectedDb = disconnectedSessionDbs.length > 0;
+
+  // Column 3 groups graphs by the prompt that produced them — every
+  // assistant response that came back with at least one graph gets its own
+  // section, labeled with the user's question, newest first. Responses that
+  // didn't produce any graphs are skipped entirely (nothing to show).
+  const chartGroups: ChartGroup[] = (() => {
+    const groups: ChartGroup[] = [];
+    let pendingPrompt = '';
+
+    for (const msg of messages) {
+      if (msg.role === 'user') {
+        pendingPrompt = msg.content;
+        continue;
+      }
+      if (msg.role === 'assistant' && msg.graphs && msg.graphs.length > 0) {
+        groups.push({ id: msg.id, prompt: pendingPrompt, graphs: msg.graphs });
+      }
+    }
+
+    return groups.reverse();
+  })();
+
+  const handleSelectSession = (id: string) => {
+    if (isStreaming) return;
+    setActiveSessionId(id);
+  };
+
+  const handleSendMessage = async (text: string) => {
+    const sessionId = activeSessionId;
+    if (!sessionId || isAwaitingResponseUnit || isBlockedByDisconnectedDb) return;
+
+    const isStale = () => activeSessionRef.current !== sessionId;
+
+    const userMsg: ChatMessage = {
+      id: `local-${Date.now()}`,
+      role: 'user',
+      content: text,
+      graphs: [],
+      created_at: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, userMsg]);
+    // Once a message is sent, starter prompts and any previous followups no longer apply.
+    setSuggestedPrompts([]);
+    setFollowups([]);
+
+    setIsStreaming(true);
+    setStreamSteps([]);
+    setStreamError(null);
+
+    let sawMessageEvent = false;
+    let streamFailed = false;
+
+    // Upserts the single in-progress assistant bubble with the latest text
+    // seen so far, so the response prints incrementally as events arrive
+    // instead of only appearing once the whole stream finishes.
+    const upsertStreamingMessage = (text: string) => {
+      setMessages((prev) => {
+        const withoutProvisional = prev.filter((m) => m.id !== STREAM_MESSAGE_ID);
+        return [
+          ...withoutProvisional,
+          {
+            id: STREAM_MESSAGE_ID,
+            role: 'assistant',
+            content: text,
+            graphs: [],
+            created_at: new Date().toISOString(),
+          },
+        ];
+      });
+    };
+
+    try {
+      for await (const event of api.streamQuery(sessionId, text)) {
+        if (isStale()) return;
+
+        if (event.type === 'step') {
+          setStreamSteps((prev) => [...prev, event.step]);
+        } else if (event.type === 'message') {
+          sawMessageEvent = true;
+          upsertStreamingMessage(event.step);
+        } else if (event.type === 'error') {
+          streamFailed = true;
+          setStreamError(event.message);
+        } else if (event.type === 'done') {
+          break;
+        }
+      }
+    } catch (err) {
+      if (!isStale()) {
+        streamFailed = true;
+        if (err instanceof MissingDbConnectionError) {
+          setQueryMissingDbIds(err.missingDbIds);
+          setStreamError(null);
+          // The query never actually ran — remove the optimistic user
+          // message so the thread doesn't imply it was processed.
+          setMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
+        } else {
+          setStreamError(err instanceof Error ? err.message : 'Something went wrong while running your query.');
+        }
+      }
+    }
+
+    if (isStale()) return;
+
+    setIsStreaming(false);
+    setStreamSteps([]);
+
+    if (!sawMessageEvent || streamFailed) {
+      // Nothing usable streamed back — drop the placeholder bubble if present.
+      setMessages((prev) => prev.filter((m) => m.id !== STREAM_MESSAGE_ID));
+    } else {
+      // Reconcile with the server's message list to swap the provisional
+      // bubble for the real message (real id + any graphs attached to it,
+      // since the stream itself doesn't carry graphs).
+      try {
+        const freshMessages = await api.getMessages(sessionId);
+        if (!isStale()) setMessages(freshMessages);
+      } catch {
+        // Keep the provisional message on screen if the refresh fails — the
+        // user still sees the answer, just without graphs until they retry.
+      }
+    }
+
+    if (isStale() || streamFailed || !sawMessageEvent) return;
+
+    // Once the stream completes, fetch fresh follow-up question suggestions.
+    setFollowupsLoading(true);
+    try {
+      const res = await api.getFollowups(sessionId);
+      if (!isStale()) setFollowups(res.followups);
+    } catch {
+      // Follow-ups are a nice-to-have; fail silently rather than blocking the chat.
+    } finally {
+      if (!isStale()) setFollowupsLoading(false);
+    }
+  };
+
+  const handleDatabaseCreated = (db: DatabaseItem) => {
+    // Splice the returned object in immediately so the UI feels responsive,
+    // then refresh from the server right after — the create/upload response
+    // has repeatedly come back with incomplete fields on this backend, and
+    // a CSV upload in particular can produce a database whose shape isn't
+    // fully known client-side (e.g. "separate" mode). The refresh is the
+    // authoritative source of truth; this optimistic append just avoids a
+    // blank-feeling gap before it resolves.
+    setDatabases((prev) => [...prev, db]);
+    refreshDatabases();
+  };
+
+  const handleDatabaseConnected = (dbId: string, cacheUntil: string) => {
+    setDatabases((prev) =>
+      prev.map((db) => (db.id === dbId ? { ...db, connected: true, cache_until: cacheUntil } : db))
+    );
+  };
+
+  const handleDatabaseDisconnected = (dbId: string) => {
+    setDatabases((prev) =>
+      prev.map((db) => (db.id === dbId ? { ...db, connected: false, cache_until: null } : db))
+    );
+  };
+
+  const handleSessionCreated = (session: SessionItem) => {
+    // De-duplicate defensively: if a rapid double-submit (or any other
+    // race) ever produces two session entries with the same id, keep only
+    // the newest one rather than showing duplicate rows in the list.
+    setSessions((prev) => [session, ...prev.filter((s) => s.id !== session.id)]);
+    setSessionSliderOpen(false);
+
+    if (session.id === activeSessionId) {
+      // Selecting "the same" session id wouldn't normally re-trigger the
+      // data-loading effect (React bails out on an unchanged state value),
+      // which would leave a stale view showing no messages/prompts for a
+      // session that's actually brand new. Force the effect to run again
+      // for this session explicitly.
+      loadSessionData(session.id);
+    } else {
+      setActiveSessionId(session.id);
+    }
+  };
+
+  const handleResizeStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    dragStartXRef.current = e.clientX;
+    dragStartWidthRef.current = chatColWidth;
+    setIsResizing(true);
+  };
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handlePointerMove = (e: PointerEvent) => {
+      const delta = e.clientX - dragStartXRef.current;
+      const bodyWidth = bodyRef.current?.clientWidth ?? Infinity;
+      const maxWidth = Math.max(CHAT_COL_MIN_WIDTH, bodyWidth - NAV_COL_WIDTH - RESULTS_COL_MIN_WIDTH);
+      const nextWidth = Math.min(maxWidth, Math.max(CHAT_COL_MIN_WIDTH, dragStartWidthRef.current + delta));
+      setChatColWidth(nextWidth);
+    };
+
+    const handlePointerUp = () => setIsResizing(false);
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+  }, [isResizing]);
+
+  return (
+    <div className={styles['db-analytics']}>
+      <header className={styles['db-analytics__feature-header']}>
+        <div className={styles['db-analytics__feature-header-main']}>
+          <span className={styles['db-analytics__feature-header-icon']}>
+            <Icon.databaseInsights size={18} aria-hidden="true" />
+          </span>
+          <div className={styles['db-analytics__feature-header-text']}>
+            <h1 className={styles['db-analytics__feature-header-title']}>{t('db_analytics.app.title')}</h1>
+            <p className={styles['db-analytics__feature-header-subtitle']}>{t('db_analytics.app.subtitle')}</p>
+          </div>
+        </div>
+        <div className={styles['db-analytics__feature-header-actions']}>
+          <LanguageSwitcher />
+          <span className={styles['db-analytics__feature-header-badge']}>
+            <span className={styles['db-analytics__feature-header-badge-dot']} aria-hidden="true" />
+            <span className={styles['db-analytics__feature-header-badge-text']}>
+              {t('db_analytics.app.databasesConnected', { count: databases.filter((db) => db.connected).length })}
+            </span>
+          </span>
+        </div>
+      </header>
+
+
+      <main
+        ref={bodyRef}
+        className={`${styles['db-analytics__body']} ${isResizing ? styles['db-analytics--resizing'] : ''}`}
+        style={{ ['--db-analytics-chat-col-width' as string]: `${chatColWidth}px` }}
+      >
+        <section className={`${styles['db-analytics__col']} ${styles['db-analytics__col--nav']}`}>
+          <SessionHistory
+            sessions={sessions}
+            databases={databases}
+            activeSessionId={activeSessionId}
+            onSelect={handleSelectSession}
+            onNewSession={() => setSessionSliderOpen(true)}
+            disabled={isStreaming}
+            loading={loading}
+          />
+          <DatabaseList
+            databases={databases}
+            onManage={() => setDbSliderOpen(true)}
+            disabled={isStreaming}
+            loading={loading}
+            refreshing={databasesRefreshing}
+          />
+        </section>
+
+        <section className={`${styles['db-analytics__col']} ${styles['db-analytics__col--chat']}`}>
+          <div
+            className={`${styles['db-analytics__resize-handle']} ${
+              isResizing ? styles['db-analytics__resize-handle--active'] : ''
+            }`}
+            onPointerDown={handleResizeStart}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize chat panel"
+            title="Drag to resize"
+          />
+          <ChatPanel
+            sessionTitle={activeSession?.name ?? (loading ? 'Loading…' : 'No session selected')}
+            messages={messages}
+            loading={loading || messagesLoading}
+            hasActiveSession={!!activeSessionId}
+            suggestedPrompts={suggestedPrompts}
+            suggestedPromptsLoading={suggestedPromptsLoading}
+            suggestedPromptsError={suggestedPromptsError}
+            isStreaming={isStreaming}
+            isAwaitingResponseUnit={isAwaitingResponseUnit}
+            streamSteps={streamSteps}
+            streamError={streamError}
+            followups={followups}
+            followupsLoading={followupsLoading}
+            disconnectedDatabases={disconnectedSessionDbs}
+            onManageDatabases={() => setDbSliderOpen(true)}
+            onSend={handleSendMessage}
+          />
+        </section>
+
+        <section className={`${styles['db-analytics__col']} ${styles['db-analytics__col--results']}`}>
+          <ResultsPanel
+            chartGroups={chartGroups}
+            loadError={loadError ?? messagesError}
+            isGenerating={isStreaming}
+            sessionId={activeSessionId}
+          />
+        </section>
+      </main>
+
+      <DatabaseManagerSlider
+        open={dbSliderOpen}
+        databases={databases}
+        onClose={() => setDbSliderOpen(false)}
+        onDatabaseCreated={handleDatabaseCreated}
+        onDatabaseConnected={handleDatabaseConnected}
+        onDatabaseDisconnected={handleDatabaseDisconnected}
+      />
+
+      <NewSessionSlider
+        open={sessionSliderOpen}
+        databases={databases}
+        onClose={() => setSessionSliderOpen(false)}
+        onCreated={handleSessionCreated}
+        onManageDatabases={() => {
+          setSessionSliderOpen(false);
+          setDbSliderOpen(true);
+        }}
+      />
+    </div>
+  );
+};
+
+export default DBAnalytics;
 
 
 
@@ -787,7 +1108,8 @@ export default DatabaseManagerSlider;
         "ready": "Ready",
         "connected": "Connected",
         "disconnected": "Disconnected"
-      }
+      },
+      "refreshingDatabases": "Refreshing databases…"
     },
     "chatPanel": {
       "newSession": "New session",
@@ -1030,8 +1352,6 @@ export default DatabaseManagerSlider;
 
 
 
-
-
 {
   "db_analytics": {
     "app": {
@@ -1066,7 +1386,8 @@ export default DatabaseManagerSlider;
         "ready": "준비됨",
         "connected": "연결됨",
         "disconnected": "연결 끊김"
-      }
+      },
+      "refreshingDatabases": "데이터베이스 새로고침 중…"
     },
     "chatPanel": {
       "newSession": "새 세션",
@@ -1285,504 +1606,3 @@ export default DatabaseManagerSlider;
     }
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//api.ts
-// TODO: point this at your project's actual configured axios instance
-// (the one with the auth-token interceptor already set up).
-import { http } from '../lib/http';
-
-const API_PREFIX = '/db-analytics';
-
-export interface ApiDatabase {
-  id: string;
-  name: string;
-  db_type: string;
-  host?: string;
-  port: number;
-  db_name: string;
-  username: string;
-  created_at: string;
-  connected: boolean;
-  cache_until: string | null;
-}
-
-export interface ApiSession {
-  id: string;
-  name: string;
-  db_ids: string[];
-  created_at: string;
-}
-
-export interface ApiColumn {
-  name: string;
-  type: string;
-  nullable: boolean;
-  primary_key: boolean;
-  default: string | null;
-}
-
-export interface ApiTable {
-  name: string;
-  columns: ApiColumn[];
-  row_count: number;
-}
-
-export interface ApiSchema {
-  db_id: string;
-  db_name: string;
-  tables: ApiTable[];
-}
-
-export interface CreateDbPayload {
-  db_name: string;
-  db_type: 'mysql' | 'postgres' | 'mssql';
-  host: string;
-  name: string;
-  port: number;
-  username: string;
-}
-
-export interface CreateSessionPayload {
-  name: string;
-  db_ids: string[];
-}
-
-// Thrown when POST /sessions/:id/query responds 424 because one or more of
-// the session's databases isn't currently connected. Carries the specific
-// db ids so the UI can point at exactly which connections need attention.
-export class MissingDbConnectionError extends Error {
-  missingDbIds: string[];
-
-  constructor(message: string, missingDbIds: string[]) {
-    super(message);
-    this.name = 'MissingDbConnectionError';
-    this.missingDbIds = missingDbIds;
-  }
-}
-
-export type CsvUploadMode = 'combined' | 'separate';
-
-export interface UploadCsvPayload {
-  files: File[];
-  name: string;
-  mode: CsvUploadMode;
-}
-
-export interface ApiGraphQuery {
-  db_id: string;
-  db_name: string;
-  sql: string;
-  row_count: number;
-}
-
-export type ApiChartType = 'kpi' | 'line' | 'bar' | 'pie' | 'area' | 'scatter' | 'table';
-
-export interface ApiGraph {
-  id: string;
-  chart_type: ApiChartType;
-  title: string;
-  x_axis: string | null;
-  y_axis: string | null;
-  series: string[] | null;
-  stacked: boolean;
-  data: Record<string, string | number>[];
-  queries: ApiGraphQuery[];
-}
-
-export interface ApiMessage {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  graphs: ApiGraph[];
-  created_at: string;
-}
-
-export interface ApiSuggestedPrompt {
-  text: string;
-  label: string;
-  db_name: string;
-}
-
-export interface ApiSuggestedPromptsResponse {
-  prompts: ApiSuggestedPrompt[];
-}
-
-export interface ApiQueryStepEvent {
-  type: 'step';
-  step: string;
-}
-
-export interface ApiQueryMessageEvent {
-  type: 'message';
-  step: string;
-}
-
-export interface ApiQueryDoneEvent {
-  type: 'done';
-}
-
-export interface ApiQueryErrorEvent {
-  type: 'error';
-  message: string;
-}
-
-export type ApiQueryEvent =
-  | ApiQueryStepEvent
-  | ApiQueryMessageEvent
-  | ApiQueryDoneEvent
-  | ApiQueryErrorEvent;
-
-export interface ApiFollowupsResponse {
-  followups: string[];
-}
-
-export interface ChartInsightPayload {
-  chart: ApiGraph;
-  question: string;
-}
-
-export interface ChartInsightResponse {
-  insight: string;
-}
-
-// Some list endpoints inconsistently respond either as a bare array
-// (`[...]`) or wrapped in an envelope (`{ status: "Success", result: [...] }`).
-// This normalizes either shape into a plain array so callers never have to
-// guess which one they got — and never crash calling array methods on an
-// object if the envelope shape shows up unexpectedly.
-function unwrapList<T>(payload: unknown): T[] {
-  if (Array.isArray(payload)) return payload;
-  if (payload && typeof payload === 'object' && Array.isArray((payload as { result?: unknown }).result)) {
-    return (payload as { result: T[] }).result;
-  }
-  return [];
-}
-
-async function getList<T>(path: string, signal?: AbortSignal): Promise<T[]> {
-  const res = await http.get(`${API_PREFIX}${path}`, { signal });
-  return unwrapList<T>(res.data);
-}
-
-// Guarantees every field the UI relies on is present, and unwraps a
-// possible `{ status, result: {...} }` envelope first — createSession was
-// previously skipping that step, which meant a wrapped response left every
-// field (including id) undefined and silently broke session selection,
-// message loading, and everything downstream of it.
-function normalizeSession(raw: unknown): ApiSession {
-  const obj = unwrapObject<Partial<ApiSession>>(raw) ?? {};
-  return {
-    id: obj.id ?? '',
-    name: obj.name ?? '',
-    db_ids: Array.isArray(obj.db_ids) ? obj.db_ids : [],
-    created_at: obj.created_at ?? new Date().toISOString(),
-  };
-}
-
-// Extracts a human-readable message from an axios error response, whatever
-// shape the backend used (`detail` as a string, `message`, or nothing at all).
-function extractErrorMessage(err: unknown, fallback: string): string {
-  const anyErr = err as {
-    response?: { status?: number; data?: { message?: string; detail?: unknown; status?: string; result?: unknown } };
-    message?: string;
-  };
-  const data = anyErr?.response?.data;
-  // Some endpoints (e.g. /upload-csv) respond with { status: "Error", result: "..." }
-  // instead of the more common { detail } / { message } shape.
-  if (data?.status === 'Error' && typeof data?.result === 'string') return data.result;
-  if (typeof data?.detail === 'string') return data.detail;
-  if (typeof data?.message === 'string') return data.message;
-  if (typeof anyErr?.message === 'string') return anyErr.message;
-  return fallback;
-}
-
-// Parses a streaming response body into individual JSON payloads as they
-// arrive. Two framing styles are supported, detected automatically per line:
-//  1) Newline-delimited JSON — one `{...}` object per line (no `data:` prefix,
-//     no blank-line separators). This is what a lot of simple SSE-flavored
-//     backends actually send even when the content-type says event-stream.
-//  2) Standard SSE framing — `data: {...}` lines, events separated by a
-//     blank line, potentially multi-line data blocks.
-// Critically, this parses and yields as soon as a complete line/frame is
-// available rather than waiting for the whole response to buffer, so the
-// consumer can render each event the moment it arrives instead of getting
-// everything dumped at once when the stream closes.
-async function* parseEventStream(res: Response): AsyncGenerator<ApiQueryEvent> {
-  if (!res.body) return;
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let sseDataBuffer: string[] = [];
-
-  const tryParse = (raw: string): ApiQueryEvent | null => {
-    const trimmed = raw.trim();
-    if (!trimmed) return null;
-    try {
-      return JSON.parse(trimmed) as ApiQueryEvent;
-    } catch {
-      return null;
-    }
-  };
-
-  const flushSseBuffer = function* (): Generator<ApiQueryEvent> {
-    if (sseDataBuffer.length === 0) return;
-    const joined = sseDataBuffer.join('\n');
-    sseDataBuffer = [];
-    const parsed = tryParse(joined);
-    if (parsed) yield parsed;
-  };
-
-  const processLine = function* (line: string): Generator<ApiQueryEvent> {
-    if (line.startsWith('data:')) {
-      // Standard SSE frame: accumulate until a blank line flushes it.
-      sseDataBuffer.push(line.slice(5).trim());
-      return;
-    }
-    if (line.trim() === '') {
-      // Blank line = SSE event boundary.
-      yield* flushSseBuffer();
-      return;
-    }
-    // Not SSE-prefixed — try treating the line as a standalone JSON event
-    // (newline-delimited JSON framing).
-    const parsed = tryParse(line);
-    if (parsed) {
-      yield parsed;
-    }
-  };
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-
-    const lines = buffer.split('\n');
-    // Keep the last (possibly incomplete) line in the buffer for next read.
-    buffer = lines.pop() ?? '';
-
-    for (const line of lines) {
-      yield* processLine(line);
-    }
-  }
-
-  // Flush anything left after the stream closes.
-  if (buffer.trim()) {
-    yield* processLine(buffer);
-  }
-  yield* flushSseBuffer();
-}
-
-// NOTE: this one deliberately stays on raw `fetch` instead of the axios
-// instance. Axios buffers the full response body before resolving (or needs
-// extra adapter config to expose a readable stream), which defeats the
-// purpose here — we need to read and yield each SSE/NDJSON chunk as it
-// arrives so the UI can render step-by-step progress in real time. `fetch`'s
-// `res.body` ReadableStream gives us that directly. The auth header is
-// applied manually below since this bypasses the axios interceptor.
-async function* streamQuery(sessionId: string, query: string): AsyncGenerator<ApiQueryEvent> {
-  const authHeader = http.defaults.headers.common?.['Authorization'];
-
-  const res = await fetch(`${http.defaults.baseURL ?? ''}${API_PREFIX}/sessions/${sessionId}/query`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(authHeader ? { Authorization: String(authHeader) } : {}),
-    },
-    body: JSON.stringify({ query }),
-  });
-
-  if (!res.ok) {
-    let detail = '';
-    try {
-      const body = await res.json();
-      // 424 shape: { detail: { message: string, missing_db_ids: string[] } }
-      if (res.status === 424 && body?.detail && typeof body.detail === 'object') {
-        const message = body.detail.message || 'One or more databases are not connected.';
-        const missingDbIds = Array.isArray(body.detail.missing_db_ids) ? body.detail.missing_db_ids : [];
-        throw new MissingDbConnectionError(message, missingDbIds);
-      }
-      detail = typeof body?.detail === 'string' ? body.detail : body?.message || '';
-    } catch (err) {
-      if (err instanceof MissingDbConnectionError) throw err;
-      // ignore parse errors from a non-JSON error body
-    }
-    throw new Error(detail || `Request failed with status ${res.status}`);
-  }
-
-  yield* parseEventStream(res);
-}
-
-// Mirrors unwrapList, but for single-object responses. Some create/action
-// endpoints have been observed to wrap their result the same way list
-// endpoints do (`{ status: "Success", result: {...} }`) instead of
-// returning the object directly — this normalizes either shape.
-function unwrapObject<T extends object>(payload: unknown): T {
-  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
-    const withResult = payload as { result?: unknown; status?: unknown };
-    if (withResult.result && typeof withResult.result === 'object' && !Array.isArray(withResult.result)) {
-      return withResult.result as T;
-    }
-  }
-  return payload as T;
-}
-
-// Guarantees every field the UI relies on is present with a sane default,
-// even if the create/upload response is missing some of them.
-function normalizeDatabase(raw: unknown): ApiDatabase {
-  const obj = unwrapObject<Partial<ApiDatabase>>(raw) ?? {};
-  return {
-    id: obj.id ?? '',
-    name: obj.name ?? '',
-    db_type: obj.db_type ?? '',
-    host: obj.host,
-    port: obj.port ?? 0,
-    db_name: obj.db_name ?? '',
-    username: obj.username ?? '',
-    created_at: obj.created_at ?? new Date().toISOString(),
-    connected: obj.connected ?? false,
-    cache_until: obj.cache_until ?? null,
-  };
-}
-
-async function uploadCsv(payload: UploadCsvPayload): Promise<ApiDatabase> {
-  const formData = new FormData();
-  // Multiple files share the same field name — this is the standard way to
-  // send a file list via multipart/form-data; most backends (including
-  // FastAPI's `List[UploadFile]`) expect repeated `files` entries rather
-  // than an indexed/bracketed key.
-  payload.files.forEach((file) => formData.append('files', file));
-  formData.append('name', payload.name);
-  formData.append('mode', payload.mode);
-
-  try {
-    const res = await http.post(`${API_PREFIX}/upload-csv`, formData, {
-      headers: {
-        // Let axios/the browser set the multipart boundary automatically —
-        // don't hardcode 'multipart/form-data' here or the boundary gets lost.
-        'Content-Type': 'multipart/form-data',
-      },
-    });
-    return normalizeDatabase(res.data);
-  } catch (err) {
-    throw new Error(extractErrorMessage(err, 'Failed to upload CSV file.'));
-  }
-}
-
-export const api = {
-  listDatabases: () => getList<ApiDatabase>('/dbs'),
-
-  listSessions: async () => {
-    const raw = await getList<Partial<ApiSession> & { id: string }>('/sessions');
-    return raw.map(normalizeSession);
-  },
-
-  createDatabase: async (payload: CreateDbPayload): Promise<ApiDatabase> => {
-    try {
-      const res = await http.post(`${API_PREFIX}/dbs`, payload);
-      return normalizeDatabase(res.data);
-    } catch (err) {
-      throw new Error(extractErrorMessage(err, 'Failed to create database.'));
-    }
-  },
-
-  uploadCsv,
-
-  connectDatabase: async (
-    dbId: string,
-    password: string
-  ): Promise<{ message: string; db_id: string; cache_until: string }> => {
-    try {
-      const res = await http.post(`${API_PREFIX}/dbs/${dbId}/connect`, { password });
-      return res.data;
-    } catch (err) {
-      throw new Error(extractErrorMessage(err, 'Failed to connect.'));
-    }
-  },
-
-  disconnectDatabase: async (dbId: string): Promise<{ message: string; db_id: string }> => {
-    try {
-      const res = await http.post(`${API_PREFIX}/dbs/${dbId}/disconnect`);
-      return res.data;
-    } catch (err) {
-      throw new Error(extractErrorMessage(err, 'Failed to disconnect.'));
-    }
-  },
-
-  getSchema: async (dbId: string): Promise<ApiSchema> => {
-    const res = await http.get(`${API_PREFIX}/dbs/${dbId}/schema`);
-    const body = unwrapObject<Partial<ApiSchema>>(res.data) ?? {};
-    return {
-      db_id: body.db_id ?? dbId,
-      db_name: body.db_name ?? '',
-      tables: Array.isArray(body.tables) ? body.tables : [],
-    };
-  },
-
-  createSession: async (payload: CreateSessionPayload): Promise<ApiSession> => {
-    try {
-      const res = await http.post(`${API_PREFIX}/sessions`, payload);
-      const normalized = normalizeSession(res.data);
-
-      if (!normalized.id) {
-        // A session with no id can never be selected/matched correctly
-        // downstream — better to surface this clearly than silently hand
-        // back something broken.
-        throw new Error('The server did not return an id for the new session.');
-      }
-
-      // The create response has been observed to come back missing fields
-      // right after creation (the server hasn't fully propagated everything
-      // yet) — db_ids empty, name blank — even though what was submitted is
-      // properly saved moments later. Rather than show a blank name or "0
-      // databases" until the next full refresh, trust what we just sent as
-      // a fallback whenever the response doesn't echo it back.
-      const db_ids = normalized.db_ids.length > 0 ? normalized.db_ids : payload.db_ids;
-      const name = normalized.name.trim().length > 0 ? normalized.name : payload.name;
-      return { ...normalized, name, db_ids };
-    } catch (err) {
-      throw new Error(extractErrorMessage(err, 'Failed to create session.'));
-    }
-  },
-
-  getMessages: (sessionId: string, signal?: AbortSignal) =>
-    getList<ApiMessage>(`/sessions/${sessionId}/messages`, signal),
-
-  getSuggestedPrompts: async (sessionId: string): Promise<ApiSuggestedPromptsResponse> => {
-    const res = await http.post(`${API_PREFIX}/sessions/${sessionId}/suggested-prompts`);
-    const body = unwrapObject<{ prompts?: unknown }>(res.data) ?? {};
-    return { prompts: Array.isArray(body.prompts) ? (body.prompts as ApiSuggestedPrompt[]) : [] };
-  },
-
-  streamQuery,
-
-  getFollowups: async (sessionId: string): Promise<ApiFollowupsResponse> => {
-    const res = await http.post(`${API_PREFIX}/sessions/${sessionId}/followups`);
-    const body = unwrapObject<{ followups?: unknown }>(res.data) ?? {};
-    return { followups: Array.isArray(body.followups) ? (body.followups as string[]) : [] };
-  },
-
-  getChartInsight: async (sessionId: string, payload: ChartInsightPayload): Promise<ChartInsightResponse> => {
-    try {
-      const res = await http.post(`${API_PREFIX}/sessions/${sessionId}/chart_insight`, payload);
-      const body = unwrapObject<{ insight?: unknown }>(res.data) ?? {};
-      return { insight: typeof body.insight === 'string' ? body.insight : '' };
-    } catch (err) {
-      throw new Error(extractErrorMessage(err, 'Failed to get an insight for this question.'));
-    }
-  },
-};
