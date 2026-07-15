@@ -1116,15 +1116,36 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
                   </svg>
                 </button>
 
-                {getPageNumbers(filesPage, filesTotalPages).map(p => (
-                  <button
-                    key={p}
-                    className={`${styles.pageNumBtn} ${p === filesPage ? styles.pageNumBtnActive : ''}`}
-                    onClick={() => goToPage(p)}
-                  >
-                    {p}
-                  </button>
-                ))}
+                {(() => {
+                  const pageWindow = getPageNumbers(filesPage, filesTotalPages);
+                  const showFirst = pageWindow[0] > 1;
+                  const showLast = pageWindow[pageWindow.length - 1] < filesTotalPages;
+                  return (
+                    <>
+                      {showFirst && (
+                        <>
+                          <button className={styles.pageNumBtn} onClick={() => goToPage(1)}>1</button>
+                          {pageWindow[0] > 2 && <span className={styles.pageEllipsis}>…</span>}
+                        </>
+                      )}
+                      {pageWindow.map(p => (
+                        <button
+                          key={p}
+                          className={`${styles.pageNumBtn} ${p === filesPage ? styles.pageNumBtnActive : ''}`}
+                          onClick={() => goToPage(p)}
+                        >
+                          {p}
+                        </button>
+                      ))}
+                      {showLast && (
+                        <>
+                          {pageWindow[pageWindow.length - 1] < filesTotalPages - 1 && <span className={styles.pageEllipsis}>…</span>}
+                          <button className={styles.pageNumBtn} onClick={() => goToPage(filesTotalPages)}>{filesTotalPages}</button>
+                        </>
+                      )}
+                    </>
+                  );
+                })()}
 
                 <button
                   className={styles.pageNavBtn}
