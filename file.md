@@ -941,28 +941,41 @@ function buildGraphNodes(nodes: GNode[], edges: GEdge[]): GNode[] {
 // Custom node — a labeled circle sized by `value`, with an invisible
 // handle on all 4 sides (each doubling as source+target) so edges can
 // connect from whichever side actually faces the other node.
-// Long labels wrap onto multiple lines (capped at LABEL_MAX_W) rather than
-// overflowing past their allotted box — that overflow was the main cause
-// of nodes visually overlapping even though dagre's own boxes did not.
-const LABEL_MAX_W = 108;
+// Multi-word labels wrap onto multiple lines (capped at LABEL_MAX_W).
+// Single unbroken words (no spaces/hyphens — common for keyword nodes)
+// are NOT force-wrapped: breaking a word with no natural break point
+// inside a narrow box is what produced near-vertical stacks of 1-2
+// characters per line. Those get their own width instead, up to
+// LABEL_HARD_MAX_W.
+const LABEL_MAX_W = 150;
+const LABEL_HARD_MAX_W = 220;
 const LABEL_CHAR_W = 6.1; // ~px per character at the label's font size
 const LABEL_LINE_H = 14;
 
 function estimateNodeBox(label: string, circleSize: number) {
+    const hasBreakPoint = /[\s-]/.test(label);
     const rawTextWidth = label.length * LABEL_CHAR_W + 8;
-    const lines = Math.max(1, Math.ceil(rawTextWidth / LABEL_MAX_W));
-    const w = Math.max(circleSize, Math.min(LABEL_MAX_W, rawTextWidth), 72) + 16;
+    const capWidth = hasBreakPoint ? LABEL_MAX_W : LABEL_HARD_MAX_W;
+    const labelWidth = Math.min(capWidth, Math.max(rawTextWidth, 44));
+    const lines = hasBreakPoint ? Math.max(1, Math.ceil(rawTextWidth / LABEL_MAX_W)) : 1;
+    const w = Math.max(circleSize, labelWidth, 72) + 16;
     const h = circleSize + 16 + lines * LABEL_LINE_H;
-    return { w, h };
+    return { w, h, labelWidth };
 }
 
-const MindMapNode: React.FC<{ data: { label: string; value?: number } }> = ({ data }) => {
+const MindMapNode: React.FC<{ data: { label: string; value?: number; labelWidth?: number } }> = ({ data }) => {
     const size = 34 + Math.min(26, (data.value ?? 1) * 4);
+    const hasBreakPoint = /[\s-]/.test(data.label);
     return (
         <div className={styles.rfNode} style={{ width: size, height: size }} title={data.label}>
             <Handle type="target" position={Position.Top} id="top-target" className={styles.rfHandle} />
             <Handle type="source" position={Position.Bottom} id="bottom-source" className={styles.rfHandle} />
-            <span className={styles.rfNodeLabel} style={{ maxWidth: LABEL_MAX_W }}>{data.label}</span>
+            <span
+                className={styles.rfNodeLabel}
+                style={{ maxWidth: data.labelWidth ?? LABEL_MAX_W, whiteSpace: hasBreakPoint ? 'normal' : 'nowrap' }}
+            >
+                {data.label}
+            </span>
         </div>
     );
 };
@@ -977,7 +990,7 @@ function computeDagreLayout(nodes: GNode[], edges: GEdge[]) {
     g.setGraph({ rankdir: 'TB', nodesep: 72, ranksep: 150, marginx: 60, marginy: 60, acyclicer: 'greedy' });
     g.setDefaultEdgeLabel(() => ({}));
 
-    const dims = new Map<string, { w: number; h: number }>();
+    const dims = new Map<string, { w: number; h: number; labelWidth: number }>();
     nodes.forEach(n => {
         const size = 34 + Math.min(26, (n.value ?? 1) * 4);
         const dim = estimateNodeBox(n.label, size);
@@ -1014,7 +1027,7 @@ function computeDagreLayout(nodes: GNode[], edges: GEdge[]) {
         const pos = g.node(n.id);
         const dim = dims.get(n.id)!;
         // Dagre positions are centers — React Flow expects top-left.
-        return { ...n, x: pos.x - dim.w / 2, y: pos.y - dim.h / 2 };
+        return { ...n, x: pos.x - dim.w / 2, y: pos.y - dim.h / 2, labelWidth: dim.labelWidth };
     });
     return { positioned, resolvedEdges };
 }
@@ -1030,7 +1043,7 @@ const NodeLinkGraph: React.FC<{ nodes: GNode[]; edges: GEdge[] }> = ({ nodes, ed
             id: n.id,
             type: 'mindmap',
             position: { x: n.x, y: n.y },
-            data: { label: n.label, value: n.value },
+            data: { label: n.label, value: n.value, labelWidth: n.labelWidth },
         }));
 
         const rfEdges: RFEdge[] = resolvedEdges.map((e, i) => ({
@@ -1443,9 +1456,6 @@ const WorkspacePanel: React.FC<Props> = ({ step2Visible = true, step2Minimized =
 };
 
 export default WorkspacePanel;
-
-
-
 
 
 
@@ -3478,9 +3488,8 @@ export default WorkspacePanel;
     font-weight: 500;
     line-height: 14px;
     color: var(--t1);
-    white-space: normal;
     text-align: center;
-    word-break: break-word;
+    overflow-wrap: break-word;
     font-family: var(--font-ui);
     pointer-events: none;
 }
