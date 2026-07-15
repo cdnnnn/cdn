@@ -946,7 +946,7 @@ function buildGraphNodes(nodes: GNode[], edges: GEdge[]): GNode[] {
 // of nodes visually overlapping even though dagre's own boxes did not.
 const LABEL_MAX_W = 108;
 const LABEL_CHAR_W = 6.1; // ~px per character at the label's font size
-const LABEL_LINE_H = 13;
+const LABEL_LINE_H = 14;
 
 function estimateNodeBox(label: string, circleSize: number) {
     const rawTextWidth = label.length * LABEL_CHAR_W + 8;
@@ -974,7 +974,7 @@ const RF_NODE_TYPES = { mindmap: MindMapNode };
 //    so nothing overlaps regardless of graph size. ──
 function computeDagreLayout(nodes: GNode[], edges: GEdge[]) {
     const g = new dagre.graphlib.Graph();
-    g.setGraph({ rankdir: 'TB', nodesep: 44, ranksep: 116, marginx: 48, marginy: 48, acyclicer: 'greedy' });
+    g.setGraph({ rankdir: 'TB', nodesep: 72, ranksep: 150, marginx: 60, marginy: 60, acyclicer: 'greedy' });
     g.setDefaultEdgeLabel(() => ({}));
 
     const dims = new Map<string, { w: number; h: number }>();
@@ -1000,7 +1000,11 @@ function computeDagreLayout(nodes: GNode[], edges: GEdge[]) {
         const key = `${s}→${tg}`;
         if (seenEdges.has(key)) return;
         seenEdges.add(key);
-        g.setEdge(s, tg);
+        // Reserve space for the edge's own label too — without this, dagre
+        // has no idea the label text exists and will happily route another
+        // node right where that text needs to sit.
+        const label = e.label?.trim();
+        g.setEdge(s, tg, label ? { width: Math.min(120, label.length * LABEL_CHAR_W + 12), height: LABEL_LINE_H + 8, labelpos: 'c' } : {});
         resolvedEdges.push({ source: s, target: tg, label: e.label });
     });
 
@@ -1058,8 +1062,9 @@ const NodeLinkGraph: React.FC<{ nodes: GNode[]; edges: GEdge[] }> = ({ nodes, ed
                 onNodesChange={onNodesChange}
                 nodeTypes={RF_NODE_TYPES}
                 fitView
+                fitViewOptions={{ padding: 0.25 }}
                 minZoom={0.1}
-                maxZoom={2}
+                maxZoom={1.5}
                 proOptions={{ hideAttribution: true }}
             >
                 <Background gap={16} size={1} color="var(--bdr)" />
@@ -1438,6 +1443,11 @@ const WorkspacePanel: React.FC<Props> = ({ step2Visible = true, step2Minimized =
 };
 
 export default WorkspacePanel;
+
+
+
+
+
 
 
 
@@ -3382,7 +3392,7 @@ export default WorkspacePanel;
 .graphWrap {
     width: 100%;
     flex: 1;
-    min-height: 360px;
+    min-height: 460px;
     border-radius: 10px;
     overflow: hidden;
     border: 1px solid var(--bdr);
@@ -3463,9 +3473,10 @@ export default WorkspacePanel;
     top: 100%;
     left: 50%;
     transform: translateX(-50%);
-    margin-top: 4px;
-    font-size: 10.5px;
-    line-height: 13px;
+    margin-top: 5px;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 14px;
     color: var(--t1);
     white-space: normal;
     text-align: center;
