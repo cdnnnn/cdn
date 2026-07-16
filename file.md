@@ -297,12 +297,15 @@ export default UploadInfer;
 .tabbarWrap {
   flex-shrink: 0;
   padding: 20px 24px;
+  display: flex;
+  justify-content: center;
 }
 
 .tabbar {
   position: relative;
   display: flex;
   justify-content: space-between;
+  width: 100%;
   max-width: 620px;
 }
 
@@ -344,12 +347,14 @@ export default UploadInfer;
 
 .tabBtnActive {
   border-color: var(--blue);
-  background: var(--blue-dim);
+  background-color: var(--bg1);
+  background-image: linear-gradient(var(--blue-dim), var(--blue-dim));
   box-shadow: 0 0 0 3px var(--blue-dim);
 
   &:hover {
     border-color: var(--blue);
-    background: var(--blue-dim);
+    background-color: var(--bg1);
+    background-image: linear-gradient(var(--blue-dim), var(--blue-dim));
   }
 }
 
