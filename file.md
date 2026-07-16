@@ -144,34 +144,10 @@ const UploadInfer: React.FC = () => {
   // ── Tab bar badges ──
   const inferBusyCount = serverFilesData.queued.length + serverFilesData.running.length;
 
-  const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
-    {
-      id: 'upload',
-      label: t('uploadInfer.tabs.upload'),
-      icon: (
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M8 11V4M5 7l3-3 3 3" /><path d="M2.5 13.5h11" />
-        </svg>
-      ),
-    },
-    {
-      id: 'infer',
-      label: t('uploadInfer.tabs.infer'),
-      icon: (
-        <svg viewBox="0 0 16 16" fill="currentColor" stroke="none">
-          <path d="M8 1l1.8 4.4L14 6.2l-3.3 2.5 1.2 4.3L8 10.8 4.1 13l1.2-4.3L2 6.2l4.2-.8z" />
-        </svg>
-      ),
-    },
-    {
-      id: 'results',
-      label: t('uploadInfer.tabs.results'),
-      icon: (
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="2.5" y="2" width="11" height="12" rx="1.5" /><path d="M5 5.5h6M5 8h6M5 10.5h3.5" />
-        </svg>
-      ),
-    },
+  const tabs: { id: TabId; label: string }[] = [
+    { id: 'upload', label: t('uploadInfer.tabs.upload') },
+    { id: 'infer', label: t('uploadInfer.tabs.infer') },
+    { id: 'results', label: t('uploadInfer.tabs.results') },
   ];
 
   return (
@@ -185,9 +161,10 @@ const UploadInfer: React.FC = () => {
         </div>
       </div>
 
-      {/* ── Tab bar — every tab is clickable at any time ── */}
+      {/* ── Tab bar — three connected step buttons, every one always clickable ── */}
       <div className={styles.tabbarWrap}>
         <div className={styles.tabbar} role="tablist">
+          <div className={styles.tabbarLine} />
           {tabs.map(tab => (
             <button
               key={tab.id}
@@ -197,13 +174,16 @@ const UploadInfer: React.FC = () => {
               className={`${styles.tabBtn} ${activeTab === tab.id ? styles.tabBtnActive : ''}`}
               onClick={() => setActiveTab(tab.id)}
             >
-              <span className={styles.tabIcon}>{tab.icon}</span>
-              {tab.label}
+              <span className={styles.tabLabel}>{tab.label}</span>
+
               {tab.id === 'upload' && filesTotal > 0 && (
-                <span className={styles.tabBadge}>{filesTotal}</span>
+                <span className={styles.tabBadge}>
+                  {t('uploadInfer.tabs.fileCount', { count: filesTotal })}
+                </span>
               )}
+
               {tab.id === 'infer' && isBatchRunning && (
-                <span className={styles.tabBadgeLive}>
+                <span className={styles.tabBadge}>
                   <span className={styles.tabLiveDot} />
                   {inferBusyCount > 0
                     ? t('uploadInfer.tabs.runningCount', { count: inferBusyCount })
@@ -211,7 +191,13 @@ const UploadInfer: React.FC = () => {
                 </span>
               )}
               {tab.id === 'infer' && !isBatchRunning && selectMode && selectedServerIds.length > 0 && (
-                <span className={styles.tabBadge}>{selectedServerIds.length}</span>
+                <span className={styles.tabBadge}>
+                  {t('uploadInfer.tabs.selectedCount', { count: selectedServerIds.length })}
+                </span>
+              )}
+
+              {tab.id === 'results' && activeFileId === null && (
+                <span className={styles.tabHint}>{t('uploadInfer.tabs.resultsHint')}</span>
               )}
             </button>
           ))}
@@ -271,12 +257,6 @@ export default UploadInfer;
 
 
 
-
-
-
-
-
-
 // ═══════════════════════════════════════════════
 // UploadInfer.module.scss
 // LectureAI · Upload & Inference page shell + tab bar
@@ -313,94 +293,107 @@ export default UploadInfer;
   color: var(--t2);
 }
 
-// ── Tab bar — segmented control, every tab always clickable ──
+// ── Tab bar — three connected step buttons, every tab always clickable ──
 .tabbarWrap {
   flex-shrink: 0;
-  padding: 14px 24px;
+  padding: 20px 24px;
 }
 
 .tabbar {
-  display: inline-flex;
-  align-items: center;
-  background: var(--bg1);
-  border: 1px solid var(--bdr);
-  border-radius: var(--rl);
-  padding: 3px;
-  gap: 2px;
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  max-width: 620px;
+}
+
+// Connecting line — sits behind the buttons; only visible in the gaps
+// between them since each button has an opaque background.
+.tabbarLine {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--bdr2);
+  transform: translateY(-50%);
+  z-index: 0;
 }
 
 .tabBtn {
-  display: inline-flex;
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 7px;
-  height: 34px;
-  padding: 0 16px;
-  border: none;
-  border-radius: calc(var(--rl) - 3px);
-  background: transparent;
-  color: var(--t2);
-  font-family: var(--font-ui);
-  font-size: 13.5px;
-  font-weight: 500;
+  justify-content: center;
+  gap: 5px;
+  width: 180px;
+  height: 58px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid var(--bdr2);
+  background: var(--bg1);
   cursor: pointer;
   @include m.theme-transition;
 
   &:hover {
-    color: var(--t1);
+    border-color: var(--bdr3);
+    background: var(--bg2);
   }
 }
 
 .tabBtnActive {
-  background: var(--bg3);
-  color: var(--t0);
+  border-color: var(--blue);
+  background: var(--blue-dim);
+  box-shadow: 0 0 0 3px var(--blue-dim);
 
   &:hover {
-    color: var(--t0);
+    border-color: var(--blue);
+    background: var(--blue-dim);
   }
 }
 
-.tabIcon {
-  display: flex;
-  width: 15px;
-  height: 15px;
-  flex-shrink: 0;
+.tabLabel {
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--t1);
+  letter-spacing: 0.01em;
+}
 
-  svg { width: 100%; height: 100%; }
+.tabBtnActive .tabLabel {
+  font-weight: 600;
+  color: var(--t0);
 }
 
 .tabBadge {
-  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
   font-weight: 600;
   color: var(--t2);
   background: var(--bg2);
   border-radius: 99px;
-  padding: 1px 7px;
+  padding: 1px 8px;
   line-height: 1.5;
 }
 
 .tabBtnActive .tabBadge {
   color: var(--blue);
-  background: var(--blue-dim);
+  background: rgba(0, 0, 0, 0.12);
 }
 
-.tabBadgeLive {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--blue);
-  background: var(--blue-dim);
-  border-radius: 99px;
-  padding: 1px 8px 1px 6px;
-  line-height: 1.5;
+.tabHint {
+  font-size: 10px;
+  color: var(--t2);
 }
 
 .tabLiveDot {
-  width: 5px;
-  height: 5px;
+  width: 4px;
+  height: 4px;
   border-radius: 50%;
-  background: var(--blue);
+  background: currentColor;
   animation: tabLivePulse 1.4s ease-in-out infinite;
 }
 
@@ -429,8 +422,10 @@ export default UploadInfer;
 
 @media (max-width: 860px) {
   .ph { padding: 14px 16px 0; }
-  .tabbarWrap { padding: 12px 16px; }
-  .tabBtn { padding: 0 12px; font-size: 12.5px; }
+  .tabbarWrap { padding: 14px 16px; }
+  .tabbar { flex-wrap: wrap; gap: 8px; max-width: none; }
+  .tabbarLine { display: none; }
+  .tabBtn { width: calc(50% - 4px); }
 
   .tabPane { flex-direction: column; }
 }
