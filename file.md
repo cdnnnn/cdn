@@ -148,6 +148,25 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
   // ── Prompt template association modal ────────
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
 
+  // ── Actions dropdown (replaces the old inline action tile row) ──
+  const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
+  const actionsMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!actionsMenuOpen) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (actionsMenuRef.current && !actionsMenuRef.current.contains(e.target as Node)) {
+        setActionsMenuOpen(false);
+      }
+    };
+    const onEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') setActionsMenuOpen(false); };
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onEsc);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onEsc);
+    };
+  }, [actionsMenuOpen]);
+
   const openSearch = () => {
     setSearchOpen(true);
     setTimeout(() => searchInputRef.current?.focus(), 50);
@@ -873,96 +892,111 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
 
         <div className={styles.filterSortRow}>
           <div className={styles.filterSortLeft}>
-            {/* ── Action toolbar — only in normal (idle) mode ── */}
+            {/* ── Actions — single icon, dropdown menu — idle mode only ── */}
             {!selectMode && !deleteMode && !exportMode && !isBatchRunning && (
-              <div className={styles.actionsGrid}>
-                {/* Infer */}
+              <div className={styles.actionsMenuWrap} ref={actionsMenuRef}>
                 <button
-                  className={`${styles.actionTile} ${styles.actionTileInfer}`}
-                  onClick={onEnterSelectMode}
-                  title={t('uploadInfer.filePanel.inferenceBtn')}
+                  type="button"
+                  className={`${styles.actionsMenuBtn} ${actionsMenuOpen ? styles.actionsMenuBtnActive : ''}`}
+                  onClick={() => setActionsMenuOpen(v => !v)}
+                  title={t('uploadInfer.filePanel.actionsBtn')}
+                  aria-haspopup="true"
+                  aria-expanded={actionsMenuOpen}
                 >
-                  <svg viewBox="0 0 16 16" fill="currentColor" stroke="none">
-                    <path d="M8 1l1.8 4.4L14 6.2l-3.3 2.5 1.2 4.3L8 10.8 4.1 13l1.2-4.3L2 6.2l4.2-.8z" />
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                    <circle cx="8" cy="3.2" r="0.9" fill="currentColor" stroke="none" />
+                    <circle cx="8" cy="8" r="0.9" fill="currentColor" stroke="none" />
+                    <circle cx="8" cy="12.8" r="0.9" fill="currentColor" stroke="none" />
                   </svg>
-                  {t('uploadInfer.filePanel.inferenceBtn')}
                 </button>
 
-                {/* Dictionary */}
-                <button
-                  className={`${styles.actionTile} ${styles.actionTileDictionary}`}
-                  onClick={() => setDictModalOpen(true)}
-                  disabled={filesTotal === 0}
-                  title={t('uploadInfer.filePanel.dictionaryBtn')}
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                    strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M3 2.5h7.5a1.5 1.5 0 011.5 1.5v9a.5.5 0 01-.5.5H4a1 1 0 01-1-1V2.5z" />
-                    <path d="M3 11.5a1 1 0 011-1h8" />
-                    <path d="M6 5.5h3" />
-                  </svg>
-                  {t('uploadInfer.filePanel.dictionaryBtn')}
-                </button>
+                {actionsMenuOpen && (
+                  <div className={styles.actionsMenu} role="menu">
+                    {/* Infer */}
+                    <button
+                      className={`${styles.actionsMenuItem} ${styles.actionsMenuItemInfer}`}
+                      onClick={() => { setActionsMenuOpen(false); onEnterSelectMode(); }}
+                    >
+                      <svg viewBox="0 0 16 16" fill="currentColor" stroke="none">
+                        <path d="M8 1l1.8 4.4L14 6.2l-3.3 2.5 1.2 4.3L8 10.8 4.1 13l1.2-4.3L2 6.2l4.2-.8z" />
+                      </svg>
+                      {t('uploadInfer.filePanel.inferenceBtn')}
+                    </button>
 
-                {/* Template */}
-                <button
-                  className={`${styles.actionTile} ${styles.actionTileTemplate}`}
-                  onClick={() => setTemplateModalOpen(true)}
-                  disabled={filesTotal === 0}
-                  title={t('uploadInfer.filePanel.templateBtn')}
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                    strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M3 2.5h10v11H3z" />
-                    <path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3" />
-                  </svg>
-                  {t('uploadInfer.filePanel.templateBtn')}
-                </button>
+                    {/* Dictionary */}
+                    <button
+                      className={`${styles.actionsMenuItem} ${styles.actionsMenuItemDictionary}`}
+                      onClick={() => { setActionsMenuOpen(false); setDictModalOpen(true); }}
+                      disabled={filesTotal === 0}
+                    >
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                        strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M3 2.5h7.5a1.5 1.5 0 011.5 1.5v9a.5.5 0 01-.5.5H4a1 1 0 01-1-1V2.5z" />
+                        <path d="M3 11.5a1 1 0 011-1h8" />
+                        <path d="M6 5.5h3" />
+                      </svg>
+                      {t('uploadInfer.filePanel.dictionaryBtn')}
+                    </button>
 
-                {/* Search */}
-                <button
-                  className={`${styles.actionTile} ${styles.actionTileSearch} ${searchOpen ? styles.actionTileActive : ''}`}
-                  onClick={openSearch}
-                  title={t('uploadInfer.filePanel.searchBtn')}
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="6.5" cy="6.5" r="4" />
-                    <path d="M11 11l2.5 2.5" />
-                  </svg>
-                  {t('uploadInfer.filePanel.searchBtn')}
-                </button>
+                    {/* Template */}
+                    <button
+                      className={`${styles.actionsMenuItem} ${styles.actionsMenuItemTemplate}`}
+                      onClick={() => { setActionsMenuOpen(false); setTemplateModalOpen(true); }}
+                      disabled={filesTotal === 0}
+                    >
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                        strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M3 2.5h10v11H3z" />
+                        <path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3" />
+                      </svg>
+                      {t('uploadInfer.filePanel.templateBtn')}
+                    </button>
 
-                {/* Export */}
-                <button
-                  className={`${styles.actionTile} ${styles.actionTileExport}`}
-                  onClick={enterExportMode}
-                  disabled={filesTotal === 0}
-                  title={t('uploadInfer.filePanel.exportBtn')}
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                    strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6z" />
-                    <path d="M9 2v4h4" />
-                    <path d="M6 9.5l1.5 2 2.5-3" />
-                  </svg>
-                  {t('uploadInfer.filePanel.exportBtn')}
-                </button>
+                    {/* Search */}
+                    <button
+                      className={`${styles.actionsMenuItem} ${styles.actionsMenuItemSearch}`}
+                      onClick={() => { setActionsMenuOpen(false); openSearch(); }}
+                    >
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="6.5" cy="6.5" r="4" />
+                        <path d="M11 11l2.5 2.5" />
+                      </svg>
+                      {t('uploadInfer.filePanel.searchBtn')}
+                    </button>
 
-                {/* Delete */}
-                <button
-                  className={`${styles.actionTile} ${styles.actionTileDelete}`}
-                  onClick={enterDeleteMode}
-                  disabled={filesTotal === 0}
-                  title={t('uploadInfer.filePanel.deleteBtn')}
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                    strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M3 4h10M6 4V3h4v1" />
-                    <path d="M5 4l.5 8h5l.5-8" />
-                    <path d="M7 7v3M9 7v3" />
-                  </svg>
-                  {t('uploadInfer.filePanel.deleteBtn')}
-                </button>
+                    <div className={styles.actionsMenuDivider} />
+
+                    {/* Export */}
+                    <button
+                      className={`${styles.actionsMenuItem} ${styles.actionsMenuItemExport}`}
+                      onClick={() => { setActionsMenuOpen(false); enterExportMode(); }}
+                      disabled={filesTotal === 0}
+                    >
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                        strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6z" />
+                        <path d="M9 2v4h4" />
+                        <path d="M6 9.5l1.5 2 2.5-3" />
+                      </svg>
+                      {t('uploadInfer.filePanel.exportBtn')}
+                    </button>
+
+                    {/* Delete */}
+                    <button
+                      className={`${styles.actionsMenuItem} ${styles.actionsMenuItemDelete}`}
+                      onClick={() => { setActionsMenuOpen(false); enterDeleteMode(); }}
+                      disabled={filesTotal === 0}
+                    >
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                        strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M3 4h10M6 4V3h4v1" />
+                        <path d="M5 4l.5 8h5l.5-8" />
+                        <path d="M7 7v3M9 7v3" />
+                      </svg>
+                      {t('uploadInfer.filePanel.deleteBtn')}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1298,6 +1332,17 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
 };
 
 export default FilePanel;
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -2003,137 +2048,96 @@ export default FilePanel;
 
 
 // ── Action grid (Option C — 3×2 icon + label tiles) ──────────
-.actionsGrid {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
+.actionsMenuWrap {
+  position: relative;
+  flex-shrink: 0;
 }
 
-.actionTile {
-  display: inline-flex;
-  flex-direction: row;
+.actionsMenuBtn {
+  display: flex;
   align-items: center;
+  justify-content: center;
+  width: 32px;
   height: 32px;
-  gap: 5px;
-  padding: 0 11px;
   border-radius: var(--r);
   border: 1px solid var(--bdr);
   background: var(--bg3);
   color: var(--t2);
-  font-size: 12px;
-  font-weight: 500;
-  font-family: var(--font-ui);
-  letter-spacing: 0.01em;
-  white-space: nowrap;
   cursor: pointer;
   transition: all 0.13s;
-  user-select: none;
 
-  svg {
-    width: 13px;
-    height: 13px;
-    flex-shrink: 0;
-  }
+  svg { width: 15px; height: 15px; }
 
-  &:hover:not(:disabled) {
+  &:hover {
     background: var(--bg2);
     border-color: var(--bdr2);
     color: var(--t0);
   }
+}
 
-  &:active:not(:disabled) {
-    transform: scale(0.97);
+.actionsMenuBtnActive {
+  background: var(--blue-dim);
+  border-color: var(--blue-bdr);
+  color: var(--blue);
+}
+
+.actionsMenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 190px;
+  padding: 5px;
+  background: var(--bg2);
+  border: 1px solid var(--bdr2);
+  border-radius: var(--rl);
+  box-shadow: var(--shadow-sm);
+}
+
+.actionsMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  height: 32px;
+  padding: 0 9px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--t1);
+  font-size: 12.5px;
+  font-weight: 500;
+  font-family: var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s;
+
+  svg { width: 14px; height: 14px; flex-shrink: 0; }
+
+  &:hover:not(:disabled) {
+    background: var(--bg3);
   }
 
   &:disabled {
-    opacity: 0.3;
+    opacity: 0.35;
     cursor: not-allowed;
   }
 }
 
-// Infer — blue tint
-.actionTileInfer {
-  border-color: var(--blue-bdr);
-  background: var(--blue-dim);
-  color: var(--blue);
-  animation: inferPulse 2.4s ease-in-out infinite;
+.actionsMenuItemInfer { svg { color: var(--blue); } }
+.actionsMenuItemDictionary { svg { color: var(--violet); } }
+.actionsMenuItemTemplate { svg { color: var(--teal); } }
+.actionsMenuItemSearch { svg { color: var(--amber); } }
+.actionsMenuItemExport { svg { color: var(--green); } }
+.actionsMenuItemDelete { svg { color: var(--red); } }
 
-  &:hover:not(:disabled) {
-    background: var(--blue);
-    border-color: var(--blue);
-    color: #fff;
-    animation: none;
-  }
-}
-
-// Dictionary — violet tint
-.actionTileDictionary {
-  color: var(--violet);
-  border-color: var(--violet-dim);
-  background: var(--violet-dim);
-
-  &:hover:not(:disabled) {
-    background: var(--violet);
-    border-color: var(--violet);
-    color: #fff;
-  }
-}
-
-// Template — teal tint
-.actionTileTemplate {
-  color: var(--teal);
-  border-color: var(--teal-bdr);
-  background: var(--teal-dim);
-
-  &:hover:not(:disabled) {
-    background: var(--teal);
-    border-color: var(--teal);
-    color: #fff;
-  }
-}
-
-// Search — amber tint
-.actionTileSearch {
-  color: var(--amber);
-  border-color: rgba(240, 160, 48, 0.25);
-  background: rgba(240, 160, 48, 0.08);
-
-  &:hover:not(:disabled) {
-    background: rgba(240, 160, 48, 0.18);
-    border-color: rgba(240, 160, 48, 0.45);
-  }
-}
-
-// Active search
-.actionTileActive {
-  background: rgba(240, 160, 48, 0.15) !important;
-  border-color: rgba(240, 160, 48, 0.45) !important;
-}
-
-// Export — green tint
-.actionTileExport {
-  color: var(--green);
-  border-color: var(--green-bdr);
-  background: var(--green-dim);
-
-  &:hover:not(:disabled) {
-    background: var(--green);
-    border-color: var(--green);
-    color: #fff;
-  }
-}
-
-// Delete — red tint
-.actionTileDelete {
-  color: #ef4444;
-  border-color: rgba(239, 68, 68, 0.22);
-  background: rgba(239, 68, 68, 0.07);
-
-  &:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.15);
-    border-color: rgba(239, 68, 68, 0.4);
-  }
+.actionsMenuDivider {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--bdr);
 }
 
 // ── Delete icon button (used inside mode-bar) ─────────────────
@@ -2258,11 +2262,6 @@ export default FilePanel;
   flex-shrink: 0;
 }
 
-
-@keyframes inferPulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(91, 164, 239, 0.4); }
-  50%       { box-shadow: 0 0 0 4px rgba(91, 164, 239, 0); }
-}
 
 // ── Cancel icon button (used inside mode-bar) ─────────────────
 .cancelIconBtn {
@@ -3567,23 +3566,6 @@ export default FilePanel;
   .dzActions {
     margin-top: 7px;
     gap: 6px;
-  }
-
-  // Action grid — tighter
-  .actionsGrid {
-    padding: 0 8px 6px;
-    gap: 3px;
-  }
-
-  .actionTile {
-    padding: 4px 2px 3px;
-    gap: 2px;
-    font-size: 8px;
-
-    svg {
-      width: 11px;
-      height: 11px;
-    }
   }
 
   // Section2 title row
