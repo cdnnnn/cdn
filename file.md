@@ -148,25 +148,6 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
   // ── Prompt template association modal ────────
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
 
-  // ── Actions dropdown (replaces the old inline action tile row) ──
-  const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
-  const actionsMenuRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!actionsMenuOpen) return;
-    const onDocClick = (e: MouseEvent) => {
-      if (actionsMenuRef.current && !actionsMenuRef.current.contains(e.target as Node)) {
-        setActionsMenuOpen(false);
-      }
-    };
-    const onEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') setActionsMenuOpen(false); };
-    document.addEventListener('mousedown', onDocClick);
-    document.addEventListener('keydown', onEsc);
-    return () => {
-      document.removeEventListener('mousedown', onDocClick);
-      document.removeEventListener('keydown', onEsc);
-    };
-  }, [actionsMenuOpen]);
-
   const openSearch = () => {
     setSearchOpen(true);
     setTimeout(() => searchInputRef.current?.focus(), 50);
@@ -891,119 +872,7 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
         </div>
 
         <div className={styles.filterSortRow}>
-          <div className={styles.filterSortLeft}>
-            {/* ── Actions — single icon, dropdown menu — idle mode only ── */}
-            {!selectMode && !deleteMode && !exportMode && !isBatchRunning && (
-              <div className={styles.actionsMenuWrap} ref={actionsMenuRef}>
-                <button
-                  type="button"
-                  className={`${styles.actionsMenuBtn} ${actionsMenuOpen ? styles.actionsMenuBtnActive : ''}`}
-                  onClick={() => setActionsMenuOpen(v => !v)}
-                  title={t('uploadInfer.filePanel.actionsBtn')}
-                  aria-haspopup="true"
-                  aria-expanded={actionsMenuOpen}
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                    <circle cx="8" cy="3.2" r="0.9" fill="currentColor" stroke="none" />
-                    <circle cx="8" cy="8" r="0.9" fill="currentColor" stroke="none" />
-                    <circle cx="8" cy="12.8" r="0.9" fill="currentColor" stroke="none" />
-                  </svg>
-                </button>
-
-                {actionsMenuOpen && (
-                  <div className={styles.actionsMenu} role="menu">
-                    {/* Infer */}
-                    <button
-                      className={`${styles.actionsMenuItem} ${styles.actionsMenuItemInfer}`}
-                      onClick={() => { setActionsMenuOpen(false); onEnterSelectMode(); }}
-                    >
-                      <svg viewBox="0 0 16 16" fill="currentColor" stroke="none">
-                        <path d="M8 1l1.8 4.4L14 6.2l-3.3 2.5 1.2 4.3L8 10.8 4.1 13l1.2-4.3L2 6.2l4.2-.8z" />
-                      </svg>
-                      {t('uploadInfer.filePanel.inferenceBtn')}
-                    </button>
-
-                    {/* Dictionary */}
-                    <button
-                      className={`${styles.actionsMenuItem} ${styles.actionsMenuItemDictionary}`}
-                      onClick={() => { setActionsMenuOpen(false); setDictModalOpen(true); }}
-                      disabled={filesTotal === 0}
-                    >
-                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                        strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M3 2.5h7.5a1.5 1.5 0 011.5 1.5v9a.5.5 0 01-.5.5H4a1 1 0 01-1-1V2.5z" />
-                        <path d="M3 11.5a1 1 0 011-1h8" />
-                        <path d="M6 5.5h3" />
-                      </svg>
-                      {t('uploadInfer.filePanel.dictionaryBtn')}
-                    </button>
-
-                    {/* Template */}
-                    <button
-                      className={`${styles.actionsMenuItem} ${styles.actionsMenuItemTemplate}`}
-                      onClick={() => { setActionsMenuOpen(false); setTemplateModalOpen(true); }}
-                      disabled={filesTotal === 0}
-                    >
-                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                        strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M3 2.5h10v11H3z" />
-                        <path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3" />
-                      </svg>
-                      {t('uploadInfer.filePanel.templateBtn')}
-                    </button>
-
-                    {/* Search */}
-                    <button
-                      className={`${styles.actionsMenuItem} ${styles.actionsMenuItemSearch}`}
-                      onClick={() => { setActionsMenuOpen(false); openSearch(); }}
-                    >
-                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="6.5" cy="6.5" r="4" />
-                        <path d="M11 11l2.5 2.5" />
-                      </svg>
-                      {t('uploadInfer.filePanel.searchBtn')}
-                    </button>
-
-                    <div className={styles.actionsMenuDivider} />
-
-                    {/* Export */}
-                    <button
-                      className={`${styles.actionsMenuItem} ${styles.actionsMenuItemExport}`}
-                      onClick={() => { setActionsMenuOpen(false); enterExportMode(); }}
-                      disabled={filesTotal === 0}
-                    >
-                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                        strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6z" />
-                        <path d="M9 2v4h4" />
-                        <path d="M6 9.5l1.5 2 2.5-3" />
-                      </svg>
-                      {t('uploadInfer.filePanel.exportBtn')}
-                    </button>
-
-                    {/* Delete */}
-                    <button
-                      className={`${styles.actionsMenuItem} ${styles.actionsMenuItemDelete}`}
-                      onClick={() => { setActionsMenuOpen(false); enterDeleteMode(); }}
-                      disabled={filesTotal === 0}
-                    >
-                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                        strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M3 4h10M6 4V3h4v1" />
-                        <path d="M5 4l.5 8h5l.5-8" />
-                        <path d="M7 7v3M9 7v3" />
-                      </svg>
-                      {t('uploadInfer.filePanel.deleteBtn')}
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {!selectMode && !deleteMode && !exportMode && !isBatchRunning && (
-              <div className={styles.filterSortDivider} />
-            )}
-
+          <div className={styles.dateSortLine}>
             <div className={styles.dateFilter}>
               <svg className={styles.dateIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="2" y="3" width="12" height="11" rx="1.5" />
@@ -1020,37 +889,133 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
                 onChange={e => dispatch(setDateTo(e.target.value))} />
               <button className={styles.applyBtn} onClick={handleApply} disabled={filesLoading || isBatchRunning}>{t('uploadInfer.filePanel.applyDate')}</button>
             </div>
-          </div>
 
-          {/* Sort header */}
-          <div className={styles.sortHeader}>
-            <span className={styles.sortHeaderLabel}>
-              <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                <path d="M2 4h10M4 7h6M6 10h2" />
-              </svg>
-              {t('uploadInfer.filePanel.sortBy')}
-            </span>
-            <div className={styles.sortCols}>
-              {([
-                { key: 'id' as SortKey, label: t('uploadInfer.filePanel.sortId') },
-                { key: 'name' as SortKey, label: t('uploadInfer.filePanel.sortName') },
-                { key: 'date' as SortKey, label: t('uploadInfer.filePanel.sortDate') },
-                { key: 'status' as SortKey, label: t('uploadInfer.filePanel.sortStatus') },
-              ]).map(({ key, label }) => (
-                <button
-                  key={key}
-                  className={`${styles.sortCol} ${sort.key === key ? styles.sortColActive : ''}`}
-                  onClick={() => handleSort(key)}
-                >
-                  {label}
-                  <svg viewBox="0 0 10 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
-                    className={sort.key === key ? (sort.dir === 'asc' ? styles.sortAsc : styles.sortDesc) : styles.sortInactive}>
-                    <path d="M5 1v10M2 8l3 3 3-3" />
-                  </svg>
-                </button>
-                  ))}
+            {/* Sort header */}
+            <div className={styles.sortHeader}>
+              <span className={styles.sortHeaderLabel}>
+                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                  <path d="M2 4h10M4 7h6M6 10h2" />
+                </svg>
+                {t('uploadInfer.filePanel.sortBy')}
+              </span>
+              <div className={styles.sortCols}>
+                {([
+                  { key: 'id' as SortKey, label: t('uploadInfer.filePanel.sortId') },
+                  { key: 'name' as SortKey, label: t('uploadInfer.filePanel.sortName') },
+                  { key: 'date' as SortKey, label: t('uploadInfer.filePanel.sortDate') },
+                  { key: 'status' as SortKey, label: t('uploadInfer.filePanel.sortStatus') },
+                ]).map(({ key, label }) => (
+                  <button
+                    key={key}
+                    className={`${styles.sortCol} ${sort.key === key ? styles.sortColActive : ''}`}
+                    onClick={() => handleSort(key)}
+                  >
+                    {label}
+                    <svg viewBox="0 0 10 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
+                      className={sort.key === key ? (sort.dir === 'asc' ? styles.sortAsc : styles.sortDesc) : styles.sortInactive}>
+                      <path d="M5 1v10M2 8l3 3 3-3" />
+                    </svg>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
+
+          {/* ── Action toolbar — its own line, only in normal (idle) mode ── */}
+          {!selectMode && !deleteMode && !exportMode && !isBatchRunning && (
+            <>
+              <div className={styles.filterSortHDivider} />
+              <div className={styles.actionsGrid}>
+                {/* Infer */}
+                <button
+                  className={`${styles.actionTile} ${styles.actionTileInfer}`}
+                  onClick={onEnterSelectMode}
+                  title={t('uploadInfer.filePanel.inferenceBtn')}
+                >
+                  <svg viewBox="0 0 16 16" fill="currentColor" stroke="none">
+                    <path d="M8 1l1.8 4.4L14 6.2l-3.3 2.5 1.2 4.3L8 10.8 4.1 13l1.2-4.3L2 6.2l4.2-.8z" />
+                  </svg>
+                  {t('uploadInfer.filePanel.inferenceBtn')}
+                </button>
+
+                {/* Dictionary */}
+                <button
+                  className={`${styles.actionTile} ${styles.actionTileDictionary}`}
+                  onClick={() => setDictModalOpen(true)}
+                  disabled={filesTotal === 0}
+                  title={t('uploadInfer.filePanel.dictionaryBtn')}
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                    strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 2.5h7.5a1.5 1.5 0 011.5 1.5v9a.5.5 0 01-.5.5H4a1 1 0 01-1-1V2.5z" />
+                    <path d="M3 11.5a1 1 0 011-1h8" />
+                    <path d="M6 5.5h3" />
+                  </svg>
+                  {t('uploadInfer.filePanel.dictionaryBtn')}
+                </button>
+
+                {/* Template */}
+                <button
+                  className={`${styles.actionTile} ${styles.actionTileTemplate}`}
+                  onClick={() => setTemplateModalOpen(true)}
+                  disabled={filesTotal === 0}
+                  title={t('uploadInfer.filePanel.templateBtn')}
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                    strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 2.5h10v11H3z" />
+                    <path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3" />
+                  </svg>
+                  {t('uploadInfer.filePanel.templateBtn')}
+                </button>
+
+                {/* Search */}
+                <button
+                  className={`${styles.actionTile} ${styles.actionTileSearch} ${searchOpen ? styles.actionTileActive : ''}`}
+                  onClick={openSearch}
+                  title={t('uploadInfer.filePanel.searchBtn')}
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="6.5" cy="6.5" r="4" />
+                    <path d="M11 11l2.5 2.5" />
+                  </svg>
+                  {t('uploadInfer.filePanel.searchBtn')}
+                </button>
+
+                {/* Export */}
+                <button
+                  className={`${styles.actionTile} ${styles.actionTileExport}`}
+                  onClick={enterExportMode}
+                  disabled={filesTotal === 0}
+                  title={t('uploadInfer.filePanel.exportBtn')}
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                    strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6z" />
+                    <path d="M9 2v4h4" />
+                    <path d="M6 9.5l1.5 2 2.5-3" />
+                  </svg>
+                  {t('uploadInfer.filePanel.exportBtn')}
+                </button>
+
+                {/* Delete */}
+                <button
+                  className={`${styles.actionTile} ${styles.actionTileDelete}`}
+                  onClick={enterDeleteMode}
+                  disabled={filesTotal === 0}
+                  title={t('uploadInfer.filePanel.deleteBtn')}
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                    strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 4h10M6 4V3h4v1" />
+                    <path d="M5 4l.5 8h5l.5-8" />
+                    <path d="M7 7v3M9 7v3" />
+                  </svg>
+                  {t('uploadInfer.filePanel.deleteBtn')}
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Search bar */}
@@ -1332,11 +1297,6 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
 };
 
 export default FilePanel;
-
-
-
-
-
 
 
 
@@ -2047,99 +2007,6 @@ export default FilePanel;
 
 
 
-// ── Action grid (Option C — 3×2 icon + label tiles) ──────────
-.actionsMenuWrap {
-  position: relative;
-  flex-shrink: 0;
-}
-
-.actionsMenuBtn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr);
-  background: var(--bg3);
-  color: var(--t2);
-  cursor: pointer;
-  transition: all 0.13s;
-
-  svg { width: 15px; height: 15px; }
-
-  &:hover {
-    background: var(--bg2);
-    border-color: var(--bdr2);
-    color: var(--t0);
-  }
-}
-
-.actionsMenuBtnActive {
-  background: var(--blue-dim);
-  border-color: var(--blue-bdr);
-  color: var(--blue);
-}
-
-.actionsMenu {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 20;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  width: 190px;
-  padding: 5px;
-  background: var(--bg2);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--rl);
-  box-shadow: var(--shadow-sm);
-}
-
-.actionsMenuItem {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  width: 100%;
-  height: 32px;
-  padding: 0 9px;
-  border-radius: 6px;
-  border: none;
-  background: transparent;
-  color: var(--t1);
-  font-size: 12.5px;
-  font-weight: 500;
-  font-family: var(--font-ui);
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.12s;
-
-  svg { width: 14px; height: 14px; flex-shrink: 0; }
-
-  &:hover:not(:disabled) {
-    background: var(--bg3);
-  }
-
-  &:disabled {
-    opacity: 0.35;
-    cursor: not-allowed;
-  }
-}
-
-.actionsMenuItemInfer { svg { color: var(--blue); } }
-.actionsMenuItemDictionary { svg { color: var(--violet); } }
-.actionsMenuItemTemplate { svg { color: var(--teal); } }
-.actionsMenuItemSearch { svg { color: var(--amber); } }
-.actionsMenuItemExport { svg { color: var(--green); } }
-.actionsMenuItemDelete { svg { color: var(--red); } }
-
-.actionsMenuDivider {
-  height: 1px;
-  margin: 4px 2px;
-  background: var(--bdr);
-}
-
 // ── Delete icon button (used inside mode-bar) ─────────────────
 .deleteIconBtn {
   width: 28px;
@@ -2299,9 +2166,8 @@ export default FilePanel;
 // Date range filter — sits above section2Header
 .filterSortRow {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
+  flex-direction: column;
+  gap: 10px;
   padding: 10px 12px;
   background: var(--bg1);
   flex-shrink: 0;
@@ -2340,27 +2206,92 @@ export default FilePanel;
   }
 }
 
-// Action toolbar + date filter, grouped together on the left
-.filterSortLeft {
+// Line 1 — date filter on the left, sort chip on the right
+.dateSortLine {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
-  min-width: 0;
+  width: 100%;
 }
 
-// Sort chip pushes to the far right; wraps below the left cluster
-// on narrower widths instead of overlapping it
 .sortHeader {
   margin-left: auto;
 }
 
-// Vertical divider between the action toolbar and the date filter
-.filterSortDivider {
-  width: 1px;
-  height: 22px;
-  background: var(--bdr2);
+// Clear horizontal separator between line 1 (date/sort) and line 2 (actions)
+.filterSortHDivider {
+  height: 1px;
+  width: 100%;
+  background: var(--bdr);
   flex-shrink: 0;
+}
+
+// Line 2 — action toolbar, full width
+.actionsGrid {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+}
+
+.actionTile {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  height: 32px;
+  gap: 5px;
+  padding: 0 11px;
+  border-radius: var(--r);
+  border: 1px solid var(--bdr);
+  background: var(--bg3);
+  color: var(--t2);
+  font-size: 12px;
+  font-weight: 500;
+  font-family: var(--font-ui);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.13s;
+  user-select: none;
+
+  svg {
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+  }
+
+  &:hover:not(:disabled) {
+    background: var(--bg2);
+    border-color: var(--bdr2);
+    color: var(--t0);
+  }
+
+  &:active:not(:disabled) {
+    transform: scale(0.97);
+  }
+
+  &:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+}
+
+.actionTileInfer svg { color: var(--blue); }
+.actionTileDictionary svg { color: var(--violet); }
+.actionTileTemplate svg { color: var(--teal); }
+.actionTileSearch svg { color: var(--amber); }
+.actionTileExport svg { color: var(--green); }
+.actionTileDelete svg { color: var(--red); }
+
+.actionTileActive {
+  background: var(--blue-dim);
+  border-color: var(--blue-bdr);
+  color: var(--blue);
+
+  svg { color: var(--blue); }
 }
 
 // Single-line, icon-led date filter — same 32px height as the rest of the row
