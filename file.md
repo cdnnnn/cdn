@@ -926,6 +926,13 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
             <>
               <div className={styles.filterSortHDivider} />
               <div className={styles.actionsGrid}>
+                <span className={styles.actionsLabel}>
+                  <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M7 1.5l1.4 3.4L12 6l-3.6 1.4L7 12.5l-1.4-4.1L2 7l3.6-1.1z" />
+                  </svg>
+                  {t('uploadInfer.filePanel.actionsLabel')}
+                </span>
+
                 {/* Infer */}
                 <button
                   className={`${styles.actionTile} ${styles.actionTileInfer}`}
@@ -1297,6 +1304,9 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
 };
 
 export default FilePanel;
+
+
+
 
 
 
@@ -2237,13 +2247,34 @@ export default FilePanel;
   width: 100%;
 }
 
+.actionsLabel {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--t2);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-right: 2px;
+
+  svg {
+    width: 11px;
+    height: 11px;
+    opacity: 0.6;
+  }
+}
+
 .actionTile {
   display: inline-flex;
   flex-direction: row;
   align-items: center;
-  height: 32px;
-  gap: 5px;
-  padding: 0 11px;
+  height: 26px;
+  gap: 4px;
+  padding: 0 9px;
   border-radius: var(--r);
   border: 1px solid var(--bdr);
   background: var(--bg3);
@@ -2258,8 +2289,8 @@ export default FilePanel;
   user-select: none;
 
   svg {
-    width: 13px;
-    height: 13px;
+    width: 12px;
+    height: 12px;
     flex-shrink: 0;
   }
 
