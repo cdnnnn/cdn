@@ -1,4 +1,803 @@
 // ═══════════════════════════════════════════════
+// pages/UploadInfer/UploadInfer.tsx
+// LectureAI · Upload & Inference page
+// ═══════════════════════════════════════════════
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useAppSelector, useAppDispatch } from '../../store/hooks';
+import { clearServerSelection } from '../../store/uploadSlice';
+import api from '../../services/api';
+import FilePanel from './FilePanel';
+import InferencePanel from './InferencePanel';
+import WorkspacePanel from './WorkspacePanel';
+import FileSidebar from './FileSidebar';
+import styles from './UploadInfer.module.scss';
+
+// ── Keyword Insights (from GET /files/{id}) ──────
+export interface KGEdge { type: string; source: string; target: string; }
+export interface KGNode { id: string; label: string; title?: string; value?: number; }
+export interface KnowledgeGraph { edges: KGEdge[]; nodes: KGNode[]; }
+export interface WordCloudData { wordcloud: [string, number][]; complexity_map: Record<string, string>; }
+export interface TimelineDataset { data: number[]; label: string; }
+export interface TimelineData { labels: string[]; datasets: TimelineDataset[]; timestamped: boolean; }
+export interface HeatmapData { matrix: number[][]; keywords: string[]; segments: string[]; timestamped: boolean; }
+export interface ClusterItem { id: string; label: string; value: number; }
+export interface ClustersData { clusters: Record<string, ClusterItem[]>; }
+export interface FrequencyItem { count: number; keyword: string; relative_pct: number; first_mention_pct: number; }
+export interface FrequencyData { data: FrequencyItem[]; }
+export interface PrereqEdge { reason: string; enables: string; prerequisite: string; }
+export interface PrereqNode { id: string; label: string; value: number; }
+export interface PrerequisitesData { edges: PrereqEdge[]; nodes: PrereqNode[]; }
+export interface ImportanceComplexityItem { reason: string; keyword: string; frequency: number; complexity: string; importance: number; }
+export interface ImportanceComplexityData { data: ImportanceComplexityItem[]; }
+export interface CooccurrenceData { matrix: number[][]; keywords: string[]; }
+export interface GlossaryItem { term: string; definition: string; first_mentioned_ms: number; }
+export interface GlossaryData { glossary: GlossaryItem[]; }
+
+export interface KeywordInsights {
+  enriched_keywords: unknown | null;
+  knowledge_graph: KnowledgeGraph | null;
+  word_cloud: WordCloudData | null;
+  timeline: TimelineData | null;
+  heatmap: HeatmapData | null;
+  clusters: ClustersData | null;
+  frequency: FrequencyData | null;
+  prerequisites: PrerequisitesData | null;
+  importance_complexity: ImportanceComplexityData | null;
+  cooccurrence: CooccurrenceData | null;
+  congnitive_Load: unknown | null;
+  segments: { segments: unknown[] } | null;
+  glossary: GlossaryData | null;
+}
+
+export interface FileResult {
+  summary: string;
+  keywords: string[];
+  faq: string;
+  shortAnswer: string;
+  trueFalse: string;
+  timestampedSummary: string;
+  keywordInsights: KeywordInsights | null;
+  fileName: string;
+  fileId: number;
+  insertedAt: string;
+}
+
+// ── Tabs ──────────────────────────────────────────
+// All three are always clickable — there's no gating on a previous tab
+// being "complete". Every panel below stays mounted at all times (just
+// hidden with CSS) so file lists, batch polling, and scroll position
+// survive switching tabs instead of resetting.
+type TabId = 'upload' | 'infer' | 'results';
+
+const UploadInfer: React.FC = () => {
+  const { t } = useTranslation();
+  const isBatchRunning = useAppSelector(s => s.upload.isBatchRunning);
+  const serverFilesData = useAppSelector(s => s.upload.serverFilesData);
+  const filesTotal = useAppSelector(s => s.upload.filesTotal);
+  const selectedServerIds = useAppSelector(s => s.upload.selectedServerIds);
+  const dispatch = useAppDispatch();
+
+  const [activeTab, setActiveTab] = useState<TabId>('upload');
+
+  // "selectMode" is FilePanel's checkbox-selection UI for building the set
+  // of files to run inference on. Turning it on stays on the Upload tab
+  // (so people can keep browsing/checking files there) — the Infer tab
+  // badge below nudges them over once something's selected.
+  const [selectMode, setSelectMode] = useState(false);
+  useEffect(() => { if (!isBatchRunning) setSelectMode(false); }, [isBatchRunning]);
+  useEffect(() => { if (!selectMode) dispatch(clearServerSelection()); }, [selectMode]); // eslint-disable-line
+  useEffect(() => { return () => { dispatch(clearServerSelection()); }; }, []); // eslint-disable-line
+
+  const enterInferSelection = useCallback(() => setSelectMode(true), []);
+  const exitInferSelection = useCallback(() => setSelectMode(false), []);
+
+  const [fileResult, setFileResult] = useState<FileResult | null>(null);
+  const [fileLoading, setFileLoading] = useState(false);
+  const [activeFileId, setActiveFileId] = useState<number | null>(null);
+
+  const fetchFileData = useCallback(async (fileId: number) => {
+    setFileLoading(true);
+    try {
+      const res = await api.get(`/files/${fileId}`);
+      const d = (res.data as any)?.data ?? {};
+      setFileResult(prev => ({
+        fileId,
+        fileName: d.original_name ?? prev?.fileName ?? String(fileId),
+        insertedAt: d.inserted_at ?? prev?.insertedAt ?? '',
+        summary: d.summary ?? '',
+        keywords: d.keywords ?? [],
+        faq: d.faq ?? '[]',
+        shortAnswer: d.short_answer ?? '[]',
+        trueFalse: d.true_false ?? '[]',
+        // NOTE: backend key is genuinely "timstamped_summary" (missing an "e") — match it exactly.
+        timestampedSummary: d.timstamped_summary ?? '[]',
+        keywordInsights: d.keyword_insights ?? null,
+      }));
+    } catch { setFileResult(null); } finally { setFileLoading(false); }
+  }, []);
+
+  // Clicking a file (from the Upload tab's list, or the Workspace tab's
+  // own picker) loads its results and jumps straight to the Workspace tab.
+  const handleFileClick = useCallback(async (fileId: number) => {
+    setActiveTab('results');
+    if (fileId === activeFileId) return;
+    setActiveFileId(fileId);
+    setFileResult(null);
+    await fetchFileData(fileId);
+  }, [activeFileId, fetchFileData]);
+
+  const handleDeleteComplete = useCallback((deletedIds: number[], all?: boolean) => {
+    if (all || (activeFileId !== null && deletedIds.includes(activeFileId))) {
+      setActiveFileId(null);
+      setFileResult(null);
+    }
+  }, [activeFileId]);
+
+  const prevBatchRunning = useRef(false);
+  useEffect(() => {
+    const justFinished = prevBatchRunning.current && !isBatchRunning;
+    prevBatchRunning.current = isBatchRunning;
+    if (justFinished && activeFileId !== null) fetchFileData(activeFileId);
+  }, [isBatchRunning]); // eslint-disable-line
+
+  // ── Tab bar badges ──
+  const inferBusyCount = serverFilesData.queued.length + serverFilesData.running.length;
+
+  const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
+    {
+      id: 'upload',
+      label: t('uploadInfer.tabs.upload'),
+      icon: (
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M8 11V4M5 7l3-3 3 3" /><path d="M2.5 13.5h11" />
+        </svg>
+      ),
+    },
+    {
+      id: 'infer',
+      label: t('uploadInfer.tabs.infer'),
+      icon: (
+        <svg viewBox="0 0 16 16" fill="currentColor" stroke="none">
+          <path d="M8 1l1.8 4.4L14 6.2l-3.3 2.5 1.2 4.3L8 10.8 4.1 13l1.2-4.3L2 6.2l4.2-.8z" />
+        </svg>
+      ),
+    },
+    {
+      id: 'results',
+      label: t('uploadInfer.tabs.results'),
+      icon: (
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2.5" y="2" width="11" height="12" rx="1.5" /><path d="M5 5.5h6M5 8h6M5 10.5h3.5" />
+        </svg>
+      ),
+    },
+  ];
+
+  return (
+    <div className={styles.page}>
+      <div className={styles.ph}>
+        <div className={styles.phRow}>
+          <div>
+            <div className={styles.phTitle}>{t('uploadInfer.pageTitle')}</div>
+            <div className={styles.phSub}>{t('uploadInfer.pageSub')}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Tab bar — every tab is clickable at any time ── */}
+      <div className={styles.tabbar} role="tablist">
+        {tabs.map(tab => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === tab.id}
+            className={`${styles.tabBtn} ${activeTab === tab.id ? styles.tabBtnActive : ''}`}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            <span className={styles.tabIcon}>{tab.icon}</span>
+            {tab.label}
+            {tab.id === 'upload' && filesTotal > 0 && (
+              <span className={styles.tabBadge}>{filesTotal}</span>
+            )}
+            {tab.id === 'infer' && isBatchRunning && (
+              <span className={styles.tabBadgeLive}>
+                <span className={styles.tabLiveDot} />
+                {inferBusyCount > 0
+                  ? t('uploadInfer.tabs.runningCount', { count: inferBusyCount })
+                  : t('uploadInfer.tabs.running')}
+              </span>
+            )}
+            {tab.id === 'infer' && !isBatchRunning && selectMode && selectedServerIds.length > 0 && (
+              <span className={styles.tabBadge}>{selectedServerIds.length}</span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      <div className={styles.upbody}>
+        <div className={styles.tabPane} style={{ display: activeTab === 'upload' ? 'flex' : 'none' }}>
+          <FilePanel
+            selectMode={selectMode}
+            onEnterSelectMode={enterInferSelection}
+            onExitSelectMode={exitInferSelection}
+            onFileClick={handleFileClick}
+            onDeleteComplete={handleDeleteComplete}
+            activeFileId={activeFileId}
+            onGoToInfer={() => setActiveTab('infer')}
+          />
+        </div>
+
+        <div className={styles.tabPane} style={{ display: activeTab === 'infer' ? 'flex' : 'none' }}>
+          <FileSidebar mode="select" />
+          <InferencePanel />
+        </div>
+
+        <div className={styles.tabPane} style={{ display: activeTab === 'results' ? 'flex' : 'none' }}>
+          <FileSidebar mode="view" activeFileId={activeFileId} onFileClick={handleFileClick} />
+          <WorkspacePanel
+            step2Visible={false}
+            fileResult={fileResult}
+            fileLoading={fileLoading}
+            activeFileId={activeFileId}
+            onResultUpdate={patch => setFileResult(prev => prev ? { ...prev, ...patch } : prev)}
+          />
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default UploadInfer;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ═══════════════════════════════════════════════
+// pages/UploadInfer/FileSidebar.tsx
+// Content Analytics · Shared 400px file sidebar
+// Used by both the Infer tab (mode="select") and the Workspace tab
+// (mode="view") so the file list + date filter only exist once.
+// ═══════════════════════════════════════════════
+import React, { useCallback, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import {
+  setDateFrom, setDateTo,
+  serverFilesLoading, serverFilesSuccess, serverFilesFailure,
+  toggleServerFileSelection, toggleSelectAllServerFiles,
+} from '../../store/uploadSlice';
+import api from '../../services/api';
+import styles from './FileSidebar.module.scss';
+
+const getExt = (n: string): 'vtt' | 'srt' => n.toLowerCase().endsWith('.srt') ? 'srt' : 'vtt';
+
+interface CbProps { checked: boolean; indeterminate?: boolean; onChange: () => void; disabled?: boolean; }
+const Checkbox: React.FC<CbProps> = ({ checked, indeterminate, onChange, disabled }) => (
+  <div
+    className={`${styles.cb} ${checked ? styles.cbChecked : ''} ${indeterminate ? styles.cbIndet : ''} ${disabled ? styles.cbDisabled : ''}`}
+    onClick={e => { e.stopPropagation(); if (!disabled) onChange(); }}
+    role="checkbox" aria-checked={indeterminate ? 'mixed' : checked} tabIndex={0}
+    onKeyDown={e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); if (!disabled) onChange(); } }}
+  />
+);
+
+interface Props {
+  // "select" — checkbox multi-select for building the inference batch (Infer tab)
+  // "view"   — click a file to load its results (Workspace tab)
+  mode: 'select' | 'view';
+  activeFileId?: number | null;
+  onFileClick?: (fileId: number) => void;
+}
+
+const FileSidebar: React.FC<Props> = ({ mode, activeFileId = null, onFileClick }) => {
+  const { t } = useTranslation();
+  const dispatch = useAppDispatch();
+  const {
+    serverFiles, filesTotal, serverFilesLoading: filesLoading,
+    dateFrom, dateTo, selectedServerIds, isBatchRunning,
+    filesPageSize, filesSortBy, filesSortOrder, filesSearch,
+  } = useAppSelector(s => s.upload);
+
+  const [query, setQuery] = useState('');
+  const [applying, setApplying] = useState(false);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return serverFiles;
+    return serverFiles.filter(f => f.original_name.toLowerCase().includes(q));
+  }, [serverFiles, query]);
+
+  // Same /files/by-date/ call FilePanel uses, kept independent so this
+  // sidebar's date filter doesn't have to coordinate with the Upload
+  // tab's pagination/sort/search UI — it just refreshes the shared
+  // `serverFiles` list everyone reads from.
+  const handleApply = useCallback(async () => {
+    setApplying(true);
+    dispatch(serverFilesLoading());
+    try {
+      const res = await api.post('/files/by-date/', {
+        start_date: dateFrom,
+        end_date: dateTo,
+        page: 1,
+        page_size: filesPageSize,
+        sort_by: filesSortBy,
+        sort_order: filesSortOrder,
+        ...(filesSearch ? { search: filesSearch } : {}),
+      });
+      const d = (res.data as any)?.data ?? {};
+      dispatch(serverFilesSuccess({
+        files: d.data ?? [],
+        total: d.total ?? 0,
+        page: d.page ?? 1,
+        pageSize: d.page_size ?? filesPageSize,
+        totalPages: d.total_pages ?? 1,
+        sortBy: filesSortBy, sortOrder: filesSortOrder, search: filesSearch,
+      }));
+    } catch (err) {
+      dispatch(serverFilesFailure(err instanceof Error ? err.message : 'Failed to load files.'));
+    } finally {
+      setApplying(false);
+    }
+  }, [dispatch, dateFrom, dateTo, filesPageSize, filesSortBy, filesSortOrder, filesSearch]);
+
+  const pageSelectedCount = serverFiles.filter(f => selectedServerIds.includes(f.id)).length;
+  const allSelected = serverFiles.length > 0 && pageSelectedCount === serverFiles.length;
+  const someSelected = pageSelectedCount > 0 && !allSelected;
+
+  const handleRowClick = (fileId: number) => {
+    if (mode === 'select') {
+      if (isBatchRunning) return;
+      dispatch(toggleServerFileSelection(fileId));
+    } else {
+      onFileClick?.(fileId);
+    }
+  };
+
+  return (
+    <div className={styles.sidebar}>
+      <div className={styles.dateFilter}>
+        <div className={styles.dateField}>
+          <label className={styles.dateLabel}>{t('uploadInfer.filePanel.dateFrom')}</label>
+          <input
+            type="date" className={styles.dateInput} value={dateFrom} max={dateTo}
+            onChange={e => dispatch(setDateFrom(e.target.value))}
+          />
+        </div>
+        <div className={styles.dateSep}>—</div>
+        <div className={styles.dateField}>
+          <label className={styles.dateLabel}>{t('uploadInfer.filePanel.dateTo')}</label>
+          <input
+            type="date" className={styles.dateInput} value={dateTo} min={dateFrom}
+            onChange={e => dispatch(setDateTo(e.target.value))}
+          />
+        </div>
+        <button className={styles.applyBtn} onClick={handleApply} disabled={applying}>
+          {applying ? <span className={styles.miniSpinner} /> : t('uploadInfer.filePanel.applyDate')}
+        </button>
+      </div>
+
+      <div className={styles.head}>
+        {mode === 'select' && (
+          <Checkbox
+            checked={allSelected}
+            indeterminate={someSelected}
+            onChange={() => dispatch(toggleSelectAllServerFiles())}
+            disabled={filesTotal === 0 || isBatchRunning}
+          />
+        )}
+        <span className={styles.headTitle}>{t('uploadInfer.workspace.filesTitle')}</span>
+        {filesTotal > 0 && <span className={styles.headCount}>{filesTotal}</span>}
+        {mode === 'select' && selectedServerIds.length > 0 && (
+          <span className={styles.headSelected}>
+            {t('uploadInfer.filePanel.selectedTotal', { count: selectedServerIds.length, total: filesTotal })}
+          </span>
+        )}
+      </div>
+
+      <div className={styles.searchWrap}>
+        <svg className={styles.searchIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="6.5" cy="6.5" r="4" /><path d="M11 11l2.5 2.5" />
+        </svg>
+        <input
+          type="text"
+          className={styles.searchInput}
+          placeholder={t('uploadInfer.workspace.searchFiles')}
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+        />
+      </div>
+
+      <div className={styles.rows}>
+        {filesLoading && serverFiles.length === 0 && (
+          <div className={styles.empty}>{t('uploadInfer.workspace.loadingFiles')}</div>
+        )}
+        {!filesLoading && serverFiles.length === 0 && (
+          <div className={styles.empty}>{t('uploadInfer.workspace.noFilesYet')}</div>
+        )}
+        {!filesLoading && serverFiles.length > 0 && filtered.length === 0 && (
+          <div className={styles.empty}>{t('uploadInfer.workspace.noFilesMatch')}</div>
+        )}
+        {filtered.map(f => {
+          const ext = getExt(f.original_name);
+          const active = mode === 'view' ? f.id === activeFileId : selectedServerIds.includes(f.id);
+          const inferred = f.status === 'completed';
+          const disabled = mode === 'select' && isBatchRunning;
+          return (
+            <div
+              key={f.id}
+              role="button"
+              tabIndex={0}
+              className={`${styles.row} ${active ? styles.rowActive : ''} ${disabled ? styles.rowDisabled : ''}`}
+              onClick={() => !disabled && handleRowClick(f.id)}
+              onKeyDown={e => { if (!disabled && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); handleRowClick(f.id); } }}
+              title={f.original_name}
+            >
+              {mode === 'select' && (
+                <Checkbox checked={selectedServerIds.includes(f.id)} onChange={() => handleRowClick(f.id)} disabled={isBatchRunning} />
+              )}
+              <span className={`${styles.ext} ${styles[ext]}`}>{ext.toUpperCase()}</span>
+              <span className={styles.name}>{f.original_name}</span>
+              <span
+                className={`${styles.dot} ${inferred ? styles.dotDone : styles.dotPending}`}
+                title={inferred ? t('uploadInfer.filePanel.inferenced') : t('uploadInfer.filePanel.notInferenced')}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+export default FileSidebar;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ═══════════════════════════════════════════════
+// FileSidebar.module.scss
+// Content Analytics · Shared sidebar for the Infer + Workspace tabs
+// ═══════════════════════════════════════════════
+@use '../../styles/mixins' as m;
+
+.sidebar {
+  width: 400px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg0);
+  border-right: 1px solid var(--bdr);
+}
+
+// ── Date range filter ─────────────────────────
+.dateFilter {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 12px 14px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--bdr);
+}
+
+.dateField {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+
+.dateLabel {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--t2);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  @include m.mono;
+}
+
+.dateInput {
+  width: 100%;
+  padding: 4px 7px;
+  background: var(--bg1);
+  border: 1px solid var(--bdr2);
+  border-radius: var(--r);
+  color: var(--t0);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  outline: none;
+  appearance: none;
+  transition: border-color 0.12s;
+  cursor: pointer;
+
+  &:focus {
+    border-color: var(--blue);
+    box-shadow: 0 0 0 2px var(--blue-dim);
+  }
+
+  &::-webkit-calendar-picker-indicator {
+    opacity: 0.7;
+    cursor: pointer;
+    filter: var(--date-icon-filter);
+  }
+}
+
+.dateSep {
+  font-size: 13px;
+  color: var(--t2);
+  padding-bottom: 4px;
+  flex-shrink: 0;
+}
+
+.applyBtn {
+  align-self: flex-end;
+  padding: 4px 12px;
+  border-radius: var(--r);
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t1);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.12s;
+
+  &:hover:not(:disabled) {
+    background: var(--bg3);
+    border-color: var(--bdr3);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+}
+
+.miniSpinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--bdr3);
+  border-top-color: var(--t1);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+// ── List header ────────────────────────────────
+.head {
+  @include m.flex-center;
+  gap: 8px;
+  padding: 12px 14px 8px;
+  flex-shrink: 0;
+}
+
+.headTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--t1);
+}
+
+.headCount {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--t2);
+  background: var(--bg2);
+  border-radius: 99px;
+  padding: 1px 7px;
+}
+
+.headSelected {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--blue);
+}
+
+// ── Search ─────────────────────────────────────
+.searchWrap {
+  position: relative;
+  margin: 0 14px 10px;
+  flex-shrink: 0;
+}
+
+.searchIcon {
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 13px;
+  height: 13px;
+  color: var(--t2);
+  pointer-events: none;
+}
+
+.searchInput {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px 0 28px;
+  border-radius: var(--r);
+  border: 1px solid var(--bdr2);
+  background: var(--bg1);
+  color: var(--t0);
+  font-family: var(--font-ui);
+  font-size: 12px;
+
+  &::placeholder { color: var(--t2); }
+  &:focus { outline: none; border-color: var(--bdr3); }
+}
+
+// ── Rows ───────────────────────────────────────
+.rows {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 8px 12px;
+  @include m.scrollbar;
+}
+
+.empty {
+  padding: 20px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--t2);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 9px;
+  border-radius: var(--r);
+  color: var(--t1);
+  cursor: pointer;
+  @include m.theme-transition;
+
+  &:hover { background: var(--bg2); }
+}
+
+.rowActive {
+  background: rgba(91, 164, 239, 0.06);
+
+  &:hover { background: rgba(91, 164, 239, 0.06); }
+}
+
+.rowDisabled {
+  opacity: 0.5;
+  cursor: default;
+  pointer-events: none;
+}
+
+.ext {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 2px 5px;
+  border-radius: 4px;
+
+  &.vtt { background: var(--blue-dim); color: var(--blue); }
+  &.srt { background: var(--green-dim); color: var(--green); }
+}
+
+.name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  @include m.truncate;
+}
+
+.dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.dotDone { background: var(--green); }
+.dotPending { background: var(--t2); opacity: 0.5; }
+
+// ── Checkbox (mirrors FilePanel's) ─────────────
+.cb {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  border-radius: 4px;
+  border: 1px solid var(--cb-bdr);
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+  transition: all 0.12s;
+
+  &:hover { border-color: var(--blue); }
+}
+
+.cbChecked {
+  background: var(--blue);
+  border-color: var(--blue);
+
+  &::after {
+    content: '';
+    position: absolute;
+    left: 4px;
+    top: 1px;
+    width: 4px;
+    height: 8px;
+    border: solid white;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+  }
+}
+
+.cbIndet {
+  background: var(--blue);
+  border-color: var(--blue);
+
+  &::after {
+    content: '';
+    position: absolute;
+    left: 3px;
+    top: 6px;
+    width: 7px;
+    height: 2px;
+    background: white;
+  }
+}
+
+.cbDisabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ═══════════════════════════════════════════════
 // pages/UploadInfer/FilePanel.tsx
 // Content Analytics · Step-1 upload + uploaded files list
 // ═══════════════════════════════════════════════
@@ -1079,37 +1878,34 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
             const selectable = selectMode && !isBatchRunning;
             const deletable = deleteMode && !isBatchRunning;
             const exportable = exportMode && !isBatchRunning;
+            const checked = selectable ? isChecked : deletable ? isDeleteChecked : exportable ? isExportChecked : false;
+            const toggle = () => {
+              if (selectable) dispatch(toggleServerFileSelection(f.id));
+              else if (deletable) toggleDeleteSelection(f.id);
+              else if (exportable) toggleExportSelection(f.id);
+              else onFileClick(f.id);
+            };
             return (
               <div
                 key={f.id}
-                className={`${styles.hitm}
-                  ${selectable ? (isChecked ? styles.active : '') : ''}
-                  ${deletable ? (isDeleteChecked ? styles.activeDelete : '') : ''}
-                  ${exportable ? (isExportChecked ? styles.activeExport : '') : ''}
-                  ${!selectable && !deletable && !exportable ? (f.id === activeFileId ? styles.activeView : '') : ''}
-                  ${styles.hitmSelectable}`}
-                onClick={() => {
-                  if (selectable) dispatch(toggleServerFileSelection(f.id));
-                  else if (deletable) toggleDeleteSelection(f.id);
-                  else if (exportable) toggleExportSelection(f.id);
-                  else onFileClick(f.id);
-                }}
+                className={`${styles.fcard}
+                  ${selectable ? (isChecked ? styles.fcardActive : '') : ''}
+                  ${deletable ? (isDeleteChecked ? styles.fcardActiveDelete : '') : ''}
+                  ${exportable ? (isExportChecked ? styles.fcardActiveExport : '') : ''}
+                  ${!selectable && !deletable && !exportable ? (f.id === activeFileId ? styles.fcardActiveView : '') : ''}
+                `}
+                onClick={toggle}
+                title={f.original_name}
               >
-                {selectable && (
-                  <Checkbox checked={isChecked} onChange={() => dispatch(toggleServerFileSelection(f.id))} />
+                {(selectable || deletable || exportable) && (
+                  <div className={styles.fcardCheck}>
+                    <Checkbox checked={checked} onChange={toggle} />
+                  </div>
                 )}
-                {deletable && (
-                  <Checkbox checked={isDeleteChecked} onChange={() => toggleDeleteSelection(f.id)} />
-                )}
-                {exportable && (
-                  <Checkbox checked={isExportChecked} onChange={() => toggleExportSelection(f.id)} />
-                )}
-                <div className={`${styles.ficon} ${styles[ext]}`}>{ext.toUpperCase()}</div>
-                <div className={styles.hi}>
-                  <div className={styles.hn}>{f.original_name}</div>
-                  <div className={styles.hm}>{f.inserted_at} · #{f.id}</div>
-                </div>
-                <span className={`${styles.badge} ${isChecked ? styles.bSelected :
+                <div className={`${styles.fcardIcon} ${styles[ext]}`}>{ext.toUpperCase()}</div>
+                <div className={styles.fcardName}>{f.original_name}</div>
+                <div className={styles.fcardMeta}>#{f.id}</div>
+                <span className={`${styles.badge} ${styles.fcardBadge} ${isChecked ? styles.bSelected :
                   isDeleteChecked ? styles.bDelete :
                     isExportChecked ? styles.bExport :
                       f.status === 'completed' ? styles.bInferred : styles.bNotInferred
@@ -1293,6 +2089,10 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
 };
 
 export default FilePanel;
+
+
+
+
 
 
 
@@ -2401,11 +3201,109 @@ export default FilePanel;
 .uploadedBody {
   flex: 1;
   overflow-y: auto;
-  padding: 8px 10px;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  align-content: start;
+  gap: 10px;
+  @include m.scrollbar;
+}
+
+// listState/errorState (loading, error, empty) span every column so they
+// don't get squeezed into a single grid cell
+.listState {
+  grid-column: 1 / -1;
+}
+
+// ── Square file cards ─────────────────────────
+.fcard {
+  position: relative;
+  aspect-ratio: 1 / 1;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  @include m.scrollbar;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 14px 10px 26px;
+  border-radius: var(--rl);
+  border: 1px solid var(--bdr);
+  background: var(--bg1);
+  cursor: pointer;
+  text-align: center;
+  overflow: hidden;
+  transition: all 0.12s;
+  user-select: none;
+
+  &:hover {
+    background: var(--bg2);
+    border-color: var(--bdr3);
+  }
+}
+
+.fcardActive,
+.fcardActiveView {
+  background: rgba(91, 164, 239, 0.06);
+  border-color: var(--blue-bdr);
+}
+
+.fcardActiveDelete {
+  background: var(--red-dim);
+  border-color: var(--red-bdr);
+}
+
+.fcardActiveExport {
+  background: var(--green-dim);
+  border-color: var(--green-bdr);
+}
+
+.fcardCheck {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 1;
+}
+
+.fcardIcon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+
+  &.vtt { background: var(--blue-dim); color: var(--blue); }
+  &.srt { background: var(--green-dim); color: var(--green); }
+}
+
+.fcardName {
+  width: 100%;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--t0);
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.fcardMeta {
+  font-size: 10px;
+  color: var(--t2);
+  @include m.mono;
+}
+
+.fcardBadge {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  padding: 2px 7px;
 }
 
 // ── Uploaded card wrap — carries the static green gradient border ──
