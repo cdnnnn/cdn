@@ -966,21 +966,25 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
               </div>
             )}
 
+            {!selectMode && !deleteMode && !exportMode && !isBatchRunning && (
+              <div className={styles.filterSortDivider} />
+            )}
+
             <div className={styles.dateFilter}>
-              <div className={styles.dateField}>
-                <label className={styles.dateLabel}>{t('uploadInfer.filePanel.dateFrom')}</label>
-                <input type="date" className={styles.dateInput} value={dateFrom} max={dateTo}
-                  disabled={isBatchRunning}
-                  onChange={e => dispatch(setDateFrom(e.target.value))} />
-              </div>
-              <div className={styles.dateSep}>—</div>
-              <div className={styles.dateField}>
-                <label className={styles.dateLabel}>{t('uploadInfer.filePanel.dateTo')}</label>
-                <input type="date" className={styles.dateInput} value={dateTo} min={dateFrom}
-                  disabled={isBatchRunning}
-                  onChange={e => dispatch(setDateTo(e.target.value))} />
-              </div>
-              <button className={`${styles.btn} ${styles.btnApply}`} onClick={handleApply} disabled={filesLoading || isBatchRunning}>{t('uploadInfer.filePanel.applyDate')}</button>
+              <svg className={styles.dateIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="2" y="3" width="12" height="11" rx="1.5" />
+                <path d="M2 6.5h12M5 2v2.5M11 2v2.5" />
+              </svg>
+              <input type="date" className={styles.dateInput} value={dateFrom} max={dateTo}
+                disabled={isBatchRunning}
+                aria-label={t('uploadInfer.filePanel.dateFrom')}
+                onChange={e => dispatch(setDateFrom(e.target.value))} />
+              <span className={styles.dateSep}>–</span>
+              <input type="date" className={styles.dateInput} value={dateTo} min={dateFrom}
+                disabled={isBatchRunning}
+                aria-label={t('uploadInfer.filePanel.dateTo')}
+                onChange={e => dispatch(setDateTo(e.target.value))} />
+              <button className={styles.applyBtn} onClick={handleApply} disabled={filesLoading || isBatchRunning}>{t('uploadInfer.filePanel.applyDate')}</button>
             </div>
           </div>
 
@@ -1294,15 +1298,6 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
 };
 
 export default FilePanel;
-
-
-
-
-
-
-
-
-
 
 
 
@@ -2019,8 +2014,9 @@ export default FilePanel;
   display: inline-flex;
   flex-direction: row;
   align-items: center;
+  height: 32px;
   gap: 5px;
-  padding: 6px 10px;
+  padding: 0 11px;
   border-radius: var(--r);
   border: 1px solid var(--bdr);
   background: var(--bg3);
@@ -2360,11 +2356,27 @@ export default FilePanel;
   margin-left: auto;
 }
 
-// Sized to its own content — no longer stretches to fill the row
+// Vertical divider between the action toolbar and the date filter
+.filterSortDivider {
+  width: 1px;
+  height: 22px;
+  background: var(--bdr2);
+  flex-shrink: 0;
+}
+
+// Single-line, icon-led date filter — same 32px height as the rest of the row
 .dateFilter {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
+  height: 32px;
   gap: 6px;
+  flex-shrink: 0;
+}
+
+.dateIcon {
+  width: 14px;
+  height: 14px;
+  color: var(--t2);
   flex-shrink: 0;
 }
 
@@ -2386,14 +2398,15 @@ export default FilePanel;
 }
 
 .dateInput {
-  width: 100%;
-  padding: 4px 7px;
-  background: var(--bg0);
+  width: 104px;
+  height: 32px;
+  padding: 0 8px;
+  background: var(--bg2);
   border: 1px solid var(--bdr2);
   border-radius: var(--r);
   color: var(--t0);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: 12.5px;
   outline: none;
   appearance: none;
   transition: border-color 0.12s;
@@ -2412,17 +2425,34 @@ export default FilePanel;
 }
 
 .dateSep {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--t2);
-  padding-bottom: 4px;
   flex-shrink: 0;
 }
 
-.btnApply {
-  align-self: flex-end;
-  padding: 4px 10px !important;
-  font-size: 13px !important;
+.applyBtn {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--r);
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t1);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
   flex-shrink: 0;
+  transition: all 0.12s;
+
+  &:hover:not(:disabled) {
+    background: var(--bg3);
+    border-color: var(--bdr3);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
 }
 
 // Uploaded file cards
@@ -3410,10 +3440,11 @@ export default FilePanel;
 .sortHeader {
   display: flex;
   align-items: center;
+  height: 32px;
   background: var(--bg2);
   border: 1px solid var(--bdr);
   border-radius: var(--r);
-  padding: 0 8px;
+  padding: 0 6px 0 10px;
   gap: 6px;
   flex-shrink: 0;
   overflow: hidden;
@@ -3429,11 +3460,8 @@ export default FilePanel;
   font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  padding: 6px 0;
   white-space: nowrap;
   flex-shrink: 0;
-  border-right: 1px solid var(--bdr);
-  padding-right: 8px;
 
   svg {
     width: 11px;
@@ -3444,28 +3472,26 @@ export default FilePanel;
 
 .sortCols {
   display: flex;
-  flex: 1;
+  align-items: center;
+  gap: 2px;
 }
 
 .sortCol {
-  flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 4px;
-  padding: 6px 4px;
+  height: 24px;
+  padding: 0 8px;
   background: transparent;
   border: none;
-  border-right: 1px solid var(--bdr);
+  border-radius: 5px;
   color: var(--t2);
   font-size: 12px;
   font-family: var(--font-mono);
   cursor: pointer;
   transition: all 0.12s;
-
-  &:last-child {
-    border-right: none;
-  }
+  white-space: nowrap;
 
   svg {
     width: 8px;
