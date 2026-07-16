@@ -869,117 +869,119 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
             </div>
           )}
 
-          {/* ── Action grid — 3×2 tiles, only in normal (idle) mode ── */}
-          {!selectMode && !deleteMode && !exportMode && !isBatchRunning && (
-            <div className={styles.actionsGrid}>
-              {/* Infer */}
-              <button
-                className={`${styles.actionTile} ${styles.actionTileInfer}`}
-                onClick={onEnterSelectMode}
-                title={t('uploadInfer.filePanel.inferenceBtn')}
-              >
-                <svg viewBox="0 0 16 16" fill="currentColor" stroke="none">
-                  <path d="M8 1l1.8 4.4L14 6.2l-3.3 2.5 1.2 4.3L8 10.8 4.1 13l1.2-4.3L2 6.2l4.2-.8z" />
-                </svg>
-                {t('uploadInfer.filePanel.inferenceBtn')}
-              </button>
-
-              {/* Dictionary */}
-              <button
-                className={`${styles.actionTile} ${styles.actionTileDictionary}`}
-                onClick={() => setDictModalOpen(true)}
-                disabled={filesTotal === 0}
-                title={t('uploadInfer.filePanel.dictionaryBtn')}
-              >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                  strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 2.5h7.5a1.5 1.5 0 011.5 1.5v9a.5.5 0 01-.5.5H4a1 1 0 01-1-1V2.5z" />
-                  <path d="M3 11.5a1 1 0 011-1h8" />
-                  <path d="M6 5.5h3" />
-                </svg>
-                {t('uploadInfer.filePanel.dictionaryBtn')}
-              </button>
-
-              {/* Template */}
-              <button
-                className={`${styles.actionTile} ${styles.actionTileTemplate}`}
-                onClick={() => setTemplateModalOpen(true)}
-                disabled={filesTotal === 0}
-                title={t('uploadInfer.filePanel.templateBtn')}
-              >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                  strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 2.5h10v11H3z" />
-                  <path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3" />
-                </svg>
-                {t('uploadInfer.filePanel.templateBtn')}
-              </button>
-
-              {/* Search */}
-              <button
-                className={`${styles.actionTile} ${styles.actionTileSearch} ${searchOpen ? styles.actionTileActive : ''}`}
-                onClick={openSearch}
-                title={t('uploadInfer.filePanel.searchBtn')}
-              >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="6.5" cy="6.5" r="4" />
-                  <path d="M11 11l2.5 2.5" />
-                </svg>
-                {t('uploadInfer.filePanel.searchBtn')}
-              </button>
-
-              {/* Export */}
-              <button
-                className={`${styles.actionTile} ${styles.actionTileExport}`}
-                onClick={enterExportMode}
-                disabled={filesTotal === 0}
-                title={t('uploadInfer.filePanel.exportBtn')}
-              >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                  strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6z" />
-                  <path d="M9 2v4h4" />
-                  <path d="M6 9.5l1.5 2 2.5-3" />
-                </svg>
-                {t('uploadInfer.filePanel.exportBtn')}
-              </button>
-
-              {/* Delete */}
-              <button
-                className={`${styles.actionTile} ${styles.actionTileDelete}`}
-                onClick={enterDeleteMode}
-                disabled={filesTotal === 0}
-                title={t('uploadInfer.filePanel.deleteBtn')}
-              >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                  strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 4h10M6 4V3h4v1" />
-                  <path d="M5 4l.5 8h5l.5-8" />
-                  <path d="M7 7v3M9 7v3" />
-                </svg>
-                {t('uploadInfer.filePanel.deleteBtn')}
-              </button>
-            </div>
-          )}
-
         </div>
 
         <div className={styles.filterSortRow}>
-          <div className={styles.dateFilter}>
-            <div className={styles.dateField}>
-              <label className={styles.dateLabel}>{t('uploadInfer.filePanel.dateFrom')}</label>
-              <input type="date" className={styles.dateInput} value={dateFrom} max={dateTo}
-                disabled={isBatchRunning}
-                onChange={e => dispatch(setDateFrom(e.target.value))} />
+          <div className={styles.filterSortLeft}>
+            {/* ── Action toolbar — only in normal (idle) mode ── */}
+            {!selectMode && !deleteMode && !exportMode && !isBatchRunning && (
+              <div className={styles.actionsGrid}>
+                {/* Infer */}
+                <button
+                  className={`${styles.actionTile} ${styles.actionTileInfer}`}
+                  onClick={onEnterSelectMode}
+                  title={t('uploadInfer.filePanel.inferenceBtn')}
+                >
+                  <svg viewBox="0 0 16 16" fill="currentColor" stroke="none">
+                    <path d="M8 1l1.8 4.4L14 6.2l-3.3 2.5 1.2 4.3L8 10.8 4.1 13l1.2-4.3L2 6.2l4.2-.8z" />
+                  </svg>
+                  {t('uploadInfer.filePanel.inferenceBtn')}
+                </button>
+
+                {/* Dictionary */}
+                <button
+                  className={`${styles.actionTile} ${styles.actionTileDictionary}`}
+                  onClick={() => setDictModalOpen(true)}
+                  disabled={filesTotal === 0}
+                  title={t('uploadInfer.filePanel.dictionaryBtn')}
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                    strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 2.5h7.5a1.5 1.5 0 011.5 1.5v9a.5.5 0 01-.5.5H4a1 1 0 01-1-1V2.5z" />
+                    <path d="M3 11.5a1 1 0 011-1h8" />
+                    <path d="M6 5.5h3" />
+                  </svg>
+                  {t('uploadInfer.filePanel.dictionaryBtn')}
+                </button>
+
+                {/* Template */}
+                <button
+                  className={`${styles.actionTile} ${styles.actionTileTemplate}`}
+                  onClick={() => setTemplateModalOpen(true)}
+                  disabled={filesTotal === 0}
+                  title={t('uploadInfer.filePanel.templateBtn')}
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                    strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 2.5h10v11H3z" />
+                    <path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3" />
+                  </svg>
+                  {t('uploadInfer.filePanel.templateBtn')}
+                </button>
+
+                {/* Search */}
+                <button
+                  className={`${styles.actionTile} ${styles.actionTileSearch} ${searchOpen ? styles.actionTileActive : ''}`}
+                  onClick={openSearch}
+                  title={t('uploadInfer.filePanel.searchBtn')}
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="6.5" cy="6.5" r="4" />
+                    <path d="M11 11l2.5 2.5" />
+                  </svg>
+                  {t('uploadInfer.filePanel.searchBtn')}
+                </button>
+
+                {/* Export */}
+                <button
+                  className={`${styles.actionTile} ${styles.actionTileExport}`}
+                  onClick={enterExportMode}
+                  disabled={filesTotal === 0}
+                  title={t('uploadInfer.filePanel.exportBtn')}
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                    strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6z" />
+                    <path d="M9 2v4h4" />
+                    <path d="M6 9.5l1.5 2 2.5-3" />
+                  </svg>
+                  {t('uploadInfer.filePanel.exportBtn')}
+                </button>
+
+                {/* Delete */}
+                <button
+                  className={`${styles.actionTile} ${styles.actionTileDelete}`}
+                  onClick={enterDeleteMode}
+                  disabled={filesTotal === 0}
+                  title={t('uploadInfer.filePanel.deleteBtn')}
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                    strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 4h10M6 4V3h4v1" />
+                    <path d="M5 4l.5 8h5l.5-8" />
+                    <path d="M7 7v3M9 7v3" />
+                  </svg>
+                  {t('uploadInfer.filePanel.deleteBtn')}
+                </button>
+              </div>
+            )}
+
+            <div className={styles.dateFilter}>
+              <div className={styles.dateField}>
+                <label className={styles.dateLabel}>{t('uploadInfer.filePanel.dateFrom')}</label>
+                <input type="date" className={styles.dateInput} value={dateFrom} max={dateTo}
+                  disabled={isBatchRunning}
+                  onChange={e => dispatch(setDateFrom(e.target.value))} />
+              </div>
+              <div className={styles.dateSep}>—</div>
+              <div className={styles.dateField}>
+                <label className={styles.dateLabel}>{t('uploadInfer.filePanel.dateTo')}</label>
+                <input type="date" className={styles.dateInput} value={dateTo} min={dateFrom}
+                  disabled={isBatchRunning}
+                  onChange={e => dispatch(setDateTo(e.target.value))} />
+              </div>
+              <button className={`${styles.btn} ${styles.btnApply}`} onClick={handleApply} disabled={filesLoading || isBatchRunning}>{t('uploadInfer.filePanel.applyDate')}</button>
             </div>
-            <div className={styles.dateSep}>—</div>
-            <div className={styles.dateField}>
-              <label className={styles.dateLabel}>{t('uploadInfer.filePanel.dateTo')}</label>
-              <input type="date" className={styles.dateInput} value={dateTo} min={dateFrom}
-                disabled={isBatchRunning}
-                onChange={e => dispatch(setDateTo(e.target.value))} />
-            </div>
-            <button className={`${styles.btn} ${styles.btnApply}`} onClick={handleApply} disabled={filesLoading || isBatchRunning}>{t('uploadInfer.filePanel.applyDate')}</button>
           </div>
 
           {/* Sort header */}
@@ -1292,6 +1294,9 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
 };
 
 export default FilePanel;
+
+
+
 
 
 
@@ -2004,34 +2009,34 @@ export default FilePanel;
 
 // ── Action grid (Option C — 3×2 icon + label tiles) ──────────
 .actionsGrid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 4px;
-  padding: 0 10px 8px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .actionTile {
-  display: flex;
-  flex-direction: column;
+  display: inline-flex;
+  flex-direction: row;
   align-items: center;
-  justify-content: center;
-  gap: 3px;
-  padding: 5px 2px 4px;
-  border-radius: 6px;
+  gap: 5px;
+  padding: 6px 10px;
+  border-radius: var(--r);
   border: 1px solid var(--bdr);
   background: var(--bg3);
   color: var(--t2);
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 500;
   font-family: var(--font-ui);
   letter-spacing: 0.01em;
+  white-space: nowrap;
   cursor: pointer;
   transition: all 0.13s;
   user-select: none;
 
   svg {
-    width: 12px;
-    height: 12px;
+    width: 13px;
+    height: 13px;
     flex-shrink: 0;
   }
 
@@ -2299,11 +2304,10 @@ export default FilePanel;
 // Date range filter — sits above section2Header
 .filterSortRow {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
+  align-items: center;
   flex-wrap: wrap;
   gap: 12px;
-  padding: 8px 12px 7px;
+  padding: 10px 12px;
   background: var(--bg1);
   flex-shrink: 0;
   position: relative;
@@ -2339,6 +2343,21 @@ export default FilePanel;
         rgba(240, 160, 48, 0.0) 100%);
     pointer-events: none;
   }
+}
+
+// Action toolbar + date filter, grouped together on the left
+.filterSortLeft {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-width: 0;
+}
+
+// Sort chip pushes to the far right; wraps below the left cluster
+// on narrower widths instead of overlapping it
+.sortHeader {
+  margin-left: auto;
 }
 
 // Sized to its own content — no longer stretches to fill the row
