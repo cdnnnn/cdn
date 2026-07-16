@@ -528,6 +528,7 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
 
       {/* ══ SECTION 1: Step-1 ══ */}
       <div className={`${styles.step1} ${uploadZoneCollapsed ? styles.step1Collapsed : ''}`}>
+        <div className={styles.step1Card}>
         <div className={styles.step1Bar}>
           <span className={styles.slbl}>{t('uploadInfer.filePanel.step1Label')}</span>
           {view === 'dropzone' && (
@@ -612,6 +613,7 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
               )}
             </div>
           )}
+        </div>
         </div>
       </div>
 
@@ -1307,6 +1309,9 @@ export default FilePanel;
 
 
 
+
+
+
 // ═══════════════════════════════════════════════
 // FilePanel.module.scss
 // Content Analytics · Upload panel — two sections
@@ -1347,21 +1352,36 @@ export default FilePanel;
 // SECTION 1 — Step header + upload zone
 // ══════════════════════════════════════
 .step1 {
-  width: 300px;
+  width: 400px;
   flex-shrink: 0;
   border-bottom: none;
   border-right: 1px solid var(--bdr);
-  background: var(--bg1);
+  background: var(--bg0);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   position: relative;
-  transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.25s;
+  padding: 16px;
+  transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1), padding 0.25s, border-color 0.25s;
 }
 
 .step1Collapsed {
   width: 0;
+  padding: 16px 0;
   border-right-color: transparent;
+}
+
+// ── The upload zone itself, as a distinct card sitting in the sidebar ──
+.step1Card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg1);
+  border: 1px solid var(--bdr);
+  border-radius: var(--rl);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
 }
 
 // Reopen affordance shown in the file-list header once the upload
