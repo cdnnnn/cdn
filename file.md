@@ -2276,7 +2276,7 @@ export default FilePanel;
   gap: 4px;
   padding: 0 9px;
   border-radius: var(--r);
-  border: 1px solid var(--bdr);
+  border: 1px solid transparent;
   background: var(--bg3);
   color: var(--t2);
   font-size: 12px;
@@ -2294,12 +2294,6 @@ export default FilePanel;
     flex-shrink: 0;
   }
 
-  &:hover:not(:disabled) {
-    background: var(--bg2);
-    border-color: var(--bdr2);
-    color: var(--t0);
-  }
-
   &:active:not(:disabled) {
     transform: scale(0.97);
   }
@@ -2310,19 +2304,57 @@ export default FilePanel;
   }
 }
 
-.actionTileInfer svg { color: var(--blue); }
-.actionTileDictionary svg { color: var(--violet); }
-.actionTileTemplate svg { color: var(--teal); }
-.actionTileSearch svg { color: var(--amber); }
-.actionTileExport svg { color: var(--green); }
-.actionTileDelete svg { color: var(--red); }
+.actionTileInfer {
+  background: var(--blue-dim);
+  color: var(--blue);
+  border-color: var(--blue-bdr);
+
+  &:hover:not(:disabled) { background: var(--blue-dim); border-color: var(--blue); }
+}
+
+.actionTileDictionary {
+  background: var(--violet-dim);
+  color: var(--violet);
+  border-color: var(--violet-dim);
+
+  &:hover:not(:disabled) { background: var(--violet-dim); border-color: var(--violet); }
+}
+
+.actionTileTemplate {
+  background: var(--teal-dim);
+  color: var(--teal);
+  border-color: var(--teal-bdr);
+
+  &:hover:not(:disabled) { background: var(--teal-dim); border-color: var(--teal); }
+}
+
+.actionTileSearch {
+  background: var(--amber-dim);
+  color: var(--amber);
+  border-color: var(--amber-bdr);
+
+  &:hover:not(:disabled) { background: var(--amber-dim); border-color: var(--amber); }
+}
+
+.actionTileExport {
+  background: var(--green-dim);
+  color: var(--green);
+  border-color: var(--green-bdr);
+
+  &:hover:not(:disabled) { background: var(--green-dim); border-color: var(--green); }
+}
+
+.actionTileDelete {
+  background: var(--red-dim);
+  color: var(--red);
+  border-color: var(--red-bdr);
+
+  &:hover:not(:disabled) { background: var(--red-dim); border-color: var(--red); }
+}
 
 .actionTileActive {
-  background: var(--blue-dim);
-  border-color: var(--blue-bdr);
-  color: var(--blue);
-
-  svg { color: var(--blue); }
+  outline: 2px solid var(--blue-bdr);
+  outline-offset: -1px;
 }
 
 // Single-line, icon-led date filter — same 32px height as the rest of the row
