@@ -151,28 +151,17 @@ const UploadInfer: React.FC = () => {
         <div className={styles.phTitle}>{t('uploadInfer.pageTitle')}</div>
 
         <div className={styles.tabbar} role="tablist">
-          {tabs.map((tab, i) => (
-            <React.Fragment key={tab.id}>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === tab.id}
-                className={`${styles.tabBtn} ${activeTab === tab.id ? styles.tabBtnActive : ''}`}
-                onClick={() => setActiveTab(tab.id)}
-              >
-                {tab.label}
-              </button>
-
-              {i < tabs.length - 1 && (
-                <div className={styles.tabConnector} aria-hidden="true">
-                  <span className={styles.tabConnectorArrowWrap}>
-                    <svg className={styles.tabConnectorArrow} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M5 3l5 5-5 5" />
-                    </svg>
-                  </span>
-                </div>
-              )}
-            </React.Fragment>
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              className={`${styles.tabBtn} ${activeTab === tab.id ? styles.tabBtnActive : ''}`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              {tab.label}
+            </button>
           ))}
         </div>
       </div>
@@ -211,6 +200,17 @@ const UploadInfer: React.FC = () => {
 };
 
 export default UploadInfer;
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -276,60 +276,28 @@ export default UploadInfer;
 }
 
 .tabbar {
-  position: relative;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  flex: 1;
-  max-width: 560px;
-}
-
-// One connector per gap (Upload→Inference, Inference→Result), each with
-// its own arrow — rather than a single line spanning the whole bar.
-.tabConnector {
-  flex: 1;
-  min-width: 20px;
-  height: 2px;
-  background: var(--bdr2);
-  position: relative;
-  margin: 0 4px;
-}
-
-.tabConnectorArrowWrap {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--bg0);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.tabConnectorArrow {
-  width: 12px;
-  height: 12px;
-  color: var(--t2);
   flex-shrink: 0;
+  background: var(--bg2);
+  border: 1px solid var(--bdr);
+  border-radius: var(--rl);
+  padding: 3px;
+  gap: 2px;
 }
 
 .tabBtn {
-  position: relative;
-  z-index: 1;
-  flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 40px;
-  padding: 0 16px;
-  border-radius: 10px;
-  border: 1px solid var(--bdr2);
-  background: var(--bg1);
-  color: var(--t1);
+  height: 32px;
+  padding: 0 18px;
+  border-radius: calc(var(--rl) - 3px);
+  border: none;
+  background: transparent;
+  color: var(--t2);
   font-family: var(--font-ui);
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 500;
   letter-spacing: 0.01em;
   white-space: nowrap;
@@ -337,23 +305,17 @@ export default UploadInfer;
   @include m.theme-transition;
 
   &:hover {
-    border-color: var(--bdr3);
-    background: var(--bg2);
+    color: var(--t1);
   }
 }
 
 .tabBtnActive {
-  border-color: var(--blue);
-  background-color: var(--bg1);
-  background-image: linear-gradient(var(--blue-dim), var(--blue-dim));
-  color: var(--t0);
+  background: var(--blue-dim);
+  color: var(--blue);
   font-weight: 600;
-  box-shadow: 0 0 0 3px var(--blue-dim);
 
   &:hover {
-    border-color: var(--blue);
-    background-color: var(--bg1);
-    background-image: linear-gradient(var(--blue-dim), var(--blue-dim));
+    color: var(--blue);
   }
 }
 
@@ -377,8 +339,8 @@ export default UploadInfer;
 
 @media (max-width: 860px) {
   .headerBar { flex-direction: column; align-items: stretch; gap: 12px; padding: 14px 16px; }
-  .tabbar { max-width: none; }
-  .tabBtn { font-size: 12.5px; padding: 0 8px; }
+  .tabbar { width: 100%; }
+  .tabBtn { flex: 1; font-size: 12.5px; padding: 0 8px; }
 
   .tabPane { flex-direction: column; }
 }
