@@ -1,445 +1,101 @@
 // ═══════════════════════════════════════════════
-// pages/UploadInfer/FileSidebar.tsx
-// Content Analytics · Shared 400px file sidebar
-// Used by both the Infer tab (mode="select") and the Workspace tab
-// (mode="view"). Deliberately does NOT read the Upload tab's shared
-// `serverFiles` — it keeps its own local list, date filter, sort,
-// search, and pagination, and fetches independently every time its
-// tab becomes active. The only thing still shared with the rest of
-// the app is `selectedServerIds`, since InferencePanel needs that to
-// run a batch.
-// ═══════════════════════════════════════════════
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import { useAppDispatch, useAppSelector } from '../../store/hooks';
-import { toggleServerFileSelection, toggleSelectAllServerFiles, ServerFile, FilesSortBy, SortOrder } from '../../store/uploadSlice';
-import api from '../../services/api';
-import styles from './FileSidebar.module.scss';
-
-const getExt = (n: string): 'vtt' | 'srt' => n.toLowerCase().endsWith('.srt') ? 'srt' : 'vtt';
-
-function toDateStr(d: Date) { return d.toISOString().slice(0, 10); }
-function defaultFrom() { const d = new Date(); d.setMonth(d.getMonth() - 1); return toDateStr(d); }
-function defaultTo() { return toDateStr(new Date()); }
-
-const PAGE_WINDOW = 4;
-const getPageNumbers = (current: number, total: number): number[] => {
-  if (total <= PAGE_WINDOW) return Array.from({ length: total }, (_, i) => i + 1);
-  const start = Math.max(1, Math.min(current - 1, total - PAGE_WINDOW + 1));
-  return Array.from({ length: PAGE_WINDOW }, (_, i) => start + i);
-};
-
-type SortKey = 'id' | 'name' | 'date' | 'status';
-const SORT_KEY_TO_API: Record<SortKey, FilesSortBy> = {
-  id: 'id', name: 'original_name', date: 'inserted_at', status: 'status',
-};
-const API_TO_SORT_KEY: Record<FilesSortBy, SortKey> = {
-  id: 'id', original_name: 'name', inserted_at: 'date', status: 'status',
-};
-
-interface CbProps { checked: boolean; indeterminate?: boolean; onChange: () => void; disabled?: boolean; }
-const Checkbox: React.FC<CbProps> = ({ checked, indeterminate, onChange, disabled }) => (
-  <div
-    className={`${styles.cb} ${checked ? styles.cbChecked : ''} ${indeterminate ? styles.cbIndet : ''} ${disabled ? styles.cbDisabled : ''}`}
-    onClick={e => { e.stopPropagation(); if (!disabled) onChange(); }}
-    role="checkbox" aria-checked={indeterminate ? 'mixed' : checked} tabIndex={0}
-    onKeyDown={e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); if (!disabled) onChange(); } }}
-  />
-);
-
-interface Props {
-  // "select" — checkbox multi-select for building the inference batch (Infer tab)
-  // "view"   — click a file to load its results (Workspace tab)
-  mode: 'select' | 'view';
-  // Whether this sidebar's tab is the one currently showing. A fresh
-  // fetch fires each time this flips true — i.e. every time the user
-  // navigates to the Infer or Result tab, not just on first mount.
-  active: boolean;
-  activeFileId?: number | null;
-  onFileClick?: (fileId: number) => void;
-}
-
-const PAGE_SIZES = [25, 50, 75, 100];
-
-const FileSidebar: React.FC<Props> = ({ mode, active, activeFileId = null, onFileClick }) => {
-  const { t } = useTranslation();
-  const dispatch = useAppDispatch();
-  const selectedServerIds = useAppSelector(s => s.upload.selectedServerIds);
-  const isBatchRunning = useAppSelector(s => s.upload.isBatchRunning);
-
-  // ── Independent local file list ──
-  const [files, setFiles] = useState<ServerFile[]>([]);
-  const [total, setTotal] = useState(0);
-  const [totalPages, setTotalPages] = useState(1);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
-  const [sortBy, setSortBy] = useState<FilesSortBy>('id');
-  const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
-  const [search, setSearch] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const [dateFrom, setDateFrom] = useState(defaultFrom());
-  const [dateTo, setDateTo] = useState(defaultTo());
-  const [applying, setApplying] = useState(false);
-
-  const fetchFiles = useCallback(async (opts?: {
-    page?: number; pageSize?: number; from?: string; to?: string;
-    sortBy?: FilesSortBy; sortOrder?: SortOrder; search?: string;
-  }) => {
-    const p = opts?.page ?? page;
-    const ps = opts?.pageSize ?? pageSize;
-    const from = opts?.from ?? dateFrom;
-    const to = opts?.to ?? dateTo;
-    const sBy = opts?.sortBy ?? sortBy;
-    const sOrd = opts?.sortOrder ?? sortOrder;
-    const q = opts?.search ?? search;
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await api.post('/files/by-date/', {
-        start_date: from,
-        end_date: to,
-        page: p,
-        page_size: ps,
-        sort_by: sBy,
-        sort_order: sOrd,
-        ...(q ? { search: q } : {}),
-      });
-      const d = (res.data as any)?.data ?? {};
-      setFiles(d.data ?? []);
-      setTotal(d.total ?? 0);
-      setPage(d.page ?? p);
-      setPageSize(d.page_size ?? ps);
-      setTotalPages(d.total_pages ?? 1);
-      setSortBy(sBy);
-      setSortOrder(sOrd);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load files.');
-    } finally {
-      setLoading(false);
-    }
-  }, [page, pageSize, dateFrom, dateTo, sortBy, sortOrder, search]);
-
-  // Own API call, fired every time this tab becomes active — entirely
-  // separate from whatever the Upload tab is doing.
-  useEffect(() => {
-    if (active) fetchFiles({ page: 1 });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active]);
-
-  const handleApply = useCallback(async () => {
-    setApplying(true);
-    await fetchFiles({ page: 1 });
-    setApplying(false);
-  }, [fetchFiles]);
-
-  const goToPage = (p: number) => {
-    if (p < 1 || p > totalPages || p === page || loading) return;
-    fetchFiles({ page: p });
-  };
-
-  const handlePageSizeChange = (size: number) => {
-    fetchFiles({ page: 1, pageSize: size });
-  };
-
-  const handleSort = useCallback((key: SortKey) => {
-    const apiKey = SORT_KEY_TO_API[key];
-    const dir: SortOrder = sortBy === apiKey ? (sortOrder === 'asc' ? 'desc' : 'asc') : 'asc';
-    fetchFiles({ sortBy: apiKey, sortOrder: dir, page: 1 });
-  }, [sortBy, sortOrder, fetchFiles]);
-  const sort = { key: API_TO_SORT_KEY[sortBy], dir: sortOrder };
-
-  // ── Search — server-side, debounced (matches the Upload tab's search) ──
-  const [searchQuery, setSearchQuery] = useState('');
-  const skipNextSearchEffect = useRef(true);
-  useEffect(() => {
-    if (skipNextSearchEffect.current) { skipNextSearchEffect.current = false; return; }
-    const q = searchQuery.trim();
-    const handle = setTimeout(() => {
-      setSearch(q);
-      fetchFiles({ search: q, page: 1 });
-    }, 400);
-    return () => clearTimeout(handle);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchQuery]);
-
-  const pageSelectedCount = files.filter(f => selectedServerIds.includes(f.id)).length;
-  const allSelected = files.length > 0 && pageSelectedCount === files.length;
-  const someSelected = pageSelectedCount > 0 && !allSelected;
-
-  const handleRowClick = (fileId: number) => {
-    if (mode === 'select') {
-      if (isBatchRunning) return;
-      dispatch(toggleServerFileSelection(fileId));
-    } else {
-      onFileClick?.(fileId);
-    }
-  };
-
-  return (
-    <div className={styles.sidebar} data-tour={mode === 'select' ? 'infer-sidebar' : 'results-sidebar'}>
-      <div className={styles.dateFilter}>
-        <div className={styles.dateField}>
-          <label className={styles.dateLabel}>{t('uploadInfer.filePanel.dateFrom')}</label>
-          <input
-            type="date" className={styles.dateInput} value={dateFrom} max={dateTo}
-            disabled={applying}
-            onChange={e => setDateFrom(e.target.value)}
-          />
-        </div>
-        <div className={styles.dateSep}>—</div>
-        <div className={styles.dateField}>
-          <label className={styles.dateLabel}>{t('uploadInfer.filePanel.dateTo')}</label>
-          <input
-            type="date" className={styles.dateInput} value={dateTo} min={dateFrom}
-            disabled={applying}
-            onChange={e => setDateTo(e.target.value)}
-          />
-        </div>
-        <button className={styles.applyBtn} onClick={handleApply} disabled={applying || loading}>
-          {applying ? <span className={styles.miniSpinner} /> : t('uploadInfer.filePanel.applyDate')}
-        </button>
-      </div>
-
-      <div className={styles.head}>
-        {mode === 'select' && (
-          <Checkbox
-            checked={allSelected}
-            indeterminate={someSelected}
-            onChange={() => dispatch(toggleSelectAllServerFiles(files.map(f => f.id)))}
-            disabled={files.length === 0 || isBatchRunning}
-          />
-        )}
-        <span className={styles.headTitle}>{t('uploadInfer.workspace.filesTitle')}</span>
-        {total > 0 && <span className={styles.headCount}>{total}</span>}
-        {mode === 'select' && selectedServerIds.length > 0 && (
-          <span className={styles.headSelected}>
-            {t('uploadInfer.filePanel.selectedTotal', { count: selectedServerIds.length, total })}
-          </span>
-        )}
-      </div>
-
-      <div className={styles.searchWrap}>
-        <svg className={styles.searchIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="6.5" cy="6.5" r="4" /><path d="M11 11l2.5 2.5" />
-        </svg>
-        <input
-          type="text"
-          className={styles.searchInput}
-          placeholder={t('uploadInfer.workspace.searchFiles')}
-          value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
-        />
-      </div>
-
-      {/* Sort header — same sort keys as the Upload tab */}
-      <div className={styles.sortHeader}>
-        <span className={styles.sortHeaderLabel}>
-          <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-            <path d="M2 4h10M4 7h6M6 10h2" />
-          </svg>
-          {t('uploadInfer.filePanel.sortBy')}
-        </span>
-        <div className={styles.sortCols}>
-          {([
-            { key: 'id' as SortKey, label: t('uploadInfer.filePanel.sortId') },
-            { key: 'name' as SortKey, label: t('uploadInfer.filePanel.sortName') },
-            { key: 'date' as SortKey, label: t('uploadInfer.filePanel.sortDate') },
-            { key: 'status' as SortKey, label: t('uploadInfer.filePanel.sortStatus') },
-          ]).map(({ key, label }) => (
-            <button
-              key={key}
-              className={`${styles.sortCol} ${sort.key === key ? styles.sortColActive : ''}`}
-              onClick={() => handleSort(key)}
-              disabled={loading}
-            >
-              {label}
-              <svg viewBox="0 0 10 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
-                className={sort.key === key ? (sort.dir === 'asc' ? styles.sortAsc : styles.sortDesc) : styles.sortInactive}>
-                <path d="M5 1v10M2 8l3 3 3-3" />
-              </svg>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className={styles.rows}>
-        {error && (
-          <div className={styles.empty}>{error}</div>
-        )}
-        {!error && loading && files.length === 0 && (
-          <div className={styles.empty}>{t('uploadInfer.workspace.loadingFiles')}</div>
-        )}
-        {!error && !loading && files.length === 0 && (
-          <div className={styles.empty}>
-            {search ? t('uploadInfer.workspace.noFilesMatch') : t('uploadInfer.workspace.noFilesYet')}
-          </div>
-        )}
-        {files.map(f => {
-          const ext = getExt(f.original_name);
-          const isChecked = mode === 'select' && selectedServerIds.includes(f.id);
-          const isActiveView = mode === 'view' && f.id === activeFileId;
-          const disabled = mode === 'select' && isBatchRunning;
-          return (
-            <div
-              key={f.id}
-              role="button"
-              tabIndex={0}
-              className={`${styles.hitm} ${styles.hitmSelectable}
-                ${isChecked ? styles.active : ''}
-                ${isActiveView ? styles.activeView : ''}
-                ${disabled ? styles.rowDisabled : ''}`}
-              onClick={() => !disabled && handleRowClick(f.id)}
-              onKeyDown={e => { if (!disabled && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); handleRowClick(f.id); } }}
-            >
-              {mode === 'select' && (
-                <Checkbox checked={isChecked} onChange={() => handleRowClick(f.id)} disabled={isBatchRunning} />
-              )}
-              <div className={`${styles.ficon} ${styles[ext]}`}>{ext.toUpperCase()}</div>
-              <div className={styles.hi}>
-                <div className={styles.hn}>{f.original_name}</div>
-                <div className={styles.hm}>{f.inserted_at} · #{f.id}</div>
-              </div>
-              <span className={`${styles.badge} ${isChecked ? styles.bSelected : f.status === 'completed' ? styles.bInferred : styles.bNotInferred}`}>
-                {isChecked ? (
-                  <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="10" height="10">
-                    <path d="M2 6l3 3 5-5" />
-                  </svg>
-                ) : f.status === 'completed' ? (
-                  <>
-                    <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="9" height="9">
-                      <path d="M2 6l3 3 5-5" />
-                    </svg>
-                    {t('uploadInfer.filePanel.inferenced')}
-                  </>
-                ) : t('uploadInfer.filePanel.notInferenced')}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Pagination footer — same page-number layout as the Upload tab */}
-      {!loading && !error && total > 0 && (
-        <div className={styles.paginationBar}>
-          <div className={styles.paginationTopRow}>
-            <div className={styles.pageSizeGroup}>
-              <span className={styles.pageSizeLabel}>{t('uploadInfer.filePanel.perPage')}</span>
-              <select
-                className={styles.pageSizeSelect}
-                value={pageSize}
-                onChange={e => handlePageSizeChange(Number(e.target.value))}
-              >
-                {PAGE_SIZES.map(size => (
-                  <option key={size} value={size}>{size}</option>
-                ))}
-              </select>
-            </div>
-
-            <div className={styles.pageNav}>
-              <button
-                className={styles.pageNavBtn}
-                onClick={() => goToPage(page - 1)}
-                disabled={page <= 1}
-                aria-label="Previous page"
-              >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                  <path d="M10 3L6 8l4 5" />
-                </svg>
-              </button>
-
-              {(() => {
-                const pageWindow = getPageNumbers(page, totalPages);
-                const showFirst = pageWindow[0] > 1;
-                const showLast = pageWindow[pageWindow.length - 1] < totalPages;
-                return (
-                  <>
-                    {showFirst && (
-                      <>
-                        <button className={styles.pageNumBtn} onClick={() => goToPage(1)}>1</button>
-                        {pageWindow[0] > 2 && <span className={styles.pageEllipsis}>…</span>}
-                      </>
-                    )}
-                    {pageWindow.map(p => (
-                      <button
-                        key={p}
-                        className={`${styles.pageNumBtn} ${p === page ? styles.pageNumBtnActive : ''}`}
-                        onClick={() => goToPage(p)}
-                      >
-                        {p}
-                      </button>
-                    ))}
-                    {showLast && (
-                      <>
-                        {pageWindow[pageWindow.length - 1] < totalPages - 1 && <span className={styles.pageEllipsis}>…</span>}
-                        <button className={styles.pageNumBtn} onClick={() => goToPage(totalPages)}>{totalPages}</button>
-                      </>
-                    )}
-                  </>
-                );
-              })()}
-
-              <button
-                className={styles.pageNavBtn}
-                onClick={() => goToPage(page + 1)}
-                disabled={page >= totalPages}
-                aria-label="Next page"
-              >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                  <path d="M6 3l4 5-4 5" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          <div className={styles.pageInfo}>
-            {t('uploadInfer.filePanel.pageInfo', { page, totalPages, total })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-export default FileSidebar;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// ═══════════════════════════════════════════════
-// UploadInfer.module.scss
-// LectureAI · Upload & Inference page shell + tab bar
+// FilePanel.module.scss
+// Content Analytics · Upload panel — two sections
 // ═══════════════════════════════════════════════
 @use '../../styles/mixins' as m;
 
-.page {
+// ── Outer panel shell ─────────────────────────
+.panel {
+  width: 100%;
+  flex: 1;
+  border-right: none;
   display: flex;
-  flex-direction: column;
-  height: 100%;
+  flex-direction: row;
+  align-items: stretch;
   overflow: hidden;
   background: var(--bg0);
+  position: relative;
+
+  &::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 1px;
+    background: linear-gradient(180deg,
+        rgba(139, 92, 246, 0.0) 0%,
+        rgba(139, 92, 246, 0.6) 20%,
+        rgba(56, 196, 186, 0.7) 55%,
+        rgba(240, 160, 48, 0.6) 85%,
+        rgba(240, 160, 48, 0.0) 100%);
+    pointer-events: none;
+    z-index: 1;
+  }
 }
 
-// ── Header — title and tab bar share one row ──────
-.headerBar {
+// ══════════════════════════════════════
+// SECTION 1 — Step header + upload zone
+// ══════════════════════════════════════
+.step1 {
+  width: 400px;
   flex-shrink: 0;
+  border-bottom: none;
+  border-right: 1px solid var(--bdr);
+  background: var(--bg0);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+// ── The upload zone itself, as a distinct card sitting in the sidebar ──
+.step1Card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg1);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+
+// Reopen affordance shown in the file-list header once the upload
+// column has been collapsed to width: 0 (and its own header bar with it).
+.reopenUploadBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 8px;
+  padding: 3px 9px;
+  border-radius: 99px;
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t2);
+  font-size: 12px;
+  @include m.mono;
+  cursor: pointer;
+  transition: all 0.12s;
+
+  svg { width: 10px; height: 10px; }
+
+  &:hover {
+    background: var(--bg3);
+    color: var(--t1);
+    border-color: var(--bdr3);
+  }
+}
+
+// ── Step-1 header bar (original design) ──────
+.step1Bar {
+  padding: 10px 14px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 16px 24px;
+  gap: 9px;
+  border-bottom: none;
   background: var(--bg1);
+  flex-shrink: 0;
+  white-space: nowrap;
   position: relative;
 
   &::after {
@@ -459,36 +115,37 @@ export default FileSidebar;
   }
 }
 
-.phTitleRow {
+.slbl {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--t2);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  @include m.mono;
+}
+
+// Collapse toggle button — matches original
+.collapseBtn {
   display: flex;
   align-items: center;
-  gap: 12px;
-  flex-shrink: 0;
-}
-
-.phTitle {
-  flex-shrink: 0;
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--t0);
-}
-
-.tourTriggerBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
+  gap: 5px;
+  margin-left: auto;
+  padding: 3px 8px;
   border-radius: 99px;
   border: 1px solid var(--bdr2);
   background: transparent;
   color: var(--t2);
-  font-family: var(--font-ui);
   font-size: 12px;
-  font-weight: 500;
+  @include m.mono;
   cursor: pointer;
   transition: all 0.12s;
+  user-select: none;
+  flex-shrink: 0;
 
-  svg { width: 13px; height: 13px; }
+  svg {
+    width: 10px;
+    height: 10px;
+  }
 
   &:hover {
     background: var(--bg3);
@@ -497,92 +154,2477 @@ export default FileSidebar;
   }
 }
 
-.tabbar {
+// ── Collapsible content area — fills the rest of the column, scrolls
+// internally so a long browsed/uploading list doesn't blow out the height ──
+.step1Content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  @include m.scrollbar;
+}
+
+// ── Drop zone (original style) ────────────────
+.dropzone {
+  border: 1.5px dashed var(--bdr2);
+  border-radius: var(--rxl);
+  padding: 24px 20px;
+  margin: 12px 14px;
+  text-align: center;
+  background: var(--bg1);
+  cursor: pointer;
+  transition: all 0.18s;
+  position: relative;
+  overflow: hidden;
+
+  &::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at 50% 0%, rgba(139, 92, 246, 0.04), transparent 65%);
+    pointer-events: none;
+  }
+
+  &:hover,
+  &.dragOver {
+    border-color: var(--blue);
+    background: var(--bg2);
+  }
+
+  &.dragOver {
+    background: var(--blue-dim);
+  }
+}
+
+.dzIc {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: var(--blue-dim);
+  border: 1px solid var(--blue-bdr);
   display: flex;
-  align-items: stretch;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 11px;
+
+  svg {
+    width: 18px;
+    height: 18px;
+  }
+}
+
+.dzTitle {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--t0);
+  margin-bottom: 4px;
+}
+
+.dzSub {
+  font-size: 13px;
+  color: var(--t2);
+  @include m.mono;
+}
+
+.chips {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.chip {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  background: var(--bg3);
+  border: 1px solid var(--bdr);
+  color: var(--t2);
+  @include m.mono;
+}
+
+.dzActions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 11px;
+  position: relative;
+  z-index: 1;
+}
+
+// ── Preview / uploading ───────────────────────
+.previewWrap {
+  display: flex;
+  flex-direction: column;
+  animation: fadeSlide 0.18s ease;
+}
+
+.previewList {
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  @include m.scrollbar;
+}
+
+// Browsed file card
+.fileCard {
+  display: flex;
+  align-items: center;
   gap: 10px;
+  padding: 10px 11px;
+  background: var(--bg2);
+  border: 1px solid var(--bdr);
+  border-radius: var(--rxl);
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+  position: relative;
+  overflow: hidden;
+
+  // Subtle shimmer background
+  &::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at 0% 50%, rgba(139, 92, 246, 0.04), transparent 70%);
+    pointer-events: none;
+  }
+
+  // Left accent bar
+  &::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 8px;
+    bottom: 8px;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: var(--bdr2);
+    transition: background 0.2s;
+  }
+
+  &.uploading {
+    border-color: rgba(139, 92, 246, 0.35);
+    background: rgba(139, 92, 246, 0.05);
+    box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.12) inset;
+
+    &::after {
+      background: linear-gradient(180deg, var(--blue), #a78bfa);
+    }
+
+    &::before {
+      background: radial-gradient(ellipse at 0% 50%, rgba(139, 92, 246, 0.08), transparent 70%);
+    }
+  }
+
+  &.success {
+    border-color: var(--green-bdr);
+    background: var(--green-dim);
+
+    &::after {
+      background: var(--green);
+    }
+
+    &::before {
+      background: radial-gradient(ellipse at 0% 50%, rgba(52, 211, 153, 0.08), transparent 70%);
+    }
+  }
+
+  &.failed {
+    border-color: var(--red-bdr);
+    background: var(--red-dim);
+
+    &::after {
+      background: var(--red);
+    }
+
+    &::before {
+      background: radial-gradient(ellipse at 0% 50%, rgba(239, 68, 68, 0.08), transparent 70%);
+    }
+  }
+}
+
+// Extension badge (shared between browsed + uploaded cards)
+.extBadge {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 800;
+  @include m.mono;
+  flex-shrink: 0;
+  letter-spacing: 0.03em;
+  position: relative;
+  z-index: 1;
+
+  &.vtt {
+    background: linear-gradient(135deg, rgba(91, 164, 239, 0.18) 0%, rgba(139, 92, 246, 0.14) 100%);
+    color: var(--blue);
+    border: 1px solid rgba(91, 164, 239, 0.3);
+    box-shadow: 0 1px 4px rgba(91, 164, 239, 0.12);
+  }
+
+  &.srt {
+    background: linear-gradient(135deg, rgba(52, 211, 153, 0.18) 0%, rgba(56, 196, 186, 0.14) 100%);
+    color: var(--green);
+    border: 1px solid rgba(52, 211, 153, 0.3);
+    box-shadow: 0 1px 4px rgba(52, 211, 153, 0.12);
+  }
+}
+
+.fileInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.fileNameRow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.fileName {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--t0);
+  @include m.truncate;
+  margin-bottom: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.fileId {
+  font-size: 10px;
+  color: var(--t2);
+  @include m.mono;
+  flex-shrink: 0;
+  opacity: 0.65;
+}
+
+// ── File ID badge (shown before ext badge in card) ──
+.fileIdBadge {
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: #a78bfa;
+  background: rgba(167, 139, 250, 0.12);
+  border: 1px solid rgba(167, 139, 250, 0.3);
+  border-radius: 4px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+
+.fileMeta {
+  font-size: 12px;
+  color: var(--t2);
+  @include m.mono;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  flex-wrap: wrap;
+}
+
+.fileSizeChip {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 99px;
+  background: var(--bg3);
+  border: 1px solid var(--bdr);
+  color: var(--t2);
+}
+
+.fileStatusText {
+  font-size: 11px;
+  color: var(--t2);
+  opacity: 0.7;
+}
+
+.fileStatusTextSuccess {
+  font-size: 11px;
+  color: var(--green);
+  font-weight: 600;
+}
+
+.fileError {
+  color: var(--red);
+}
+
+// Status icon (upload progress)
+.statusIc {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  &.pending {
+    color: var(--t2);
+  }
+
+  &.uploading {
+    color: var(--blue);
+    animation: spin 0.9s linear infinite;
+  }
+
+  &.success {
+    color: var(--green);
+  }
+
+  &.failed {
+    color: var(--red);
+  }
+}
+
+.removeBtn {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0;
+  transition: all 0.12s;
+
+  svg {
+    width: 10px;
+    height: 10px;
+  }
+
+  &:hover {
+    background: var(--red-dim);
+    border-color: var(--red-bdr);
+    color: var(--red);
+  }
+}
+
+// Action bar (Upload / Cancel)
+.step1Footer {
+  flex-shrink: 0;
+  display: flex;
+  gap: 7px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--bdr);
+  background: var(--bg1);
+}
+
+.step1FooterBtn {
+  flex: 1;
+}
+
+// Upload progress bar
+.uploadSummary {
+  width: 100%;
+}
+
+.uploadProgressBar {
+  height: 3px;
+  background: var(--bg3);
+  border-radius: 99px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.uploadProgressFill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--blue), #a78bfa);
+  border-radius: 99px;
+  transition: width 0.4s ease;
+}
+
+.uploadProgressLabel {
+  font-size: 12px;
+  color: var(--t2);
+  @include m.mono;
+}
+
+.failCount {
+  color: var(--red);
+}
+
+// ══════════════════════════════════════
+// SECTION 2 — Uploaded files list
+// ══════════════════════════════════════
+.section2 {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg0);
+}
+
+// Section 2 header — stacked: title row + action row/grid below
+.section2Header {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0;
+  border-bottom: none;
+  background: var(--bg1);
+  flex-shrink: 0;
+  position: relative;
+}
+
+// Title row — checkbox + title + optional search icon
+.section2TitleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px 8px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.section2Title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--t2);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  @include m.mono;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.filesCount {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--blue);
+  background: var(--blue-dim);
+  border: 1px solid var(--blue-bdr);
+  padding: 1px 6px;
+  border-radius: 99px;
+}
+
+// Cross-page selection total — shown next to filesCount while in
+// select/delete/export mode so it's clear selections persist across pages.
+.selectedTotalHint {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--green);
+  background: var(--green-dim);
+  border: 1px solid var(--green-bdr);
+  padding: 1px 6px;
+  border-radius: 99px;
+  margin-left: 4px;
+}
+
+
+
+// ── Delete icon button (used inside mode-bar) ─────────────────
+.deleteIconBtn {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex-shrink: 0;
+  transition: all 0.15s;
+
+  svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  &:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.1);
+    border-color: rgba(239, 68, 68, 0.35);
+    color: #ef4444;
+  }
+
+  &:disabled {
+    opacity: 0.3;
+    cursor: default;
+  }
+}
+
+// Confirm-delete state — always red, solid
+.deleteIconBtnConfirm {
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+
+  &:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.22);
+    border-color: rgba(239, 68, 68, 0.7);
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.25);
+  }
+}
+
+.deleteIconBtnDisabled {
+  opacity: 0.4 !important;
+  cursor: default !important;
+}
+
+// ── Export icon button (used inside mode-bar) ─────────────────
+.exportIconBtn {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex-shrink: 0;
+  transition: all 0.15s;
+
+  svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  &:hover:not(:disabled) {
+    background: rgba(78, 200, 122, 0.10);
+    border-color: rgba(78, 200, 122, 0.35);
+    color: var(--green);
+  }
+
+  &:disabled {
+    opacity: 0.3;
+    cursor: default;
+  }
+}
+
+// Confirm-export state — always green, solid
+.exportIconBtnConfirm {
+  border-color: rgba(78, 200, 122, 0.45);
+  background: rgba(78, 200, 122, 0.10);
+  color: var(--green);
+
+  &:hover:not(:disabled) {
+    background: rgba(78, 200, 122, 0.20);
+    border-color: rgba(78, 200, 122, 0.70);
+    box-shadow: 0 0 8px rgba(78, 200, 122, 0.22);
+  }
+}
+
+.exportIconBtnDisabled {
+  opacity: 0.4 !important;
+  cursor: default !important;
+}
+
+.miniSpinner {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid rgba(239, 68, 68, 0.3);
+  border-top-color: #ef4444;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
   flex-shrink: 0;
 }
 
-.tabBtn {
+.miniSpinnerGreen {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid rgba(78, 200, 122, 0.3);
+  border-top-color: #4ec87a;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+
+// ── Cancel icon button (used inside mode-bar) ─────────────────
+.cancelIconBtn {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.08);
+  color: #ef4444;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex-shrink: 0;
+  transition: all 0.15s;
+
+  svg {
+    width: 13px;
+    height: 13px;
+  }
+
+  &:hover {
+    background: rgba(239, 68, 68, 0.16);
+    border-color: rgba(239, 68, 68, 0.6);
+    box-shadow: 0 0 6px rgba(239, 68, 68, 0.2);
+  }
+}
+
+// Cards get pointer cursor only when in selection mode
+.uploadedCardWrapSelectable {
+  cursor: pointer;
+}
+
+// Date range filter — sits above section2Header
+.filterSortRow {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 2px;
-  width: 172px;
-  padding: 8px 14px;
-  border-radius: var(--rl);
-  border: 1px solid var(--bdr2);
+  gap: 10px;
+  padding: 10px 12px;
   background: var(--bg1);
-  cursor: pointer;
-  text-align: left;
-  @include m.theme-transition;
+  flex-shrink: 0;
+  position: relative;
 
-  &:hover {
-    border-color: var(--bdr3);
-    background: var(--bg2);
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg,
+        rgba(139, 92, 246, 0.0) 0%,
+        rgba(139, 92, 246, 0.6) 20%,
+        rgba(56, 196, 186, 0.7) 50%,
+        rgba(240, 160, 48, 0.6) 80%,
+        rgba(240, 160, 48, 0.0) 100%);
+    pointer-events: none;
   }
 }
 
-.tabBtnActive {
-  border-color: var(--blue);
-  background-color: var(--bg1);
-  background-image: linear-gradient(var(--blue-dim), var(--blue-dim));
-
-  &:hover {
-    border-color: var(--blue);
-    background-color: var(--bg1);
-    background-image: linear-gradient(var(--blue-dim), var(--blue-dim));
-  }
+// Line 1 — date filter on the left, sort chip on the right
+.dateSortLine {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  width: 100%;
 }
 
-.tabLabel {
-  font-family: var(--font-ui);
-  font-size: 13.5px;
+.sortHeader {
+  margin-left: auto;
+}
+
+// Clear horizontal separator between line 1 (date/sort) and line 2 (actions)
+.filterSortHDivider {
+  height: 1px;
+  width: 100%;
+  background: var(--bdr);
+  flex-shrink: 0;
+}
+
+// Line 2 — action toolbar, full width
+.actionsGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.actionsTiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 6px;
+}
+
+.actionsLabel {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
   font-weight: 600;
-  color: var(--t1);
+  color: var(--t2);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-right: 2px;
+
+  svg {
+    width: 11px;
+    height: 11px;
+    opacity: 0.6;
+  }
+}
+
+.actionTile {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  gap: 5px;
+  padding: 0 9px;
+  border-radius: var(--r);
+  border: 1px solid transparent;
+  background: var(--bg3);
+  color: var(--t2);
+  font-size: 12px;
+  font-weight: 500;
+  font-family: var(--font-ui);
   letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: all 0.13s;
+  user-select: none;
+
+  svg {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+  }
+
+  &:active:not(:disabled) {
+    transform: scale(0.97);
+  }
+
+  &:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
 }
 
-.tabBtnActive .tabLabel {
+.actionTileLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.actionTileDictionary {
+  background: var(--violet-dim);
+  color: var(--violet);
+  border-color: var(--violet-dim);
+
+  &:hover:not(:disabled) { background: var(--violet-dim); border-color: var(--violet); }
+}
+
+.actionTileTemplate {
+  background: var(--teal-dim);
+  color: var(--teal);
+  border-color: var(--teal-bdr);
+
+  &:hover:not(:disabled) { background: var(--teal-dim); border-color: var(--teal); }
+}
+
+.actionTileSearch {
+  background: var(--amber-dim);
+  color: var(--amber);
+  border-color: var(--amber-bdr);
+
+  &:hover:not(:disabled) { background: var(--amber-dim); border-color: var(--amber); }
+}
+
+.actionTileExport {
+  background: var(--green-dim);
+  color: var(--green);
+  border-color: var(--green-bdr);
+
+  &:hover:not(:disabled) { background: var(--green-dim); border-color: var(--green); }
+}
+
+.actionTileDelete {
+  background: var(--red-dim);
+  color: var(--red);
+  border-color: var(--red-bdr);
+
+  &:hover:not(:disabled) { background: var(--red-dim); border-color: var(--red); }
+}
+
+.actionTileActive {
+  outline: 2px solid var(--blue-bdr);
+  outline-offset: -1px;
+}
+
+// Single-line, icon-led date filter — same 32px height as the rest of the row
+.dateFilter {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.dateIcon {
+  width: 14px;
+  height: 14px;
+  color: var(--t2);
+  flex-shrink: 0;
+}
+
+.dateField {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 118px;
+  flex-shrink: 0;
+}
+
+.dateLabel {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--t2);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  @include m.mono;
+}
+
+.dateInput {
+  width: 115px;
+  height: 32px;
+  padding: 0 8px;
+  background: var(--bg2);
+  border: 1px solid var(--bdr2);
+  border-radius: var(--r);
   color: var(--t0);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  outline: none;
+  appearance: none;
+  transition: border-color 0.12s;
+  cursor: pointer;
+
+  &:focus {
+    border-color: var(--blue);
+    box-shadow: 0 0 0 2px var(--blue-dim);
+  }
+
+  &::-webkit-calendar-picker-indicator {
+    opacity: 0.7;
+    cursor: pointer;
+    filter: var(--date-icon-filter);
+  }
 }
 
-// Always visible — this is what tells the user what they'll find on
-// this tab, without needing to click it first or read a separate banner.
-.tabDesc {
+.dateSep {
+  font-size: 12px;
+  color: var(--t2);
+  flex-shrink: 0;
+}
+
+.applyBtn {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--r);
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t1);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.12s;
+
+  &:hover:not(:disabled) {
+    background: var(--bg3);
+    border-color: var(--bdr3);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}
+
+// Uploaded file cards
+.uploadedBody {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(215px, 1fr));
+  grid-auto-rows: 250px;
+  align-content: start;
+  gap: 12px;
+  @include m.scrollbar;
+}
+
+// listState/errorState (loading, error, empty) span every column so they
+// don't get squeezed into a single grid cell
+.listState {
+  grid-column: 1 / -1;
+}
+
+// ── Square file cards ─────────────────────────
+.fcard {
+  position: relative;
+  height: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 18px 14px 36px;
+  border-radius: var(--rl);
+  border: 1px solid var(--bdr);
+  background: var(--bg1);
+  cursor: default;
+  text-align: center;
+  overflow: hidden;
+  transition: all 0.12s;
+  user-select: none;
+}
+
+.fcardStatic {
+  cursor: default;
+}
+
+.fcard:not(.fcardStatic) {
+  cursor: pointer;
+
+  &:hover {
+    background: var(--bg2);
+    border-color: var(--bdr3);
+  }
+}
+
+.fcardActive,
+.fcardActiveView {
+  background: rgba(91, 164, 239, 0.06);
+  border-color: var(--blue-bdr);
+}
+
+.fcardActiveDelete {
+  background: var(--red-dim);
+  border-color: var(--red-bdr);
+}
+
+.fcardActiveExport {
+  background: var(--green-dim);
+  border-color: var(--green-bdr);
+}
+
+.fcardCheck {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 1;
+}
+
+// Dictionary / prompt-template association icons — mirrors the checkbox's
+// corner, opposite side, and only renders when at least one is linked.
+.fcardLinks {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1;
+  display: flex;
+  gap: 4px;
+}
+
+.fcardLinkIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  background: var(--violet-dim);
+  color: var(--violet);
+
+  svg { width: 11px; height: 11px; }
+}
+
+.fcardIcon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-bottom: 12px;
+
+  &.vtt { background: var(--blue-dim); color: var(--blue); }
+  &.srt { background: var(--green-dim); color: var(--green); }
+}
+
+.fcardName {
+  width: 100%;
+  max-width: 100%;
+  min-height: 34px;
+  margin-bottom: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--t0);
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+  flex-shrink: 0;
+}
+
+.fcardMeta {
+  font-size: 9.5px;
+  color: var(--t2);
+  flex-shrink: 0;
+  margin-bottom: auto;
+  padding-bottom: 14px;
+  @include m.mono;
+}
+
+// Compact S·K·Q·A·T checklist — which content prompts are customized
+// for this file (Summary, Keywords, Questions, short Answer, True/false).
+.fcardPrompts {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  cursor: default;
+}
+
+.fcardPromptDot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: none;
+  background: var(--bg2);
+  color: var(--t2);
+  cursor: pointer;
+  transition: all 0.12s;
+
+  svg { width: 12px; height: 12px; }
+
+  &:hover {
+    background: var(--bg3);
+    color: var(--t0);
+  }
+}
+
+.fcardPromptDotSet {
+  background: var(--blue-dim);
+  color: var(--blue);
+
+  &:hover {
+    background: var(--blue-dim);
+    color: var(--blue);
+    opacity: 0.8;
+  }
+}
+
+.fcardBadgeDot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: fcardPulse 1.4s ease-in-out infinite;
+}
+
+@keyframes fcardPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.fcardBadge {
+  position: absolute;
+  bottom: 11px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  padding: 2px 7px;
+  max-width: calc(100% - 16px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+// ── Uploaded card wrap — carries the static green gradient border ──
+// ── Uploaded file card — mirrors HistoryPanel .hitm ──────────────
+.hitm {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 9px;
+  border-radius: var(--r);
+  border: 1px solid transparent;
+  transition: all 0.12s;
+  margin-bottom: 3px;
+  user-select: none;
+
+  &:hover {
+    background: var(--bg2);
+    border-color: var(--bdr);
+  }
+
+  &.active {
+    background: rgba(91, 164, 239, 0.06);
+    border-color: var(--blue-bdr);
+
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 6px;
+      bottom: 6px;
+      width: 3px;
+      border-radius: 0 3px 3px 0;
+      background: linear-gradient(180deg, var(--blue), #a78bfa);
+    }
+  }
+
+  // Normal-mode file view highlight — distinct purple/amber accent
+  &.activeView {
+    background: rgba(167, 139, 250, 0.06);
+    border-color: rgba(167, 139, 250, 0.3);
+
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 6px;
+      bottom: 6px;
+      width: 3px;
+      border-radius: 0 3px 3px 0;
+      background: linear-gradient(180deg, #a78bfa, var(--amber));
+    }
+  }
+
+  // Delete mode selected — red accent
+  &.activeDelete {
+    background: rgba(239, 68, 68, 0.05);
+    border-color: rgba(239, 68, 68, 0.3);
+
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 6px;
+      bottom: 6px;
+      width: 3px;
+      border-radius: 0 3px 3px 0;
+      background: linear-gradient(180deg, #ef4444, #f97316);
+    }
+  }
+
+  // Export mode selected — green accent
+  &.activeExport {
+    background: rgba(78, 200, 122, 0.05);
+    border-color: rgba(78, 200, 122, 0.28);
+
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 6px;
+      bottom: 6px;
+      width: 3px;
+      border-radius: 0 3px 3px 0;
+      background: linear-gradient(180deg, #4ec87a, #38c4ba);
+    }
+  }
+}
+
+.hitmSelectable {
+  cursor: pointer;
+}
+
+// ── Ext icon ──
+.ficon {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  @include m.mono;
+  flex-shrink: 0;
+
+  &.vtt {
+    background: var(--blue-dim);
+    color: var(--blue);
+  }
+
+  &.srt {
+    background: var(--green-dim);
+    color: var(--green);
+  }
+}
+
+// ── File info ──
+.hi {
+  flex: 1;
+  min-width: 0;
+}
+
+.hn {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--t0);
+  @include m.truncate;
+}
+
+.hm {
+  font-size: 12px;
+  color: var(--t2);
+  margin-top: 2px;
+  @include m.mono;
+}
+
+// Empty / loading / error state
+.listState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 32px 16px;
+  font-size: 13px;
+  color: var(--t2);
+  @include m.mono;
+  text-align: center;
+
+  svg {
+    width: 18px;
+    height: 18px;
+    opacity: 0.5;
+  }
+}
+
+.errorState {
+  color: var(--red);
+
+  svg {
+    opacity: 0.7;
+  }
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--bdr2);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+// ── Search icon button ──────────────────────────
+.searchIconBtn {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex-shrink: 0;
+  transition: all 0.15s;
+
+  svg {
+    width: 13px;
+    height: 13px;
+  }
+
+  &:hover {
+    background: var(--bg3);
+    border-color: var(--bdr3);
+    color: var(--t0);
+  }
+}
+
+.searchIconBtnActive {
+  border-color: var(--blue-bdr);
+  background: var(--blue-dim);
+  color: var(--blue);
+
+  &:hover {
+    background: var(--blue-dim);
+    border-color: var(--blue);
+    color: var(--blue);
+  }
+}
+
+// ── Search bar (slides in below sortHeader) ──────
+.searchBar {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.18s ease;
+  overflow: hidden;
+  padding: 0 10px;
+}
+
+.searchBarOpen {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  padding: 6px 10px 4px;
+}
+
+// Flex row: input box + close button
+.searchBarRow {
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.searchInner {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg2);
+  border: 1px solid var(--bdr2);
+  border-radius: var(--r);
+  padding: 0 8px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+
+  &:focus-within {
+    border-color: var(--blue);
+    box-shadow: 0 0 0 2px var(--blue-dim);
+  }
+}
+
+.searchBarIcon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: var(--t2);
+  opacity: 0.6;
+}
+
+.searchInput {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--t0);
+  font-family: var(--font-ui);
+  font-size: 13px;
+
+  &::placeholder {
+    color: var(--t2);
+    opacity: 0.55;
+  }
+}
+
+.searchCloseBtn {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.08);
+  color: #ef4444;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex-shrink: 0;
+  transition: all 0.12s;
+
+  svg {
+    width: 8px;
+    height: 8px;
+  }
+
+  &:hover {
+    background: rgba(239, 68, 68, 0.18);
+    border-color: rgba(239, 68, 68, 0.6);
+    box-shadow: 0 0 6px rgba(239, 68, 68, 0.2);
+  }
+}
+
+.searchCount {
+  font-size: 11px;
+  color: var(--t2);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-weight: 500;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  @include m.mono;
+}
+
+.bReady {
+  background: var(--green-dim);
+  color: var(--green);
+  border-color: var(--green-bdr);
+}
+
+// Inferenced — green (file has completed inference)
+.bInferred {
+  background: var(--green-dim);
+  color: var(--green);
+  border-color: var(--green-bdr);
+}
+
+// Not Inferenced — amber (file uploaded but not yet processed)
+.bNotInferred {
+  background: rgba(240, 160, 48, 0.1);
+  color: var(--amber);
+  border-color: rgba(240, 160, 48, 0.3);
+}
+
+// Running — blue, with the pulsing dot from fcardBadgeDot
+.bRunning {
+  background: var(--blue-dim);
+  color: var(--blue);
+  border-color: var(--blue-bdr);
+}
+
+// Queued — amber, waiting its turn in the batch
+.bQueued {
+  background: rgba(240, 160, 48, 0.1);
+  color: var(--amber);
+  border-color: rgba(240, 160, 48, 0.3);
+}
+
+// Error — red, inference failed for this file
+.bError {
+  background: var(--red-dim);
+  color: var(--red);
+  border-color: var(--red-bdr);
+}
+
+.bSelected {
+  background: var(--blue-dim);
+  color: var(--blue);
+  border-color: var(--blue-bdr);
+  font-weight: 600;
+}
+
+.bDelete {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.3);
+  font-weight: 600;
+}
+
+.bExport {
+  background: var(--green-dim);
+  color: var(--green);
+  border-color: var(--green-bdr);
+  font-weight: 600;
+  gap: 4px;
+}
+
+.bInfo {
+  background: var(--blue-dim);
+  color: var(--blue);
+  border-color: var(--blue-bdr);
+}
+
+// ── Buttons ───────────────────────────────────
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 13px;
+  border-radius: var(--r);
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t1);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+  user-select: none;
+
+  svg {
+    width: 11px;
+    height: 11px;
+  }
+
+  &:hover {
+    background: var(--bg3);
+    color: var(--t0);
+    border-color: var(--bdr3);
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+}
+
+.btnP {
+  background: var(--blue);
+  color: #fff;
+  border-color: var(--blue);
+  font-weight: 600;
+
+  &:hover {
+    background: #a78bfa;
+    border-color: #a78bfa;
+    color: #fff;
+  }
+}
+
+.btnSm {
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+.btnFull {
+  flex: 1;
+}
+
+.btnDanger {
+  color: var(--red);
+  border-color: var(--red-bdr);
+
+  &:hover {
+    background: var(--red-dim);
+    border-color: var(--red);
+  }
+
+  &:disabled {
+    color: var(--t2);
+    border-color: var(--bdr2);
+    background: transparent;
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+
+    &:hover {
+      background: transparent;
+      border-color: var(--bdr2);
+    }
+  }
+}
+
+// ── Animations ───────────────────────────────
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes fadeSlide {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+// ── Checkbox component ──────────────────────────
+.cb {
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--cb-bdr);
+  border-radius: 4px;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: all 0.12s;
+  position: relative;
+  outline: none;
+
+  &:hover:not(.cbDisabled) {
+    border-color: var(--blue);
+  }
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--blue-dim);
+  }
+
+  &.cbChecked {
+    background: var(--blue);
+    border-color: var(--blue);
+
+    &::after {
+      content: '';
+      position: absolute;
+      left: 2px;
+      top: 5px;
+      width: 7px;
+      height: 4px;
+      border-left: 1.5px solid #fff;
+      border-bottom: 1.5px solid #fff;
+      transform: rotate(-45deg) translate(0, -1px);
+    }
+  }
+
+  &.cbIndet {
+    background: var(--blue);
+    border-color: var(--blue);
+
+    &::after {
+      content: '';
+      position: absolute;
+      left: 2px;
+      top: 5px;
+      width: 8px;
+      height: 1.5px;
+      background: #fff;
+    }
+  }
+
+  &.cbDisabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+}
+
+// Grouped action buttons — used inside mode-bar (title row)
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+// ── Mode action row: search LEFT, confirm+cancel RIGHT ────────
+.modeActionsRow {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0 10px 8px;
+  min-width: 0;
+}
+
+.modeActionsRight {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.modeActionsLeft {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+// Base tile — icon + label side by side
+.modeTile {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--bdr);
+  background: var(--bg3);
+  color: var(--t2);
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  transition: all 0.13s;
+  user-select: none;
+  white-space: nowrap;
+
+  svg {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+  }
+
+  &:active:not(:disabled) {
+    transform: scale(0.97);
+  }
+
+  &:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+}
+
+// Search tile — amber tint (left side)
+.modeTileSearch {
+  color: var(--amber);
+  border-color: rgba(240, 160, 48, 0.25);
+  background: rgba(240, 160, 48, 0.08);
+
+  &:hover {
+    background: rgba(240, 160, 48, 0.16);
+    border-color: rgba(240, 160, 48, 0.45);
+  }
+}
+
+.modeTileSearchActive {
+  background: rgba(240, 160, 48, 0.15);
+  border-color: rgba(240, 160, 48, 0.45);
+}
+
+// Confirm export — green
+.modeTileConfirmExport {
+  color: var(--green);
+  border-color: var(--green-bdr);
+  background: var(--green-dim);
+
+  &:hover:not(:disabled) {
+    background: var(--green);
+    border-color: var(--green);
+    color: #fff;
+  }
+}
+
+// Confirm delete — red
+.modeTileConfirmDelete {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.25);
+  background: rgba(239, 68, 68, 0.08);
+
+  &:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.18);
+    border-color: rgba(239, 68, 68, 0.5);
+  }
+}
+
+// Cancel
+.modeTileCancel {
+  color: var(--t2);
+  border-color: var(--bdr2);
+  background: transparent;
+
+  &:hover {
+    background: var(--bg2);
+    border-color: var(--bdr3);
+    color: var(--t0);
+  }
+}
+
+// Disabled state
+.modeTileDisabled {
+  opacity: 0.35 !important;
+  cursor: not-allowed !important;
+}
+
+// "Export all files" trigger — mirrors modeTileDeleteAll but green/non-destructive
+.modeTileExportAll {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--green-bdr);
+  background: var(--green-dim);
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  transition: all 0.13s;
+  user-select: none;
+  white-space: nowrap;
+
+  svg {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+  }
+
+  &:hover:not(:disabled) {
+    background: var(--green);
+    border-color: var(--green);
+    color: #fff;
+  }
+
+  &:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+}
+
+.modeActionsError {
+  font-size: 11px;
+  color: #ef4444;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+
+// "Delete all files" trigger — deliberately louder/more solid than the
+// per-row delete tile since it's an account-wide destructive action.
+.modeTileDeleteAll {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  background: rgba(239, 68, 68, 0.14);
+  color: #ef4444;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  transition: all 0.13s;
+  user-select: none;
+  white-space: nowrap;
+
+  svg {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+  }
+
+  &:hover:not(:disabled) {
+    background: #ef4444;
+    border-color: #ef4444;
+    color: #fff;
+  }
+
+  &:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+}
+
+// ── Delete-ALL confirmation (danger zone) ───────────────────────────
+.dangerOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  padding: 16px;
+}
+
+.dangerModal {
+  width: 100%;
+  max-width: 360px;
+  background: var(--bg1);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 10px;
+  padding: 20px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 4px;
+}
+
+.dangerIcon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(239, 68, 68, 0.14);
+  color: #ef4444;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 6px;
+
+  svg {
+    width: 22px;
+    height: 22px;
+  }
+}
+
+.dangerTitle {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--t0);
+  font-family: var(--font-ui);
+}
+
+.dangerBody {
+  font-size: 13px;
+  color: var(--t2);
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+.dangerLabel {
+  align-self: flex-start;
+  font-size: 12px;
+  color: var(--t1);
+  margin-top: 4px;
+}
+
+.dangerInput {
+  width: 100%;
+  padding: 7px 10px;
+  background: var(--bg0);
+  border: 1px solid var(--bdr2);
+  border-radius: var(--r);
+  color: var(--t0);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  outline: none;
+  margin-top: 4px;
+  margin-bottom: 6px;
+  text-align: center;
+  transition: border-color 0.12s;
+
+  &:focus {
+    border-color: #ef4444;
+    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.15);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+  }
+}
+
+.dangerError {
+  font-size: 12px;
+  color: #ef4444;
+  margin-bottom: 6px;
+}
+
+.dangerActions {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  margin-top: 6px;
+}
+
+// .uploadedCardSel replaced by .hitm.active
+
+// Uploaded card disabled (batch running)
+.uploadedCardDisabled {
+  cursor: default !important;
+  opacity: 0.65;
+  pointer-events: none;
+}
+
+// ── Sort header ─────────────────────────────────────
+.sortHeader {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  background: var(--bg2);
+  border: 1px solid var(--bdr);
+  border-radius: var(--r);
+  padding: 0 6px 0 10px;
+  gap: 6px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.sortHeaderLabel {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--t2);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  flex-shrink: 0;
+
+  svg {
+    width: 11px;
+    height: 11px;
+    opacity: 0.6;
+  }
+}
+
+.sortCols {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.sortCol {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--t2);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+
+  svg {
+    width: 8px;
+    height: 10px;
+    flex-shrink: 0;
+    transition: transform 0.2s;
+  }
+
+  &:hover {
+    background: var(--bg3);
+    color: var(--t1);
+  }
+}
+
+.sortColActive {
+  background: var(--blue-dim);
+  color: var(--blue);
+  font-weight: 600;
+
+  &:hover {
+    background: var(--blue-dim);
+  }
+}
+
+.sortInactive {
+  opacity: 0.25;
+}
+
+.sortAsc {
+  transform: rotate(180deg);
+}
+
+// arrow up
+.sortDesc {
+  transform: rotate(0deg);
+}
+
+// arrow down (default path direction)
+// ── Small screen overrides (height < 1000px) ─────────────────
+@media (max-height: 999px) {
+
+  // Step-1 bar — tighter
+  .step1Bar {
+    padding: 7px 14px;
+  }
+
+  // Dropzone — much more compact
+  .dropzone {
+    padding: 10px 16px;
+    margin: 6px 10px;
+  }
+
+  .dzIc {
+    width: 28px;
+    height: 28px;
+    margin-bottom: 6px;
+
+    svg {
+      width: 14px;
+      height: 14px;
+    }
+  }
+
+  .dzTitle {
+    font-size: 12px;
+    margin-bottom: 2px;
+  }
+
+  .dzSub {
+    font-size: 11px;
+  }
+
+  .dzActions {
+    margin-top: 7px;
+    gap: 6px;
+  }
+
+  // Section2 title row
+  .section2TitleRow {
+    padding: 7px 14px 6px;
+  }
+
+  // Mode action row
+  .modeActionsRow {
+    padding: 0 8px 6px;
+  }
+
+  // Date filter — tighter
+  .dateFilter {
+    padding: 5px 10px 5px;
+    gap: 5px;
+  }
+
+  .dateInput {
+    padding: 3px 6px;
+    font-size: 12px;
+  }
+
+  // Sort header — tighter
+  .sortHeader {
+    margin-bottom: 4px;
+  }
+
+  .sortCol {
+    padding: 4px 4px;
+    font-size: 11px;
+  }
+
+  .sortHeaderLabel {
+    padding: 4px 0;
+    padding-right: 6px;
+    font-size: 9px;
+  }
+
+  // File list — tighter items, ensure it can grow
+  .uploadedBody {
+    padding: 4px 8px;
+    gap: 2px;
+  }
+
+  .hitm {
+    padding: 5px 8px;
+    margin-bottom: 1px;
+  }
+
+  .ficon {
+    width: 22px;
+    height: 22px;
+    font-size: 9px;
+  }
+
+  .hn {
+    font-size: 12px;
+  }
+
+  .hm {
+    font-size: 11px;
+    margin-top: 1px;
+  }
+
+  .badge {
+    font-size: 10px;
+    padding: 1px 6px;
+  }
+}
+
+// ── Pagination footer (bottom of the uploaded-files list) ──────────
+.paginationBar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--bdr2);
+  background: var(--bg1);
+  flex-shrink: 0;
+}
+
+.paginationTopRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.pageSizeGroup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.pageSizeLabel {
   font-size: 11px;
   color: var(--t2);
   white-space: nowrap;
 }
 
-.tabBtnActive .tabDesc {
+.pageSizeSelect {
+  padding: 3px 6px;
+  background: var(--bg0);
+  border: 1px solid var(--bdr2);
+  border-radius: var(--r);
+  color: var(--t0);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.12s;
+
+  &:focus {
+    border-color: var(--blue);
+    box-shadow: 0 0 0 2px var(--blue-dim);
+  }
+}
+
+// Page-number row sits to the right of the page-size selector. It never
+// wraps to its own line — if there isn't room for every number button,
+// this row scrolls horizontally within itself instead.
+.pageNav {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  flex-wrap: nowrap;
+  flex-shrink: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.pageNavBtn,
+.pageNumBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: var(--r);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--t1);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s;
+  user-select: none;
+  flex-shrink: 0;
+
+  svg {
+    width: 11px;
+    height: 11px;
+  }
+
+  &:hover:not(:disabled) {
+    background: var(--bg3);
+    color: var(--t0);
+    border-color: var(--bdr3);
+  }
+
+  &:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+}
+
+.pageNumBtnActive {
+  background: var(--blue-dim);
+  border-color: var(--blue-bdr);
   color: var(--blue);
+  font-weight: 700;
+
+  &:hover:not(:disabled) {
+    background: var(--blue-dim);
+    color: var(--blue);
+  }
 }
 
-// ── Tab content ──────────────────────────────────
-.upbody {
-  flex: 1;
-  min-height: 0;
-  position: relative;
+.pageEllipsis {
+  color: var(--t2);
+  font-size: 12px;
+  padding: 0 2px;
+  user-select: none;
+  flex-shrink: 0;
 }
 
-// Every panel is rendered inside a .tabPane at all times; only the active
-// one is switched to `display: flex` (see UploadInfer.tsx). This keeps
-// file lists, batch polling, and scroll position alive across tab
-// switches instead of remounting on every click.
-.tabPane {
-  position: absolute;
-  inset: 0;
-  flex-direction: row;
+.pageInfo {
+  font-size: 11px;
+  color: var(--t2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+  @include m.mono;
+}
+
+@media (min-width: 1920px) {
+  .section1Title {
+    font-size: 14px;
+  }
+
+  .section2Title {
+    font-size: 14px;
+  }
+
+  .uploadHint {
+    font-size: 13px;
+  }
+
+  .uploadZoneText {
+    font-size: 14px;
+  }
+
+  .sortHeaderLabel {
+    font-size: 12px;
+  }
+
+  .sortBtn {
+    font-size: 13px;
+  }
+
+  .fileName {
+    font-size: 14px;
+  }
+
+  .fileMeta {
+    font-size: 12px;
+  }
+
+  .fileDate {
+    font-size: 12px;
+  }
+
+  .badge {
+    font-size: 13px;
+  }
+
+  .btn {
+    font-size: 13px;
+  }
+
+  .listState {
+    font-size: 14px;
+  }
+
+  .searchInput {
+    font-size: 14px;
+  }
+
+  .searchCount {
+    font-size: 12px;
+  }
+
+  .dateLabel {
+    font-size: 12px;
+  }
+
+  .dateInput {
+    font-size: 13px;
+  }
+
+  .emptyState {
+    font-size: 14px;
+  }
+}
+
+// ── Per-file prompt viewer popup ─────────────────
+.promptViewerModal {
+  width: 100%;
+  max-width: 480px;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg1);
+  border: 1px solid var(--bdr2);
+  border-radius: var(--rl);
+  box-shadow: var(--shadow);
   overflow: hidden;
 }
 
-@media (max-width: 860px) {
-  .headerBar { flex-direction: column; align-items: stretch; gap: 12px; padding: 14px 16px; }
-  .tabbar { flex-wrap: wrap; }
-  .tabBtn { width: calc(50% - 5px); }
+.promptViewerHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--bdr);
+  flex-shrink: 0;
+}
 
-  .tabPane { flex-direction: column; }
+.promptViewerTitle {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--t0);
+}
+
+.promptViewerFile {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--t2);
+  @include m.truncate;
+}
+
+.promptViewerClose {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--t2);
+  cursor: pointer;
+
+  svg { width: 13px; height: 13px; }
+
+  &:hover {
+    background: var(--bg3);
+    color: var(--t0);
+  }
+}
+
+.promptViewerBody {
+  padding: 16px;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--t1);
+  white-space: pre-wrap;
+  word-break: break-word;
+  @include m.scrollbar;
+}
+
+.promptViewerEmpty {
+  color: var(--t2);
+  font-style: italic;
 }
