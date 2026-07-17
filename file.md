@@ -138,16 +138,15 @@ const UploadInfer: React.FC = () => {
     if (justFinished && activeFileId !== null) fetchFileData(activeFileId);
   }, [isBatchRunning]); // eslint-disable-line
 
-  const tabs: { id: TabId; label: string; step: number; hint: string }[] = [
-    { id: 'upload', label: t('uploadInfer.tabs.upload'), step: 1, hint: t('uploadInfer.tabs.uploadHint') },
-    { id: 'infer', label: t('uploadInfer.tabs.infer'), step: 2, hint: t('uploadInfer.tabs.inferHint') },
-    { id: 'results', label: t('uploadInfer.tabs.results'), step: 3, hint: t('uploadInfer.tabs.resultsHintFull') },
+  const tabs: { id: TabId; label: string; desc: string }[] = [
+    { id: 'upload', label: t('uploadInfer.tabs.upload'), desc: 'Add & browse your files' },
+    { id: 'infer', label: t('uploadInfer.tabs.infer'), desc: 'Configure & run analysis' },
+    { id: 'results', label: t('uploadInfer.tabs.results'), desc: 'View summaries & quizzes' },
   ];
-  const activeTabInfo = tabs.find(tab => tab.id === activeTab) ?? tabs[0];
 
   return (
     <div className={styles.page}>
-      {/* ── Header — title and tab bar share one row ── */}
+      {/* ── Header — title and self-explanatory tab cards share one row ── */}
       <div className={styles.headerBar}>
         <div className={styles.phTitle}>{t('uploadInfer.pageTitle')}</div>
 
@@ -161,20 +160,11 @@ const UploadInfer: React.FC = () => {
               className={`${styles.tabBtn} ${activeTab === tab.id ? styles.tabBtnActive : ''}`}
               onClick={() => setActiveTab(tab.id)}
             >
-              <span className={styles.tabStep}>{tab.step}</span>
-              {tab.label}
+              <span className={styles.tabLabel}>{tab.label}</span>
+              <span className={styles.tabDesc}>{tab.desc}</span>
             </button>
           ))}
         </div>
-      </div>
-
-      {/* ── Contextual help — tells a first-time user what this tab is for ── */}
-      <div className={styles.infoBanner}>
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="8" cy="8" r="6.25" />
-          <path d="M8 7.25v4M8 5.25v.1" />
-        </svg>
-        {activeTabInfo.hint}
       </div>
 
       <div className={styles.upbody}>
@@ -211,6 +201,11 @@ const UploadInfer: React.FC = () => {
 };
 
 export default UploadInfer;
+
+
+
+
+
 
 
 
@@ -282,84 +277,66 @@ export default UploadInfer;
 
 .tabbar {
   display: flex;
-  align-items: center;
+  align-items: stretch;
+  gap: 10px;
   flex-shrink: 0;
 }
 
 .tabBtn {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 36px;
-  padding: 0 2px;
-  margin-right: 24px;
-  border: none;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--t2);
-  font-family: var(--font-ui);
-  font-size: 13.5px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-  white-space: nowrap;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  width: 172px;
+  padding: 8px 14px;
+  border-radius: var(--rl);
+  border: 1px solid var(--bdr2);
+  background: var(--bg1);
   cursor: pointer;
+  text-align: left;
   @include m.theme-transition;
 
-  &:last-child {
-    margin-right: 0;
-  }
-
   &:hover {
-    color: var(--t1);
+    border-color: var(--bdr3);
+    background: var(--bg2);
   }
 }
 
 .tabBtnActive {
-  color: var(--t0);
-  font-weight: 600;
-  border-bottom-color: var(--blue);
-}
+  border-color: var(--blue);
+  background-color: var(--bg1);
+  background-image: linear-gradient(var(--blue-dim), var(--blue-dim));
 
-.tabStep {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--bg3);
-  color: var(--t2);
-  font-size: 10px;
-  font-weight: 700;
-  flex-shrink: 0;
-}
-
-.tabBtnActive .tabStep {
-  background: var(--blue);
-  color: #fff;
-}
-
-// ── Contextual help banner — explains what the active tab is for ──
-.infoBanner {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin: 14px 24px;
-  padding: 9px 14px;
-  border-radius: var(--r);
-  background: var(--blue-dim);
-  border: 1px solid var(--blue-bdr);
-  color: var(--t1);
-  font-size: 12.5px;
-  line-height: 1.4;
-  flex-shrink: 0;
-
-  svg {
-    width: 15px;
-    height: 15px;
-    color: var(--blue);
-    flex-shrink: 0;
+  &:hover {
+    border-color: var(--blue);
+    background-color: var(--bg1);
+    background-image: linear-gradient(var(--blue-dim), var(--blue-dim));
   }
+}
+
+.tabLabel {
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--t1);
+  letter-spacing: 0.01em;
+}
+
+.tabBtnActive .tabLabel {
+  color: var(--t0);
+}
+
+// Always visible — this is what tells the user what they'll find on
+// this tab, without needing to click it first or read a separate banner.
+.tabDesc {
+  font-size: 11px;
+  color: var(--t2);
+  white-space: nowrap;
+}
+
+.tabBtnActive .tabDesc {
+  color: var(--blue);
 }
 
 // ── Tab content ──────────────────────────────────
@@ -382,9 +359,8 @@ export default UploadInfer;
 
 @media (max-width: 860px) {
   .headerBar { flex-direction: column; align-items: stretch; gap: 12px; padding: 14px 16px; }
-  .tabbar { flex-wrap: wrap; row-gap: 8px; }
-  .tabBtn { margin-right: 16px; font-size: 12.5px; }
-  .infoBanner { margin: 12px 16px; }
+  .tabbar { flex-wrap: wrap; }
+  .tabBtn { width: calc(50% - 5px); }
 
   .tabPane { flex-direction: column; }
 }
