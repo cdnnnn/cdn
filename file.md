@@ -139,34 +139,32 @@ const UploadInfer: React.FC = () => {
   }, [isBatchRunning]); // eslint-disable-line
 
   const tabs: { id: TabId; label: string; desc: string }[] = [
-    { id: 'upload', label: t('uploadInfer.tabs.upload'), desc: 'Upload lecture files and browse everything you\u2019ve added.' },
-    { id: 'infer', label: t('uploadInfer.tabs.infer'), desc: 'Pick files, configure what to generate, and run analysis.' },
-    { id: 'results', label: t('uploadInfer.tabs.results'), desc: 'Select a processed file to open its summary, keywords, and quiz.' },
+    { id: 'upload', label: t('uploadInfer.tabs.upload'), desc: 'Add & browse your files' },
+    { id: 'infer', label: t('uploadInfer.tabs.infer'), desc: 'Configure & run analysis' },
+    { id: 'results', label: t('uploadInfer.tabs.results'), desc: 'View summaries & quizzes' },
   ];
-  const activeTabInfo = tabs.find(tab => tab.id === activeTab) ?? tabs[0];
 
   return (
     <div className={styles.page}>
-      {/* ── Header — tabs stand in for the title, active one reads as the page heading ── */}
+      {/* ── Header — title and self-explanatory tab cards share one row ── */}
       <div className={styles.headerBar}>
-        <div>
-          <div className={styles.headerTabs} role="tablist">
-            {tabs.map(tab => (
-              <button
-                key={tab.id}
-                type="button"
-                role="tab"
-                aria-selected={activeTab === tab.id}
-                className={`${styles.headerTab} ${activeTab === tab.id ? styles.headerTabActive : ''}`}
-                onClick={() => setActiveTab(tab.id)}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-          <div className={styles.headerSub}>{activeTabInfo.desc}</div>
+        <div className={styles.phTitle}>{t('uploadInfer.pageTitle')}</div>
+
+        <div className={styles.tabbar} role="tablist">
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              className={`${styles.tabBtn} ${activeTab === tab.id ? styles.tabBtnActive : ''}`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              <span className={styles.tabLabel}>{tab.label}</span>
+              <span className={styles.tabDesc}>{tab.desc}</span>
+            </button>
+          ))}
         </div>
-        <div className={styles.headerActions} />
       </div>
 
       <div className={styles.upbody}>
@@ -219,9 +217,6 @@ export default UploadInfer;
 
 
 
-
-
-
 // ═══════════════════════════════════════════════
 // UploadInfer.module.scss
 // LectureAI · Upload & Inference page shell + tab bar
@@ -236,66 +231,102 @@ export default UploadInfer;
   background: var(--bg0);
 }
 
-// ── Header — matches the reference: title/subtitle on the left, a
-// reserved action area on the right, and a plain flat divider beneath.
-// Our tabs stand in for the static title — the active one reads at
-// title weight/size, the others sit alongside as smaller nav links.
+// ── Header — title and tab bar share one row ──────
 .headerBar {
   flex-shrink: 0;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 20px 24px 16px;
-  border-bottom: 1px solid var(--bdr);
+  padding: 16px 24px;
+  position: relative;
+
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg,
+        rgba(139, 92, 246, 0.0) 0%,
+        rgba(139, 92, 246, 0.6) 20%,
+        rgba(56, 196, 186, 0.7) 50%,
+        rgba(240, 160, 48, 0.6) 80%,
+        rgba(240, 160, 48, 0.0) 100%);
+    pointer-events: none;
+  }
 }
 
-.headerTabs {
+.phTitle {
+  flex-shrink: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--t0);
+}
+
+.tabbar {
   display: flex;
-  align-items: baseline;
-  gap: 18px;
+  align-items: stretch;
+  gap: 10px;
+  flex-shrink: 0;
 }
 
-.headerTab {
-  padding: 0;
-  border: none;
-  background: transparent;
-  font-family: var(--font-ui);
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--t2);
+.tabBtn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  width: 172px;
+  padding: 8px 14px;
+  border-radius: var(--rl);
+  border: 1px solid var(--bdr2);
+  background: var(--bg1);
   cursor: pointer;
+  text-align: left;
   @include m.theme-transition;
 
   &:hover {
-    color: var(--t1);
+    border-color: var(--bdr3);
+    background: var(--bg2);
   }
 }
 
-.headerTabActive {
-  font-size: 19px;
-  font-weight: 600;
-  color: var(--t0);
+.tabBtnActive {
+  border-color: var(--blue);
+  background-color: var(--bg1);
+  background-image: linear-gradient(var(--blue-dim), var(--blue-dim));
 
   &:hover {
-    color: var(--t0);
+    border-color: var(--blue);
+    background-color: var(--bg1);
+    background-image: linear-gradient(var(--blue-dim), var(--blue-dim));
   }
 }
 
-.headerSub {
-  margin-top: 4px;
-  font-size: 13px;
-  color: var(--t2);
+.tabLabel {
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--t1);
+  letter-spacing: 0.01em;
 }
 
-// Reserved for per-tab actions (e.g. an export/run shortcut), so the
-// header keeps the same shape as the reference even before any button
-// is wired up here.
-.headerActions {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.tabBtnActive .tabLabel {
+  color: var(--t0);
+}
+
+// Always visible — this is what tells the user what they'll find on
+// this tab, without needing to click it first or read a separate banner.
+.tabDesc {
+  font-size: 11px;
+  color: var(--t2);
+  white-space: nowrap;
+}
+
+.tabBtnActive .tabDesc {
+  color: var(--blue);
 }
 
 // ── Tab content ──────────────────────────────────
@@ -317,13 +348,12 @@ export default UploadInfer;
 }
 
 @media (max-width: 860px) {
-  .headerBar { flex-direction: column; align-items: stretch; gap: 10px; padding: 14px 16px; }
-  .headerTabs { flex-wrap: wrap; gap: 14px; }
-  .headerTabActive { font-size: 17px; }
+  .headerBar { flex-direction: column; align-items: stretch; gap: 12px; padding: 14px 16px; }
+  .tabbar { flex-wrap: wrap; }
+  .tabBtn { width: calc(50% - 5px); }
 
   .tabPane { flex-direction: column; }
 }
-
 
 
 
@@ -562,12 +592,12 @@ export default UploadInfer;
   position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 11px 12px;
-  border-radius: var(--rl);
+  gap: 8px;
+  padding: 8px 9px;
+  border-radius: var(--r);
   border: 1px solid transparent;
   transition: all 0.12s;
-  margin-bottom: 4px;
+  margin-bottom: 3px;
   user-select: none;
 
   &:hover {
@@ -613,9 +643,9 @@ export default UploadInfer;
 }
 
 .ficon {
-  width: 30px;
-  height: 30px;
-  border-radius: 7px;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
