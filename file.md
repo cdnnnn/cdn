@@ -138,11 +138,12 @@ const UploadInfer: React.FC = () => {
     if (justFinished && activeFileId !== null) fetchFileData(activeFileId);
   }, [isBatchRunning]); // eslint-disable-line
 
-  const tabs: { id: TabId; label: string }[] = [
-    { id: 'upload', label: t('uploadInfer.tabs.upload') },
-    { id: 'infer', label: t('uploadInfer.tabs.infer') },
-    { id: 'results', label: t('uploadInfer.tabs.results') },
+  const tabs: { id: TabId; label: string; step: number; hint: string }[] = [
+    { id: 'upload', label: t('uploadInfer.tabs.upload'), step: 1, hint: t('uploadInfer.tabs.uploadHint') },
+    { id: 'infer', label: t('uploadInfer.tabs.infer'), step: 2, hint: t('uploadInfer.tabs.inferHint') },
+    { id: 'results', label: t('uploadInfer.tabs.results'), step: 3, hint: t('uploadInfer.tabs.resultsHintFull') },
   ];
+  const activeTabInfo = tabs.find(tab => tab.id === activeTab) ?? tabs[0];
 
   return (
     <div className={styles.page}>
@@ -160,10 +161,20 @@ const UploadInfer: React.FC = () => {
               className={`${styles.tabBtn} ${activeTab === tab.id ? styles.tabBtnActive : ''}`}
               onClick={() => setActiveTab(tab.id)}
             >
+              <span className={styles.tabStep}>{tab.step}</span>
               {tab.label}
             </button>
           ))}
         </div>
+      </div>
+
+      {/* ── Contextual help — tells a first-time user what this tab is for ── */}
+      <div className={styles.infoBanner}>
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="8" cy="8" r="6.25" />
+          <path d="M8 7.25v4M8 5.25v.1" />
+        </svg>
+        {activeTabInfo.hint}
       </div>
 
       <div className={styles.upbody}>
@@ -200,12 +211,6 @@ const UploadInfer: React.FC = () => {
 };
 
 export default UploadInfer;
-
-
-
-
-
-
 
 
 
@@ -276,33 +281,33 @@ export default UploadInfer;
 }
 
 .tabbar {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   flex-shrink: 0;
-  background: var(--bg2);
-  border: 1px solid var(--bdr);
-  border-radius: var(--rl);
-  padding: 3px;
-  gap: 2px;
 }
 
 .tabBtn {
   display: flex;
   align-items: center;
-  justify-content: center;
-  height: 32px;
-  padding: 0 18px;
-  border-radius: calc(var(--rl) - 3px);
+  gap: 8px;
+  height: 36px;
+  padding: 0 2px;
+  margin-right: 24px;
   border: none;
+  border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--t2);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 500;
   letter-spacing: 0.01em;
   white-space: nowrap;
   cursor: pointer;
   @include m.theme-transition;
+
+  &:last-child {
+    margin-right: 0;
+  }
 
   &:hover {
     color: var(--t1);
@@ -310,12 +315,50 @@ export default UploadInfer;
 }
 
 .tabBtnActive {
-  background: var(--blue-dim);
-  color: var(--blue);
+  color: var(--t0);
   font-weight: 600;
+  border-bottom-color: var(--blue);
+}
 
-  &:hover {
+.tabStep {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--bg3);
+  color: var(--t2);
+  font-size: 10px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.tabBtnActive .tabStep {
+  background: var(--blue);
+  color: #fff;
+}
+
+// ── Contextual help banner — explains what the active tab is for ──
+.infoBanner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 14px 24px;
+  padding: 9px 14px;
+  border-radius: var(--r);
+  background: var(--blue-dim);
+  border: 1px solid var(--blue-bdr);
+  color: var(--t1);
+  font-size: 12.5px;
+  line-height: 1.4;
+  flex-shrink: 0;
+
+  svg {
+    width: 15px;
+    height: 15px;
     color: var(--blue);
+    flex-shrink: 0;
   }
 }
 
@@ -339,8 +382,9 @@ export default UploadInfer;
 
 @media (max-width: 860px) {
   .headerBar { flex-direction: column; align-items: stretch; gap: 12px; padding: 14px 16px; }
-  .tabbar { width: 100%; }
-  .tabBtn { flex: 1; font-size: 12.5px; padding: 0 8px; }
+  .tabbar { flex-wrap: wrap; row-gap: 8px; }
+  .tabBtn { margin-right: 16px; font-size: 12.5px; }
+  .infoBanner { margin: 12px 16px; }
 
   .tabPane { flex-direction: column; }
 }
