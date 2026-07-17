@@ -31,7 +31,9 @@ const TourGuide: React.FC<TourGuideProps> = ({ steps, active, onFinish }) => {
   const [index, setIndex] = useState(0);
   const [rect, setRect] = useState<Rect | null>(null);
   const [ready, setReady] = useState(false);
-  const [correction, setCorrection] = useState({ dx: 0, dy: 0 });
+  // Real tooltip size, measured after each render — starts with a rough
+  // estimate for the very first paint, then locks to the actual size.
+  const [size, setSize] = useState({ w: 320, h: 190 });
   const tooltipRef = useRef<HTMLDivElement>(null);
 
   const step = steps[index];
@@ -78,24 +80,14 @@ const TourGuide: React.FC<TourGuideProps> = ({ steps, active, onFinish }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, index]);
 
-  // Correction pass — after the tooltip actually paints at its estimated
-  // position, check its real size and nudge it back on-screen if the
-  // estimate was off (e.g. a longer translated string than expected).
+  // Lock in the tooltip's real rendered size — runs after every render
+  // (cheap: only updates state, and thus re-renders, on an actual change).
   useLayoutEffect(() => {
-    setCorrection({ dx: 0, dy: 0 });
     const el = tooltipRef.current;
-    if (!el || !rect) return;
-    const r = el.getBoundingClientRect();
-    const EDGE = 12;
-    const vw = window.innerWidth, vh = window.innerHeight;
-    let dx = 0, dy = 0;
-    if (r.top < EDGE) dy = EDGE - r.top;
-    else if (r.bottom > vh - EDGE) dy = vh - EDGE - r.bottom;
-    if (r.left < EDGE) dx = EDGE - r.left;
-    else if (r.right > vw - EDGE) dx = vw - EDGE - r.right;
-    if (dx !== 0 || dy !== 0) setCorrection({ dx, dy });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rect, index]);
+    if (!el) return;
+    const w = el.offsetWidth, h = el.offsetHeight;
+    if (w && h && (w !== size.w || h !== size.h)) setSize({ w, h });
+  });
 
   useEffect(() => {
     if (!active) return;
@@ -118,37 +110,53 @@ const TourGuide: React.FC<TourGuideProps> = ({ steps, active, onFinish }) => {
     setIndex(next);
   };
 
-  // Tooltip placement — default under the target, flipped above if there
-  // isn't room, then clamped so it never runs off-screen horizontally.
+  // ── Placement: pick whichever side actually has room, treating the
+  // step's preferred side as a preference rather than a guarantee. This
+  // is what stops a "top" or "right" placement from clipping off-screen
+  // when its target sits near a viewport edge. ──
   const spotRect = rect ?? { top: -9999, left: -9999, width: 0, height: 0 };
   const vw = typeof window !== 'undefined' ? window.innerWidth : 1200;
   const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
-  const tooltipW = 320;
   const EDGE = 12;
-  const estH = 190; // rough estimate used before the real measurement pass below
-  const placement = step.placement ?? (spotRect.top + spotRect.height + estH + 24 > vh ? 'top' : 'bottom');
+  const GAP = PAD + 12;
 
-  let tTop = 0, tLeft = 0;
+  const spaceBelow = vh - (spotRect.top + spotRect.height);
+  const spaceAbove = spotRect.top;
+  const spaceRight = vw - (spotRect.left + spotRect.width);
+  const spaceLeft = spotRect.left;
+  const fits = {
+    bottom: spaceBelow >= size.h + GAP + EDGE,
+    top: spaceAbove >= size.h + GAP + EDGE,
+    right: spaceRight >= size.w + GAP + EDGE,
+    left: spaceLeft >= size.w + GAP + EDGE,
+  };
+  const preferred = step.placement;
+  const placement: 'top' | 'bottom' | 'left' | 'right' =
+    (preferred && fits[preferred]) ? preferred
+      : fits.bottom ? 'bottom'
+        : fits.top ? 'top'
+          : fits.right ? 'right'
+            : fits.left ? 'left'
+              : 'bottom'; // nothing fits cleanly — fall back and let clamping do its best
+
+  let top = 0, left = 0;
   if (placement === 'bottom') {
-    tTop = spotRect.top + spotRect.height + PAD + 12;
-    tTop = Math.min(tTop, vh - estH - EDGE);
-    tLeft = spotRect.left + spotRect.width / 2 - tooltipW / 2;
+    top = spotRect.top + spotRect.height + GAP;
+    left = spotRect.left + spotRect.width / 2 - size.w / 2;
   } else if (placement === 'top') {
-    tTop = spotRect.top - PAD - 12;
-    tTop = Math.max(tTop, estH + EDGE);
-    tLeft = spotRect.left + spotRect.width / 2 - tooltipW / 2;
+    top = spotRect.top - GAP - size.h;
+    left = spotRect.left + spotRect.width / 2 - size.w / 2;
   } else if (placement === 'left') {
-    tTop = spotRect.top + spotRect.height / 2;
-    tTop = Math.min(Math.max(tTop, estH / 2 + EDGE), vh - estH / 2 - EDGE);
-    tLeft = spotRect.left - PAD - 12 - tooltipW;
+    top = spotRect.top + spotRect.height / 2 - size.h / 2;
+    left = spotRect.left - GAP - size.w;
   } else {
-    tTop = spotRect.top + spotRect.height / 2;
-    tTop = Math.min(Math.max(tTop, estH / 2 + EDGE), vh - estH / 2 - EDGE);
-    tLeft = spotRect.left + spotRect.width + PAD + 12;
+    top = spotRect.top + spotRect.height / 2 - size.h / 2;
+    left = spotRect.left + spotRect.width + GAP;
   }
-  tTop = Math.max(tTop, EDGE);
-  tLeft = Math.min(Math.max(tLeft, EDGE), vw - tooltipW - EDGE);
-  const usesTransformY = placement === 'top';
+  // Final safety clamp regardless of placement — guarantees the tooltip
+  // is always fully on-screen even in edge cases nothing above caught.
+  top = Math.min(Math.max(top, EDGE), vh - size.h - EDGE);
+  left = Math.min(Math.max(left, EDGE), vw - size.w - EDGE);
 
   return (
     <div className={styles.tourRoot} aria-live="polite">
@@ -168,13 +176,10 @@ const TourGuide: React.FC<TourGuideProps> = ({ steps, active, onFinish }) => {
         ref={tooltipRef}
         className={`${styles.tooltip} ${styles[`place_${placement}`]}`}
         style={{
-          top: placement === 'top' || placement === 'bottom' ? tTop + correction.dy : undefined,
-          left: placement === 'left' || placement === 'right' ? undefined : tLeft + correction.dx,
-          right: placement === 'left' ? vw - tLeft - tooltipW - correction.dx : undefined,
-          transform: usesTransformY ? 'translateY(-100%)' : (placement === 'left' || placement === 'right') ? `translateY(-50%) translateY(${correction.dy}px)` : undefined,
+          top, left,
           maxHeight: `calc(100vh - ${EDGE * 2}px)`,
           overflowY: 'auto',
-          width: tooltipW,
+          width: 320,
         }}
       >
         <div className={styles.tooltipStep}>{index + 1} / {steps.length}</div>
