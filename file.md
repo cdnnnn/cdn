@@ -103,7 +103,7 @@ const InferencePanel: React.FC<InferencePanelProps> = ({ onClose, minimized = fa
   const {
     settings,
     selectedServerIds, isBatchRunning,
-    serverFiles,
+    fileDetailsById,
     models, modelsLoading: mlLoading, selectedModel,
     dateFrom, dateTo,
   } = useAppSelector(s => s.upload);
@@ -132,19 +132,20 @@ const InferencePanel: React.FC<InferencePanelProps> = ({ onClose, minimized = fa
 
   // No files selected — the "Generate content" checkboxes have nothing to
   // apply to, so force them all off and keep them disabled (below) until
-  // the user picks at least one file again.
+  // the user picks at least one file again. Only fires on an actual
+  // deselect-to-zero transition (prevN > 0) — NOT on initial mount, where
+  // n starts at 0 and the app's default-checked options (Summary/Keywords/
+  // Questions) should stay as-is until the user actually touches selection.
+  const prevNForResetRef = useRef(n);
   useEffect(() => {
-    if (n > 0) return;
-    const anyOn = settings.generateSummary || settings.generateKeywords || settings.generateQuestions
-      || settings.generateShortAnswer || settings.generateTrueFalse || settings.generateKeywordInsights
-      || settings.timestampedSummary;
-    if (anyOn) {
-      dispatch(updateSettings({
-        generateSummary: false, generateKeywords: false, generateQuestions: false,
-        generateShortAnswer: false, generateTrueFalse: false,
-        generateKeywordInsights: false, timestampedSummary: false,
-      }));
-    }
+    const prevN = prevNForResetRef.current;
+    prevNForResetRef.current = n;
+    if (n > 0 || prevN === 0) return;
+    dispatch(updateSettings({
+      generateSummary: false, generateKeywords: false, generateQuestions: false,
+      generateShortAnswer: false, generateTrueFalse: false,
+      generateKeywordInsights: false, timestampedSummary: false,
+    }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [n]);
 
@@ -328,7 +329,7 @@ const InferencePanel: React.FC<InferencePanelProps> = ({ onClose, minimized = fa
     prevSelectionCount.current = n;
 
     if (n === 1) {
-      const file = serverFiles.find(f => f.id === selectedServerIds[0]);
+      const file = fileDetailsById[selectedServerIds[0]];
       if (file) {
         const s = file.summary_prompt ?? '';
         const k = file.keywords_prompt ?? '';
@@ -372,7 +373,7 @@ const InferencePanel: React.FC<InferencePanelProps> = ({ onClose, minimized = fa
     }
   });
 
-  const selectedFiles = serverFiles.filter(f => selectedServerIds.includes(f.id));
+  const selectedFiles = selectedServerIds.map(id => fileDetailsById[id]).filter((f): f is ServerFile => !!f);
 
   const handlePromptCancel = () => {
     dispatch(updateSummaryPrompt(promptSnapshot.current.summary));
@@ -539,7 +540,7 @@ const InferencePanel: React.FC<InferencePanelProps> = ({ onClose, minimized = fa
                   </div>
                   <div className={styles.submittingFiles}>
                     {selectedServerIds.slice(0, 5).map((id, i) => {
-                      const f = serverFiles.find(sf => sf.id === id);
+                      const f = fileDetailsById[id];
                       return f ? (
                         <div key={id} className={styles.submittingFile}>
                           <span className={styles.submittingDot} style={{ animationDelay: `${i * 0.15}s` }} />
@@ -1059,6 +1060,15 @@ const InferencePanel: React.FC<InferencePanelProps> = ({ onClose, minimized = fa
 };
 
 export default InferencePanel;
+
+
+
+
+
+
+
+
+
 
 
 
@@ -3007,6 +3017,14 @@ textarea.fc {
 
 
 
+
+
+
+
+
+
+
+
 // ═══════════════════════════════════════════════
 // FileSidebar.module.scss
 // Content Analytics · Shared sidebar for the Infer + Workspace tabs
@@ -3758,6 +3776,20 @@ textarea.fc {
 .sortAsc {
   transform: rotate(180deg);
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -5190,6 +5222,11 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
 };
 
 export default FilePanel;
+
+
+
+
+
 
 
 
