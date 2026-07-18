@@ -76,7 +76,7 @@ interface Props {
   // navigates to the Infer or Result tab, not just on first mount.
   active: boolean;
   activeFileId?: number | null;
-  onFileClick?: (fileId: number) => void;
+  onFileClick?: (fileId: number, fileName: string) => void;
 }
 
 const PAGE_SIZES = [25, 50, 75, 100];
@@ -215,12 +215,12 @@ const FileSidebar: React.FC<Props> = ({ mode, active, activeFileId = null, onFil
   const allSelected = files.length > 0 && pageSelectedCount === files.length;
   const someSelected = pageSelectedCount > 0 && !allSelected;
 
-  const handleRowClick = (fileId: number) => {
+  const handleRowClick = (fileId: number, fileName: string) => {
     if (mode === 'select') {
       if (isBatchRunning) return;
       dispatch(toggleServerFileSelection(fileId));
     } else {
-      onFileClick?.(fileId);
+      onFileClick?.(fileId, fileName);
     }
   };
 
@@ -359,11 +359,11 @@ const FileSidebar: React.FC<Props> = ({ mode, active, activeFileId = null, onFil
                 ${isChecked ? styles.active : ''}
                 ${isActiveView ? styles.activeView : ''}
                 ${disabled ? styles.rowDisabled : ''}`}
-              onClick={() => !disabled && handleRowClick(f.id)}
-              onKeyDown={e => { if (!disabled && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); handleRowClick(f.id); } }}
+              onClick={() => !disabled && handleRowClick(f.id, f.original_name)}
+              onKeyDown={e => { if (!disabled && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); handleRowClick(f.id, f.original_name); } }}
             >
               {mode === 'select' && (
-                <Checkbox checked={isChecked} onChange={() => handleRowClick(f.id)} disabled={isBatchRunning} />
+                <Checkbox checked={isChecked} onChange={() => handleRowClick(f.id, f.original_name)} disabled={isBatchRunning} />
               )}
               <div className={`${styles.ficon} ${styles[ext]}`}>{ext.toUpperCase()}</div>
               <div className={styles.hi}>
@@ -497,754 +497,304 @@ export default FileSidebar;
 
 
 
+
+
+
+
+
+
+
+
+
+
 // ═══════════════════════════════════════════════
-// FileSidebar.module.scss
-// Content Analytics · Shared sidebar for the Infer + Workspace tabs
+// pages/UploadInfer/UploadInfer.tsx
+// LectureAI · Upload & Inference page
 // ═══════════════════════════════════════════════
-@use '../../styles/mixins' as m;
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useAppSelector, useAppDispatch } from '../../store/hooks';
+import { clearServerSelection } from '../../store/uploadSlice';
+import api from '../../services/api';
+import FilePanel from './FilePanel';
+import InferencePanel from './InferencePanel';
+import WorkspacePanel from './WorkspacePanel';
+import FileSidebar from './FileSidebar';
+import TourGuide, { TourStep } from './TourGuide';
+import styles from './UploadInfer.module.scss';
 
-.sidebar {
-  width: 400px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--bg0);
-  border-right: 1px solid var(--bdr);
+// ── Keyword Insights (from GET /files/{id}) ──────
+export interface KGEdge { type: string; source: string; target: string; }
+export interface KGNode { id: string; label: string; title?: string; value?: number; }
+export interface KnowledgeGraph { edges: KGEdge[]; nodes: KGNode[]; }
+export interface WordCloudData { wordcloud: [string, number][]; complexity_map: Record<string, string>; }
+export interface TimelineDataset { data: number[]; label: string; }
+export interface TimelineData { labels: string[]; datasets: TimelineDataset[]; timestamped: boolean; }
+export interface HeatmapData { matrix: number[][]; keywords: string[]; segments: string[]; timestamped: boolean; }
+export interface ClusterItem { id: string; label: string; value: number; }
+export interface ClustersData { clusters: Record<string, ClusterItem[]>; }
+export interface FrequencyItem { count: number; keyword: string; relative_pct: number; first_mention_pct: number; }
+export interface FrequencyData { data: FrequencyItem[]; }
+export interface PrereqEdge { reason: string; enables: string; prerequisite: string; }
+export interface PrereqNode { id: string; label: string; value: number; }
+export interface PrerequisitesData { edges: PrereqEdge[]; nodes: PrereqNode[]; }
+export interface ImportanceComplexityItem { reason: string; keyword: string; frequency: number; complexity: string; importance: number; }
+export interface ImportanceComplexityData { data: ImportanceComplexityItem[]; }
+export interface CooccurrenceData { matrix: number[][]; keywords: string[]; }
+export interface GlossaryItem { term: string; definition: string; first_mentioned_ms: number; }
+export interface GlossaryData { glossary: GlossaryItem[]; }
 
-  :global(html.light) & {
-    background: #fff;
-  }
+export interface KeywordInsights {
+  enriched_keywords: unknown | null;
+  knowledge_graph: KnowledgeGraph | null;
+  word_cloud: WordCloudData | null;
+  timeline: TimelineData | null;
+  heatmap: HeatmapData | null;
+  clusters: ClustersData | null;
+  frequency: FrequencyData | null;
+  prerequisites: PrerequisitesData | null;
+  importance_complexity: ImportanceComplexityData | null;
+  cooccurrence: CooccurrenceData | null;
+  congnitive_Load: unknown | null;
+  segments: { segments: unknown[] } | null;
+  glossary: GlossaryData | null;
 }
 
-// ── Date range filter ─────────────────────────
-.dateFilter {
-  display: flex;
-  align-items: flex-end;
-  gap: 6px;
-  padding: 12px 14px;
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--bdr);
+export interface FileResult {
+  summary: string;
+  keywords: string[];
+  faq: string;
+  shortAnswer: string;
+  trueFalse: string;
+  timestampedSummary: string;
+  keywordInsights: KeywordInsights | null;
+  fileName: string;
+  fileId: number;
+  insertedAt: string;
 }
 
-.dateField {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  flex: 1;
-  min-width: 0;
-}
+// ── Tabs ──────────────────────────────────────────
+// All three are always clickable — there's no gating on a previous tab
+// being "complete". Every panel below stays mounted at all times (just
+// hidden with CSS) so file lists, batch polling, and scroll position
+// survive switching tabs instead of resetting.
+type TabId = 'upload' | 'infer' | 'results';
 
-.dateLabel {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--t2);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  @include m.mono;
-}
+const UploadInfer: React.FC = () => {
+  const { t } = useTranslation();
+  const isBatchRunning = useAppSelector(s => s.upload.isBatchRunning);
+  const dispatch = useAppDispatch();
 
-.dateInput {
-  width: 100%;
-  padding: 4px 7px;
-  background: var(--bg1);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 13px;
-  outline: none;
-  appearance: none;
-  transition: border-color 0.12s;
-  cursor: pointer;
+  const [activeTab, setActiveTab] = useState<TabId>('upload');
 
-  &:focus {
-    border-color: var(--blue);
-    box-shadow: 0 0 0 2px var(--blue-dim);
-  }
+  // ── Guided tour ──
+  const TOUR_STORAGE_KEY = 'uploadInfer.tourSeen';
+  const [tourActive, setTourActive] = useState(false);
+  useEffect(() => {
+    try {
+      if (!localStorage.getItem(TOUR_STORAGE_KEY)) setTourActive(true);
+    } catch { /* localStorage unavailable — just skip auto-start */ }
+  }, []);
+  const finishTour = useCallback(() => {
+    setTourActive(false);
+    try { localStorage.setItem(TOUR_STORAGE_KEY, '1'); } catch { /* ignore */ }
+  }, []);
+  const startTour = useCallback(() => { setActiveTab('upload'); setTourActive(true); }, []);
 
-  &::-webkit-calendar-picker-indicator {
-    opacity: 0.7;
-    cursor: pointer;
-    filter: var(--date-icon-filter);
-  }
-}
+  const tourSteps: TourStep[] = [
+    {
+      target: 'tabbar',
+      title: t('uploadInfer.tour.tabsTitle', 'Three steps, always available'),
+      content: t('uploadInfer.tour.tabsBody', 'Upload, Inference, and Results — you can jump between them any time, nothing is locked behind finishing a previous step.'),
+      onEnter: () => setActiveTab('upload'),
+    },
+    {
+      target: 'upload-dropzone',
+      title: t('uploadInfer.tour.uploadTitle', 'Add your files here'),
+      content: t('uploadInfer.tour.uploadBody', 'Drag in a lecture recording\u2019s captions (.vtt or .srt), or browse for one.'),
+      onEnter: () => setActiveTab('upload'),
+    },
+    {
+      target: 'upload-cards',
+      title: t('uploadInfer.tour.cardsTitle', 'Your uploaded files'),
+      content: t('uploadInfer.tour.cardsBody', 'Every file shows up here as a card. The small icons on each card open the prompt that was used to generate its content.'),
+      onEnter: () => setActiveTab('upload'),
+    },
+    {
+      target: 'infer-sidebar',
+      title: t('uploadInfer.tour.inferSidebarTitle', 'Pick files to analyze'),
+      content: t('uploadInfer.tour.inferSidebarBody', 'Select one or more files here \u2014 this list and its date filter work independently of the Upload tab.'),
+      placement: 'right',
+      onEnter: () => setActiveTab('infer'),
+    },
+    {
+      target: 'infer-settings',
+      title: t('uploadInfer.tour.inferSettingsTitle', 'Choose what to generate'),
+      content: t('uploadInfer.tour.inferSettingsBody', 'Turn on summaries, keywords, quiz questions, and more \u2014 each option can have its own custom prompt.'),
+      onEnter: () => setActiveTab('infer'),
+    },
+    {
+      target: 'infer-run',
+      title: t('uploadInfer.tour.inferRunTitle', 'Run it'),
+      content: t('uploadInfer.tour.inferRunBody', 'Once you\u2019ve picked files and settings, run the batch here. You can watch progress or switch tabs \u2014 it keeps running either way.'),
+      placement: 'left',
+      onEnter: () => setActiveTab('infer'),
+    },
+    {
+      target: 'results-sidebar',
+      title: t('uploadInfer.tour.resultsSidebarTitle', 'Find a finished file'),
+      content: t('uploadInfer.tour.resultsSidebarBody', 'Once a file\u2019s done, click it here to open its results.'),
+      placement: 'right',
+      onEnter: () => setActiveTab('results'),
+    },
+    {
+      target: 'results-content',
+      title: t('uploadInfer.tour.resultsContentTitle', 'Your notes, ready to use'),
+      content: t('uploadInfer.tour.resultsContentBody', 'Summary, keywords, quiz questions, and more \u2014 all generated from the file you selected.'),
+      placement: 'left',
+      onEnter: () => setActiveTab('results'),
+    },
+  ];
 
-.dateSep {
-  font-size: 13px;
-  color: var(--t2);
-  padding-bottom: 4px;
-  flex-shrink: 0;
-}
+  // "selectMode" is FilePanel's checkbox-selection UI for building the set
+  // of files to run inference on. Turning it on stays on the Upload tab
+  // (so people can keep browsing/checking files there) — the Infer tab
+  // badge below nudges them over once something's selected.
+  const [selectMode, setSelectMode] = useState(false);
+  useEffect(() => { if (!isBatchRunning) setSelectMode(false); }, [isBatchRunning]);
+  useEffect(() => { if (!selectMode) dispatch(clearServerSelection()); }, [selectMode]); // eslint-disable-line
+  useEffect(() => { return () => { dispatch(clearServerSelection()); }; }, []); // eslint-disable-line
 
-// ── Status filter ──────────────────────────────
-.statusFilterWrap {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0 14px 10px;
-  flex-shrink: 0;
-}
+  const enterInferSelection = useCallback(() => setSelectMode(true), []);
+  const exitInferSelection = useCallback(() => setSelectMode(false), []);
 
-.statusFilterIcon {
-  width: 14px;
-  height: 14px;
-  color: var(--t2);
-  flex-shrink: 0;
-}
+  const [fileResult, setFileResult] = useState<FileResult | null>(null);
+  const [fileLoading, setFileLoading] = useState(false);
+  const [activeFileId, setActiveFileId] = useState<number | null>(null);
 
-.statusFilterSelect {
-  flex: 1;
-  height: 30px;
-  padding: 0 8px;
-  background: var(--bg1);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 12.5px;
-  outline: none;
-  cursor: pointer;
-  transition: border-color 0.12s;
+  const fetchFileData = useCallback(async (fileId: number, knownFileName?: string) => {
+    setFileLoading(true);
+    try {
+      const res = await api.get(`/files/${fileId}`);
+      const d = (res.data as any)?.data ?? {};
+      setFileResult(prev => ({
+        fileId,
+        fileName: d.original_name ?? knownFileName ?? prev?.fileName ?? String(fileId),
+        insertedAt: d.inserted_at ?? prev?.insertedAt ?? '',
+        summary: d.summary ?? '',
+        keywords: d.keywords ?? [],
+        faq: d.faq ?? '[]',
+        shortAnswer: d.short_answer ?? '[]',
+        trueFalse: d.true_false ?? '[]',
+        // NOTE: backend key is genuinely "timstamped_summary" (missing an "e") — match it exactly.
+        timestampedSummary: d.timstamped_summary ?? '[]',
+        keywordInsights: d.keyword_insights ?? null,
+      }));
+    } catch { setFileResult(null); } finally { setFileLoading(false); }
+  }, []);
 
-  &:focus { border-color: var(--blue); }
-  &:disabled { opacity: 0.5; cursor: default; }
-}
+  // Clicking a file (from the Upload tab's list, or the Workspace tab's
+  // own picker) loads its results and jumps straight to the Workspace tab.
+  // `fileName` is already known from the row that was clicked, so the
+  // title can show it immediately/reliably rather than depending on the
+  // detail endpoint's field naming.
+  const handleFileClick = useCallback(async (fileId: number, fileName?: string) => {
+    setActiveTab('results');
+    if (fileId === activeFileId) return;
+    setActiveFileId(fileId);
+    setFileResult(fileName ? {
+      fileId, fileName, insertedAt: '', summary: '', keywords: [], faq: '[]',
+      shortAnswer: '[]', trueFalse: '[]', timestampedSummary: '[]', keywordInsights: null,
+    } : null);
+    await fetchFileData(fileId, fileName);
+  }, [activeFileId, fetchFileData]);
 
-.applyBtn {
-  align-self: flex-end;
-  padding: 4px 12px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t1);
-  font-family: var(--font-ui);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: all 0.12s;
-
-  &:hover:not(:disabled) {
-    background: var(--bg3);
-    border-color: var(--bdr3);
-  }
-
-  &:disabled {
-    opacity: 0.6;
-    cursor: default;
-  }
-}
-
-.miniSpinner {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  border: 2px solid var(--bdr3);
-  border-top-color: var(--t1);
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-}
-
-.headSpinner {
-  display: inline-block;
-  width: 11px;
-  height: 11px;
-  border: 2px solid var(--bdr3);
-  border-top-color: var(--blue);
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  flex-shrink: 0;
-}
-
-.rowsSpinner {
-  display: inline-block;
-  width: 18px;
-  height: 18px;
-  border: 2.5px solid var(--bdr3);
-  border-top-color: var(--blue);
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  margin-bottom: 8px;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-// ── List header ────────────────────────────────
-.head {
-  @include m.flex-center;
-  gap: 8px;
-  padding: 12px 14px 8px;
-  flex-shrink: 0;
-}
-
-.headTitle {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--t1);
-}
-
-.headCount {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--t2);
-  background: var(--bg2);
-  border-radius: 99px;
-  padding: 1px 7px;
-}
-
-.headSelected {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--blue);
-}
-
-// ── Search ─────────────────────────────────────
-.searchWrap {
-  position: relative;
-  margin: 0 14px 10px;
-  flex-shrink: 0;
-}
-
-.searchIcon {
-  position: absolute;
-  left: 9px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 13px;
-  height: 13px;
-  color: var(--t2);
-  pointer-events: none;
-}
-
-.searchInput {
-  width: 100%;
-  height: 30px;
-  padding: 0 10px 0 28px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: var(--bg1);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 12px;
-
-  &::placeholder { color: var(--t2); }
-  &:focus { outline: none; border-color: var(--bdr3); }
-}
-
-// ── Rows ───────────────────────────────────────
-.rowsWrap {
-  position: relative;
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.rows {
-  flex: 1;
-  overflow-y: auto;
-  padding: 0 8px 12px;
-  @include m.scrollbar;
-}
-
-.rowsLoadingOverlay {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg1);
-  background: color-mix(in srgb, var(--bg0) 70%, transparent);
-  cursor: wait;
-  z-index: 2;
-}
-
-.empty {
-  padding: 20px 12px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--t2);
-}
-
-.emptyLoading {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 24px 12px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--t2);
-}
-
-.row {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 8px 9px;
-  border-radius: var(--r);
-  color: var(--t1);
-  cursor: pointer;
-  @include m.theme-transition;
-
-  &:hover { background: var(--bg2); }
-}
-
-.rowDisabled {
-  opacity: 0.5;
-  cursor: default;
-  pointer-events: none;
-}
-
-// ── File row — mirrors FilePanel's pre-card .hitm design ──────
-.hitm {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 9px;
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  transition: all 0.12s;
-  margin-bottom: 3px;
-  user-select: none;
-
-  &:hover {
-    background: var(--bg2);
-    border-color: var(--bdr);
-  }
-
-  &.active {
-    background: rgba(91, 164, 239, 0.06);
-    border-color: var(--blue-bdr);
-
-    &::before {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 6px;
-      bottom: 6px;
-      width: 3px;
-      border-radius: 0 3px 3px 0;
-      background: linear-gradient(180deg, var(--blue), #a78bfa);
+  const handleDeleteComplete = useCallback((deletedIds: number[], all?: boolean) => {
+    if (all || (activeFileId !== null && deletedIds.includes(activeFileId))) {
+      setActiveFileId(null);
+      setFileResult(null);
     }
-  }
+  }, [activeFileId]);
 
-  &.activeView {
-    background: rgba(167, 139, 250, 0.06);
-    border-color: rgba(167, 139, 250, 0.3);
+  const prevBatchRunning = useRef(false);
+  useEffect(() => {
+    const justFinished = prevBatchRunning.current && !isBatchRunning;
+    prevBatchRunning.current = isBatchRunning;
+    if (justFinished && activeFileId !== null) fetchFileData(activeFileId);
+  }, [isBatchRunning]); // eslint-disable-line
 
-    &::before {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 6px;
-      bottom: 6px;
-      width: 3px;
-      border-radius: 0 3px 3px 0;
-      background: linear-gradient(180deg, #a78bfa, var(--amber));
-    }
-  }
-}
+  const tabs: { id: TabId; label: string; desc: string }[] = [
+    { id: 'upload', label: t('uploadInfer.tabs.upload'), desc: 'Add & browse your files' },
+    { id: 'infer', label: t('uploadInfer.tabs.infer'), desc: 'Configure & run analysis' },
+    { id: 'results', label: t('uploadInfer.tabs.results'), desc: 'View summaries & quizzes' },
+  ];
 
-.hitmSelectable {
-  cursor: pointer;
-}
+  return (
+    <div className={styles.page}>
+      {/* ── Header — title and self-explanatory tab cards share one row ── */}
+      <div className={styles.headerBar}>
+        <div className={styles.phTitleRow}>
+          <div className={styles.phTitle}>{t('uploadInfer.pageTitle')}</div>
+          <button type="button" className={styles.tourTriggerBtn} onClick={startTour}>
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="8" cy="8" r="6.25" />
+              <path d="M6.1 6.2a1.9 1.9 0 013.6.7c0 1.3-1.7 1.5-1.7 2.7M8 11.4v.1" />
+            </svg>
+            {t('uploadInfer.tour.takeTour', 'Take a tour')}
+          </button>
+        </div>
 
-.ficon {
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 700;
-  @include m.mono;
-  flex-shrink: 0;
+        <div className={styles.tabbar} role="tablist" data-tour="tabbar">
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              className={`${styles.tabBtn} ${activeTab === tab.id ? styles.tabBtnActive : ''}`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              <span className={styles.tabLabel}>{tab.label}</span>
+              <span className={styles.tabDesc}>{tab.desc}</span>
+            </button>
+          ))}
+        </div>
+      </div>
 
-  &.vtt { background: var(--blue-dim); color: var(--blue); }
-  &.srt { background: var(--green-dim); color: var(--green); }
-}
+      <div className={styles.upbody}>
+        <div className={styles.tabPane} style={{ display: activeTab === 'upload' ? 'flex' : 'none' }}>
+          <FilePanel
+            selectMode={selectMode}
+            onEnterSelectMode={enterInferSelection}
+            onExitSelectMode={exitInferSelection}
+            onDeleteComplete={handleDeleteComplete}
+            active={activeTab === 'upload'}
+            onGoToInfer={() => setActiveTab('infer')}
+          />
+        </div>
 
-.hi {
-  flex: 1;
-  min-width: 0;
-}
+        <div className={styles.tabPane} style={{ display: activeTab === 'infer' ? 'flex' : 'none' }}>
+          <FileSidebar mode="select" active={activeTab === 'infer'} />
+          <InferencePanel />
+        </div>
 
-.hn {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--t0);
-  @include m.truncate;
-}
+        <div className={styles.tabPane} style={{ display: activeTab === 'results' ? 'flex' : 'none' }}>
+          <FileSidebar mode="view" active={activeTab === 'results'} activeFileId={activeFileId} onFileClick={handleFileClick} />
+          <div data-tour="results-content" style={{ display: 'contents' }}>
+            <WorkspacePanel
+              step2Visible={false}
+              fileResult={fileResult}
+              fileLoading={fileLoading}
+              activeFileId={activeFileId}
+              onResultUpdate={patch => setFileResult(prev => prev ? { ...prev, ...patch } : prev)}
+            />
+          </div>
+        </div>
+      </div>
 
-.hm {
-  font-size: 12px;
-  color: var(--t2);
-  margin-top: 2px;
-  @include m.mono;
-}
+      <TourGuide steps={tourSteps} active={tourActive} onFinish={finishTour} />
+    </div>
+  );
+};
 
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  padding: 2px 7px;
-  border-radius: 99px;
-  font-weight: 500;
-  border: 1px solid transparent;
-  white-space: nowrap;
-  flex-shrink: 0;
-  @include m.mono;
-}
-
-.bSelected {
-  background: var(--blue-dim);
-  color: var(--blue);
-  border-color: var(--blue-bdr);
-}
-
-.bInferred {
-  background: var(--green-dim);
-  color: var(--green);
-  border-color: var(--green-bdr);
-}
-
-.bNotInferred {
-  background: rgba(240, 160, 48, 0.1);
-  color: var(--amber);
-  border-color: rgba(240, 160, 48, 0.3);
-}
-
-.bRunning {
-  background: var(--blue-dim);
-  color: var(--blue);
-  border-color: var(--blue-bdr);
-}
-
-.bQueued {
-  background: rgba(240, 160, 48, 0.1);
-  color: var(--amber);
-  border-color: rgba(240, 160, 48, 0.3);
-}
-
-// Waiting — neutral gray, distinct from "not inferenced" (amber)
-.bWaiting {
-  background: var(--bg2);
-  color: var(--t2);
-  border-color: var(--bdr2);
-}
-
-.badgeDot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
-  animation: fsBadgePulse 1.4s ease-in-out infinite;
-}
-
-@keyframes fsBadgePulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-}
-
-// ── Checkbox (mirrors FilePanel's) ─────────────
-.cb {
-  width: 15px;
-  height: 15px;
-  flex-shrink: 0;
-  border-radius: 4px;
-  border: 1px solid var(--cb-bdr);
-  background: transparent;
-  cursor: pointer;
-  position: relative;
-  transition: all 0.12s;
-
-  &:hover { border-color: var(--blue); }
-}
-
-.cbChecked {
-  background: var(--blue);
-  border-color: var(--blue);
-
-  &::after {
-    content: '';
-    position: absolute;
-    left: 4px;
-    top: 1px;
-    width: 4px;
-    height: 8px;
-    border: solid white;
-    border-width: 0 2px 2px 0;
-    transform: rotate(45deg);
-  }
-}
-
-.cbIndet {
-  background: var(--blue);
-  border-color: var(--blue);
-
-  &::after {
-    content: '';
-    position: absolute;
-    left: 3px;
-    top: 6px;
-    width: 7px;
-    height: 2px;
-    background: white;
-  }
-}
-
-.cbDisabled {
-  opacity: 0.4;
-  pointer-events: none;
-}
-
-// ── Pagination footer — matches the Upload tab's layout ──
-.paginationBar {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 12px;
-  border-top: 1px solid var(--bdr);
-  flex-shrink: 0;
-}
-
-.paginationTopRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex-wrap: nowrap;
-  min-width: 0;
-}
-
-.pageSizeGroup {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.pageSizeLabel {
-  font-size: 11px;
-  color: var(--t2);
-  white-space: nowrap;
-}
-
-.pageSizeSelect {
-  padding: 3px 6px;
-  background: var(--bg1);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  color: var(--t1);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  outline: none;
-  cursor: pointer;
-  transition: border-color 0.12s;
-
-  &:focus { border-color: var(--blue); }
-}
-
-.pageNav {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.pageNavBtn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: var(--bg1);
-  color: var(--t2);
-  cursor: pointer;
-  transition: all 0.12s;
-  flex-shrink: 0;
-
-  svg { width: 13px; height: 13px; }
-
-  &:hover:not(:disabled) {
-    background: var(--bg2);
-    color: var(--t0);
-  }
-
-  &:disabled {
-    opacity: 0.35;
-    cursor: default;
-  }
-}
-
-.pageNumBtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 24px;
-  height: 24px;
-  padding: 0 6px;
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--t1);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.12s;
-  user-select: none;
-  flex-shrink: 0;
-
-  &:hover:not(:disabled) {
-    background: var(--bg3);
-    color: var(--t0);
-    border-color: var(--bdr3);
-  }
-
-  &:disabled {
-    opacity: 0.35;
-    cursor: default;
-  }
-}
-
-.pageNumBtnActive {
-  background: var(--blue-dim);
-  border-color: var(--blue-bdr);
-  color: var(--blue);
-  font-weight: 700;
-
-  &:hover:not(:disabled) {
-    background: var(--blue-dim);
-    color: var(--blue);
-  }
-}
-
-.pageEllipsis {
-  color: var(--t2);
-  font-size: 12px;
-  padding: 0 2px;
-  user-select: none;
-  flex-shrink: 0;
-}
-
-.pageInfo {
-  font-size: 11px;
-  color: var(--t2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: right;
-  @include m.mono;
-}
-
-.pageIndicator {
-  font-size: 12px;
-  color: var(--t2);
-  @include m.mono;
-  min-width: 44px;
-  text-align: center;
-}
-
-// ── Sort header — same as the Upload tab's sort chip ──
-.sortHeader {
-  display: flex;
-  align-items: center;
-  height: 32px;
-  background: var(--bg2);
-  border: 1px solid var(--bdr);
-  border-radius: var(--r);
-  padding: 0 6px 0 10px;
-  gap: 6px;
-  margin: 0 14px 10px;
-  flex-shrink: 0;
-  overflow: hidden;
-}
-
-.sortHeaderLabel {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--t2);
-  font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  white-space: nowrap;
-  flex-shrink: 0;
-
-  svg {
-    width: 11px;
-    height: 11px;
-    opacity: 0.6;
-  }
-}
-
-.sortCols {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex: 1;
-}
-
-.sortCol {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 6px;
-  background: transparent;
-  border: none;
-  border-radius: 5px;
-  color: var(--t2);
-  font-size: 11.5px;
-  font-family: var(--font-mono);
-  cursor: pointer;
-  transition: all 0.12s;
-  white-space: nowrap;
-
-  svg {
-    width: 8px;
-    height: 10px;
-    flex-shrink: 0;
-    transition: transform 0.2s;
-  }
-
-  &:hover:not(:disabled) {
-    background: var(--bg3);
-    color: var(--t1);
-  }
-
-  &:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-}
-
-.sortColActive {
-  background: var(--blue-dim);
-  color: var(--blue);
-  font-weight: 600;
-
-  &:hover:not(:disabled) {
-    background: var(--blue-dim);
-  }
-}
-
-.sortInactive {
-  opacity: 0.25;
-}
-
-.sortAsc {
-  transform: rotate(180deg);
-}
+export default UploadInfer;
