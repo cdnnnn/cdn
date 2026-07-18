@@ -1160,6 +1160,10 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
                   </div>
                 )}
 
+                <div className={`${styles.fcardIcon} ${styles[ext]} ${(selectable || deletable || exportable) ? styles.fcardIconShifted : ''}`}>
+                  {ext.toUpperCase()}
+                </div>
+
                 {hasLinks && (
                   <div className={styles.fcardLinks}>
                     {f.dictionary_id && (
@@ -1182,7 +1186,6 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
                   </div>
                 )}
 
-                <div className={`${styles.fcardIcon} ${styles[ext]}`}>{ext.toUpperCase()}</div>
                 <div className={styles.fcardName}>{f.original_name}</div>
                 <div className={styles.fcardMeta}>{f.inserted_at} · #{f.id}</div>
 
@@ -1421,6 +1424,8 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
 };
 
 export default FilePanel;
+
+
 
 
 
@@ -2545,7 +2550,7 @@ export default FilePanel;
   flex-direction: column;
   align-items: center;
   justify-content: flex-start;
-  padding: 18px 14px 36px;
+  padding: 46px 14px 36px;
   border-radius: var(--rl);
   border: 1px solid var(--bdr);
   background: var(--bg1);
@@ -2625,19 +2630,28 @@ export default FilePanel;
 }
 
 .fcardIcon {
-  width: 36px;
-  height: 36px;
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 1;
+  width: 32px;
+  height: 32px;
   border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 700;
-  flex-shrink: 0;
-  margin-bottom: 12px;
+  transition: top 0.12s;
 
   &.vtt { background: var(--blue-dim); color: var(--blue); }
   &.srt { background: var(--green-dim); color: var(--green); }
+}
+
+// When the selection checkbox is also occupying the top-left corner,
+// nudge the ext badge down below it instead of overlapping.
+.fcardIconShifted {
+  top: 40px;
 }
 
 .fcardName {
@@ -2675,6 +2689,7 @@ export default FilePanel;
   gap: 4px;
   flex-shrink: 0;
   margin-top: auto;
+  margin-bottom: 10px;
   cursor: default;
 }
 
