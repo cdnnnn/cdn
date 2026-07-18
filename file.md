@@ -975,29 +975,30 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
               <button className={styles.applyBtn} onClick={handleApply} disabled={filesLoading || isBatchRunning}>{t('uploadInfer.filePanel.applyDate')}</button>
             </div>
 
-            {/* ── Status filter ── */}
-            <div className={styles.statusFilterWrap}>
-              <svg className={styles.dateIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M2 4h12M4.5 8h7M7 12h2" />
-              </svg>
-              <span className={styles.filterBarLabel}>{t('uploadInfer.filePanel.statusLabel', 'Status')}</span>
-              <select
-                className={styles.statusFilterSelect}
-                value={statusFilter}
-                disabled={filesLoading || isBatchRunning}
-                onChange={e => handleStatusFilterChange(e.target.value as FileStatus | '')}
-              >
-                {STATUS_FILTER_OPTIONS.map(opt => (
-                  <option key={opt.value || 'all'} value={opt.value}>{t(opt.labelKey)}</option>
-                ))}
-              </select>
-            </div>
+            {/* ── Status filter + Actions — grouped on the right ── */}
+            <div className={styles.filterBarRight}>
+              <div className={styles.statusFilterWrap}>
+                <svg className={styles.dateIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M2 4h12M4.5 8h7M7 12h2" />
+                </svg>
+                <span className={styles.filterBarLabel}>{t('uploadInfer.filePanel.statusLabel', 'Status')}</span>
+                <select
+                  className={styles.statusFilterSelect}
+                  value={statusFilter}
+                  disabled={filesLoading || isBatchRunning}
+                  onChange={e => handleStatusFilterChange(e.target.value as FileStatus | '')}
+                >
+                  {STATUS_FILTER_OPTIONS.map(opt => (
+                    <option key={opt.value || 'all'} value={opt.value}>{t(opt.labelKey)}</option>
+                  ))}
+                </select>
+              </div>
 
-            {/* ── Actions — collapsed into a single trigger + popover, only in normal (idle) mode ── */}
-            {!selectMode && !deleteMode && !exportMode && !isBatchRunning && (
-              <div className={styles.actionsPopoverWrap} ref={actionsPopoverRef}>
-                <button
-                  type="button"
+              {/* ── Actions — collapsed into a single trigger + popover, only in normal (idle) mode ── */}
+              {!selectMode && !deleteMode && !exportMode && !isBatchRunning && (
+                <div className={styles.actionsPopoverWrap} ref={actionsPopoverRef}>
+                  <button
+                    type="button"
                   className={`${styles.actionsTrigger} ${actionsOpen ? styles.actionsTriggerOpen : ''}`}
                   onClick={() => setActionsOpen(o => !o)}
                   aria-expanded={actionsOpen}
@@ -1093,6 +1094,7 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
                 )}
               </div>
             )}
+            </div>
           </div>
         </div>
 
@@ -1456,8 +1458,6 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
 };
 
 export default FilePanel;
-
-
 
 
 
@@ -2300,6 +2300,16 @@ export default FilePanel;
   width: 100%;
 }
 
+// Groups the status filter and the actions trigger together, pushed to
+// the right edge of the row, with a visible gap between the two.
+.filterBarRight {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
 // Small caption shown inside the date/status/actions pills so their
 // purpose is legible at a glance, not just implied by an icon.
 .filterBarLabel {
@@ -2315,7 +2325,6 @@ export default FilePanel;
 // ── Actions — collapsed into a single trigger button + popover ──
 .actionsPopoverWrap {
   position: relative;
-  margin-left: auto;
   flex-shrink: 0;
 }
 
@@ -2634,7 +2643,7 @@ export default FilePanel;
     top: 0;
     left: 0;
     right: 0;
-    height: 3px;
+    height: 2px;
     background: var(--bdr3);
   }
 
