@@ -1,698 +1,492 @@
 // ═══════════════════════════════════════════════
-// pages/GeneralSettings/GeneralSettings.tsx
-// Content Analytics · General Settings
+// pages/Settings/Settings.tsx
+// Content Analytics · User Dictionary (master-detail)
 // ═══════════════════════════════════════════════
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import {
-    fetchSettings,
-    updateSettings,
-    resetSettingsToDefaults,
-    clearSettingsError,
-    type DictionaryTerm,
-} from '../../store/settingsSlice';
-import { fetchPromptTemplates, type PromptTemplate } from '../../store/promptTemplateSlice';
-import styles from './GeneralSettings.module.scss';
-import TourGuide, { type TourStep } from './TourGuide';
+  fetchDictionaries,
+  createDictionary,
+  updateDictionary,
+  selectDictionary,
+} from '../../store/dictionarySlice';
+import type { DictionaryTerm } from '../../services/dictionaryApi';
+import TourGuide, { type TourStep } from '../UploadInfer/TourGuide';
+import styles from './Settings.module.scss';
 
-type FormState = {
-    subtitle_format: 'srt' | 'vtt';
-    default_prompt_template_id: number | null;
-    keywords_mode: 'auto' | 'custom';
-    num_keywords: string;
-    questions_mode: 'auto' | 'custom';
-    num_assessment_questions: string;
-    global_dictionary_enabled: boolean;
-    global_dictionary_terms: DictionaryTerm[];
+const DICT_NAME_MAX_LENGTH = 255;
+
+// ─────────────────────────────────────────────
+// Tour steps for the User Dictionary feature.
+// onEnter callbacks use DOM clicks so they work
+// without lifting state up into the parent.
+// ─────────────────────────────────────────────
+const ensureEditorOpen = () => {
+  // If the name input isn't in the DOM yet the editor panel is closed —
+  // click the + button to open a new-dictionary form first.
+  if (!document.querySelector('[data-tour="dict-name-input"]')) {
+    document.querySelector<HTMLElement>('[data-tour="dict-new-btn"]')?.click();
+  }
 };
 
-const DEFAULT_NUM_KEYWORDS = '20';
-const DEFAULT_NUM_ASSESSMENT_QUESTIONS = '20';
+export const DICT_TOUR_STEPS: TourStep[] = [
+  {
+    target: 'dict-list-panel',
+    placement: 'right',
+    title: 'Your dictionaries',
+    content:
+      'All your saved dictionaries live here. Select one to view and edit it, or create a new one with the + button at the top.',
+  },
+  {
+    target: 'dict-new-btn',
+    placement: 'right',
+    title: 'Create a dictionary',
+    content:
+      'Click + to start a new dictionary. You can have multiple dictionaries — for example one per course or subject area.',
+  },
+  {
+    target: 'dict-name-input',
+    placement: 'bottom',
+    title: 'Name your dictionary',
+    content:
+      'Give it a clear, descriptive name (up to 255 characters). The name appears in the list panel and in any pipeline that uses this dictionary.',
+    onEnter: ensureEditorOpen,
+  },
+  {
+    target: 'dict-add-term-btn',
+    placement: 'bottom',
+    title: 'Add correction terms',
+    content:
+      'Click "Add term" to insert a new row. Each row maps one wrong form to its correct replacement — you can add as many as you need.',
+    onEnter: ensureEditorOpen,
+  },
+  {
+    target: 'dict-terms-table',
+    placement: 'top',
+    title: 'Wrong → Correct pairs',
+    content:
+      'Type the misspelled or incorrect form in the left column and the replacement in the right. The delete button removes a row. Use the search bar above to filter when the list is long.',
+    onEnter: ensureEditorOpen,
+  },
+  {
+    target: 'dict-save-btn',
+    placement: 'left',
+    title: 'Save your dictionary',
+    content:
+      'Hit "Create" (new) or "Save changes" (existing) to persist your work. The dictionary is applied automatically during STT transcription and inference runs.',
+    onEnter: ensureEditorOpen,
+  },
+];
 
-const toFormState = (s: {
-    subtitle_format: 'srt' | 'vtt';
-    default_prompt_template_id: number | null;
-    num_keywords: string;
-    num_assessment_questions: string;
-    global_dictionary_enabled: boolean;
-    global_dictionary_terms: DictionaryTerm[];
-}): FormState => ({
-    subtitle_format: s.subtitle_format,
-    default_prompt_template_id: s.default_prompt_template_id,
-    keywords_mode: s.num_keywords === 'auto' ? 'auto' : 'custom',
-    num_keywords: s.num_keywords === 'auto' ? '' : s.num_keywords,
-    questions_mode: s.num_assessment_questions === 'auto' ? 'auto' : 'custom',
-    num_assessment_questions: s.num_assessment_questions === 'auto' ? '' : s.num_assessment_questions,
-    global_dictionary_enabled: s.global_dictionary_enabled,
-    global_dictionary_terms: s.global_dictionary_terms ?? [],
+type LocalTerm = DictionaryTerm & { _localId: string };
+
+const makeLocalId = () => Math.random().toString(36).slice(2, 10);
+const toLocal = (t: DictionaryTerm): LocalTerm => ({ ...t, _localId: makeLocalId() });
+const stripLocal = (t: LocalTerm): DictionaryTerm => ({
+  wrong_term: t.wrong_term,
+  correct_term: t.correct_term,
 });
 
-// ── Dictionary modal ──────────────────────────────
-interface DictionaryModalProps {
-    terms: DictionaryTerm[];
-    onSave: (terms: DictionaryTerm[]) => void;
-    onClose: () => void;
-    t: (key: string) => string;
+const EMPTY_TERMS = (): LocalTerm[] => [
+  { _localId: makeLocalId(), wrong_term: '', correct_term: '' },
+];
+
+// ─────────────────────────────────────────────
+// Dictionary List Panel
+// ─────────────────────────────────────────────
+interface ListPanelProps {
+  loading: boolean;
+  items: { dictionary_id: number; dictionary_name: string; dictionary_terms: DictionaryTerm[] }[];
+  selectedId: number | null;
+  isCreating: boolean;
+  onSelect: (id: number) => void;
+  onNew: () => void;
 }
 
-const ROW_HEIGHT = 52; // px — must match .termRow min-height in SCSS
-
-// ── Memoized single term row ──────────────────────
-interface TermRowProps {
-    term: DictionaryTerm;
-    index: number;
-    wrongPlaceholder: string;
-    correctPlaceholder: string;
-    removeAriaLabel: string;
-    onChange: (index: number, field: keyof DictionaryTerm, value: string) => void;
-    onRemove: (index: number) => void;
-}
-
-const TermRow: React.FC<TermRowProps> = React.memo(({ term, index, wrongPlaceholder, correctPlaceholder, removeAriaLabel, onChange, onRemove }) => (
-    <div className={styles.termRow} style={{ height: ROW_HEIGHT }}>
-        <input
-            className={styles.input}
-            value={term.wrong_term}
-            onChange={(e) => onChange(index, 'wrong_term', e.target.value)}
-            placeholder={wrongPlaceholder}
-        />
-        <svg className={styles.arrowIc} width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M2 8h11M9 4l4 4-4 4" />
-        </svg>
-        <input
-            className={styles.input}
-            value={term.correct_term}
-            onChange={(e) => onChange(index, 'correct_term', e.target.value)}
-            placeholder={correctPlaceholder}
-        />
-        <button type="button" className={styles.removeBtn} onClick={() => onRemove(index)} aria-label={removeAriaLabel}>
-            <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                <path d="M2 2l10 10M12 2L2 12" />
-            </svg>
+const ListPanel: React.FC<ListPanelProps> = ({
+  loading, items, selectedId, isCreating, onSelect, onNew,
+}) => {
+  const { t } = useTranslation();
+  return (
+    <aside className={styles.dictListPanel} data-tour="dict-list-panel">
+      <div className={styles.dictListHead}>
+        <div className={styles.dictListTitle}>{t('settings.dictionaries')}</div>
+        <button className={styles.dictListAdd} onClick={onNew} title={t('settings.newDictTooltip')} data-tour="dict-new-btn">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+            <path d="M8 3v10M3 8h10" />
+          </svg>
         </button>
-    </div>
-));
+      </div>
 
-// ── Virtual list — only renders visible rows ──────
-const VISIBLE_ROWS = 9;
-const OVERSCAN     = 3;
+      <div className={styles.dictList}>
+        {loading && items.length === 0 ? (
+          <div className={styles.dictListLoading}>{t('settings.loading')}</div>
+        ) : (
+          <>
+            {isCreating && (
+              <div className={`${styles.dictListItem} ${styles.dictListItemActive}`}>
+                <div className={styles.dictListItemName}>{t('settings.newDict')}</div>
+                <div className={styles.dictListItemMeta}>{t('settings.unsaved')}</div>
+              </div>
+            )}
 
-interface VirtualListProps {
-    terms: DictionaryTerm[];
-    wrongPlaceholder: string;
-    correctPlaceholder: string;
-    removeAriaLabel: string;
-    scrollRef: React.RefObject<HTMLDivElement | null>;
-    onChange: (index: number, field: keyof DictionaryTerm, value: string) => void;
-    onRemove: (index: number) => void;
-}
+            {items.length === 0 && !isCreating && (
+              <div className={styles.dictListEmpty}>
+                {t('settings.noDict').split('\n').map((line, i) => (
+                  <React.Fragment key={i}>{line}{i === 0 && <br />}</React.Fragment>
+                ))}
+              </div>
+            )}
 
-const VirtualList: React.FC<VirtualListProps> = ({ terms, wrongPlaceholder, correctPlaceholder, removeAriaLabel, scrollRef, onChange, onRemove }) => {
-    const [scrollTop, setScrollTop] = useState(0);
-
-    const totalHeight  = terms.length * ROW_HEIGHT;
-    const startIdx     = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
-    const endIdx       = Math.min(terms.length - 1, startIdx + VISIBLE_ROWS + OVERSCAN * 2);
-    const visibleTerms = terms.slice(startIdx, endIdx + 1);
-    const offsetY      = startIdx * ROW_HEIGHT;
-
-    return (
-        <div
-            ref={scrollRef}
-            className={styles.virtualScroll}
-            onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
-        >
-            <div style={{ height: totalHeight, position: 'relative' }}>
-                <div style={{ position: 'absolute', top: offsetY, left: 0, right: 0 }}>
-                    {visibleTerms.map((term, i) => (
-                        <TermRow
-                            key={startIdx + i}
-                            index={startIdx + i}
-                            term={term}
-                            wrongPlaceholder={wrongPlaceholder}
-                            correctPlaceholder={correctPlaceholder}
-                            removeAriaLabel={removeAriaLabel}
-                            onChange={onChange}
-                            onRemove={onRemove}
-                        />
-                    ))}
+            {items.map(d => (
+              <button
+                key={d.dictionary_id}
+                className={`${styles.dictListItem} ${selectedId === d.dictionary_id && !isCreating ? styles.dictListItemActive : ''}`}
+                onClick={() => onSelect(d.dictionary_id)}
+              >
+                <div className={styles.dictListItemName}>{d.dictionary_name}</div>
+                <div className={styles.dictListItemMeta}>
+                  {t('settings.term', { count: d.dictionary_terms.length })}
                 </div>
-            </div>
-        </div>
-    );
+              </button>
+            ))}
+          </>
+        )}
+      </div>
+    </aside>
+  );
 };
 
-// ── Dictionary modal ──────────────────────────────
-const DictionaryModal: React.FC<DictionaryModalProps> = ({ terms, onSave, onClose, t }) => {
-    const [localTerms, setLocalTerms] = useState<DictionaryTerm[]>(terms);
-    const scrollRef = useRef<HTMLDivElement>(null);
+// ─────────────────────────────────────────────
+// Dictionary Detail Panel
+// ─────────────────────────────────────────────
+const UserDictionary: React.FC = () => {
+  const dispatch = useAppDispatch();
+  const { t } = useTranslation();
+  const { items, selectedId, loading, saving, error } = useAppSelector(s => s.dictionary);
 
-    const handleAdd = useCallback(() => {
-        setLocalTerms(prev => [...prev, { wrong_term: '', correct_term: '' }]);
-        setTimeout(() => {
-            if (scrollRef.current) {
-                scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-            }
-        }, 50);
-    }, []);
+  const [isCreating, setIsCreating] = useState(false);
+  const [name, setName] = useState('');
+  const [terms, setTerms] = useState<LocalTerm[]>([]);
+  const [search, setSearch] = useState('');
+  const [dirty, setDirty] = useState(false);
+  const [savedFlash, setSavedFlash] = useState(false);
 
-    const handleChange = useCallback((index: number, field: keyof DictionaryTerm, value: string) =>
-        setLocalTerms(prev => prev.map((term, i) => (i === index ? { ...term, [field]: value } : term))), []);
-
-    const handleRemove = useCallback((index: number) =>
-        setLocalTerms(prev => prev.filter((_, i) => i !== index)), []);
-
-    const handleSave = () => {
-        const result = localTerms.filter(
-            t => t.wrong_term.trim() !== '' || t.correct_term.trim() !== ''
-        );
-        onSave(result);
-    };
-
-    return (
-        <div className={styles.overlay}>
-            <div className={styles.modal}>
-                <div className={styles.modalHead}>
-                    <div className={styles.modalTitle}>{t('generalSettings.globalDict.title')}</div>
-                    <button className={styles.closeBtn} onClick={onClose} type="button" aria-label={t('generalSettings.templateModal.closeAriaLabel')}>
-                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                            <path d="M2 2l10 10M12 2L2 12" />
-                        </svg>
-                    </button>
-                </div>
-
-                <div className={styles.modalBody}>
-                    <p className={styles.dictModalDesc}>{t('generalSettings.globalDict.desc')}</p>
-                    <div className={styles.termsHeader}>
-                        <span>{t('generalSettings.globalDict.wrongPlaceholder')}</span>
-                        <span>{t('generalSettings.globalDict.correctPlaceholder')}</span>
-                    </div>
-                    {localTerms.length === 0 ? (
-                        <div className={styles.emptyTerms}>{t('generalSettings.globalDict.noTerms')}</div>
-                    ) : (
-                        <VirtualList
-                            terms={localTerms}
-                            wrongPlaceholder={t('generalSettings.globalDict.wrongPlaceholder')}
-                            correctPlaceholder={t('generalSettings.globalDict.correctPlaceholder')}
-                            removeAriaLabel={t('generalSettings.globalDict.removeTerm')}
-                            scrollRef={scrollRef}
-                            onChange={handleChange}
-                            onRemove={handleRemove}
-                        />
-                    )}
-                </div>
-
-                <div className={styles.modalFoot}>
-                    <button type="button" className={styles.addTermBtn} onClick={handleAdd}>
-                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                            <path d="M6 1.5v9M1.5 6h9" />
-                        </svg>
-                        {t('generalSettings.globalDict.addTerm')}
-                    </button>
-                    <div className={styles.modalFootRight}>
-                        <button className={styles.btn} onClick={onClose}>{t('generalSettings.resetModal.cancel')}</button>
-                        <button className={styles.btnPrimary} onClick={handleSave}>{t('generalSettings.globalDict.apply')}</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-};
-
-
-const Spinner: React.FC<{ label: string }> = ({ label }) => (
-    <div className={styles.spinnerWrap}>
-        <div className={styles.spinner} />
-        <span>{label}</span>
-    </div>
-);
-interface StepperProps {
-    value: number;
-    min: number;
-    max: number;
-    onChange: (val: number) => void;
-}
-
-const Stepper: React.FC<StepperProps> = ({ value, min, max, onChange }) => {
-    const [inputVal, setInputVal] = useState(String(value));
-    const [error, setError] = useState('');
-
-    useEffect(() => {
-        setInputVal(String(value));
-        setError('');
-    }, [value]);
-
-    const commit = (raw: string) => {
-        const n = parseInt(raw, 10);
-        if (isNaN(n) || n < min || n > max) {
-            setError(`Enter a value between ${min} and ${max}`);
-            setInputVal(String(value)); // revert
-        } else {
-            setError('');
-            onChange(n);
-        }
-    };
-
-    return (
-        <div className={styles.stepperWrap}>
-            <div className={`${styles.stepper} ${error ? styles.stepperError : ''}`}>
-                <button
-                    type="button"
-                    className={styles.stepBtn}
-                    onClick={() => onChange(Math.max(min, value - 1))}
-                    disabled={value <= min}
-                    aria-label="Decrease"
-                >
-                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                        <path d="M2 6h8" />
-                    </svg>
-                </button>
-                <input
-                    className={styles.stepInput}
-                    type="number"
-                    min={min}
-                    max={max}
-                    value={inputVal}
-                    onChange={(e) => { setInputVal(e.target.value); setError(''); }}
-                    onBlur={(e) => commit(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && commit(inputVal)}
-                />
-                <button
-                    type="button"
-                    className={styles.stepBtn}
-                    onClick={() => onChange(Math.min(max, value + 1))}
-                    disabled={value >= max}
-                    aria-label="Increase"
-                >
-                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                        <path d="M6 2v8M2 6h8" />
-                    </svg>
-                </button>
-            </div>
-            <div className={styles.stepMeta}>
-                <span className={styles.stepRange}>{min} – {max}</span>
-                {error && <span className={styles.stepErr}>{error}</span>}
-            </div>
-        </div>
-    );
-};
-
-// ── Stepper ───────────────────────────────────────
-
-const GeneralSettings: React.FC = () => {
-    const dispatch = useAppDispatch();
-    const { t } = useTranslation();
-    const { settings, loading, saving, resetting, error } = useAppSelector(s => s.settings);
-    const { templates } = useAppSelector(s => s.promptTemplate);
-
-    const [form, setForm] = useState<FormState | null>(null);
-    const [successMsg, setSuccessMsg] = useState<string | null>(null);
-    const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
-    const [viewTemplate, setViewTemplate] = useState<PromptTemplate | null>(null);
-    const [dictModalOpen, setDictModalOpen] = useState(false);
-    const [tourActive, setTourActive] = useState(false);
-
-    useEffect(() => {
-        dispatch(fetchSettings());
-        dispatch(fetchPromptTemplates());
-    }, [dispatch]);
-
-    useEffect(() => {
-        if (settings) setForm(toFormState(settings));
-    }, [settings]);
-
-    useEffect(() => {
-        if (!successMsg) return;
-        const timer = setTimeout(() => setSuccessMsg(null), 3000);
-        return () => clearTimeout(timer);
-    }, [successMsg]);
-
-    const isDirty = useMemo(() => {
-        if (!form || !settings) return false;
-        return JSON.stringify(form) !== JSON.stringify(toFormState(settings));
-    }, [form, settings]);
-
-    const selectedTemplate = useMemo(
-        () => templates.find(tpl => tpl.id === form?.default_prompt_template_id) ?? null,
-        [templates, form?.default_prompt_template_id],
-    );
-
-    // ── Handlers — must be defined before any early return ──
-    const update = <K extends keyof FormState>(field: K, value: FormState[K]) =>
-        setForm(f => (f ? { ...f, [field]: value } : f));
-
-    if (loading || !form) {
-        return (
-            <div className={styles.page}>
-                <div className={styles.ph}>
-                    <div className={styles.phRow}>
-                        <div>
-                            <div className={styles.phTitle}>{t('generalSettings.pageTitle')}</div>
-                            <div className={styles.phSub}>{t('generalSettings.pageSub')}</div>
-                        </div>
-                    </div>
-                </div>
-                <div className={styles.body}>
-                    <div className={styles.loadingBody}>
-                        <Spinner label={t('generalSettings.loading')} />
-                    </div>
-                </div>
-            </div>
-        );
+  useEffect(() => {
+    if (items.length === 0 && !loading) {
+      dispatch(fetchDictionaries());
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    const handleSave = async () => {
-        dispatch(clearSettingsError());
-        const payload = {
-            subtitle_format: form.subtitle_format,
-            default_prompt_template_id: form.default_prompt_template_id,
-            num_keywords: form.keywords_mode === 'auto' ? 'auto' : (form.num_keywords || DEFAULT_NUM_KEYWORDS),
-            num_assessment_questions: form.questions_mode === 'auto' ? 'auto' : (form.num_assessment_questions || DEFAULT_NUM_ASSESSMENT_QUESTIONS),
-            global_dictionary_terms: form.global_dictionary_terms,
-            global_dictionary_enabled: form.global_dictionary_enabled,
-        };
-        try {
-            await dispatch(updateSettings(payload)).unwrap();
-            setSuccessMsg(t('generalSettings.savedSuccess'));
-        } catch { /* surfaced via error banner */ }
-    };
+  const selected = useMemo(
+    () => items.find(d => d.dictionary_id === selectedId) ?? null,
+    [items, selectedId],
+  );
 
-    const handleResetConfirm = async () => {
-        setResetConfirmOpen(false);
-        try {
-            await dispatch(resetSettingsToDefaults()).unwrap();
-            setSuccessMsg(t('generalSettings.resetSuccess'));
-        } catch { /* surfaced via error banner */ }
-    };
+  useEffect(() => {
+    if (isCreating) return;
+    if (selected) {
+      setName(selected.dictionary_name);
+      setTerms(selected.dictionary_terms.map(toLocal));
+      setDirty(false);
+    } else {
+      setName('');
+      setTerms([]);
+      setDirty(false);
+    }
+  }, [selected, isCreating]);
 
-    const handleDiscard = () => {
-        if (settings) setForm(toFormState(settings));
-        dispatch(clearSettingsError());
-    };
+  const handleSelect = (id: number) => {
+    if (dirty && !window.confirm(t('settings.discardConfirm'))) return;
+    setIsCreating(false);
+    dispatch(selectDictionary(id));
+  };
 
-    const tourSteps: TourStep[] = [
-        {
-            target: 'gs-subtitle',
-            title: 'Subtitle Format',
-            content: 'Choose whether lecture subtitles are generated in SRT or VTT format. This default applies to all new lecture uploads.',
-            placement: 'bottom',
-        },
-        {
-            target: 'gs-template',
-            title: 'Default Prompt Template',
-            content: 'Select a prompt template applied automatically to every new upload. Use the eye icon to preview a template before selecting it.',
-            placement: 'bottom',
-        },
-        {
-            target: 'gs-keywords',
-            title: 'Number of Keywords',
-            content: 'Set to Auto to let the platform decide, or switch to Custom and pick a number between 1 and 20 keywords to extract per lecture.',
-            placement: 'bottom',
-        },
-        {
-            target: 'gs-questions',
-            title: 'Number of Assessment Questions',
-            content: 'Choose Auto for platform-decided counts, or Custom to set a fixed number between 1 and 20 assessment questions per lecture.',
-            placement: 'bottom',
-        },
-        {
-            target: 'gs-dictionary',
-            title: 'Global Dictionary',
-            content: 'Enable auto-correction of recurring transcription errors across all lectures. Click Manage to add wrong → correct term pairs applied automatically.',
-            placement: 'top',
-        },
-    ];
+  const handleNew = () => {
+    if (dirty && !window.confirm(t('settings.discardConfirm'))) return;
+    setIsCreating(true);
+    setName('');
+    setTerms(EMPTY_TERMS());
+    setDirty(false);
+  };
 
-    return (
-        <div className={styles.page}>
+  const handleCancelNew = () => {
+    setIsCreating(false);
+    setDirty(false);
+  };
 
-            {/* ── Page header ── */}
-            <div className={styles.ph}>
-                <div className={styles.phRow}>
-                    <div>
-                        <div className={styles.phTitle}>{t('generalSettings.pageTitle')}</div>
-                        <div className={styles.phSub}>{t('generalSettings.pageSub')}</div>
-                    </div>
-                    <div className={styles.phActs}>
-                        <button
-                            className={styles.tourBtn}
-                            onClick={() => setTourActive(true)}
-                            title="Take a guided tour"
-                            aria-label="Take a guided tour"
-                        >
-                            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                <circle cx="8" cy="8" r="6.5" />
-                                <path d="M6.5 6.2C6.7 5.3 7.3 4.8 8 4.8s1.5.6 1.5 1.4C9.5 7.5 8 8 8 9.2" />
-                                <circle cx="8" cy="11.2" r=".6" fill="currentColor" />
-                            </svg>
-                            Tour
-                        </button>
-                        <button className={styles.btn} onClick={() => setResetConfirmOpen(true)} disabled={resetting}>
-                            {resetting ? t('generalSettings.resetting') : t('generalSettings.resetToDefaults')}
-                        </button>
-                        {isDirty && (
-                            <button className={styles.btn} onClick={handleDiscard} disabled={saving}>
-                                {t('generalSettings.discard')}
-                            </button>
-                        )}
-                        <button className={styles.btnPrimary} onClick={handleSave} disabled={saving || !isDirty}>
-                            {saving ? t('generalSettings.saving') : t('generalSettings.saveChanges')}
-                        </button>
-                    </div>
-                </div>
-            </div>
+  const handleNameChange = (value: string) => {
+    setName(value.slice(0, DICT_NAME_MAX_LENGTH));
+    setDirty(true);
+  };
 
-            {/* ── Scrollable body ── */}
-            <div className={styles.body}>
-                <div className={styles.viewBody}>
+  const updateTerm = (localId: string, patch: Partial<DictionaryTerm>) => {
+    setTerms(prev => prev.map(term => term._localId === localId ? { ...term, ...patch } : term));
+    setDirty(true);
+  };
 
-                    {successMsg && <div className={styles.successBanner}>{successMsg}</div>}
-                    {error && <div className={styles.errorBanner}>{error}</div>}
+  const addTermRow = () => {
+    setTerms(prev => [...prev, { _localId: makeLocalId(), wrong_term: '', correct_term: '' }]);
+    setDirty(true);
+  };
 
-                    {/* ── Subtitle Format ── */}
-                    <div className={styles.card} data-tour="gs-subtitle">
-                        <div className={styles.cardTitle}>{t('generalSettings.subtitleFormat.title')}</div>
-                        <div className={styles.cardDesc}>{t('generalSettings.subtitleFormat.desc')}</div>
-                        <div className={styles.segmented}>
-                            <button
-                                type="button"
-                                className={`${styles.segmentBtn} ${form.subtitle_format === 'srt' ? styles.segmentActive : ''}`}
-                                onClick={() => update('subtitle_format', 'srt')}
-                            >SRT</button>
-                            <button
-                                type="button"
-                                className={`${styles.segmentBtn} ${form.subtitle_format === 'vtt' ? styles.segmentActive : ''}`}
-                                onClick={() => update('subtitle_format', 'vtt')}
-                            >VTT</button>
-                        </div>
-                    </div>
+  const removeTerm = (localId: string) => {
+    setTerms(prev => prev.filter(term => term._localId !== localId));
+    setDirty(true);
+  };
 
-                    {/* ── Default Prompt Template ── */}
-                    <div className={styles.card} data-tour="gs-template">
-                        <div className={styles.cardTitle}>{t('generalSettings.defaultTemplate.title')}</div>
-                        <div className={styles.cardDesc}>{t('generalSettings.defaultTemplate.desc')}</div>
-                        <div className={styles.templateRow}>
-                            <select
-                                className={styles.select}
-                                value={form.default_prompt_template_id ?? ''}
-                                onChange={(e) =>
-                                    update('default_prompt_template_id', e.target.value === '' ? null : Number(e.target.value))
-                                }
-                            >
-                                <option value="">{t('generalSettings.defaultTemplate.none')}</option>
-                                {templates.map(tpl => (
-                                    <option key={tpl.id} value={tpl.id}>{tpl.name}</option>
-                                ))}
-                            </select>
-                            <button
-                                type="button"
-                                className={styles.viewTplBtn}
-                                onClick={() => selectedTemplate && setViewTemplate(selectedTemplate)}
-                                disabled={!selectedTemplate}
-                                title={selectedTemplate ? t('generalSettings.defaultTemplate.viewAriaLabel') : undefined}
-                                aria-label={t('generalSettings.defaultTemplate.viewAriaLabel')}
-                            >
-                                <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                    <path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z" />
-                                    <circle cx="8" cy="8" r="2" />
-                                </svg>
-                            </button>
-                        </div>
-                    </div>
+  const handleSave = async () => {
+    const cleanedTerms = terms
+      .map(stripLocal)
+      .filter(term => term.wrong_term.trim() && term.correct_term.trim())
+      .map(term => ({ wrong_term: term.wrong_term.trim(), correct_term: term.correct_term.trim() }));
 
-                    {/* ── Num Keywords ── */}
-                    <div className={styles.card} data-tour="gs-keywords">
-                        <div className={styles.cardTitle}>{t('generalSettings.numKeywords.title')}</div>
-                        <div className={styles.cardDesc}>{t('generalSettings.numKeywords.desc')}</div>
-                        <div className={styles.inlineRow}>
-                            <div className={styles.segmented}>
-                                <button
-                                    type="button"
-                                    className={`${styles.segmentBtn} ${form.keywords_mode === 'auto' ? styles.segmentActive : ''}`}
-                                    onClick={() => update('keywords_mode', 'auto')}
-                                >{t('generalSettings.numKeywords.auto')}</button>
-                                <button
-                                    type="button"
-                                    className={`${styles.segmentBtn} ${form.keywords_mode === 'custom' ? styles.segmentActive : ''}`}
-                                    onClick={() => setForm(f => (f ? { ...f, keywords_mode: 'custom', num_keywords: f.num_keywords || DEFAULT_NUM_KEYWORDS } : f))}
-                                >{t('generalSettings.numKeywords.custom')}</button>
-                            </div>
-                            {form.keywords_mode === 'custom' && (
-                                <Stepper
-                                    min={1}
-                                    max={20}
-                                    value={Number(form.num_keywords) || 20}
-                                    onChange={(val) => update('num_keywords', String(val))}
-                                />
-                            )}
-                        </div>
-                    </div>
+    const cleanedName = name.trim().slice(0, DICT_NAME_MAX_LENGTH);
 
-                    {/* ── Num Assessment Questions ── */}
-                    <div className={styles.card} data-tour="gs-questions">
-                        <div className={styles.cardTitle}>{t('generalSettings.numQuestions.title')}</div>
-                        <div className={styles.cardDesc}>{t('generalSettings.numQuestions.desc')}</div>
-                        <div className={styles.inlineRow}>
-                            <div className={styles.segmented}>
-                                <button
-                                    type="button"
-                                    className={`${styles.segmentBtn} ${form.questions_mode === 'auto' ? styles.segmentActive : ''}`}
-                                    onClick={() => update('questions_mode', 'auto')}
-                                >{t('generalSettings.numQuestions.auto')}</button>
-                                <button
-                                    type="button"
-                                    className={`${styles.segmentBtn} ${form.questions_mode === 'custom' ? styles.segmentActive : ''}`}
-                                    onClick={() => setForm(f => (f ? { ...f, questions_mode: 'custom', num_assessment_questions: f.num_assessment_questions || DEFAULT_NUM_ASSESSMENT_QUESTIONS } : f))}
-                                >{t('generalSettings.numQuestions.custom')}</button>
-                            </div>
-                            {form.questions_mode === 'custom' && (
-                                <Stepper
-                                    min={1}
-                                    max={20}
-                                    value={Number(form.num_assessment_questions) || 10}
-                                    onChange={(val) => update('num_assessment_questions', String(val))}
-                                />
-                            )}
-                        </div>
-                    </div>
+    if (!cleanedName) { alert(t('settings.nameRequired')); return; }
+    if (cleanedTerms.length === 0) { alert(t('settings.termRequired')); return; }
 
-                    {/* ── Global Dictionary ── */}
-                    <div className={styles.card} data-tour="gs-dictionary">
-                        <div className={styles.cardHead}>
-                            <div className={styles.cardHeadText}>
-                                <div className={styles.cardTitle}>{t('generalSettings.globalDict.title')}</div>
-                                <div className={styles.cardDesc}>{t('generalSettings.globalDict.desc')}</div>
-                            </div>
-                            <label className={styles.toggle}>
-                                <input
-                                    type="checkbox"
-                                    checked={form.global_dictionary_enabled}
-                                    onChange={(e) => update('global_dictionary_enabled', e.target.checked)}
-                                />
-                                <span className={styles.toggleTrack}><span className={styles.toggleThumb} /></span>
-                            </label>
-                        </div>
-                        <div className={styles.dictSummaryRow}>
-                            <span className={styles.dictCount}>
-                                {form.global_dictionary_terms.length > 0
-                                    ? `${form.global_dictionary_terms.length} term${form.global_dictionary_terms.length === 1 ? '' : 's'} defined`
-                                    : t('generalSettings.globalDict.noTerms')}
-                            </span>
-                            <button type="button" className={styles.btn} onClick={() => setDictModalOpen(true)}>
-                                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                                    <path d="M6 1.5v9M1.5 6h9" />
-                                </svg>
-                                {t('generalSettings.globalDict.manage')}
-                            </button>
-                        </div>
-                    </div>
+    const payload = { dictionary_name: cleanedName, dictionary_terms: cleanedTerms };
+    try {
+      if (isCreating) {
+        await dispatch(createDictionary(payload)).unwrap();
+        setIsCreating(false);
+      } else if (selected) {
+        await dispatch(updateDictionary({ id: selected.dictionary_id, payload })).unwrap();
+      }
+      setDirty(false);
+      setSavedFlash(true);
+      setTimeout(() => setSavedFlash(false), 2000);
+    } catch { /* error surfaces via Redux state */ }
+  };
 
-                </div>
-            </div>
-
-            {/* ── Reset confirmation modal ── */}
-            {resetConfirmOpen && (
-                <div className={styles.overlay}>
-                    <div className={`${styles.modal} ${styles.modalSm}`}>
-                        <div className={styles.modalHead}>
-                            <div className={styles.modalTitle}>{t('generalSettings.resetModal.title')}</div>
-                        </div>
-                        <div className={styles.modalBody}>
-                            <p className={styles.confirmText}>{t('generalSettings.resetModal.body')}</p>
-                        </div>
-                        <div className={styles.modalFoot}>
-                            <button className={styles.btn} onClick={() => setResetConfirmOpen(false)}>
-                                {t('generalSettings.resetModal.cancel')}
-                            </button>
-                            <button className={`${styles.btnPrimary} ${styles.btnDangerSolid}`} onClick={handleResetConfirm}>
-                                {t('generalSettings.resetModal.confirm')}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* ── Template details modal ── */}
-            {viewTemplate && (
-                <div className={styles.overlay}>
-                    <div className={styles.modal}>
-                        <div className={styles.modalHead}>
-                            <div className={styles.modalTitle}>{viewTemplate.name}</div>
-                            <button className={styles.closeBtn} onClick={() => setViewTemplate(null)} aria-label={t('generalSettings.templateModal.closeAriaLabel')} type="button">
-                                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                                    <path d="M2 2l10 10M12 2L2 12" />
-                                </svg>
-                            </button>
-                        </div>
-                        <div className={styles.modalBody}>
-                            <div className={styles.tplDetailGroup}>
-                                <div className={styles.tplDetailLabel}>{t('generalSettings.templateModal.description')}</div>
-                                <div className={styles.tplDetailValue}>{viewTemplate.description || '—'}</div>
-                            </div>
-                            <div className={styles.tplDetailGroup}>
-                                <div className={styles.tplDetailLabel}>{t('generalSettings.templateModal.summaryPrompt')}</div>
-                                <div className={styles.tplDetailBlock}>{viewTemplate.summary_prompt || '—'}</div>
-                            </div>
-                            <div className={styles.tplDetailGroup}>
-                                <div className={styles.tplDetailLabel}>{t('generalSettings.templateModal.keywordPrompt')}</div>
-                                <div className={styles.tplDetailBlock}>{viewTemplate.keyword_prompt || '—'}</div>
-                            </div>
-                            <div className={styles.tplDetailGroup}>
-                                <div className={styles.tplDetailLabel}>{t('generalSettings.templateModal.faqPrompt')}</div>
-                                <div className={styles.tplDetailBlock}>{viewTemplate.faq_prompt || '—'}</div>
-                            </div>
-                        </div>
-                        <div className={styles.modalFoot}>
-                            <button className={styles.btn} onClick={() => setViewTemplate(null)}>
-                                {t('generalSettings.templateModal.close')}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-            {/* ── Tour ── */}
-            <TourGuide
-                steps={tourSteps}
-                active={tourActive}
-                onFinish={() => setTourActive(false)}
-            />
-
-            {/* ── Dictionary modal ── */}
-            {dictModalOpen && (
-                <DictionaryModal
-                    terms={form.global_dictionary_terms}
-                    onSave={(terms) => { update('global_dictionary_terms', terms); setDictModalOpen(false); }}
-                    onClose={() => setDictModalOpen(false)}
-                    t={t}
-                />
-            )}
-
-        </div>
+  const filteredTerms = useMemo(() => {
+    if (!search.trim()) return terms;
+    const q = search.toLowerCase();
+    return terms.filter(term =>
+      term.wrong_term.toLowerCase().includes(q) ||
+      term.correct_term.toLowerCase().includes(q),
     );
+  }, [terms, search]);
+
+  const showEditor = isCreating || !!selected;
+  const nameAtLimit = name.length >= DICT_NAME_MAX_LENGTH;
+
+  return (
+    <div className={styles.dictLayout}>
+      <ListPanel
+        loading={loading}
+        items={items}
+        selectedId={selectedId}
+        isCreating={isCreating}
+        onSelect={handleSelect}
+        onNew={handleNew}
+      />
+
+      <section className={styles.dictDetail}>
+        {!showEditor ? (
+          <div className={styles.dictDetailEmpty}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 4h12a3 3 0 013 3v13H7a3 3 0 01-3-3V4z" />
+              <path d="M4 4v13a3 3 0 003 3" />
+              <path d="M8 8h7M8 12h7M8 16h4" />
+            </svg>
+            <div>{t('settings.selectOrCreate')}</div>
+          </div>
+        ) : (
+          <>
+            {/* ── Detail header ── */}
+            <div className={styles.dictDetailHead}>
+              <div className={styles.dictDetailHeadMeta}>
+                <div className={styles.dictNameField}>
+                  <div className={styles.dictNameLabelRow}>
+                    <label className={styles.dictNameLabel}>{t('settings.dictNameLabel')}</label>
+                    <span className={`${styles.dictNameCount} ${nameAtLimit ? styles.dictNameCountMax : ''}`}>
+                      {name.length}/{DICT_NAME_MAX_LENGTH}
+                    </span>
+                  </div>
+                  <input
+                    className={styles.dictNameInput}
+                    value={name}
+                    maxLength={DICT_NAME_MAX_LENGTH}
+                    onChange={e => handleNameChange(e.target.value)}
+                    placeholder={t('settings.dictNamePlaceholder')}
+                    data-tour="dict-name-input"
+                  />
+                </div>
+                {selected && !isCreating && (
+                  <div className={styles.dictDetailDates}>
+                    {t('settings.updated', { date: new Date(selected.updated_at).toLocaleString() })}
+                  </div>
+                )}
+              </div>
+              <div className={styles.dictDetailActions}>
+                {isCreating && (
+                  <button className={styles.btn} onClick={handleCancelNew} disabled={saving}>
+                    {t('settings.cancel')}
+                  </button>
+                )}
+                <button
+                  className={`${styles.btn} ${styles.btnP} ${savedFlash ? styles.btnSaved : ''}`}
+                  onClick={handleSave}
+                  disabled={saving || (!dirty && !isCreating)}
+                  data-tour="dict-save-btn"
+                >
+                  {saving ? t('settings.saving') : savedFlash ? (
+                    <><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 8l3.5 3.5L13 5" /></svg>{t('settings.saved')}</>
+                  ) : isCreating ? t('settings.create') : t('settings.saveChanges')}
+                </button>
+              </div>
+            </div>
+
+            {error && <div className={styles.dictErrorBox}>{error}</div>}
+
+            {/* ── Search / count ── */}
+            <div className={styles.dictDetailToolbar}>
+              <div className={styles.dictSearch}>
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+                  <circle cx="6.5" cy="6.5" r="4.5" /><path d="M10 10l3 3" />
+                </svg>
+                <input
+                  className={styles.dictSearchInput}
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  placeholder={t('settings.searchPlaceholder')}
+                />
+                {search && (
+                  <button className={styles.dictSearchClear} onClick={() => setSearch('')}>✕</button>
+                )}
+              </div>
+              <div className={styles.dictMeta}>
+                <span className={styles.dictCount}>{terms.length}</span>
+                <span className={styles.dictTotal}>{t('settings.term', { count: terms.length })}</span>
+              </div>
+            </div>
+
+            {/* ── Add-term toolbar ── */}
+            <div className={styles.dictTermsToolbar}>
+              <button className={styles.dictAddRowBtn} onClick={addTermRow} data-tour="dict-add-term-btn">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                  <path d="M8 3v10M3 8h10" />
+                </svg>
+                {t('settings.addTerm')}
+              </button>
+            </div>
+
+            {/* ── Terms table ── */}
+            <div className={styles.dictTermsWrap}>
+              <div className={styles.dictTable} data-tour="dict-terms-table">
+                <div className={styles.dictTermsHead}>
+                  <span>{t('settings.wrongTerm')}</span>
+                  <span />
+                  <span>{t('settings.correctTerm')}</span>
+                  <span />
+                </div>
+
+                {filteredTerms.length === 0 ? (
+                  <div className={styles.dictEmpty}>
+                    {search ? t('settings.noSearchMatch') : t('settings.noTermsYet')}
+                  </div>
+                ) : filteredTerms.map(term => (
+                  <div key={term._localId} className={styles.dictTermsRow}>
+                    <input
+                      className={styles.dictInput}
+                      value={term.wrong_term}
+                      onChange={e => updateTerm(term._localId, { wrong_term: e.target.value })}
+                      placeholder={t('settings.wrongPlaceholder')}
+                    />
+                    <span className={styles.dictArrow}>→</span>
+                    <input
+                      className={styles.dictInput}
+                      value={term.correct_term}
+                      onChange={e => updateTerm(term._localId, { correct_term: e.target.value })}
+                      placeholder={t('settings.correctPlaceholder')}
+                    />
+                    <button
+                      className={`${styles.dictActionBtn} ${styles.dictActionDel}`}
+                      onClick={() => removeTerm(term._localId)}
+                      title={t('settings.removeTerm')}
+                    >
+                      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M2 3.5h10M5.5 3.5V2.5h3v1M5 6l.5 5M9 6l-.5 5" />
+                      </svg>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className={styles.dictInfo}>
+              <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round">
+                <circle cx="7" cy="7" r="5.5" /><path d="M7 4.5v3M7 9v.5" />
+              </svg>
+              {t('settings.dictInfo')}
+            </div>
+          </>
+        )}
+      </section>
+    </div>
+  );
 };
 
-export default GeneralSettings;
+// ─────────────────────────────────────────────
+// Settings root
+// ─────────────────────────────────────────────
+const Settings: React.FC = () => {
+  const { t } = useTranslation();
+  const [tourActive, setTourActive] = useState(false);
+
+  return (
+    <div className={styles.page}>
+      <div className={styles.ph}>
+        <div className={styles.phRow}>
+          <div>
+            <div className={styles.phTitle}>{t('settings.pageTitle')}</div>
+            <div className={styles.phSub}>{t('settings.pageSub')}</div>
+          </div>
+          <button
+            className={styles.tourTriggerBtn}
+            onClick={() => setTourActive(true)}
+            title="Take a tour of User Dictionary"
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="8" cy="8" r="6.5" />
+              <path d="M6.5 6.2C6.7 5.3 7.3 4.8 8 4.8s1.5.6 1.5 1.4C9.5 7.5 8 8 8 9.2" />
+              <circle cx="8" cy="11.2" r=".6" fill="currentColor" stroke="none" />
+            </svg>
+            Take a tour
+          </button>
+        </div>
+      </div>
+
+      <div className={styles.body}>
+        <UserDictionary />
+      </div>
+
+      <TourGuide
+        steps={DICT_TOUR_STEPS}
+        active={tourActive}
+        onFinish={() => setTourActive(false)}
+      />
+    </div>
+  );
+};
+
+export default Settings;
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -704,774 +498,580 @@ export default GeneralSettings;
 
 
 // ═══════════════════════════════════════════════
-// GeneralSettings.module.scss
-// Content Analytics · General Settings
+// Settings.module.scss
+// Content Analytics · User Dictionary page
 // ═══════════════════════════════════════════════
 @use '../../styles/mixins' as m;
 
 // ── Page shell ──────────────────────────────────
 .page {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
 }
 
 // ── Page header ─────────────────────────────────
 .ph {
-    padding: 14px 24px 12px;
-    background: var(--bg1);
-    border-bottom: 1px solid var(--bdr);
-    flex-shrink: 0;
+  background: var(--bg1);
+  border-bottom: 1px solid var(--bdr);
+  flex-shrink: 0;
 }
 
 .phRow {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 24px;
 }
 
 .phTitle {
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--t0);
-    letter-spacing: -0.3px;
-    font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--t0);
+  letter-spacing: -0.3px;
+  font-family: var(--font-display);
 }
 
 .phSub {
-    font-size: 11px;
-    color: var(--t2);
-    margin-top: 3px;
-    @include m.mono;
+  font-size: 11px;
+  color: var(--t2);
+  margin-top: 3px;
+  @include m.mono;
 }
 
-.phActs {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-shrink: 0;
+.tourTriggerBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: var(--r);
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t1);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all 0.12s;
+
+  svg { width: 14px; height: 14px; }
+
+  &:hover {
+    background: var(--blue-dim);
+    border-color: var(--blue-bdr);
+    color: var(--blue);
+  }
 }
 
 // ── Scrollable body ──────────────────────────────
 .body {
-    flex: 1;
-    overflow-y: auto;
-    @include m.scrollbar;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
-.viewBody {
-    padding: 20px 24px 40px;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    max-width: 680px;
+// ══════════════════════════════════════════
+// SHARED — meta count, search, info box
+// ══════════════════════════════════════════
+.dictMeta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
 }
 
-// ── Banners ───────────────────────────────────────
-.successBanner {
-    padding: 9px 14px;
-    border-radius: var(--r);
-    background: var(--green-dim);
-    border: 1px solid var(--green-bdr);
-    color: var(--green);
-    font-size: 12px;
-    font-weight: 500;
+.dictCount {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--blue);
+  @include m.mono;
 }
 
-.errorBanner {
-    padding: 9px 14px;
-    border-radius: var(--r);
-    background: var(--red-dim);
-    border: 1px solid var(--red-bdr);
-    color: var(--red);
-    font-size: 12px;
-    font-weight: 500;
+.dictTotal {
+  font-size: 11px;
+  color: var(--t2);
+  @include m.mono;
 }
 
-// ── Cards ─────────────────────────────────────────
-.card {
-    @include m.card;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
+.dictInput {
+  padding: 8px 12px;
+  background: var(--bg0);
+  border: 1px solid var(--bdr3);
+  border-radius: var(--r);
+  color: var(--t0);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  outline: none;
+  appearance: none;
+  width: 100%;
+  transition: border-color 0.12s, box-shadow 0.12s;
+
+  &:focus { border-color: var(--blue); box-shadow: 0 0 0 2px var(--blue-dim); }
+  &::placeholder { color: var(--t2); }
 }
 
-.cardHead {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
+// ── Search box ─────────────────────────────────────
+.dictSearch {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 180px;
+  background: var(--bg1);
+  border: 1px solid var(--bdr2);
+  border-radius: var(--r);
+  padding: 6px 10px;
+  transition: border-color 0.12s;
+
+  &:focus-within { border-color: var(--blue); box-shadow: 0 0 0 2px var(--blue-dim); }
+
+  svg { width: 13px; height: 13px; color: var(--t2); flex-shrink: 0; }
 }
 
-.cardHeadText {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-
-    .cardDesc {
-        margin-top: 0;
-    }
+.dictSearchInput {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-size: 12px;
+  color: var(--t0);
+  font-family: var(--font-ui);
+  &::placeholder { color: var(--t2); }
 }
 
-.cardTitle {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--t0);
+.dictSearchClear {
+  background: none;
+  border: none;
+  color: var(--t2);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+  &:hover { color: var(--red); }
 }
 
-.cardDesc {
-    font-size: 11.5px;
-    color: var(--t2);
-    line-height: 1.5;
-    margin-top: -6px;
+// ── Empty state inside table ──────────────────────
+.dictEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 36px 20px;
+  font-size: 12px;
+  color: var(--t2);
+  @include m.mono;
+  text-align: center;
 }
 
-.inlineRow {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
+.dictTable {
+  background: var(--bg1);
+  border: 1px solid var(--bdr);
+  border-radius: var(--rl);
+  overflow: hidden;
 }
 
-// ── Segmented control ────────────────────────────
-.segmented {
-    display: inline-flex;
-    padding: 2px;
-    background: var(--bg3);
-    border: 1px solid var(--bdr2);
-    border-radius: var(--r);
-    width: fit-content;
+.dictArrow {
+  font-size: 13px;
+  color: var(--t2);
+  text-align: center;
 }
 
-.segmentBtn {
-    padding: 6px 14px;
-    border-radius: 5px;
-    border: none;
-    background: transparent;
-    color: var(--t2);
-    font-family: var(--font-ui);
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.12s;
+// ── Row action button ─────────────────────────────
+.dictActionBtn {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: all 0.12s;
+  svg { width: 12px; height: 12px; }
 
-    &:hover {
-        color: var(--t0);
-    }
+  &:hover { background: var(--blue-dim); border-color: var(--blue-bdr); color: var(--blue); }
 }
 
-.segmentActive {
-    background: var(--blue);
-    color: #fff;
-
-    &:hover {
-        color: #fff;
-    }
+.dictActionDel {
+  &:hover { background: var(--red-dim); border-color: var(--red-bdr); color: var(--red); }
 }
 
-// ── Select / number input ────────────────────────
-.select,
-.numInput,
-.input {
-    background: var(--bg3);
-    border: 1px solid var(--bdr2);
-    border-radius: var(--r);
-    color: var(--t0);
-    font-family: var(--font-ui);
-    font-size: 13px;
-    padding: 8px 10px;
-    outline: none;
-    transition: border-color 0.12s, box-shadow 0.12s;
+// ── Info box ──────────────────────────────────────
+.dictInfo {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 24px 16px;
+  padding: 11px 14px;
+  background: var(--blue-dim);
+  border: 1px solid var(--blue-bdr);
+  border-radius: var(--r);
+  font-size: 11px;
+  color: var(--blue);
+  line-height: 1.6;
+  @include m.mono;
+  flex-shrink: 0;
 
-    &::placeholder {
-        color: var(--t2);
-    }
-
-    &:focus {
-        border-color: var(--blue-bdr);
-        box-shadow: 0 0 0 2px var(--blue-dim);
-    }
-}
-
-.select {
-    width: 100%;
-    max-width: 320px;
-}
-
-.templateRow {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.viewTplBtn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 30px;
-    height: 30px;
-    flex-shrink: 0;
-    border-radius: var(--r);
-    border: 1px solid var(--bdr2);
-    background: transparent;
-    color: var(--t2);
-    cursor: pointer;
-    transition: all 0.12s;
-
-    &:hover:not(:disabled) {
-        background: var(--bg3);
-        color: var(--t0);
-        border-color: var(--bdr3);
-    }
-
-    &:disabled {
-        opacity: 0.4;
-        cursor: default;
-    }
-}
-
-.tplDetailGroup {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
-.tplDetailLabel {
-    font-size: 10px;
-    font-weight: 600;
-    color: var(--t2);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    @include m.mono;
-}
-
-.tplDetailValue {
-    font-size: 13px;
-    color: var(--t0);
-    line-height: 1.5;
-}
-
-.tplDetailBlock {
-    font-size: 12.5px;
-    color: var(--t1);
-    line-height: 1.6;
-    background: var(--bg3);
-    border: 1px solid var(--bdr2);
-    border-radius: var(--r);
-    padding: 10px 12px;
-    white-space: pre-wrap;
-    @include m.mono;
-}
-
-// ── Stepper ───────────────────────────────────────
-.stepperWrap {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.stepper {
-    display: inline-flex;
-    align-items: center;
-    height: 32px;
-    border: 1px solid var(--bdr2);
-    border-radius: var(--r);
-    overflow: hidden;
-    background: var(--bg3);
-    transition: border-color 0.12s, box-shadow 0.12s;
-
-    &:focus-within {
-        border-color: var(--blue-bdr);
-        box-shadow: 0 0 0 2px var(--blue-dim);
-    }
-}
-
-.stepperError {
-    border-color: var(--red-bdr) !important;
-    box-shadow: 0 0 0 2px var(--red-dim) !important;
-}
-
-.stepBtn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 30px;
-    height: 100%;
-    flex-shrink: 0;
-    border: none;
-    background: transparent;
-    color: var(--t1);
-    cursor: pointer;
-    transition: background 0.1s, color 0.1s;
-
-    &:hover:not(:disabled) {
-        background: var(--bg2);
-        color: var(--blue);
-    }
-
-    &:disabled {
-        color: var(--t2);
-        opacity: 0.35;
-        cursor: default;
-    }
-
-    &:first-child {
-        border-right: 1px solid var(--bdr2);
-    }
-
-    &:last-child {
-        border-left: 1px solid var(--bdr2);
-    }
-}
-
-.stepInput {
-    width: 44px;
-    height: 100%;
-    border: none;
-    background: transparent;
-    color: var(--t0);
-    font-family: var(--font-ui);
-    font-size: 13px;
-    font-weight: 700;
-    text-align: center;
-    outline: none;
-    padding: 0;
-
-    &::-webkit-inner-spin-button,
-    &::-webkit-outer-spin-button {
-        -webkit-appearance: none;
-        margin: 0;
-    }
-    -moz-appearance: textfield;
-}
-
-.stepMeta {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-}
-
-.stepRange {
-    font-size: 11px;
-    color: var(--t2);
-    @include m.mono;
-    line-height: 1;
-}
-
-.stepErr {
-    font-size: 11px;
-    color: var(--red);
-    line-height: 1;
-}
-
-// ── Toggle switch ─────────────────────────────────
-.toggle {
-    position: relative;
-    display: inline-flex;
-    flex-shrink: 0;
-    cursor: pointer;
-
-    input {
-        position: absolute;
-        opacity: 0;
-        width: 0;
-        height: 0;
-
-        &:checked+.toggleTrack {
-            background: var(--blue);
-            border-color: var(--blue-bdr);
-        }
-
-        &:checked+.toggleTrack .toggleThumb {
-            transform: translateX(16px);
-        }
-    }
-}
-
-.toggleTrack {
-    display: inline-flex;
-    align-items: center;
-    width: 36px;
-    height: 20px;
-    border-radius: 99px;
-    background: var(--bg3);
-    border: 1px solid var(--bdr2);
-    transition: background 0.15s, border-color 0.15s;
-}
-
-.toggleThumb {
-    width: 14px;
-    height: 14px;
-    margin-left: 2px;
-    border-radius: 50%;
-    background: #fff;
-    transition: transform 0.15s;
-}
-
-// ── Dictionary terms ──────────────────────────────
-.termsList {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.termRow {
-    display: grid;
-    grid-template-columns: 1fr auto 1fr auto;
-    align-items: center;
-    gap: 8px;
-    min-height: 52px;
-    padding: 4px 0;
-    box-sizing: border-box;
-}
-
-.arrowIc {
-    color: var(--t2);
-    flex-shrink: 0;
-}
-
-.emptyTerms {
-    font-size: 11.5px;
-    color: var(--t2);
-    padding: 10px 0;
-}
-
-.removeBtn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 26px;
-    border-radius: 7px;
-    border: 1px solid var(--bdr2);
-    background: transparent;
-    color: var(--t2);
-    cursor: pointer;
-    transition: all 0.12s;
-    flex-shrink: 0;
-
-    &:hover {
-        background: var(--red-dim);
-        color: var(--red);
-        border-color: var(--red-bdr);
-    }
-}
-
-.addTermBtn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    width: fit-content;
-    padding: 6px 12px;
-    border-radius: var(--r);
-    border: 1px dashed var(--bdr3);
-    background: transparent;
-    color: var(--t1);
-    font-family: var(--font-ui);
-    font-size: 11.5px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.12s;
-
-    &:hover {
-        background: var(--bg3);
-        color: var(--t0);
-        border-color: var(--blue-bdr);
-    }
-}
-
-// ── Tour button ───────────────────────────────────
-.tourBtn {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 6px 11px;
-    border-radius: var(--r);
-    border: 1px solid var(--blue-bdr);
-    background: var(--blue-dim);
-    color: var(--blue);
-    font-family: var(--font-ui);
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.12s;
-    white-space: nowrap;
-
-    &:hover {
-        background: var(--blue);
-        color: #fff;
-    }
+  svg { width: 13px; height: 13px; flex-shrink: 0; margin-top: 1px; }
 }
 
 // ── Buttons ───────────────────────────────────────
 .btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 13px;
-    border-radius: var(--r);
-    border: 1px solid var(--bdr2);
-    background: transparent;
-    color: var(--t1);
-    font-family: var(--font-ui);
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.12s;
-    white-space: nowrap;
-
-    &:hover:not(:disabled) {
-        background: var(--bg3);
-        color: var(--t0);
-        border-color: var(--bdr3);
-    }
-
-    &:disabled {
-        opacity: 0.5;
-        cursor: default;
-    }
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: var(--r);
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t1);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+  svg { width: 13px; height: 13px; }
+  &:hover { background: var(--bg3); color: var(--t0); border-color: var(--bdr3); }
+  &:disabled { opacity: 0.4; cursor: not-allowed; pointer-events: none; }
 }
 
-.btnPrimary {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 7px 14px;
-    border-radius: var(--r);
-    border: 1px solid var(--blue-bdr);
-    background: var(--blue);
-    color: #fff;
-    font-family: var(--font-ui);
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.12s;
-    white-space: nowrap;
-
-    &:hover:not(:disabled) {
-        filter: brightness(1.08);
-    }
-
-    &:disabled {
-        opacity: 0.6;
-        cursor: default;
-    }
+.btnP {
+  background: var(--blue);
+  color: #fff;
+  border-color: var(--blue);
+  font-weight: 600;
+  &:hover { background: #a78bfa; border-color: #a78bfa; color: #fff; }
 }
 
-.btnDangerSolid {
-    background: var(--red);
-    border-color: var(--red-bdr);
-
-    &:hover:not(:disabled) {
-        filter: brightness(1.08);
-    }
+.btnSaved {
+  background: var(--green);
+  border-color: var(--green);
+  &:hover { background: var(--green); border-color: var(--green); }
 }
 
-// ── Spinner ───────────────────────────────────────
+// ══════════════════════════════════════════
+// USER DICTIONARY · Master-detail layout
+// ══════════════════════════════════════════
 
-// ── Virtual scroll container ──────────────────────
-.virtualScroll {
-    height: calc(9 * 52px);
-    overflow-y: auto;
-    padding-right: 8px;
-    @include m.scrollbar;
+.dictLayout {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
 }
 
-// ── Dictionary summary ─────────────────────────────
-.dictSummaryRow {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding-top: 4px;
+// ── Left: list panel ──────────────────────────────
+.dictListPanel {
+  width: 280px;
+  flex-shrink: 0;
+  background: var(--bg1);
+  border-right: 1px solid var(--bdr);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-.dictCount {
-    font-size: 12px;
-    color: var(--t2);
-    @include m.mono;
+.dictListHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px 10px;
+  border-bottom: 1px solid var(--bdr);
+  flex-shrink: 0;
 }
 
-.dictModalDesc {
-    font-size: 12.5px;
-    color: var(--t1);
-    line-height: 1.5;
-    margin: 0 0 4px;
+.dictListTitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--t2);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  @include m.mono;
 }
 
-.termsHeader {
-    display: grid;
-    grid-template-columns: 1fr auto 1fr auto;
-    gap: 8px;
-    padding: 0 0 4px;
-    font-size: 10px;
-    font-weight: 600;
-    color: var(--t2);
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
+.dictListAdd {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r);
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t1);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.12s;
 
-    // only show first two columns as headers (arrow + remove have no label)
-    span:nth-child(1) { grid-column: 1; }
-    span:nth-child(2) { grid-column: 3; }
-}
-.loadingBody {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    height: 100%;
-    min-height: 320px;
+  svg { width: 13px; height: 13px; }
+
+  &:hover {
+    background: var(--blue-dim);
+    border-color: var(--blue-bdr);
+    color: var(--blue);
+  }
 }
 
-.spinnerWrap {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    color: var(--t2);
-    font-size: 12px;
-    @include m.mono;
+.dictList {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 8px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  @include m.scrollbar;
 }
 
-.spinner {
-    width: 22px;
-    height: 22px;
-    border: 2px solid var(--bdr2);
-    border-top-color: var(--blue);
-    border-radius: 50%;
-    animation: gsSpin 0.7s linear infinite;
+.dictListLoading,
+.dictListEmpty {
+  padding: 24px 16px;
+  font-size: 11px;
+  color: var(--t2);
+  text-align: center;
+  line-height: 1.6;
+  @include m.mono;
 }
 
-// ── Modal (reset confirmation) ────────────────────
-.overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.55);
-    backdrop-filter: blur(2px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-    padding: 24px;
-    animation: gsFadeIn 0.15s ease-out;
-}
+.dictListItem {
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r);
+  padding: 9px 11px;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  color: var(--t1);
+  transition: all 0.12s;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 
-.modal {
-    width: 100%;
-    max-width: 560px;
-    max-height: calc(100vh - 48px);
-    display: flex;
-    flex-direction: column;
-    background: var(--bg1);
-    border: 1px solid var(--bdr2);
-    border-radius: var(--rxl);
-    box-shadow: var(--shadow);
-    animation: gsScaleIn 0.16s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.modalSm {
-    max-width: 380px;
-}
-
-.modalHead {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 16px 18px;
-    border-bottom: 1px solid var(--bdr);
-    flex-shrink: 0;
-}
-
-.modalTitle {
-    font-size: 14px;
-    font-weight: 600;
+  &:hover {
+    background: var(--bg2);
     color: var(--t0);
-    font-family: var(--font-display);
+  }
+
+  &.dictListItemActive {
+    background: var(--blue-dim);
+    border-color: var(--blue-bdr);
+    color: var(--blue);
+  }
 }
 
-.closeBtn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 26px;
-    border-radius: 7px;
-    border: none;
-    background: transparent;
-    color: var(--t2);
-    cursor: pointer;
-    transition: background 0.12s, color 0.12s;
-    flex-shrink: 0;
-
-    &:hover {
-        background: var(--bg3);
-        color: var(--t0);
-    }
+.dictListItemName {
+  font-size: 13px;
+  font-weight: 500;
+  @include m.truncate;
 }
 
-.modalBody {
-    padding: 16px 18px;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    @include m.scrollbar;
+.dictListItemMeta {
+  font-size: 10px;
+  color: var(--t2);
+  @include m.mono;
+
+  .dictListItemActive & { color: var(--blue); opacity: 0.75; }
 }
 
-.modalFoot {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 14px 18px;
-    border-top: 1px solid var(--bdr);
-    flex-shrink: 0;
+// ── Right: detail panel ───────────────────────────
+.dictDetail {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg0);
 }
 
-.modalFootRight {
-    display: flex;
-    align-items: center;
-    gap: 8px;
+.dictDetailEmpty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  color: var(--t2);
+  font-size: 12px;
+  @include m.mono;
+  padding: 40px;
+  text-align: center;
+
+  svg { width: 36px; height: 36px; opacity: 0.35; }
 }
 
-.confirmText {
-    font-size: 13px;
-    color: var(--t1);
-    line-height: 1.5;
+.dictDetailHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 24px 14px;
+  background: var(--bg1);
+  border-bottom: 1px solid var(--bdr);
+  flex-shrink: 0;
 }
 
-// ── Animations ────────────────────────────────────
-@keyframes gsFadeIn {
-    from {
-        opacity: 0;
-    }
-
-    to {
-        opacity: 1;
-    }
+.dictDetailHeadMeta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-@keyframes gsScaleIn {
-    from {
-        opacity: 0;
-        transform: translateY(6px) scale(0.98);
-    }
-
-    to {
-        opacity: 1;
-        transform: translateY(0) scale(1);
-    }
+.dictNameField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-@keyframes gsSpin {
-    to {
-        transform: rotate(360deg);
-    }
+.dictNameLabelRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
+.dictNameLabel {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--t2);
+  @include m.mono;
+}
 
+.dictNameCount {
+  font-size: 10px;
+  color: var(--t2);
+  @include m.mono;
+
+  &.dictNameCountMax { color: var(--amber); }
+}
+
+.dictNameInput {
+  width: 100%;
+  background: var(--bg0);
+  border: 1px solid var(--bdr2);
+  border-radius: var(--r);
+  padding: 9px 12px;
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--t0);
+  letter-spacing: -0.2px;
+  outline: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+
+  &:hover  { border-color: var(--bdr3); }
+  &:focus  { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-dim); }
+  &::placeholder { color: var(--t2); font-weight: 400; }
+}
+
+.dictDetailDates {
+  font-size: 10px;
+  color: var(--t2);
+  @include m.mono;
+}
+
+.dictDetailActions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.dictErrorBox {
+  margin: 12px 24px 0;
+  padding: 9px 12px;
+  background: var(--red-dim);
+  border: 1px solid var(--red-bdr);
+  border-radius: var(--r);
+  font-size: 11px;
+  color: var(--red);
+  @include m.mono;
+}
+
+.dictDetailToolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 24px 10px;
+  flex-shrink: 0;
+}
+
+// ── Toolbar row (Add term, right-aligned) ─────────
+.dictTermsToolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 0 24px 10px;
+  flex-shrink: 0;
+}
+
+// ── Terms editor (scroll container) ───────────────
+.dictTermsWrap {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 24px 24px;
+  @include m.scrollbar;
+}
+
+.dictTermsHead {
+  display: grid;
+  grid-template-columns: 1fr 24px 1fr 32px;
+  gap: 10px;
+  padding: 9px 14px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--bdr);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--t2);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  @include m.mono;
+}
+
+.dictTermsRow {
+  display: grid;
+  grid-template-columns: 1fr 24px 1fr 32px;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--bdr);
+  transition: background 0.1s;
+
+  &:last-child { border-bottom: none; }
+  &:hover { background: var(--bg2); }
+}
+
+.dictAddRowBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  background: transparent;
+  border: 1px solid var(--bdr2);
+  border-radius: var(--r);
+  color: var(--t1);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s;
+
+  svg { width: 12px; height: 12px; }
+
+  &:hover {
+    background: var(--blue-dim);
+    border-color: var(--blue-bdr);
+    color: var(--blue);
+  }
+}
