@@ -23,7 +23,7 @@ const NO_DICT = -1;
 const DictionaryAssociationModal: React.FC<Props> = ({ open, onClose }) => {
     const dispatch = useAppDispatch();
     const { t } = useTranslation();
-    const serverFiles = useAppSelector(s => s.upload.serverFiles);
+    const { serverFiles, dateFrom, dateTo } = useAppSelector(s => s.upload);
 
     const [dicts, setDicts] = useState<DictionaryListItem[]>([]);
     const [dictsLoading, setDictsLoading] = useState(false);
@@ -37,6 +37,11 @@ const DictionaryAssociationModal: React.FC<Props> = ({ open, onClose }) => {
     const [detailLoading, setDetailLoading] = useState(false);
     const [detailError, setDetailError] = useState<string | null>(null);
 
+    // ── Associate ALL — every file in the current date range, bypasses the
+    //     per-row preview entirely and hits the backend directly. ──
+    const [isAssociatingAll, setIsAssociatingAll] = useState(false);
+    const [associateAllError, setAssociateAllError] = useState<string | null>(null);
+
     useEffect(() => {
         if (!open) return;
         const init: Record<number, number> = {};
@@ -45,6 +50,7 @@ const DictionaryAssociationModal: React.FC<Props> = ({ open, onClose }) => {
         initialSelectionRef.current = init;
         setBulkValue(NO_DICT);
         setDetailDictId(null); setDetailData(null); setDetailError(null);
+        setAssociateAllError(null);
 
         let cancelled = false;
         (async () => {
@@ -111,7 +117,7 @@ const DictionaryAssociationModal: React.FC<Props> = ({ open, onClose }) => {
         try {
             const calls: Promise<unknown>[] = [];
             for (const [dictIdStr, fileIds] of Object.entries(associateGroups)) {
-                calls.push(api.post('/dictionary/associate', { file_ids: fileIds, dictionary_id: Number(dictIdStr) }));
+                calls.push(api.post('/dictionary/associate', { file_ids: fileIds, dictionary_id: Number(dictIdStr), all: false }));
             }
             if (disassociateIds.length > 0) {
                 calls.push(api.post('/dictionary/disassociate', { all: false, file_ids: disassociateIds }));
@@ -127,6 +133,33 @@ const DictionaryAssociationModal: React.FC<Props> = ({ open, onClose }) => {
             dispatch(addToast(t('uploadInfer.dictModal.saveFail'), 'error'));
         } finally { setSaving(false); }
     }, [isDirty, saving, dirtyIds, selection, dispatch, onClose, t]);
+
+    // ── Associate ALL files in [dateFrom, dateTo] with bulkValue — skips the
+    //     per-row preview/save flow and applies directly on the backend. ──
+    const handleAssociateAll = useCallback(async () => {
+        if (bulkValue === NO_DICT || saving || isAssociatingAll) return;
+        setIsAssociatingAll(true);
+        setAssociateAllError(null);
+        try {
+            await api.post('/dictionary/associate', {
+                dictionary_id: bulkValue,
+                all: true,
+                start_date: dateFrom,
+                end_date: dateTo,
+            });
+            // Best-effort local patch for whatever's currently loaded — files on
+            // other pages will reflect the change next time they're fetched.
+            const patch: Record<number, number | null> = {};
+            serverFiles.forEach(f => { patch[f.id] = bulkValue; });
+            dispatch(patchFileDictionaries(patch));
+            dispatch(addToast(t('uploadInfer.dictModal.associateAllSuccess'), 'success'));
+            onClose();
+        } catch {
+            setAssociateAllError(t('uploadInfer.dictModal.associateAllFail'));
+        } finally {
+            setIsAssociatingAll(false);
+        }
+    }, [bulkValue, saving, isAssociatingAll, dateFrom, dateTo, serverFiles, dispatch, onClose, t]);
 
     const handleCloseClick = useCallback(() => { if (saving) return; onClose(); }, [saving, onClose]);
     const handleBackdropClick = useCallback((e: React.MouseEvent) => { e.stopPropagation(); }, []);
@@ -159,7 +192,7 @@ const DictionaryAssociationModal: React.FC<Props> = ({ open, onClose }) => {
                     </button>
                 </div>
 
-                {/* Bulk bar */}
+                {/* Bulk bar — applies to files currently loaded in this modal (preview, needs Save) */}
                 <div className={styles.bulkBar}>
                     <span className={styles.bulkLabel}>{t('uploadInfer.dictModal.applyToAll')}</span>
                     <select className={styles.bulkSelect} value={bulkValue}
@@ -176,6 +209,22 @@ const DictionaryAssociationModal: React.FC<Props> = ({ open, onClose }) => {
                             ? t('uploadInfer.dictModal.changes', { count: dirtyIds.length })
                             : t('uploadInfer.dictModal.noChanges')}
                     </span>
+                </div>
+
+                {/* Associate ALL bar — applies immediately to every file in the date
+                    range on the backend, including files not currently loaded here */}
+                <div className={styles.associateAllBar}>
+                    <span className={styles.bulkLabel}>
+                        {t('uploadInfer.dictModal.associateAllLabel', { from: dateFrom, to: dateTo })}
+                    </span>
+                    <button
+                        className={styles.associateAllBtn}
+                        onClick={handleAssociateAll}
+                        disabled={bulkValue === NO_DICT || saving || isAssociatingAll}
+                    >
+                        {isAssociatingAll ? <span className={styles.spinnerSm} /> : t('uploadInfer.dictModal.associateAllBtn')}
+                    </button>
+                    {associateAllError && <span className={styles.associateAllError}>{associateAllError}</span>}
                 </div>
 
                 {/* Body */}
@@ -328,10 +377,6 @@ export default DictionaryAssociationModal;
 
 
 
-
-
-
-
 // ═══════════════════════════════════════════════
 // pages/UploadInfer/PromptTemplateAssociationModal.tsx
 // Content Analytics · Bulk file ↔ prompt-template association
@@ -346,13 +391,15 @@ import styles from './PromptTemplateAssociationModal.module.scss';
 
 interface PromptTemplateListItem {
     id: number; ms_user_id: number; name: string; description: string;
-    summary_prompt: string; keyword_prompt: string; faq_prompt: string;
-    inserted_at: string; updated_at: string;
+    summary_prompt: string; keywords_prompt: string; faq_prompt: string;
+    short_answers_prompt: string; true_false_prompt: string;
+    inserted_at: string; updated_at: string; is_default?: boolean;
 }
 interface PromptTemplateDetail {
     id: number; ms_user_id: number; name: string; description: string;
     summary_prompt: string; keyword_prompt?: string; keywords_prompt?: string;
-    faq_prompt: string; inserted_at: string; updated_at: string;
+    faq_prompt: string; short_answers_prompt?: string; true_false_prompt?: string;
+    inserted_at: string; updated_at: string; is_default?: boolean;
 }
 interface Props { open: boolean; onClose: () => void; }
 
@@ -361,7 +408,7 @@ const NO_TEMPLATE = -1;
 const PromptTemplateAssociationModal: React.FC<Props> = ({ open, onClose }) => {
     const dispatch = useAppDispatch();
     const { t } = useTranslation();
-    const serverFiles = useAppSelector(s => s.upload.serverFiles);
+    const { serverFiles, dateFrom, dateTo } = useAppSelector(s => s.upload);
 
     const [templates, setTemplates] = useState<PromptTemplateListItem[]>([]);
     const [templatesLoading, setTemplatesLoading] = useState(false);
@@ -375,6 +422,11 @@ const PromptTemplateAssociationModal: React.FC<Props> = ({ open, onClose }) => {
     const [detailLoading, setDetailLoading] = useState(false);
     const [detailError, setDetailError] = useState<string | null>(null);
 
+    // ── Associate ALL — every file in the current date range, bypasses the
+    //     per-row preview entirely and hits the backend directly. ──
+    const [isAssociatingAll, setIsAssociatingAll] = useState(false);
+    const [associateAllError, setAssociateAllError] = useState<string | null>(null);
+
     useEffect(() => {
         if (!open) return;
         const init: Record<number, number> = {};
@@ -383,12 +435,13 @@ const PromptTemplateAssociationModal: React.FC<Props> = ({ open, onClose }) => {
         initialSelectionRef.current = init;
         setBulkValue(NO_TEMPLATE);
         setDetailTemplateId(null); setDetailData(null); setDetailError(null);
+        setAssociateAllError(null);
 
         let cancelled = false;
         (async () => {
             setTemplatesLoading(true); setTemplatesError(null);
             try {
-                const res = await api.get('/prompt_template/list_templates');
+                const res = await api.get('/prompt_template/list_template');
                 const list: PromptTemplateListItem[] = (res.data as any)?.templates ?? [];
                 if (!cancelled) setTemplates(Array.isArray(list) ? list : []);
             } catch {
@@ -451,7 +504,7 @@ const PromptTemplateAssociationModal: React.FC<Props> = ({ open, onClose }) => {
         if (entries.length === 0 && disassociateIds.length === 0) { setSaving(false); onClose(); return; }
         try {
             const calls: Promise<unknown>[] = entries.map(([templateIdStr, fileIds]) =>
-                api.post('/prompt_template/associate', { file_ids: fileIds, template_id: Number(templateIdStr) })
+                api.post('/prompt_template/associate', { file_ids: fileIds, template_id: Number(templateIdStr), all: false })
             );
             if (disassociateIds.length > 0) {
                 calls.push(api.post('/prompt_template/disassociate', { all: false, file_ids: disassociateIds }));
@@ -462,11 +515,22 @@ const PromptTemplateAssociationModal: React.FC<Props> = ({ open, onClose }) => {
                 const tmpl = templates.find(t => t.id === Number(templateIdStr));
                 fileIds.forEach(id => { templatePatch[id] = Number(templateIdStr); });
                 if (!tmpl) return;
-                dispatch(updateFilePrompts({ fileIds, summaryPrompt: tmpl.summary_prompt, keywordsPrompt: tmpl.keyword_prompt, faqPrompt: tmpl.faq_prompt }));
+                dispatch(updateFilePrompts({
+                    fileIds,
+                    summaryPrompt: tmpl.summary_prompt,
+                    keywordsPrompt: tmpl.keywords_prompt,
+                    faqPrompt: tmpl.faq_prompt,
+                    shortAnswerPrompt: tmpl.short_answers_prompt,
+                    trueFalsePrompt: tmpl.true_false_prompt,
+                }));
             });
             if (disassociateIds.length > 0) {
                 disassociateIds.forEach(id => { templatePatch[id] = null; });
-                dispatch(updateFilePrompts({ fileIds: disassociateIds, summaryPrompt: '', keywordsPrompt: '', faqPrompt: '' }));
+                dispatch(updateFilePrompts({
+                    fileIds: disassociateIds,
+                    summaryPrompt: '', keywordsPrompt: '', faqPrompt: '',
+                    shortAnswerPrompt: '', trueFalsePrompt: '',
+                }));
             }
             dispatch(patchFilePromptTemplate(templatePatch));
             dispatch(addToast(t('uploadInfer.templateModal.saveSuccess'), 'success'));
@@ -475,6 +539,45 @@ const PromptTemplateAssociationModal: React.FC<Props> = ({ open, onClose }) => {
             dispatch(addToast(t('uploadInfer.templateModal.saveFail'), 'error'));
         } finally { setSaving(false); }
     }, [isDirty, saving, dirtyIds, selection, templates, dispatch, onClose, t]);
+
+    // ── Associate ALL files in [dateFrom, dateTo] with bulkValue — skips the
+    //     per-row preview/save flow and applies directly on the backend. ──
+    const handleAssociateAll = useCallback(async () => {
+        if (bulkValue === NO_TEMPLATE || saving || isAssociatingAll) return;
+        setIsAssociatingAll(true);
+        setAssociateAllError(null);
+        try {
+            await api.post('/prompt_template/associate', {
+                template_id: bulkValue,
+                all: true,
+                start_date: dateFrom,
+                end_date: dateTo,
+            });
+            const tmpl = templates.find(x => x.id === bulkValue);
+            // Best-effort local patch for whatever's currently loaded — files on
+            // other pages will reflect the change next time they're fetched.
+            const templatePatch: Record<number, number | null> = {};
+            const fileIds = serverFiles.map(f => f.id);
+            fileIds.forEach(id => { templatePatch[id] = bulkValue; });
+            dispatch(patchFilePromptTemplate(templatePatch));
+            if (tmpl) {
+                dispatch(updateFilePrompts({
+                    fileIds,
+                    summaryPrompt: tmpl.summary_prompt,
+                    keywordsPrompt: tmpl.keywords_prompt,
+                    faqPrompt: tmpl.faq_prompt,
+                    shortAnswerPrompt: tmpl.short_answers_prompt,
+                    trueFalsePrompt: tmpl.true_false_prompt,
+                }));
+            }
+            dispatch(addToast(t('uploadInfer.templateModal.associateAllSuccess'), 'success'));
+            onClose();
+        } catch {
+            setAssociateAllError(t('uploadInfer.templateModal.associateAllFail'));
+        } finally {
+            setIsAssociatingAll(false);
+        }
+    }, [bulkValue, saving, isAssociatingAll, dateFrom, dateTo, serverFiles, templates, dispatch, onClose, t]);
 
     const handleCloseClick = useCallback(() => { if (saving) return; onClose(); }, [saving, onClose]);
     const handleBackdropClick = useCallback((e: React.MouseEvent) => { e.stopPropagation(); }, []);
@@ -507,7 +610,7 @@ const PromptTemplateAssociationModal: React.FC<Props> = ({ open, onClose }) => {
                     </button>
                 </div>
 
-                {/* Bulk bar */}
+                {/* Bulk bar — applies to files currently loaded in this modal (preview, needs Save) */}
                 <div className={styles.bulkBar}>
                     <span className={styles.bulkLabel}>{t('uploadInfer.templateModal.applyToAll')}</span>
                     <select className={styles.bulkSelect} value={bulkValue}
@@ -524,6 +627,22 @@ const PromptTemplateAssociationModal: React.FC<Props> = ({ open, onClose }) => {
                             ? t('uploadInfer.templateModal.changes', { count: dirtyIds.length })
                             : t('uploadInfer.templateModal.noChanges')}
                     </span>
+                </div>
+
+                {/* Associate ALL bar — applies immediately to every file in the date
+                    range on the backend, including files not currently loaded here */}
+                <div className={styles.associateAllBar}>
+                    <span className={styles.bulkLabel}>
+                        {t('uploadInfer.templateModal.associateAllLabel', { from: dateFrom, to: dateTo })}
+                    </span>
+                    <button
+                        className={styles.associateAllBtn}
+                        onClick={handleAssociateAll}
+                        disabled={bulkValue === NO_TEMPLATE || saving || isAssociatingAll}
+                    >
+                        {isAssociatingAll ? <span className={styles.spinnerSm} /> : t('uploadInfer.templateModal.associateAllBtn')}
+                    </button>
+                    {associateAllError && <span className={styles.associateAllError}>{associateAllError}</span>}
                 </div>
 
                 {/* Body */}
@@ -577,6 +696,12 @@ const PromptTemplateAssociationModal: React.FC<Props> = ({ open, onClose }) => {
                                                 </svg>
                                             </button>
                                         )}
+                                        {initial !== NO_TEMPLATE && current !== NO_TEMPLATE && (
+                                            <button className={styles.disBtn} onClick={() => handleRowChange(f.id, NO_TEMPLATE)}
+                                                disabled={saving} title={t('uploadInfer.templateModal.disassociate')}>
+                                                {t('uploadInfer.templateModal.disassociate')}
+                                            </button>
+                                        )}
                                     </div>
                                 </div>
                             );
@@ -617,6 +742,8 @@ const PromptTemplateAssociationModal: React.FC<Props> = ({ open, onClose }) => {
                                             { label: t('uploadInfer.templateModal.summaryPrompt'), text: detailData.summary_prompt },
                                             { label: t('uploadInfer.templateModal.keywordPrompt'), text: detailData.keywords_prompt ?? detailData.keyword_prompt ?? '—' },
                                             { label: t('uploadInfer.templateModal.faqPrompt'), text: detailData.faq_prompt },
+                                            { label: t('uploadInfer.templateModal.shortAnswerPrompt'), text: detailData.short_answers_prompt ?? '—' },
+                                            { label: t('uploadInfer.templateModal.trueFalsePrompt'), text: detailData.true_false_prompt ?? '—' },
                                         ].map(block => (
                                             <div key={block.label} className={styles.promptBlock}>
                                                 <div className={styles.promptLabel}>{block.label}</div>
