@@ -1,2159 +1,2988 @@
-{
-  "header": {
-    "logoText": "Content",
-    "logoTextSpan": "Analytics",
-    "sso": "Knox SSO",
-    "theme": {
-      "label": "Choose theme",
-      "dark": "Dark",
-      "light": "Light",
-      "navy": "Navy"
-    },
-    "userMenu": {
-      "label": "User menu",
-      "administrator": "Administrator",
-      "logout": "Log out"
+// ═══════════════════════════════════════════════
+// pages/UploadInfer/InferencePanel.tsx
+// Content Analytics · Inference configuration + batch status
+// ═══════════════════════════════════════════════
+import React, { useEffect, useRef, useCallback, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import {
+  inferenceStatusSuccess, updateRunningProgress,
+  updateSummaryPrompt, updateKeywordPrompt, updateQuestionPrompt,
+  updateShortAnswerPrompt, updateTrueFalsePrompt, updateSettings,
+  modelsLoading, modelsSuccess, modelsFailure, setSelectedModel,
+  updateFilePrompts,
+  type ServerFile, type ServerFilesData, type TimeInterval,
+} from '../../store/uploadSlice';
+import api from '../../services/api';
+import styles from './InferencePanel.module.scss';
+import { addToast } from '../../store/toastSlice';
+
+// ── Batch status columns ──────────────────────────
+const StatusCard: React.FC<{ file: ServerFile; variant: 'queued' | 'running' | 'completed'; onStop?: (id: number) => void; stopping?: boolean }> = ({ file, variant, onStop, stopping }) => {
+  const { t } = useTranslation();
+  const ext = file.original_name.toLowerCase().endsWith('.srt') ? 'srt' : 'vtt';
+  return (
+    <div className={`${styles.statusCardWrap} ${styles[variant + 'Wrap']}`}>
+      <div className={`${styles.statusCard} ${styles[variant]}`}>
+
+        {/* Left icon — ext badge for queued/running, green check for completed */}
+        {variant === 'completed' ? (
+          <div className={styles.completedCheck}>
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 8l3.5 3.5L13 5" />
+            </svg>
+          </div>
+        ) : (
+          <div className={`${styles.statusExt} ${styles[ext]}`}>{ext.toUpperCase()}</div>
+        )}
+
+        <div className={styles.statusInfo}>
+          <div className={styles.statusNameRow}>
+            <span className={`${styles.statusIdBadge} ${styles['statusIdBadge_' + variant]}`}>#{file.id}</span>
+            <div className={styles.statusName}>{file.original_name}</div>
+          </div>
+
+          {variant === 'running' && typeof file.progress === 'number' && (
+            <div className={styles.statusProgress}>
+              <div className={styles.statusBar}>
+                <div className={styles.statusFill} style={{ width: `${file.progress}%` }} />
+              </div>
+              <span className={styles.statusPct}>{file.progress}%</span>
+            </div>
+          )}
+
+          {variant === 'queued' && (
+            <div className={styles.queuedMeta}>
+              <span className={styles.queuedDot} />
+              {t('uploadInfer.inferencePanel.waitingQueue')}
+            </div>
+          )}
+
+          {variant === 'completed' && (
+            <div className={styles.completedMeta}>{file.inserted_at}</div>
+          )}
+
+          {variant === 'running' && typeof file.progress !== 'number' && (
+            <div className={styles.statusDate}>{file.inserted_at}</div>
+          )}
+        </div>
+
+        {/* Stop button — queued files only */}
+        {variant === 'queued' && onStop && (
+          <button
+            className={styles.stopBtn}
+            onClick={() => onStop(file.id)}
+            disabled={stopping}
+            title={t('uploadInfer.inferencePanel.stopFile')}
+          >
+            {stopping ? (
+              <span className={styles.stopSpinner} />
+            ) : (
+              <svg viewBox="0 0 16 16" fill="currentColor" stroke="none">
+                <rect x="4" y="4" width="8" height="8" rx="1.5" />
+              </svg>
+            )}
+          </button>
+        )}
+
+      </div>
+    </div>
+  );
+};
+
+// ── InferencePanel ───────────────────────────────
+interface InferencePanelProps {
+  onClose?: () => void;
+  minimized?: boolean;
+  onToggleMinimize?: () => void;
+}
+
+const InferencePanel: React.FC<InferencePanelProps> = ({ onClose, minimized = false, onToggleMinimize }) => {
+  const { t } = useTranslation();
+  const dispatch = useAppDispatch();
+  const {
+    settings,
+    selectedServerIds, isBatchRunning,
+    selectFiles,
+    models, modelsLoading: mlLoading, selectedModel,
+    dateFrom, dateTo,
+  } = useAppSelector(s => s.upload);
+
+  const [running, setRunning] = React.useState(false);
+  const [stoppingIds, setStoppingIds] = React.useState<Set<number>>(new Set());
+
+  // ── Prompt save state ──────────────────────────
+  const [promptSaving, setPromptSaving] = useState(false);
+  const [promptSaveError, setPromptSaveError] = useState<string | null>(null);
+  const promptSnapshot = useRef({ summary: '', keyword: '', question: '', shortAnswer: '', trueFalse: '' });
+  const promptsDirty =
+    settings.summaryPromptOverride !== promptSnapshot.current.summary ||
+    settings.keywordPromptOverride !== promptSnapshot.current.keyword ||
+    settings.questionPromptOverride !== promptSnapshot.current.question ||
+    settings.shortAnswerPromptOverride !== promptSnapshot.current.shortAnswer ||
+    settings.trueFalsePromptOverride !== promptSnapshot.current.trueFalse;
+
+  const emptyBatch: ServerFilesData = { queued: [], running: [], completed: [], pending: [] };
+  const [batchData, setBatchData] = React.useState<ServerFilesData>(emptyBatch);
+  const [countdown, setCountdown] = React.useState(10);
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const n = selectedServerIds.length;
+  // When nothing is selected, every generation checkbox should read as
+  // unchecked and be non-interactive — there's nothing to configure yet.
+  // Settings themselves aren't reset (so a prior selection is restored if
+  // the user re-selects the same files), only the display/interaction is.
+  const noFilesSelected = n === 0;
+  const isChecked = (v: boolean) => v && !noFilesSelected;
+  const canRunInference = n > 0 && !isBatchRunning && !!selectedModel;
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ── Fetch models ────────────────────────────
+  const fetchModels = useCallback(async () => {
+    dispatch(modelsLoading());
+    try {
+      const res = await api.get('/get_models');
+      const result = (res.data as any)?.result ?? [];
+      dispatch(modelsSuccess(result));
+    } catch {
+      dispatch(modelsFailure());
     }
-  },
-  "footer": {
-    "copyright": "© {{year}} Knox University. All rights reserved."
-  },
-  "sidebar": {
-    "expand": "Expand sidebar",
-    "collapse": "Collapse sidebar",
-    "menu": "Menu",
-    "soon": "Soon",
-    "groups": {
-      "main": "Main",
-      "analysis": "Analysis",
-      "tools": "Tools",
-      "feedback": "Feedback",
-      "settings": "Settings",
-      "usage": "Usage"
-    },
-    "nav": {
-      "lecturePipeline": "Lecture Pipeline",
-      "historyWorkspace": "History & Workspace",
-      "keywordInsights": "Keyword Insights",
-      "assessment": "Assessment",
-      "sttTranscription": "STT Transcription",
-      "promptTemplates": "Prompt Templates",
-      "generalSettings": "General Settings",
-      "settings": "Settings",
-      "adminDashboard": "Admin Dashboard",
-      "voiceOfCustomer": "Voice of Customer",
-      "userDictionary": "User Dictionary",
-      "dashboard": "Dashboard"
-    }
-  },
-  "ssoLogin": {
-    "title": "Content",
-    "titleSpan": "Analytics",
-    "subtitle": "Lecture Intelligence Platform",
-    "signedOut": "You've been signed out successfully.",
-    "signInBtn": "Sign in with Knox SSO",
-    "hint": "Authentication is handled automatically via your institution's Knox SSO service."
-  },
-  "adminDashboard": {
-    "pageTitle": "Dashboard",
-    "userViewSub": "Your usage statistics and file activity",
-    "adminViewSub": "Platform-wide usage, user management, and system health",
-    "myStats": "My Stats",
-    "admin": "Admin",
-    "administratorBadge": "Administrator",
-    "readOnlyBadge": "Read-only — admin access required for edits",
-    "loading": "Loading dashboard data…",
-    "loadError": "Failed to load dashboard data. Please try again.",
-    "adminLoadError": "Failed to load admin dashboard data. Please try again.",
-    "userStats": {
-      "totalUploaded": "Total files uploaded",
-      "filesInferenced": "Files inferenced",
-      "aiGenerations": "AI generations run",
-      "dictionariesCreated": "Dictionaries created",
-      "audioVideo": "{{audio}} audio · {{video}} video",
-      "ofUploads": "{{pct}}% of uploads",
-      "kwSummaryFaq": "KW · Summary · FAQ",
-      "promptUpdates": "{{count}} prompt updates"
-    },
-    "adminStats": {
-      "totalUploaded": "Total files uploaded",
-      "totalUsers": "Total users",
-      "aiGenerations": "AI generations",
-      "dictionariesCreated": "Dictionaries created",
-      "activeUsers": "{{count}} active users",
-      "activeOf": "{{count}} active",
-      "kwSummaryFaq": "KW · Summary · FAQ",
-      "promptUpdates": "{{count}} prompt updates"
-    },
-    "tabs": {
-      "overview": "Overview",
-      "files": "Per-file stats",
-      "dictionary": "Dictionary usage",
-      "uploadInference": "Upload vs Inference",
-      "users": "User activity",
-      "perUser": "Per-user detail",
-      "upload_inference": "Upload vs Inference",
-      "per_user": "Per-user detail"
-    },
-    "charts": {
-      "uploadVsInference": "Upload vs Inference by Type",
-      "uploadVsInferenceSub": "{{uploaded}} total uploads · {{inferenced}} inferenced",
-      "aiBreakdown": "AI Generation Breakdown",
-      "aiBreakdownSub": "{{total}} total generations",
-      "filesByType": "Files by Type",
-      "filesByTypeSub": "{{total}} total files uploaded",
-      "sttCompletions": "STT Completions",
-      "sttCompletionsSub": "Speech-to-text jobs finished",
-      "audioStt": "Audio STT",
-      "videoStt": "Video STT",
-      "ofAudioUploads": "{{pct}}% of audio uploads",
-      "ofVideoUploads": "{{pct}}% of video uploads",
-      "uploadedLabel": "Uploaded",
-      "inferencedLabel": "Inferenced",
-      "dictUsageFreq": "Dictionary Usage Frequency",
-      "dictUsageFreqSub": "{{count}} dictionaries created",
-      "dailyUploadTrend": "Daily Upload Trend",
-      "dailyUploadTrendSub": "Files uploaded per day",
-      "dailyGenTrend": "Daily Generation Trend",
-      "dailyGenTrendSub": "AI generations per day by type",
-      "uploadsByType": "Uploads by File Type",
-      "uploadsByCategoryTitle": "Upload vs Inference by Category",
-      "uploadsByCategorySub": "{{uploaded}} uploaded · {{inferenced}} inferenced · {{start}} → {{end}}",
-      "dailyUviTrend": "Daily Upload vs Inference Trend",
-      "dailyUviTrendSub": "Uploaded and inferenced per day",
-      "usagePerDict": "Usage per Dictionary",
-      "usageByDept": "Usage by Department",
-      "usageByDeptSub": "Dictionary count and usage per department",
-      "totalDictionaries": "Total dictionaries",
-      "totalUsageCount": "Total usage count",
-      "keywordsLabel": "Keywords",
-      "summaryLabel": "Summary",
-      "faqLabel": "FAQ",
-      "dictionariesLabel": "Dictionaries",
-      "usageLabel": "Usage"
-    },
-    "table": {
-      "hash": "#",
-      "fileName": "File name",
-      "type": "Type",
-      "keywords": "Keywords",
-      "summaries": "Summaries",
-      "faqs": "FAQs",
-      "promptUpdates": "Prompt updates",
-      "noFileStats": "No file stats available",
-      "dictName": "Dictionary name",
-      "timesUsed": "Times used",
-      "created": "Created",
-      "noDicts": "No dictionaries yet",
-      "username": "Username",
-      "department": "Department",
-      "totalFiles": "Total files",
-      "generations": "Generations",
-      "dictionaries": "Dictionaries",
-      "lastActive": "Last active",
-      "noUserActivity": "No user activity data",
-      "owner": "Owner",
-      "category": "Category",
-      "uploaded": "Uploaded",
-      "inferenced": "Inferenced",
-      "coverage": "Coverage",
-      "noPerUserData": "No per-user data available",
-      "noAdminDicts": "No dictionaries yet",
-      "deptSummary": "Department summary",
-      "totalUsage": "Total usage"
-    },
-    "perUser": {
-      "filesUploaded": "Files uploaded",
-      "filesInferenced": "Files inferenced",
-      "aiGenerations": "AI generations",
-      "dictionaries": "Dictionaries",
-      "lastActive": "Last active: {{date}}",
-      "promptUpdates": "{{count}} prompt updates"
-    }
-  },
-  "generalSettings": {
-    "pageTitle": "General Settings",
-    "pageSub": "defaults applied across lecture processing",
-    "loading": "Loading settings…",
-    "resetToDefaults": "Reset to Defaults",
-    "resetting": "Resetting…",
-    "discard": "Discard",
-    "saveChanges": "Save Changes",
-    "saving": "Saving…",
-    "savedSuccess": "Settings updated successfully.",
-    "resetSuccess": "Settings reset to defaults.",
-    "subtitleFormat": {
-      "title": "Subtitle Format",
-      "desc": "Default file format used when generating subtitles."
-    },
-    "defaultTemplate": {
-      "title": "Default Prompt Template",
-      "desc": "Template applied automatically to new lecture uploads.",
-      "none": "None",
-      "viewAriaLabel": "View template details"
-    },
-    "numKeywords": {
-      "title": "Number of Keywords",
-      "desc": "How many keywords to extract per lecture.",
-      "auto": "Auto",
-      "custom": "Custom"
-    },
-    "numQuestions": {
-      "title": "Number of Assessment Questions",
-      "desc": "How many assessment questions to generate per lecture.",
-      "auto": "Auto",
-      "custom": "Custom"
-    },
-    "globalDict": {
-      "title": "Global Dictionary",
-      "desc": "Auto-correct recurring transcription errors across all lectures.",
-      "noTerms": "No dictionary terms yet.",
-      "wrongPlaceholder": "Wrong term (e.g. teh)",
-      "correctPlaceholder": "Correct term (e.g. the)",
-      "addTerm": "Add Term",
-      "removeTerm": "Remove term",
-      "apply": "Apply",
-      "manage": "Manage Dictionary",
-      "termsDefined_one": "{{count}} term defined",
-      "termsDefined_other": "{{count}} terms defined"
-    },
-    "resetModal": {
-      "title": "Reset to Defaults",
-      "body": "This will reset subtitle format, prompt template, keyword/question counts and the global dictionary back to their default values. This can't be undone.",
-      "cancel": "Cancel",
-      "confirm": "Reset"
-    },
-    "templateModal": {
-      "description": "Description",
-      "summaryPrompt": "Summary Prompt",
-      "keywordPrompt": "Keyword Prompt",
-      "faqPrompt": "FAQ Prompt",
-      "close": "Close",
-      "closeAriaLabel": "Close"
-    },
-    "stepper": {
-      "rangeError": "Enter a value between {{min}} and {{max}}",
-      "decreaseAriaLabel": "Decrease",
-      "increaseAriaLabel": "Increase"
-    }
-  },
-  "promptTemplates": {
-    "pageTitle": "Prompt Templates",
-    "pageSub_one": "{{count}} template · reusable prompts for summary, keyword & FAQ generation",
-    "pageSub_other": "{{count}} templates · reusable prompts for summary, keyword & FAQ generation",
-    "newTemplate": "New Template",
-    "loading": "Loading templates…",
-    "createdSuccess": "Template created.",
-    "updatedSuccess": "Template updated.",
-    "deletedSuccess": "Template deleted.",
-    "genericError": "Something went wrong. Please try again.",
-    "allFieldsRequired": "All fields are required.",
-    "table": {
-      "name": "Name",
-      "description": "Description",
-      "updated": "Updated",
-      "empty": "No templates yet — create your first one to standardise summary, keyword and FAQ prompts.",
-      "edit": "Edit",
-      "delete": "Delete",
-      "deleting": "Deleting…"
-    },
-    "modal": {
-      "createTitle": "New Template",
-      "editTitle": "Edit Template",
-      "name": "Name",
-      "namePlaceholder": "e.g. Lecture Summary — Default",
-      "description": "Description",
-      "descPlaceholder": "Short description of when to use this template",
-      "summaryPrompt": "Summary Prompt",
-      "summaryPlaceholder": "Instructions used to generate the summary",
-      "keywordPrompt": "Keyword Prompt",
-      "keywordPlaceholder": "Instructions used to extract keywords",
-      "faqPrompt": "FAQ Prompt",
-      "faqPlaceholder": "Instructions used to generate FAQs",
-      "required": "*",
-      "cancel": "Cancel",
-      "saving": "Saving…",
-      "saveChanges": "Save Changes",
-      "createBtn": "Create Template",
-      "closeAriaLabel": "Close"
-    },
-    "deleteModal": {
-      "title": "Delete Template",
-      "body": "Delete <strong>{{name}}</strong>? This can't be undone.",
-      "cancel": "Cancel",
-      "confirm": "Delete"
-    }
-  },
-  "settings": {
-    "pageTitle": "User Dictionary",
-    "pageSub": "Manage custom term replacements applied during transcription and inference",
-    "dictionaries": "Dictionaries",
-    "newDictTooltip": "New dictionary",
-    "loading": "Loading…",
-    "noDict": "No dictionaries yet.\nClick + to create one.",
-    "unsaved": "Unsaved",
-    "newDict": "New dictionary",
-    "selectOrCreate": "Select a dictionary, or create a new one.",
-    "dictNameLabel": "Dictionary name",
-    "dictNamePlaceholder": "Enter a dictionary name…",
-    "updated": "Updated {{date}}",
-    "cancel": "Cancel",
-    "saving": "Saving…",
-    "saved": "Saved",
-    "create": "Create",
-    "saveChanges": "Save changes",
-    "discardConfirm": "Discard unsaved changes?",
-    "nameRequired": "Dictionary name is required",
-    "termRequired": "Add at least one term with both values filled",
-    "searchPlaceholder": "Search terms…",
-    "term_one": "{{count}} term",
-    "term_other": "{{count}} terms",
-    "addTerm": "Add term",
-    "wrongTerm": "Wrong term",
-    "correctTerm": "Correct term",
-    "wrongPlaceholder": "e.g. teh",
-    "correctPlaceholder": "e.g. the",
-    "removeTerm": "Remove term",
-    "noSearchMatch": "No terms match your search",
-    "noTermsYet": "No terms yet — click \"Add term\" to create one",
-    "dictInfo": "Dictionaries are applied during STT transcription and inference. Wrong terms found in transcripts will be replaced with their correct counterparts."
-  },
-  "landing": {
-    "badge": "Lecture Intelligence Platform · v2.4.1",
-    "hero": {
-      "title1": "Turn lecture transcripts",
-      "title2": "into structured",
-      "titleAccent": "knowledge",
-      "title3": "",
-      "desc": "Content Analytics ingests VTT and SRT files, runs AI inference, and delivers summaries, keyword maps, and assessment questions — all in under a minute per lecture.",
-      "ctaPrimary": "Lecture Pipeline",
-      "ctaSecondary": "View workspace"
-    },
-    "stats": {
-      "fasterReview": "Faster content review",
-      "groundingRate": "Question grounding rate",
-      "maxAudio": "Max audio per STT job",
-      "filesPerBatch": "Files per batch"
-    },
-    "features": {
-      "sectionLabel": "What it does",
-      "sectionTitle": "Every step of the pipeline,\nhandled automatically",
-      "batchUpload": {
-        "title": "Batch Upload",
-        "desc": "Drag-and-drop VTT and SRT transcript files in bulk. Supports up to 100 files, 50 MB each, with folder-level ingestion."
-      },
-      "aiInference": {
-        "title": "AI Inference",
-        "desc": "Powered by large language models — generates structured summaries, timestamped content outlines, and keyword frequency maps."
-      },
-      "smartSummaries": {
-        "title": "Smart Summaries",
-        "desc": "Three summary modes — Table of Contents, Timestamped Core Content, and Comprehensive Overview — across Korean and English."
-      },
-      "assessmentGen": {
-        "title": "Assessment Generation",
-        "desc": "Auto-generates MCQ, True/False, and short-answer questions with anti-hallucination validation — 91%+ content grounding."
-      },
-      "keywordInsights": {
-        "title": "Keyword Insights",
-        "desc": "Frequency analysis, knowledge graphs, and word clouds reveal dominant concepts across single files or entire lecture sets."
-      },
-      "workspaceHistory": {
-        "title": "Workspace History",
-        "desc": "Full audit trail of every inference run — re-open results, re-generate outputs, and export to Excel with one click."
-      }
-    },
-    "workflow": {
-      "steps": {
-        "upload": {
-          "label": "Upload",
-          "sub": "Drop VTT / SRT files"
-        },
-        "configure": {
-          "label": "Configure",
-          "sub": "Set prompts & outputs"
-        },
-        "infer": {
-          "label": "Infer",
-          "sub": "Run AI pipeline"
-        },
-        "review": {
-          "label": "Review",
-          "sub": "Open workspace"
-        },
-        "export": {
-          "label": "Export",
-          "sub": "Download Excel"
+  }, [dispatch]); // eslint-disable-line
+
+  useEffect(() => { fetchModels(); }, []); // eslint-disable-line
+
+  // ── Polling helper ───────────────────────────
+  const fetchFilesForPolling = useCallback(async () => {
+    try {
+      const statusRes = await api.post('/files/by-progress/', { start_date: dateFrom, end_date: dateTo });
+      const d = (statusRes.data as any)?.data;
+      const data: ServerFilesData = {
+        queued: d?.queued ?? [],
+        completed: d?.completed ?? [],
+        pending: d?.pending ?? [],
+        running: d?.running ?? [],
+      };
+      dispatch(inferenceStatusSuccess(data));
+      setBatchData(data);
+
+      const stillRunning = data.running.length > 0 || data.queued.length > 0;
+
+      if (data.running.length > 0) {
+        const runningIds = data.running.map(f => f.id);
+        try {
+          const progressRes = await api.post('/files/progress/', { file_ids: runningIds });
+          const progressMap = (progressRes.data as any)?.result ?? {};
+          dispatch(updateRunningProgress(progressMap));
+          setBatchData(prev => ({
+            ...prev,
+            running: prev.running.map(f => {
+              const raw = progressMap[String(f.id)];
+              if (raw === undefined) return f;
+              const pct = typeof raw === 'string' ? parseFloat(raw) : raw;
+              return { ...f, progress: isNaN(pct) ? f.progress : Math.min(100, Math.max(0, pct)) };
+            }),
+          }));
+        } catch {
+          // progress fetch failing is non-critical — silently ignore
         }
       }
-    },
-    "ctaSection": {
-      "title": "Ready to analyse your lectures?",
-      "desc": "Upload your first transcript and get a full AI-generated summary, keyword map, and question set in under 60 seconds.",
-      "button": "Lecture Pipeline"
-    },
-    "mockCard": {
-      "tabs": {
-        "summary": "Summary",
-        "keywords": "Keywords",
-        "questions": "Questions"
-      },
-      "status": "Done",
-      "block1Title": "1. Definition & Classification of Algorithms",
-      "block2Title": "2. Comparative Analysis of Sorting Algorithms",
-      "kw1": "Algorithm 18%",
-      "kw2": "Time Complexity 14%",
-      "kw3": "Big-O 8%",
-      "kw4": "Recursion 7%"
+
+      if (!stillRunning) setBatchData(emptyBatch);
+      return stillRunning;
+    } catch {
+      return false;
     }
-  },
-  "uploadInfer": {
-    "pageTitle": "Lecture Pipeline",
-    "pageSub": "Step 1 — upload VTT/SRT files · Step 2 — inference · Step 3 — workspace result",
-    "batchGroups": {
-      "batchTitle": "Batch #{{id}}",
-      "done": "{{done}} / {{total}} done",
-      "running": "Running",
-      "statusTitles": {
-        "running": "Running",
-        "queued": "Queued",
-        "done": "Completed",
-        "pending": "Not selected"
-      },
-      "badgeLabels": {
-        "running": "Active",
-        "queued": "Waiting",
-        "done": "Done",
-        "pending": "Skipped"
-      },
-      "file_one": "{{count}} file",
-      "file_other": "{{count}} files",
-      "inQueue": "In queue",
-      "emptyMsg": "No files were excluded from this batch.",
-      "view": "View"
-    },
-    "filePanel": {
-      "step1Label": "Step 1 — Files",
-      "uploaded_one": "{{count}} uploaded",
-      "uploaded_other": "{{count}} uploaded",
-      "selected_one": "{{count}} selected",
-      "selected_other": "{{count}} selected",
-      "showUpload": "Show upload",
-      "hideUpload": "Hide upload",
-      "dropTitle": "Drop files here",
-      "dropTitleDefault": "Drop .vtt / .srt here",
-      "dropSub": "or click to browse · folder upload supported",
-      "browseFiles": "Browse files",
-      "folder": "Folder",
-      "uploadBtn_one": "Upload {{count}} file",
-      "uploadBtn_other": "Upload {{count}} files",
-      "cancelBtn": "Cancel",
-      "complete": "{{finished}} / {{total}} complete",
-      "failed_one": "· {{count}} failed",
-      "failed_other": "· {{count}} failed",
-      "fileStatus": {
-        "ready": "Ready to upload",
-        "uploading": "Uploading…",
-        "uploaded": "Uploaded"
-      },
-      "uploadedFiles": "Uploaded Files",
-      "inferenceBtn": "Select files for inference",
-      "dictionaryBtn": "Associate / Disassociate dictionary",
-      "templateBtn": "Map prompt template",
-      "searchBtn": "Search files",
-      "exportBtn": "Export files to Excel",
-      "deleteBtn": "Delete files",
-      "dateFrom": "From",
-      "dateTo": "To",
-      "applyDate": "Apply",
-      "sortBy": "Sort by",
-      "sortId": "ID",
-      "sortName": "Name",
-      "sortDate": "Date",
-      "sortStatus": "Status",
-      "searchPlaceholder": "Search by filename or ID…",
-      "loadingFiles": "Loading files…",
-      "noFilesRange": "No files in this date range",
-      "noFilesMatch": "No files match \"{{query}}\"",
-      "inferenced": "Inferenced",
-      "notInferenced": "Not Inferenced",
-      "export": "Export",
-      "exportToExcelTitle": "Export {{count}} file(s) to Excel",
-      "exportSelectFirst": "Select files to export",
-      "selectFilesToExport": "Select files to export",
-      "exportCountTitle": "Export {{count}} file(s) to Excel",
-      "selectFilesToDelete": "Select files to delete",
-      "deleteCountTitle": "Delete {{count}} file(s)",
-      "exportCount": "Export {{count}} file(s)",
-      "deleteCount": "Delete {{count}} file(s)",
-      "cancelTitle": "Cancel",
-      "uploaded": "Uploaded ({{count}})",
-      "selected": "{{count}} selected",
-      "uploadBtn": "Upload {{count}} file(s)",
-      "failed": "· {{count}} failed",
-      "exportAllBtn": "Export All",
-      "exportAllFailed": "Export failed. Please try again.",
-      "deleteAllBtn": "Delete All",
-      "deleteAllConfirmTitle": "Delete All Files",
-      "deleteAllConfirmBody": "This will permanently delete all files uploaded between {{from}} and {{to}}. This action cannot be undone.",
-      "deleteAllConfirmPrompt": "Type <strong>{{phrase}}</strong> to confirm:",
-      "deleteAllConfirmBtn": "Delete All Files",
-      "deleteAllFailed": "Delete failed. Please try again.",
-      "matchCount": "{{count}} files",
-      "pageInfo": "Page {{page}} of {{totalPages}} · {{total}} files",
-      "perPage": "Per page",
-      "selectedTotal": "{{count}} of {{total}} selected",
-      "selectAllFiles": "Select all",
-      "clearAllFiles": "Clear all",
-      "inferenceMode": "Select for Inference",
-      "deleteMode": "Delete Files",
-      "exportMode": "Export Files",
-      "exitMode": "Exit",
-      "noFilesSelected": "No files selected",
-      "runInferenceBtn": "Run Inference",
-      "confirmDeleteBtn": "Confirm Delete",
-      "confirmExportBtn": "Confirm Export",
-      "paginationPrev": "Previous",
-      "paginationNext": "Next",
-      "actionsLabel": "Actions",
-      "continueToInfer": "Continue to Inference",
-      "continueToInferCount": "Continue to Inference ({{count}})",
-      "dictionaryLinked": "Dictionary linked",
-      "templateLinked": "Prompt template linked",
-      "promptCustomized": "Customized",
-      "promptDefault": "Default",
-      "promptDefaultFull": "Using default prompt",
-      "perPageShort": "{{count}} / page",
-      "statusAll": "All",
-      "statusWaiting": "Waiting",
-      "statusQueued": "Queued",
-      "statusRunning": "Running",
-      "statusError": "Error",
-      "statusTbd": "Pending"
-    },
-    "inferencePanel": {
-      "step2Label": "Step 2 — Inference Configuration",
-      "step2Running": "Step 2 — Inference Running",
-      "expandStep2": "Expand Step 2",
-      "minimizeStep2": "Minimize Step 2",
-      "closeStep2": "Close Step 2",
-      "filesSelected_one": "{{count}} file selected for inference",
-      "filesSelected_other": "{{count}} files selected for inference",
-      "batchRunning": "Batch running",
-      "runInference": "Run inference",
-      "selectFilesFirst": "Select files first",
-      "noModelSelected": "No model selected",
-      "submitting": "Submitting batch…",
-      "submittingDesc": "Sending {{count}} file(s) to the inference engine.\nThis may take a moment — please wait.",
-      "submittingMore": "+{{count}} more",
-      "selBanner": "{{count}} file(s)",
-      "selBannerEmpty": "Select files from the left panel",
-      "selBannerFilled": "{{count}} file(s) selected for inference",
-      "generateContent": "Generate content",
-      "generateSummary": "Summary",
-      "generateKeywords": "Keywords",
-      "generateQuestions": "Assessment questions",
-      "outputSettings": "Output settings",
-      "modelLabel": "Model",
-      "refreshModels": "Refresh models",
-      "noModels": "No models available — inference cannot be started. Try refreshing or check your connection.",
-      "modelsAvailable_one": "{{count}} model available",
-      "modelsAvailable_other": "{{count}} models available",
-      "noModelsOption": "— no models found —",
-      "promptOverrides": "Prompt overrides",
-      "promptModeSingle": "Single file — autofilled · edit to override.",
-      "promptModeMulti": "Multiple files — enter here to override all.",
-      "summaryPrompt": "Summary prompt",
-      "keywordPrompt": "Keyword prompt",
-      "questionPrompt": "Assessment question prompt",
-      "optional": "optional",
-      "perFile": "Per-file",
-      "hide": "Hide",
-      "noPromptSet": "No prompt set",
-      "autofillPlaceholder": "Autofilled from file — edit to override…",
-      "manualPlaceholder": "Leave blank to use per-file prompts…",
-      "noContentHint": "Enable at least one content type to configure its prompt.",
-      "cancelPrompt": "Cancel",
-      "savePrompts": "Save prompts",
-      "saving": "Saving…",
-      "promptSaveFail": "Failed to save prompts. Please try again.",
-      "inferenceStatus": "Inference status",
-      "live": "Live",
-      "refreshingIn": "refreshing in {{sec}}s",
-      "filesRunning_one": "{{count}} file running",
-      "filesRunning_other": "{{count}} files running",
-      "queued": "Queued",
-      "runningCol": "Running",
-      "completed": "Completed",
-      "waitingQueue": "Waiting in queue",
-      "stopFile": "Stop this file",
-      "stopAlready": "This file has already been processed and cannot be stopped.",
-      "inferenceStarted": "Inference started successfully",
-      "batchRunPill": "Batch running",
-      "collapsePerFile": "Collapse per-file prompts",
-      "viewPerFile": "View per-file prompts",
-      "filesSelected": "{{count}} file(s) selected for inference",
-      "filesRunning": "{{count}} file(s) running",
-      "modelsAvailable": "{{count}} model(s) available",
-      "generateKeywordInsights": "Keyword Insights",
-      "generateShortAnswer": "Short Answer Questions",
-      "generateTrueFalse": "True / False Questions",
-      "timestampedSummary": "Timestamped Summary",
-      "timeInterval": "Time interval",
-      "minutesOption": "{{count}} min",
-      "shortAnswerPrompt": "Short answer prompt",
-      "trueFalsePrompt": "True / False prompt"
-    },
-    "dictModal": {
-      "title": "Dictionary Association",
-      "subtitle": "Assign a dictionary to each file, or apply one to all files at once.",
-      "closeSaving": "Saving — please wait",
-      "close": "Close",
-      "applyToAll": "Apply to all files:",
-      "applyBtn": "Apply to all",
-      "noneOption": "— None (clear) —",
-      "noneRow": "— None —",
-      "changes_one": "{{count}} change pending",
-      "changes_other": "{{count}} changes pending",
-      "noChanges": "No changes yet",
-      "colFile": "File",
-      "colDict": "Dictionary",
-      "loadingDicts": "Loading dictionaries…",
-      "noFiles": "No files available.",
-      "loadFail": "Failed to load dictionaries. Please try again.",
-      "associated": "Associated",
-      "viewDetails": "View dictionary details",
-      "disassociate": "Disassociate",
-      "detailClose": "Close details",
-      "metaId": "ID:",
-      "metaUpdated": "Updated:",
-      "metaTerms": "Terms:",
-      "loadingDetails": "Loading details…",
-      "noTerms": "No terms in this dictionary.",
-      "detailLoadFail": "Failed to load dictionary details.",
-      "noDetailsReturned": "No details returned for this dictionary.",
-      "wrongTerm": "Wrong term",
-      "correctTerm": "Correct term",
-      "savingHint": "Saving — please don't close this window…",
-      "cancel": "Cancel",
-      "save": "Save",
-      "saving": "Saving…",
-      "saveSuccess": "Dictionary settings saved successfully",
-      "saveFail": "Failed to save dictionary settings. Please try again.",
-      "associateAllLabel": "Apply dictionary to all files ({{from}} – {{to}})",
-      "associateAllBtn": "Apply to All Files",
-      "associateAllSuccess": "Dictionary applied to all files successfully.",
-      "associateAllFail": "Failed to apply dictionary to all files. Please try again.",
-      "changes": "{{count}} change(s) pending"
-    },
-    "templateModal": {
-      "title": "Prompt Template Association",
-      "subtitle": "Map a prompt template to each file to update its summary, keyword, and FAQ prompts.",
-      "closeSaving": "Saving — please wait",
-      "close": "Close",
-      "applyToAll": "Apply to all files:",
-      "applyBtn": "Apply to all",
-      "noneOption": "— None —",
-      "noneRow": "— None —",
-      "changes_one": "{{count}} change pending",
-      "changes_other": "{{count}} changes pending",
-      "noChanges": "No changes yet",
-      "colFile": "File",
-      "colTemplate": "Prompt Template",
-      "loadingTemplates": "Loading prompt templates…",
-      "loadFail": "Failed to load prompt templates. Please try again.",
-      "noFiles": "No files available.",
-      "mapped": "Mapped",
-      "viewDetails": "View template details",
-      "detailClose": "Close details",
-      "metaId": "ID:",
-      "metaUpdated": "Updated:",
-      "metaDescription": "Description:",
-      "loadingDetails": "Loading details…",
-      "noDetailsReturned": "No details returned for this template.",
-      "detailLoadFail": "Failed to load template details.",
-      "summaryPrompt": "Summary Prompt",
-      "keywordPrompt": "Keyword Prompt",
-      "faqPrompt": "FAQ Prompt",
-      "savingHint": "Saving — please don't close this window…",
-      "cancel": "Cancel",
-      "save": "Save",
-      "saving": "Saving…",
-      "saveSuccess": "Prompt template applied successfully",
-      "saveFail": "Failed to apply prompt template. Please try again.",
-      "associateAllLabel": "Apply template to all files ({{from}} – {{to}})",
-      "associateAllBtn": "Apply to All Files",
-      "associateAllSuccess": "Template applied to all files successfully.",
-      "associateAllFail": "Failed to apply template to all files. Please try again.",
-      "changes": "{{count}} change(s) pending",
-      "shortAnswerPrompt": "Short Answer Prompt",
-      "trueFalsePrompt": "True / False Prompt"
-    },
-    "workspacePanel": {
-      "clickToView": "Click a file to view results",
-      "noFileSelected": "No file selected",
-      "noFileDesc": "Click any uploaded file to view its inference results here.",
-      "loadingFile": "Loading file data…",
-      "tabs": {
-        "summary": "Summary",
-        "keywords": "Keywords",
-        "assessment": "Assessment Questions",
-        "shortAnswer": "Short Answer",
-        "trueFalse": "True / False",
-        "timestampedSummary": "Timestamped Summary",
-        "keywordInsights": "Keyword Insights",
-        "mcq": "MCQ"
-      },
-      "noSummary": "No summary available.",
-      "noKeywords": "No keywords available.",
-      "noQuestions": "No questions available.",
-      "edit": "Edit",
-      "copy": "Copy",
-      "download": "Download",
-      "copyAs": "Copy as",
-      "downloadAs": "Download as",
-      "editColPreview": "Preview",
-      "editColEdit": "Edit Content",
-      "markdownRenderer": "Markdown Renderer",
-      "markdownTag": "Markdown",
-      "chipView": "Chip View",
-      "onePerLine": "One per line",
-      "cancel": "Cancel",
-      "save": "Save",
-      "saving": "Saving",
-      "autofillPlaceholder": "Autofilled from file — edit to override…",
-      "keywordPlaceholder": "One keyword per line…",
-      "mcq": "MCQ",
-      "viewAll": "View All",
-      "explanation": "Explanation",
-      "complete": "Complete!",
-      "assessCompleteTitle": "Assessment Complete!",
-      "assessCompleteDesc": "You answered all {{count}} question(s).",
-      "restart": "Restart",
-      "next": "Next Question",
-      "finish": "Finish",
-      "question": "Q{{n}}",
-      "answer": "Answer",
-      "true": "True",
-      "false": "False",
-      "revealAnswer": "Reveal answer",
-      "showAllAnswers": "Show all answers",
-      "hideAllAnswers": "Hide all answers",
-      "quizMode": "Quiz mode",
-      "noShortAnswer": "No short answer questions available.",
-      "noTrueFalse": "No true / false questions available.",
-      "noTimestampedSummary": "No timestamped summary available.",
-      "noKeywordInsights": "No keyword insights available.",
-      "noData": "No data available.",
-      "firstMentionAt": "First mention at {{pct}}%",
-      "importanceAxis": "Importance",
-      "kiTabs": {
-        "graph": "Knowledge Graph",
-        "wordcloud": "Word Cloud",
-        "timeline": "Timeline",
-        "heatmap": "Heatmap",
-        "clusters": "Clusters",
-        "frequency": "Frequency",
-        "prerequisites": "Prerequisites",
-        "importance": "Importance",
-        "cooccurrence": "Co-occurrence",
-        "glossary": "Glossary"
-      },
-      "scrollLeft": "Scroll tabs left",
-      "scrollRight": "Scroll tabs right",
-      "complexityAxis": "Complexity",
-      "glossaryTerm": "Term",
-      "glossaryDefinition": "Definition",
-      "reason": "Reason",
-      "cluster": "Cluster",
-      "count": "Count",
-      "copied": "Copied!",
-      "score": "Score",
-      "period": "Period",
-      "frequency": "Frequency",
-      "reGenerate": "Re-generate",
-      "reGenerating": "Re-generating…",
-      "reGenerateSuccess": "Re-generated successfully.",
-      "reGenerateFail": "Re-generation failed. Please try again."
-    },
-    "tabs": {
-      "upload": "Upload & Manage",
-      "infer": "Inference",
-      "results": "View Results",
-      "fileCount": "{{count}} files",
-      "selectedCount": "{{count}} selected",
-      "runningCount": "{{count}} running",
-      "running": "Running",
-      "resultsHint": "Select a file to view results"
-    },
-    "workspace": {
-      "filesTitle": "Files",
-      "searchFiles": "Search files…",
-      "loadingFiles": "Loading files…",
-      "noFilesYet": "No files yet",
-      "noFilesMatch": "No files match your search"
+  }, [dispatch, dateFrom, dateTo]);
+
+  const stopCountdown = useCallback(() => {
+    if (countdownRef.current) {
+      clearInterval(countdownRef.current);
+      countdownRef.current = null;
     }
-  },
-  "stt": {
-    "pageTitle": "STT Pipeline",
-    "loading": "Loading…",
-    "file_one": "{{count}} file",
-    "file_other": "{{count}} files",
-    "processing_one": " · {{count}} processing",
-    "processing_other": " · {{count}} processing",
-    "dateError": "Start date cannot be after end date.",
-    "apply": "Apply",
-    "refreshTitle": "Refresh",
-    "refreshDisabled": "Disabled during inference",
-    "library": {
-      "title": "Library",
-      "filterAll": "All",
-      "searchPlaceholder": "Search…",
-      "closeInference": "Close inference",
-      "runInference": "Run inference",
-      "cancelDelete": "Cancel delete",
-      "deleteFiles": "Delete Files",
-      "cancelMove": "Cancel move",
-      "movePipeline": "Move to Lecture Pipeline",
-      "selected_one": "{{count}} selected",
-      "selected_other": "{{count}} selected",
-      "noneSelected": "Click cards to select",
-      "noPipelineFiles": "No completed files to select",
-      "selectCompleted": "Select completed files only",
-      "selectAll": "Select all",
-      "clear": "Clear",
-      "inferenceSelected_one": "{{count}} selected",
-      "inferenceSelected_other": "{{count}} selected",
-      "inferenceNone": "Click cards to select",
-      "loading": "Loading files…",
-      "emptyTitle": "No files in this range",
-      "emptyHint": "Try widening the date filter, or upload a new file.",
-      "noMatchTitle": "No files match \"{{query}}\"",
-      "noMatchHint": "Try searching by file ID or a different name.",
-      "loadError": "Could not load files: {{error}}",
-      "retry": "Retry",
-      "deleting_one": "Deleting… ({{count}})",
-      "deleting_other": "Deleting… ({{count}})",
-      "delete_one": "Delete ({{count}})",
-      "delete_other": "Delete ({{count}})",
-      "moving_one": "Moving… ({{count}})",
-      "moving_other": "Moving… ({{count}})",
-      "move_one": "Move to Lecture ({{count}})",
-      "move_other": "Move to Lecture ({{count}})",
-      "deletedSuccess_one": "{{count}} file deleted successfully.",
-      "deletedSuccess_other": "{{count}} files deleted successfully.",
-      "deleteFail": "Delete failed. Please try again.",
-      "movedSuccess_one": "{{count}} file moved to Lecture Pipeline.",
-      "movedSuccess_other": "{{count}} files moved to Lecture Pipeline.",
-      "moveFail": "Move failed. Please try again.",
-      "selectForInference": "Select Files for Inference"
-    },
-    "fileCard": {
-      "status": {
-        "completed": "Completed",
-        "queued": "Queued",
-        "pending": "Pending",
-        "running": "Running",
-        "failed": "Failed"
-      },
-      "type": {
-        "video": "Video",
-        "audio": "Audio"
-      },
-      "generate": "Generate",
-      "reGenerate": "Re-generate",
-      "retry": "Retry",
-      "inPipelineTitle": "Added to Lecture Pipeline"
-    },
-    "inference": {
-      "title": "Inference",
-      "nextCheck": "⟳ next check in {{sec}}s",
-      "selectHint": "Select files from the Library to run inference on.",
-      "selectedHint_one": "{{count}} file selected from Library",
-      "selectedHint_other": "{{count}} files selected from Library",
-      "settingsTitle": "Settings",
-      "modelLabel": "Model",
-      "modelLoading": "Loading…",
-      "languageLabel": "Language",
-      "korean": "Korean",
-      "english": "English",
-      "chunkLabel": "Chunk size",
-      "chunkAuto": "Auto",
-      "submitting": "Submitting…",
-      "runBtn": "Run Inference",
-      "runBtnCount": "Run Inference ({{count}})",
-      "queued": "Queued",
-      "file_one": "{{count}} file",
-      "file_other": "{{count}} files",
-      "waiting": "Waiting",
-      "noQueued": "No queued files",
-      "inQueue": "In queue",
-      "running": "Running",
-      "active": "Active",
-      "noRunning": "No active files",
-      "done": "Done",
-      "noDone": "No completed files yet",
-      "statusDone": "Done",
-      "statusFailed": "Failed",
-      "statusStarting": "Starting…"
-    },
-    "timeline": {
-      "ariaLabel": "Transcript timeline",
-      "seekTo": "Seek to {{time}}"
-    },
-    "unknownDate": "Unknown",
-    "filterLabel": "Filter: {{filter}}"
-  },
-  "modal": {
-    "ariaLabel": "Dialog"
-  },
-  "transcriptDetail": {
-    "backAriaLabel": "Back",
-    "fileSub": "File #{{id}} · {{count}} cues",
-    "downloadSrt": "Download SRT",
-    "captionsError": "Could not load captions: {{error}}",
-    "retry": "Retry",
-    "loadingMedia": "Loading media…",
-    "mediaError": "Could not load media",
-    "nowPlaying": "Now Playing",
-    "saveStatus": {
-      "editing": "Saving…",
-      "saved": "Saved",
-      "failed": "Save failed"
-    },
-    "cueInfo": "Cue {{current}} / {{total}} · {{start}} → {{end}}",
-    "cueCountHint": "{{count}} cues · press play",
-    "loading": "Loading…",
-    "noTranscript": "No transcript",
-    "followAlong": "Press play to follow along",
-    "transcriptTitle": "Transcript",
-    "transcriptHint": "Click to jump · pencil to edit",
-    "loadingCaptions": "Loading captions…",
-    "noCaptions": "No captions available",
-    "noCaptionsToast": "No captions available",
-    "nowTag": "▶ Now",
-    "editTitle": "Edit",
-    "emptyWarn": "⚠ Save with empty text? This will clear the caption.",
-    "keepEditing": "Keep editing",
-    "saveEmpty": "Save empty",
-    "savedToast": "Saved",
-    "saveFailedToast": "Save failed",
-    "downloadedToast": "Downloaded"
-  },
-  "transcribePanel": {
-    "title": "Generate Transcription",
-    "closeAriaLabel": "Close panel",
-    "fileLabel": "File",
-    "modelLabel": "Model",
-    "modelsLoading": "Loading models…",
-    "modelsError": "Could not load models.",
-    "modelsRetry": "Retry",
-    "noModels": "No models available",
-    "languageLabel": "Language",
-    "korean": "Korean",
-    "english": "English",
-    "chunkLabel": "Chunk",
-    "chunk5": "5 sec",
-    "chunk10": "10 sec",
-    "chunk15": "15 sec",
-    "chunk20": "20 sec",
-    "cancel": "Cancel",
-    "starting": "Starting…",
-    "start": "Start transcription"
-  },
-  "uploadInline": {
-    "title": "Upload Files",
-    "limitBadge": "{{active}}/{{max}} uploading",
-    "limitReached": "Upload limit reached",
-    "dropActive": "Drop to upload",
-    "dropDefault": "Drag files or a folder here",
-    "dropHint": "MP3 · WAV · AAC · MP4 · MOV · max {{max}} files",
-    "limitHint": "Max {{max}} files at a time",
-    "browseFiles": "Browse Files",
-    "browseFolder": "Browse Folder",
-    "unsupportedFormat": "Unsupported format. Accepted: MP3, WAV, AAC, FLAC, M4A, OGG, MP4, AVI, MOV, MKV, WEBM.",
-    "allSlotsBusy": "All {{max}} upload slots are busy. Wait for a file to finish, then try again.",
-    "partialQueue": "{{queued}} file(s) queued. {{ignored}} file(s) ignored — only {{max}} uploads run at once. You can upload more as each one completes.",
-    "uploading": "Uploading…",
-    "uploaded": "Uploaded",
-    "failed": "Failed",
-    "retryBtn": "Retry",
-    "dismissAriaLabel": "Dismiss"
-  },
-  "uploadPanel": {
-    "title": "Upload File",
-    "closeAriaLabel": "Close upload panel",
-    "fileLabel": "File",
-    "dropActive": "Drop to attach",
-    "dropDefault": "Drop a file or click to browse",
-    "dropHint": "MP3 WAV AAC FLAC M4A OGG · MP4 AVI MOV MKV WEBM",
-    "unsupportedFormat": "Unsupported file format",
-    "removeAriaLabel": "Remove file",
-    "cancel": "Cancel",
-    "uploading": "Uploading…",
-    "upload": "Upload"
-  },
-  "history": {
-    "pageTitle": "History & Workspace",
-    "pageSub": "Browse past inference runs and review results",
-    "loading": "Loading history…",
-    "loadError": "Failed to load history. Please try again.",
-    "retry": "Retry",
-    "empty": {
-      "title": "No files yet",
-      "hint": "Upload files and run inference to see results here."
-    },
-    "searchPlaceholder": "Search by filename or ID…",
-    "filterAll": "All",
-    "filterInferenced": "Inferenced",
-    "filterPending": "Not inferenced",
-    "sortLabel": "Sort",
-    "sortNewest": "Newest first",
-    "sortOldest": "Oldest first",
-    "sortName": "Name",
-    "fileCount": "{{count}} files",
-    "selectedCount": "{{count}} selected",
-    "selectAll": "Select all",
-    "clearSelection": "Clear",
-    "openWorkspace": "Open Workspace",
-    "deleteSelected": "Delete",
-    "deleting": "Deleting…",
-    "deleteSuccess": "{{count}} file(s) deleted successfully.",
-    "deleteFail": "Delete failed. Please try again.",
-    "deleteConfirm": {
-      "title": "Delete Files",
-      "body": "Are you sure you want to delete {{count}} file(s)? This action cannot be undone.",
-      "cancel": "Cancel",
-      "confirm": "Delete"
-    },
-    "workspace": {
-      "title": "Workspace",
-      "noFile": "No file selected",
-      "noFileHint": "Select a file from the list to view its inference results here.",
-      "tabs": {
-        "summary": "Summary",
-        "keywords": "Keywords",
-        "assessment": "Assessment"
-      },
-      "noSummary": "No summary available.",
-      "noKeywords": "No keywords available.",
-      "noAssessment": "No assessment questions available.",
-      "copy": "Copy",
-      "copied": "Copied!",
-      "download": "Download",
-      "edit": "Edit",
-      "save": "Save",
-      "saving": "Saving…",
-      "cancel": "Cancel",
-      "reGenerate": "Re-generate",
-      "reGenerating": "Re-generating…",
-      "reGenerateFail": "Re-generation failed. Please try again.",
-      "reGenerateSuccess": "Re-generated successfully.",
-      "keywordPlaceholder": "One keyword per line…",
-      "summaryPlaceholder": "Autofilled from file — edit to override…",
-      "editColPreview": "Preview",
-      "editColEdit": "Edit Content",
-      "markdownTag": "Markdown",
-      "chipView": "Chip View",
-      "onePerLine": "One per line",
-      "mcq": "MCQ",
-      "viewAll": "View All",
-      "explanation": "Explanation",
-      "assessComplete": "Assessment Complete!",
-      "assessCompleteDesc": "You answered all {{count}} question(s).",
-      "restart": "Restart",
-      "next": "Next Question",
-      "finish": "Finish",
-      "question": "Q{{n}}"
+  }, []);
+
+  const startCountdown = useCallback(() => {
+    stopCountdown();
+    setCountdown(10);
+    countdownRef.current = setInterval(() => {
+      setCountdown(prev => (prev <= 1 ? 10 : prev - 1));
+    }, 1000);
+  }, [stopCountdown]);
+
+  const stopPolling = useCallback(() => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+    stopCountdown();
+    setCountdown(10);
+  }, [stopCountdown]);
+
+  const startPolling = useCallback(() => {
+    stopPolling();
+    startCountdown();
+    pollingRef.current = setInterval(async () => {
+      const stillRunning = await fetchFilesForPolling();
+      if (!stillRunning) stopPolling();
+      else startCountdown();
+    }, 10000);
+  }, [fetchFilesForPolling, stopPolling, startCountdown]);
+
+  useEffect(() => {
+    if (isBatchRunning) {
+      fetchFilesForPolling().then(stillRunning => {
+        if (stillRunning) startPolling();
+        else stopPolling();
+      });
+    } else {
+      stopPolling();
+    }
+    return stopPolling;
+  }, [isBatchRunning]); // eslint-disable-line
+
+  // ── One-time bootstrap check on mount ──
+  // /files/by-date/ is now paginated and no longer tells us whether a batch
+  // is running (a running/queued file may simply be on another page), so we
+  // can't rely on its response to seed isBatchRunning like before. Ask
+  // /files/by-progress/ directly once on mount to catch a batch that was
+  // already running before this page loaded (e.g. after a refresh).
+  useEffect(() => {
+    fetchFilesForPolling().then(stillRunning => { if (stillRunning) startPolling(); });
+  }, []); // eslint-disable-line
+
+  // ── Stop a queued file ───────────────────────
+  const handleStop = useCallback(async (fileId: number) => {
+    setStoppingIds(prev => new Set(prev).add(fileId));
+    try {
+      await api.patch('/files/stop', { fileID: [fileId] });
+    } catch (err: any) {
+      if (err?.response?.status === 403) {
+        dispatch(addToast(t('uploadInfer.inferencePanel.stopAlready'), 'error'));
+      } else {
+        console.error('Stop file failed:', err);
+      }
+    } finally {
+      await fetchFilesForPolling();
+      setStoppingIds(prev => { const s = new Set(prev); s.delete(fileId); return s; });
+    }
+  }, [fetchFilesForPolling]);
+
+  // ── Run inference ────────────────────────────
+  const handleRun = async () => {
+    if (!canRunInference) return;
+    setRunning(true);
+    try {
+      await api.post('/batch_process', {
+        all: false, // always false for now — file_ids-driven runs only
+        file_ids: selectedServerIds,
+        start_date: dateFrom,
+        end_date: dateTo,
+        model_name: selectedModel,
+        summary_prompt: settings.summaryPromptOverride,
+        faq_prompt: settings.questionPromptOverride,
+        keywords_prompt: settings.keywordPromptOverride,
+        short_answers_prompt: settings.shortAnswerPromptOverride,
+        true_false_prompt: settings.trueFalsePromptOverride,
+        generate_summary: settings.generateSummary,
+        generate_keywords: settings.generateKeywords,
+        generate_faq: settings.generateQuestions,
+        generate_short_answer: settings.generateShortAnswer,
+        generate_true_false: settings.generateTrueFalse,
+        // Only meaningful — and only ever sent true — when Keywords itself is on.
+        generate_keyword_insights: settings.generateKeywords && settings.generateKeywordInsights,
+        timestamped_summary: settings.timestampedSummary,
+        time_interval: settings.timeInterval,
+      });
+      const stillRunning = await fetchFilesForPolling();
+      if (stillRunning) startPolling();
+      dispatch(addToast(t('uploadInfer.inferencePanel.inferenceStarted'), 'success'));
+    } catch (err) {
+      console.error('Batch process failed:', err);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  // ── Run button sub-label ─────────────────────
+  const runBtnSubLabel = (() => {
+    if (n === 0) return t('uploadInfer.inferencePanel.selectFilesFirst');
+    if (!selectedModel) return t('uploadInfer.inferencePanel.noModelSelected');
+    return `${n} file${n !== 1 ? 's' : ''} ready`;
+  })();
+
+  // ── Auto-fill prompts when exactly 1 file is selected ────────────
+  // Keyed off the *actual selected file id* (or a stable "multi"/"none"
+  // marker), not the selection count and not the selectedServerIds array
+  // reference. Redux can hand us a brand-new array reference for the same
+  // underlying selection on unrelated updates — keying off the array (or
+  // count alone) made this effect refire and stomp on prompt edits the
+  // user was still mid-typing, even though the selection hadn't changed.
+  const singleSelectedId = n === 1 ? selectedServerIds[0] : null;
+  const selectionKey = n === 1 ? `one:${singleSelectedId}` : n === 0 ? 'none' : 'multi';
+  const prevSelectionKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (selectionKey === prevSelectionKey.current) return;
+    prevSelectionKey.current = selectionKey;
+
+    if (n === 1) {
+      const file = selectFiles.find(f => f.id === singleSelectedId);
+      if (file) {
+        const s = file.summary_prompt ?? '';
+        const k = file.keywords_prompt ?? '';
+        const q = file.faq_prompt ?? '';
+        const sa = file.short_answer_prompt ?? '';
+        const tf = file.true_false_prompt ?? '';
+        dispatch(updateSummaryPrompt(s));
+        dispatch(updateKeywordPrompt(k));
+        dispatch(updateQuestionPrompt(q));
+        dispatch(updateShortAnswerPrompt(sa));
+        dispatch(updateTrueFalsePrompt(tf));
+        promptSnapshot.current = { summary: s, keyword: k, question: q, shortAnswer: sa, trueFalse: tf };
+      }
+    } else {
+      dispatch(updateSummaryPrompt(''));
+      dispatch(updateKeywordPrompt(''));
+      dispatch(updateQuestionPrompt(''));
+      dispatch(updateShortAnswerPrompt(''));
+      dispatch(updateTrueFalsePrompt(''));
+      promptSnapshot.current = { summary: '', keyword: '', question: '', shortAnswer: '', trueFalse: '' };
+    }
+    setPromptSaveError(null);
+  }, [selectionKey]); // eslint-disable-line
+
+  // ── Per-file prompt preview expand/collapse ──
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
+  const [keywordExpanded, setKeywordExpanded] = useState(false);
+  const [questionExpanded, setQuestionExpanded] = useState(false);
+  const [shortAnswerExpanded, setShortAnswerExpanded] = useState(false);
+  const [trueFalseExpanded, setTrueFalseExpanded] = useState(false);
+
+  const prevSelectedCount = useRef(selectedServerIds.length);
+  useEffect(() => {
+    if (selectedServerIds.length !== prevSelectedCount.current) {
+      prevSelectedCount.current = selectedServerIds.length;
+      setSummaryExpanded(false);
+      setKeywordExpanded(false);
+      setQuestionExpanded(false);
+      setShortAnswerExpanded(false);
+      setTrueFalseExpanded(false);
+    }
+  });
+
+  const selectedFiles = selectFiles.filter(f => selectedServerIds.includes(f.id));
+
+  const handlePromptCancel = () => {
+    dispatch(updateSummaryPrompt(promptSnapshot.current.summary));
+    dispatch(updateKeywordPrompt(promptSnapshot.current.keyword));
+    dispatch(updateQuestionPrompt(promptSnapshot.current.question));
+    dispatch(updateShortAnswerPrompt(promptSnapshot.current.shortAnswer));
+    dispatch(updateTrueFalsePrompt(promptSnapshot.current.trueFalse));
+    setPromptSaveError(null);
+  };
+
+  const handlePromptSave = async () => {
+    setPromptSaving(true);
+    setPromptSaveError(null);
+    try {
+      const payload: Record<string, unknown> = {
+        file_ids: selectedServerIds,
+      };
+      if (settings.generateSummary) payload.summary_prompt = settings.summaryPromptOverride;
+      if (settings.generateKeywords) payload.keywords_prompt = settings.keywordPromptOverride;
+      if (settings.generateQuestions) payload.faq_prompt = settings.questionPromptOverride;
+      if (settings.generateShortAnswer) payload.short_answers_prompt = settings.shortAnswerPromptOverride;
+      if (settings.generateTrueFalse) payload.true_false_prompt = settings.trueFalsePromptOverride;
+
+      await api.post('/prompt_update', payload);
+
+      dispatch(updateFilePrompts({
+        fileIds: selectedServerIds,
+        ...(settings.generateSummary && { summaryPrompt: settings.summaryPromptOverride }),
+        ...(settings.generateKeywords && { keywordsPrompt: settings.keywordPromptOverride }),
+        ...(settings.generateQuestions && { faqPrompt: settings.questionPromptOverride }),
+        ...(settings.generateShortAnswer && { shortAnswerPrompt: settings.shortAnswerPromptOverride }),
+        ...(settings.generateTrueFalse && { trueFalsePrompt: settings.trueFalsePromptOverride }),
+      }));
+
+      promptSnapshot.current = {
+        summary: settings.summaryPromptOverride,
+        keyword: settings.keywordPromptOverride,
+        question: settings.questionPromptOverride,
+        shortAnswer: settings.shortAnswerPromptOverride,
+        trueFalse: settings.trueFalsePromptOverride,
+      };
+    } catch {
+      setPromptSaveError(t('uploadInfer.inferencePanel.promptSaveFail'));
+    } finally {
+      setPromptSaving(false);
+    }
+  };
+
+  return (
+    <div className={`${styles.infpanel} ${minimized ? styles.infpanelMinimized : ''}`}>
+
+      {/* ── Minimized rail ── */}
+      {minimized ? (
+        <button
+          type="button"
+          className={styles.minRail}
+          onClick={onToggleMinimize}
+          title={t('uploadInfer.inferencePanel.expandStep2')}
+          aria-label={t('uploadInfer.inferencePanel.expandStep2')}
+        >
+          <span className={styles.minRailIcon}>
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+              strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M6 4l4 4-4 4" />
+            </svg>
+          </span>
+          <span className={styles.minRailLabel}>
+            {t('uploadInfer.inferencePanel.step2Label').replace('Configuration', '').replace('2 —', '2 —')}
+            {isBatchRunning && <span className={styles.minRailDot} />}
+          </span>
+        </button>
+      ) : (
+        <>
+
+          {/* ── Header ── */}
+          <div className={styles.infpanelHead}>
+            <div>
+              <div className={styles.slbl}>
+                {isBatchRunning ? (
+                  <span className={styles.inferenceRunningLabel}>{t('uploadInfer.inferencePanel.step2Running')}</span>
+                ) : t('uploadInfer.inferencePanel.step2Label')}
+              </div>
+              <div className={styles.selSummary}>
+                {t('uploadInfer.inferencePanel.filesSelected', { count: n })}
+                {isBatchRunning && <span className={styles.batchRunPill}><span className={styles.batchRunDot} />{t('uploadInfer.inferencePanel.batchRunPill')}</span>}
+              </div>
+            </div>
+            <div className={styles.headActions}>
+              {!isBatchRunning && (
+                <>
+                  {/* ── Run Inference button — large, self-describing ── */}
+                  <button
+                    className={`${styles.runBtn} ${canRunInference ? styles.runBtnReady : styles.runBtnDisabled}`}
+                    onClick={handleRun}
+                    disabled={!canRunInference}
+                    data-tour="infer-run"
+                    aria-label={`Run inference on ${n} file${n !== 1 ? 's' : ''}`}
+                  >
+                    <span className={styles.runBtnIconWrap}>
+                      <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
+                        <path d="M5 3l8 5-8 5V3z" fill="currentColor" />
+                      </svg>
+                    </span>
+                    <span className={styles.runBtnText}>
+                      <span className={styles.runBtnTitle}>Run inference</span>
+                      <span className={styles.runBtnSub}>{runBtnSubLabel}</span>
+                    </span>
+                  </button>
+
+                  {onToggleMinimize && (
+                    <button
+                      className={styles.minimizeStepBtn}
+                      onClick={onToggleMinimize}
+                      title={t('uploadInfer.inferencePanel.minimizeStep2')}
+                      aria-label={t('uploadInfer.inferencePanel.minimizeStep2')}
+                    >
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                        strokeWidth="1.6" strokeLinecap="round">
+                        <path d="M3 8h10" />
+                      </svg>
+                    </button>
+                  )}
+                  {onClose && (
+                    <button
+                      className={styles.closeStepBtn}
+                      onClick={onClose}
+                      title={t('uploadInfer.inferencePanel.closeStep2')}
+                    >
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                        <path d="M4 4l8 8M12 4l-8 8" />
+                      </svg>
+                    </button>
+                  )}
+                </>
+              )}
+              {isBatchRunning && onToggleMinimize && (
+                <button
+                  className={styles.minimizeStepBtn}
+                  onClick={onToggleMinimize}
+                  title={t('uploadInfer.inferencePanel.minimizeStep2')}
+                  aria-label={t('uploadInfer.inferencePanel.minimizeStep2')}
+                >
+                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                    strokeWidth="1.6" strokeLinecap="round">
+                    <path d="M3 8h10" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          </div>
+
+
+          {/* ── Main body ── */}
+          <div className={`${styles.infpanelBody} ${isBatchRunning ? styles.infpanelBodyRunning : styles.infpanelBodyConfig}`}>
+
+            {/* ── Submitting overlay — shown while awaiting /batch_process ── */}
+            {running && (
+              <div className={styles.submittingOverlay}>
+                <div className={styles.submittingCard}>
+                  <div className={styles.submittingSpinner} />
+                  <div className={styles.submittingTitle}>{t('uploadInfer.inferencePanel.submitting')}</div>
+                  <div className={styles.submittingDesc}>
+                    {t('uploadInfer.inferencePanel.submittingDesc', { count: n }).split('\n').map((line, i) => <React.Fragment key={i}>{line}{i === 0 && <br />}</React.Fragment>)}
+                  </div>
+                  <div className={styles.submittingFiles}>
+                    {selectedServerIds.slice(0, 5).map((id, i) => {
+                      const f = selectFiles.find(sf => sf.id === id);
+                      return f ? (
+                        <div key={id} className={styles.submittingFile}>
+                          <span className={styles.submittingDot} style={{ animationDelay: `${i * 0.15}s` }} />
+                          {f.original_name}
+                        </div>
+                      ) : null;
+                    })}
+                    {selectedServerIds.length > 5 && (
+                      <div className={styles.submittingMore}>+{selectedServerIds.length - 5} more</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Selection banner — hidden while batch running or submitting */}
+            {!isBatchRunning && !running && <div className={styles.selBanner}>
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="var(--blue)" strokeWidth="1.5" strokeLinecap="round">
+                <path d="M2 8h12M8 3l5 5-5 5" />
+              </svg>
+              <span className={styles.selCt}>{n} file{n !== 1 ? 's' : ''}</span>
+              <span className={styles.selNm}>
+                {n === 0 ? t('uploadInfer.inferencePanel.selBannerEmpty') : `${n} file${n !== 1 ? 's' : ''} selected for inference`}
+              </span>
+            </div>}
+
+            {/* ── Settings — hidden while batch running or submitting ── */}
+            {!isBatchRunning && !running && <div className={styles.infSettingsWrap} data-tour="infer-settings">
+              <div className={styles.settingsGrid}>
+
+                {/* Generate content card */}
+                <div className={styles.card}>
+                  <div className={styles.cardT}>{t('uploadInfer.inferencePanel.generateContent')}</div>
+
+                  {/* Model dropdown — moved to the top; deliberately narrow rather than spanning the row */}
+                  <div className={styles.modelFieldTop}>
+                    <div className={styles.fg}>
+                      <div className={styles.modelLabelRow}>
+                        <label className={styles.fl}>
+                          {t('uploadInfer.inferencePanel.modelLabel')} {mlLoading && <span className={styles.loadingDot}>…</span>}
+                        </label>
+                        <button
+                          className={styles.refreshBtn}
+                          onClick={fetchModels}
+                          disabled={mlLoading}
+                          title={t('uploadInfer.inferencePanel.refreshModels')}
+                        >
+                          <svg
+                            viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                            strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"
+                            className={mlLoading ? styles.spinning : undefined}
+                          >
+                            <path d="M13.5 8A5.5 5.5 0 1 1 10 3.07" />
+                            <path d="M10 2v3h3" />
+                          </svg>
+                          Refresh
+                        </button>
+                      </div>
+                      <select className={styles.fc} value={selectedModel}
+                        onChange={e => dispatch(setSelectedModel(e.target.value))}
+                        disabled={mlLoading || models.length === 0}>
+                        {models.length === 0
+                          ? <option value="">{t('uploadInfer.inferencePanel.noModelsOption')}</option>
+                          : models.map(m => <option key={m} value={m}>{m}</option>)
+                        }
+                      </select>
+                      {!mlLoading && models.length === 0 && (
+                        <div className={styles.modelWarn}>
+                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                            <path d="M8 2L14 13H2L8 2z" /><path d="M8 7v3M8 11.5v.1" />
+                          </svg>
+                          {t('uploadInfer.inferencePanel.noModels')}
+                        </div>
+                      )}
+                      {!mlLoading && models.length > 0 && (
+                        <div className={styles.modelOk}>
+                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                            <circle cx="8" cy="8" r="5.5" /><path d="M5.5 8l2 2 3-3" />
+                          </svg>
+                          {t('uploadInfer.inferencePanel.modelsAvailable', { count: models.length })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className={styles.fieldsGrid}>
+
+                  {/* Summary */}
+                  <div className={styles.fieldCell}>
+                  <div
+                    className={`${styles.cr} ${isChecked(settings.generateSummary) ? styles.ck : ''} ${styles.mb8} ${noFilesSelected ? styles.crDisabled : ''}`}
+                    onClick={() => { if (noFilesSelected) return; dispatch(updateSettings({ generateSummary: !settings.generateSummary })); }}
+                  >
+                    <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateSummary')}</label>
+                  </div>
+
+                  {isChecked(settings.generateSummary) && (
+                    <div className={styles.promptInline} onClick={(e) => e.stopPropagation()}>
+                      <div className={styles.fg}>
+                        <div className={styles.flRow}>
+                          <label className={styles.fl}>
+                            {t('uploadInfer.inferencePanel.summaryPrompt')} <span className={styles.optTag}>{t('uploadInfer.inferencePanel.optional')}</span>
+                          </label>
+                          {n > 1 && (
+                            <button
+                              className={`${styles.perFileBtn} ${summaryExpanded ? styles.perFileBtnActive : ''}`}
+                              onClick={(e) => { e.stopPropagation(); setSummaryExpanded(v => !v); }}
+                              title={summaryExpanded ? 'Collapse per-file prompts' : 'View per-file prompts'}
+                            >
+                              <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <rect x="1.5" y="2" width="11" height="10" rx="2" />
+                                <path d="M4 5h6M4 7.5h4" />
+                              </svg>
+                              {summaryExpanded ? 'Hide' : t('uploadInfer.inferencePanel.perFile')}
+                              <svg className={`${styles.perFileChevron} ${summaryExpanded ? styles.perFileChevronOpen : ''}`} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                                <path d="M2 3.5l3 3 3-3" />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
+                        <div className={`${styles.perFilePanel} ${summaryExpanded ? styles.perFilePanelOpen : ''}`}>
+                          <div className={styles.perFilePanelInner}>
+                            {selectedFiles.map(f => (
+                              <div key={f.id} className={styles.perFileRow}>
+                                <div className={styles.perFileName}>{f.original_name}</div>
+                                <div className={styles.perFilePrompt}>{f.summary_prompt || <span className={styles.perFileEmpty}>{t('uploadInfer.inferencePanel.noPromptSet')}</span>}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <textarea className={styles.fc} rows={3}
+                          value={settings.summaryPromptOverride}
+                          placeholder={n === 1 ? t('uploadInfer.inferencePanel.autofillPlaceholder') : t('uploadInfer.inferencePanel.manualPlaceholder')}
+                          onChange={e => dispatch(updateSummaryPrompt(e.target.value))} />
+                      </div>
+                    </div>
+                  )}
+                  </div>
+
+                  {/* Keywords + nested Keyword Insights */}
+                  <div className={styles.fieldCell}>
+                  <div
+                    className={`${styles.cr} ${isChecked(settings.generateKeywords) ? styles.ck : ''} ${styles.mb8} ${noFilesSelected ? styles.crDisabled : ''}`}
+                    onClick={() => {
+                      if (noFilesSelected) return;
+                      dispatch(updateSettings({
+                        generateKeywords: !settings.generateKeywords,
+                        // Force the nested toggle off when the parent turns off,
+                        // so a stale "on" state can never leak into the request.
+                        ...(settings.generateKeywords ? { generateKeywordInsights: false } : {}),
+                      }));
+                    }}
+                  >
+                    <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateKeywords')}</label>
+                  </div>
+
+                  {isChecked(settings.generateKeywords) && (
+                    <div className={styles.promptInline} onClick={(e) => e.stopPropagation()}>
+                      <div className={styles.fg}>
+                        <div className={styles.flRow}>
+                          <label className={styles.fl}>
+                            {t('uploadInfer.inferencePanel.keywordPrompt')} <span className={styles.optTag}>{t('uploadInfer.inferencePanel.optional')}</span>
+                          </label>
+                          {n > 1 && (
+                            <button
+                              className={`${styles.perFileBtn} ${keywordExpanded ? styles.perFileBtnActive : ''}`}
+                              onClick={(e) => { e.stopPropagation(); setKeywordExpanded(v => !v); }}
+                              title={keywordExpanded ? 'Collapse per-file prompts' : 'View per-file prompts'}
+                            >
+                              <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <rect x="1.5" y="2" width="11" height="10" rx="2" />
+                                <path d="M4 5h6M4 7.5h4" />
+                              </svg>
+                              {keywordExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.perFile')}
+                              <svg className={`${styles.perFileChevron} ${keywordExpanded ? styles.perFileChevronOpen : ''}`} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                                <path d="M2 3.5l3 3 3-3" />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
+                        <div className={`${styles.perFilePanel} ${keywordExpanded ? styles.perFilePanelOpen : ''}`}>
+                          <div className={styles.perFilePanelInner}>
+                            {selectedFiles.map(f => (
+                              <div key={f.id} className={styles.perFileRow}>
+                                <div className={styles.perFileName}>{f.original_name}</div>
+                                <div className={styles.perFilePrompt}>{f.keywords_prompt || <span className={styles.perFileEmpty}>No prompt set</span>}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <textarea className={styles.fc} rows={3}
+                          value={settings.keywordPromptOverride}
+                          placeholder={n === 1 ? 'Autofilled from file — edit to override…' : 'Leave blank to use per-file prompts…'}
+                          onChange={e => dispatch(updateKeywordPrompt(e.target.value))} />
+                      </div>
+                    </div>
+                  )}
+                  {isChecked(settings.generateKeywords) && (
+                    <div
+                      className={`${styles.crNested} ${isChecked(settings.generateKeywordInsights) ? styles.ck : ''} ${styles.mb8}`}
+                      onClick={(e) => { e.stopPropagation(); if (noFilesSelected) return; dispatch(updateSettings({ generateKeywordInsights: !settings.generateKeywordInsights })); }}
+                    >
+                      <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateKeywordInsights')}</label>
+                    </div>
+                  )}
+                  </div>
+
+                  {/* Assessment Questions */}
+                  <div className={styles.fieldCell}>
+                  <div
+                    className={`${styles.cr} ${isChecked(settings.generateQuestions) ? styles.ck : ''} ${styles.mb8} ${noFilesSelected ? styles.crDisabled : ''}`}
+                    onClick={() => { if (noFilesSelected) return; dispatch(updateSettings({ generateQuestions: !settings.generateQuestions })); }}
+                  >
+                    <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateQuestions')}</label>
+                  </div>
+
+                  {isChecked(settings.generateQuestions) && (
+                    <div className={styles.promptInline} onClick={(e) => e.stopPropagation()}>
+                      <div className={styles.fg}>
+                        <div className={styles.flRow}>
+                          <label className={styles.fl}>
+                            {t('uploadInfer.inferencePanel.questionPrompt')} <span className={styles.optTag}>{t('uploadInfer.inferencePanel.optional')}</span>
+                          </label>
+                          {n > 1 && (
+                            <button
+                              className={`${styles.perFileBtn} ${questionExpanded ? styles.perFileBtnActive : ''}`}
+                              onClick={(e) => { e.stopPropagation(); setQuestionExpanded(v => !v); }}
+                              title={questionExpanded ? 'Collapse per-file prompts' : 'View per-file prompts'}
+                            >
+                              <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <rect x="1.5" y="2" width="11" height="10" rx="2" />
+                                <path d="M4 5h6M4 7.5h4" />
+                              </svg>
+                              {questionExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.perFile')}
+                              <svg className={`${styles.perFileChevron} ${questionExpanded ? styles.perFileChevronOpen : ''}`} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                                <path d="M2 3.5l3 3 3-3" />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
+                        <div className={`${styles.perFilePanel} ${questionExpanded ? styles.perFilePanelOpen : ''}`}>
+                          <div className={styles.perFilePanelInner}>
+                            {selectedFiles.map(f => (
+                              <div key={f.id} className={styles.perFileRow}>
+                                <div className={styles.perFileName}>{f.original_name}</div>
+                                <div className={styles.perFilePrompt}>{f.faq_prompt || <span className={styles.perFileEmpty}>No prompt set</span>}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <textarea className={styles.fc} rows={3}
+                          value={settings.questionPromptOverride}
+                          placeholder={n === 1 ? 'Autofilled from file — edit to override…' : 'Leave blank to use per-file prompts…'}
+                          onChange={e => dispatch(updateQuestionPrompt(e.target.value))} />
+                      </div>
+                    </div>
+                  )}
+                  </div>
+
+                  {/* Short Answer */}
+                  <div className={styles.fieldCell}>
+                  <div
+                    className={`${styles.cr} ${isChecked(settings.generateShortAnswer) ? styles.ck : ''} ${styles.mb8} ${noFilesSelected ? styles.crDisabled : ''}`}
+                    onClick={() => { if (noFilesSelected) return; dispatch(updateSettings({ generateShortAnswer: !settings.generateShortAnswer })); }}
+                  >
+                    <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateShortAnswer')}</label>
+                  </div>
+
+                  {isChecked(settings.generateShortAnswer) && (
+                    <div className={styles.promptInline} onClick={(e) => e.stopPropagation()}>
+                      <div className={styles.fg}>
+                        <div className={styles.flRow}>
+                          <label className={styles.fl}>
+                            {t('uploadInfer.inferencePanel.shortAnswerPrompt')} <span className={styles.optTag}>{t('uploadInfer.inferencePanel.optional')}</span>
+                          </label>
+                          {n > 1 && (
+                            <button
+                              className={`${styles.perFileBtn} ${shortAnswerExpanded ? styles.perFileBtnActive : ''}`}
+                              onClick={(e) => { e.stopPropagation(); setShortAnswerExpanded(v => !v); }}
+                              title={shortAnswerExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.viewPerFile')}
+                            >
+                              <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <rect x="1.5" y="2" width="11" height="10" rx="2" />
+                                <path d="M4 5h6M4 7.5h4" />
+                              </svg>
+                              {shortAnswerExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.perFile')}
+                              <svg className={`${styles.perFileChevron} ${shortAnswerExpanded ? styles.perFileChevronOpen : ''}`} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                                <path d="M2 3.5l3 3 3-3" />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
+                        <div className={`${styles.perFilePanel} ${shortAnswerExpanded ? styles.perFilePanelOpen : ''}`}>
+                          <div className={styles.perFilePanelInner}>
+                            {selectedFiles.map(f => (
+                              <div key={f.id} className={styles.perFileRow}>
+                                <div className={styles.perFileName}>{f.original_name}</div>
+                                <div className={styles.perFilePrompt}>{f.short_answer_prompt || <span className={styles.perFileEmpty}>{t('uploadInfer.inferencePanel.noPromptSet')}</span>}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <textarea className={styles.fc} rows={3}
+                          value={settings.shortAnswerPromptOverride}
+                          placeholder={n === 1 ? t('uploadInfer.inferencePanel.autofillPlaceholder') : t('uploadInfer.inferencePanel.manualPlaceholder')}
+                          onChange={e => dispatch(updateShortAnswerPrompt(e.target.value))} />
+                      </div>
+                    </div>
+                  )}
+                  </div>
+
+                  {/* True/False */}
+                  <div className={styles.fieldCell}>
+                  <div
+                    className={`${styles.cr} ${isChecked(settings.generateTrueFalse) ? styles.ck : ''} ${styles.mb8} ${noFilesSelected ? styles.crDisabled : ''}`}
+                    onClick={() => { if (noFilesSelected) return; dispatch(updateSettings({ generateTrueFalse: !settings.generateTrueFalse })); }}
+                  >
+                    <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateTrueFalse')}</label>
+                  </div>
+
+                  {isChecked(settings.generateTrueFalse) && (
+                    <div className={styles.promptInline} onClick={(e) => e.stopPropagation()}>
+                      <div className={styles.fg}>
+                        <div className={styles.flRow}>
+                          <label className={styles.fl}>
+                            {t('uploadInfer.inferencePanel.trueFalsePrompt')} <span className={styles.optTag}>{t('uploadInfer.inferencePanel.optional')}</span>
+                          </label>
+                          {n > 1 && (
+                            <button
+                              className={`${styles.perFileBtn} ${trueFalseExpanded ? styles.perFileBtnActive : ''}`}
+                              onClick={(e) => { e.stopPropagation(); setTrueFalseExpanded(v => !v); }}
+                              title={trueFalseExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.viewPerFile')}
+                            >
+                              <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <rect x="1.5" y="2" width="11" height="10" rx="2" />
+                                <path d="M4 5h6M4 7.5h4" />
+                              </svg>
+                              {trueFalseExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.perFile')}
+                              <svg className={`${styles.perFileChevron} ${trueFalseExpanded ? styles.perFileChevronOpen : ''}`} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                                <path d="M2 3.5l3 3 3-3" />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
+                        <div className={`${styles.perFilePanel} ${trueFalseExpanded ? styles.perFilePanelOpen : ''}`}>
+                          <div className={styles.perFilePanelInner}>
+                            {selectedFiles.map(f => (
+                              <div key={f.id} className={styles.perFileRow}>
+                                <div className={styles.perFileName}>{f.original_name}</div>
+                                <div className={styles.perFilePrompt}>{f.true_false_prompt || <span className={styles.perFileEmpty}>{t('uploadInfer.inferencePanel.noPromptSet')}</span>}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <textarea className={styles.fc} rows={3}
+                          value={settings.trueFalsePromptOverride}
+                          placeholder={n === 1 ? t('uploadInfer.inferencePanel.autofillPlaceholder') : t('uploadInfer.inferencePanel.manualPlaceholder')}
+                          onChange={e => dispatch(updateTrueFalsePrompt(e.target.value))} />
+                      </div>
+                    </div>
+                  )}
+                  </div>
+
+                  {/* Timestamp Summary + nested interval dropdown */}
+                  <div className={styles.fieldCell}>
+                  <div
+                    className={`${styles.cr} ${isChecked(settings.timestampedSummary) ? styles.ck : ''} ${styles.mb8} ${noFilesSelected ? styles.crDisabled : ''}`}
+                    onClick={() => { if (noFilesSelected) return; dispatch(updateSettings({ timestampedSummary: !settings.timestampedSummary })); }}
+                  >
+                    <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.timestampedSummary')}</label>
+                  </div>
+                  {isChecked(settings.timestampedSummary) && (
+                    <div className={styles.nestedField} onClick={(e) => e.stopPropagation()}>
+                      <label>{t('uploadInfer.inferencePanel.timeInterval')}</label>
+                      <select
+                        className={styles.fc}
+                        value={settings.timeInterval}
+                        onChange={e => dispatch(updateSettings({ timeInterval: Number(e.target.value) as TimeInterval }))}
+                      >
+                        {([5, 10, 15, 20, 30, 45, 60] as const).map(min => (
+                          <option key={min} value={min}>{t('uploadInfer.inferencePanel.minutesOption', { count: min })}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  </div>
+
+                  </div>
+
+                  {/* Save / Cancel bar — persists any edited prompt overrides above */}
+                  {n > 0 && (settings.generateSummary || settings.generateKeywords || settings.generateQuestions
+                    || settings.generateShortAnswer || settings.generateTrueFalse) && (
+                    <div className={styles.promptActions}>
+                      {promptSaveError && (
+                        <span className={styles.promptSaveError}>{promptSaveError}</span>
+                      )}
+                      <button
+                        className={`${styles.btn} ${styles.btnSm} ${styles.btnGhost}`}
+                        onClick={handlePromptCancel}
+                        disabled={!promptsDirty || promptSaving}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        className={`${styles.btn} ${styles.btnSm} ${styles.btnPrimary}`}
+                        onClick={handlePromptSave}
+                        disabled={!promptsDirty || promptSaving}
+                      >
+                        {promptSaving ? (
+                          <><span className={styles.btnSpinner} />{t('uploadInfer.inferencePanel.saving')}</>
+                        ) : t('uploadInfer.inferencePanel.savePrompts')}
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+              </div>
+            </div>}
+
+            {/* ══ 3-Column batch status ══ */}
+            {isBatchRunning && (
+              <div className={styles.batchSection}>
+                <div className={styles.batchSectionTitle}>
+                  <span className={styles.liveLabel}>{t('uploadInfer.inferencePanel.inferenceStatus')}</span>
+                  {isBatchRunning && (
+                    <span className={styles.liveStatus}>
+                      <span className={styles.liveDot} />
+                      Live
+                      <span className={styles.liveSep}>·</span>
+                      {t('uploadInfer.inferencePanel.refreshingIn', { sec: countdown })}
+                      {batchData.running.length > 0 && (
+                        <><span className={styles.liveSep}>·</span>
+                          <span className={styles.liveFiles}>
+                            {t('uploadInfer.inferencePanel.filesRunning', { count: batchData.running.length })}
+                          </span></>
+                      )}
+                    </span>
+                  )}
+                </div>
+                <div className={styles.batchColumns}>
+
+                  {/* Queued */}
+                  <div className={styles.batchCol}>
+                    <div className={`${styles.batchColHead} ${styles.headQueued}`}>
+                      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+                        <circle cx="7" cy="7" r="5" /><path d="M7 4v3.5l2 1.5" />
+                      </svg>
+                      Queued
+                      <span className={styles.batchColCount}>{batchData.queued.length}</span>
+                    </div>
+                    <div className={styles.batchColBody}>
+                      {batchData.queued.length === 0
+                        ? <div className={styles.batchEmpty}>—</div>
+                        : batchData.queued.map(f => (
+                          <StatusCard
+                            key={f.id}
+                            file={f}
+                            variant="queued"
+                            onStop={handleStop}
+                            stopping={stoppingIds.has(f.id)}
+                          />
+                        ))
+                      }
+                    </div>
+                  </div>
+
+                  {/* Running */}
+                  <div className={styles.batchCol}>
+                    <div className={`${styles.batchColHead} ${styles.headRunning}`}>
+                      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+                        <circle cx="7" cy="7" r="5" /><path d="M7 4v3M7 9.5v.2" />
+                      </svg>
+                      Running
+                      <span className={styles.batchColCount}>{batchData.running.length}</span>
+                    </div>
+                    <div className={styles.batchColBody}>
+                      {batchData.running.length === 0
+                        ? <div className={styles.batchEmpty}>—</div>
+                        : batchData.running.map(f => <StatusCard key={f.id} file={f} variant="running" />)
+                      }
+                    </div>
+                  </div>
+
+                  {/* Completed */}
+                  <div className={styles.batchCol}>
+                    <div className={`${styles.batchColHead} ${styles.headCompleted}`}>
+                      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="7" cy="7" r="5" /><path d="M4.5 7l2 2 3-3" />
+                      </svg>
+                      Completed
+                      <span className={styles.batchColCount}>{batchData.completed.length}</span>
+                    </div>
+                    <div className={styles.batchColBody}>
+                      {batchData.completed.length === 0
+                        ? <div className={styles.batchEmpty}>—</div>
+                        : batchData.completed.map(f => <StatusCard key={f.id} file={f} variant="completed" />)
+                      }
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+            )}
+
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
+export default InferencePanel;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ═══════════════════════════════════════════════
+// InferencePanel.module.scss
+// ═══════════════════════════════════════════════
+@use '../../styles/mixins' as m;
+
+// ── Panel shell ──
+.infpanel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+// ── Inference Running label in step header ──
+.inferenceRunningLabel {
+  background: linear-gradient(90deg, var(--blue), #a78bfa, var(--amber));
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: labelShimmer 2.5s linear infinite;
+  font-weight: 700;
+}
+
+@keyframes labelShimmer {
+  0% {
+    background-position: 0% center;
+  }
+
+  100% {
+    background-position: 200% center;
+  }
+}
+
+// ── Panel header ──
+.infpanelHead {
+  padding: 13px 18px 10px;
+  border-bottom: none;
+  background: var(--bg1);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  position: relative;
+
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg,
+        rgba(139, 92, 246, 0.0) 0%,
+        rgba(139, 92, 246, 0.6) 20%,
+        rgba(56, 196, 186, 0.7) 50%,
+        rgba(240, 160, 48, 0.6) 80%,
+        rgba(240, 160, 48, 0.0) 100%);
+    pointer-events: none;
+  }
+}
+
+.slbl {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--t2);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  @include m.mono;
+  margin-bottom: 2px;
+}
+
+.selSummary {
+  font-size: 13px;
+  color: var(--t1);
+}
+
+.headActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.closeStepBtn {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex-shrink: 0;
+  transition: all 0.14s;
+
+  svg {
+    width: 13px;
+    height: 13px;
+  }
+
+  &:hover {
+    background: rgba(239, 68, 68, 0.08);
+    border-color: rgba(239, 68, 68, 0.3);
+    color: #ef4444;
+  }
+}
+
+// ══════════════════════════════════════
+// RUN INFERENCE BUTTON
+// ══════════════════════════════════════
+
+.runBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px 8px 10px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: var(--blue);
+  color: #ffffff;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s, opacity 0.15s, border-color 0.15s;
+  white-space: nowrap;
+  user-select: none;
+  flex-shrink: 0;
+
+  &:hover:not(:disabled) {
+    background: #6bb3f5;
+  }
+
+  &:active:not(:disabled) {
+    background: #4a90d9;
+  }
+}
+
+// Icon chip inside the button
+.runBtnIconWrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.18);
+  flex-shrink: 0;
+  transition: background 0.14s;
+
+  svg {
+    display: block;
+  }
+
+  .runBtn:hover:not(:disabled) & {
+    background: rgba(255, 255, 255, 0.25);
+  }
+}
+
+// Two-line text stack
+.runBtnText {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.2;
+  gap: 2px;
+}
+
+.runBtnTitle {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.1px;
+}
+
+.runBtnSub {
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0.82;
+  font-family: var(--font-mono);
+}
+
+// Ready state — glowing outline pulse to draw the eye
+.runBtnReady {
+  box-shadow:
+    0 0 0 1px rgba(91, 164, 239, 0.7),
+    0 2px 12px rgba(91, 164, 239, 0.35);
+  animation: runReadyPulse 2.4s ease-in-out infinite;
+}
+
+@keyframes runReadyPulse {
+
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgba(91, 164, 239, 0.7),
+      0 2px 12px rgba(91, 164, 239, 0.30);
+  }
+
+  50% {
+    box-shadow:
+      0 0 0 2px rgba(91, 164, 239, 0.55),
+      0 4px 20px rgba(91, 164, 239, 0.50);
+  }
+}
+
+// Disabled state — muted, clearly not actionable, sub-label explains why
+.runBtnDisabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+  pointer-events: none;
+  box-shadow: none;
+}
+
+// Large screen tweaks
+@media (min-width: 1920px) {
+  .runBtnTitle {
+    font-size: 15px;
+  }
+
+  .runBtnSub {
+    font-size: 12px;
+  }
+
+  .runBtnIconWrap {
+    width: 32px;
+    height: 32px;
+  }
+
+  .runBtn {
+    padding: 9px 18px 9px 11px;
+    gap: 11px;
+    border-radius: 11px;
+  }
+}
+
+// ── Main body ──
+.infpanelBody {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 14px 18px 0;
+}
+
+// Configuration mode — body itself scrolls, batch section is absent
+.infpanelBodyConfig {
+  overflow-y: auto;
+  @include m.scrollbar;
+}
+
+// Running mode — no scroll on body; each batch column scrolls independently
+.infpanelBodyRunning {
+  overflow: hidden;
+}
+
+// ── Selection banner ──
+.selBanner {
+  background: var(--bg2);
+  border: 1px solid var(--blue-bdr);
+  border-radius: var(--rl);
+  padding: 9px 13px;
+  margin-bottom: 13px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.selCt {
+  font-size: 13px;
+  color: var(--blue);
+  font-weight: 600;
+  @include m.mono;
+  flex-shrink: 0;
+}
+
+.selNm {
+  font-size: 12px;
+  color: var(--t2);
+  @include m.mono;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+// ── Collapsible settings wrap ──
+.infSettingsWrap {
+  padding-bottom: 16px;
+  flex-shrink: 0;
+}
+
+.settingsGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 11px;
+  margin-bottom: 12px;
+}
+
+// 2 fields per row inside the merged Generate content card
+.fieldsGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 20px;
+  align-items: start;
+}
+
+.fieldCell {
+  min-width: 0;
+}
+
+// Model dropdown spans both columns
+.modelFieldTop {
+  width: 260px;
+  max-width: 100%;
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--bdr);
+}
+
+.promptGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 11px;
+}
+
+.promptStack {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.noPromptHint {
+  font-size: 13px;
+  color: var(--t2);
+  font-family: var(--font-mono);
+  text-align: center;
+  padding: 10px 0 2px;
+}
+
+// ── Card ──
+.card {
+  background: var(--bg1);
+  border: 1px solid var(--bdr);
+  border-radius: var(--rl);
+  padding: 14px 16px;
+}
+
+.cardT {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--t2);
+  margin-bottom: 12px;
+  @include m.mono;
+}
+
+.promptMode {
+  font-size: 12px;
+  margin-left: 8px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  @include m.mono;
+}
+
+// ── Form ──
+.fg {
+  margin-bottom: 11px;
+}
+
+// Indents a prompt block under the checkbox it belongs to (same 20px
+// indent convention as .nestedField, used for the timestamp interval).
+.promptInline {
+  padding-left: 20px;
+  margin-bottom: 4px;
+  cursor: default;
+}
+
+.mb0 {
+  margin-bottom: 0 !important;
+}
+
+.mb8 {
+  margin-bottom: 8px;
+}
+
+.mb12 {
+  margin-bottom: 12px !important;
+}
+
+.flRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.fl {
+  display: block;
+  font-size: 13px;
+  color: var(--t1);
+  margin-bottom: 0;
+  font-weight: 500;
+}
+
+.fc {
+  width: 100%;
+  padding: 7px 11px;
+  background: var(--bg0);
+  border: 1px solid var(--bdr2);
+  border-radius: var(--r);
+  color: var(--t0);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  transition: border-color 0.12s;
+  outline: none;
+  appearance: none;
+
+  &:focus {
+    border-color: var(--blue);
+    box-shadow: 0 0 0 3px rgba(91, 164, 239, 0.07);
+  }
+
+  &::placeholder {
+    color: var(--t2);
+  }
+}
+
+select.fc {
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='7'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%234e5668' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 26px;
+}
+
+textarea.fc {
+  resize: vertical;
+  min-height: 56px;
+  line-height: 1.6;
+}
+
+.optTag {
+  font-size: 12px;
+  color: var(--t2);
+  margin-left: 4px;
+  font-weight: 400;
+  @include m.mono;
+}
+
+// ── Checkboxes ──
+.cr {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  cursor: pointer;
+  user-select: none;
+
+  label {
+    font-size: 13px;
+    color: var(--t1);
+    cursor: pointer;
+  }
+}
+
+.crDisabled {
+  cursor: default;
+  opacity: 0.45;
+
+  label {
+    cursor: default;
+  }
+
+  .cb {
+    cursor: default;
+  }
+}
+
+.cb {
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--bdr2);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.12s;
+}
+
+.ck {
+  .cb {
+    background: var(--blue);
+    border-color: var(--blue);
+
+    &::after {
+      content: '';
+      width: 7px;
+      height: 4px;
+      border-left: 1.5px solid #0b0d10;
+      border-bottom: 1.5px solid #0b0d10;
+      transform: rotate(-45deg) translate(0, -1px);
+      display: block;
+    }
+  }
+
+  label {
+    color: var(--t0);
+  }
+}
+
+// Nested option, e.g. "Keyword Insights" under Keywords — indented, only
+// rendered while its parent checkbox is on.
+.crNested {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0 3px 20px;
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+
+  &::before {
+    content: '';
+    position: absolute;
+    left: 6px;
+    top: 0;
+    bottom: 50%;
+    width: 8px;
+    border-left: 1.5px solid var(--bdr2);
+    border-bottom: 1.5px solid var(--bdr2);
+    border-radius: 0 0 0 4px;
+  }
+
+  label {
+    font-size: 12.5px;
+    color: var(--t1);
+    cursor: pointer;
+  }
+
+  &.ck label {
+    color: var(--t0);
+  }
+}
+
+// Nested field, e.g. the Timestamp Summary Interval dropdown — indented to
+// visually sit under its parent checkbox.
+.nestedField {
+  padding-left: 20px;
+  margin-bottom: 8px;
+
+  label {
+    display: block;
+    font-size: 11.5px;
+    color: var(--t2);
+    margin-bottom: 4px;
+  }
+
+  select {
+    max-width: 200px;
+  }
+}
+
+// ── Range sliders ──
+.rangeInput {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 3px;
+  background: var(--bg4);
+  border-radius: 99px;
+  outline: none;
+  cursor: pointer;
+  display: block;
+  margin-top: 4px;
+
+  &::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    background: var(--blue);
+    border-radius: 50%;
+    border: 2px solid var(--bg0);
+    cursor: pointer;
+    box-shadow: 0 0 0 2px rgba(91, 164, 239, 0.25);
+  }
+}
+
+.slim {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--t2);
+  margin-top: 3px;
+  @include m.mono;
+}
+
+.sv {
+  @include m.mono;
+  font-size: 13px;
+  color: var(--blue);
+}
+
+.qTypeLabel {
+  font-size: 13px;
+  color: var(--t1);
+  font-weight: 500;
+  margin-bottom: 5px;
+}
+
+.dimLabel {
+  color: var(--t2) !important;
+}
+
+.feasibilityTag {
+  font-size: 10px;
+  background: var(--amber-dim);
+  color: var(--amber);
+  padding: 1px 5px;
+  border-radius: 99px;
+  margin-left: 3px;
+}
+
+// ── Divider ──
+.divider {
+  border: none;
+  height: 1px;
+  margin: 12px 0;
+  background: linear-gradient(90deg,
+      rgba(139, 92, 246, 0.0) 0%,
+      rgba(139, 92, 246, 0.35) 25%,
+      rgba(56, 196, 186, 0.4) 50%,
+      rgba(240, 160, 48, 0.35) 75%,
+      rgba(240, 160, 48, 0.0) 100%);
+}
+
+// ── Callout ──
+.callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: var(--r);
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
+.cInfo {
+  background: var(--blue-dim);
+  border: 1px solid var(--blue-bdr);
+  color: var(--blue);
+}
+
+// ── Generic utility buttons (used for save/cancel etc.) ──
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 13px;
+  border-radius: var(--r);
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t1);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+  user-select: none;
+
+  &:hover {
+    background: var(--bg3);
+    color: var(--t0);
+    border-color: var(--bdr3);
+  }
+}
+
+.btnP {
+  background: var(--blue);
+  color: #ffffff;
+  border-color: var(--blue);
+  font-weight: 600;
+
+  &:hover {
+    background: #a78bfa;
+    border-color: #a78bfa;
+    color: #ffffff;
+  }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+}
+
+// ── Batch running pill in header ─────────────────
+.batchRunPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--amber);
+  background: var(--amber-dim);
+  border: 1px solid var(--amber-bdr);
+  padding: 1px 8px;
+  border-radius: 99px;
+  margin-left: 10px;
+  font-family: var(--font-mono);
+  vertical-align: middle;
+}
+
+.batchRunDot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--amber);
+  animation: breathe 1.2s ease-in-out infinite;
+}
+
+@keyframes breathe {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.35;
+  }
+}
+
+// ── Model loading indicator ───────────────────────
+.loadingDot {
+  font-size: 13px;
+  color: var(--t2);
+  font-family: var(--font-mono);
+}
+
+// ══════════════════════════════════════
+// 3-COLUMN BATCH STATUS
+// ══════════════════════════════════════
+.batchSection {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  margin-top: 16px;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.batchSectionTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--t2);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-family: var(--font-mono);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.liveLabel {
+  flex-shrink: 0;
+}
+
+// ── Live status pill ─────────────────────────────
+.liveStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--green);
+  background: var(--green-dim);
+  border: 1px solid var(--green-bdr);
+  padding: 2px 9px 2px 7px;
+  border-radius: 99px;
+  font-family: var(--font-mono);
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.liveDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  flex-shrink: 0;
+  animation: livePulse 1.4s ease-in-out infinite;
+}
+
+@keyframes livePulse {
+
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.4;
+    transform: scale(0.75);
+  }
+}
+
+.liveSep {
+  color: var(--green);
+  opacity: 0.4;
+  font-size: 12px;
+}
+
+.liveCountdown {
+  color: var(--green);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  min-width: 2ch;
+  display: inline-block;
+  text-align: right;
+}
+
+.liveFiles {
+  color: var(--green);
+  opacity: 0.85;
+}
+
+.batchColumns {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.batchCol {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+// Column headers
+.batchColHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+
+  svg {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+  }
+
+  &.headQueued {
+    background: rgba(240, 160, 48, 0.08);
+    color: var(--amber);
+    border: 1px solid var(--amber-bdr);
+
+    svg {
+      stroke: var(--amber);
+    }
+  }
+
+  &.headRunning {
+    background: var(--blue-dim);
+    color: var(--blue);
+    border: 1px solid var(--blue-bdr);
+
+    svg {
+      stroke: var(--blue);
+    }
+  }
+
+  &.headCompleted {
+    background: var(--green-dim);
+    color: var(--green);
+    border: 1px solid var(--green-bdr);
+
+    svg {
+      stroke: var(--green);
     }
   }
 }
 
+.batchColCount {
+  margin-left: auto;
+  font-size: 13px;
+  font-weight: 700;
+  min-width: 16px;
+  text-align: center;
+}
 
+.batchColBody {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: 14px;
+  @include m.scrollbar;
+}
 
+.batchEmpty {
+  text-align: center;
+  font-size: 13px;
+  color: var(--t2);
+  font-family: var(--font-mono);
+  padding: 12px 0;
+}
 
+// ── Status card wrapper (handles enter/exit animation) ──
+.statusCardWrap {
+  position: relative;
+  border-radius: 10px;
+}
 
+// ── Queued: slow breathing amber dashed-style border ──
+.queuedWrap {
+  padding: 2px;
+  background: conic-gradient(from 0deg,
+      rgba(240, 160, 48, 0.7) 0deg,
+      rgba(240, 160, 48, 0.15) 60deg,
+      rgba(240, 160, 48, 0.05) 120deg,
+      rgba(240, 160, 48, 0.15) 180deg,
+      rgba(240, 160, 48, 0.05) 240deg,
+      rgba(240, 160, 48, 0.15) 300deg,
+      rgba(240, 160, 48, 0.7) 360deg);
+  animation: queuedBreath 2.8s ease-in-out infinite;
+}
 
+@keyframes queuedBreath {
 
+  0%,
+  100% {
+    opacity: 0.5;
+  }
 
+  50% {
+    opacity: 1;
+  }
+}
 
+// ── Completed: static clean green gradient border, no animation ──
+.completedWrap {
+  padding: 2px;
+  background: linear-gradient(135deg,
+      rgba(74, 222, 128, 0.9) 0%,
+      rgba(74, 222, 128, 0.3) 40%,
+      rgba(74, 222, 128, 0.6) 70%,
+      rgba(74, 222, 128, 0.9) 100%);
+}
 
+// ── Animated gradient border for running cards ──
+.runningWrap {
+  border-radius: 10px;
+  padding: 2px;
+  background: conic-gradient(from var(--border-angle, 0deg),
+      transparent 0deg,
+      transparent 30deg,
+      #5ba4ef 50deg,
+      #a78bfa 65deg,
+      #f0a030 80deg,
+      transparent 100deg,
+      transparent 360deg);
+  animation: borderBeamSpin 2.4s linear infinite;
+}
 
+@property --border-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
 
+@keyframes borderBeamSpin {
+  to {
+    --border-angle: 360deg;
+  }
+}
 
+// Status cards
+.statusCard {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid;
+  min-width: 0;
+  position: relative;
 
+  &.queued {
+    background: var(--bg1);
+    border-color: transparent;
+    border-radius: 8px;
+  }
 
+  &.running {
+    background: var(--bg1);
+    border-color: transparent;
+    border-radius: 8px;
+  }
 
+  &.completed {
+    background: var(--bg1);
+    border-color: transparent;
+    border-radius: 8px;
+  }
+}
 
+.statusExt {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 800;
+  font-family: var(--font-mono);
+  flex-shrink: 0;
 
+  &.vtt {
+    background: var(--blue-dim);
+    color: var(--blue);
+  }
 
-{
-  "header": {
-    "logoText": "콘텐츠",
-    "logoTextSpan": "애널리틱스",
-    "sso": "Knox SSO",
-    "theme": {
-      "label": "테마 선택",
-      "dark": "다크",
-      "light": "라이트",
-      "navy": "네이비"
-    },
-    "userMenu": {
-      "label": "사용자 메뉴",
-      "administrator": "관리자",
-      "logout": "로그아웃"
-    }
-  },
-  "footer": {
-    "copyright": "© {{year}} Knox University. All rights reserved."
-  },
-  "sidebar": {
-    "expand": "사이드바 펼치기",
-    "collapse": "사이드바 접기",
-    "menu": "메뉴",
-    "soon": "출시 예정",
-    "groups": {
-      "main": "메인",
-      "analysis": "분석",
-      "tools": "도구",
-      "feedback": "피드백",
-      "settings": "설정",
-      "usage": "사용 현황"
-    },
-    "nav": {
-      "lecturePipeline": "강의 파이프라인",
-      "historyWorkspace": "이력 및 워크스페이스",
-      "keywordInsights": "키워드 인사이트",
-      "assessment": "평가 문항",
-      "sttTranscription": "STT 전사",
-      "promptTemplates": "프롬프트 템플릿",
-      "generalSettings": "일반 설정",
-      "settings": "설정",
-      "adminDashboard": "관리자 대시보드",
-      "voiceOfCustomer": "고객의 소리",
-      "userDictionary": "사용자 사전",
-      "dashboard": "대시보드"
-    }
-  },
-  "ssoLogin": {
-    "title": "콘텐츠",
-    "titleSpan": "애널리틱스",
-    "subtitle": "강의 인텔리전스 플랫폼",
-    "signedOut": "성공적으로 로그아웃되었습니다.",
-    "signInBtn": "Knox SSO로 로그인",
-    "hint": "인증은 기관의 Knox SSO 서비스를 통해 자동으로 처리됩니다."
-  },
-  "adminDashboard": {
-    "pageTitle": "대시보드",
-    "userViewSub": "내 사용 통계 및 파일 활동",
-    "adminViewSub": "플랫폼 전체 사용 현황, 사용자 관리 및 시스템 상태",
-    "myStats": "내 통계",
-    "admin": "관리자",
-    "administratorBadge": "관리자",
-    "readOnlyBadge": "읽기 전용 — 수정은 관리자 권한 필요",
-    "loading": "대시보드 데이터 불러오는 중…",
-    "loadError": "대시보드 데이터를 불러오지 못했습니다. 다시 시도해 주세요.",
-    "adminLoadError": "관리자 대시보드 데이터를 불러오지 못했습니다. 다시 시도해 주세요.",
-    "userStats": {
-      "totalUploaded": "총 업로드 파일",
-      "filesInferenced": "추론된 파일",
-      "aiGenerations": "AI 생성 실행",
-      "dictionariesCreated": "생성된 사전",
-      "audioVideo": "{{audio}} 오디오 · {{video}} 동영상",
-      "ofUploads": "업로드의 {{pct}}%",
-      "kwSummaryFaq": "키워드 · 요약 · FAQ",
-      "promptUpdates": "{{count}}개 프롬프트 업데이트"
-    },
-    "adminStats": {
-      "totalUploaded": "총 업로드 파일",
-      "totalUsers": "전체 사용자",
-      "aiGenerations": "AI 생성",
-      "dictionariesCreated": "생성된 사전",
-      "activeUsers": "{{count}}명 활성 사용자",
-      "activeOf": "{{count}}명 활성",
-      "kwSummaryFaq": "키워드 · 요약 · FAQ",
-      "promptUpdates": "{{count}}개 프롬프트 업데이트"
-    },
-    "tabs": {
-      "overview": "개요",
-      "files": "파일별 통계",
-      "dictionary": "사전 사용",
-      "uploadInference": "업로드 대 추론",
-      "users": "사용자 활동",
-      "perUser": "사용자별 상세",
-      "upload_inference": "업로드 대 추론",
-      "per_user": "사용자별 상세"
-    },
-    "charts": {
-      "uploadVsInference": "유형별 업로드 대 추론",
-      "uploadVsInferenceSub": "총 {{uploaded}}개 업로드 · {{inferenced}}개 추론",
-      "aiBreakdown": "AI 생성 분류",
-      "aiBreakdownSub": "총 {{total}}개 생성",
-      "filesByType": "유형별 파일",
-      "filesByTypeSub": "총 {{total}}개 업로드",
-      "sttCompletions": "STT 완료",
-      "sttCompletionsSub": "완료된 음성 인식 작업",
-      "audioStt": "오디오 STT",
-      "videoStt": "동영상 STT",
-      "ofAudioUploads": "오디오 업로드의 {{pct}}%",
-      "ofVideoUploads": "동영상 업로드의 {{pct}}%",
-      "uploadedLabel": "업로드",
-      "inferencedLabel": "추론",
-      "dictUsageFreq": "사전 사용 빈도",
-      "dictUsageFreqSub": "{{count}}개 사전 생성",
-      "dailyUploadTrend": "일별 업로드 추이",
-      "dailyUploadTrendSub": "일별 업로드 파일 수",
-      "dailyGenTrend": "일별 생성 추이",
-      "dailyGenTrendSub": "유형별 일별 AI 생성",
-      "uploadsByType": "유형별 업로드",
-      "uploadsByCategoryTitle": "카테고리별 업로드 대 추론",
-      "uploadsByCategorySub": "{{uploaded}}개 업로드 · {{inferenced}}개 추론 · {{start}} → {{end}}",
-      "dailyUviTrend": "일별 업로드 대 추론 추이",
-      "dailyUviTrendSub": "일별 업로드 및 추론",
-      "usagePerDict": "사전별 사용 횟수",
-      "usageByDept": "부서별 사용 현황",
-      "usageByDeptSub": "부서별 사전 수 및 사용량",
-      "totalDictionaries": "전체 사전",
-      "totalUsageCount": "총 사용 횟수",
-      "keywordsLabel": "키워드",
-      "summaryLabel": "요약",
-      "faqLabel": "FAQ",
-      "dictionariesLabel": "사전",
-      "usageLabel": "사용"
-    },
-    "table": {
-      "hash": "#",
-      "fileName": "파일명",
-      "type": "유형",
-      "keywords": "키워드",
-      "summaries": "요약",
-      "faqs": "FAQ",
-      "promptUpdates": "프롬프트 업데이트",
-      "noFileStats": "파일 통계 없음",
-      "dictName": "사전명",
-      "timesUsed": "사용 횟수",
-      "created": "생성일",
-      "noDicts": "사전 없음",
-      "username": "사용자명",
-      "department": "부서",
-      "totalFiles": "총 파일",
-      "generations": "생성",
-      "dictionaries": "사전",
-      "lastActive": "마지막 활동",
-      "noUserActivity": "사용자 활동 데이터 없음",
-      "owner": "소유자",
-      "category": "카테고리",
-      "uploaded": "업로드",
-      "inferenced": "추론",
-      "coverage": "처리율",
-      "noPerUserData": "사용자별 데이터 없음",
-      "noAdminDicts": "사전 없음",
-      "deptSummary": "부서 요약",
-      "totalUsage": "총 사용"
-    },
-    "perUser": {
-      "filesUploaded": "업로드 파일",
-      "filesInferenced": "추론 파일",
-      "aiGenerations": "AI 생성",
-      "dictionaries": "사전",
-      "lastActive": "마지막 활동: {{date}}",
-      "promptUpdates": "{{count}}개 프롬프트 업데이트"
-    }
-  },
-  "generalSettings": {
-    "pageTitle": "일반 설정",
-    "pageSub": "강의 처리에 적용되는 기본값",
-    "loading": "설정 불러오는 중…",
-    "resetToDefaults": "기본값으로 초기화",
-    "resetting": "초기화 중…",
-    "discard": "취소",
-    "saveChanges": "변경사항 저장",
-    "saving": "저장 중…",
-    "savedSuccess": "설정이 성공적으로 업데이트되었습니다.",
-    "resetSuccess": "설정이 기본값으로 초기화되었습니다.",
-    "subtitleFormat": {
-      "title": "자막 형식",
-      "desc": "자막 생성 시 사용되는 기본 파일 형식."
-    },
-    "defaultTemplate": {
-      "title": "기본 프롬프트 템플릿",
-      "desc": "새 강의 업로드 시 자동으로 적용되는 템플릿.",
-      "none": "없음",
-      "viewAriaLabel": "템플릿 상세 보기"
-    },
-    "numKeywords": {
-      "title": "키워드 수",
-      "desc": "강의당 추출할 키워드 수.",
-      "auto": "자동",
-      "custom": "직접 지정"
-    },
-    "numQuestions": {
-      "title": "평가 문항 수",
-      "desc": "강의당 생성할 평가 문항 수.",
-      "auto": "자동",
-      "custom": "직접 지정"
-    },
-    "globalDict": {
-      "title": "전역 사전",
-      "desc": "모든 강의에서 반복되는 전사 오류를 자동으로 수정합니다.",
-      "noTerms": "사전 항목이 없습니다.",
-      "wrongPlaceholder": "잘못된 용어 (예: teh)",
-      "correctPlaceholder": "올바른 용어 (예: the)",
-      "addTerm": "항목 추가",
-      "removeTerm": "항목 삭제",
-      "apply": "적용",
-      "manage": "사전 관리",
-      "termsDefined_one": "{{count}}개 항목 정의됨",
-      "termsDefined_other": "{{count}}개 항목 정의됨"
-    },
-    "resetModal": {
-      "title": "기본값으로 초기화",
-      "body": "자막 형식, 프롬프트 템플릿, 키워드/문항 수 및 전역 사전이 기본값으로 초기화됩니다. 이 작업은 취소할 수 없습니다.",
-      "cancel": "취소",
-      "confirm": "초기화"
-    },
-    "templateModal": {
-      "description": "설명",
-      "summaryPrompt": "요약 프롬프트",
-      "keywordPrompt": "키워드 프롬프트",
-      "faqPrompt": "FAQ 프롬프트",
-      "close": "닫기",
-      "closeAriaLabel": "닫기"
-    },
-    "stepper": {
-      "rangeError": "{{min}}에서 {{max}} 사이의 값을 입력하세요",
-      "decreaseAriaLabel": "감소",
-      "increaseAriaLabel": "증가"
-    }
-  },
-  "promptTemplates": {
-    "pageTitle": "프롬프트 템플릿",
-    "pageSub_one": "{{count}}개 템플릿 · 요약, 키워드 및 FAQ 생성을 위한 재사용 가능한 프롬프트",
-    "pageSub_other": "{{count}}개 템플릿 · 요약, 키워드 및 FAQ 생성을 위한 재사용 가능한 프롬프트",
-    "newTemplate": "새 템플릿",
-    "loading": "템플릿 불러오는 중…",
-    "createdSuccess": "템플릿이 생성되었습니다.",
-    "updatedSuccess": "템플릿이 수정되었습니다.",
-    "deletedSuccess": "템플릿이 삭제되었습니다.",
-    "genericError": "오류가 발생했습니다. 다시 시도해 주세요.",
-    "allFieldsRequired": "모든 필드를 입력해야 합니다.",
-    "table": {
-      "name": "이름",
-      "description": "설명",
-      "updated": "수정일",
-      "empty": "아직 템플릿이 없습니다 — 첫 번째 템플릿을 생성하여 요약, 키워드 및 FAQ 프롬프트를 표준화하세요.",
-      "edit": "수정",
-      "delete": "삭제",
-      "deleting": "삭제 중…"
-    },
-    "modal": {
-      "createTitle": "새 템플릿",
-      "editTitle": "템플릿 수정",
-      "name": "이름",
-      "namePlaceholder": "예: 강의 요약 — 기본",
-      "description": "설명",
-      "descPlaceholder": "이 템플릿을 사용하는 상황에 대한 짧은 설명",
-      "summaryPrompt": "요약 프롬프트",
-      "summaryPlaceholder": "요약 생성에 사용되는 지시사항",
-      "keywordPrompt": "키워드 프롬프트",
-      "keywordPlaceholder": "키워드 추출에 사용되는 지시사항",
-      "faqPrompt": "FAQ 프롬프트",
-      "faqPlaceholder": "FAQ 생성에 사용되는 지시사항",
-      "required": "*",
-      "cancel": "취소",
-      "saving": "저장 중…",
-      "saveChanges": "변경사항 저장",
-      "createBtn": "템플릿 생성",
-      "closeAriaLabel": "닫기"
-    },
-    "deleteModal": {
-      "title": "템플릿 삭제",
-      "body": "<strong>{{name}}</strong>을(를) 삭제하시겠습니까? 이 작업은 취소할 수 없습니다.",
-      "cancel": "취소",
-      "confirm": "삭제"
-    }
-  },
-  "settings": {
-    "pageTitle": "사용자 사전",
-    "pageSub": "전사 및 추론 중 적용되는 사용자 정의 용어 교체 관리",
-    "dictionaries": "사전",
-    "newDictTooltip": "새 사전",
-    "loading": "불러오는 중…",
-    "noDict": "사전이 없습니다.\n+ 버튼을 클릭하여 생성하세요.",
-    "unsaved": "저장되지 않음",
-    "newDict": "새 사전",
-    "selectOrCreate": "사전을 선택하거나 새로 만드세요.",
-    "dictNameLabel": "사전 이름",
-    "dictNamePlaceholder": "사전 이름을 입력하세요…",
-    "updated": "{{date}} 업데이트됨",
-    "cancel": "취소",
-    "saving": "저장 중…",
-    "saved": "저장됨",
-    "create": "생성",
-    "saveChanges": "변경사항 저장",
-    "discardConfirm": "저장하지 않은 변경사항을 버리시겠습니까?",
-    "nameRequired": "사전 이름은 필수입니다",
-    "termRequired": "두 값이 모두 입력된 항목이 최소 하나 있어야 합니다",
-    "searchPlaceholder": "용어 검색…",
-    "term_one": "{{count}}개 항목",
-    "term_other": "{{count}}개 항목",
-    "addTerm": "항목 추가",
-    "wrongTerm": "잘못된 용어",
-    "correctTerm": "올바른 용어",
-    "wrongPlaceholder": "예: teh",
-    "correctPlaceholder": "예: the",
-    "removeTerm": "항목 삭제",
-    "noSearchMatch": "검색 결과가 없습니다",
-    "noTermsYet": "아직 항목이 없습니다 — \"항목 추가\"를 클릭하여 생성하세요",
-    "dictInfo": "사전은 STT 전사 및 추론 중 적용됩니다. 전사본에서 발견된 잘못된 용어는 올바른 용어로 교체됩니다."
-  },
-  "landing": {
-    "badge": "강의 인텔리전스 플랫폼 · v2.4.1",
-    "hero": {
-      "title1": "강의 스크립트를",
-      "title2": "체계적인",
-      "titleAccent": "지식",
-      "title3": "으로 변환하세요",
-      "desc": "Content Analytics는 VTT 및 SRT 파일을 수집하고 AI 추론을 실행하여 강의당 1분 이내에 요약, 키워드 맵, 평가 문항을 제공합니다.",
-      "ctaPrimary": "강의 파이프라인",
-      "ctaSecondary": "워크스페이스 보기"
-    },
-    "stats": {
-      "fasterReview": "빠른 콘텐츠 검토",
-      "groundingRate": "문항 근거 비율",
-      "maxAudio": "STT 최대 오디오",
-      "filesPerBatch": "배치당 파일 수"
-    },
-    "features": {
-      "sectionLabel": "주요 기능",
-      "sectionTitle": "파이프라인의 모든 단계를,\n자동으로 처리합니다",
-      "batchUpload": {
-        "title": "일괄 업로드",
-        "desc": "VTT 및 SRT 스크립트 파일을 드래그 앤 드롭으로 대량 업로드. 파일당 최대 50MB, 최대 100개 파일, 폴더 단위 수집 지원."
-      },
-      "aiInference": {
-        "title": "AI 추론",
-        "desc": "대형 언어 모델 기반 — 구조화된 요약, 타임스탬프 콘텐츠 아웃라인, 키워드 빈도 맵을 생성합니다."
-      },
-      "smartSummaries": {
-        "title": "스마트 요약",
-        "desc": "목차, 타임스탬프 핵심 내용, 종합 개요 — 세 가지 요약 모드를 한국어와 영어로 제공합니다."
-      },
-      "assessmentGen": {
-        "title": "평가 문항 생성",
-        "desc": "반환각(hallucination) 검증 기반의 객관식, 진위형, 단답형 문항을 자동 생성 — 91% 이상의 콘텐츠 근거율."
-      },
-      "keywordInsights": {
-        "title": "키워드 인사이트",
-        "desc": "빈도 분석, 지식 그래프, 워드 클라우드로 단일 파일 또는 전체 강의 세트의 핵심 개념을 파악합니다."
-      },
-      "workspaceHistory": {
-        "title": "워크스페이스 이력",
-        "desc": "모든 추론 실행의 완전한 감사 추적 — 결과를 다시 열고, 출력을 재생성하고, 클릭 한 번으로 엑셀로 내보내기."
-      }
-    },
-    "workflow": {
-      "steps": {
-        "upload": {
-          "label": "업로드",
-          "sub": "VTT / SRT 파일 드롭"
-        },
-        "configure": {
-          "label": "설정",
-          "sub": "프롬프트 및 출력 설정"
-        },
-        "infer": {
-          "label": "추론",
-          "sub": "AI 파이프라인 실행"
-        },
-        "review": {
-          "label": "검토",
-          "sub": "워크스페이스 열기"
-        },
-        "export": {
-          "label": "내보내기",
-          "sub": "엑셀 다운로드"
-        }
-      }
-    },
-    "ctaSection": {
-      "title": "강의 분석을 시작할 준비가 되셨나요?",
-      "desc": "첫 번째 스크립트를 업로드하면 60초 이내에 AI 생성 요약, 키워드 맵, 문항 세트를 받아보세요.",
-      "button": "강의 파이프라인"
-    },
-    "mockCard": {
-      "tabs": {
-        "summary": "요약",
-        "keywords": "키워드",
-        "questions": "문항"
-      },
-      "status": "완료",
-      "block1Title": "1. 알고리즘의 정의와 분류",
-      "block2Title": "2. 정렬 알고리즘 비교 분석",
-      "kw1": "알고리즘 18%",
-      "kw2": "시간복잡도 14%",
-      "kw3": "Big-O 8%",
-      "kw4": "재귀 7%"
-    }
-  },
-  "uploadInfer": {
-    "pageTitle": "강의 파이프라인",
-    "pageSub": "1단계 — VTT/SRT 파일 업로드 · 2단계 — 추론 · 3단계 — 워크스페이스 결과",
-    "batchGroups": {
-      "batchTitle": "배치 #{{id}}",
-      "done": "{{done}} / {{total}} 완료",
-      "running": "실행 중",
-      "statusTitles": {
-        "running": "실행 중",
-        "queued": "대기 중",
-        "done": "완료",
-        "pending": "선택 안 됨"
-      },
-      "badgeLabels": {
-        "running": "활성",
-        "queued": "대기",
-        "done": "완료",
-        "pending": "건너뜀"
-      },
-      "file_one": "{{count}}개 파일",
-      "file_other": "{{count}}개 파일",
-      "inQueue": "대기열에 있음",
-      "emptyMsg": "이 배치에서 제외된 파일이 없습니다.",
-      "view": "보기"
-    },
-    "filePanel": {
-      "step1Label": "1단계 — 파일",
-      "uploaded_one": "{{count}}개 업로드됨",
-      "uploaded_other": "{{count}}개 업로드됨",
-      "selected_one": "{{count}}개 선택됨",
-      "selected_other": "{{count}}개 선택됨",
-      "showUpload": "업로드 표시",
-      "hideUpload": "업로드 숨기기",
-      "dropTitle": "여기에 파일을 드롭하세요",
-      "dropTitleDefault": ".vtt / .srt 파일을 여기에 드롭하세요",
-      "dropSub": "또는 클릭하여 탐색 · 폴더 업로드 지원",
-      "browseFiles": "파일 탐색",
-      "folder": "폴더",
-      "uploadBtn_one": "{{count}}개 파일 업로드",
-      "uploadBtn_other": "{{count}}개 파일 업로드",
-      "cancelBtn": "취소",
-      "complete": "{{finished}} / {{total}} 완료",
-      "failed_one": "· {{count}}개 실패",
-      "failed_other": "· {{count}}개 실패",
-      "fileStatus": {
-        "ready": "업로드 준비 완료",
-        "uploading": "업로드 중…",
-        "uploaded": "업로드됨"
-      },
-      "uploadedFiles": "업로드된 파일",
-      "inferenceBtn": "추론을 위한 파일 선택",
-      "dictionaryBtn": "사전 연결 / 해제",
-      "templateBtn": "프롬프트 템플릿 매핑",
-      "searchBtn": "파일 검색",
-      "exportBtn": "엑셀로 내보내기",
-      "deleteBtn": "파일 삭제",
-      "dateFrom": "시작일",
-      "dateTo": "종료일",
-      "applyDate": "적용",
-      "sortBy": "정렬 기준",
-      "sortId": "ID",
-      "sortName": "이름",
-      "sortDate": "날짜",
-      "sortStatus": "상태",
-      "searchPlaceholder": "파일명 또는 ID로 검색…",
-      "loadingFiles": "파일 불러오는 중…",
-      "noFilesRange": "이 날짜 범위에 파일이 없습니다",
-      "noFilesMatch": "{{query}}와 일치하는 파일이 없습니다",
-      "inferenced": "추론됨",
-      "notInferenced": "추론 안 됨",
-      "export": "내보내기",
-      "exportToExcelTitle": "{{count}}개 파일을 Excel로 내보내기",
-      "exportSelectFirst": "내보낼 파일을 선택하세요",
-      "selectFilesToExport": "내보낼 파일을 선택하세요",
-      "exportCountTitle": "{{count}}개 파일을 Excel로 내보내기",
-      "selectFilesToDelete": "삭제할 파일을 선택하세요",
-      "deleteCountTitle": "{{count}}개 파일 삭제",
-      "exportCount": "{{count}}개 내보내기",
-      "deleteCount": "{{count}}개 삭제",
-      "cancelTitle": "취소",
-      "uploaded": "업로드됨 ({{count}})",
-      "selected": "{{count}}개 선택됨",
-      "uploadBtn": "{{count}}개 파일 업로드",
-      "failed": "· {{count}}개 실패",
-      "exportAllBtn": "전체 내보내기",
-      "exportAllFailed": "내보내기에 실패했습니다. 다시 시도해 주세요.",
-      "deleteAllBtn": "전체 삭제",
-      "deleteAllConfirmTitle": "모든 파일 삭제",
-      "deleteAllConfirmBody": "{{from}}부터 {{to}}까지 업로드된 모든 파일이 영구적으로 삭제됩니다. 이 작업은 취소할 수 없습니다.",
-      "deleteAllConfirmPrompt": "확인을 위해 <strong>{{phrase}}</strong>을(를) 입력하세요:",
-      "deleteAllConfirmBtn": "모든 파일 삭제",
-      "deleteAllFailed": "삭제에 실패했습니다. 다시 시도해 주세요.",
-      "matchCount": "파일 {{count}}개",
-      "pageInfo": "{{page}} / {{totalPages}} 페이지 · 총 {{total}}개",
-      "perPage": "페이지당",
-      "selectedTotal": "{{total}}개 중 {{count}}개 선택됨",
-      "selectAllFiles": "전체 선택",
-      "clearAllFiles": "전체 해제",
-      "inferenceMode": "추론을 위해 선택",
-      "deleteMode": "파일 삭제",
-      "exportMode": "파일 내보내기",
-      "exitMode": "나가기",
-      "noFilesSelected": "선택된 파일 없음",
-      "runInferenceBtn": "추론 실행",
-      "confirmDeleteBtn": "삭제 확인",
-      "confirmExportBtn": "내보내기 확인",
-      "paginationPrev": "이전",
-      "paginationNext": "다음",
-      "actionsLabel": "작업",
-      "continueToInfer": "추론으로 계속",
-      "continueToInferCount": "추론으로 계속 ({{count}})",
-      "dictionaryLinked": "사전 연결됨",
-      "templateLinked": "프롬프트 템플릿 연결됨",
-      "promptCustomized": "사용자 지정",
-      "promptDefault": "기본값",
-      "promptDefaultFull": "기본 프롬프트 사용 중",
-      "perPageShort": "{{count}}개 / 페이지",
-      "statusAll": "전체",
-      "statusWaiting": "대기 중",
-      "statusQueued": "대기열",
-      "statusRunning": "실행 중",
-      "statusError": "오류",
-      "statusTbd": "미정"
-    },
-    "inferencePanel": {
-      "step2Label": "2단계 — 추론 설정",
-      "step2Running": "2단계 — 추론 실행 중",
-      "expandStep2": "Step 2 펼치기",
-      "minimizeStep2": "Step 2 최소화",
-      "closeStep2": "Step 2 닫기",
-      "filesSelected_one": "추론을 위해 {{count}}개 파일 선택됨",
-      "filesSelected_other": "추론을 위해 {{count}}개 파일 선택됨",
-      "batchRunning": "배치 실행 중",
-      "runInference": "추론 실행",
-      "selectFilesFirst": "먼저 파일을 선택하세요",
-      "noModelSelected": "모델이 선택되지 않음",
-      "submitting": "배치 제출 중…",
-      "submittingDesc": "추론 엔진으로 {{count}}개 파일을 전송 중입니다.\n잠시 기다려 주세요.",
-      "submittingMore": "+{{count}}개 더",
-      "selBanner": "{{count}}개 파일",
-      "selBannerEmpty": "왼쪽 패널에서 파일을 선택하세요",
-      "selBannerFilled": "추론을 위해 {{count}}개 파일이 선택됨",
-      "generateContent": "콘텐츠 생성",
-      "generateSummary": "요약",
-      "generateKeywords": "키워드",
-      "generateQuestions": "평가 문항",
-      "outputSettings": "출력 설정",
-      "modelLabel": "모델",
-      "refreshModels": "모델 새로고침",
-      "noModels": "사용 가능한 모델 없음 — 추론을 시작할 수 없습니다. 새로고침하거나 연결을 확인하세요.",
-      "modelsAvailable_one": "{{count}}개 모델 사용 가능",
-      "modelsAvailable_other": "{{count}}개 모델 사용 가능",
-      "noModelsOption": "— 모델을 찾을 수 없음 —",
-      "promptOverrides": "프롬프트 덮어쓰기",
-      "promptModeSingle": "단일 파일 — 자동 입력됨 · 변경하여 덮어쓰기.",
-      "promptModeMulti": "여러 파일 — 여기에 입력하면 모두 덮어씁니다.",
-      "summaryPrompt": "요약 프롬프트",
-      "keywordPrompt": "키워드 프롬프트",
-      "questionPrompt": "평가 문항 프롬프트",
-      "optional": "선택사항",
-      "perFile": "파일별",
-      "hide": "숨기기",
-      "noPromptSet": "프롬프트 없음",
-      "autofillPlaceholder": "파일에서 자동 입력됨 — 변경하여 덮어쓰기…",
-      "manualPlaceholder": "파일별 프롬프트를 사용하려면 비워두세요…",
-      "noContentHint": "프롬프트를 설정하려면 콘텐츠 유형을 하나 이상 활성화하세요.",
-      "cancelPrompt": "취소",
-      "savePrompts": "프롬프트 저장",
-      "saving": "저장 중…",
-      "promptSaveFail": "프롬프트 저장에 실패했습니다. 다시 시도해 주세요.",
-      "inferenceStatus": "추론 상태",
-      "live": "라이브",
-      "refreshingIn": "{{sec}}초 후 새로고침",
-      "filesRunning_one": "{{count}}개 파일 실행 중",
-      "filesRunning_other": "{{count}}개 파일 실행 중",
-      "queued": "대기 중",
-      "runningCol": "실행 중",
-      "completed": "완료",
-      "waitingQueue": "대기열에 있음",
-      "stopFile": "이 파일 중지",
-      "stopAlready": "이 파일은 이미 처리되어 중지할 수 없습니다.",
-      "inferenceStarted": "추론이 시작되었습니다",
-      "batchRunPill": "배치 실행 중",
-      "collapsePerFile": "파일별 프롬프트 접기",
-      "viewPerFile": "파일별 프롬프트 보기",
-      "filesSelected": "추론을 위해 {{count}}개 파일 선택됨",
-      "filesRunning": "{{count}}개 파일 실행 중",
-      "modelsAvailable": "{{count}}개 모델 사용 가능",
-      "generateKeywordInsights": "키워드 인사이트",
-      "generateShortAnswer": "단답형 문항",
-      "generateTrueFalse": "진위형 문항",
-      "timestampedSummary": "타임스탬프 요약",
-      "timeInterval": "시간 간격",
-      "minutesOption": "{{count}}분",
-      "shortAnswerPrompt": "단답형 프롬프트",
-      "trueFalsePrompt": "진위형 프롬프트"
-    },
-    "dictModal": {
-      "title": "사전 연결",
-      "subtitle": "각 파일에 사전을 할당하거나, 모든 파일에 한 번에 적용하세요.",
-      "closeSaving": "저장 중 — 잠시 기다려 주세요",
-      "close": "닫기",
-      "applyToAll": "모든 파일에 적용:",
-      "applyBtn": "모두에 적용",
-      "noneOption": "— 없음 (초기화) —",
-      "noneRow": "— 없음 —",
-      "changes_one": "{{count}}개 변경 사항 대기 중",
-      "changes_other": "{{count}}개 변경 사항 대기 중",
-      "noChanges": "변경 사항 없음",
-      "colFile": "파일",
-      "colDict": "사전",
-      "loadingDicts": "사전 불러오는 중…",
-      "noFiles": "파일이 없습니다.",
-      "loadFail": "사전을 불러오지 못했습니다. 다시 시도해 주세요.",
-      "associated": "연결됨",
-      "viewDetails": "사전 상세 보기",
-      "disassociate": "연결 해제",
-      "detailClose": "상세 닫기",
-      "metaId": "ID:",
-      "metaUpdated": "수정일:",
-      "metaTerms": "항목 수:",
-      "loadingDetails": "상세 정보 불러오는 중…",
-      "noTerms": "이 사전에 항목이 없습니다.",
-      "detailLoadFail": "사전 상세 정보를 불러오지 못했습니다.",
-      "noDetailsReturned": "이 사전의 상세 정보가 반환되지 않았습니다.",
-      "wrongTerm": "잘못된 용어",
-      "correctTerm": "올바른 용어",
-      "savingHint": "저장 중 — 이 창을 닫지 마세요…",
-      "cancel": "취소",
-      "save": "저장",
-      "saving": "저장 중…",
-      "saveSuccess": "사전 설정이 성공적으로 저장되었습니다",
-      "saveFail": "사전 설정 저장에 실패했습니다. 다시 시도해 주세요.",
-      "associateAllLabel": "모든 파일에 사전 적용 ({{from}} – {{to}})",
-      "associateAllBtn": "모든 파일에 적용",
-      "associateAllSuccess": "모든 파일에 사전이 성공적으로 적용되었습니다.",
-      "associateAllFail": "모든 파일에 사전 적용에 실패했습니다. 다시 시도해 주세요.",
-      "changes": "{{count}}개 변경 사항 대기 중"
-    },
-    "templateModal": {
-      "title": "프롬프트 템플릿 연결",
-      "subtitle": "각 파일에 프롬프트 템플릿을 매핑하여 요약, 키워드, FAQ 프롬프트를 업데이트하세요.",
-      "closeSaving": "저장 중 — 잠시 기다려 주세요",
-      "close": "닫기",
-      "applyToAll": "모든 파일에 적용:",
-      "applyBtn": "모두에 적용",
-      "noneOption": "— 없음 —",
-      "noneRow": "— 없음 —",
-      "changes_one": "{{count}}개 변경 사항 대기 중",
-      "changes_other": "{{count}}개 변경 사항 대기 중",
-      "noChanges": "변경 사항 없음",
-      "colFile": "파일",
-      "colTemplate": "프롬프트 템플릿",
-      "loadingTemplates": "프롬프트 템플릿 불러오는 중…",
-      "loadFail": "프롬프트 템플릿을 불러오지 못했습니다. 다시 시도해 주세요.",
-      "noFiles": "파일이 없습니다.",
-      "mapped": "매핑됨",
-      "viewDetails": "템플릿 상세 보기",
-      "detailClose": "상세 닫기",
-      "metaId": "ID:",
-      "metaUpdated": "수정일:",
-      "metaDescription": "설명:",
-      "loadingDetails": "상세 정보 불러오는 중…",
-      "noDetailsReturned": "이 템플릿의 상세 정보가 반환되지 않았습니다.",
-      "detailLoadFail": "템플릿 상세 정보를 불러오지 못했습니다.",
-      "summaryPrompt": "요약 프롬프트",
-      "keywordPrompt": "키워드 프롬프트",
-      "faqPrompt": "FAQ 프롬프트",
-      "savingHint": "저장 중 — 이 창을 닫지 마세요…",
-      "cancel": "취소",
-      "save": "저장",
-      "saving": "저장 중…",
-      "saveSuccess": "프롬프트 템플릿이 성공적으로 적용되었습니다",
-      "saveFail": "프롬프트 템플릿 적용에 실패했습니다. 다시 시도해 주세요.",
-      "associateAllLabel": "모든 파일에 템플릿 적용 ({{from}} – {{to}})",
-      "associateAllBtn": "모든 파일에 적용",
-      "associateAllSuccess": "모든 파일에 템플릿이 성공적으로 적용되었습니다.",
-      "associateAllFail": "모든 파일에 템플릿 적용에 실패했습니다. 다시 시도해 주세요.",
-      "changes": "{{count}}개 변경 사항 대기 중",
-      "shortAnswerPrompt": "단답형 프롬프트",
-      "trueFalsePrompt": "진위형 프롬프트"
-    },
-    "workspacePanel": {
-      "clickToView": "결과를 보려면 파일을 클릭하세요",
-      "noFileSelected": "파일이 선택되지 않음",
-      "noFileDesc": "업로드된 파일을 클릭하면 추론 결과가 여기에 표시됩니다.",
-      "loadingFile": "파일 데이터 불러오는 중…",
-      "tabs": {
-        "summary": "요약",
-        "keywords": "키워드",
-        "assessment": "평가 문항",
-        "shortAnswer": "단답형",
-        "trueFalse": "진위형",
-        "timestampedSummary": "타임스탬프 요약",
-        "keywordInsights": "키워드 인사이트",
-        "mcq": "객관식"
-      },
-      "noSummary": "요약을 사용할 수 없습니다.",
-      "noKeywords": "키워드를 사용할 수 없습니다.",
-      "noQuestions": "문항을 사용할 수 없습니다.",
-      "edit": "편집",
-      "copy": "복사",
-      "download": "다운로드",
-      "copyAs": "형식으로 복사",
-      "downloadAs": "형식으로 다운로드",
-      "editColPreview": "미리보기",
-      "editColEdit": "내용 편집",
-      "markdownRenderer": "Markdown 렌더러",
-      "markdownTag": "Markdown",
-      "chipView": "칩 뷰",
-      "onePerLine": "한 줄에 하나씩",
-      "cancel": "취소",
-      "save": "저장",
-      "saving": "저장 중",
-      "autofillPlaceholder": "파일에서 자동 입력됨 — 편집하여 덮어쓰기…",
-      "keywordPlaceholder": "키워드를 한 줄에 하나씩…",
-      "mcq": "MCQ",
-      "viewAll": "전체 보기",
-      "explanation": "설명",
-      "complete": "완료!",
-      "assessCompleteTitle": "평가 완료!",
-      "assessCompleteDesc": "{{count}}개의 문항을 모두 완료했습니다.",
-      "restart": "다시 시작",
-      "next": "다음 문항",
-      "finish": "완료",
-      "question": "Q{{n}}",
-      "answer": "정답",
-      "true": "참",
-      "false": "거짓",
-      "revealAnswer": "정답 보기",
-      "showAllAnswers": "전체 정답 보기",
-      "hideAllAnswers": "전체 정답 숨기기",
-      "quizMode": "퀴즈 모드",
-      "noShortAnswer": "단답형 문항이 없습니다.",
-      "noTrueFalse": "진위형 문항이 없습니다.",
-      "noTimestampedSummary": "타임스탬프 요약이 없습니다.",
-      "noKeywordInsights": "키워드 인사이트가 없습니다.",
-      "noData": "데이터가 없습니다.",
-      "firstMentionAt": "첫 언급 {{pct}}%",
-      "importanceAxis": "중요도",
-      "kiTabs": {
-        "graph": "지식 그래프",
-        "wordcloud": "워드 클라우드",
-        "timeline": "타임라인",
-        "heatmap": "히트맵",
-        "clusters": "클러스터",
-        "frequency": "빈도",
-        "prerequisites": "선수 지식",
-        "importance": "중요도",
-        "cooccurrence": "동시 출현",
-        "glossary": "용어집"
-      },
-      "scrollLeft": "탭 왼쪽으로 스크롤",
-      "scrollRight": "탭 오른쪽으로 스크롤",
-      "complexityAxis": "복잡도",
-      "glossaryTerm": "용어",
-      "glossaryDefinition": "정의",
-      "reason": "이유",
-      "cluster": "클러스터",
-      "count": "횟수",
-      "copied": "복사됨!",
-      "score": "점수",
-      "period": "기간",
-      "frequency": "빈도",
-      "reGenerate": "재생성",
-      "reGenerating": "재생성 중…",
-      "reGenerateSuccess": "재생성이 완료되었습니다.",
-      "reGenerateFail": "재생성에 실패했습니다. 다시 시도해 주세요."
-    },
-    "tabs": {
-      "upload": "업로드 및 관리",
-      "infer": "추론",
-      "results": "결과 보기",
-      "fileCount": "파일 {{count}}개",
-      "selectedCount": "{{count}}개 선택됨",
-      "runningCount": "{{count}}개 실행 중",
-      "running": "실행 중",
-      "resultsHint": "파일을 선택하여 결과 보기"
-    },
-    "workspace": {
-      "filesTitle": "파일",
-      "searchFiles": "파일 검색…",
-      "loadingFiles": "파일 불러오는 중…",
-      "noFilesYet": "파일이 없습니다",
-      "noFilesMatch": "검색 결과가 없습니다"
-    }
-  },
-  "stt": {
-    "pageTitle": "STT 파이프라인",
-    "loading": "불러오는 중…",
-    "file_one": "{{count}}개 파일",
-    "file_other": "{{count}}개 파일",
-    "processing_one": " · {{count}}개 처리 중",
-    "processing_other": " · {{count}}개 처리 중",
-    "dateError": "시작일이 종료일보다 늦을 수 없습니다.",
-    "apply": "적용",
-    "refreshTitle": "새로고침",
-    "refreshDisabled": "추론 중 비활성화됨",
-    "library": {
-      "title": "라이브러리",
-      "filterAll": "전체",
-      "searchPlaceholder": "검색…",
-      "closeInference": "추론 닫기",
-      "runInference": "추론 실행",
-      "cancelDelete": "삭제 취소",
-      "deleteFiles": "파일 삭제",
-      "cancelMove": "이동 취소",
-      "movePipeline": "강의 파이프라인으로 이동",
-      "selected_one": "{{count}}개 선택됨",
-      "selected_other": "{{count}}개 선택됨",
-      "noneSelected": "클릭하여 선택",
-      "noPipelineFiles": "선택 가능한 완료 파일 없음",
-      "selectCompleted": "완료된 파일만 선택 가능",
-      "selectAll": "전체 선택",
-      "clear": "초기화",
-      "inferenceSelected_one": "{{count}}개 선택됨",
-      "inferenceSelected_other": "{{count}}개 선택됨",
-      "inferenceNone": "클릭하여 선택",
-      "loading": "파일 불러오는 중…",
-      "emptyTitle": "이 기간에 파일이 없습니다",
-      "emptyHint": "날짜 필터를 넓히거나 새 파일을 업로드하세요.",
-      "noMatchTitle": "\"{{query}}\"와 일치하는 파일이 없습니다",
-      "noMatchHint": "파일 ID 또는 다른 이름으로 검색해 보세요.",
-      "loadError": "파일을 불러오지 못했습니다: {{error}}",
-      "retry": "재시도",
-      "deleting_one": "삭제 중… ({{count}}개)",
-      "deleting_other": "삭제 중… ({{count}}개)",
-      "delete_one": "삭제 ({{count}})",
-      "delete_other": "삭제 ({{count}})",
-      "moving_one": "이동 중… ({{count}}개)",
-      "moving_other": "이동 중… ({{count}}개)",
-      "move_one": "강의로 이동 ({{count}})",
-      "move_other": "강의로 이동 ({{count}})",
-      "deletedSuccess_one": "{{count}}개 파일이 삭제되었습니다.",
-      "deletedSuccess_other": "{{count}}개 파일이 삭제되었습니다.",
-      "deleteFail": "삭제에 실패했습니다. 다시 시도해 주세요.",
-      "movedSuccess_one": "{{count}}개 파일이 강의 파이프라인으로 이동되었습니다.",
-      "movedSuccess_other": "{{count}}개 파일이 강의 파이프라인으로 이동되었습니다.",
-      "moveFail": "이동에 실패했습니다. 다시 시도해 주세요.",
-      "selectForInference": "추론을 위한 파일 선택"
-    },
-    "fileCard": {
-      "status": {
-        "completed": "완료",
-        "queued": "대기 중",
-        "pending": "대기",
-        "running": "실행 중",
-        "failed": "실패"
-      },
-      "type": {
-        "video": "비디오",
-        "audio": "오디오"
-      },
-      "generate": "생성",
-      "reGenerate": "재생성",
-      "retry": "재시도",
-      "inPipelineTitle": "강의 파이프라인에 추가됨"
-    },
-    "inference": {
-      "title": "추론",
-      "nextCheck": "⟳ {{sec}}초 후 확인",
-      "selectHint": "추론을 실행할 파일을 라이브러리에서 선택하세요.",
-      "selectedHint_one": "라이브러리에서 {{count}}개 파일 선택됨",
-      "selectedHint_other": "라이브러리에서 {{count}}개 파일 선택됨",
-      "settingsTitle": "설정",
-      "modelLabel": "모델",
-      "modelLoading": "불러오는 중…",
-      "languageLabel": "언어",
-      "korean": "한국어",
-      "english": "영어",
-      "chunkLabel": "청크 크기",
-      "chunkAuto": "자동",
-      "submitting": "제출 중…",
-      "runBtn": "추론 실행",
-      "runBtnCount": "추론 실행 ({{count}})",
-      "queued": "대기 중",
-      "file_one": "{{count}}개 파일",
-      "file_other": "{{count}}개 파일",
-      "waiting": "대기 중",
-      "noQueued": "대기 중인 파일 없음",
-      "inQueue": "대기열에 있음",
-      "running": "실행 중",
-      "active": "활성",
-      "noRunning": "활성 파일 없음",
-      "done": "완료",
-      "noDone": "아직 완료된 파일 없음",
-      "statusDone": "완료",
-      "statusFailed": "실패",
-      "statusStarting": "시작 중…"
-    },
-    "timeline": {
-      "ariaLabel": "전사 타임라인",
-      "seekTo": "{{time}}(으)로 이동"
-    },
-    "unknownDate": "알 수 없음",
-    "filterLabel": "필터: {{filter}}"
-  },
-  "modal": {
-    "ariaLabel": "대화 상자"
-  },
-  "transcriptDetail": {
-    "backAriaLabel": "뒤로",
-    "fileSub": "파일 #{{id}} · {{count}}개 큐",
-    "downloadSrt": "SRT 다운로드",
-    "captionsError": "자막을 불러오지 못했습니다: {{error}}",
-    "retry": "재시도",
-    "loadingMedia": "미디어 불러오는 중…",
-    "mediaError": "미디어를 불러오지 못했습니다",
-    "nowPlaying": "현재 재생 중",
-    "saveStatus": {
-      "editing": "저장 중…",
-      "saved": "저장됨",
-      "failed": "저장 실패"
-    },
-    "cueInfo": "큐 {{current}} / {{total}} · {{start}} → {{end}}",
-    "cueCountHint": "{{count}}개 큐 · 재생을 눌러 진행하세요",
-    "loading": "불러오는 중…",
-    "noTranscript": "전사 없음",
-    "followAlong": "재생을 눌러 따라가세요",
-    "transcriptTitle": "전사",
-    "transcriptHint": "클릭하여 이동 · 연필 아이콘으로 편집",
-    "loadingCaptions": "자막 불러오는 중…",
-    "noCaptions": "사용 가능한 자막 없음",
-    "noCaptionsToast": "사용 가능한 자막이 없습니다",
-    "nowTag": "▶ 지금",
-    "editTitle": "편집",
-    "emptyWarn": "⚠ 빈 텍스트로 저장하시겠습니까? 자막이 지워집니다.",
-    "keepEditing": "계속 편집",
-    "saveEmpty": "빈 상태로 저장",
-    "savedToast": "저장됨",
-    "saveFailedToast": "저장 실패",
-    "downloadedToast": "다운로드됨"
-  },
-  "transcribePanel": {
-    "title": "전사 생성",
-    "closeAriaLabel": "패널 닫기",
-    "fileLabel": "파일",
-    "modelLabel": "모델",
-    "modelsLoading": "모델 불러오는 중…",
-    "modelsError": "모델을 불러오지 못했습니다.",
-    "modelsRetry": "재시도",
-    "noModels": "사용 가능한 모델 없음",
-    "languageLabel": "언어",
-    "korean": "한국어",
-    "english": "영어",
-    "chunkLabel": "청크",
-    "chunk5": "5초",
-    "chunk10": "10초",
-    "chunk15": "15초",
-    "chunk20": "20초",
-    "cancel": "취소",
-    "starting": "시작 중…",
-    "start": "전사 시작"
-  },
-  "uploadInline": {
-    "title": "파일 업로드",
-    "limitBadge": "{{active}}/{{max}} 업로드 중",
-    "limitReached": "업로드 한도 도달",
-    "dropActive": "드롭하여 업로드",
-    "dropDefault": "파일 또는 폴더를 여기에 드래그하세요",
-    "dropHint": "MP3 · WAV · AAC · MP4 · MOV · 최대 {{max}}개 파일",
-    "limitHint": "한 번에 최대 {{max}}개 파일",
-    "browseFiles": "파일 찾아보기",
-    "browseFolder": "폴더 찾아보기",
-    "unsupportedFormat": "지원하지 않는 형식입니다. 허용 형식: MP3, WAV, AAC, FLAC, M4A, OGG, MP4, AVI, MOV, MKV, WEBM.",
-    "allSlotsBusy": "{{max}}개 업로드 슬롯이 모두 사용 중입니다. 파일 업로드가 완료되면 다시 시도하세요.",
-    "partialQueue": "{{queued}}개 파일 대기 중. {{ignored}}개 파일 무시됨 — 한 번에 {{max}}개까지만 업로드 가능합니다. 각 파일이 완료되면 더 업로드할 수 있습니다.",
-    "uploading": "업로드 중…",
-    "uploaded": "업로드됨",
-    "failed": "실패",
-    "retryBtn": "재시도",
-    "dismissAriaLabel": "닫기"
-  },
-  "uploadPanel": {
-    "title": "파일 업로드",
-    "closeAriaLabel": "업로드 패널 닫기",
-    "fileLabel": "파일",
-    "dropActive": "드롭하여 첨부",
-    "dropDefault": "파일을 드롭하거나 클릭하여 찾아보기",
-    "dropHint": "MP3 WAV AAC FLAC M4A OGG · MP4 AVI MOV MKV WEBM",
-    "unsupportedFormat": "지원하지 않는 파일 형식입니다",
-    "removeAriaLabel": "파일 제거",
-    "cancel": "취소",
-    "uploading": "업로드 중…",
-    "upload": "업로드"
-  },
-  "history": {
-    "pageTitle": "이력 및 워크스페이스",
-    "pageSub": "과거 추론 실행을 탐색하고 결과를 검토하세요",
-    "loading": "이력 불러오는 중…",
-    "loadError": "이력을 불러오지 못했습니다. 다시 시도해 주세요.",
-    "retry": "재시도",
-    "empty": {
-      "title": "파일이 없습니다",
-      "hint": "파일을 업로드하고 추론을 실행하면 여기에 결과가 표시됩니다."
-    },
-    "searchPlaceholder": "파일명 또는 ID로 검색…",
-    "filterAll": "전체",
-    "filterInferenced": "추론됨",
-    "filterPending": "추론 안 됨",
-    "sortLabel": "정렬",
-    "sortNewest": "최신순",
-    "sortOldest": "오래된순",
-    "sortName": "이름순",
-    "fileCount": "파일 {{count}}개",
-    "selectedCount": "{{count}}개 선택됨",
-    "selectAll": "전체 선택",
-    "clearSelection": "초기화",
-    "openWorkspace": "워크스페이스 열기",
-    "deleteSelected": "삭제",
-    "deleting": "삭제 중…",
-    "deleteSuccess": "{{count}}개 파일이 성공적으로 삭제되었습니다.",
-    "deleteFail": "삭제에 실패했습니다. 다시 시도해 주세요.",
-    "deleteConfirm": {
-      "title": "파일 삭제",
-      "body": "{{count}}개 파일을 삭제하시겠습니까? 이 작업은 취소할 수 없습니다.",
-      "cancel": "취소",
-      "confirm": "삭제"
-    },
-    "workspace": {
-      "title": "워크스페이스",
-      "noFile": "파일이 선택되지 않음",
-      "noFileHint": "왼쪽 목록에서 파일을 선택하면 추론 결과가 여기에 표시됩니다.",
-      "tabs": {
-        "summary": "요약",
-        "keywords": "키워드",
-        "assessment": "평가 문항"
-      },
-      "noSummary": "요약을 사용할 수 없습니다.",
-      "noKeywords": "키워드를 사용할 수 없습니다.",
-      "noAssessment": "평가 문항을 사용할 수 없습니다.",
-      "copy": "복사",
-      "copied": "복사됨!",
-      "download": "다운로드",
-      "edit": "편집",
-      "save": "저장",
-      "saving": "저장 중…",
-      "cancel": "취소",
-      "reGenerate": "재생성",
-      "reGenerating": "재생성 중…",
-      "reGenerateFail": "재생성에 실패했습니다. 다시 시도해 주세요.",
-      "reGenerateSuccess": "재생성이 완료되었습니다.",
-      "keywordPlaceholder": "키워드를 한 줄에 하나씩…",
-      "summaryPlaceholder": "파일에서 자동 입력됨 — 편집하여 덮어쓰기…",
-      "editColPreview": "미리보기",
-      "editColEdit": "내용 편집",
-      "markdownTag": "Markdown",
-      "chipView": "칩 뷰",
-      "onePerLine": "한 줄에 하나씩",
-      "mcq": "MCQ",
-      "viewAll": "전체 보기",
-      "explanation": "설명",
-      "assessComplete": "평가 완료!",
-      "assessCompleteDesc": "{{count}}개의 문항을 모두 완료했습니다.",
-      "restart": "다시 시작",
-      "next": "다음 문항",
-      "finish": "완료",
-      "question": "Q{{n}}"
-    }
+  &.srt {
+    background: var(--green-dim);
+    color: var(--green);
+  }
+}
+
+// ── Completed check icon ──
+.completedCheck {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--green-dim);
+  border: 1.5px solid var(--green-bdr);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--green);
+
+  svg {
+    width: 13px;
+    height: 13px;
+  }
+}
+
+// ── Queued "waiting" meta line ──
+.queuedMeta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--amber);
+  font-family: var(--font-mono);
+  opacity: 0.8;
+}
+
+.queuedDot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--amber);
+  flex-shrink: 0;
+  animation: queuedDotPulse 1.6s ease-in-out infinite;
+}
+
+@keyframes queuedDotPulse {
+
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+}
+
+// ── Completed date meta ──
+.completedMeta {
+  font-size: 10px;
+  color: var(--green);
+  font-family: var(--font-mono);
+  opacity: 0.75;
+}
+
+.statusInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.statusNameRow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin-bottom: 3px;
+  overflow: hidden;
+}
+
+.statusName {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--t0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+.statusIdBadge {
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  border-radius: 4px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+  color: var(--blue);
+  background: var(--blue-dim);
+  border: 1px solid var(--blue-bdr);
+}
+
+.statusIdBadge_queued {
+  color: var(--amber);
+  background: rgba(240, 160, 48, 0.12);
+  border-color: rgba(240, 160, 48, 0.3);
+}
+
+.statusIdBadge_running {
+  color: var(--blue);
+  background: var(--blue-dim);
+  border-color: var(--blue-bdr);
+}
+
+.statusIdBadge_completed {
+  color: var(--green);
+  background: var(--green-dim);
+  border-color: var(--green-bdr);
+}
+
+.statusDate {
+  font-size: 10px;
+  color: var(--t2);
+  font-family: var(--font-mono);
+}
+
+.statusProgress {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.statusBar {
+  flex: 1;
+  height: 3px;
+  background: var(--bg4);
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.statusFill {
+  height: 100%;
+  background: var(--blue);
+  border-radius: 99px;
+  transition: width 0.4s ease;
+}
+
+.statusPct {
+  font-size: 10px;
+  color: var(--blue);
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
+// ── Model row (label + refresh) ──────────────────
+.modelLabelRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+
+  .fl {
+    margin-bottom: 0;
+  }
+}
+
+.refreshBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t2);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.12s;
+  flex-shrink: 0;
+
+  svg {
+    width: 10px;
+    height: 10px;
+    flex-shrink: 0;
+    transition: transform 0.12s;
+  }
+
+  &:hover:not(:disabled) {
+    background: var(--bg3);
+    color: var(--t1);
+    border-color: var(--bdr3);
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+}
+
+.spinning {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+// ── Model status messages ─────────────────────────
+.modelWarn {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 7px;
+  padding: 7px 10px;
+  border-radius: var(--r);
+  background: var(--amber-dim);
+  border: 1px solid var(--amber-bdr);
+  color: var(--amber);
+  font-size: 13px;
+  line-height: 1.5;
+
+  svg {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+    margin-top: 1px;
+    stroke: var(--amber);
+  }
+}
+
+.modelOk {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--t2);
+  font-family: var(--font-mono);
+
+  svg {
+    width: 11px;
+    height: 11px;
+    flex-shrink: 0;
+    stroke: var(--green);
+  }
+}
+
+// ══════════════════════════════════════
+// SUBMITTING OVERLAY
+// ══════════════════════════════════════
+.submittingOverlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(var(--bg0-rgb, 11, 13, 16), 0.82);
+  backdrop-filter: blur(4px);
+  z-index: 20;
+  animation: fadeIn 0.18s ease;
+}
+
+.submittingCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 28px 32px;
+  background: var(--bg1);
+  border: 1px solid var(--bdr2);
+  border-radius: var(--rxl, 12px);
+  max-width: 320px;
+  width: 90%;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.28);
+  text-align: center;
+}
+
+.submittingSpinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--bdr2);
+  border-top-color: var(--blue);
+  border-right-color: rgba(139, 92, 246, 0.5);
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+  flex-shrink: 0;
+}
+
+.submittingTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--t0);
+  letter-spacing: -0.2px;
+}
+
+.submittingDesc {
+  font-size: 13px;
+  color: var(--t2);
+  font-family: var(--font-mono);
+  line-height: 1.65;
+}
+
+.submittingFiles {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+  margin-top: 2px;
+}
+
+.submittingFile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--t1);
+  font-family: var(--font-mono);
+  background: var(--bg2);
+  border: 1px solid var(--bdr);
+  border-radius: var(--r);
+  padding: 5px 10px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.submittingDot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--blue);
+  flex-shrink: 0;
+  animation: breathe 1.2s ease-in-out infinite;
+}
+
+.submittingMore {
+  font-size: 12px;
+  color: var(--t2);
+  font-family: var(--font-mono);
+  text-align: center;
+  padding: 2px 0;
+}
+
+// ── Stop button on queued file cards ─────────────────────
+.stopBtn {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.08);
+  color: #ef4444;
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.15s;
+  margin-left: auto;
+
+  svg {
+    width: 9px;
+    height: 9px;
+  }
+
+  &:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.18);
+    border-color: rgba(239, 68, 68, 0.6);
+    box-shadow: 0 0 6px rgba(239, 68, 68, 0.2);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}
+
+.stopSpinner {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid rgba(239, 68, 68, 0.3);
+  border-top-color: #ef4444;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+// ── Large screen overrides (> 1900px) ────────────────────
+@media (min-width: 1920px) {
+  .slbl {
+    font-size: 13px;
+  }
+
+  .selSummary {
+    font-size: 14px;
+  }
+
+  .selCt {
+    font-size: 14px;
+  }
+
+  .selNm {
+    font-size: 13px;
+  }
+
+  .cardT {
+    font-size: 11px;
+  }
+
+  .fl {
+    font-size: 14px;
+  }
+
+  .fc {
+    font-size: 14px;
+  }
+
+  .optTag {
+    font-size: 13px;
+  }
+
+  .cr label {
+    font-size: 14px;
+  }
+
+  .slim {
+    font-size: 13px;
+  }
+
+  .sv {
+    font-size: 14px;
+  }
+
+  .qTypeLabel {
+    font-size: 14px;
+  }
+
+  .noPromptHint {
+    font-size: 14px;
+  }
+
+  .btn {
+    font-size: 14px;
+  }
+
+  .batchSectionTitle {
+    font-size: 13px;
+  }
+
+  .batchColHead {
+    font-size: 13px;
+  }
+
+  .batchColCount {
+    font-size: 14px;
+  }
+
+  .batchEmpty {
+    font-size: 14px;
+  }
+
+  .statusName {
+    font-size: 14px;
+  }
+
+  .statusIdBadge {
+    font-size: 11px;
+  }
+
+  .statusDate {
+    font-size: 11px;
+  }
+
+  .statusPct {
+    font-size: 11px;
+  }
+
+  .queuedMeta {
+    font-size: 11px;
+  }
+
+  .completedMeta {
+    font-size: 11px;
+  }
+
+  .loadingDot {
+    font-size: 14px;
+  }
+
+  .refreshBtn {
+    font-size: 13px;
+  }
+
+  .modelWarn {
+    font-size: 14px;
+  }
+
+  .modelOk {
+    font-size: 13px;
+  }
+
+  .submittingTitle {
+    font-size: 15px;
+  }
+
+  .submittingDesc {
+    font-size: 14px;
+  }
+
+  .submittingFile {
+    font-size: 14px;
+  }
+
+  .submittingMore {
+    font-size: 13px;
+  }
+
+  .liveStatus {
+    font-size: 13px;
+  }
+}
+
+// ── Per-file prompt preview ───────────────────
+.perFileBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding: 2px 8px 2px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t2);
+  font-size: 11px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  vertical-align: middle;
+  transition: all 0.14s;
+
+  svg:first-child {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+  }
+}
+
+.perFileBtn:hover {
+  background: var(--bg3);
+  border-color: var(--bdr3);
+  color: var(--t0);
+}
+
+.perFileBtnActive {
+  background: var(--blue-dim);
+  border-color: var(--blue-bdr);
+  color: var(--blue);
+}
+
+.perFileBtnActive:hover {
+  background: var(--blue-dim);
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.perFileChevron {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  transition: transform 0.18s ease;
+}
+
+.perFileChevronOpen {
+  transform: rotate(180deg);
+}
+
+// Animated expand container
+.perFilePanel {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.18s ease,
+    margin 0.2s ease;
+  margin-bottom: 0;
+}
+
+.perFilePanelOpen {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  margin-bottom: 6px;
+}
+
+.perFilePanelInner {
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--bdr2);
+  border-radius: var(--r);
+  background: var(--bg1);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.perFileRow {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--bdr1);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+
+  &:last-child {
+    border-bottom: none;
+  }
+}
+
+.perFileName {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--t2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.perFilePrompt {
+  font-size: 12px;
+  color: var(--t0);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.perFileEmpty {
+  font-size: 12px;
+  color: var(--t2);
+  font-style: italic;
+  opacity: 0.6;
+}
+
+@media (min-width: 1920px) {
+  .perFileBtn {
+    font-size: 12px;
+  }
+
+  .perFileName {
+    font-size: 12px;
+  }
+
+  .perFilePrompt {
+    font-size: 13px;
+  }
+
+  .perFileEmpty {
+    font-size: 13px;
+  }
+}
+
+// ── Prompt save / cancel bar ──────────────────
+.promptActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--bdr1);
+  margin-top: 4px;
+}
+
+.promptSaveError {
+  flex: 1;
+  font-size: 12px;
+  color: var(--red, #ef4444);
+  margin-right: 4px;
+}
+
+.btnSm {
+  height: 30px;
+  padding: 0 14px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  font-family: var(--font-ui);
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.14s;
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+}
+
+.btnGhost {
+  background: transparent;
+  border-color: var(--bdr2);
+  color: var(--t1);
+
+  &:hover:not(:disabled) {
+    background: var(--bg3);
+    border-color: var(--bdr3);
+  }
+}
+
+.btnPrimary {
+  background: var(--blue);
+  border-color: var(--blue);
+  color: #fff;
+
+  &:hover:not(:disabled) {
+    opacity: 0.88;
+  }
+}
+
+.btnSpinner {
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@media (min-width: 1920px) {
+  .btnSm {
+    height: 34px;
+    font-size: 13px;
+    padding: 0 16px;
+  }
+
+  .promptSaveError {
+    font-size: 13px;
+  }
+}
+
+// ─────────────────────────────────────────────
+// Minimize / minimized rail
+// ─────────────────────────────────────────────
+
+.minimizeStepBtn {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex-shrink: 0;
+  transition: all 0.14s;
+
+  svg {
+    width: 13px;
+    height: 13px;
+  }
+
+  &:hover {
+    background: var(--bg3);
+    border-color: var(--bdr3);
+    color: var(--t0);
+  }
+}
+
+.infpanelMinimized {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.minRail {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 14px;
+  padding: 14px 0;
+  width: 100%;
+  background: var(--bg2);
+  border: 1px solid var(--bdr);
+  border-radius: var(--rl);
+  color: var(--t1);
+  cursor: pointer;
+  transition: background 0.14s, border-color 0.14s, color 0.14s;
+
+  &:hover {
+    background: var(--bg3);
+    border-color: var(--bdr2);
+    color: var(--t0);
+  }
+}
+
+.minRailIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid var(--bdr2);
+  color: var(--t2);
+  flex-shrink: 0;
+
+  svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .minRail:hover & {
+    color: var(--t0);
+    border-color: var(--bdr3);
+  }
+}
+
+.minRailLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--t1);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.minRailDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--amber);
+  animation: minRailPulse 1.2s infinite;
+}
+
+@keyframes minRailPulse {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.4;
   }
 }
