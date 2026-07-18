@@ -113,12 +113,16 @@ interface FilePanelProps {
   onEnterSelectMode: () => void;
   onExitSelectMode: () => void;
   onDeleteComplete: (deletedIds: number[], all?: boolean) => void;
+  // Whether the Upload tab is the one currently showing — triggers a
+  // fresh fetch each time it becomes active, and clears stale state
+  // when navigating away so a return visit doesn't flash old data.
+  active: boolean;
   // Optional — lets the host switch to the Run inference tab once files
   // are picked here. FilePanel works fine without it (just no shortcut).
   onGoToInfer?: () => void;
 }
 
-const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, onExitSelectMode, onDeleteComplete, onGoToInfer }) => {
+const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, onExitSelectMode, onDeleteComplete, active, onGoToInfer }) => {
   const { t } = useTranslation();
   const dispatch = useAppDispatch();
   const {
@@ -411,8 +415,6 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
     }
   }, [dispatch, dateFrom, dateTo, filesPage, filesPageSize, filesSortBy, filesSortOrder, filesSearch, statusFilter]);
 
-  useEffect(() => { fetchFiles({ page: 1 }); }, []); // eslint-disable-line
-
   // Re-fetch /by-date/ whenever a batch finishes so completed statuses are up to date
   useEffect(() => {
     if (lastBatchFinishedAt !== null) {
@@ -540,6 +542,25 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
     }, 400);
     return () => clearTimeout(handle);
   }, [searchQuery]); // eslint-disable-line
+
+  // Own fresh fetch every time the Upload tab becomes active — and when
+  // it goes inactive (navigated away from), clear the list and reset
+  // search/sort/status-filter/page so a return visit shows a clean
+  // loading state instead of the previous stale results.
+  useEffect(() => {
+    if (active) {
+      fetchFiles({ page: 1 });
+    } else {
+      skipNextSearchEffect.current = true;
+      setSearchQuery('');
+      dispatch(setStatusFilter(''));
+      dispatch(serverFilesSuccess({
+        files: [], total: 0, page: 1, pageSize: filesPageSize, totalPages: 1,
+        sortBy: 'id', sortOrder: 'desc', search: '',
+      }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
 
   const displayedFiles = serverFiles;
 
@@ -1411,2697 +1432,6 @@ export default FilePanel;
 
 
 
-
-
-
-
-
-
-// ═══════════════════════════════════════════════
-// FilePanel.module.scss
-// Content Analytics · Upload panel — two sections
-// ═══════════════════════════════════════════════
-@use '../../styles/mixins' as m;
-
-// ── Outer panel shell ─────────────────────────
-.panel {
-  width: 100%;
-  flex: 1;
-  border-right: none;
-  display: flex;
-  flex-direction: row;
-  align-items: stretch;
-  overflow: hidden;
-  background: var(--bg0);
-  position: relative;
-
-  &::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 1px;
-    background: linear-gradient(180deg,
-        rgba(139, 92, 246, 0.0) 0%,
-        rgba(139, 92, 246, 0.6) 20%,
-        rgba(56, 196, 186, 0.7) 55%,
-        rgba(240, 160, 48, 0.6) 85%,
-        rgba(240, 160, 48, 0.0) 100%);
-    pointer-events: none;
-    z-index: 1;
-  }
-}
-
-// ══════════════════════════════════════
-// SECTION 1 — Step header + upload zone
-// ══════════════════════════════════════
-.step1 {
-  width: 400px;
-  flex-shrink: 0;
-  border-bottom: none;
-  border-right: 1px solid var(--bdr);
-  background: var(--bg0);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  position: relative;
-}
-
-// ── The upload zone itself, as a distinct card sitting in the sidebar ──
-.step1Card {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg1);
-  overflow: hidden;
-  box-shadow: var(--shadow-sm);
-}
-
-// Reopen affordance shown in the file-list header once the upload
-// column has been collapsed to width: 0 (and its own header bar with it).
-.reopenUploadBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  margin-right: 8px;
-  padding: 3px 9px;
-  border-radius: 99px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  font-size: 12px;
-  @include m.mono;
-  cursor: pointer;
-  transition: all 0.12s;
-
-  svg { width: 10px; height: 10px; }
-
-  &:hover {
-    background: var(--bg3);
-    color: var(--t1);
-    border-color: var(--bdr3);
-  }
-}
-
-// ── Step-1 header bar (original design) ──────
-.step1Bar {
-  padding: 10px 14px;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  border-bottom: none;
-  background: var(--bg1);
-  flex-shrink: 0;
-  white-space: nowrap;
-  position: relative;
-
-  &::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-        rgba(139, 92, 246, 0.0) 0%,
-        rgba(139, 92, 246, 0.6) 20%,
-        rgba(56, 196, 186, 0.7) 50%,
-        rgba(240, 160, 48, 0.6) 80%,
-        rgba(240, 160, 48, 0.0) 100%);
-    pointer-events: none;
-  }
-}
-
-.slbl {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--t2);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  @include m.mono;
-}
-
-// Collapse toggle button — matches original
-.collapseBtn {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-left: auto;
-  padding: 3px 8px;
-  border-radius: 99px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  font-size: 12px;
-  @include m.mono;
-  cursor: pointer;
-  transition: all 0.12s;
-  user-select: none;
-  flex-shrink: 0;
-
-  svg {
-    width: 10px;
-    height: 10px;
-  }
-
-  &:hover {
-    background: var(--bg3);
-    color: var(--t1);
-    border-color: var(--bdr3);
-  }
-}
-
-// ── Collapsible content area — fills the rest of the column, scrolls
-// internally so a long browsed/uploading list doesn't blow out the height ──
-.step1Content {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  @include m.scrollbar;
-}
-
-// ── Drop zone (original style) ────────────────
-.dropzone {
-  border: 1.5px dashed var(--bdr2);
-  border-radius: var(--rxl);
-  padding: 24px 20px;
-  margin: 12px 14px;
-  text-align: center;
-  background: var(--bg1);
-  cursor: pointer;
-  transition: all 0.18s;
-  position: relative;
-  overflow: hidden;
-
-  &::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: radial-gradient(ellipse at 50% 0%, rgba(139, 92, 246, 0.04), transparent 65%);
-    pointer-events: none;
-  }
-
-  &:hover,
-  &.dragOver {
-    border-color: var(--blue);
-    background: var(--bg2);
-  }
-
-  &.dragOver {
-    background: var(--blue-dim);
-  }
-}
-
-.dzIc {
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
-  background: var(--blue-dim);
-  border: 1px solid var(--blue-bdr);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin: 0 auto 11px;
-
-  svg {
-    width: 18px;
-    height: 18px;
-  }
-}
-
-.dzTitle {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--t0);
-  margin-bottom: 4px;
-}
-
-.dzSub {
-  font-size: 13px;
-  color: var(--t2);
-  @include m.mono;
-}
-
-.chips {
-  display: flex;
-  justify-content: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-top: 10px;
-}
-
-.chip {
-  font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 99px;
-  background: var(--bg3);
-  border: 1px solid var(--bdr);
-  color: var(--t2);
-  @include m.mono;
-}
-
-.dzActions {
-  display: flex;
-  gap: 8px;
-  justify-content: center;
-  margin-top: 11px;
-  position: relative;
-  z-index: 1;
-}
-
-// ── Preview / uploading ───────────────────────
-.previewWrap {
-  display: flex;
-  flex-direction: column;
-  animation: fadeSlide 0.18s ease;
-}
-
-.previewList {
-  max-height: 240px;
-  overflow-y: auto;
-  padding: 8px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  @include m.scrollbar;
-}
-
-// Browsed file card
-.fileCard {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 11px;
-  background: var(--bg2);
-  border: 1px solid var(--bdr);
-  border-radius: var(--rxl);
-  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
-  position: relative;
-  overflow: hidden;
-
-  // Subtle shimmer background
-  &::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: radial-gradient(ellipse at 0% 50%, rgba(139, 92, 246, 0.04), transparent 70%);
-    pointer-events: none;
-  }
-
-  // Left accent bar
-  &::after {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 8px;
-    bottom: 8px;
-    width: 3px;
-    border-radius: 0 3px 3px 0;
-    background: var(--bdr2);
-    transition: background 0.2s;
-  }
-
-  &.uploading {
-    border-color: rgba(139, 92, 246, 0.35);
-    background: rgba(139, 92, 246, 0.05);
-    box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.12) inset;
-
-    &::after {
-      background: linear-gradient(180deg, var(--blue), #a78bfa);
-    }
-
-    &::before {
-      background: radial-gradient(ellipse at 0% 50%, rgba(139, 92, 246, 0.08), transparent 70%);
-    }
-  }
-
-  &.success {
-    border-color: var(--green-bdr);
-    background: var(--green-dim);
-
-    &::after {
-      background: var(--green);
-    }
-
-    &::before {
-      background: radial-gradient(ellipse at 0% 50%, rgba(52, 211, 153, 0.08), transparent 70%);
-    }
-  }
-
-  &.failed {
-    border-color: var(--red-bdr);
-    background: var(--red-dim);
-
-    &::after {
-      background: var(--red);
-    }
-
-    &::before {
-      background: radial-gradient(ellipse at 0% 50%, rgba(239, 68, 68, 0.08), transparent 70%);
-    }
-  }
-}
-
-// Extension badge (shared between browsed + uploaded cards)
-.extBadge {
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 800;
-  @include m.mono;
-  flex-shrink: 0;
-  letter-spacing: 0.03em;
-  position: relative;
-  z-index: 1;
-
-  &.vtt {
-    background: linear-gradient(135deg, rgba(91, 164, 239, 0.18) 0%, rgba(139, 92, 246, 0.14) 100%);
-    color: var(--blue);
-    border: 1px solid rgba(91, 164, 239, 0.3);
-    box-shadow: 0 1px 4px rgba(91, 164, 239, 0.12);
-  }
-
-  &.srt {
-    background: linear-gradient(135deg, rgba(52, 211, 153, 0.18) 0%, rgba(56, 196, 186, 0.14) 100%);
-    color: var(--green);
-    border: 1px solid rgba(52, 211, 153, 0.3);
-    box-shadow: 0 1px 4px rgba(52, 211, 153, 0.12);
-  }
-}
-
-.fileInfo {
-  flex: 1;
-  min-width: 0;
-}
-
-.fileNameRow {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-}
-
-.fileName {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--t0);
-  @include m.truncate;
-  margin-bottom: 1px;
-  flex: 1;
-  min-width: 0;
-}
-
-.fileId {
-  font-size: 10px;
-  color: var(--t2);
-  @include m.mono;
-  flex-shrink: 0;
-  opacity: 0.65;
-}
-
-// ── File ID badge (shown before ext badge in card) ──
-.fileIdBadge {
-  font-size: 10px;
-  font-weight: 700;
-  font-family: var(--font-mono);
-  color: #a78bfa;
-  background: rgba(167, 139, 250, 0.12);
-  border: 1px solid rgba(167, 139, 250, 0.3);
-  border-radius: 4px;
-  padding: 1px 5px;
-  flex-shrink: 0;
-  white-space: nowrap;
-  letter-spacing: 0.02em;
-}
-
-.fileMeta {
-  font-size: 12px;
-  color: var(--t2);
-  @include m.mono;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 2px;
-  flex-wrap: wrap;
-}
-
-.fileSizeChip {
-  font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 99px;
-  background: var(--bg3);
-  border: 1px solid var(--bdr);
-  color: var(--t2);
-}
-
-.fileStatusText {
-  font-size: 11px;
-  color: var(--t2);
-  opacity: 0.7;
-}
-
-.fileStatusTextSuccess {
-  font-size: 11px;
-  color: var(--green);
-  font-weight: 600;
-}
-
-.fileError {
-  color: var(--red);
-}
-
-// Status icon (upload progress)
-.statusIc {
-  width: 18px;
-  height: 18px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  svg {
-    width: 15px;
-    height: 15px;
-  }
-
-  &.pending {
-    color: var(--t2);
-  }
-
-  &.uploading {
-    color: var(--blue);
-    animation: spin 0.9s linear infinite;
-  }
-
-  &.success {
-    color: var(--green);
-  }
-
-  &.failed {
-    color: var(--red);
-  }
-}
-
-.removeBtn {
-  width: 22px;
-  height: 22px;
-  border-radius: 5px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  padding: 0;
-  transition: all 0.12s;
-
-  svg {
-    width: 10px;
-    height: 10px;
-  }
-
-  &:hover {
-    background: var(--red-dim);
-    border-color: var(--red-bdr);
-    color: var(--red);
-  }
-}
-
-// Action bar (Upload / Cancel)
-.step1Footer {
-  flex-shrink: 0;
-  display: flex;
-  gap: 7px;
-  padding: 12px 14px;
-  border-top: 1px solid var(--bdr);
-  background: var(--bg1);
-}
-
-.step1FooterBtn {
-  flex: 1;
-}
-
-// Upload progress bar
-.uploadSummary {
-  width: 100%;
-}
-
-.uploadProgressBar {
-  height: 3px;
-  background: var(--bg3);
-  border-radius: 99px;
-  overflow: hidden;
-  margin-bottom: 6px;
-}
-
-.uploadProgressFill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--blue), #a78bfa);
-  border-radius: 99px;
-  transition: width 0.4s ease;
-}
-
-.uploadProgressLabel {
-  font-size: 12px;
-  color: var(--t2);
-  @include m.mono;
-}
-
-.failCount {
-  color: var(--red);
-}
-
-// ══════════════════════════════════════
-// SECTION 2 — Uploaded files list
-// ══════════════════════════════════════
-.section2 {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--bg0);
-}
-
-// Section 2 header — stacked: title row + action row/grid below
-.section2Header {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 0;
-  border-bottom: none;
-  background: var(--bg1);
-  flex-shrink: 0;
-  position: relative;
-}
-
-// Title row — checkbox + title + optional search icon
-.section2TitleRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px 8px;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.section2Title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--t2);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  @include m.mono;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.filesCount {
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--blue);
-  background: var(--blue-dim);
-  border: 1px solid var(--blue-bdr);
-  padding: 1px 6px;
-  border-radius: 99px;
-}
-
-// Cross-page selection total — shown next to filesCount while in
-// select/delete/export mode so it's clear selections persist across pages.
-.selectedTotalHint {
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--green);
-  background: var(--green-dim);
-  border: 1px solid var(--green-bdr);
-  padding: 1px 6px;
-  border-radius: 99px;
-  margin-left: 4px;
-}
-
-
-
-// ── Delete icon button (used inside mode-bar) ─────────────────
-.deleteIconBtn {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  flex-shrink: 0;
-  transition: all 0.15s;
-
-  svg {
-    width: 14px;
-    height: 14px;
-  }
-
-  &:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.1);
-    border-color: rgba(239, 68, 68, 0.35);
-    color: #ef4444;
-  }
-
-  &:disabled {
-    opacity: 0.3;
-    cursor: default;
-  }
-}
-
-// Confirm-delete state — always red, solid
-.deleteIconBtnConfirm {
-  border-color: rgba(239, 68, 68, 0.45);
-  background: rgba(239, 68, 68, 0.12);
-  color: #ef4444;
-
-  &:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.22);
-    border-color: rgba(239, 68, 68, 0.7);
-    box-shadow: 0 0 8px rgba(239, 68, 68, 0.25);
-  }
-}
-
-.deleteIconBtnDisabled {
-  opacity: 0.4 !important;
-  cursor: default !important;
-}
-
-// ── Export icon button (used inside mode-bar) ─────────────────
-.exportIconBtn {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  flex-shrink: 0;
-  transition: all 0.15s;
-
-  svg {
-    width: 14px;
-    height: 14px;
-  }
-
-  &:hover:not(:disabled) {
-    background: rgba(78, 200, 122, 0.10);
-    border-color: rgba(78, 200, 122, 0.35);
-    color: var(--green);
-  }
-
-  &:disabled {
-    opacity: 0.3;
-    cursor: default;
-  }
-}
-
-// Confirm-export state — always green, solid
-.exportIconBtnConfirm {
-  border-color: rgba(78, 200, 122, 0.45);
-  background: rgba(78, 200, 122, 0.10);
-  color: var(--green);
-
-  &:hover:not(:disabled) {
-    background: rgba(78, 200, 122, 0.20);
-    border-color: rgba(78, 200, 122, 0.70);
-    box-shadow: 0 0 8px rgba(78, 200, 122, 0.22);
-  }
-}
-
-.exportIconBtnDisabled {
-  opacity: 0.4 !important;
-  cursor: default !important;
-}
-
-.miniSpinner {
-  width: 12px;
-  height: 12px;
-  border: 1.5px solid rgba(239, 68, 68, 0.3);
-  border-top-color: #ef4444;
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  flex-shrink: 0;
-}
-
-.miniSpinnerGreen {
-  width: 12px;
-  height: 12px;
-  border: 1.5px solid rgba(78, 200, 122, 0.3);
-  border-top-color: #4ec87a;
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  flex-shrink: 0;
-}
-
-
-// ── Cancel icon button (used inside mode-bar) ─────────────────
-.cancelIconBtn {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  border: 1px solid rgba(239, 68, 68, 0.35);
-  background: rgba(239, 68, 68, 0.08);
-  color: #ef4444;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  flex-shrink: 0;
-  transition: all 0.15s;
-
-  svg {
-    width: 13px;
-    height: 13px;
-  }
-
-  &:hover {
-    background: rgba(239, 68, 68, 0.16);
-    border-color: rgba(239, 68, 68, 0.6);
-    box-shadow: 0 0 6px rgba(239, 68, 68, 0.2);
-  }
-}
-
-// Cards get pointer cursor only when in selection mode
-.uploadedCardWrapSelectable {
-  cursor: pointer;
-}
-
-// Date range filter — sits above section2Header
-.filterSortRow {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 10px 12px;
-  background: var(--bg1);
-  flex-shrink: 0;
-  position: relative;
-
-  &::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-        rgba(139, 92, 246, 0.0) 0%,
-        rgba(139, 92, 246, 0.6) 20%,
-        rgba(56, 196, 186, 0.7) 50%,
-        rgba(240, 160, 48, 0.6) 80%,
-        rgba(240, 160, 48, 0.0) 100%);
-    pointer-events: none;
-  }
-}
-
-// Line 1 — date filter on the left, sort chip on the right
-.dateSortLine {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
-  width: 100%;
-}
-
-.sortHeader {
-  margin-left: auto;
-}
-
-// Clear horizontal separator between line 1 (date/sort) and line 2 (actions)
-.filterSortHDivider {
-  height: 1px;
-  width: 100%;
-  background: var(--bdr);
-  flex-shrink: 0;
-}
-
-// Line 2 — action toolbar, full width
-.actionsGrid {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  width: 100%;
-}
-
-.actionsTiles {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
-  gap: 6px;
-}
-
-.actionsLabel {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--t2);
-  font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  white-space: nowrap;
-  flex-shrink: 0;
-  margin-right: 2px;
-
-  svg {
-    width: 11px;
-    height: 11px;
-    opacity: 0.6;
-  }
-}
-
-.actionTile {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  min-width: 0;
-  height: 28px;
-  gap: 5px;
-  padding: 0 9px;
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  background: var(--bg3);
-  color: var(--t2);
-  font-size: 12px;
-  font-weight: 500;
-  font-family: var(--font-ui);
-  letter-spacing: 0.01em;
-  cursor: pointer;
-  transition: all 0.13s;
-  user-select: none;
-
-  svg {
-    width: 12px;
-    height: 12px;
-    flex-shrink: 0;
-  }
-
-  &:active:not(:disabled) {
-    transform: scale(0.97);
-  }
-
-  &:disabled {
-    opacity: 0.3;
-    cursor: not-allowed;
-  }
-}
-
-.actionTileLabel {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.actionTileDictionary {
-  background: var(--violet-dim);
-  color: var(--violet);
-  border-color: var(--violet-dim);
-
-  &:hover:not(:disabled) { background: var(--violet-dim); border-color: var(--violet); }
-}
-
-.actionTileTemplate {
-  background: var(--teal-dim);
-  color: var(--teal);
-  border-color: var(--teal-bdr);
-
-  &:hover:not(:disabled) { background: var(--teal-dim); border-color: var(--teal); }
-}
-
-.actionTileSearch {
-  background: var(--amber-dim);
-  color: var(--amber);
-  border-color: var(--amber-bdr);
-
-  &:hover:not(:disabled) { background: var(--amber-dim); border-color: var(--amber); }
-}
-
-.actionTileExport {
-  background: var(--green-dim);
-  color: var(--green);
-  border-color: var(--green-bdr);
-
-  &:hover:not(:disabled) { background: var(--green-dim); border-color: var(--green); }
-}
-
-.actionTileDelete {
-  background: var(--red-dim);
-  color: var(--red);
-  border-color: var(--red-bdr);
-
-  &:hover:not(:disabled) { background: var(--red-dim); border-color: var(--red); }
-}
-
-.actionTileActive {
-  outline: 2px solid var(--blue-bdr);
-  outline-offset: -1px;
-}
-
-// Single-line, icon-led date filter — same 32px height as the rest of the row
-.dateFilter {
-  display: flex;
-  align-items: center;
-  height: 32px;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.dateIcon {
-  width: 14px;
-  height: 14px;
-  color: var(--t2);
-  flex-shrink: 0;
-}
-
-.dateField {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  width: 118px;
-  flex-shrink: 0;
-}
-
-.dateLabel {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--t2);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  @include m.mono;
-}
-
-.dateInput {
-  width: 115px;
-  height: 32px;
-  padding: 0 8px;
-  background: var(--bg2);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 12.5px;
-  outline: none;
-  appearance: none;
-  transition: border-color 0.12s;
-  cursor: pointer;
-
-  &:focus {
-    border-color: var(--blue);
-    box-shadow: 0 0 0 2px var(--blue-dim);
-  }
-
-  &::-webkit-calendar-picker-indicator {
-    opacity: 0.7;
-    cursor: pointer;
-    filter: var(--date-icon-filter);
-  }
-}
-
-.dateSep {
-  font-size: 12px;
-  color: var(--t2);
-  flex-shrink: 0;
-}
-
-// ── Status filter ──────────────────────────────
-.statusFilterWrap {
-  display: flex;
-  align-items: center;
-  height: 32px;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.statusFilterSelect {
-  height: 32px;
-  padding: 0 8px;
-  background: var(--bg2);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 12.5px;
-  outline: none;
-  cursor: pointer;
-  transition: border-color 0.12s;
-
-  &:focus { border-color: var(--blue); }
-  &:disabled { opacity: 0.5; cursor: default; }
-}
-
-.applyBtn {
-  height: 32px;
-  padding: 0 12px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t1);
-  font-family: var(--font-ui);
-  font-size: 12.5px;
-  font-weight: 500;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: all 0.12s;
-
-  &:hover:not(:disabled) {
-    background: var(--bg3);
-    border-color: var(--bdr3);
-  }
-
-  &:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-}
-
-// Uploaded file cards
-.uploadedBody {
-  flex: 1;
-  overflow-y: auto;
-  padding: 10px;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(215px, 1fr));
-  grid-auto-rows: 250px;
-  align-content: start;
-  gap: 12px;
-  @include m.scrollbar;
-}
-
-// listState/errorState (loading, error, empty) span every column so they
-// don't get squeezed into a single grid cell
-.listState {
-  grid-column: 1 / -1;
-}
-
-// ── Square file cards ─────────────────────────
-.fcard {
-  position: relative;
-  height: 100%;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  padding: 18px 14px 36px;
-  border-radius: var(--rl);
-  border: 1px solid var(--bdr);
-  background: var(--bg1);
-  cursor: default;
-  text-align: center;
-  overflow: hidden;
-  transition: all 0.12s;
-  user-select: none;
-}
-
-.fcardStatic {
-  cursor: default;
-}
-
-.fcard:not(.fcardStatic) {
-  cursor: pointer;
-
-  &:hover {
-    background: var(--bg2);
-    border-color: var(--bdr3);
-  }
-}
-
-.fcardActive,
-.fcardActiveView {
-  background: rgba(91, 164, 239, 0.06);
-  border-color: var(--blue-bdr);
-}
-
-.fcardActiveDelete {
-  background: var(--red-dim);
-  border-color: var(--red-bdr);
-}
-
-.fcardActiveExport {
-  background: var(--green-dim);
-  border-color: var(--green-bdr);
-}
-
-.fcardCheck {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  z-index: 1;
-}
-
-// Dictionary / prompt-template association icons — mirrors the checkbox's
-// corner, opposite side, and only renders when at least one is linked.
-.fcardLinks {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: 1;
-  display: flex;
-  gap: 4px;
-}
-
-.fcardLinkIcon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 5px;
-  background: var(--violet-dim);
-  color: var(--violet);
-
-  svg { width: 11px; height: 11px; }
-}
-
-.fcardIcon {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 700;
-  flex-shrink: 0;
-  margin-bottom: 12px;
-
-  &.vtt { background: var(--blue-dim); color: var(--blue); }
-  &.srt { background: var(--green-dim); color: var(--green); }
-}
-
-.fcardName {
-  width: 100%;
-  max-width: 100%;
-  min-height: 34px;
-  margin-bottom: 6px;
-  font-size: 12.5px;
-  font-weight: 500;
-  color: var(--t0);
-  line-height: 1.3;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  word-break: break-word;
-  flex-shrink: 0;
-}
-
-.fcardMeta {
-  font-size: 9.5px;
-  color: var(--t2);
-  flex-shrink: 0;
-  margin-bottom: auto;
-  padding-bottom: 14px;
-  @include m.mono;
-}
-
-// Compact S·K·Q·A·T checklist — which content prompts are customized
-// for this file (Summary, Keywords, Questions, short Answer, True/false).
-.fcardPrompts {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  flex-shrink: 0;
-  cursor: default;
-}
-
-.fcardPromptDot {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  border: none;
-  background: var(--bg2);
-  color: var(--t2);
-  cursor: pointer;
-  transition: all 0.12s;
-
-  svg { width: 12px; height: 12px; }
-
-  &:hover {
-    background: var(--bg3);
-    color: var(--t0);
-  }
-}
-
-.fcardPromptDotSet {
-  background: var(--blue-dim);
-  color: var(--blue);
-
-  &:hover {
-    background: var(--blue-dim);
-    color: var(--blue);
-    opacity: 0.8;
-  }
-}
-
-.fcardBadgeDot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
-  animation: fcardPulse 1.4s ease-in-out infinite;
-}
-
-@keyframes fcardPulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-}
-
-.fcardBadge {
-  position: absolute;
-  bottom: 11px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 9px;
-  padding: 2px 7px;
-  max-width: calc(100% - 16px);
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-// ── Uploaded card wrap — carries the static green gradient border ──
-// ── Uploaded file card — mirrors HistoryPanel .hitm ──────────────
-.hitm {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 9px;
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  transition: all 0.12s;
-  margin-bottom: 3px;
-  user-select: none;
-
-  &:hover {
-    background: var(--bg2);
-    border-color: var(--bdr);
-  }
-
-  &.active {
-    background: rgba(91, 164, 239, 0.06);
-    border-color: var(--blue-bdr);
-
-    &::before {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 6px;
-      bottom: 6px;
-      width: 3px;
-      border-radius: 0 3px 3px 0;
-      background: linear-gradient(180deg, var(--blue), #a78bfa);
-    }
-  }
-
-  // Normal-mode file view highlight — distinct purple/amber accent
-  &.activeView {
-    background: rgba(167, 139, 250, 0.06);
-    border-color: rgba(167, 139, 250, 0.3);
-
-    &::before {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 6px;
-      bottom: 6px;
-      width: 3px;
-      border-radius: 0 3px 3px 0;
-      background: linear-gradient(180deg, #a78bfa, var(--amber));
-    }
-  }
-
-  // Delete mode selected — red accent
-  &.activeDelete {
-    background: rgba(239, 68, 68, 0.05);
-    border-color: rgba(239, 68, 68, 0.3);
-
-    &::before {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 6px;
-      bottom: 6px;
-      width: 3px;
-      border-radius: 0 3px 3px 0;
-      background: linear-gradient(180deg, #ef4444, #f97316);
-    }
-  }
-
-  // Export mode selected — green accent
-  &.activeExport {
-    background: rgba(78, 200, 122, 0.05);
-    border-color: rgba(78, 200, 122, 0.28);
-
-    &::before {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 6px;
-      bottom: 6px;
-      width: 3px;
-      border-radius: 0 3px 3px 0;
-      background: linear-gradient(180deg, #4ec87a, #38c4ba);
-    }
-  }
-}
-
-.hitmSelectable {
-  cursor: pointer;
-}
-
-// ── Ext icon ──
-.ficon {
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 700;
-  @include m.mono;
-  flex-shrink: 0;
-
-  &.vtt {
-    background: var(--blue-dim);
-    color: var(--blue);
-  }
-
-  &.srt {
-    background: var(--green-dim);
-    color: var(--green);
-  }
-}
-
-// ── File info ──
-.hi {
-  flex: 1;
-  min-width: 0;
-}
-
-.hn {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--t0);
-  @include m.truncate;
-}
-
-.hm {
-  font-size: 12px;
-  color: var(--t2);
-  margin-top: 2px;
-  @include m.mono;
-}
-
-// Empty / loading / error state
-.listState {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 32px 16px;
-  font-size: 13px;
-  color: var(--t2);
-  @include m.mono;
-  text-align: center;
-
-  svg {
-    width: 18px;
-    height: 18px;
-    opacity: 0.5;
-  }
-}
-
-.errorState {
-  color: var(--red);
-
-  svg {
-    opacity: 0.7;
-  }
-}
-
-.spinner {
-  width: 18px;
-  height: 18px;
-  border: 2px solid var(--bdr2);
-  border-top-color: var(--blue);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-// ── Search icon button ──────────────────────────
-.searchIconBtn {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  flex-shrink: 0;
-  transition: all 0.15s;
-
-  svg {
-    width: 13px;
-    height: 13px;
-  }
-
-  &:hover {
-    background: var(--bg3);
-    border-color: var(--bdr3);
-    color: var(--t0);
-  }
-}
-
-.searchIconBtnActive {
-  border-color: var(--blue-bdr);
-  background: var(--blue-dim);
-  color: var(--blue);
-
-  &:hover {
-    background: var(--blue-dim);
-    border-color: var(--blue);
-    color: var(--blue);
-  }
-}
-
-// ── Search bar (slides in below sortHeader) ──────
-.searchBar {
-  display: grid;
-  grid-template-rows: 0fr;
-  opacity: 0;
-  transition:
-    grid-template-rows 0.22s cubic-bezier(0.4, 0, 0.2, 1),
-    opacity 0.18s ease;
-  overflow: hidden;
-  padding: 0 10px;
-}
-
-.searchBarOpen {
-  grid-template-rows: 1fr;
-  opacity: 1;
-  padding: 6px 10px 4px;
-}
-
-// Flex row: input box + close button
-.searchBarRow {
-  min-height: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.searchInner {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--bg2);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  padding: 0 8px;
-  transition: border-color 0.15s, box-shadow 0.15s;
-
-  &:focus-within {
-    border-color: var(--blue);
-    box-shadow: 0 0 0 2px var(--blue-dim);
-  }
-}
-
-.searchBarIcon {
-  width: 12px;
-  height: 12px;
-  flex-shrink: 0;
-  color: var(--t2);
-  opacity: 0.6;
-}
-
-.searchInput {
-  flex: 1;
-  min-width: 0;
-  padding: 6px 0;
-  background: transparent;
-  border: none;
-  outline: none;
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 13px;
-
-  &::placeholder {
-    color: var(--t2);
-    opacity: 0.55;
-  }
-}
-
-.searchCloseBtn {
-  width: 20px;
-  height: 20px;
-  border-radius: 5px;
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  background: rgba(239, 68, 68, 0.08);
-  color: #ef4444;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  flex-shrink: 0;
-  transition: all 0.12s;
-
-  svg {
-    width: 8px;
-    height: 8px;
-  }
-
-  &:hover {
-    background: rgba(239, 68, 68, 0.18);
-    border-color: rgba(239, 68, 68, 0.6);
-    box-shadow: 0 0 6px rgba(239, 68, 68, 0.2);
-  }
-}
-
-.searchCount {
-  font-size: 11px;
-  color: var(--t2);
-  font-family: var(--font-mono);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 99px;
-  font-weight: 500;
-  border: 1px solid transparent;
-  white-space: nowrap;
-  @include m.mono;
-}
-
-.bReady {
-  background: var(--green-dim);
-  color: var(--green);
-  border-color: var(--green-bdr);
-}
-
-// Inferenced — green (file has completed inference)
-.bInferred {
-  background: var(--green-dim);
-  color: var(--green);
-  border-color: var(--green-bdr);
-}
-
-// Not Inferenced — amber (file uploaded but not yet processed)
-.bNotInferred {
-  background: rgba(240, 160, 48, 0.1);
-  color: var(--amber);
-  border-color: rgba(240, 160, 48, 0.3);
-}
-
-// Running — blue, with the pulsing dot from fcardBadgeDot
-.bRunning {
-  background: var(--blue-dim);
-  color: var(--blue);
-  border-color: var(--blue-bdr);
-}
-
-// Queued — amber, waiting its turn in the batch
-.bQueued {
-  background: rgba(240, 160, 48, 0.1);
-  color: var(--amber);
-  border-color: rgba(240, 160, 48, 0.3);
-}
-
-// Error — red, inference failed for this file
-.bError {
-  background: var(--red-dim);
-  color: var(--red);
-  border-color: var(--red-bdr);
-}
-
-// Waiting — neutral gray, distinct from "not inferenced" (amber)
-.bWaiting {
-  background: var(--bg2);
-  color: var(--t2);
-  border-color: var(--bdr2);
-}
-
-.bSelected {
-  background: var(--blue-dim);
-  color: var(--blue);
-  border-color: var(--blue-bdr);
-  font-weight: 600;
-}
-
-.bDelete {
-  background: rgba(239, 68, 68, 0.1);
-  color: #ef4444;
-  border-color: rgba(239, 68, 68, 0.3);
-  font-weight: 600;
-}
-
-.bExport {
-  background: var(--green-dim);
-  color: var(--green);
-  border-color: var(--green-bdr);
-  font-weight: 600;
-  gap: 4px;
-}
-
-.bInfo {
-  background: var(--blue-dim);
-  color: var(--blue);
-  border-color: var(--blue-bdr);
-}
-
-// ── Buttons ───────────────────────────────────
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  padding: 6px 13px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t1);
-  font-family: var(--font-ui);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.12s;
-  white-space: nowrap;
-  user-select: none;
-
-  svg {
-    width: 11px;
-    height: 11px;
-  }
-
-  &:hover {
-    background: var(--bg3);
-    color: var(--t0);
-    border-color: var(--bdr3);
-  }
-
-  &:disabled {
-    opacity: 0.45;
-    cursor: default;
-  }
-}
-
-.btnP {
-  background: var(--blue);
-  color: #fff;
-  border-color: var(--blue);
-  font-weight: 600;
-
-  &:hover {
-    background: #a78bfa;
-    border-color: #a78bfa;
-    color: #fff;
-  }
-}
-
-.btnSm {
-  padding: 4px 10px;
-  font-size: 13px;
-}
-
-.btnFull {
-  flex: 1;
-}
-
-.btnDanger {
-  color: var(--red);
-  border-color: var(--red-bdr);
-
-  &:hover {
-    background: var(--red-dim);
-    border-color: var(--red);
-  }
-
-  &:disabled {
-    color: var(--t2);
-    border-color: var(--bdr2);
-    background: transparent;
-    opacity: 0.4;
-    cursor: not-allowed;
-    pointer-events: none;
-
-    &:hover {
-      background: transparent;
-      border-color: var(--bdr2);
-    }
-  }
-}
-
-// ── Animations ───────────────────────────────
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes fadeSlide {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-// ── Checkbox component ──────────────────────────
-.cb {
-  width: 14px;
-  height: 14px;
-  border: 1.5px solid var(--cb-bdr);
-  border-radius: 4px;
-  flex-shrink: 0;
-  cursor: pointer;
-  transition: all 0.12s;
-  position: relative;
-  outline: none;
-
-  &:hover:not(.cbDisabled) {
-    border-color: var(--blue);
-  }
-
-  &:focus-visible {
-    box-shadow: 0 0 0 2px var(--blue-dim);
-  }
-
-  &.cbChecked {
-    background: var(--blue);
-    border-color: var(--blue);
-
-    &::after {
-      content: '';
-      position: absolute;
-      left: 2px;
-      top: 5px;
-      width: 7px;
-      height: 4px;
-      border-left: 1.5px solid #fff;
-      border-bottom: 1.5px solid #fff;
-      transform: rotate(-45deg) translate(0, -1px);
-    }
-  }
-
-  &.cbIndet {
-    background: var(--blue);
-    border-color: var(--blue);
-
-    &::after {
-      content: '';
-      position: absolute;
-      left: 2px;
-      top: 5px;
-      width: 8px;
-      height: 1.5px;
-      background: #fff;
-    }
-  }
-
-  &.cbDisabled {
-    opacity: 0.35;
-    cursor: not-allowed;
-    pointer-events: none;
-  }
-}
-
-// Grouped action buttons — used inside mode-bar (title row)
-.headerActions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: auto;
-  flex-shrink: 0;
-}
-
-// ── Mode action row: search LEFT, confirm+cancel RIGHT ────────
-.modeActionsRow {
-  display: flex;
-  align-items: center;
-  box-sizing: border-box;
-  width: 100%;
-  padding: 0 10px 8px;
-  min-width: 0;
-}
-
-.modeActionsRight {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: auto;
-  flex-shrink: 0;
-}
-
-.modeActionsLeft {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  flex-wrap: wrap;
-}
-
-// Base tile — icon + label side by side
-.modeTile {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 9px;
-  border-radius: 6px;
-  border: 1px solid var(--bdr);
-  background: var(--bg3);
-  color: var(--t2);
-  font-size: 11px;
-  font-weight: 500;
-  font-family: var(--font-ui);
-  cursor: pointer;
-  transition: all 0.13s;
-  user-select: none;
-  white-space: nowrap;
-
-  svg {
-    width: 12px;
-    height: 12px;
-    flex-shrink: 0;
-  }
-
-  &:active:not(:disabled) {
-    transform: scale(0.97);
-  }
-
-  &:disabled {
-    opacity: 0.3;
-    cursor: not-allowed;
-  }
-}
-
-// Search tile — amber tint (left side)
-.modeTileSearch {
-  color: var(--amber);
-  border-color: rgba(240, 160, 48, 0.25);
-  background: rgba(240, 160, 48, 0.08);
-
-  &:hover {
-    background: rgba(240, 160, 48, 0.16);
-    border-color: rgba(240, 160, 48, 0.45);
-  }
-}
-
-.modeTileSearchActive {
-  background: rgba(240, 160, 48, 0.15);
-  border-color: rgba(240, 160, 48, 0.45);
-}
-
-// Confirm export — green
-.modeTileConfirmExport {
-  color: var(--green);
-  border-color: var(--green-bdr);
-  background: var(--green-dim);
-
-  &:hover:not(:disabled) {
-    background: var(--green);
-    border-color: var(--green);
-    color: #fff;
-  }
-}
-
-// Confirm delete — red
-.modeTileConfirmDelete {
-  color: #ef4444;
-  border-color: rgba(239, 68, 68, 0.25);
-  background: rgba(239, 68, 68, 0.08);
-
-  &:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.18);
-    border-color: rgba(239, 68, 68, 0.5);
-  }
-}
-
-// Cancel
-.modeTileCancel {
-  color: var(--t2);
-  border-color: var(--bdr2);
-  background: transparent;
-
-  &:hover {
-    background: var(--bg2);
-    border-color: var(--bdr3);
-    color: var(--t0);
-  }
-}
-
-// Disabled state
-.modeTileDisabled {
-  opacity: 0.35 !important;
-  cursor: not-allowed !important;
-}
-
-// "Export all files" trigger — mirrors modeTileDeleteAll but green/non-destructive
-.modeTileExportAll {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 9px;
-  border-radius: 6px;
-  border: 1px solid var(--green-bdr);
-  background: var(--green-dim);
-  color: var(--green);
-  font-size: 11px;
-  font-weight: 600;
-  font-family: var(--font-ui);
-  cursor: pointer;
-  transition: all 0.13s;
-  user-select: none;
-  white-space: nowrap;
-
-  svg {
-    width: 12px;
-    height: 12px;
-    flex-shrink: 0;
-  }
-
-  &:hover:not(:disabled) {
-    background: var(--green);
-    border-color: var(--green);
-    color: #fff;
-  }
-
-  &:disabled {
-    opacity: 0.35;
-    cursor: not-allowed;
-  }
-}
-
-.modeActionsError {
-  font-size: 11px;
-  color: #ef4444;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 160px;
-}
-
-// "Delete all files" trigger — deliberately louder/more solid than the
-// per-row delete tile since it's an account-wide destructive action.
-.modeTileDeleteAll {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 9px;
-  border-radius: 6px;
-  border: 1px solid rgba(239, 68, 68, 0.5);
-  background: rgba(239, 68, 68, 0.14);
-  color: #ef4444;
-  font-size: 11px;
-  font-weight: 600;
-  font-family: var(--font-ui);
-  cursor: pointer;
-  transition: all 0.13s;
-  user-select: none;
-  white-space: nowrap;
-
-  svg {
-    width: 12px;
-    height: 12px;
-    flex-shrink: 0;
-  }
-
-  &:hover:not(:disabled) {
-    background: #ef4444;
-    border-color: #ef4444;
-    color: #fff;
-  }
-
-  &:disabled {
-    opacity: 0.3;
-    cursor: not-allowed;
-  }
-}
-
-// ── Delete-ALL confirmation (danger zone) ───────────────────────────
-.dangerOverlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(2px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 200;
-  padding: 16px;
-}
-
-.dangerModal {
-  width: 100%;
-  max-width: 360px;
-  background: var(--bg1);
-  border: 1px solid rgba(239, 68, 68, 0.4);
-  border-radius: 10px;
-  padding: 20px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  gap: 4px;
-}
-
-.dangerIcon {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background: rgba(239, 68, 68, 0.14);
-  color: #ef4444;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 6px;
-
-  svg {
-    width: 22px;
-    height: 22px;
-  }
-}
-
-.dangerTitle {
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--t0);
-  font-family: var(--font-ui);
-}
-
-.dangerBody {
-  font-size: 13px;
-  color: var(--t2);
-  line-height: 1.5;
-  margin-bottom: 8px;
-}
-
-.dangerLabel {
-  align-self: flex-start;
-  font-size: 12px;
-  color: var(--t1);
-  margin-top: 4px;
-}
-
-.dangerInput {
-  width: 100%;
-  padding: 7px 10px;
-  background: var(--bg0);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 13px;
-  outline: none;
-  margin-top: 4px;
-  margin-bottom: 6px;
-  text-align: center;
-  transition: border-color 0.12s;
-
-  &:focus {
-    border-color: #ef4444;
-    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.15);
-  }
-
-  &:disabled {
-    opacity: 0.6;
-  }
-}
-
-.dangerError {
-  font-size: 12px;
-  color: #ef4444;
-  margin-bottom: 6px;
-}
-
-.dangerActions {
-  display: flex;
-  gap: 8px;
-  width: 100%;
-  margin-top: 6px;
-}
-
-// .uploadedCardSel replaced by .hitm.active
-
-// Uploaded card disabled (batch running)
-.uploadedCardDisabled {
-  cursor: default !important;
-  opacity: 0.65;
-  pointer-events: none;
-}
-
-// ── Sort header ─────────────────────────────────────
-.sortHeader {
-  display: flex;
-  align-items: center;
-  height: 32px;
-  background: var(--bg2);
-  border: 1px solid var(--bdr);
-  border-radius: var(--r);
-  padding: 0 6px 0 10px;
-  gap: 6px;
-  flex-shrink: 0;
-  overflow: hidden;
-}
-
-.sortHeaderLabel {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--t2);
-  font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  white-space: nowrap;
-  flex-shrink: 0;
-
-  svg {
-    width: 11px;
-    height: 11px;
-    opacity: 0.6;
-  }
-}
-
-.sortCols {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.sortCol {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 8px;
-  background: transparent;
-  border: none;
-  border-radius: 5px;
-  color: var(--t2);
-  font-size: 12px;
-  font-family: var(--font-mono);
-  cursor: pointer;
-  transition: all 0.12s;
-  white-space: nowrap;
-
-  svg {
-    width: 8px;
-    height: 10px;
-    flex-shrink: 0;
-    transition: transform 0.2s;
-  }
-
-  &:hover {
-    background: var(--bg3);
-    color: var(--t1);
-  }
-}
-
-.sortColActive {
-  background: var(--blue-dim);
-  color: var(--blue);
-  font-weight: 600;
-
-  &:hover {
-    background: var(--blue-dim);
-  }
-}
-
-.sortInactive {
-  opacity: 0.25;
-}
-
-.sortAsc {
-  transform: rotate(180deg);
-}
-
-// arrow up
-.sortDesc {
-  transform: rotate(0deg);
-}
-
-// arrow down (default path direction)
-// ── Small screen overrides (height < 1000px) ─────────────────
-@media (max-height: 999px) {
-
-  // Step-1 bar — tighter
-  .step1Bar {
-    padding: 7px 14px;
-  }
-
-  // Dropzone — much more compact
-  .dropzone {
-    padding: 10px 16px;
-    margin: 6px 10px;
-  }
-
-  .dzIc {
-    width: 28px;
-    height: 28px;
-    margin-bottom: 6px;
-
-    svg {
-      width: 14px;
-      height: 14px;
-    }
-  }
-
-  .dzTitle {
-    font-size: 12px;
-    margin-bottom: 2px;
-  }
-
-  .dzSub {
-    font-size: 11px;
-  }
-
-  .dzActions {
-    margin-top: 7px;
-    gap: 6px;
-  }
-
-  // Section2 title row
-  .section2TitleRow {
-    padding: 7px 14px 6px;
-  }
-
-  // Mode action row
-  .modeActionsRow {
-    padding: 0 8px 6px;
-  }
-
-  // Date filter — tighter
-  .dateFilter {
-    padding: 5px 10px 5px;
-    gap: 5px;
-  }
-
-  .dateInput {
-    padding: 3px 6px;
-    font-size: 12px;
-  }
-
-  // Sort header — tighter
-  .sortHeader {
-    margin-bottom: 4px;
-  }
-
-  .sortCol {
-    padding: 4px 4px;
-    font-size: 11px;
-  }
-
-  .sortHeaderLabel {
-    padding: 4px 0;
-    padding-right: 6px;
-    font-size: 9px;
-  }
-
-  // File list — tighter items, ensure it can grow
-  .uploadedBody {
-    padding: 4px 8px;
-    gap: 2px;
-  }
-
-  .hitm {
-    padding: 5px 8px;
-    margin-bottom: 1px;
-  }
-
-  .ficon {
-    width: 22px;
-    height: 22px;
-    font-size: 9px;
-  }
-
-  .hn {
-    font-size: 12px;
-  }
-
-  .hm {
-    font-size: 11px;
-    margin-top: 1px;
-  }
-
-  .badge {
-    font-size: 10px;
-    padding: 1px 6px;
-  }
-}
-
-// ── Pagination footer (bottom of the uploaded-files list) ──────────
-.paginationBar {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 10px;
-  border-top: 1px solid var(--bdr2);
-  background: var(--bg1);
-  flex-shrink: 0;
-}
-
-.paginationTopRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex-wrap: nowrap;
-  min-width: 0;
-}
-
-.pageSizeGroup {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.pageSizeLabel {
-  font-size: 11px;
-  color: var(--t2);
-  white-space: nowrap;
-}
-
-.pageSizeSelect {
-  padding: 3px 6px;
-  background: var(--bg0);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  outline: none;
-  cursor: pointer;
-  transition: border-color 0.12s;
-
-  &:focus {
-    border-color: var(--blue);
-    box-shadow: 0 0 0 2px var(--blue-dim);
-  }
-}
-
-// Page-number row sits to the right of the page-size selector. It never
-// wraps to its own line — if there isn't room for every number button,
-// this row scrolls horizontally within itself instead.
-.pageNav {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 2px;
-  flex-wrap: nowrap;
-  flex-shrink: 1;
-  min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-
-  &::-webkit-scrollbar {
-    display: none;
-  }
-}
-
-.pageNavBtn,
-.pageNumBtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 24px;
-  height: 24px;
-  padding: 0 6px;
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--t1);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.12s;
-  user-select: none;
-  flex-shrink: 0;
-
-  svg {
-    width: 11px;
-    height: 11px;
-  }
-
-  &:hover:not(:disabled) {
-    background: var(--bg3);
-    color: var(--t0);
-    border-color: var(--bdr3);
-  }
-
-  &:disabled {
-    opacity: 0.35;
-    cursor: default;
-  }
-}
-
-.pageNumBtnActive {
-  background: var(--blue-dim);
-  border-color: var(--blue-bdr);
-  color: var(--blue);
-  font-weight: 700;
-
-  &:hover:not(:disabled) {
-    background: var(--blue-dim);
-    color: var(--blue);
-  }
-}
-
-.pageEllipsis {
-  color: var(--t2);
-  font-size: 12px;
-  padding: 0 2px;
-  user-select: none;
-  flex-shrink: 0;
-}
-
-.pageInfo {
-  font-size: 11px;
-  color: var(--t2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: right;
-  @include m.mono;
-}
-
-@media (min-width: 1920px) {
-  .section1Title {
-    font-size: 14px;
-  }
-
-  .section2Title {
-    font-size: 14px;
-  }
-
-  .uploadHint {
-    font-size: 13px;
-  }
-
-  .uploadZoneText {
-    font-size: 14px;
-  }
-
-  .sortHeaderLabel {
-    font-size: 12px;
-  }
-
-  .sortBtn {
-    font-size: 13px;
-  }
-
-  .fileName {
-    font-size: 14px;
-  }
-
-  .fileMeta {
-    font-size: 12px;
-  }
-
-  .fileDate {
-    font-size: 12px;
-  }
-
-  .badge {
-    font-size: 13px;
-  }
-
-  .btn {
-    font-size: 13px;
-  }
-
-  .listState {
-    font-size: 14px;
-  }
-
-  .searchInput {
-    font-size: 14px;
-  }
-
-  .searchCount {
-    font-size: 12px;
-  }
-
-  .dateLabel {
-    font-size: 12px;
-  }
-
-  .dateInput {
-    font-size: 13px;
-  }
-
-  .emptyState {
-    font-size: 14px;
-  }
-}
-
-// ── Per-file prompt viewer popup ─────────────────
-.promptViewerModal {
-  width: 100%;
-  max-width: 480px;
-  max-height: 70vh;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg1);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--rl);
-  box-shadow: var(--shadow);
-  overflow: hidden;
-}
-
-.promptViewerHead {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--bdr);
-  flex-shrink: 0;
-}
-
-.promptViewerTitle {
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--t0);
-}
-
-.promptViewerFile {
-  margin-top: 2px;
-  font-size: 12px;
-  color: var(--t2);
-  @include m.truncate;
-}
-
-.promptViewerClose {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  flex-shrink: 0;
-  border-radius: 6px;
-  border: none;
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-
-  svg { width: 13px; height: 13px; }
-
-  &:hover {
-    background: var(--bg3);
-    color: var(--t0);
-  }
-}
-
-.promptViewerBody {
-  padding: 16px;
-  overflow-y: auto;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--t1);
-  white-space: pre-wrap;
-  word-break: break-word;
-  @include m.scrollbar;
-}
-
-.promptViewerEmpty {
-  color: var(--t2);
-  font-style: italic;
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // ═══════════════════════════════════════════════
 // pages/UploadInfer/FileSidebar.tsx
 // Content Analytics · Shared 400px file sidebar
@@ -4250,13 +1580,6 @@ const FileSidebar: React.FC<Props> = ({ mode, active, activeFileId = null, onFil
     }
   }, [page, pageSize, dateFrom, dateTo, sortBy, sortOrder, search, statusFilter]);
 
-  // Own API call, fired every time this tab becomes active — entirely
-  // separate from whatever the Upload tab is doing.
-  useEffect(() => {
-    if (active) fetchFiles({ page: 1 });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active]);
-
   const handleApply = useCallback(async () => {
     setApplying(true);
     await fetchFiles({ page: 1 });
@@ -4296,6 +1619,31 @@ const FileSidebar: React.FC<Props> = ({ mode, active, activeFileId = null, onFil
     return () => clearTimeout(handle);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchQuery]);
+
+  // Own API call, fired every time this tab becomes active — entirely
+  // separate from whatever the Upload tab is doing. When the tab goes
+  // inactive (navigated away from), clear the list and reset search/
+  // sort/filter/page back to defaults so a return visit shows a clean
+  // loading state and a genuinely fresh fetch, instead of the previous
+  // tab's stale results flashing before the new data arrives.
+  useEffect(() => {
+    if (active) {
+      fetchFiles({ page: 1 });
+    } else {
+      skipNextSearchEffect.current = true; // don't let the reset below trigger a second debounced fetch
+      setFiles([]);
+      setTotal(0);
+      setTotalPages(1);
+      setPage(1);
+      setSortBy('id');
+      setSortOrder('desc');
+      setSearch('');
+      setSearchQuery('');
+      setStatusFilter('');
+      setError(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
 
   const pageSelectedCount = files.filter(f => selectedServerIds.includes(f.id)).length;
   const allSelected = files.length > 0 && pageSelectedCount === files.length;
@@ -4362,6 +1710,7 @@ const FileSidebar: React.FC<Props> = ({ mode, active, activeFileId = null, onFil
         )}
         <span className={styles.headTitle}>{t('uploadInfer.workspace.filesTitle')}</span>
         {total > 0 && <span className={styles.headCount}>{total}</span>}
+        {loading && <span className={styles.headSpinner} aria-label="Loading" />}
         {mode === 'select' && selectedServerIds.length > 0 && (
           <span className={styles.headSelected}>
             {t('uploadInfer.filePanel.selectedTotal', { count: selectedServerIds.length, total })}
@@ -4418,7 +1767,10 @@ const FileSidebar: React.FC<Props> = ({ mode, active, activeFileId = null, onFil
           <div className={styles.empty}>{error}</div>
         )}
         {!error && loading && files.length === 0 && (
-          <div className={styles.empty}>{t('uploadInfer.workspace.loadingFiles')}</div>
+          <div className={styles.emptyLoading}>
+            <span className={styles.rowsSpinner} />
+            {t('uploadInfer.workspace.loadingFiles')}
+          </div>
         )}
         {!error && !loading && files.length === 0 && (
           <div className={styles.empty}>
@@ -4558,8 +1910,6 @@ const FileSidebar: React.FC<Props> = ({ mode, active, activeFileId = null, onFil
 };
 
 export default FileSidebar;
-
-
 
 
 
@@ -4731,6 +2081,28 @@ export default FileSidebar;
   animation: spin 0.7s linear infinite;
 }
 
+.headSpinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--bdr3);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+.rowsSpinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 2.5px solid var(--bdr3);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  margin-bottom: 8px;
+}
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
@@ -4807,6 +2179,16 @@ export default FileSidebar;
 
 .empty {
   padding: 20px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--t2);
+}
+
+.emptyLoading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 24px 12px;
   text-align: center;
   font-size: 12px;
   color: var(--t2);
@@ -5295,475 +2677,288 @@ export default FileSidebar;
 
 
 
-
-
 // ═══════════════════════════════════════════════
-// store/uploadSlice.ts
-// Content Analytics · Upload & Inference state
+// pages/UploadInfer/UploadInfer.tsx
+// LectureAI · Upload & Inference page
 // ═══════════════════════════════════════════════
-import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useAppSelector, useAppDispatch } from '../../store/hooks';
+import { clearServerSelection } from '../../store/uploadSlice';
+import api from '../../services/api';
+import FilePanel from './FilePanel';
+import InferencePanel from './InferencePanel';
+import WorkspacePanel from './WorkspacePanel';
+import FileSidebar from './FileSidebar';
+import TourGuide, { TourStep } from './TourGuide';
+import styles from './UploadInfer.module.scss';
 
-// ── Server file (from /files/by-date/) ──────────
-// "tbd" = not yet inferenced, "completed" = inferenced.
-export type FileStatus = 'waiting' | 'running' | 'completed' | 'error' | 'tbd' | 'queued';
+// ── Keyword Insights (from GET /files/{id}) ──────
+export interface KGEdge { type: string; source: string; target: string; }
+export interface KGNode { id: string; label: string; title?: string; value?: number; }
+export interface KnowledgeGraph { edges: KGEdge[]; nodes: KGNode[]; }
+export interface WordCloudData { wordcloud: [string, number][]; complexity_map: Record<string, string>; }
+export interface TimelineDataset { data: number[]; label: string; }
+export interface TimelineData { labels: string[]; datasets: TimelineDataset[]; timestamped: boolean; }
+export interface HeatmapData { matrix: number[][]; keywords: string[]; segments: string[]; timestamped: boolean; }
+export interface ClusterItem { id: string; label: string; value: number; }
+export interface ClustersData { clusters: Record<string, ClusterItem[]>; }
+export interface FrequencyItem { count: number; keyword: string; relative_pct: number; first_mention_pct: number; }
+export interface FrequencyData { data: FrequencyItem[]; }
+export interface PrereqEdge { reason: string; enables: string; prerequisite: string; }
+export interface PrereqNode { id: string; label: string; value: number; }
+export interface PrerequisitesData { edges: PrereqEdge[]; nodes: PrereqNode[]; }
+export interface ImportanceComplexityItem { reason: string; keyword: string; frequency: number; complexity: string; importance: number; }
+export interface ImportanceComplexityData { data: ImportanceComplexityItem[]; }
+export interface CooccurrenceData { matrix: number[][]; keywords: string[]; }
+export interface GlossaryItem { term: string; definition: string; first_mentioned_ms: number; }
+export interface GlossaryData { glossary: GlossaryItem[]; }
 
-export interface ServerFile {
-  id: number;
-  original_name: string;
-  inserted_at: string;
-  summary_prompt: string;
-  keywords_prompt: string;
-  faq_prompt: string;
-  short_answer_prompt: string;
-  true_false_prompt: string;
-  progress: string | number | null;
-  dictionary_id?: number | null;
-  prompt_template_id?: number | null;
-  status: FileStatus;
+export interface KeywordInsights {
+  enriched_keywords: unknown | null;
+  knowledge_graph: KnowledgeGraph | null;
+  word_cloud: WordCloudData | null;
+  timeline: TimelineData | null;
+  heatmap: HeatmapData | null;
+  clusters: ClustersData | null;
+  frequency: FrequencyData | null;
+  prerequisites: PrerequisitesData | null;
+  importance_complexity: ImportanceComplexityData | null;
+  cooccurrence: CooccurrenceData | null;
+  congnitive_Load: unknown | null;
+  segments: { segments: unknown[] } | null;
+  glossary: GlossaryData | null;
 }
 
-// ── /files/by-date/ pagination params & sort keys ──
-export type FilesSortBy = 'id' | 'original_name' | 'inserted_at' | 'status';
-export type SortOrder = 'asc' | 'desc';
-
-export interface ServerFilesData {
-  queued: ServerFile[];
-  completed: ServerFile[];
-  pending: ServerFile[];
-  running: ServerFile[];
+export interface FileResult {
+  summary: string;
+  keywords: string[];
+  faq: string;
+  shortAnswer: string;
+  trueFalse: string;
+  timestampedSummary: string;
+  keywordInsights: KeywordInsights | null;
+  fileName: string;
+  fileId: number;
+  insertedAt: string;
 }
 
-export interface UploadedFile {
-  id: number;
-  name: string;
-  size: string;
-  type: 'vtt' | 'srt';
-  status: 'ready' | 'running' | 'done' | 'failed';
-  summaryPrompt: string;
-  questionPrompt: string;
-}
+// ── Tabs ──────────────────────────────────────────
+// All three are always clickable — there's no gating on a previous tab
+// being "complete". Every panel below stays mounted at all times (just
+// hidden with CSS) so file lists, batch polling, and scroll position
+// survive switching tabs instead of resetting.
+type TabId = 'upload' | 'infer' | 'results';
 
-export interface BatchFile {
-  id: number;
-  name: string;
-  size: string;
-  type: 'vtt' | 'srt';
-  progress?: number;
-}
+const UploadInfer: React.FC = () => {
+  const { t } = useTranslation();
+  const isBatchRunning = useAppSelector(s => s.upload.isBatchRunning);
+  const dispatch = useAppDispatch();
 
-export interface BatchGroup {
-  id: string;
-  status: 'running' | 'queued' | 'done' | 'pending';
-  files: BatchFile[];
-  collapsed: boolean;
-}
+  const [activeTab, setActiveTab] = useState<TabId>('upload');
 
-export type TimeInterval = 5 | 10 | 15 | 20 | 30 | 45 | 60;
+  // ── Guided tour ──
+  const TOUR_STORAGE_KEY = 'uploadInfer.tourSeen';
+  const [tourActive, setTourActive] = useState(false);
+  useEffect(() => {
+    try {
+      if (!localStorage.getItem(TOUR_STORAGE_KEY)) setTourActive(true);
+    } catch { /* localStorage unavailable — just skip auto-start */ }
+  }, []);
+  const finishTour = useCallback(() => {
+    setTourActive(false);
+    try { localStorage.setItem(TOUR_STORAGE_KEY, '1'); } catch { /* ignore */ }
+  }, []);
+  const startTour = useCallback(() => { setActiveTab('upload'); setTourActive(true); }, []);
 
-export interface InferenceSettings {
-  generateSummary: boolean;
-  generateKeywords: boolean;
-  generateQuestions: boolean;
-  summaryStyle: string;
-  timestampInterval: string;
-  languageOutput: string;
-  mcq: boolean;
-  trueFalse: boolean;
-  shortAnswer: boolean;
-  questionCount: number;
-  keywordCount: number;
-  summaryPromptOverride: string;
-  keywordPromptOverride: string;
-  questionPromptOverride: string;
+  const tourSteps: TourStep[] = [
+    {
+      target: 'tabbar',
+      title: t('uploadInfer.tour.tabsTitle', 'Three steps, always available'),
+      content: t('uploadInfer.tour.tabsBody', 'Upload, Inference, and Results — you can jump between them any time, nothing is locked behind finishing a previous step.'),
+      onEnter: () => setActiveTab('upload'),
+    },
+    {
+      target: 'upload-dropzone',
+      title: t('uploadInfer.tour.uploadTitle', 'Add your files here'),
+      content: t('uploadInfer.tour.uploadBody', 'Drag in a lecture recording\u2019s captions (.vtt or .srt), or browse for one.'),
+      onEnter: () => setActiveTab('upload'),
+    },
+    {
+      target: 'upload-cards',
+      title: t('uploadInfer.tour.cardsTitle', 'Your uploaded files'),
+      content: t('uploadInfer.tour.cardsBody', 'Every file shows up here as a card. The small icons on each card open the prompt that was used to generate its content.'),
+      onEnter: () => setActiveTab('upload'),
+    },
+    {
+      target: 'infer-sidebar',
+      title: t('uploadInfer.tour.inferSidebarTitle', 'Pick files to analyze'),
+      content: t('uploadInfer.tour.inferSidebarBody', 'Select one or more files here \u2014 this list and its date filter work independently of the Upload tab.'),
+      placement: 'right',
+      onEnter: () => setActiveTab('infer'),
+    },
+    {
+      target: 'infer-settings',
+      title: t('uploadInfer.tour.inferSettingsTitle', 'Choose what to generate'),
+      content: t('uploadInfer.tour.inferSettingsBody', 'Turn on summaries, keywords, quiz questions, and more \u2014 each option can have its own custom prompt.'),
+      onEnter: () => setActiveTab('infer'),
+    },
+    {
+      target: 'infer-run',
+      title: t('uploadInfer.tour.inferRunTitle', 'Run it'),
+      content: t('uploadInfer.tour.inferRunBody', 'Once you\u2019ve picked files and settings, run the batch here. You can watch progress or switch tabs \u2014 it keeps running either way.'),
+      placement: 'left',
+      onEnter: () => setActiveTab('infer'),
+    },
+    {
+      target: 'results-sidebar',
+      title: t('uploadInfer.tour.resultsSidebarTitle', 'Find a finished file'),
+      content: t('uploadInfer.tour.resultsSidebarBody', 'Once a file\u2019s done, click it here to open its results.'),
+      placement: 'right',
+      onEnter: () => setActiveTab('results'),
+    },
+    {
+      target: 'results-content',
+      title: t('uploadInfer.tour.resultsContentTitle', 'Your notes, ready to use'),
+      content: t('uploadInfer.tour.resultsContentBody', 'Summary, keywords, quiz questions, and more \u2014 all generated from the file you selected.'),
+      placement: 'left',
+      onEnter: () => setActiveTab('results'),
+    },
+  ];
 
-  // ── New independent content types ──
-  generateShortAnswer: boolean;
-  generateTrueFalse: boolean;
-  // Only meaningful (and only sent as true) when generateKeywords is also true.
-  generateKeywordInsights: boolean;
-  timestampedSummary: boolean;
-  timeInterval: TimeInterval;
-  shortAnswerPromptOverride: string;
-  trueFalsePromptOverride: string;
-}
+  // "selectMode" is FilePanel's checkbox-selection UI for building the set
+  // of files to run inference on. Turning it on stays on the Upload tab
+  // (so people can keep browsing/checking files there) — the Infer tab
+  // badge below nudges them over once something's selected.
+  const [selectMode, setSelectMode] = useState(false);
+  useEffect(() => { if (!isBatchRunning) setSelectMode(false); }, [isBatchRunning]);
+  useEffect(() => { if (!selectMode) dispatch(clearServerSelection()); }, [selectMode]); // eslint-disable-line
+  useEffect(() => { return () => { dispatch(clearServerSelection()); }; }, []); // eslint-disable-line
 
-interface UploadState {
-  files: UploadedFile[];
-  selectedIds: number[];
-  settingsCollapsed: boolean;
-  batchVisible: boolean;
-  batchGroups: BatchGroup[];
-  settings: InferenceSettings;
-  uploadZoneCollapsed: boolean;
+  const enterInferSelection = useCallback(() => setSelectMode(true), []);
+  const exitInferSelection = useCallback(() => setSelectMode(false), []);
 
-  // ── Server files (from /files/by-date/) ──
-  // NOTE: serverFilesData is now populated exclusively by inferenceStatusSuccess
-  // (the /files/by-progress/ polling endpoint), which still returns the old
-  // bucketed shape. /files/by-date/ is paginated and returns a flat, per-file
-  // `status` — so it no longer feeds serverFilesData.
-  serverFilesData: ServerFilesData;          // raw split by status (from /files/by-progress/)
-  serverFiles: ServerFile[];             // current page of /files/by-date/ results
-  serverFilesLoading: boolean;
-  serverFilesError: string | null;
-  dateFrom: string;
-  dateTo: string;
-  statusFilter: FileStatus | '';
+  const [fileResult, setFileResult] = useState<FileResult | null>(null);
+  const [fileLoading, setFileLoading] = useState(false);
+  const [activeFileId, setActiveFileId] = useState<number | null>(null);
 
-  // ── /files/by-date/ pagination, sort & search ──
-  filesPage: number;
-  filesPageSize: number;
-  filesTotal: number;
-  filesTotalPages: number;
-  filesSortBy: FilesSortBy;
-  filesSortOrder: SortOrder;
-  filesSearch: string;
+  const fetchFileData = useCallback(async (fileId: number) => {
+    setFileLoading(true);
+    try {
+      const res = await api.get(`/files/${fileId}`);
+      const d = (res.data as any)?.data ?? {};
+      setFileResult(prev => ({
+        fileId,
+        fileName: d.original_name ?? prev?.fileName ?? String(fileId),
+        insertedAt: d.inserted_at ?? prev?.insertedAt ?? '',
+        summary: d.summary ?? '',
+        keywords: d.keywords ?? [],
+        faq: d.faq ?? '[]',
+        shortAnswer: d.short_answer ?? '[]',
+        trueFalse: d.true_false ?? '[]',
+        // NOTE: backend key is genuinely "timstamped_summary" (missing an "e") — match it exactly.
+        timestampedSummary: d.timstamped_summary ?? '[]',
+        keywordInsights: d.keyword_insights ?? null,
+      }));
+    } catch { setFileResult(null); } finally { setFileLoading(false); }
+  }, []);
 
-  // ── Selection on uploaded files ──
-  selectedServerIds: number[];
+  // Clicking a file (from the Upload tab's list, or the Workspace tab's
+  // own picker) loads its results and jumps straight to the Workspace tab.
+  const handleFileClick = useCallback(async (fileId: number) => {
+    setActiveTab('results');
+    if (fileId === activeFileId) return;
+    setActiveFileId(fileId);
+    setFileResult(null);
+    await fetchFileData(fileId);
+  }, [activeFileId, fetchFileData]);
 
-  // ── Batch running state ──
-  isBatchRunning: boolean;                  // true while queued/running not empty
-  lastBatchFinishedAt: number | null;       // timestamp (Date.now()) set when batch transitions running→done
+  const handleDeleteComplete = useCallback((deletedIds: number[], all?: boolean) => {
+    if (all || (activeFileId !== null && deletedIds.includes(activeFileId))) {
+      setActiveFileId(null);
+      setFileResult(null);
+    }
+  }, [activeFileId]);
 
-  // ── Models ──
-  models: string[];
-  modelsLoading: boolean;
-  selectedModel: string;
-}
+  const prevBatchRunning = useRef(false);
+  useEffect(() => {
+    const justFinished = prevBatchRunning.current && !isBatchRunning;
+    prevBatchRunning.current = isBatchRunning;
+    if (justFinished && activeFileId !== null) fetchFileData(activeFileId);
+  }, [isBatchRunning]); // eslint-disable-line
 
-function toDateStr(d: Date) { return d.toISOString().slice(0, 10); }
-function defaultFrom() { const d = new Date(); d.setMonth(d.getMonth() - 1); return toDateStr(d); }
-function defaultTo() { return toDateStr(new Date()); }
+  const tabs: { id: TabId; label: string; desc: string }[] = [
+    { id: 'upload', label: t('uploadInfer.tabs.upload'), desc: 'Add & browse your files' },
+    { id: 'infer', label: t('uploadInfer.tabs.infer'), desc: 'Configure & run analysis' },
+    { id: 'results', label: t('uploadInfer.tabs.results'), desc: 'View summaries & quizzes' },
+  ];
 
-const emptyData: ServerFilesData = { queued: [], completed: [], pending: [], running: [] };
+  return (
+    <div className={styles.page}>
+      {/* ── Header — title and self-explanatory tab cards share one row ── */}
+      <div className={styles.headerBar}>
+        <div className={styles.phTitleRow}>
+          <div className={styles.phTitle}>{t('uploadInfer.pageTitle')}</div>
+          <button type="button" className={styles.tourTriggerBtn} onClick={startTour}>
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="8" cy="8" r="6.25" />
+              <path d="M6.1 6.2a1.9 1.9 0 013.6.7c0 1.3-1.7 1.5-1.7 2.7M8 11.4v.1" />
+            </svg>
+            {t('uploadInfer.tour.takeTour', 'Take a tour')}
+          </button>
+        </div>
 
-const initialState: UploadState = {
-  files: [],
-  selectedIds: [],
-  uploadZoneCollapsed: false,
-  settingsCollapsed: false,
-  batchVisible: false,
-  batchGroups: [],
-  settings: {
-    generateSummary: true, generateKeywords: true, generateQuestions: true,
-    summaryStyle: 'Table of Contents', timestampInterval: '5 minute segments',
-    languageOutput: 'Korean + English',
-    mcq: true, trueFalse: true, shortAnswer: false,
-    questionCount: 10, keywordCount: 15,
-    summaryPromptOverride: '', keywordPromptOverride: '', questionPromptOverride: '',
+        <div className={styles.tabbar} role="tablist" data-tour="tabbar">
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              className={`${styles.tabBtn} ${activeTab === tab.id ? styles.tabBtnActive : ''}`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              <span className={styles.tabLabel}>{tab.label}</span>
+              <span className={styles.tabDesc}>{tab.desc}</span>
+            </button>
+          ))}
+        </div>
+      </div>
 
-    generateShortAnswer: false, generateTrueFalse: false,
-    generateKeywordInsights: false,
-    timestampedSummary: false, timeInterval: 5,
-    shortAnswerPromptOverride: '', trueFalsePromptOverride: '',
-  },
-  serverFilesData: emptyData,
-  serverFiles: [],
-  serverFilesLoading: false,
-  serverFilesError: null,
-  dateFrom: defaultFrom(),
-  dateTo: defaultTo(),
-  statusFilter: '',
+      <div className={styles.upbody}>
+        <div className={styles.tabPane} style={{ display: activeTab === 'upload' ? 'flex' : 'none' }}>
+          <FilePanel
+            selectMode={selectMode}
+            onEnterSelectMode={enterInferSelection}
+            onExitSelectMode={exitInferSelection}
+            onDeleteComplete={handleDeleteComplete}
+            active={activeTab === 'upload'}
+            onGoToInfer={() => setActiveTab('infer')}
+          />
+        </div>
 
-  filesPage: 1,
-  filesPageSize: 50,
-  filesTotal: 0,
-  filesTotalPages: 1,
-  filesSortBy: 'id',
-  filesSortOrder: 'desc',
-  filesSearch: '',
+        <div className={styles.tabPane} style={{ display: activeTab === 'infer' ? 'flex' : 'none' }}>
+          <FileSidebar mode="select" active={activeTab === 'infer'} />
+          <InferencePanel />
+        </div>
 
-  selectedServerIds: [],
-  isBatchRunning: false,
-  lastBatchFinishedAt: null,
-  models: [],
-  modelsLoading: false,
-  selectedModel: '',
+        <div className={styles.tabPane} style={{ display: activeTab === 'results' ? 'flex' : 'none' }}>
+          <FileSidebar mode="view" active={activeTab === 'results'} activeFileId={activeFileId} onFileClick={handleFileClick} />
+          <div data-tour="results-content" style={{ display: 'contents' }}>
+            <WorkspacePanel
+              step2Visible={false}
+              fileResult={fileResult}
+              fileLoading={fileLoading}
+              activeFileId={activeFileId}
+              onResultUpdate={patch => setFileResult(prev => prev ? { ...prev, ...patch } : prev)}
+            />
+          </div>
+        </div>
+      </div>
+
+      <TourGuide steps={tourSteps} active={tourActive} onFinish={finishTour} />
+    </div>
+  );
 };
 
-const uploadSlice = createSlice({
-  name: 'upload',
-  initialState,
-  reducers: {
-    // ── Inference legacy ──
-    toggleFileSelection(state, action: PayloadAction<number>) {
-      const idx = state.selectedIds.indexOf(action.payload);
-      if (idx > -1) state.selectedIds.splice(idx, 1);
-      else state.selectedIds.push(action.payload);
-    },
-    toggleSelectAll(state) {
-      const allIds = state.files.map(f => f.id);
-      state.selectedIds = state.selectedIds.length === allIds.length ? [] : allIds;
-    },
-    toggleUploadZone(state) {
-      state.uploadZoneCollapsed = !state.uploadZoneCollapsed;
-    },
-    toggleBatchGroup(state, action: PayloadAction<string>) {
-      const g = state.batchGroups.find(g => g.id === action.payload);
-      if (g) g.collapsed = !g.collapsed;
-    },
-    runInference(state) {
-      state.batchVisible = true;
-    },
-    updateSummaryPrompt(state, action: PayloadAction<string>) {
-      state.settings.summaryPromptOverride = action.payload;
-    },
-    updateKeywordPrompt(state, action: PayloadAction<string>) {
-      state.settings.keywordPromptOverride = action.payload;
-    },
-    updateQuestionPrompt(state, action: PayloadAction<string>) {
-      state.settings.questionPromptOverride = action.payload;
-    },
-    updateShortAnswerPrompt(state, action: PayloadAction<string>) {
-      state.settings.shortAnswerPromptOverride = action.payload;
-    },
-    updateTrueFalsePrompt(state, action: PayloadAction<string>) {
-      state.settings.trueFalsePromptOverride = action.payload;
-    },
-    updateSettings(state, action: PayloadAction<Partial<InferenceSettings>>) {
-      state.settings = { ...state.settings, ...action.payload };
-    },
-
-    // ── Date range ──
-    setDateFrom(state, action: PayloadAction<string>) { state.dateFrom = action.payload; },
-    setDateTo(state, action: PayloadAction<string>) { state.dateTo = action.payload; },
-    setStatusFilter(state, action: PayloadAction<FileStatus | ''>) { state.statusFilter = action.payload; },
-
-    // ── Patch progress % onto running files from /files/progress/ response ──
-    updateRunningProgress(state, action: PayloadAction<Record<string, number | string>>) {
-      const progressMap = action.payload;
-      state.serverFilesData.running = state.serverFilesData.running.map(f => {
-        const raw = progressMap[String(f.id)];
-        if (raw === undefined) return f;
-        const pct = typeof raw === 'string' ? parseFloat(raw) : raw;
-        return { ...f, progress: isNaN(pct) ? f.progress : Math.min(100, Math.max(0, pct)) };
-      });
-    },
-
-    // ── Inference-only status update (does NOT touch the FilePanel file list) ──
-    inferenceStatusSuccess(state, action: PayloadAction<ServerFilesData>) {
-      const d = action.payload;
-      // Merge any newly-completed files from the polling response into the
-      // existing completed bucket. We keep the historical /by-date/ entries
-      // and append/replace any IDs that just finished in the active batch,
-      // so FilePanel badges flip to "Inferenced" the moment Step-2 moves a
-      // file into its Completed column — without needing another API call.
-      const incomingCompleted = d.completed ?? [];
-      const incomingCompletedIds = new Set(incomingCompleted.map(f => f.id));
-      const mergedCompleted = [
-        ...state.serverFilesData.completed.filter(f => !incomingCompletedIds.has(f.id)),
-        ...incomingCompleted,
-      ];
-      state.serverFilesData = {
-        queued: d.queued ?? [],
-        running: d.running ?? [],
-        pending: d.pending ?? [],
-        completed: mergedCompleted,
-      };
-      const running = (d.queued?.length ?? 0) > 0 || (d.running?.length ?? 0) > 0;
-      // Clear selections the moment the batch becomes active so highlighted
-      // cards stop showing the blue selected state after a successful submit.
-      if (running && !state.isBatchRunning) {
-        state.selectedServerIds = [];
-      }
-      // Auto-collapse settings when a batch starts running. (Previously derived
-      // from /files/by-date/, which is now paginated and can't reliably tell us this.)
-      if (running) state.settingsCollapsed = true;
-      // When batch transitions running → done, stamp a timestamp so FilePanel
-      // knows to re-fetch /by-date/ and refresh the completed list.
-      if (!running && state.isBatchRunning) {
-        state.lastBatchFinishedAt = Date.now();
-      }
-      state.isBatchRunning = running;
-    },
-
-    // ── Server files (paginated /files/by-date/) ──
-    serverFilesLoading(state) {
-      state.serverFilesLoading = true;
-      state.serverFilesError = null;
-    },
-    serverFilesSuccess(state, action: PayloadAction<{
-      files: ServerFile[];
-      total: number;
-      page: number;
-      pageSize: number;
-      totalPages: number;
-      sortBy: FilesSortBy;
-      sortOrder: SortOrder;
-      search: string;
-    }>) {
-      const { files, total, page, pageSize, totalPages, sortBy, sortOrder, search } = action.payload;
-      state.serverFiles = files;
-      state.serverFilesLoading = false;
-      state.serverFilesError = null;
-
-      state.filesTotal = total;
-      state.filesPage = page;
-      state.filesPageSize = pageSize;
-      state.filesTotalPages = totalPages;
-      state.filesSortBy = sortBy;
-      state.filesSortOrder = sortOrder;
-      state.filesSearch = search;
-
-      // NOTE: isBatchRunning is no longer derived here — /files/by-date/ is
-      // paginated so a running/queued file may simply be on another page.
-      // isBatchRunning is set by inferenceStatusSuccess (/files/by-progress/),
-      // which always reflects the full, unpaginated set of active files.
-
-      // NOTE: selections are intentionally NOT pruned against this page's ids —
-      // a file not present here may just be on a different page, not deleted.
-      // Deletion flows already clear selectedServerIds explicitly on success.
-    },
-    serverFilesFailure(state, action: PayloadAction<string>) {
-      state.serverFilesLoading = false;
-      state.serverFilesError = action.payload;
-    },
-
-    // ── Pagination / sort / search (kept in sync for UI display; the actual
-    //     fetch is triggered imperatively by the component with these values) ──
-    setFilesPage(state, action: PayloadAction<number>) {
-      state.filesPage = action.payload;
-    },
-    setFilesPageSize(state, action: PayloadAction<number>) {
-      state.filesPageSize = action.payload;
-      state.filesPage = 1;
-    },
-    setFilesSort(state, action: PayloadAction<{ sortBy: FilesSortBy; sortOrder: SortOrder }>) {
-      state.filesSortBy = action.payload.sortBy;
-      state.filesSortOrder = action.payload.sortOrder;
-      state.filesPage = 1;
-    },
-    setFilesSearch(state, action: PayloadAction<string>) {
-      state.filesSearch = action.payload;
-      state.filesPage = 1;
-    },
-
-    // ── Server file selection ──
-    toggleServerFileSelection(state, action: PayloadAction<number>) {
-      if (state.isBatchRunning) return;  // no selection while batch running
-      const idx = state.selectedServerIds.indexOf(action.payload);
-      if (idx > -1) state.selectedServerIds.splice(idx, 1);
-      else state.selectedServerIds.push(action.payload);
-    },
-    toggleSelectAllServerFiles(state, action: PayloadAction<number[]>) {
-      if (state.isBatchRunning) return;
-      const pageIds = action.payload;
-      if (pageIds.length === 0) return;
-      const selectedSet = new Set(state.selectedServerIds);
-      const allPageSelected = pageIds.every(id => selectedSet.has(id));
-      if (allPageSelected) {
-        // Uncheck — remove only this page's ids, leave other pages' selections alone.
-        const pageIdSet = new Set(pageIds);
-        state.selectedServerIds = state.selectedServerIds.filter(id => !pageIdSet.has(id));
-      } else {
-        // Check — add this page's ids on top of whatever's already selected elsewhere.
-        pageIds.forEach(id => { if (!selectedSet.has(id)) state.selectedServerIds.push(id); });
-      }
-    },
-    clearServerSelection(state) {
-      state.selectedServerIds = [];
-    },
-
-    // ── Patch prompt fields on saved files ──
-    updateFilePrompts(state, action: PayloadAction<{
-      fileIds: number[];
-      summaryPrompt?: string;
-      keywordsPrompt?: string;
-      faqPrompt?: string;
-      shortAnswerPrompt?: string;
-      trueFalsePrompt?: string;
-    }>) {
-      const { fileIds, summaryPrompt, keywordsPrompt, faqPrompt, shortAnswerPrompt, trueFalsePrompt } = action.payload;
-      const idSet = new Set(fileIds);
-      state.serverFiles = state.serverFiles.map(f => {
-        if (!idSet.has(f.id)) return f;
-        return {
-          ...f,
-          ...(summaryPrompt !== undefined && { summary_prompt: summaryPrompt }),
-          ...(keywordsPrompt !== undefined && { keywords_prompt: keywordsPrompt }),
-          ...(faqPrompt !== undefined && { faq_prompt: faqPrompt }),
-          ...(shortAnswerPrompt !== undefined && { short_answer_prompt: shortAnswerPrompt }),
-          ...(trueFalsePrompt !== undefined && { true_false_prompt: trueFalsePrompt }),
-        };
-      });
-      // Also patch inside serverFilesData buckets so the per-file preview reflects the change
-      const patchBucket = (bucket: ServerFile[]) => bucket.map(f => {
-        if (!idSet.has(f.id)) return f;
-        return {
-          ...f,
-          ...(summaryPrompt !== undefined && { summary_prompt: summaryPrompt }),
-          ...(keywordsPrompt !== undefined && { keywords_prompt: keywordsPrompt }),
-          ...(faqPrompt !== undefined && { faq_prompt: faqPrompt }),
-          ...(shortAnswerPrompt !== undefined && { short_answer_prompt: shortAnswerPrompt }),
-          ...(trueFalsePrompt !== undefined && { true_false_prompt: trueFalsePrompt }),
-        };
-      });
-      state.serverFilesData.completed = patchBucket(state.serverFilesData.completed);
-      state.serverFilesData.queued = patchBucket(state.serverFilesData.queued);
-      state.serverFilesData.running = patchBucket(state.serverFilesData.running);
-      state.serverFilesData.pending = patchBucket(state.serverFilesData.pending);
-    },
-
-
-    // ── Patch dictionary_id on saved files (after associate/disassociate) ──
-    patchFileDictionaries(state, action: PayloadAction<Record<number, number | null>>) {
-      const map = action.payload;
-      const apply = (f: ServerFile): ServerFile =>
-        map[f.id] !== undefined ? { ...f, dictionary_id: map[f.id] } : f;
-      state.serverFiles = state.serverFiles.map(apply);
-      state.serverFilesData.completed = state.serverFilesData.completed.map(apply);
-      state.serverFilesData.queued = state.serverFilesData.queued.map(apply);
-      state.serverFilesData.running = state.serverFilesData.running.map(apply);
-      state.serverFilesData.pending = state.serverFilesData.pending.map(apply);
-    },
-
-    // ── Patch prompt_template_id on saved files (after template association) ──
-    patchFilePromptTemplate(state, action: PayloadAction<Record<number, number | null>>) {
-      const map = action.payload;
-      const apply = (f: ServerFile): ServerFile =>
-        map[f.id] !== undefined ? { ...f, prompt_template_id: map[f.id] } : f;
-      state.serverFiles = state.serverFiles.map(apply);
-      state.serverFilesData.completed = state.serverFilesData.completed.map(apply);
-      state.serverFilesData.queued = state.serverFilesData.queued.map(apply);
-      state.serverFilesData.running = state.serverFilesData.running.map(apply);
-      state.serverFilesData.pending = state.serverFilesData.pending.map(apply);
-    },
-
-    // ── Models ──
-    modelsLoading(state) {
-      state.modelsLoading = true;
-    },
-    modelsSuccess(state, action: PayloadAction<string[]>) {
-      state.models = action.payload;
-      state.modelsLoading = false;
-      if (action.payload.length > 0 && !state.selectedModel) {
-        state.selectedModel = action.payload[0];
-      }
-    },
-    modelsFailure(state) {
-      state.modelsLoading = false;
-    },
-    setSelectedModel(state, action: PayloadAction<string>) {
-      state.selectedModel = action.payload;
-    },
-  },
-});
-
-export const {
-  toggleFileSelection, toggleSelectAll,
-  toggleUploadZone, toggleBatchGroup,
-  runInference, updateSummaryPrompt, updateKeywordPrompt, updateQuestionPrompt,
-  updateShortAnswerPrompt, updateTrueFalsePrompt, updateSettings,
-  setDateFrom, setDateTo, setStatusFilter,
-  inferenceStatusSuccess,
-  updateRunningProgress,
-  serverFilesLoading, serverFilesSuccess, serverFilesFailure,
-  setFilesPage, setFilesPageSize, setFilesSort, setFilesSearch,
-  toggleServerFileSelection, toggleSelectAllServerFiles, clearServerSelection,
-  updateFilePrompts,
-  patchFileDictionaries,
-  patchFilePromptTemplate,
-  modelsLoading, modelsSuccess, modelsFailure, setSelectedModel,
-} = uploadSlice.actions;
-
-export default uploadSlice.reducer;
+export default UploadInfer;
