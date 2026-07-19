@@ -378,6 +378,56 @@ const UploadInfer: React.FC = () => {
       placement: 'bottom',
       onEnter: () => { setActiveTab('results'); workspacePanelRef.current?.setTab('summary'); },
     },
+    // ── One step per tab, switching to it as it's highlighted ──
+    {
+      target: 'results-tab-summary',
+      title: t('uploadInfer.tour.tabSummaryTitle', 'Summary'),
+      content: t('uploadInfer.tour.tabSummaryBody', 'A written summary of the file\u2019s content.'),
+      placement: 'bottom',
+      onEnter: () => { setActiveTab('results'); workspacePanelRef.current?.setTab('summary'); },
+    },
+    {
+      target: 'results-tab-keywords',
+      title: t('uploadInfer.tour.tabKeywordsTitle', 'Keywords'),
+      content: t('uploadInfer.tour.tabKeywordsBody', 'The key terms extracted from the file, shown as chips.'),
+      placement: 'bottom',
+      onEnter: () => { setActiveTab('results'); workspacePanelRef.current?.setTab('keywords'); },
+    },
+    {
+      target: 'results-tab-assessment',
+      title: t('uploadInfer.tour.tabAssessmentTitle', 'Assessment Questions'),
+      content: t('uploadInfer.tour.tabAssessmentBody', 'Quiz-style assessment questions, with a multiple-choice quiz mode and a view-all mode.'),
+      placement: 'bottom',
+      onEnter: () => { setActiveTab('results'); workspacePanelRef.current?.setTab('assessment'); },
+    },
+    {
+      target: 'results-tab-shortAnswer',
+      title: t('uploadInfer.tour.tabShortAnswerTitle', 'Short Answer'),
+      content: t('uploadInfer.tour.tabShortAnswerBody', 'Short written-answer questions and responses, revealed one at a time or all at once.'),
+      placement: 'bottom',
+      onEnter: () => { setActiveTab('results'); workspacePanelRef.current?.setTab('shortAnswer'); },
+    },
+    {
+      target: 'results-tab-trueFalse',
+      title: t('uploadInfer.tour.tabTrueFalseTitle', 'True/False'),
+      content: t('uploadInfer.tour.tabTrueFalseBody', 'True/False questions, with the same quiz and view-all modes as Assessment Questions.'),
+      placement: 'bottom',
+      onEnter: () => { setActiveTab('results'); workspacePanelRef.current?.setTab('trueFalse'); },
+    },
+    {
+      target: 'results-tab-timestampedSummary',
+      title: t('uploadInfer.tour.tabTimestampedTitle', 'Timestamped Summary'),
+      content: t('uploadInfer.tour.tabTimestampedBody', 'A summary broken into timestamped segments, each linking back to a moment in the recording.'),
+      placement: 'bottom',
+      onEnter: () => { setActiveTab('results'); workspacePanelRef.current?.setTab('timestampedSummary'); },
+    },
+    {
+      target: 'results-tab-keywordInsights',
+      title: t('uploadInfer.tour.tabKeywordInsightsTitle', 'Keyword Insights'),
+      content: t('uploadInfer.tour.tabKeywordInsightsBody', 'Extra visualizations built from the extracted keywords \u2014 knowledge graph, word cloud, timeline, heatmap, clusters, and more.'),
+      placement: 'bottom',
+      onEnter: () => { setActiveTab('results'); workspacePanelRef.current?.setTab('keywordInsights'); },
+    },
   ];
 
   // The five per-icon steps only make sense once there's a real card to
@@ -531,526 +581,6 @@ const UploadInfer: React.FC = () => {
 };
 
 export default UploadInfer;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// ═══════════════════════════════════════════════
-// pages/UploadInfer/FileSidebar.tsx
-// Content Analytics · Shared 400px file sidebar
-// Used by both the Infer tab (mode="select") and the Workspace tab
-// (mode="view"). Deliberately does NOT read the Upload tab's shared
-// `serverFiles` — it keeps its own local list, date filter, sort,
-// search, and pagination, and fetches independently every time its
-// tab becomes active. The only thing still shared with the rest of
-// the app is `selectedServerIds`, since InferencePanel needs that to
-// run a batch.
-// ═══════════════════════════════════════════════
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import { useAppDispatch, useAppSelector } from '../../store/hooks';
-import { toggleServerFileSelection, toggleSelectAllServerFiles, selectFilesSuccess, ServerFile, FilesSortBy, SortOrder, FileStatus } from '../../store/uploadSlice';
-import api from '../../services/api';
-import styles from './FileSidebar.module.scss';
-
-const getExt = (n: string): 'vtt' | 'srt' => n.toLowerCase().endsWith('.srt') ? 'srt' : 'vtt';
-
-function toDateStr(d: Date) { return d.toISOString().slice(0, 10); }
-function defaultFrom() { const d = new Date(); d.setMonth(d.getMonth() - 1); return toDateStr(d); }
-function defaultTo() { return toDateStr(new Date()); }
-
-const PAGE_WINDOW = 4;
-const getPageNumbers = (current: number, total: number): number[] => {
-  if (total <= PAGE_WINDOW) return Array.from({ length: total }, (_, i) => i + 1);
-  const start = Math.max(1, Math.min(current - 1, total - PAGE_WINDOW + 1));
-  return Array.from({ length: PAGE_WINDOW }, (_, i) => start + i);
-};
-
-type SortKey = 'id' | 'name' | 'date' | 'status';
-const SORT_KEY_TO_API: Record<SortKey, FilesSortBy> = {
-  id: 'id', name: 'original_name', date: 'inserted_at', status: 'status',
-};
-const API_TO_SORT_KEY: Record<FilesSortBy, SortKey> = {
-  id: 'id', original_name: 'name', inserted_at: 'date', status: 'status',
-};
-
-// ── Status → badge label/color — same 5-state mapping as the Upload tab ──
-const STATUS_META: Record<FileStatus, { labelKey: string; cls: string }> = {
-  waiting: { labelKey: 'uploadInfer.filePanel.statusWaiting', cls: 'bWaiting' },
-  running: { labelKey: 'uploadInfer.filePanel.statusRunning', cls: 'bRunning' },
-  completed: { labelKey: 'uploadInfer.filePanel.inferenced', cls: 'bInferred' },
-  error: { labelKey: 'uploadInfer.filePanel.notInferenced', cls: 'bNotInferred' },
-  tbd: { labelKey: 'uploadInfer.filePanel.notInferenced', cls: 'bNotInferred' },
-  queued: { labelKey: 'uploadInfer.filePanel.statusQueued', cls: 'bQueued' },
-};
-
-const STATUS_FILTER_OPTIONS: { value: FileStatus | ''; labelKey: string }[] = [
-  { value: '', labelKey: 'uploadInfer.filePanel.statusAll' },
-  { value: 'waiting', labelKey: 'uploadInfer.filePanel.statusWaiting' },
-  { value: 'queued', labelKey: 'uploadInfer.filePanel.statusQueued' },
-  { value: 'running', labelKey: 'uploadInfer.filePanel.statusRunning' },
-  { value: 'completed', labelKey: 'uploadInfer.filePanel.inferenced' },
-  { value: 'error', labelKey: 'uploadInfer.filePanel.statusError' },
-  { value: 'tbd', labelKey: 'uploadInfer.filePanel.statusTbd' },
-];
-
-interface CbProps { checked: boolean; indeterminate?: boolean; onChange: () => void; disabled?: boolean; }
-const Checkbox: React.FC<CbProps> = ({ checked, indeterminate, onChange, disabled }) => (
-  <div
-    className={`${styles.cb} ${checked ? styles.cbChecked : ''} ${indeterminate ? styles.cbIndet : ''} ${disabled ? styles.cbDisabled : ''}`}
-    onClick={e => { e.stopPropagation(); if (!disabled) onChange(); }}
-    role="checkbox" aria-checked={indeterminate ? 'mixed' : checked} tabIndex={0}
-    onKeyDown={e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); if (!disabled) onChange(); } }}
-  />
-);
-
-interface Props {
-  // "select" — checkbox multi-select for building the inference batch (Infer tab)
-  // "view"   — click a file to load its results (Workspace tab)
-  mode: 'select' | 'view';
-  // Whether this sidebar's tab is the one currently showing. A fresh
-  // fetch fires each time this flips true — i.e. every time the user
-  // navigates to the Infer or Result tab, not just on first mount.
-  active: boolean;
-  activeFileId?: number | null;
-  onFileClick?: (fileId: number, fileName: string) => void;
-}
-
-const PAGE_SIZES = [25, 50, 75, 100];
-
-const FileSidebar: React.FC<Props> = ({ mode, active, activeFileId = null, onFileClick }) => {
-  const { t } = useTranslation();
-  const dispatch = useAppDispatch();
-  const selectedServerIds = useAppSelector(s => s.upload.selectedServerIds);
-  const isBatchRunning = useAppSelector(s => s.upload.isBatchRunning);
-
-  // ── Independent local file list ──
-  const [files, setFiles] = useState<ServerFile[]>([]);
-  const [total, setTotal] = useState(0);
-  const [totalPages, setTotalPages] = useState(1);
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
-  const [sortBy, setSortBy] = useState<FilesSortBy>('id');
-  const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
-  const [search, setSearch] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const [dateFrom, setDateFrom] = useState(defaultFrom());
-  const [dateTo, setDateTo] = useState(defaultTo());
-  const [applying, setApplying] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<FileStatus | ''>('');
-
-  const fetchFiles = useCallback(async (opts?: {
-    page?: number; pageSize?: number; from?: string; to?: string;
-    sortBy?: FilesSortBy; sortOrder?: SortOrder; search?: string;
-    statusFilter?: FileStatus | '';
-  }) => {
-    const p = opts?.page ?? page;
-    const ps = opts?.pageSize ?? pageSize;
-    const from = opts?.from ?? dateFrom;
-    const to = opts?.to ?? dateTo;
-    const sBy = opts?.sortBy ?? sortBy;
-    const sOrd = opts?.sortOrder ?? sortOrder;
-    const q = opts?.search ?? search;
-    const statusF = opts?.statusFilter ?? statusFilter;
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await api.post('/files/by-date/', {
-        start_date: from,
-        end_date: to,
-        page: p,
-        page_size: ps,
-        sort_by: sBy,
-        sort_order: sOrd,
-        ...(q ? { search: q } : {}),
-        ...(statusF ? { status_filter: statusF } : {}),
-      });
-      const d = (res.data as any)?.data ?? {};
-      setFiles(d.data ?? []);
-      setTotal(d.total ?? 0);
-      setPage(d.page ?? p);
-      setPageSize(d.page_size ?? ps);
-      setTotalPages(d.total_pages ?? 1);
-      setSortBy(sBy);
-      setSortOrder(sOrd);
-      setStatusFilter(statusF);
-      // select mode = Infer tab: this is the only live source of full file
-      // objects (prompt defaults included) while that tab is active, since
-      // the Upload tab's shared `serverFiles` gets cleared as soon as it's
-      // not the active tab. view mode (Workspace tab) doesn't publish —
-      // InferencePanel only needs this for its own selection.
-      if (mode === 'select') dispatch(selectFilesSuccess(d.data ?? []));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load files.');
-    } finally {
-      setLoading(false);
-    }
-  }, [page, pageSize, dateFrom, dateTo, sortBy, sortOrder, search, statusFilter, mode, dispatch]);
-
-  const handleApply = useCallback(async () => {
-    setApplying(true);
-    await fetchFiles({ page: 1 });
-    setApplying(false);
-  }, [fetchFiles]);
-
-  const handleStatusFilterChange = (value: FileStatus | '') => {
-    fetchFiles({ page: 1, statusFilter: value });
-  };
-
-  const goToPage = (p: number) => {
-    if (p < 1 || p > totalPages || p === page || loading) return;
-    fetchFiles({ page: p });
-  };
-
-  const handlePageSizeChange = (size: number) => {
-    fetchFiles({ page: 1, pageSize: size });
-  };
-
-  const handleSort = useCallback((key: SortKey) => {
-    const apiKey = SORT_KEY_TO_API[key];
-    const dir: SortOrder = sortBy === apiKey ? (sortOrder === 'asc' ? 'desc' : 'asc') : 'asc';
-    fetchFiles({ sortBy: apiKey, sortOrder: dir, page: 1 });
-  }, [sortBy, sortOrder, fetchFiles]);
-  const sort = { key: API_TO_SORT_KEY[sortBy], dir: sortOrder };
-
-  // ── Search — server-side, debounced (matches the Upload tab's search) ──
-  const [searchQuery, setSearchQuery] = useState('');
-  const skipNextSearchEffect = useRef(true);
-  useEffect(() => {
-    if (skipNextSearchEffect.current) { skipNextSearchEffect.current = false; return; }
-    const q = searchQuery.trim();
-    const handle = setTimeout(() => {
-      setSearch(q);
-      fetchFiles({ search: q, page: 1 });
-    }, 400);
-    return () => clearTimeout(handle);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchQuery]);
-
-  // Own API call, fired every time this tab becomes active — entirely
-  // separate from whatever the Upload tab is doing. When the tab goes
-  // inactive (navigated away from), clear the list and reset search/
-  // sort/filter/page back to defaults so a return visit shows a clean
-  // loading state and a genuinely fresh fetch, instead of the previous
-  // tab's stale results flashing before the new data arrives.
-  useEffect(() => {
-    if (active) {
-      fetchFiles({ page: 1 });
-    } else {
-      skipNextSearchEffect.current = true; // don't let the reset below trigger a second debounced fetch
-      setFiles([]);
-      if (mode === 'select') dispatch(selectFilesSuccess([]));
-      setTotal(0);
-      setTotalPages(1);
-      setPage(1);
-      setSortBy('id');
-      setSortOrder('desc');
-      setSearch('');
-      setSearchQuery('');
-      setStatusFilter('');
-      setError(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active]);
-
-  const pageSelectedCount = files.filter(f => selectedServerIds.includes(f.id)).length;
-  const allSelected = files.length > 0 && pageSelectedCount === files.length;
-  const someSelected = pageSelectedCount > 0 && !allSelected;
-
-  const handleRowClick = (fileId: number, fileName: string) => {
-    if (mode === 'select') {
-      if (isBatchRunning) return;
-      dispatch(toggleServerFileSelection(fileId));
-    } else {
-      onFileClick?.(fileId, fileName);
-    }
-  };
-
-  return (
-    <div className={styles.sidebar} data-tour={mode === 'select' ? 'infer-sidebar' : 'results-sidebar'}>
-      <div className={styles.dateFilter} data-tour={mode === 'select' ? 'infer-date-filter' : 'results-date-filter'}>
-        <div className={styles.dateField}>
-          <label className={styles.dateLabel}>{t('uploadInfer.filePanel.dateFrom')}</label>
-          <input
-            type="date" className={styles.dateInput} value={dateFrom} max={dateTo}
-            disabled={applying}
-            onChange={e => setDateFrom(e.target.value)}
-          />
-        </div>
-        <div className={styles.dateSep}>—</div>
-        <div className={styles.dateField}>
-          <label className={styles.dateLabel}>{t('uploadInfer.filePanel.dateTo')}</label>
-          <input
-            type="date" className={styles.dateInput} value={dateTo} min={dateFrom}
-            disabled={applying}
-            onChange={e => setDateTo(e.target.value)}
-          />
-        </div>
-        <button className={styles.applyBtn} onClick={handleApply} disabled={applying || loading}>
-          {applying ? <span className={styles.miniSpinner} /> : t('uploadInfer.filePanel.applyDate')}
-        </button>
-      </div>
-
-      <div className={styles.filterSearchRow}>
-        <div className={styles.statusFilterWrap} data-tour={mode === 'select' ? 'infer-status-filter' : 'results-status-filter'}>
-          <svg className={styles.statusFilterIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M2 4h12M4.5 8h7M7 12h2" />
-          </svg>
-          <select
-            className={styles.statusFilterSelect}
-            value={statusFilter}
-            disabled={loading}
-            onChange={e => handleStatusFilterChange(e.target.value as FileStatus | '')}
-          >
-            {STATUS_FILTER_OPTIONS.map(opt => (
-              <option key={opt.value || 'all'} value={opt.value}>{t(opt.labelKey)}</option>
-            ))}
-          </select>
-        </div>
-
-        <div className={styles.searchWrap} data-tour={mode === 'select' ? 'infer-search' : 'results-search'}>
-          <svg className={styles.searchIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="6.5" cy="6.5" r="4" /><path d="M11 11l2.5 2.5" />
-          </svg>
-          <input
-            type="text"
-            className={styles.searchInput}
-            placeholder={t('uploadInfer.workspace.searchFiles')}
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-          />
-        </div>
-      </div>
-
-      <div className={styles.head}>
-        {mode === 'select' && (
-          <Checkbox
-            checked={allSelected}
-            indeterminate={someSelected}
-            onChange={() => dispatch(toggleSelectAllServerFiles(files.map(f => f.id)))}
-            disabled={files.length === 0 || isBatchRunning}
-          />
-        )}
-        <span className={styles.headTitle}>{t('uploadInfer.workspace.filesTitle')}</span>
-        {total > 0 && <span className={styles.headCount}>{total}</span>}
-        {loading && <span className={styles.headSpinner} aria-label="Loading" />}
-        {mode === 'select' && selectedServerIds.length > 0 && (
-          <span className={styles.headSelected}>
-            {t('uploadInfer.filePanel.selectedTotal', { count: selectedServerIds.length, total })}
-          </span>
-        )}
-      </div>
-
-      {/* Sort header — same sort keys as the Upload tab */}
-      <div className={styles.sortHeader} data-tour={mode === 'select' ? 'infer-sort' : 'results-sort'}>
-        <span className={styles.sortHeaderLabel}>
-          <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-            <path d="M2 4h10M4 7h6M6 10h2" />
-          </svg>
-          {t('uploadInfer.filePanel.sortBy')}
-        </span>
-        <div className={styles.sortCols}>
-          {([
-            { key: 'id' as SortKey, label: t('uploadInfer.filePanel.sortId') },
-            { key: 'name' as SortKey, label: t('uploadInfer.filePanel.sortName') },
-            { key: 'date' as SortKey, label: t('uploadInfer.filePanel.sortDate') },
-            { key: 'status' as SortKey, label: t('uploadInfer.filePanel.sortStatus') },
-          ]).map(({ key, label }) => (
-            <button
-              key={key}
-              className={`${styles.sortCol} ${sort.key === key ? styles.sortColActive : ''}`}
-              onClick={() => handleSort(key)}
-              disabled={loading}
-            >
-              {label}
-              <svg viewBox="0 0 10 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
-                className={sort.key === key ? (sort.dir === 'asc' ? styles.sortAsc : styles.sortDesc) : styles.sortInactive}>
-                <path d="M5 1v10M2 8l3 3 3-3" />
-              </svg>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className={styles.rowsWrap}>
-        <div className={styles.rows}>
-        {error && (
-          <div className={styles.empty}>{error}</div>
-        )}
-        {!error && loading && files.length === 0 && (
-          <div className={styles.emptyLoading}>
-            <span className={styles.rowsSpinner} />
-            {t('uploadInfer.workspace.loadingFiles')}
-          </div>
-        )}
-        {!error && !loading && files.length === 0 && (
-          <div className={styles.empty}>
-            {search ? t('uploadInfer.workspace.noFilesMatch') : t('uploadInfer.workspace.noFilesYet')}
-          </div>
-        )}
-        {files.map(f => {
-          const ext = getExt(f.original_name);
-          const isChecked = mode === 'select' && selectedServerIds.includes(f.id);
-          const isActiveView = mode === 'view' && f.id === activeFileId;
-          const disabled = mode === 'select' && isBatchRunning;
-          const statusMeta = STATUS_META[f.status] ?? STATUS_META.tbd;
-          return (
-            <div
-              key={f.id}
-              role="button"
-              tabIndex={0}
-              className={`${styles.hitm} ${styles.hitmSelectable}
-                ${isChecked ? styles.active : ''}
-                ${isActiveView ? styles.activeView : ''}
-                ${disabled ? styles.rowDisabled : ''}`}
-              onClick={() => !disabled && handleRowClick(f.id, f.original_name)}
-              onKeyDown={e => { if (!disabled && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); handleRowClick(f.id, f.original_name); } }}
-            >
-              {mode === 'select' && (
-                <Checkbox checked={isChecked} onChange={() => handleRowClick(f.id, f.original_name)} disabled={isBatchRunning} />
-              )}
-              <div className={`${styles.ficon} ${styles[ext]}`}>{ext.toUpperCase()}</div>
-              <div className={styles.hi}>
-                <div className={styles.hn}>{f.original_name}</div>
-                <div className={styles.hm}>{f.inserted_at} · #{f.id}</div>
-              </div>
-              <span className={`${styles.badge} ${isChecked ? styles.bSelected : styles[statusMeta.cls]}`}>
-                {isChecked ? (
-                  <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="10" height="10">
-                    <path d="M2 6l3 3 5-5" />
-                  </svg>
-                ) : (
-                  <>
-                    {f.status === 'completed' && (
-                      <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="9" height="9">
-                        <path d="M2 6l3 3 5-5" />
-                      </svg>
-                    )}
-                    {(f.status === 'running' || f.status === 'queued') && (
-                      <span className={styles.badgeDot} />
-                    )}
-                    {t(statusMeta.labelKey)}
-                  </>
-                )}
-              </span>
-            </div>
-          );
-        })}
-        </div>
-
-        {/* Blocks interaction with the current list while a fetch is in
-            flight (pagination, sort, search, filter) — only shown when
-            there's already content on screen; the empty-state spinner
-            above covers the first load. */}
-        {loading && files.length > 0 && (
-          <div className={styles.rowsLoadingOverlay}>
-            <span className={styles.rowsSpinner} />
-          </div>
-        )}
-      </div>
-
-      {/* Pagination footer — same page-number layout as the Upload tab */}
-      {!loading && !error && total > 0 && (
-        <div className={styles.paginationBar}>
-          <div className={styles.paginationTopRow}>
-            <div className={styles.pageSizeGroup}>
-              <span className={styles.pageSizeLabel}>{t('uploadInfer.filePanel.perPage')}</span>
-              <select
-                className={styles.pageSizeSelect}
-                value={pageSize}
-                onChange={e => handlePageSizeChange(Number(e.target.value))}
-              >
-                {PAGE_SIZES.map(size => (
-                  <option key={size} value={size}>{size}</option>
-                ))}
-              </select>
-            </div>
-
-            <div className={styles.pageNav}>
-              <button
-                className={styles.pageNavBtn}
-                onClick={() => goToPage(page - 1)}
-                disabled={page <= 1}
-                aria-label="Previous page"
-              >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                  <path d="M10 3L6 8l4 5" />
-                </svg>
-              </button>
-
-              {(() => {
-                const pageWindow = getPageNumbers(page, totalPages);
-                const showFirst = pageWindow[0] > 1;
-                const showLast = pageWindow[pageWindow.length - 1] < totalPages;
-                return (
-                  <>
-                    {showFirst && (
-                      <>
-                        <button className={styles.pageNumBtn} onClick={() => goToPage(1)}>1</button>
-                        {pageWindow[0] > 2 && <span className={styles.pageEllipsis}>…</span>}
-                      </>
-                    )}
-                    {pageWindow.map(p => (
-                      <button
-                        key={p}
-                        className={`${styles.pageNumBtn} ${p === page ? styles.pageNumBtnActive : ''}`}
-                        onClick={() => goToPage(p)}
-                      >
-                        {p}
-                      </button>
-                    ))}
-                    {showLast && (
-                      <>
-                        {pageWindow[pageWindow.length - 1] < totalPages - 1 && <span className={styles.pageEllipsis}>…</span>}
-                        <button className={styles.pageNumBtn} onClick={() => goToPage(totalPages)}>{totalPages}</button>
-                      </>
-                    )}
-                  </>
-                );
-              })()}
-
-              <button
-                className={styles.pageNavBtn}
-                onClick={() => goToPage(page + 1)}
-                disabled={page >= totalPages}
-                aria-label="Next page"
-              >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                  <path d="M6 3l4 5-4 5" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          <div className={styles.pageInfo}>
-            {t('uploadInfer.filePanel.pageInfo', { page, totalPages, total })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-export default FileSidebar;
-
-
-
-
-
 
 
 
@@ -2390,6 +1920,7 @@ const TabKeywordInsights: React.FC<{ data: KeywordInsights | null }> = ({ data }
 function ScrollableTabRow<T extends string>({
     ids, activeId, onChange, labelFor,
     itemClassName, activeClassName, wrapClassName, trackClassName,
+    dataTourFor,
 }: {
     ids: readonly T[];
     activeId: T;
@@ -2399,6 +1930,11 @@ function ScrollableTabRow<T extends string>({
     activeClassName: string;
     wrapClassName: string;
     trackClassName: string;
+    // Optional — lets a specific caller (e.g. the main results tab bar)
+    // tag each individual tab button for the guided tour, without
+    // affecting other callers that reuse this same component (e.g. the
+    // Keyword Insights sub-tab row).
+    dataTourFor?: (id: T) => string | undefined;
 }) {
     const trackRef = useRef<HTMLDivElement>(null);
     const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -2445,6 +1981,7 @@ function ScrollableTabRow<T extends string>({
                     <button
                         key={id}
                         data-tab-id={id}
+                        data-tour={dataTourFor?.(id)}
                         className={`${itemClassName} ${activeId === id ? activeClassName : ''}`}
                         onClick={() => onChange(id)}
                     >
@@ -2478,6 +2015,7 @@ const ScrollableTabs: React.FC<{ activeTab: TabId; onChange: (id: TabId) => void
                 activeClassName={styles.active}
                 wrapClassName={styles.wsptabsWrap}
                 trackClassName={styles.wsptabs}
+                dataTourFor={id => `results-tab-${id}`}
             />
         </div>
     );
@@ -2547,13 +2085,6 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, Props>(({ step2Visible =
 WorkspacePanel.displayName = 'WorkspacePanel';
 
 export default WorkspacePanel;
-
-
-
-
-
-
-
 
 
 
@@ -3051,7 +2582,21 @@ export default WorkspacePanel;
       "resultsContentTitle": "Your notes, ready to use",
       "resultsContentBody": "Summary, keywords, quiz questions, and more — all generated from the file you selected. You can edit and re-generate individual sections without re-running the whole batch.",
       "resultsTabbarTitle": "Seven kinds of results",
-      "resultsTabbarBody": "Switch between Summary, Keywords, Assessment Questions, Short Answer, True/False, Timestamped Summary, and Keyword Insights — whichever ones you generated for this file."
+      "resultsTabbarBody": "Switch between Summary, Keywords, Assessment Questions, Short Answer, True/False, Timestamped Summary, and Keyword Insights — whichever ones you generated for this file.",
+      "tabSummaryTitle": "Summary",
+      "tabSummaryBody": "A written summary of the file's content.",
+      "tabKeywordsTitle": "Keywords",
+      "tabKeywordsBody": "The key terms extracted from the file, shown as chips.",
+      "tabAssessmentTitle": "Assessment Questions",
+      "tabAssessmentBody": "Quiz-style assessment questions, with a multiple-choice quiz mode and a view-all mode.",
+      "tabShortAnswerTitle": "Short Answer",
+      "tabShortAnswerBody": "Short written-answer questions and responses, revealed one at a time or all at once.",
+      "tabTrueFalseTitle": "True/False",
+      "tabTrueFalseBody": "True/False questions, with the same quiz and view-all modes as Assessment Questions.",
+      "tabTimestampedTitle": "Timestamped Summary",
+      "tabTimestampedBody": "A summary broken into timestamped segments, each linking back to a moment in the recording.",
+      "tabKeywordInsightsTitle": "Keyword Insights",
+      "tabKeywordInsightsBody": "Extra visualizations built from the extracted keywords — knowledge graph, word cloud, timeline, heatmap, clusters, and more."
     },
     "batchGroups": {
       "batchTitle": "Batch #{{id}}",
@@ -3727,6 +3272,11 @@ export default WorkspacePanel;
 
 
 
+
+
+
+
+
 {
   "header": {
     "logoText": "콘텐츠",
@@ -4211,7 +3761,21 @@ export default WorkspacePanel;
       "resultsContentTitle": "바로 활용할 수 있는 결과물",
       "resultsContentBody": "요약, 키워드, 퀴즈 질문 등 선택한 파일에서 생성된 모든 콘텐츠를 확인할 수 있습니다. 전체 배치를 다시 실행하지 않고도 개별 항목을 수정하거나 재생성할 수 있습니다.",
       "resultsTabbarTitle": "7가지 결과 유형",
-      "resultsTabbarBody": "요약, 키워드, 평가 질문, 단답형 답변, 참/거짓, 타임스탬프 요약, 키워드 인사이트 중에서 이 파일에 대해 생성된 항목들을 전환하며 확인할 수 있습니다."
+      "resultsTabbarBody": "요약, 키워드, 평가 질문, 단답형 답변, 참/거짓, 타임스탬프 요약, 키워드 인사이트 중에서 이 파일에 대해 생성된 항목들을 전환하며 확인할 수 있습니다.",
+      "tabSummaryTitle": "요약",
+      "tabSummaryBody": "파일 내용을 요약한 글입니다.",
+      "tabKeywordsTitle": "키워드",
+      "tabKeywordsBody": "파일에서 추출된 핵심 용어들을 칩 형태로 보여줍니다.",
+      "tabAssessmentTitle": "평가 질문",
+      "tabAssessmentBody": "퀴즈 형식의 평가 질문입니다. 객관식 퀴즈 모드와 전체 보기 모드를 제공합니다.",
+      "tabShortAnswerTitle": "단답형 답변",
+      "tabShortAnswerBody": "짧은 서술형 질문과 답변으로, 하나씩 또는 한 번에 모두 확인할 수 있습니다.",
+      "tabTrueFalseTitle": "참/거짓",
+      "tabTrueFalseBody": "참/거짓 질문으로, 평가 질문과 동일한 퀴즈 모드와 전체 보기 모드를 제공합니다.",
+      "tabTimestampedTitle": "타임스탬프 요약",
+      "tabTimestampedBody": "구간별로 시간이 표시된 요약으로, 각 항목이 녹화본의 특정 시점과 연결됩니다.",
+      "tabKeywordInsightsTitle": "키워드 인사이트",
+      "tabKeywordInsightsBody": "추출된 키워드를 바탕으로 만든 추가 시각화 자료입니다 — 지식 그래프, 워드클라우드, 타임라인, 히트맵, 클러스터 등이 포함됩니다."
     },
     "batchGroups": {
       "batchTitle": "배치 #{{id}}",
