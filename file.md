@@ -1,3553 +1,1512 @@
 // ═══════════════════════════════════════════════
-// FilePanel.module.scss
-// Content Analytics · Upload panel — two sections
+// pages/UploadInfer/WorkspacePanel.tsx
+// LectureAI · Step-3 Workspace Result panel
 // ═══════════════════════════════════════════════
-@use '../../styles/mixins' as m;
+import React, { useState, useMemo, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react';
+import { useTranslation } from 'react-i18next';
+import { marked } from 'marked';
+import {
+    ReactFlow, Background, Controls, MiniMap, Handle, Position, applyNodeChanges,
+    type Node as RFNode, type Edge as RFEdge, type NodeChange,
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
+import dagre from 'dagre';
+import api from '../../services/api';
+import type { FileResult, WordCloudData, ImportanceComplexityData, GlossaryData, KeywordInsights } from './UploadInfer';
+import styles from './WorkspacePanel.module.scss';
 
-// ── Outer panel shell ─────────────────────────
-.panel {
-  width: 100%;
-  flex: 1;
-  border-right: none;
-  display: flex;
-  flex-direction: row;
-  align-items: stretch;
-  overflow: hidden;
-  background: var(--bg0);
-  position: relative;
+marked.setOptions({ breaks: false, gfm: true });
 
-  &::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 1px;
-    background: linear-gradient(180deg,
-        rgba(139, 92, 246, 0.0) 0%,
-        rgba(139, 92, 246, 0.6) 20%,
-        rgba(56, 196, 186, 0.7) 55%,
-        rgba(240, 160, 48, 0.6) 85%,
-        rgba(240, 160, 48, 0.0) 100%);
-    pointer-events: none;
-    z-index: 1;
-  }
+interface Props {
+    step2Visible?: boolean;
+    step2Minimized?: boolean;
+    fileResult: FileResult | null;
+    fileLoading: boolean;
+    activeFileId: number | null;
+    onResultUpdate?: (patch: Partial<Pick<FileResult, 'summary' | 'keywords'>>) => void;
 }
 
-// ══════════════════════════════════════
-// SECTION 1 — Step header + upload zone
-// ══════════════════════════════════════
-.step1 {
-  width: 400px;
-  flex-shrink: 0;
-  border-bottom: none;
-  border-right: 1px solid var(--bdr);
-  background: var(--bg0);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  position: relative;
+// TABS labels are now driven by i18n — see tabLabels() inside WorkspacePanel
+const TAB_IDS = ['summary', 'keywords', 'assessment', 'shortAnswer', 'trueFalse', 'timestampedSummary', 'keywordInsights'] as const;
+type TabId = typeof TAB_IDS[number];
 
-  @media (max-width: 1499px) {
-    width: 350px;
-  }
+// Exposed to the parent so the guided tour can drive which tab is showing
+// without lifting activeTab into Redux just for that one use.
+export interface WorkspacePanelHandle {
+    setTab: (id: TabId) => void;
 }
 
-// ── The upload zone itself, as a distinct card sitting in the sidebar ──
-.step1Card {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg1);
-  overflow: hidden;
-  box-shadow: var(--shadow-sm);
+
+interface FaqItem {
+    question: string;
+    options: Record<string, string>;
+    correct_answer: string;
+    explanation: string;
 }
 
-// Reopen affordance shown in the file-list header once the upload
-// column has been collapsed to width: 0 (and its own header bar with it).
-.reopenUploadBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  margin-right: 8px;
-  padding: 3px 9px;
-  border-radius: 99px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  font-size: 12px;
-  @include m.mono;
-  cursor: pointer;
-  transition: all 0.12s;
-
-  svg { width: 10px; height: 10px; }
-
-  &:hover {
-    background: var(--bg3);
-    color: var(--t1);
-    border-color: var(--bdr3);
-  }
-}
-
-// ── Step-1 header bar (original design) ──────
-.step1Bar {
-  padding: 10px 14px;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  border-bottom: none;
-  background: var(--bg1);
-  flex-shrink: 0;
-  white-space: nowrap;
-  position: relative;
-
-  &::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-        rgba(139, 92, 246, 0.0) 0%,
-        rgba(139, 92, 246, 0.6) 20%,
-        rgba(56, 196, 186, 0.7) 50%,
-        rgba(240, 160, 48, 0.6) 80%,
-        rgba(240, 160, 48, 0.0) 100%);
-    pointer-events: none;
-  }
-}
-
-.slbl {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--t2);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  @include m.mono;
-}
-
-// Collapse toggle button — matches original
-.collapseBtn {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-left: auto;
-  padding: 3px 8px;
-  border-radius: 99px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  font-size: 12px;
-  @include m.mono;
-  cursor: pointer;
-  transition: all 0.12s;
-  user-select: none;
-  flex-shrink: 0;
-
-  svg {
-    width: 10px;
-    height: 10px;
-  }
-
-  &:hover {
-    background: var(--bg3);
-    color: var(--t1);
-    border-color: var(--bdr3);
-  }
-}
-
-// ── Collapsible content area — fills the rest of the column, scrolls
-// internally so a long browsed/uploading list doesn't blow out the height ──
-.step1Content {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  @include m.scrollbar;
-}
-
-// ── Drop zone (original style) ────────────────
-.dropzone {
-  border: 1.5px dashed var(--bdr2);
-  border-radius: var(--rxl);
-  padding: 24px 20px;
-  margin: 12px 14px;
-  text-align: center;
-  background: var(--bg1);
-  cursor: pointer;
-  transition: all 0.18s;
-  position: relative;
-  overflow: hidden;
-
-  &::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: radial-gradient(ellipse at 50% 0%, rgba(139, 92, 246, 0.04), transparent 65%);
-    pointer-events: none;
-  }
-
-  &:hover,
-  &.dragOver {
-    border-color: var(--blue);
-    background: var(--bg2);
-  }
-
-  &.dragOver {
-    background: var(--blue-dim);
-  }
-}
-
-.dzIc {
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
-  background: var(--blue-dim);
-  border: 1px solid var(--blue-bdr);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin: 0 auto 11px;
-
-  svg {
-    width: 18px;
-    height: 18px;
-  }
-}
-
-.dzTitle {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--t0);
-  margin-bottom: 4px;
-}
-
-.dzSub {
-  font-size: 13px;
-  color: var(--t2);
-  @include m.mono;
-}
-
-.chips {
-  display: flex;
-  justify-content: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-top: 10px;
-}
-
-.chip {
-  font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 99px;
-  background: var(--bg3);
-  border: 1px solid var(--bdr);
-  color: var(--t2);
-  @include m.mono;
-}
-
-.dzActions {
-  display: flex;
-  gap: 8px;
-  justify-content: center;
-  margin-top: 11px;
-  position: relative;
-  z-index: 1;
-}
-
-// ── Preview / uploading ───────────────────────
-.previewWrap {
-  display: flex;
-  flex-direction: column;
-  animation: fadeSlide 0.18s ease;
-}
-
-.previewList {
-  overflow-y: auto;
-  padding: 8px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  @include m.scrollbar;
-}
-
-// Browsed file card
-.fileCard {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 11px;
-  background: var(--bg2);
-  border: 1px solid var(--bdr);
-  border-radius: var(--rxl);
-  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
-  position: relative;
-  overflow: hidden;
-
-  // Subtle shimmer background
-  &::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: radial-gradient(ellipse at 0% 50%, rgba(139, 92, 246, 0.04), transparent 70%);
-    pointer-events: none;
-  }
-
-  // Left accent bar
-  &::after {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 8px;
-    bottom: 8px;
-    width: 3px;
-    border-radius: 0 3px 3px 0;
-    background: var(--bdr2);
-    transition: background 0.2s;
-  }
-
-  &.uploading {
-    border-color: rgba(139, 92, 246, 0.35);
-    background: rgba(139, 92, 246, 0.05);
-    box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.12) inset;
-
-    &::after {
-      background: linear-gradient(180deg, var(--blue), #a78bfa);
+function parseFaq(raw: string): FaqItem[] {
+    if (!raw || raw === '[]') return [];
+    try {
+        // eslint-disable-next-line no-eval
+        const result = eval(raw);
+        if (Array.isArray(result)) return result as FaqItem[];
+        return [];
+    } catch {
+        // Fallback: try direct JSON parse (if API returns valid JSON)
+        try { return JSON.parse(raw) as FaqItem[]; } catch { }
+        return [];
     }
+}
 
-    &::before {
-      background: radial-gradient(ellipse at 0% 50%, rgba(139, 92, 246, 0.08), transparent 70%);
+// ── Permissive parser for the newer python-repr-style fields (short_answer,
+//    true_false, timestamped_summary). Handles True/False/None literals that
+//    plain eval() can't, and tries strict JSON first since that's cheaper
+//    and safer whenever the backend does send valid JSON. ──
+function parsePyList<T>(raw: string): T[] {
+    if (!raw || raw === '[]') return [];
+    try {
+        const result = JSON.parse(raw);
+        if (Array.isArray(result)) return result as T[];
+    } catch { /* not valid JSON — fall through to python-ish eval */ }
+    try {
+        const normalized = raw
+            .replace(/\bTrue\b/g, 'true')
+            .replace(/\bFalse\b/g, 'false')
+            .replace(/\bNone\b/g, 'null');
+        // eslint-disable-next-line no-eval
+        const result = eval('(' + normalized + ')');
+        if (Array.isArray(result)) return result as T[];
+    } catch { /* give up */ }
+    return [];
+}
+
+interface ShortAnswerItem { question: string; answer: string; }
+interface TrueFalseItem { statement: string; is_true: boolean; explanation: string; }
+interface TimestampSegment { start_time: string; end_time: string; summary: string; }
+
+const CHIP_COLORS = [
+    'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
+    'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
+    'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)',
+    'linear-gradient(135deg, #fa709a 0%, #fee140 100%)',
+    'linear-gradient(135deg, #30cfd0 0%, #330867 100%)',
+    'linear-gradient(135deg, #a8edea 0%, #fed6e3 100%)',
+    'linear-gradient(135deg, #ff9a56 0%, #ff6a88 100%)',
+    'linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%)',
+    'linear-gradient(135deg, #a1c4fd 0%, #c2e9fb 100%)',
+];
+
+function seededColorIndex(str: string): number {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+    return hash % CHIP_COLORS.length;
+}
+
+// ── Copy / Download helpers ───────────────────────────────
+function copyText(text: string) {
+    if (navigator.clipboard) { navigator.clipboard.writeText(text).catch(() => fallbackCopy(text)); }
+    else fallbackCopy(text);
+}
+function fallbackCopy(text: string) {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch { }
+    document.body.removeChild(ta);
+}
+function downloadFile(content: string, filename: string, mime: string) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+function wrapHtml(body: string, title: string): string {
+    return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${title}</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:900px;margin:40px auto;padding:20px;background:#f8f9fa;color:#333}</style></head><body>${body}</body></html>`;
+}
+
+// ── Format helpers ────────────────────────────────────────
+type Formatted = { content: string; filename: string; mime: string };
+
+function formatSummary(summary: string, fmt: string, base = 'summary'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    if (fmt === 'html') return { content: wrapHtml(marked.parse(summary) as string, 'Summary'), filename: `${base}_summary_${ts}.html`, mime: 'text/html' };
+    if (fmt === 'json') return { content: JSON.stringify({ type: 'summary', content: summary, timestamp: new Date().toISOString() }, null, 2), filename: `${base}_summary_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'md') return { content: summary, filename: `${base}_summary_${ts}.md`, mime: 'text/markdown' };
+    return { content: summary, filename: `${base}_summary_${ts}.txt`, mime: 'text/plain' };
+}
+
+function formatKeywords(keywords: string[], fmt: string, base = 'keywords'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    if (fmt === 'html') return { content: wrapHtml(`<div style="display:flex;flex-wrap:wrap;gap:10px">${keywords.map(k => `<span style="padding:6px 14px;border-radius:20px;background:linear-gradient(135deg,#8b5cf6,#a78bfa);color:#fff;font-weight:600">${k}</span>`).join('')}</div>`, 'Keywords'), filename: `${base}_keywords_${ts}.html`, mime: 'text/html' };
+    if (fmt === 'json') return { content: JSON.stringify({ type: 'keywords', keywords, timestamp: new Date().toISOString() }, null, 2), filename: `${base}_keywords_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'md') return { content: '# Keywords\n\n' + keywords.map(k => `- ${k}`).join('\n'), filename: `${base}_keywords_${ts}.md`, mime: 'text/markdown' };
+    return { content: keywords.join('\n'), filename: `${base}_keywords_${ts}.txt`, mime: 'text/plain' };
+}
+
+function formatAssessment(faqRaw: string, fmt: string, base = 'assessment'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    const items = parseFaq(faqRaw);
+    if (fmt === 'json') return { content: JSON.stringify(items, null, 2), filename: `${base}_assessment_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'html') {
+        const body = items.map((q, i) =>
+            `<div style="background:#fff;border-radius:12px;padding:24px;margin-bottom:20px;box-shadow:0 2px 8px rgba(0,0,0,.08);border-left:4px solid #8b5cf6">
+             <div style="font-weight:700;font-size:16px;margin-bottom:14px"><span style="background:linear-gradient(135deg,#8b5cf6,#a78bfa);color:#fff;padding:3px 10px;border-radius:6px;margin-right:10px;font-size:13px">Q${i + 1}</span>${q.question}</div>
+             ${Object.entries(q.options).map(([k, v]) => `<div style="padding:10px 14px;margin:6px 0;border-radius:8px;border:1px solid ${k === q.correct_answer ? '#10b981' : '#e5e7eb'};background:${k === q.correct_answer ? 'rgba(16,185,129,.08)' : '#f9fafb'}"><b style="color:${k === q.correct_answer ? '#10b981' : '#8b5cf6'}">${k}.</b> ${v}${k === q.correct_answer ? ' <span style="background:#10b981;color:#fff;padding:1px 7px;border-radius:4px;font-size:11px">✓</span>' : ''}</div>`).join('')}
+             <div style="margin-top:14px;padding:12px 16px;background:rgba(139,92,246,.06);border-left:3px solid #8b5cf6;border-radius:0 8px 8px 0;font-size:13px"><b style="color:#8b5cf6;font-size:11px;text-transform:uppercase">Explanation</b><br/>${q.explanation}</div>
+             </div>`
+        ).join('');
+        return { content: wrapHtml(body, 'Assessment Questions'), filename: `${base}_assessment_${ts}.html`, mime: 'text/html' };
     }
-  }
+    // txt
+    const txt = items.map((q, i) =>
+        `Q${i + 1}. ${q.question}\n` +
+        Object.entries(q.options).map(([k, v]) => `  ${k}. ${v}${k === q.correct_answer ? ' ✓' : ''}`).join('\n') +
+        `\n\nAnswer: ${q.correct_answer}\nExplanation: ${q.explanation}`
+    ).join('\n\n' + '─'.repeat(60) + '\n\n');
+    return { content: txt, filename: `${base}_assessment_${ts}.txt`, mime: 'text/plain' };
+}
 
-  &.success {
-    border-color: var(--green-bdr);
-    background: var(--green-dim);
-
-    &::after {
-      background: var(--green);
+function formatShortAnswer(raw: string, fmt: string, base = 'short_answer'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    const items = parsePyList<ShortAnswerItem>(raw);
+    if (fmt === 'json') return { content: JSON.stringify(items, null, 2), filename: `${base}_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'html') {
+        const body = items.map((item, i) =>
+            `<div style="background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.08);border-left:4px solid #4facfe">
+             <div style="font-weight:700;font-size:15px;margin-bottom:10px"><span style="background:#4facfe;color:#fff;padding:3px 10px;border-radius:6px;margin-right:10px;font-size:13px">Q${i + 1}</span>${item.question}</div>
+             <div style="padding:10px 14px;background:rgba(79,172,254,.08);border-radius:8px;font-size:13px"><b style="color:#4facfe">Answer:</b> ${item.answer}</div>
+             </div>`
+        ).join('');
+        return { content: wrapHtml(body, 'Short Answer Questions'), filename: `${base}_${ts}.html`, mime: 'text/html' };
     }
+    const txt = items.map((item, i) => `Q${i + 1}. ${item.question}\nA: ${item.answer}`).join('\n\n' + '─'.repeat(60) + '\n\n');
+    return { content: txt, filename: `${base}_${ts}.txt`, mime: 'text/plain' };
+}
 
-    &::before {
-      background: radial-gradient(ellipse at 0% 50%, rgba(52, 211, 153, 0.08), transparent 70%);
+function formatTrueFalse(raw: string, fmt: string, base = 'true_false'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    const items = parsePyList<TrueFalseItem>(raw);
+    if (fmt === 'json') return { content: JSON.stringify(items, null, 2), filename: `${base}_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'html') {
+        const body = items.map((item, i) =>
+            `<div style="background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.08);border-left:4px solid #43e97b">
+             <div style="font-weight:700;font-size:15px;margin-bottom:10px"><span style="background:#43e97b;color:#fff;padding:3px 10px;border-radius:6px;margin-right:10px;font-size:13px">${i + 1}</span>${item.statement}</div>
+             <div style="padding:10px 14px;background:rgba(67,233,123,.08);border-radius:8px;font-size:13px"><b style="color:#43e97b">Answer:</b> ${item.is_true ? 'True' : 'False'}</div>
+             <div style="margin-top:10px;font-size:13px;color:#666"><b>Explanation:</b> ${item.explanation}</div>
+             </div>`
+        ).join('');
+        return { content: wrapHtml(body, 'True / False Questions'), filename: `${base}_${ts}.html`, mime: 'text/html' };
     }
-  }
-
-  &.failed {
-    border-color: var(--red-bdr);
-    background: var(--red-dim);
-
-    &::after {
-      background: var(--red);
-    }
-
-    &::before {
-      background: radial-gradient(ellipse at 0% 50%, rgba(239, 68, 68, 0.08), transparent 70%);
-    }
-  }
-}
-
-// Extension badge (shared between browsed + uploaded cards)
-.extBadge {
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 800;
-  @include m.mono;
-  flex-shrink: 0;
-  letter-spacing: 0.03em;
-  position: relative;
-  z-index: 1;
-
-  &.vtt {
-    background: linear-gradient(135deg, rgba(91, 164, 239, 0.18) 0%, rgba(139, 92, 246, 0.14) 100%);
-    color: var(--blue);
-    border: 1px solid rgba(91, 164, 239, 0.3);
-    box-shadow: 0 1px 4px rgba(91, 164, 239, 0.12);
-  }
-
-  &.srt {
-    background: linear-gradient(135deg, rgba(52, 211, 153, 0.18) 0%, rgba(56, 196, 186, 0.14) 100%);
-    color: var(--green);
-    border: 1px solid rgba(52, 211, 153, 0.3);
-    box-shadow: 0 1px 4px rgba(52, 211, 153, 0.12);
-  }
-}
-
-.fileInfo {
-  flex: 1;
-  min-width: 0;
-}
-
-.fileNameRow {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-}
-
-.fileName {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--t0);
-  @include m.truncate;
-  margin-bottom: 1px;
-  flex: 1;
-  min-width: 0;
-}
-
-.fileId {
-  font-size: 10px;
-  color: var(--t2);
-  @include m.mono;
-  flex-shrink: 0;
-  opacity: 0.65;
-}
-
-// ── File ID badge (shown before ext badge in card) ──
-.fileIdBadge {
-  font-size: 10px;
-  font-weight: 700;
-  font-family: var(--font-mono);
-  color: #a78bfa;
-  background: rgba(167, 139, 250, 0.12);
-  border: 1px solid rgba(167, 139, 250, 0.3);
-  border-radius: 4px;
-  padding: 1px 5px;
-  flex-shrink: 0;
-  white-space: nowrap;
-  letter-spacing: 0.02em;
-}
-
-.fileMeta {
-  font-size: 12px;
-  color: var(--t2);
-  @include m.mono;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 2px;
-  flex-wrap: wrap;
-}
-
-.fileSizeChip {
-  font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 99px;
-  background: var(--bg3);
-  border: 1px solid var(--bdr);
-  color: var(--t2);
-}
-
-.fileStatusText {
-  font-size: 11px;
-  color: var(--t2);
-  opacity: 0.7;
-}
-
-.fileStatusTextSuccess {
-  font-size: 11px;
-  color: var(--green);
-  font-weight: 600;
-}
-
-.fileError {
-  color: var(--red);
-}
-
-// Status icon (upload progress)
-.statusIc {
-  width: 18px;
-  height: 18px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  svg {
-    width: 15px;
-    height: 15px;
-  }
-
-  &.pending {
-    color: var(--t2);
-  }
-
-  &.uploading {
-    color: var(--blue);
-    animation: spin 0.9s linear infinite;
-  }
-
-  &.success {
-    color: var(--green);
-  }
-
-  &.failed {
-    color: var(--red);
-  }
-}
-
-.removeBtn {
-  width: 22px;
-  height: 22px;
-  border-radius: 5px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  padding: 0;
-  transition: all 0.12s;
-
-  svg {
-    width: 10px;
-    height: 10px;
-  }
-
-  &:hover {
-    background: var(--red-dim);
-    border-color: var(--red-bdr);
-    color: var(--red);
-  }
-}
-
-// Action bar (Upload / Cancel)
-.step1Footer {
-  flex-shrink: 0;
-  display: flex;
-  gap: 7px;
-  padding: 12px 14px;
-  border-top: 1px solid var(--bdr);
-  background: var(--bg1);
-}
-
-.step1FooterBtn {
-  flex: 1;
-}
-
-// Upload progress bar
-.uploadSummary {
-  width: 100%;
-}
-
-.uploadProgressBar {
-  height: 3px;
-  background: var(--bg3);
-  border-radius: 99px;
-  overflow: hidden;
-  margin-bottom: 6px;
-}
-
-.uploadProgressFill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--blue), #a78bfa);
-  border-radius: 99px;
-  transition: width 0.4s ease;
-}
-
-.uploadProgressLabel {
-  font-size: 12px;
-  color: var(--t2);
-  @include m.mono;
-}
-
-.failCount {
-  color: var(--red);
-}
-
-// ══════════════════════════════════════
-// SECTION 2 — Uploaded files list
-// ══════════════════════════════════════
-.section2 {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--bg0);
-}
-
-// Section 2 header — stacked: title row + action row/grid below
-.section2Header {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 0;
-  border-bottom: none;
-  background: var(--bg1);
-  flex-shrink: 0;
-  position: relative;
-}
-
-// Title row — checkbox + title + optional search icon
-.section2TitleRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 14px 8px;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.section2Title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--t2);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  @include m.mono;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.filesCount {
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--blue);
-  background: var(--blue-dim);
-  border: 1px solid var(--blue-bdr);
-  padding: 1px 6px;
-  border-radius: 99px;
-}
-
-// Cross-page selection total — shown next to filesCount while in
-// select/delete/export mode so it's clear selections persist across pages.
-.selectedTotalHint {
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--green);
-  background: var(--green-dim);
-  border: 1px solid var(--green-bdr);
-  padding: 1px 6px;
-  border-radius: 99px;
-  margin-left: 4px;
-}
-
-
-
-// ── Delete icon button (used inside mode-bar) ─────────────────
-.deleteIconBtn {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  flex-shrink: 0;
-  transition: all 0.15s;
-
-  svg {
-    width: 14px;
-    height: 14px;
-  }
-
-  &:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.1);
-    border-color: rgba(239, 68, 68, 0.35);
-    color: #ef4444;
-  }
-
-  &:disabled {
-    opacity: 0.3;
-    cursor: default;
-  }
-}
-
-// Confirm-delete state — always red, solid
-.deleteIconBtnConfirm {
-  border-color: rgba(239, 68, 68, 0.45);
-  background: rgba(239, 68, 68, 0.12);
-  color: #ef4444;
-
-  &:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.22);
-    border-color: rgba(239, 68, 68, 0.7);
-    box-shadow: 0 0 8px rgba(239, 68, 68, 0.25);
-  }
-}
-
-.deleteIconBtnDisabled {
-  opacity: 0.4 !important;
-  cursor: default !important;
-}
-
-// ── Export icon button (used inside mode-bar) ─────────────────
-.exportIconBtn {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  flex-shrink: 0;
-  transition: all 0.15s;
-
-  svg {
-    width: 14px;
-    height: 14px;
-  }
-
-  &:hover:not(:disabled) {
-    background: rgba(78, 200, 122, 0.10);
-    border-color: rgba(78, 200, 122, 0.35);
-    color: var(--green);
-  }
-
-  &:disabled {
-    opacity: 0.3;
-    cursor: default;
-  }
-}
-
-// Confirm-export state — always green, solid
-.exportIconBtnConfirm {
-  border-color: rgba(78, 200, 122, 0.45);
-  background: rgba(78, 200, 122, 0.10);
-  color: var(--green);
-
-  &:hover:not(:disabled) {
-    background: rgba(78, 200, 122, 0.20);
-    border-color: rgba(78, 200, 122, 0.70);
-    box-shadow: 0 0 8px rgba(78, 200, 122, 0.22);
-  }
-}
-
-.exportIconBtnDisabled {
-  opacity: 0.4 !important;
-  cursor: default !important;
-}
-
-.miniSpinner {
-  width: 12px;
-  height: 12px;
-  border: 1.5px solid rgba(239, 68, 68, 0.3);
-  border-top-color: #ef4444;
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  flex-shrink: 0;
-}
-
-.miniSpinnerGreen {
-  width: 12px;
-  height: 12px;
-  border: 1.5px solid rgba(78, 200, 122, 0.3);
-  border-top-color: #4ec87a;
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  flex-shrink: 0;
-}
-
-
-// ── Cancel icon button (used inside mode-bar) ─────────────────
-.cancelIconBtn {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  border: 1px solid rgba(239, 68, 68, 0.35);
-  background: rgba(239, 68, 68, 0.08);
-  color: #ef4444;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  flex-shrink: 0;
-  transition: all 0.15s;
-
-  svg {
-    width: 13px;
-    height: 13px;
-  }
-
-  &:hover {
-    background: rgba(239, 68, 68, 0.16);
-    border-color: rgba(239, 68, 68, 0.6);
-    box-shadow: 0 0 6px rgba(239, 68, 68, 0.2);
-  }
-}
-
-// Cards get pointer cursor only when in selection mode
-.uploadedCardWrapSelectable {
-  cursor: pointer;
-}
-
-// Date range filter — sits above section2Header
-.filterSortRow {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 10px 12px;
-  background: var(--bg1);
-  flex-shrink: 0;
-  position: relative;
-
-  &::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-        rgba(139, 92, 246, 0.0) 0%,
-        rgba(139, 92, 246, 0.6) 20%,
-        rgba(56, 196, 186, 0.7) 50%,
-        rgba(240, 160, 48, 0.6) 80%,
-        rgba(240, 160, 48, 0.0) 100%);
-    pointer-events: none;
-  }
-}
-
-.sortHeader {
-  margin-left: auto;
-}
-
-// Row 2 — date filter + status filter on the left, actions trigger on the right
-.filterBarRow {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  width: 100%;
-}
-
-// Groups the status filter and the actions trigger together, pushed to
-// the right edge of the row, with a visible gap between the two.
-.filterBarRight {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin-left: auto;
-  flex-shrink: 0;
-}
-
-// Small caption shown inside the date/status/actions pills so their
-// purpose is legible at a glance, not just implied by an icon.
-.filterBarLabel {
-  font-size: 9.5px;
-  font-weight: 600;
-  color: var(--t2);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  white-space: nowrap;
-  @include m.mono;
-}
-
-// ── Actions — collapsed into a single trigger button + popover ──
-.actionsPopoverWrap {
-  position: relative;
-  flex-shrink: 0;
-}
-
-.actionsTrigger {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 10px;
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  background: var(--bg2);
-  color: var(--t1);
-  cursor: pointer;
-  transition: all 0.12s;
-
-  svg {
-    width: 13px;
-    height: 13px;
-    flex-shrink: 0;
-  }
-
-  &:hover {
-    background: var(--bg3);
-    border-color: var(--bdr3);
-  }
-}
-
-.actionsTriggerOpen {
-  background: var(--blue-dim);
-  border-color: var(--blue-bdr);
-  color: var(--blue);
-}
-
-.actionsTriggerChevron {
-  transition: transform 0.15s;
-
-  .actionsTriggerOpen & {
-    transform: rotate(180deg);
-  }
-}
-
-.actionsPopover {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 20;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px;
-  min-width: 168px;
-  border: 1px solid var(--bdr2);
-  border-radius: var(--rl);
-  background: var(--bg1);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-  animation: fadeSlide 0.14s ease;
-}
-
-.actionsPopover .actionTile {
-  width: 100%;
-  justify-content: flex-start;
-}
-
-.actionTile {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  min-width: 0;
-  height: 28px;
-  gap: 5px;
-  padding: 0 9px;
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  background: var(--bg3);
-  color: var(--t2);
-  font-size: 12px;
-  font-weight: 500;
-  font-family: var(--font-ui);
-  letter-spacing: 0.01em;
-  cursor: pointer;
-  transition: all 0.13s;
-  user-select: none;
-
-  svg {
-    width: 12px;
-    height: 12px;
-    flex-shrink: 0;
-  }
-
-  &:active:not(:disabled) {
-    transform: scale(0.97);
-  }
-
-  &:disabled {
-    opacity: 0.3;
-    cursor: not-allowed;
-  }
-}
-
-.actionTileLabel {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.actionTileDictionary {
-  background: var(--violet-dim);
-  color: var(--violet);
-  border-color: var(--violet-dim);
-
-  &:hover:not(:disabled) { background: var(--violet-dim); border-color: var(--violet); }
-}
-
-.actionTileTemplate {
-  background: var(--teal-dim);
-  color: var(--teal);
-  border-color: var(--teal-bdr);
-
-  &:hover:not(:disabled) { background: var(--teal-dim); border-color: var(--teal); }
-}
-
-.actionTileSearch {
-  background: var(--amber-dim);
-  color: var(--amber);
-  border-color: var(--amber-bdr);
-
-  &:hover:not(:disabled) { background: var(--amber-dim); border-color: var(--amber); }
-}
-
-.actionTileExport {
-  background: var(--green-dim);
-  color: var(--green);
-  border-color: var(--green-bdr);
-
-  &:hover:not(:disabled) { background: var(--green-dim); border-color: var(--green); }
-}
-
-.actionTileDelete {
-  background: var(--red-dim);
-  color: var(--red);
-  border-color: var(--red-bdr);
-
-  &:hover:not(:disabled) { background: var(--red-dim); border-color: var(--red); }
-}
-
-.actionTileActive {
-  outline: 2px solid var(--blue-bdr);
-  outline-offset: -1px;
-}
-
-// Single-line, icon-led date filter — same 32px height as the rest of the row
-.dateFilter {
-  display: flex;
-  align-items: center;
-  height: 32px;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.dateIcon {
-  width: 14px;
-  height: 14px;
-  color: var(--t2);
-  flex-shrink: 0;
-}
-
-.dateField {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  width: 118px;
-  flex-shrink: 0;
-}
-
-.dateLabel {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--t2);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  @include m.mono;
-}
-
-.dateInput {
-  width: 115px;
-  height: 32px;
-  padding: 0 8px;
-  background: var(--bg2);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 12.5px;
-  outline: none;
-  appearance: none;
-  transition: border-color 0.12s;
-  cursor: pointer;
-
-  &:focus {
-    border-color: var(--blue);
-    box-shadow: 0 0 0 2px var(--blue-dim);
-  }
-
-  &::-webkit-calendar-picker-indicator {
-    opacity: 0.7;
-    cursor: pointer;
-    filter: var(--date-icon-filter);
-  }
-}
-
-.dateSep {
-  font-size: 12px;
-  color: var(--t2);
-  flex-shrink: 0;
-}
-
-// ── Status filter ──────────────────────────────
-.statusFilterWrap {
-  display: flex;
-  align-items: center;
-  height: 32px;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.statusFilterSelect {
-  height: 32px;
-  padding: 0 8px;
-  background: var(--bg2);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 12.5px;
-  outline: none;
-  cursor: pointer;
-  transition: border-color 0.12s;
-
-  &:focus { border-color: var(--blue); }
-  &:disabled { opacity: 0.5; cursor: default; }
-}
-
-.applyBtn {
-  height: 32px;
-  padding: 0 12px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t1);
-  font-family: var(--font-ui);
-  font-size: 12.5px;
-  font-weight: 500;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: all 0.12s;
-
-  &:hover:not(:disabled) {
-    background: var(--bg3);
-    border-color: var(--bdr3);
-  }
-
-  &:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-}
-
-// Uploaded file cards
-.uploadedBody {
-  flex: 1;
-  overflow-y: auto;
-  padding: 10px;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  grid-auto-rows: 240px;
-  align-content: start;
-  gap: 12px;
-  @include m.scrollbar;
-}
-
-// listState/errorState (loading, error, empty) span every column so they
-// don't get squeezed into a single grid cell
-.listState {
-  grid-column: 1 / -1;
-}
-
-// ── Square file cards ─────────────────────────
-.fcard {
-  position: relative;
-  height: 100%;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  padding: 50px 16px 40px;
-  border-radius: var(--rl);
-  border: 1px solid var(--bdr3);
-  background: var(--bg1);
-  cursor: default;
-  text-align: center;
-  overflow: hidden;
-  transition: all 0.12s;
-  user-select: none;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
-
-  // Thin accent strip along the top edge — colored by file type (vtt/srt),
-  // gives the card a bit more identity than a flat, uniform border.
-  &::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 2px;
-    background: var(--bdr3);
-  }
-
-  &:has(.vtt)::before { background: linear-gradient(90deg, var(--blue), rgba(91, 164, 239, 0.35)); }
-  &:has(.srt)::before { background: linear-gradient(90deg, var(--green), rgba(78, 200, 122, 0.35)); }
-}
-
-.fcardStatic {
-  cursor: default;
-}
-
-.fcard:not(.fcardStatic) {
-  cursor: pointer;
-
-  &:hover {
-    background: var(--bg2);
-    border-color: var(--bdr4, var(--bdr3));
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-    transform: translateY(-1px);
-  }
-}
-
-.fcardActive,
-.fcardActiveView {
-  background: rgba(91, 164, 239, 0.06);
-  border-color: var(--blue-bdr);
-}
-
-.fcardActiveDelete {
-  background: var(--red-dim);
-  border-color: var(--red-bdr);
-}
-
-.fcardActiveExport {
-  background: var(--green-dim);
-  border-color: var(--green-bdr);
-}
-
-.fcardCheck {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  z-index: 1;
-}
-
-// Dictionary / prompt-template association icons — mirrors the checkbox's
-// corner, opposite side, and only renders when at least one is linked.
-.fcardLinks {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: 1;
-  display: flex;
-  gap: 4px;
-}
-
-.fcardLinkIcon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-
-  svg { width: 12px; height: 12px; }
-}
-
-.fcardLinkIconDict {
-  background: var(--amber-dim);
-  color: var(--amber);
-}
-
-.fcardLinkIconTemplate {
-  background: var(--violet-dim);
-  color: var(--violet);
-}
-
-.fcardIcon {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  z-index: 1;
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10.5px;
-  font-weight: 700;
-  transition: top 0.12s;
-
-  &.vtt { background: var(--blue-dim); color: var(--blue); }
-  &.srt { background: var(--green-dim); color: var(--green); }
-}
-
-// When the selection checkbox is also occupying the top-left corner,
-// nudge the ext badge down below it instead of overlapping.
-.fcardIconShifted {
-  top: 42px;
-}
-
-.fcardName {
-  width: 100%;
-  max-width: 100%;
-  min-height: 38px;
-  margin-bottom: 8px;
-  font-size: 13.5px;
-  font-weight: 500;
-  color: var(--t0);
-  line-height: 1.35;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  word-break: break-word;
-  flex-shrink: 0;
-}
-
-.fcardMeta {
-  font-size: 10.5px;
-  color: var(--t2);
-  flex-shrink: 0;
-  margin-bottom: 14px;
-  @include m.mono;
-}
-
-// Compact toolbar of "which content prompts are customized" buttons
-// (Summary, Keywords, Questions, short Answer, True/false). Bordered as a
-// group + labeled, so it reads as an interactive control rather than a
-// row of static status dots.
-.fcardPrompts {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  flex-shrink: 0;
-  margin-top: auto;
-  margin-bottom: 10px;
-  cursor: default;
-}
-
-.fcardPromptsLabel {
-  font-size: 9px;
-  font-weight: 600;
-  color: var(--t3, var(--t2));
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.fcardPromptsRow {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px;
-  border: 1px solid var(--bdr2);
-  border-radius: 8px;
-  background: var(--bg2);
-  width: fit-content;
-}
-
-.fcardPromptDot {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 25px;
-  height: 25px;
-  border-radius: 6px;
-  border: 1px solid transparent;
-  background: var(--bg1);
-  color: var(--t2);
-  cursor: pointer;
-  transition: all 0.12s;
-
-  svg { width: 13px; height: 13px; }
-
-  &:hover {
-    background: var(--bg3);
-    border-color: var(--bdr3);
-    color: var(--t0);
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.12);
-  }
-}
-
-.fcardPromptDotSet {
-  background: var(--blue-dim);
-  color: var(--blue);
-  border-color: var(--blue-bdr);
-
-  &:hover {
-    background: var(--blue-dim);
-    color: var(--blue);
-    border-color: var(--blue);
-    opacity: 0.9;
-  }
-}
-
-.fcardBadgeDot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
-  animation: fcardPulse 1.4s ease-in-out infinite;
-}
-
-@keyframes fcardPulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-}
-
-.fcardBadge {
-  position: absolute;
-  bottom: 12px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 10px;
-  padding: 3px 8px;
-  max-width: calc(100% - 16px);
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-// ── Uploaded card wrap — carries the static green gradient border ──
-// ── Uploaded file card — mirrors HistoryPanel .hitm ──────────────
-.hitm {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 9px;
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  transition: all 0.12s;
-  margin-bottom: 3px;
-  user-select: none;
-
-  &:hover {
-    background: var(--bg2);
-    border-color: var(--bdr);
-  }
-
-  &.active {
-    background: rgba(91, 164, 239, 0.06);
-    border-color: var(--blue-bdr);
-
-    &::before {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 6px;
-      bottom: 6px;
-      width: 3px;
-      border-radius: 0 3px 3px 0;
-      background: linear-gradient(180deg, var(--blue), #a78bfa);
-    }
-  }
-
-  // Normal-mode file view highlight — distinct purple/amber accent
-  &.activeView {
-    background: rgba(167, 139, 250, 0.06);
-    border-color: rgba(167, 139, 250, 0.3);
-
-    &::before {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 6px;
-      bottom: 6px;
-      width: 3px;
-      border-radius: 0 3px 3px 0;
-      background: linear-gradient(180deg, #a78bfa, var(--amber));
-    }
-  }
-
-  // Delete mode selected — red accent
-  &.activeDelete {
-    background: rgba(239, 68, 68, 0.05);
-    border-color: rgba(239, 68, 68, 0.3);
-
-    &::before {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 6px;
-      bottom: 6px;
-      width: 3px;
-      border-radius: 0 3px 3px 0;
-      background: linear-gradient(180deg, #ef4444, #f97316);
-    }
-  }
-
-  // Export mode selected — green accent
-  &.activeExport {
-    background: rgba(78, 200, 122, 0.05);
-    border-color: rgba(78, 200, 122, 0.28);
-
-    &::before {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 6px;
-      bottom: 6px;
-      width: 3px;
-      border-radius: 0 3px 3px 0;
-      background: linear-gradient(180deg, #4ec87a, #38c4ba);
-    }
-  }
-}
-
-.hitmSelectable {
-  cursor: pointer;
-}
-
-// ── Ext icon ──
-.ficon {
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 700;
-  @include m.mono;
-  flex-shrink: 0;
-
-  &.vtt {
-    background: var(--blue-dim);
-    color: var(--blue);
-  }
-
-  &.srt {
-    background: var(--green-dim);
-    color: var(--green);
-  }
-}
-
-// ── File info ──
-.hi {
-  flex: 1;
-  min-width: 0;
-}
-
-.hn {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--t0);
-  @include m.truncate;
-}
-
-.hm {
-  font-size: 12px;
-  color: var(--t2);
-  margin-top: 2px;
-  @include m.mono;
-}
-
-// Empty / loading / error state
-.listState {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 32px 16px;
-  font-size: 13px;
-  color: var(--t2);
-  @include m.mono;
-  text-align: center;
-
-  svg {
-    width: 18px;
-    height: 18px;
-    opacity: 0.5;
-  }
-}
-
-.errorState {
-  color: var(--red);
-
-  svg {
-    opacity: 0.7;
-  }
-}
-
-.spinner {
-  width: 18px;
-  height: 18px;
-  border: 2px solid var(--bdr2);
-  border-top-color: var(--blue);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-// ── Search icon button ──────────────────────────
-.searchIconBtn {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  flex-shrink: 0;
-  transition: all 0.15s;
-
-  svg {
-    width: 13px;
-    height: 13px;
-  }
-
-  &:hover {
-    background: var(--bg3);
-    border-color: var(--bdr3);
-    color: var(--t0);
-  }
-}
-
-.searchIconBtnActive {
-  border-color: var(--blue-bdr);
-  background: var(--blue-dim);
-  color: var(--blue);
-
-  &:hover {
-    background: var(--blue-dim);
-    border-color: var(--blue);
-    color: var(--blue);
-  }
-}
-
-// ── Search bar (slides in below sortHeader) ──────
-.searchBar {
-  display: grid;
-  grid-template-rows: 0fr;
-  opacity: 0;
-  transition:
-    grid-template-rows 0.22s cubic-bezier(0.4, 0, 0.2, 1),
-    opacity 0.18s ease;
-  overflow: hidden;
-  padding: 0 10px;
-}
-
-.searchBarOpen {
-  grid-template-rows: 1fr;
-  opacity: 1;
-  padding: 6px 10px 4px;
-}
-
-// Flex row: input box + close button — right-aligned, capped width so
-// it doesn't stretch across the whole panel.
-.searchBarRow {
-  min-height: 0;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-}
-
-.searchInner {
-  flex: 0 1 320px;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--bg2);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  padding: 0 8px;
-  transition: border-color 0.15s, box-shadow 0.15s;
-
-  &:focus-within {
-    border-color: var(--blue);
-    box-shadow: 0 0 0 2px var(--blue-dim);
-  }
-}
-
-.searchBarIcon {
-  width: 12px;
-  height: 12px;
-  flex-shrink: 0;
-  color: var(--t2);
-  opacity: 0.6;
-}
-
-.searchInput {
-  flex: 1;
-  min-width: 0;
-  padding: 6px 0;
-  background: transparent;
-  border: none;
-  outline: none;
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 13px;
-
-  &::placeholder {
-    color: var(--t2);
-    opacity: 0.55;
-  }
-}
-
-.searchCloseBtn {
-  width: 20px;
-  height: 20px;
-  border-radius: 5px;
-  border: 1px solid rgba(239, 68, 68, 0.3);
-  background: rgba(239, 68, 68, 0.08);
-  color: #ef4444;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  flex-shrink: 0;
-  transition: all 0.12s;
-
-  svg {
-    width: 8px;
-    height: 8px;
-  }
-
-  &:hover {
-    background: rgba(239, 68, 68, 0.18);
-    border-color: rgba(239, 68, 68, 0.6);
-    box-shadow: 0 0 6px rgba(239, 68, 68, 0.2);
-  }
-}
-
-.searchCount {
-  font-size: 11px;
-  color: var(--t2);
-  font-family: var(--font-mono);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 99px;
-  font-weight: 500;
-  border: 1px solid transparent;
-  white-space: nowrap;
-  @include m.mono;
-}
-
-.bReady {
-  background: var(--green-dim);
-  color: var(--green);
-  border-color: var(--green-bdr);
-}
-
-// Inferenced — green (file has completed inference)
-.bInferred {
-  background: var(--green-dim);
-  color: var(--green);
-  border-color: var(--green-bdr);
-}
-
-// Not Inferenced — amber (file uploaded but not yet processed)
-.bNotInferred {
-  background: rgba(240, 160, 48, 0.1);
-  color: var(--amber);
-  border-color: rgba(240, 160, 48, 0.3);
-}
-
-// Running — blue, with the pulsing dot from fcardBadgeDot
-.bRunning {
-  background: var(--blue-dim);
-  color: var(--blue);
-  border-color: var(--blue-bdr);
-}
-
-// Queued — amber, waiting its turn in the batch
-.bQueued {
-  background: rgba(240, 160, 48, 0.1);
-  color: var(--amber);
-  border-color: rgba(240, 160, 48, 0.3);
-}
-
-// Error — red, inference failed for this file
-.bError {
-  background: var(--red-dim);
-  color: var(--red);
-  border-color: var(--red-bdr);
-}
-
-// Waiting — neutral gray, distinct from "not inferenced" (amber)
-.bWaiting {
-  background: var(--bg2);
-  color: var(--t2);
-  border-color: var(--bdr2);
-}
-
-.bSelected {
-  background: var(--blue-dim);
-  color: var(--blue);
-  border-color: var(--blue-bdr);
-  font-weight: 600;
-}
-
-.bDelete {
-  background: rgba(239, 68, 68, 0.1);
-  color: #ef4444;
-  border-color: rgba(239, 68, 68, 0.3);
-  font-weight: 600;
-}
-
-.bExport {
-  background: var(--green-dim);
-  color: var(--green);
-  border-color: var(--green-bdr);
-  font-weight: 600;
-  gap: 4px;
-}
-
-.bInfo {
-  background: var(--blue-dim);
-  color: var(--blue);
-  border-color: var(--blue-bdr);
-}
-
-// ── Buttons ───────────────────────────────────
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  padding: 6px 13px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t1);
-  font-family: var(--font-ui);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.12s;
-  white-space: nowrap;
-  user-select: none;
-
-  svg {
-    width: 11px;
-    height: 11px;
-  }
-
-  &:hover {
-    background: var(--bg3);
-    color: var(--t0);
-    border-color: var(--bdr3);
-  }
-
-  &:disabled {
-    opacity: 0.45;
-    cursor: default;
-  }
-}
-
-.btnP {
-  background: var(--blue);
-  color: #fff;
-  border-color: var(--blue);
-  font-weight: 600;
-
-  &:hover {
-    background: #a78bfa;
-    border-color: #a78bfa;
-    color: #fff;
-  }
-}
-
-.btnSm {
-  padding: 4px 10px;
-  font-size: 13px;
-}
-
-.btnFull {
-  flex: 1;
-}
-
-.btnDanger {
-  color: var(--red);
-  border-color: var(--red-bdr);
-
-  &:hover {
-    background: var(--red-dim);
-    border-color: var(--red);
-  }
-
-  &:disabled {
-    color: var(--t2);
-    border-color: var(--bdr2);
-    background: transparent;
-    opacity: 0.4;
-    cursor: not-allowed;
-    pointer-events: none;
-
-    &:hover {
-      background: transparent;
-      border-color: var(--bdr2);
-    }
-  }
-}
-
-// ── Animations ───────────────────────────────
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes fadeSlide {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-// ── Checkbox component ──────────────────────────
-.cb {
-  width: 14px;
-  height: 14px;
-  border: 1.5px solid var(--cb-bdr);
-  border-radius: 4px;
-  flex-shrink: 0;
-  cursor: pointer;
-  transition: all 0.12s;
-  position: relative;
-  outline: none;
-
-  &:hover:not(.cbDisabled) {
-    border-color: var(--blue);
-  }
-
-  &:focus-visible {
-    box-shadow: 0 0 0 2px var(--blue-dim);
-  }
-
-  &.cbChecked {
-    background: var(--blue);
-    border-color: var(--blue);
-
-    &::after {
-      content: '';
-      position: absolute;
-      left: 2px;
-      top: 5px;
-      width: 7px;
-      height: 4px;
-      border-left: 1.5px solid #fff;
-      border-bottom: 1.5px solid #fff;
-      transform: rotate(-45deg) translate(0, -1px);
-    }
-  }
-
-  &.cbIndet {
-    background: var(--blue);
-    border-color: var(--blue);
-
-    &::after {
-      content: '';
-      position: absolute;
-      left: 2px;
-      top: 5px;
-      width: 8px;
-      height: 1.5px;
-      background: #fff;
-    }
-  }
-
-  &.cbDisabled {
-    opacity: 0.35;
-    cursor: not-allowed;
-    pointer-events: none;
-  }
-}
-
-// Grouped action buttons — used inside mode-bar (title row)
-.headerActions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: auto;
-  flex-shrink: 0;
-}
-
-// ── Mode action row: search LEFT, confirm+cancel RIGHT ────────
-.modeActionsRow {
-  display: flex;
-  align-items: center;
-  box-sizing: border-box;
-  width: 100%;
-  padding: 0 10px 8px;
-  min-width: 0;
-}
-
-.modeActionsRight {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: auto;
-  flex-shrink: 0;
-}
-
-.modeActionsLeft {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  flex-wrap: wrap;
-}
-
-// Base tile — icon + label side by side
-.modeTile {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 9px;
-  border-radius: 6px;
-  border: 1px solid var(--bdr);
-  background: var(--bg3);
-  color: var(--t2);
-  font-size: 11px;
-  font-weight: 500;
-  font-family: var(--font-ui);
-  cursor: pointer;
-  transition: all 0.13s;
-  user-select: none;
-  white-space: nowrap;
-
-  svg {
-    width: 12px;
-    height: 12px;
-    flex-shrink: 0;
-  }
-
-  &:active:not(:disabled) {
-    transform: scale(0.97);
-  }
-
-  &:disabled {
-    opacity: 0.3;
-    cursor: not-allowed;
-  }
-}
-
-// Search tile — amber tint (left side)
-.modeTileSearch {
-  color: var(--amber);
-  border-color: rgba(240, 160, 48, 0.25);
-  background: rgba(240, 160, 48, 0.08);
-
-  &:hover {
-    background: rgba(240, 160, 48, 0.16);
-    border-color: rgba(240, 160, 48, 0.45);
-  }
-}
-
-.modeTileSearchActive {
-  background: rgba(240, 160, 48, 0.15);
-  border-color: rgba(240, 160, 48, 0.45);
-}
-
-// Confirm export — green
-.modeTileConfirmExport {
-  color: var(--green);
-  border-color: var(--green-bdr);
-  background: var(--green-dim);
-
-  &:hover:not(:disabled) {
-    background: var(--green);
-    border-color: var(--green);
-    color: #fff;
-  }
-}
-
-// Confirm delete — red
-.modeTileConfirmDelete {
-  color: #ef4444;
-  border-color: rgba(239, 68, 68, 0.25);
-  background: rgba(239, 68, 68, 0.08);
-
-  &:hover:not(:disabled) {
-    background: rgba(239, 68, 68, 0.18);
-    border-color: rgba(239, 68, 68, 0.5);
-  }
-}
-
-// Cancel
-.modeTileCancel {
-  color: var(--t2);
-  border-color: var(--bdr2);
-  background: transparent;
-
-  &:hover {
-    background: var(--bg2);
-    border-color: var(--bdr3);
-    color: var(--t0);
-  }
-}
-
-// Disabled state
-.modeTileDisabled {
-  opacity: 0.35 !important;
-  cursor: not-allowed !important;
-}
-
-// "Export all files" trigger — mirrors modeTileDeleteAll but green/non-destructive
-.modeTileExportAll {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 9px;
-  border-radius: 6px;
-  border: 1px solid var(--green-bdr);
-  background: var(--green-dim);
-  color: var(--green);
-  font-size: 11px;
-  font-weight: 600;
-  font-family: var(--font-ui);
-  cursor: pointer;
-  transition: all 0.13s;
-  user-select: none;
-  white-space: nowrap;
-
-  svg {
-    width: 12px;
-    height: 12px;
-    flex-shrink: 0;
-  }
-
-  &:hover:not(:disabled) {
-    background: var(--green);
-    border-color: var(--green);
-    color: #fff;
-  }
-
-  &:disabled {
-    opacity: 0.35;
-    cursor: not-allowed;
-  }
-}
-
-.modeActionsError {
-  font-size: 11px;
-  color: #ef4444;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 160px;
-}
-
-// "Delete all files" trigger — deliberately louder/more solid than the
-// per-row delete tile since it's an account-wide destructive action.
-.modeTileDeleteAll {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 9px;
-  border-radius: 6px;
-  border: 1px solid rgba(239, 68, 68, 0.5);
-  background: rgba(239, 68, 68, 0.14);
-  color: #ef4444;
-  font-size: 11px;
-  font-weight: 600;
-  font-family: var(--font-ui);
-  cursor: pointer;
-  transition: all 0.13s;
-  user-select: none;
-  white-space: nowrap;
-
-  svg {
-    width: 12px;
-    height: 12px;
-    flex-shrink: 0;
-  }
-
-  &:hover:not(:disabled) {
-    background: #ef4444;
-    border-color: #ef4444;
-    color: #fff;
-  }
-
-  &:disabled {
-    opacity: 0.3;
-    cursor: not-allowed;
-  }
-}
-
-// ── Delete-ALL confirmation (danger zone) ───────────────────────────
-.dangerOverlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(2px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 200;
-  padding: 16px;
-}
-
-.dangerModal {
-  width: 100%;
-  max-width: 360px;
-  background: var(--bg1);
-  border: 1px solid rgba(239, 68, 68, 0.4);
-  border-radius: 10px;
-  padding: 20px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  gap: 4px;
-}
-
-.dangerIcon {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background: rgba(239, 68, 68, 0.14);
-  color: #ef4444;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 6px;
-
-  svg {
-    width: 22px;
-    height: 22px;
-  }
-}
-
-.dangerTitle {
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--t0);
-  font-family: var(--font-ui);
-}
-
-.dangerBody {
-  font-size: 13px;
-  color: var(--t2);
-  line-height: 1.5;
-  margin-bottom: 8px;
-}
-
-.dangerLabel {
-  align-self: flex-start;
-  font-size: 12px;
-  color: var(--t1);
-  margin-top: 4px;
-}
-
-.dangerInput {
-  width: 100%;
-  padding: 7px 10px;
-  background: var(--bg0);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 13px;
-  outline: none;
-  margin-top: 4px;
-  margin-bottom: 6px;
-  text-align: center;
-  transition: border-color 0.12s;
-
-  &:focus {
-    border-color: #ef4444;
-    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.15);
-  }
-
-  &:disabled {
-    opacity: 0.6;
-  }
-}
-
-.dangerError {
-  font-size: 12px;
-  color: #ef4444;
-  margin-bottom: 6px;
-}
-
-.dangerActions {
-  display: flex;
-  gap: 8px;
-  width: 100%;
-  margin-top: 6px;
-}
-
-// .uploadedCardSel replaced by .hitm.active
-
-// Uploaded card disabled (batch running)
-.uploadedCardDisabled {
-  cursor: default !important;
-  opacity: 0.65;
-  pointer-events: none;
-}
-
-// ── Sort header ─────────────────────────────────────
-.sortHeader {
-  display: flex;
-  align-items: center;
-  height: 32px;
-  background: var(--bg2);
-  border: 1px solid var(--bdr);
-  border-radius: var(--r);
-  padding: 0 6px 0 10px;
-  gap: 6px;
-  flex-shrink: 0;
-  overflow: hidden;
-}
-
-.sortHeaderLabel {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--t2);
-  font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  white-space: nowrap;
-  flex-shrink: 0;
-
-  svg {
-    width: 11px;
-    height: 11px;
-    opacity: 0.6;
-  }
-}
-
-.sortCols {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.sortCol {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 8px;
-  background: transparent;
-  border: none;
-  border-radius: 5px;
-  color: var(--t2);
-  font-size: 12px;
-  font-family: var(--font-mono);
-  cursor: pointer;
-  transition: all 0.12s;
-  white-space: nowrap;
-
-  svg {
-    width: 8px;
-    height: 10px;
-    flex-shrink: 0;
-    transition: transform 0.2s;
-  }
-
-  &:hover {
-    background: var(--bg3);
-    color: var(--t1);
-  }
-}
-
-.sortColActive {
-  background: var(--blue-dim);
-  color: var(--blue);
-  font-weight: 600;
-
-  &:hover {
-    background: var(--blue-dim);
-  }
-}
-
-.sortInactive {
-  opacity: 0.25;
-}
-
-.sortAsc {
-  transform: rotate(180deg);
-}
-
-// arrow up
-.sortDesc {
-  transform: rotate(0deg);
-}
-
-// arrow down (default path direction)
-// ── Small screen overrides (height < 1000px) ─────────────────
-@media (max-height: 999px) {
-
-  // Step-1 bar — tighter
-  .step1Bar {
-    padding: 7px 14px;
-  }
-
-  // Dropzone — much more compact
-  .dropzone {
-    padding: 10px 16px;
-    margin: 6px 10px;
-  }
-
-  .dzIc {
-    width: 28px;
-    height: 28px;
-    margin-bottom: 6px;
-
-    svg {
-      width: 14px;
-      height: 14px;
-    }
-  }
-
-  .dzTitle {
-    font-size: 12px;
-    margin-bottom: 2px;
-  }
-
-  .dzSub {
-    font-size: 11px;
-  }
-
-  .dzActions {
-    margin-top: 7px;
-    gap: 6px;
-  }
-
-  // Section2 title row
-  .section2TitleRow {
-    padding: 7px 14px 6px;
-  }
-
-  // Mode action row
-  .modeActionsRow {
-    padding: 0 8px 6px;
-  }
-
-  // Date filter — tighter
-  .dateFilter {
-    padding: 5px 10px 5px;
-    gap: 5px;
-  }
-
-  .dateInput {
-    padding: 3px 6px;
-    font-size: 12px;
-  }
-
-  // Sort header — tighter
-  .sortHeader {
-    margin-bottom: 4px;
-  }
-
-  .sortCol {
-    padding: 4px 4px;
-    font-size: 11px;
-  }
-
-  .sortHeaderLabel {
-    padding: 4px 0;
-    padding-right: 6px;
-    font-size: 9px;
-  }
-
-  // File list — tighter items, ensure it can grow
-  .uploadedBody {
-    padding: 4px 8px;
-    gap: 2px;
-  }
-
-  .hitm {
-    padding: 5px 8px;
-    margin-bottom: 1px;
-  }
-
-  .ficon {
-    width: 22px;
-    height: 22px;
-    font-size: 9px;
-  }
-
-  .hn {
-    font-size: 12px;
-  }
-
-  .hm {
-    font-size: 11px;
-    margin-top: 1px;
-  }
-
-  .badge {
-    font-size: 10px;
-    padding: 1px 6px;
-  }
-}
-
-// ── Pagination footer (bottom of the uploaded-files list) ──────────
-.paginationBar {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 10px;
-  border-top: 1px solid var(--bdr2);
-  background: var(--bg1);
-  flex-shrink: 0;
-}
-
-.paginationTopRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex-wrap: nowrap;
-  min-width: 0;
-}
-
-.pageSizeGroup {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.pageSizeLabel {
-  font-size: 11px;
-  color: var(--t2);
-  white-space: nowrap;
-}
-
-.pageSizeSelect {
-  padding: 3px 6px;
-  background: var(--bg0);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  outline: none;
-  cursor: pointer;
-  transition: border-color 0.12s;
-
-  &:focus {
-    border-color: var(--blue);
-    box-shadow: 0 0 0 2px var(--blue-dim);
-  }
-}
-
-// Page-number row sits to the right of the page-size selector. It never
-// wraps to its own line — if there isn't room for every number button,
-// this row scrolls horizontally within itself instead.
-.pageNav {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 2px;
-  flex-wrap: nowrap;
-  flex-shrink: 1;
-  min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-
-  &::-webkit-scrollbar {
-    display: none;
-  }
-}
-
-.pageNavBtn,
-.pageNumBtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 24px;
-  height: 24px;
-  padding: 0 6px;
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--t1);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.12s;
-  user-select: none;
-  flex-shrink: 0;
-
-  svg {
-    width: 11px;
-    height: 11px;
-  }
-
-  &:hover:not(:disabled) {
-    background: var(--bg3);
-    color: var(--t0);
-    border-color: var(--bdr3);
-  }
-
-  &:disabled {
-    opacity: 0.35;
-    cursor: default;
-  }
-}
-
-.pageNumBtnActive {
-  background: var(--blue-dim);
-  border-color: var(--blue-bdr);
-  color: var(--blue);
-  font-weight: 700;
-
-  &:hover:not(:disabled) {
-    background: var(--blue-dim);
-    color: var(--blue);
-  }
-}
-
-.pageEllipsis {
-  color: var(--t2);
-  font-size: 12px;
-  padding: 0 2px;
-  user-select: none;
-  flex-shrink: 0;
-}
-
-.pageInfo {
-  font-size: 11px;
-  color: var(--t2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: right;
-  @include m.mono;
-}
-
-@media (min-width: 1920px) {
-  .section1Title {
-    font-size: 14px;
-  }
-
-  .section2Title {
-    font-size: 14px;
-  }
-
-  .uploadHint {
-    font-size: 13px;
-  }
-
-  .uploadZoneText {
-    font-size: 14px;
-  }
-
-  .sortHeaderLabel {
-    font-size: 12px;
-  }
-
-  .sortBtn {
-    font-size: 13px;
-  }
-
-  .fileName {
-    font-size: 14px;
-  }
-
-  .fileMeta {
-    font-size: 12px;
-  }
-
-  .fileDate {
-    font-size: 12px;
-  }
-
-  .badge {
-    font-size: 13px;
-  }
-
-  .btn {
-    font-size: 13px;
-  }
-
-  .listState {
-    font-size: 14px;
-  }
-
-  .searchInput {
-    font-size: 14px;
-  }
-
-  .searchCount {
-    font-size: 12px;
-  }
-
-  .dateLabel {
-    font-size: 12px;
-  }
-
-  .dateInput {
-    font-size: 13px;
-  }
-
-  .emptyState {
-    font-size: 14px;
-  }
-}
-
-// ── Per-file prompt viewer popup ─────────────────
-.promptViewerModal {
-  width: 100%;
-  max-width: 480px;
-  max-height: 70vh;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg1);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--rl);
-  box-shadow: var(--shadow);
-  overflow: hidden;
-}
-
-.promptViewerHead {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--bdr);
-  flex-shrink: 0;
-}
-
-.promptViewerTitle {
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--t0);
-}
-
-.promptViewerFile {
-  margin-top: 2px;
-  font-size: 12px;
-  color: var(--t2);
-  @include m.truncate;
-}
-
-.promptViewerClose {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  flex-shrink: 0;
-  border-radius: 6px;
-  border: none;
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-
-  svg { width: 13px; height: 13px; }
-
-  &:hover {
-    background: var(--bg3);
-    color: var(--t0);
-  }
-}
-
-.promptViewerBody {
-  padding: 16px;
-  overflow-y: auto;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--t1);
-  white-space: pre-wrap;
-  word-break: break-word;
-  @include m.scrollbar;
-}
-
-.promptViewerEmpty {
-  color: var(--t2);
-  font-style: italic;
-}
-
-
-
-
-
-
-
-
-
-
-
-
-// ═══════════════════════════════════════════════
-// FileSidebar.module.scss
-// Content Analytics · Shared sidebar for the Infer + Workspace tabs
-// ═══════════════════════════════════════════════
-@use '../../styles/mixins' as m;
-
-.sidebar {
-  width: 400px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--bg0);
-  border-right: 1px solid var(--bdr);
-
-  :global(html.light) & {
-    background: #fff;
-  }
-
-  @media (max-width: 1499px) {
-    width: 350px;
-  }
-}
-
-// ── Date range filter ─────────────────────────
-.dateFilter {
-  display: flex;
-  align-items: flex-end;
-  gap: 6px;
-  padding: 12px 14px;
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--bdr);
-}
-
-.dateField {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  flex: 1;
-  min-width: 0;
-}
-
-.dateLabel {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--t2);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  @include m.mono;
-}
-
-.dateInput {
-  width: 100%;
-  padding: 4px 7px;
-  background: var(--bg1);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 13px;
-  outline: none;
-  appearance: none;
-  transition: border-color 0.12s;
-  cursor: pointer;
-
-  &:focus {
-    border-color: var(--blue);
-    box-shadow: 0 0 0 2px var(--blue-dim);
-  }
-
-  &::-webkit-calendar-picker-indicator {
-    opacity: 0.7;
-    cursor: pointer;
-    filter: var(--date-icon-filter);
-  }
-}
-
-.dateSep {
-  font-size: 13px;
-  color: var(--t2);
-  padding-bottom: 4px;
-  flex-shrink: 0;
-}
-
-// ── Status filter ──────────────────────────────
-// Status filter + search box share one row to avoid stacking two
-// nearly-empty lines on top of each other.
-.filterSearchRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 10px 14px 10px;
-  flex-shrink: 0;
-}
-
-.statusFilterWrap {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  width: 132px;
-  flex-shrink: 0;
-}
-
-.statusFilterIcon {
-  width: 14px;
-  height: 14px;
-  color: var(--t2);
-  flex-shrink: 0;
-}
-
-.statusFilterSelect {
-  flex: 1;
-  height: 30px;
-  padding: 0 8px;
-  background: var(--bg1);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 12.5px;
-  outline: none;
-  cursor: pointer;
-  transition: border-color 0.12s;
-
-  &:focus { border-color: var(--blue); }
-  &:disabled { opacity: 0.5; cursor: default; }
-}
-
-.applyBtn {
-  align-self: flex-end;
-  padding: 4px 12px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t1);
-  font-family: var(--font-ui);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: all 0.12s;
-
-  &:hover:not(:disabled) {
-    background: var(--bg3);
-    border-color: var(--bdr3);
-  }
-
-  &:disabled {
-    opacity: 0.6;
-    cursor: default;
-  }
-}
-
-.miniSpinner {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  border: 2px solid var(--bdr3);
-  border-top-color: var(--t1);
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-}
-
-.headSpinner {
-  display: inline-block;
-  width: 11px;
-  height: 11px;
-  border: 2px solid var(--bdr3);
-  border-top-color: var(--blue);
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  flex-shrink: 0;
-}
-
-.rowsSpinner {
-  display: inline-block;
-  width: 18px;
-  height: 18px;
-  border: 2.5px solid var(--bdr3);
-  border-top-color: var(--blue);
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  margin-bottom: 8px;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-// ── List header ────────────────────────────────
-.head {
-  @include m.flex-center;
-  gap: 8px;
-  padding: 12px 14px 8px;
-  flex-shrink: 0;
-}
-
-.headTitle {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--t1);
-}
-
-.headCount {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--t2);
-  background: var(--bg2);
-  border-radius: 99px;
-  padding: 1px 7px;
-}
-
-.headSelected {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--blue);
-}
-
-// ── Search ─────────────────────────────────────
-.searchWrap {
-  position: relative;
-  flex: 1;
-  min-width: 0;
-}
-
-.searchIcon {
-  position: absolute;
-  left: 9px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 13px;
-  height: 13px;
-  color: var(--t2);
-  pointer-events: none;
-}
-
-.searchInput {
-  width: 100%;
-  height: 30px;
-  padding: 0 10px 0 28px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: var(--bg1);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 12px;
-
-  &::placeholder { color: var(--t2); }
-  &:focus { outline: none; border-color: var(--bdr3); }
-}
-
-// ── Rows ───────────────────────────────────────
-.rowsWrap {
-  position: relative;
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.rows {
-  flex: 1;
-  overflow-y: auto;
-  padding: 0 8px 12px;
-  @include m.scrollbar;
-}
-
-.rowsLoadingOverlay {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg1);
-  background: color-mix(in srgb, var(--bg0) 70%, transparent);
-  cursor: wait;
-  z-index: 2;
-}
-
-.empty {
-  padding: 20px 12px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--t2);
-}
-
-.emptyLoading {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 24px 12px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--t2);
-}
-
-.row {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 8px 9px;
-  border-radius: var(--r);
-  color: var(--t1);
-  cursor: pointer;
-  @include m.theme-transition;
-
-  &:hover { background: var(--bg2); }
-}
-
-.rowDisabled {
-  opacity: 0.5;
-  cursor: default;
-  pointer-events: none;
-}
-
-// ── File row — mirrors FilePanel's pre-card .hitm design ──────
-.hitm {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 9px;
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  transition: all 0.12s;
-  margin-bottom: 3px;
-  user-select: none;
-
-  &:hover {
-    background: var(--bg2);
-    border-color: var(--bdr);
-  }
-
-  &.active {
-    background: rgba(91, 164, 239, 0.06);
-    border-color: var(--blue-bdr);
-
-    &::before {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 6px;
-      bottom: 6px;
-      width: 3px;
-      border-radius: 0 3px 3px 0;
-      background: linear-gradient(180deg, var(--blue), #a78bfa);
-    }
-  }
-
-  &.activeView {
-    background: rgba(167, 139, 250, 0.06);
-    border-color: rgba(167, 139, 250, 0.3);
-
-    &::before {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 6px;
-      bottom: 6px;
-      width: 3px;
-      border-radius: 0 3px 3px 0;
-      background: linear-gradient(180deg, #a78bfa, var(--amber));
-    }
-  }
-}
-
-.hitmSelectable {
-  cursor: pointer;
-}
-
-.ficon {
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 700;
-  @include m.mono;
-  flex-shrink: 0;
-
-  &.vtt { background: var(--blue-dim); color: var(--blue); }
-  &.srt { background: var(--green-dim); color: var(--green); }
-}
-
-.hi {
-  flex: 1;
-  min-width: 0;
-}
-
-.hn {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--t0);
-  @include m.truncate;
-}
-
-.hm {
-  font-size: 12px;
-  color: var(--t2);
-  margin-top: 2px;
-  @include m.mono;
-}
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  padding: 2px 7px;
-  border-radius: 99px;
-  font-weight: 500;
-  border: 1px solid transparent;
-  white-space: nowrap;
-  flex-shrink: 0;
-  @include m.mono;
-}
-
-.bSelected {
-  background: var(--blue-dim);
-  color: var(--blue);
-  border-color: var(--blue-bdr);
-}
-
-.bInferred {
-  background: var(--green-dim);
-  color: var(--green);
-  border-color: var(--green-bdr);
-}
-
-.bNotInferred {
-  background: rgba(240, 160, 48, 0.1);
-  color: var(--amber);
-  border-color: rgba(240, 160, 48, 0.3);
-}
-
-.bRunning {
-  background: var(--blue-dim);
-  color: var(--blue);
-  border-color: var(--blue-bdr);
-}
-
-.bQueued {
-  background: rgba(240, 160, 48, 0.1);
-  color: var(--amber);
-  border-color: rgba(240, 160, 48, 0.3);
-}
-
-// Waiting — neutral gray, distinct from "not inferenced" (amber)
-.bWaiting {
-  background: var(--bg2);
-  color: var(--t2);
-  border-color: var(--bdr2);
-}
-
-.badgeDot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
-  animation: fsBadgePulse 1.4s ease-in-out infinite;
-}
-
-@keyframes fsBadgePulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-}
-
-// ── Checkbox (mirrors FilePanel's) ─────────────
-.cb {
-  width: 15px;
-  height: 15px;
-  flex-shrink: 0;
-  border-radius: 4px;
-  border: 1px solid var(--cb-bdr);
-  background: transparent;
-  cursor: pointer;
-  position: relative;
-  transition: all 0.12s;
-
-  &:hover { border-color: var(--blue); }
-}
-
-.cbChecked {
-  background: var(--blue);
-  border-color: var(--blue);
-
-  &::after {
-    content: '';
-    position: absolute;
-    left: 4px;
-    top: 1px;
-    width: 4px;
-    height: 8px;
-    border: solid white;
-    border-width: 0 2px 2px 0;
-    transform: rotate(45deg);
-  }
-}
-
-.cbIndet {
-  background: var(--blue);
-  border-color: var(--blue);
-
-  &::after {
-    content: '';
-    position: absolute;
-    left: 3px;
-    top: 6px;
-    width: 7px;
-    height: 2px;
-    background: white;
-  }
-}
-
-.cbDisabled {
-  opacity: 0.4;
-  pointer-events: none;
-}
-
-// ── Pagination footer — matches the Upload tab's layout ──
-.paginationBar {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px 12px;
-  border-top: 1px solid var(--bdr);
-  flex-shrink: 0;
-}
-
-.paginationTopRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex-wrap: nowrap;
-  min-width: 0;
-}
-
-.pageSizeGroup {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.pageSizeLabel {
-  font-size: 11px;
-  color: var(--t2);
-  white-space: nowrap;
-}
-
-.pageSizeSelect {
-  padding: 3px 6px;
-  background: var(--bg1);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  color: var(--t1);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  outline: none;
-  cursor: pointer;
-  transition: border-color 0.12s;
-
-  &:focus { border-color: var(--blue); }
-}
-
-.pageNav {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.pageNavBtn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: var(--bg1);
-  color: var(--t2);
-  cursor: pointer;
-  transition: all 0.12s;
-  flex-shrink: 0;
-
-  svg { width: 13px; height: 13px; }
-
-  &:hover:not(:disabled) {
-    background: var(--bg2);
-    color: var(--t0);
-  }
-
-  &:disabled {
-    opacity: 0.35;
-    cursor: default;
-  }
-}
-
-.pageNumBtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 24px;
-  height: 24px;
-  padding: 0 6px;
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--t1);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.12s;
-  user-select: none;
-  flex-shrink: 0;
-
-  &:hover:not(:disabled) {
-    background: var(--bg3);
-    color: var(--t0);
-    border-color: var(--bdr3);
-  }
-
-  &:disabled {
-    opacity: 0.35;
-    cursor: default;
-  }
-}
-
-.pageNumBtnActive {
-  background: var(--blue-dim);
-  border-color: var(--blue-bdr);
-  color: var(--blue);
-  font-weight: 700;
-
-  &:hover:not(:disabled) {
-    background: var(--blue-dim);
-    color: var(--blue);
-  }
-}
-
-.pageEllipsis {
-  color: var(--t2);
-  font-size: 12px;
-  padding: 0 2px;
-  user-select: none;
-  flex-shrink: 0;
-}
-
-.pageInfo {
-  font-size: 11px;
-  color: var(--t2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: right;
-  @include m.mono;
-}
-
-.pageIndicator {
-  font-size: 12px;
-  color: var(--t2);
-  @include m.mono;
-  min-width: 44px;
-  text-align: center;
-}
-
-// ── Sort header — same as the Upload tab's sort chip ──
-.sortHeader {
-  display: flex;
-  align-items: center;
-  height: 32px;
-  background: var(--bg2);
-  border: 1px solid var(--bdr);
-  border-radius: var(--r);
-  padding: 0 6px 0 10px;
-  gap: 6px;
-  margin: 0 14px 10px;
-  flex-shrink: 0;
-  overflow: hidden;
-}
-
-.sortHeaderLabel {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--t2);
-  font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  white-space: nowrap;
-  flex-shrink: 0;
-
-  svg {
-    width: 11px;
-    height: 11px;
-    opacity: 0.6;
-  }
-}
-
-.sortCols {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex: 1;
-}
-
-.sortCol {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 6px;
-  background: transparent;
-  border: none;
-  border-radius: 5px;
-  color: var(--t2);
-  font-size: 11.5px;
-  font-family: var(--font-mono);
-  cursor: pointer;
-  transition: all 0.12s;
-  white-space: nowrap;
-
-  svg {
-    width: 8px;
-    height: 10px;
-    flex-shrink: 0;
-    transition: transform 0.2s;
-  }
-
-  &:hover:not(:disabled) {
-    background: var(--bg3);
-    color: var(--t1);
-  }
-
-  &:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-}
-
-.sortColActive {
-  background: var(--blue-dim);
-  color: var(--blue);
-  font-weight: 600;
-
-  &:hover:not(:disabled) {
-    background: var(--blue-dim);
-  }
-}
-
-.sortInactive {
-  opacity: 0.25;
-}
-
-.sortAsc {
-  transform: rotate(180deg);
-}
+    const txt = items.map((item, i) => `${i + 1}. ${item.statement}\nAnswer: ${item.is_true ? 'True' : 'False'}\nExplanation: ${item.explanation}`).join('\n\n' + '─'.repeat(60) + '\n\n');
+    return { content: txt, filename: `${base}_${ts}.txt`, mime: 'text/plain' };
+}
+
+function formatTimestampedSummary(raw: string, fmt: string, base = 'timestamped_summary'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    const items = parsePyList<TimestampSegment>(raw);
+    if (fmt === 'json') return { content: JSON.stringify(items, null, 2), filename: `${base}_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'md') return { content: items.map(s => `### ${s.start_time} – ${s.end_time}\n\n${s.summary}`).join('\n\n'), filename: `${base}_${ts}.md`, mime: 'text/markdown' };
+    const txt = items.map(s => `[${s.start_time} – ${s.end_time}]\n${s.summary}`).join('\n\n');
+    return { content: txt, filename: `${base}_${ts}.txt`, mime: 'text/plain' };
+}
+
+
+const SUMMARY_FMTS = [{ k: 'txt', l: 'Text' }, { k: 'md', l: 'Markdown' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const KEYWORDS_FMTS = [{ k: 'txt', l: 'Text' }, { k: 'md', l: 'Markdown' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const ASSESSMENT_FMTS = [{ k: 'txt', l: 'Plain Text' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const SHORT_ANSWER_FMTS = [{ k: 'txt', l: 'Plain Text' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const TRUE_FALSE_FMTS = [{ k: 'txt', l: 'Plain Text' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const TIMESTAMPED_SUMMARY_FMTS = [{ k: 'txt', l: 'Text' }, { k: 'md', l: 'Markdown' }, { k: 'json', l: 'JSON' }];
+
+// ── ActionBtn ─────────────────────────────────────────────
+const ActionBtn: React.FC<{ title: string; onClick: () => void; active?: boolean; children: React.ReactNode }> = ({ title, onClick, active, children }) => (
+    <button className={`${styles.actionBtn} ${active ? styles.actionBtnActive : ''}`} title={title} onClick={e => { e.stopPropagation(); onClick(); }}>
+        {children}
+    </button>
+);
+
+// ── FormatIcon ────────────────────────────────────────────
+// Small colored glyph rendered next to each format option in the
+// Copy / Download dropdowns. Each format has a recognisable hue.
+const FORMAT_ICONS: Record<string, { color: string; bg: string; node: React.ReactNode }> = {
+    txt: {
+        color: '#64748b',
+        bg: 'rgba(100, 116, 139, 0.12)',
+        node: (
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 2.5h6.5L13 6v7.5A1 1 0 0112 14.5H3a1 1 0 01-1-1v-10a1 1 0 011-1z" />
+                <path d="M9 2.5V6h4" />
+                <path d="M5 9h6M5 11.5h4" />
+            </svg>
+        ),
+    },
+    md: {
+        color: '#3b82f6',
+        bg: 'rgba(59, 130, 246, 0.14)',
+        node: (
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="1.5" y="3.5" width="13" height="9" rx="1.5" />
+                <path d="M4 10.5V6l1.75 2.5L7.5 6v4.5" />
+                <path d="M10.25 6v4.5M8.75 9l1.5 1.5L11.75 9" />
+            </svg>
+        ),
+    },
+    html: {
+        color: '#e34f26',
+        bg: 'rgba(227, 79, 38, 0.14)',
+        node: (
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M2.5 2l1 12 4.5 1.3L12.5 14l1-12z" />
+                <path d="M5 5.5h6L10.6 11l-2.6.8L5.4 11l-.15-2" />
+            </svg>
+        ),
+    },
+    json: {
+        color: '#f59e0b',
+        bg: 'rgba(245, 158, 11, 0.14)',
+        node: (
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M6 2.5C4.5 2.5 4 3.5 4 5v1.5C4 7.5 3 8 2 8c1 0 2 .5 2 1.5V11c0 1.5.5 2.5 2 2.5" />
+                <path d="M10 2.5c1.5 0 2 1 2 2.5v1.5C12 7.5 13 8 14 8c-1 0-2 .5-2 1.5V11c0 1.5-.5 2.5-2 2.5" />
+            </svg>
+        ),
+    },
+};
+
+const FormatIcon: React.FC<{ fmt: string }> = ({ fmt }) => {
+    const def = FORMAT_ICONS[fmt];
+    if (!def) return null;
+    return (
+        <span
+            className={styles.fmtIcon}
+            style={{ color: def.color, background: def.bg }}
+            aria-hidden="true"
+        >
+            {def.node}
+        </span>
+    );
+};
+
+// ── Dropdown ──────────────────────────────────────────────
+const Dropdown: React.FC<{
+    icon: React.ReactNode; title: string; label: string;
+    fmts: { k: string; l: string }[];
+    onSelect: (k: string) => void; active?: boolean;
+}> = ({ icon, title, label, fmts, onSelect, active }) => {
+    const [open, setOpen] = useState(false);
+    const ref = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+        document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h);
+    }, []);
+    return (
+        <div className={styles.dropdownWrap} ref={ref}>
+            <ActionBtn title={title} onClick={() => setOpen(o => !o)} active={open || active}>{icon}</ActionBtn>
+            {open && (
+                <div className={styles.dropdown}>
+                    <div className={styles.dropdownLabel}>{label}</div>
+                    {fmts.map(f => (
+                        <button
+                            key={f.k}
+                            className={styles.dropdownItem}
+                            onClick={() => { onSelect(f.k); setOpen(false); }}
+                        >
+                            <FormatIcon fmt={f.k} />
+                            <span className={styles.dropdownItemLabel}>{f.l}</span>
+                        </button>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Icons ─────────────────────────────────────────────────
+const IcoEdit = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M7 2.5H3.5A1.5 1.5 0 002 4v8.5A1.5 1.5 0 003.5 14H12a1.5 1.5 0 001.5-1.5V9" />
+        <path d="M11.5 1.5a1.414 1.414 0 012 2L8 9l-2.5.5.5-2.5 5.5-5.5z" />
+    </svg>
+);
+const IcoCopy = ({ success }: { success: boolean }) => success ? (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={styles.successIcon}><path d="M3 8l3.5 3.5L13 4" /></svg>
+) : (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="5" y="5" width="8" height="9" rx="1.5" />
+        <path d="M10 5V4a1 1 0 00-1-1H4a1.5 1.5 0 00-1.5 1.5V11a1 1 0 001 1h1" />
+    </svg>
+);
+const IcoDownload = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M8 2v8M5 7l3 3 3-3" />
+        <path d="M2 12v1.5A1.5 1.5 0 003.5 15h9a1.5 1.5 0 001.5-1.5V12" />
+    </svg>
+);
+
+// ── TabToolbar: edit + copy + download ───────────────────
+const TabToolbar: React.FC<{
+    onEdit?: () => void;
+    fmts: { k: string; l: string }[];
+    onCopy: (k: string) => void;
+    onDownload: (k: string) => void;
+    copied: boolean;
+}> = ({ onEdit, fmts, onCopy, onDownload, copied }) => {
+    const { t } = useTranslation();
+    return (
+        <div className={styles.tabToolbar}>
+            {onEdit && <ActionBtn title={t('uploadInfer.workspacePanel.edit')} onClick={onEdit}><IcoEdit /></ActionBtn>}
+            <Dropdown icon={<IcoCopy success={copied} />} title={t('uploadInfer.workspacePanel.copy')} label={t('uploadInfer.workspacePanel.copyAs')} fmts={fmts} onSelect={onCopy} active={copied} />
+            <Dropdown icon={<IcoDownload />} title={t('uploadInfer.workspacePanel.download')} label={t('uploadInfer.workspacePanel.downloadAs')} fmts={fmts} onSelect={onDownload} />
+        </div>
+    );
+};
+
+// ── Stable keyword chip ───────────────────────────────────
+const KeywordChip: React.FC<{ kw: string; isNew: boolean }> = ({ kw, isNew }) => (
+    <span className={`${styles.keywordPill} ${isNew ? styles.keywordPillNew : ''}`}
+        style={{ background: CHIP_COLORS[seededColorIndex(kw)] }}>
+        {kw}
+    </span>
+);
+
+const ChipGrid: React.FC<{ kws: string[]; prevSet?: Set<string> }> = ({ kws, prevSet }) => {
+    const { t } = useTranslation();
+    return kws.length > 0 ? (
+        <div className={styles.keywordGrid}>
+            {kws.map(kw => <KeywordChip key={kw} kw={kw} isNew={prevSet ? !prevSet.has(kw) : false} />)}
+        </div>
+    ) : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noKeywords')}</div>;
+};
+
+// ── Tab: Summary ──────────────────────────────────────────
+const TabSummary: React.FC<{ summary: string; fileId: number; onSaved: (s: string) => void }> = ({ summary, fileId, onSaved }) => {
+    const { t } = useTranslation();
+    const [editing, setEditing] = useState(false);
+    const [draft, setDraft] = useState(summary);
+    const [saving, setSaving] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    const html = useMemo(() => marked.parse(draft) as string, [draft]);
+    const viewHtml = useMemo(() => marked.parse(summary) as string, [summary]);
+
+    const handleSave = async () => {
+        setSaving(true);
+        try { await api.post('/files/update', { fileID: String(fileId), summary: draft }); onSaved(draft); setEditing(false); }
+        finally { setSaving(false); }
+    };
+    const handleCopy = (fmt: string) => { copyText(formatSummary(summary, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatSummary(summary, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!summary && !editing) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noSummary')}</div>;
+
+    return (
+        <div className={`${styles.tabContent} ${editing ? styles.editMode : ''}`}>
+            {!editing ? (
+                <>
+                    <TabToolbar onEdit={() => { setDraft(summary); setEditing(true); }} fmts={SUMMARY_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+                    <div className={styles.summaryMd} dangerouslySetInnerHTML={{ __html: viewHtml }} />
+                </>
+            ) : (
+                <div className={styles.editLayout}>
+                    <div className={styles.editCol}>
+                        <div className={styles.editColHeader}><span className={styles.editColLabel}>{t('uploadInfer.workspacePanel.editColPreview')}</span><span className={styles.editColTag}>{t('uploadInfer.workspacePanel.markdownRenderer')}</span></div>
+                        <div className={styles.editPreview}><div className={styles.summaryMd} dangerouslySetInnerHTML={{ __html: html }} /></div>
+                    </div>
+                    <div className={styles.editCol}>
+                        <div className={styles.editColHeader}><span className={styles.editColLabel}>{t('uploadInfer.workspacePanel.editColEdit')}</span><span className={styles.editColTag}>{t('uploadInfer.workspacePanel.markdownTag')}</span></div>
+                        <textarea className={styles.editTextarea} value={draft} onChange={e => setDraft(e.target.value)} spellCheck={false} />
+                    </div>
+                    <div className={styles.editFooter}>
+                        <button className={styles.cancelBtn} onClick={() => setEditing(false)} disabled={saving}>{t('uploadInfer.workspacePanel.cancel')}</button>
+                        <button className={styles.saveBtn} onClick={handleSave} disabled={saving}>
+                            {saving ? <><span className={styles.inlineSpinner} />{t('uploadInfer.workspacePanel.saving')}</> : t('uploadInfer.workspacePanel.save')}
+                        </button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Tab: Keywords ─────────────────────────────────────────
+const TabKeywords: React.FC<{ keywords: string[]; fileId: number; onSaved: (kws: string[]) => void }> = ({ keywords, fileId, onSaved }) => {
+    const { t } = useTranslation();
+    const [editing, setEditing] = useState(false);
+    const [draft, setDraft] = useState(keywords.join('\n'));
+    const [saving, setSaving] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    // prevSetSnapshot holds the keyword set from the PREVIOUS render of ChipGrid
+    // so only truly new chips get the pop animation
+    const prevSetSnapshot = useRef<Set<string>>(new Set(keywords));
+
+    const draftKeywords = useMemo(() => draft.split('\n').map(k => k.trim()).filter(Boolean), [draft]);
+
+    // After each render, schedule an update of the snapshot so the *next*
+    // render can compare against what's currently visible
+    useEffect(() => {
+        const id = setTimeout(() => { prevSetSnapshot.current = new Set(draftKeywords); }, 0);
+        return () => clearTimeout(id);
+    }, [draftKeywords]);
+
+    const handleSave = async () => {
+        setSaving(true);
+        try { await api.post('/files/update', { fileID: String(fileId), keywords: draftKeywords }); onSaved(draftKeywords); setEditing(false); }
+        finally { setSaving(false); }
+    };
+    const handleCopy = (fmt: string) => { copyText(formatKeywords(keywords, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatKeywords(keywords, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!keywords.length && !editing) return <div className={styles.tabEmpty}>No keywords available.</div>;
+
+    return (
+        <div className={`${styles.tabContent} ${editing ? styles.editMode : ''}`}>
+            {!editing ? (
+                <>
+                    <TabToolbar onEdit={() => { setDraft(keywords.join('\n')); prevSetSnapshot.current = new Set(keywords); setEditing(true); }} fmts={KEYWORDS_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+                    <ChipGrid kws={keywords} />
+                </>
+            ) : (
+                <div className={styles.editLayout}>
+                    <div className={styles.editCol}>
+                        <div className={styles.editColHeader}><span className={styles.editColLabel}>{t('uploadInfer.workspacePanel.editColPreview')}</span><span className={styles.editColTag}>{t('uploadInfer.workspacePanel.chipView')}</span></div>
+                        <div className={styles.editPreview}>
+                            <ChipGrid kws={draftKeywords} prevSet={prevSetSnapshot.current} />
+                        </div>
+                    </div>
+                    <div className={styles.editCol}>
+                        <div className={styles.editColHeader}><span className={styles.editColLabel}>{t('uploadInfer.workspacePanel.editColEdit')}</span><span className={styles.editColTag}>{t('uploadInfer.workspacePanel.onePerLine')}</span></div>
+                        <textarea className={styles.editTextarea} value={draft} onChange={e => setDraft(e.target.value)} spellCheck={false} placeholder={t('uploadInfer.workspacePanel.keywordPlaceholder')} />
+                    </div>
+                    <div className={styles.editFooter}>
+                        <button className={styles.cancelBtn} onClick={() => setEditing(false)} disabled={saving}>{t('uploadInfer.workspacePanel.cancel')}</button>
+                        <button className={styles.saveBtn} onClick={handleSave} disabled={saving}>
+                            {saving ? <><span className={styles.inlineSpinner} />{t('uploadInfer.workspacePanel.saving')}</> : t('uploadInfer.workspacePanel.save')}
+                        </button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Tab: Assessment ───────────────────────────────────────
+type AssessMode = 'mcq' | 'all';
+
+const TabAssessment: React.FC<{ faq: string }> = ({ faq }) => {
+    const { t } = useTranslation();
+    const items = useMemo(() => parseFaq(faq), [faq]);
+
+    // Always default to MCQ; reset when faq changes (new file)
+    const [mode, setMode] = useState<AssessMode>('mcq');
+    const [current, setCurrent] = useState(0);
+    const [selected, setSelected] = useState<string | null>(null);
+    const [revealed, setRevealed] = useState(false);
+    const [complete, setComplete] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    const prevFaq = useRef(faq);
+    useEffect(() => {
+        if (faq !== prevFaq.current) {
+            prevFaq.current = faq;
+            setMode('mcq');
+            setCurrent(0); setSelected(null); setRevealed(false); setComplete(false);
+        }
+    }, [faq]);
+
+    const handleCopy = (fmt: string) => { copyText(formatAssessment(faq, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatAssessment(faq, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!items.length) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noQuestions')}</div>;
+
+    // ── MCQ helpers ───────────────────────────────────────
+    const q = items[current];
+    const isLast = current === items.length - 1;
+    const progress = Math.round(((current + (complete ? 1 : 0)) / items.length) * 100);
+
+    const handleSelect = (key: string) => { if (revealed) return; setSelected(key); setRevealed(true); };
+    const handleNext = () => { if (isLast) setComplete(true); else { setCurrent(c => c + 1); setSelected(null); setRevealed(false); } };
+    const handleRestart = () => { setCurrent(0); setSelected(null); setRevealed(false); setComplete(false); };
+    const getOptClass = (key: string) => {
+        if (!revealed) return selected === key ? styles.faqOptSelected : '';
+        if (key === q.correct_answer && selected === key) return styles.faqOptCorrect;
+        if (key === q.correct_answer) return styles.faqOptCorrectAlt;
+        if (key === selected) return styles.faqOptWrong;
+        return '';
+    };
+
+    return (
+        <div className={styles.tabContent}>
+            {/* Toolbar row: mode tabs left, copy/download right */}
+            <div className={styles.assessHeader}>
+                <div className={styles.assessModeTabs}>
+                    <button
+                        className={`${styles.assessModeTab} ${mode === 'mcq' ? styles.assessModeTabActive : ''}`}
+                        onClick={() => setMode('mcq')}
+                    >
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="8" cy="8" r="6" />
+                            <path d="M6 8.5l1.5 1.5L10.5 6" />
+                        </svg>
+                        MCQ
+                    </button>
+                    <button
+                        className={`${styles.assessModeTab} ${mode === 'all' ? styles.assessModeTabActive : ''}`}
+                        onClick={() => setMode('all')}
+                    >
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M2 4h12M2 8h12M2 12h8" />
+                        </svg>
+                        View All
+                    </button>
+                </div>
+                <TabToolbar fmts={ASSESSMENT_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+            </div>
+
+            {/* ── MCQ mode ── */}
+            {mode === 'mcq' && (
+                complete ? (
+                    <div className={styles.assessComplete}>
+                        <div className={styles.assessCompleteIcon}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                        </div>
+                        <div className={styles.assessCompleteTitle}>{t('uploadInfer.workspacePanel.assessCompleteTitle')}</div>
+                        <div className={styles.assessCompleteDesc}>{t('uploadInfer.workspacePanel.assessCompleteDesc', { count: items.length })}</div>
+                        <button className={styles.assessRestartBtn} onClick={handleRestart}>{t('uploadInfer.workspacePanel.restart')}</button>
+                    </div>
+                ) : (
+                    <>
+                        <div className={styles.assessProgress}>
+                            <div className={styles.assessProgressTrack}>
+                                <div className={styles.assessProgressFill} style={{ width: `${progress}%` }} />
+                            </div>
+                            <span className={styles.assessProgressLabel}>{current + 1} / {items.length}</span>
+                        </div>
+                        <div className={styles.faqCard}>
+                            <div className={styles.faqQ}>
+                                <span className={styles.faqNum}>Q{current + 1}</span>
+                                {q.question}
+                            </div>
+                            <div className={styles.faqOptions}>
+                                {Object.entries(q.options).map(([key, val]) => (
+                                    <button key={key} className={`${styles.faqOpt} ${getOptClass(key)}`} onClick={() => handleSelect(key)} disabled={revealed}>
+                                        <span className={styles.faqOptKey}>{key}</span>
+                                        <span className={styles.faqOptVal}>{val}</span>
+                                        {revealed && key === q.correct_answer && <svg className={styles.faqCheckIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 8l3.5 3.5L13 4" /></svg>}
+                                        {revealed && key === selected && key !== q.correct_answer && <svg className={styles.faqXIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>}
+                                    </button>
+                                ))}
+                            </div>
+                            {revealed && (
+                                <div className={styles.faqExplain}>
+                                    <div className={styles.faqExplainLabel}>
+                                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" /><path d="M8 7v4M8 5.5v.5" /></svg>
+                                        Explanation
+                                    </div>
+                                    <p className={styles.faqExplainText}>{q.explanation}</p>
+                                </div>
+                            )}
+                        </div>
+                        {revealed && (
+                            <button className={`${styles.assessNextBtn} ${isLast ? styles.assessDoneBtn : ''}`} onClick={handleNext}>
+                                {isLast ? t('uploadInfer.workspacePanel.finish') : t('uploadInfer.workspacePanel.next')}
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                    {isLast ? <path d="M3 8l3.5 3.5L13 4" /> : <path d="M3 8h10M9 4l4 4-4 4" />}
+                                </svg>
+                            </button>
+                        )}
+                    </>
+                )
+            )}
+
+            {/* ── View All mode ── */}
+            {mode === 'all' && (
+                <div className={styles.viewAllList}>
+                    {items.map((item, idx) => (
+                        <div key={idx} className={styles.viewAllCard}>
+                            {/* Question */}
+                            <div className={styles.viewAllQ}>
+                                <span className={styles.faqNum}>Q{idx + 1}</span>
+                                {item.question}
+                            </div>
+
+                            {/* Options */}
+                            <div className={styles.faqOptions}>
+                                {Object.entries(item.options).map(([key, val]) => (
+                                    <div
+                                        key={key}
+                                        className={`${styles.faqOpt} ${key === item.correct_answer ? styles.faqOptCorrectAlt : styles.viewAllOptNeutral}`}
+                                    >
+                                        <span className={`${styles.faqOptKey} ${key === item.correct_answer ? styles.faqOptKeyCorrect : ''}`}>{key}</span>
+                                        <span className={styles.faqOptVal}>{val}</span>
+                                        {key === item.correct_answer && (
+                                            <svg className={styles.faqCheckIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                                <path d="M3 8l3.5 3.5L13 4" />
+                                            </svg>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+
+                            {/* Explanation */}
+                            <div className={styles.faqExplain}>
+                                <div className={styles.faqExplainLabel}>
+                                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                                        <circle cx="8" cy="8" r="6" /><path d="M8 7v4M8 5.5v.5" />
+                                    </svg>
+                                    Explanation
+                                </div>
+                                <p className={styles.faqExplainText}>{item.explanation}</p>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Tab: Short Answer ──────────────────────────────────────
+const TabShortAnswer: React.FC<{ raw: string }> = ({ raw }) => {
+    const { t } = useTranslation();
+    const items = useMemo(() => parsePyList<ShortAnswerItem>(raw), [raw]);
+    const [revealedIds, setRevealedIds] = useState<Set<number>>(new Set());
+    const [copied, setCopied] = useState(false);
+
+    const prevRaw = useRef(raw);
+    useEffect(() => { if (raw !== prevRaw.current) { prevRaw.current = raw; setRevealedIds(new Set()); } }, [raw]);
+
+    const toggleReveal = (idx: number) => setRevealedIds(prev => {
+        const next = new Set(prev);
+        if (next.has(idx)) next.delete(idx); else next.add(idx);
+        return next;
+    });
+    const allRevealed = items.length > 0 && revealedIds.size === items.length;
+    const toggleAll = () => setRevealedIds(allRevealed ? new Set() : new Set(items.map((_, i) => i)));
+
+    const handleCopy = (fmt: string) => { copyText(formatShortAnswer(raw, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatShortAnswer(raw, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!items.length) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noShortAnswer')}</div>;
+
+    return (
+        <div className={styles.tabContent}>
+            <div className={styles.assessHeader}>
+                <button className={styles.revealAllBtn} onClick={toggleAll}>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8s-2.5 4.5-6.5 4.5S1.5 8 1.5 8z" /><circle cx="8" cy="8" r="2" />
+                    </svg>
+                    {allRevealed ? t('uploadInfer.workspacePanel.hideAllAnswers') : t('uploadInfer.workspacePanel.showAllAnswers')}
+                </button>
+                <TabToolbar fmts={SHORT_ANSWER_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+            </div>
+            <div className={styles.viewAllList}>
+                {items.map((item, idx) => {
+                    const revealed = revealedIds.has(idx);
+                    return (
+                        <div key={idx} className={styles.viewAllCard}>
+                            <div className={styles.viewAllQ}>
+                                <span className={styles.faqNum}>Q{idx + 1}</span>
+                                {item.question}
+                            </div>
+                            {revealed ? (
+                                <div className={styles.shortAnswerBox}>
+                                    <div className={styles.shortAnswerLabel}>{t('uploadInfer.workspacePanel.answer')}</div>
+                                    <p className={styles.shortAnswerText}>{item.answer}</p>
+                                </div>
+                            ) : (
+                                <button className={styles.revealBtn} onClick={() => toggleReveal(idx)}>
+                                    {t('uploadInfer.workspacePanel.revealAnswer')}
+                                </button>
+                            )}
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
+};
+
+// ── Tab: True / False ────────────────────────────────────────
+type TfMode = 'quiz' | 'all';
+
+const TabTrueFalse: React.FC<{ raw: string }> = ({ raw }) => {
+    const { t } = useTranslation();
+    const items = useMemo(() => parsePyList<TrueFalseItem>(raw), [raw]);
+
+    const [mode, setMode] = useState<TfMode>('quiz');
+    const [current, setCurrent] = useState(0);
+    const [selected, setSelected] = useState<'true' | 'false' | null>(null);
+    const [revealed, setRevealed] = useState(false);
+    const [complete, setComplete] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    const prevRaw = useRef(raw);
+    useEffect(() => {
+        if (raw !== prevRaw.current) {
+            prevRaw.current = raw;
+            setMode('quiz');
+            setCurrent(0); setSelected(null); setRevealed(false); setComplete(false);
+        }
+    }, [raw]);
+
+    const handleCopy = (fmt: string) => { copyText(formatTrueFalse(raw, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatTrueFalse(raw, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!items.length) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noTrueFalse')}</div>;
+
+    const q = items[current];
+    const correctKey: 'true' | 'false' = q.is_true ? 'true' : 'false';
+    const isLast = current === items.length - 1;
+    const progress = Math.round(((current + (complete ? 1 : 0)) / items.length) * 100);
+
+    const handleSelect = (key: 'true' | 'false') => { if (revealed) return; setSelected(key); setRevealed(true); };
+    const handleNext = () => { if (isLast) setComplete(true); else { setCurrent(c => c + 1); setSelected(null); setRevealed(false); } };
+    const handleRestart = () => { setCurrent(0); setSelected(null); setRevealed(false); setComplete(false); };
+    const getOptClass = (key: 'true' | 'false') => {
+        if (!revealed) return selected === key ? styles.faqOptSelected : '';
+        if (key === correctKey && selected === key) return styles.faqOptCorrect;
+        if (key === correctKey) return styles.faqOptCorrectAlt;
+        if (key === selected) return styles.faqOptWrong;
+        return '';
+    };
+
+    return (
+        <div className={styles.tabContent}>
+            <div className={styles.assessHeader}>
+                <div className={styles.assessModeTabs}>
+                    <button className={`${styles.assessModeTab} ${mode === 'quiz' ? styles.assessModeTabActive : ''}`} onClick={() => setMode('quiz')}>
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="8" cy="8" r="6" /><path d="M6 8.5l1.5 1.5L10.5 6" />
+                        </svg>
+                        {t('uploadInfer.workspacePanel.quizMode')}
+                    </button>
+                    <button className={`${styles.assessModeTab} ${mode === 'all' ? styles.assessModeTabActive : ''}`} onClick={() => setMode('all')}>
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M2 4h12M2 8h12M2 12h8" />
+                        </svg>
+                        {t('uploadInfer.workspacePanel.viewAll')}
+                    </button>
+                </div>
+                <TabToolbar fmts={TRUE_FALSE_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+            </div>
+
+            {mode === 'quiz' && (
+                complete ? (
+                    <div className={styles.assessComplete}>
+                        <div className={styles.assessCompleteIcon}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                        </div>
+                        <div className={styles.assessCompleteTitle}>{t('uploadInfer.workspacePanel.assessCompleteTitle')}</div>
+                        <div className={styles.assessCompleteDesc}>{t('uploadInfer.workspacePanel.assessCompleteDesc', { count: items.length })}</div>
+                        <button className={styles.assessRestartBtn} onClick={handleRestart}>{t('uploadInfer.workspacePanel.restart')}</button>
+                    </div>
+                ) : (
+                    <>
+                        <div className={styles.assessProgress}>
+                            <div className={styles.assessProgressTrack}><div className={styles.assessProgressFill} style={{ width: `${progress}%` }} /></div>
+                            <span className={styles.assessProgressLabel}>{current + 1} / {items.length}</span>
+                        </div>
+                        <div className={styles.faqCard}>
+                            <div className={styles.faqQ}>
+                                <span className={styles.faqNum}>{current + 1}</span>
+                                {q.statement}
+                            </div>
+                            <div className={styles.tfOptions}>
+                                {(['true', 'false'] as const).map(key => (
+                                    <button key={key} className={`${styles.tfOpt} ${getOptClass(key)}`} onClick={() => handleSelect(key)} disabled={revealed}>
+                                        <span className={styles.tfOptLabel}>{key === 'true' ? t('uploadInfer.workspacePanel.true') : t('uploadInfer.workspacePanel.false')}</span>
+                                        {revealed && key === correctKey && <svg className={styles.faqCheckIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 8l3.5 3.5L13 4" /></svg>}
+                                        {revealed && key === selected && key !== correctKey && <svg className={styles.faqXIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>}
+                                    </button>
+                                ))}
+                            </div>
+                            {revealed && (
+                                <div className={styles.faqExplain}>
+                                    <div className={styles.faqExplainLabel}>
+                                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" /><path d="M8 7v4M8 5.5v.5" /></svg>
+                                        {t('uploadInfer.workspacePanel.explanation')}
+                                    </div>
+                                    <p className={styles.faqExplainText}>{q.explanation}</p>
+                                </div>
+                            )}
+                        </div>
+                        {revealed && (
+                            <button className={`${styles.assessNextBtn} ${isLast ? styles.assessDoneBtn : ''}`} onClick={handleNext}>
+                                {isLast ? t('uploadInfer.workspacePanel.finish') : t('uploadInfer.workspacePanel.next')}
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                    {isLast ? <path d="M3 8l3.5 3.5L13 4" /> : <path d="M3 8h10M9 4l4 4-4 4" />}
+                                </svg>
+                            </button>
+                        )}
+                    </>
+                )
+            )}
+
+            {mode === 'all' && (
+                <div className={styles.viewAllList}>
+                    {items.map((item, idx) => {
+                        const ck: 'true' | 'false' = item.is_true ? 'true' : 'false';
+                        return (
+                            <div key={idx} className={styles.viewAllCard}>
+                                <div className={styles.viewAllQ}>
+                                    <span className={styles.faqNum}>{idx + 1}</span>
+                                    {item.statement}
+                                </div>
+                                <div className={styles.tfOptions}>
+                                    {(['true', 'false'] as const).map(key => (
+                                        <div key={key} className={`${styles.tfOpt} ${key === ck ? styles.faqOptCorrectAlt : styles.viewAllOptNeutral}`}>
+                                            <span className={styles.tfOptLabel}>{key === 'true' ? t('uploadInfer.workspacePanel.true') : t('uploadInfer.workspacePanel.false')}</span>
+                                            {key === ck && <svg className={styles.faqCheckIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 8l3.5 3.5L13 4" /></svg>}
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className={styles.faqExplain}>
+                                    <div className={styles.faqExplainLabel}>
+                                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" /><path d="M8 7v4M8 5.5v.5" /></svg>
+                                        {t('uploadInfer.workspacePanel.explanation')}
+                                    </div>
+                                    <p className={styles.faqExplainText}>{item.explanation}</p>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Tab: Timestamped Summary ─────────────────────────────────
+const TabTimestampedSummary: React.FC<{ raw: string }> = ({ raw }) => {
+    const { t } = useTranslation();
+    const items = useMemo(() => parsePyList<TimestampSegment>(raw), [raw]);
+    const [copied, setCopied] = useState(false);
+
+    const handleCopy = (fmt: string) => { copyText(formatTimestampedSummary(raw, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatTimestampedSummary(raw, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!items.length) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noTimestampedSummary')}</div>;
+
+    return (
+        <div className={styles.tabContent}>
+            <TabToolbar fmts={TIMESTAMPED_SUMMARY_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+            <div className={styles.tsList}>
+                {items.map((seg, idx) => (
+                    <div key={idx} className={styles.tsRow}>
+                        <div className={styles.tsRail}>
+                            <div className={styles.tsDot} />
+                            {idx < items.length - 1 && <div className={styles.tsLine} />}
+                        </div>
+                        <div className={styles.tsCard}>
+                            <div className={styles.tsRange}>{seg.start_time} <span className={styles.tsArrow}>→</span> {seg.end_time}</div>
+                            <p className={styles.tsText}>{seg.summary}</p>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+
+// ── Keyword Insights: shared node-link graph (used for Knowledge Graph & Prerequisites) ──
+interface GNode { id: string; label: string; value?: number; }
+interface GEdge { source: string; target: string; label?: string; }
+
+function buildGraphNodes(nodes: GNode[], edges: GEdge[]): GNode[] {
+    const norm = (s: string) => s.trim().toLowerCase();
+    const byKey = new Map<string, GNode>();
+    const byId = new Map<string, GNode>();
+    nodes.forEach(n => {
+        byKey.set(norm(n.id), n); byKey.set(norm(n.label), n); byId.set(n.id, n);
+    });
+    edges.forEach(e => {
+        [e.source, e.target].forEach(ref => {
+            const k = norm(ref);
+            if (!byKey.has(k)) {
+                const synth: GNode = { id: ref, label: ref, value: 1 };
+                byKey.set(k, synth); byId.set(ref, synth);
+            }
+        });
+    });
+    return Array.from(byId.values());
+}
+
+// Custom node — a labeled circle sized by `value`, with an invisible
+// handle on all 4 sides (each doubling as source+target) so edges can
+// connect from whichever side actually faces the other node.
+// Multi-word labels wrap onto multiple lines (capped at LABEL_MAX_W).
+// Single unbroken words (no spaces/hyphens — common for keyword nodes)
+// are NOT force-wrapped: breaking a word with no natural break point
+// inside a narrow box is what produced near-vertical stacks of 1-2
+// characters per line. Those get their own width instead, up to
+// LABEL_HARD_MAX_W.
+const LABEL_MAX_W = 150;
+const LABEL_HARD_MAX_W = 220;
+const LABEL_CHAR_W = 6.1; // ~px per character at the label's font size
+const LABEL_LINE_H = 14;
+
+function estimateNodeBox(label: string, circleSize: number) {
+    const hasBreakPoint = /[\s-]/.test(label);
+    const rawTextWidth = label.length * LABEL_CHAR_W + 8;
+    const capWidth = hasBreakPoint ? LABEL_MAX_W : LABEL_HARD_MAX_W;
+    const labelWidth = Math.min(capWidth, Math.max(rawTextWidth, 44));
+    const lines = hasBreakPoint ? Math.max(1, Math.ceil(rawTextWidth / LABEL_MAX_W)) : 1;
+    const w = Math.max(circleSize, labelWidth, 72) + 16;
+    const h = circleSize + 16 + lines * LABEL_LINE_H;
+    return { w, h, labelWidth };
+}
+
+const MindMapNode: React.FC<{ data: { label: string; value?: number; labelWidth?: number } }> = ({ data }) => {
+    const size = 34 + Math.min(26, (data.value ?? 1) * 4);
+    const hasBreakPoint = /[\s-]/.test(data.label);
+    return (
+        <div className={styles.rfNode} style={{ width: size, height: size }} title={data.label}>
+            <Handle type="target" position={Position.Top} id="top-target" className={styles.rfHandle} />
+            <Handle type="source" position={Position.Bottom} id="bottom-source" className={styles.rfHandle} />
+            <span
+                className={styles.rfNodeLabel}
+                style={{ maxWidth: data.labelWidth ?? LABEL_MAX_W, whiteSpace: hasBreakPoint ? 'normal' : 'nowrap' }}
+            >
+                {data.label}
+            </span>
+        </div>
+    );
+};
+const RF_NODE_TYPES = { mindmap: MindMapNode };
+
+// ── Dagre auto-layout — replaces naive circular placement, which packed
+//    nodes on top of each other once a graph had more than a handful of
+//    them. Dagre lays nodes out in ranked layers with guaranteed spacing,
+//    so nothing overlaps regardless of graph size. ──
+function computeDagreLayout(nodes: GNode[], edges: GEdge[], treeMode = false) {
+    const g = new dagre.graphlib.Graph();
+    g.setGraph({ rankdir: 'TB', nodesep: 72, ranksep: 150, marginx: 60, marginy: 60, acyclicer: 'greedy' });
+    g.setDefaultEdgeLabel(() => ({}));
+
+    const dims = new Map<string, { w: number; h: number; labelWidth: number }>();
+    nodes.forEach(n => {
+        const size = 34 + Math.min(26, (n.value ?? 1) * 4);
+        const dim = estimateNodeBox(n.label, size);
+        dims.set(n.id, dim);
+        g.setNode(n.id, dim);
+    });
+
+    const norm = (s: string) => s.trim().toLowerCase();
+    const byKey = new Map<string, string>();
+    nodes.forEach(n => { byKey.set(norm(n.id), n.id); byKey.set(norm(n.label), n.id); });
+
+    // Dedupe edges — repeated source/target pairs don't add information but
+    // do add extra crowded lines between the same two nodes.
+    // In tree mode, also cap each node at ONE incoming edge (its first),
+    // so the result is a clean forest of trees — no node with multiple
+    // parents, no crossing lines fighting over the same target.
+    const seenEdges = new Set<string>();
+    const hasParent = new Set<string>();
+    const resolvedEdges: { source: string; target: string; label?: string }[] = [];
+    edges.forEach(e => {
+        const s = byKey.get(norm(e.source));
+        const tg = byKey.get(norm(e.target));
+        if (!s || !tg || s === tg) return;
+        const key = `${s}→${tg}`;
+        if (seenEdges.has(key)) return;
+        if (treeMode && hasParent.has(tg)) return;
+        seenEdges.add(key);
+        if (treeMode) hasParent.add(tg);
+        // Reserve space for the edge's own label too — without this, dagre
+        // has no idea the label text exists and will happily route another
+        // node right where that text needs to sit.
+        const label = e.label?.trim();
+        g.setEdge(s, tg, label ? { width: Math.min(120, label.length * LABEL_CHAR_W + 12), height: LABEL_LINE_H + 8, labelpos: 'c' } : {});
+        resolvedEdges.push({ source: s, target: tg, label: e.label });
+    });
+
+    dagre.layout(g);
+
+    const positioned = nodes.map(n => {
+        const pos = g.node(n.id);
+        const dim = dims.get(n.id)!;
+        // Dagre positions are centers — React Flow expects top-left.
+        return { ...n, x: pos.x - dim.w / 2, y: pos.y - dim.h / 2, labelWidth: dim.labelWidth };
+    });
+    return { positioned, resolvedEdges };
+}
+
+const NodeLinkGraph: React.FC<{ nodes: GNode[]; edges: GEdge[]; treeMode?: boolean }> = ({ nodes, edges, treeMode = false }) => {
+    const { t } = useTranslation();
+    const allNodes = useMemo(() => buildGraphNodes(nodes, edges), [nodes, edges]);
+
+    const initial = useMemo(() => {
+        const { positioned, resolvedEdges } = computeDagreLayout(allNodes, edges, treeMode);
+
+        const rfNodes: RFNode[] = positioned.map(n => ({
+            id: n.id,
+            type: 'mindmap',
+            position: { x: n.x, y: n.y },
+            data: { label: n.label, value: n.value, labelWidth: n.labelWidth },
+        }));
+
+        const rfEdges: RFEdge[] = resolvedEdges.map((e, i) => ({
+            id: `e${i}-${e.source}-${e.target}`,
+            source: e.source,
+            target: e.target,
+            sourceHandle: 'bottom-source',
+            targetHandle: 'top-target',
+            type: 'smoothstep',
+            label: e.label,
+            style: { stroke: 'var(--bdr2)' },
+            labelStyle: { fill: 'var(--t2)', fontSize: 10 },
+            labelBgStyle: { fill: 'var(--bg1)' },
+        }));
+        return { rfNodes, rfEdges };
+    }, [allNodes, edges, treeMode]);
+
+    const [rfNodes, setRfNodes] = useState<RFNode[]>(initial.rfNodes);
+    useEffect(() => { setRfNodes(initial.rfNodes); }, [initial.rfNodes]);
+    const onNodesChange = useCallback((changes: NodeChange[]) => setRfNodes(nds => applyNodeChanges(changes, nds)), []);
+
+    if (allNodes.length === 0) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+
+    return (
+        <div className={styles.graphWrap}>
+            <ReactFlow
+                nodes={rfNodes}
+                edges={initial.rfEdges}
+                onNodesChange={onNodesChange}
+                nodeTypes={RF_NODE_TYPES}
+                fitView
+                fitViewOptions={{ padding: 0.25 }}
+                minZoom={0.1}
+                maxZoom={1.5}
+                proOptions={{ hideAttribution: true }}
+            >
+                <Background gap={16} size={1} color="var(--bdr)" />
+                <Controls showInteractive={false} />
+                {allNodes.length > 8 && <MiniMap pannable zoomable style={{ background: 'var(--bg0)' }} />}
+            </ReactFlow>
+        </div>
+    );
+};
+
+// ── Keyword Insights: timeline — heatmap-style grid with time labels
+//    running horizontally across the top header row (guaranteed via
+//    inline styles: nowrap + horizontal writing-mode) and one row per
+//    keyword running down the left. ──
+const TimelineView: React.FC<{ data: TimelineData }> = ({ data }) => {
+    const { t } = useTranslation();
+    const labels = data.labels ?? [];
+    const datasets = data.datasets ?? [];
+    if (!labels.length || !datasets.length) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+
+    const max = Math.max(1, ...datasets.flatMap(d => d.data.filter(v => typeof v === 'number')));
+    const ROW_LABEL_W = 140;
+    const COL_W = 56;
+
+    // Text guaranteed to stay horizontal, left-to-right, single line —
+    // independent of whatever the surrounding stylesheet does elsewhere.
+    const horizontalLabel: React.CSSProperties = {
+        writingMode: 'horizontal-tb',
+        textOrientation: 'mixed',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+    };
+
+    return (
+        <>
+        <div style={{ overflowX: 'auto', paddingBottom: 4 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: `${ROW_LABEL_W}px repeat(${labels.length}, minmax(${COL_W}px, 1fr))`, width: 'max-content', minWidth: '100%' }}>
+                {/* Corner cell */}
+                <div />
+                {/* Time labels — header row, horizontal across the top */}
+                {labels.map((lab, li) => (
+                    <div
+                        key={li}
+                        title={lab}
+                        style={{
+                            ...horizontalLabel,
+                            fontSize: 10.5, fontWeight: 600, color: 'var(--t2)',
+                            textAlign: 'center', padding: '0 4px 8px',
+                        }}
+                    >
+                        {lab}
+                    </div>
+                ))}
+                {/* One row per keyword */}
+                {datasets.map((ds, di) => (
+                    <React.Fragment key={di}>
+                        <div style={{ ...horizontalLabel, fontSize: 12, fontWeight: 600, color: 'var(--t1)', padding: '6px 10px 6px 0', display: 'flex', alignItems: 'center' }} title={ds.label}>
+                            {ds.label}
+                        </div>
+                        {labels.map((lab, li) => {
+                            const v = ds.data[li] ?? 0;
+                            const alpha = v > 0 ? Math.min(1, 0.22 + (v / max) * 0.78) : 0;
+                            return (
+                                <div
+                                    key={li}
+                                    title={`${ds.label} \u00b7 ${lab}: ${v}`}
+                                    style={{
+                                        height: 32, margin: 2, borderRadius: 4,
+                                        background: `rgba(91, 164, 239, ${alpha})`,
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                        fontSize: 10, color: alpha > 0.5 ? '#fff' : 'var(--t2)',
+                                    }}
+                                >
+                                    {v > 0 ? v : ''}
+                                </div>
+                            );
+                        })}
+                    </React.Fragment>
+                ))}
+            </div>
+        </div>
+        {/* Legend — same intensity scale as the cells above, GitHub contribution-graph style */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 5, marginTop: 10, fontSize: 11, color: 'var(--t2)' }}>
+            <span>{t('uploadInfer.workspacePanel.legendLess', 'Less')}</span>
+            {[0, 0.22, 0.4, 0.6, 0.78, 1].map((alpha, i) => (
+                <div
+                    key={i}
+                    style={{
+                        width: 12, height: 12, borderRadius: 3,
+                        background: alpha === 0 ? 'var(--bg2)' : `rgba(91, 164, 239, ${alpha})`,
+                        border: alpha === 0 ? '1px solid var(--bdr2)' : 'none',
+                    }}
+                />
+            ))}
+            <span>{t('uploadInfer.workspacePanel.legendMore', 'More')}</span>
+        </div>
+        </>
+    );
+};
+
+// ── Keyword Insights: word cloud ──
+const WordCloudView: React.FC<{ data: WordCloudData }> = ({ data }) => {
+    const { t } = useTranslation();
+    if (!data.wordcloud_image) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+    return (
+        <div className={styles.wordCloudImageWrap} style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
+            <img
+                src={data.wordcloud_image}
+                alt={t('uploadInfer.workspacePanel.kiTabs.wordcloud')}
+                className={styles.wordCloudImage}
+                style={{ maxWidth: '100%', height: 'auto', borderRadius: 8 }}
+            />
+        </div>
+    );
+};
+
+// ── Keyword Insights: importance vs complexity scatter ──
+// Complexity → accent color, reused for the column header, bars, and dots.
+const COMPLEXITY_COLOR: Record<string, string> = {
+    Easy: 'var(--green)',
+    Medium: 'var(--amber)',
+    Hard: 'var(--red)',
+};
+const complexityColor = (c: string) => COMPLEXITY_COLOR[c] ?? 'var(--blue)';
+
+const ImportanceComplexityScatter: React.FC<{ data: ImportanceComplexityData }> = ({ data }) => {
+    const { t } = useTranslation();
+    const items = data.data ?? [];
+    if (!items.length) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+
+    const order = ['Easy', 'Medium', 'Hard'];
+    const complexities = Array.from(new Set(items.map(it => it.complexity)))
+        .sort((a, b) => {
+            const ai = order.indexOf(a), bi = order.indexOf(b);
+            if (ai === -1 && bi === -1) return a.localeCompare(b);
+            if (ai === -1) return 1;
+            if (bi === -1) return -1;
+            return ai - bi;
+        });
+
+    // Importance is always on a fixed 0–10 scale from the backend, so the
+    // bar fill is a direct out-of-10 progress value rather than scaled
+    // against whatever the largest item in this particular file happens
+    // to be — a 6 always fills 60% of the bar, on any file.
+    const IMPORTANCE_MAX = 10;
+
+    return (
+        <div className={styles.importanceColumns}>
+            {complexities.map(c => {
+                const colItems = items.filter(it => it.complexity === c).sort((a, b) => b.importance - a.importance);
+                const color = complexityColor(c);
+                return (
+                    <div key={c} className={styles.importanceColumn}>
+                        <div className={styles.importanceColumnHead} style={{ color, borderColor: color }}>
+                            {c}
+                            <span className={styles.importanceColumnCount}>{colItems.length}</span>
+                        </div>
+                        <div className={styles.importanceRows}>
+                            {colItems.map((it, i) => (
+                                <div key={i} className={styles.importanceRow} title={it.reason}>
+                                    <span className={styles.importanceDot} style={{ background: color }} />
+                                    <span className={styles.importanceKeyword}>{it.keyword}</span>
+                                    <div className={styles.importanceBarTrack}>
+                                        <div
+                                            className={styles.importanceBarFill}
+                                            style={{ width: `${Math.min(100, (it.importance / IMPORTANCE_MAX) * 100)}%`, background: color }}
+                                        />
+                                    </div>
+                                    <span className={styles.importanceValue}>{it.importance}/{IMPORTANCE_MAX}</span>
+                                    <span
+                                        className={styles.importanceFrequency}
+                                        style={{ fontSize: 11, color: 'var(--t2)', flexShrink: 0, whiteSpace: 'nowrap' }}
+                                        title={t('uploadInfer.workspacePanel.frequencyTitle')}
+                                    >
+                                        {t('uploadInfer.workspacePanel.frequencyCount', { count: it.frequency })}
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+    );
+};
+
+// ── Keyword Insights: glossary ──
+const GlossaryView: React.FC<{ data: GlossaryData }> = ({ data }) => {
+    const { t } = useTranslation();
+    const items = data.glossary ?? [];
+    if (!items.length) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+    const fmtTime = (ms: number) => {
+        const totalSec = Math.floor(ms / 1000);
+        const m = Math.floor(totalSec / 60), s = totalSec % 60;
+        return `${m}:${String(s).padStart(2, '0')}`;
+    };
+    return (
+        <div className={styles.glossaryList}>
+            {items.map((it, i) => (
+                <div key={i} className={styles.glossaryRow}>
+                    <div className={styles.glossaryTerm}>{it.term}<span className={styles.glossaryTime}>{fmtTime(it.first_mentioned_ms)}</span></div>
+                    <div className={styles.glossaryDef}>{it.definition}</div>
+                </div>
+            ))}
+        </div>
+    );
+};
+
+// ── Tab: Keyword Insights ────────────────────────────────────
+const KI_SUBTABS = ['graph', 'wordcloud', 'timeline', 'prerequisites', 'importance', 'glossary'] as const;
+type KiSubTab = typeof KI_SUBTABS[number];
+
+const TabKeywordInsights: React.FC<{ data: KeywordInsights | null }> = ({ data }) => {
+    const { t } = useTranslation();
+    const [sub, setSub] = useState<KiSubTab>('graph');
+
+    if (!data) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noKeywordInsights')}</div>;
+
+    return (
+        <div className={styles.tabContent}>
+            <ScrollableTabRow
+                ids={KI_SUBTABS}
+                activeId={sub}
+                onChange={setSub}
+                labelFor={id => t(`uploadInfer.workspacePanel.kiTabs.${id}`)}
+                itemClassName={styles.kiSubTab}
+                activeClassName={styles.kiSubTabActive}
+                wrapClassName={styles.kiSubNavWrap}
+                trackClassName={styles.kiSubNav}
+            />
+            <div className={styles.kiBody}>
+                {sub === 'graph' && (data.knowledge_graph
+                    ? <NodeLinkGraph nodes={data.knowledge_graph.nodes} edges={data.knowledge_graph.edges.map(e => ({ source: e.source, target: e.target, label: e.type }))} treeMode />
+                    : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'wordcloud' && (data.word_cloud ? <WordCloudView data={data.word_cloud} /> : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'timeline' && (data.timeline
+                    ? <TimelineView data={data.timeline} />
+                    : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'prerequisites' && (data.prerequisites
+                    ? <NodeLinkGraph nodes={data.prerequisites.nodes} edges={data.prerequisites.edges.map(e => ({ source: e.prerequisite, target: e.enables, label: e.reason }))} />
+                    : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'importance' && (data.importance_complexity ? <ImportanceComplexityScatter data={data.importance_complexity} /> : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'glossary' && (data.glossary ? <GlossaryView data={data.glossary} /> : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+            </div>
+        </div>
+    );
+};
+
+// ── Scrollable tab row — generic horizontal-scroll tab strip with arrow
+//    buttons + edge fades, reused for both the main tab bar and any
+//    sub-navigation row (e.g. Keyword Insights) that could overflow. ──
+function ScrollableTabRow<T extends string>({
+    ids, activeId, onChange, labelFor,
+    itemClassName, activeClassName, wrapClassName, trackClassName,
+    dataTourFor,
+}: {
+    ids: readonly T[];
+    activeId: T;
+    onChange: (id: T) => void;
+    labelFor: (id: T) => string;
+    itemClassName: string;
+    activeClassName: string;
+    wrapClassName: string;
+    trackClassName: string;
+    // Optional — lets a specific caller (e.g. the main results tab bar)
+    // tag each individual tab button for the guided tour, without
+    // affecting other callers that reuse this same component (e.g. the
+    // Keyword Insights sub-tab row).
+    dataTourFor?: (id: T) => string | undefined;
+}) {
+    const trackRef = useRef<HTMLDivElement>(null);
+    const [canScrollLeft, setCanScrollLeft] = useState(false);
+    const [canScrollRight, setCanScrollRight] = useState(false);
+
+    const updateScrollState = () => {
+        const el = trackRef.current;
+        if (!el) return;
+        setCanScrollLeft(el.scrollLeft > 2);
+        setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 2);
+    };
+
+    useEffect(() => {
+        updateScrollState();
+        const el = trackRef.current;
+        if (!el) return;
+        const onResize = () => updateScrollState();
+        window.addEventListener('resize', onResize);
+        el.addEventListener('scroll', updateScrollState);
+        return () => { window.removeEventListener('resize', onResize); el.removeEventListener('scroll', updateScrollState); };
+    }, []); // eslint-disable-line
+
+    // Keep the active item in view when it changes
+    useEffect(() => {
+        const el = trackRef.current;
+        if (!el) return;
+        const activeEl = el.querySelector<HTMLElement>(`[data-tab-id="${activeId}"]`);
+        activeEl?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+        const id = setTimeout(updateScrollState, 300);
+        return () => clearTimeout(id);
+    }, [activeId]); // eslint-disable-line
+
+    const scrollBy = (dx: number) => trackRef.current?.scrollBy({ left: dx, behavior: 'smooth' });
+
+    return (
+        <div className={wrapClassName}>
+            {canScrollLeft && (
+                <button className={`${styles.tabScrollBtn} ${styles.tabScrollBtnLeft}`} onClick={() => scrollBy(-160)} aria-label="Scroll left">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M10 3L6 8l4 5" /></svg>
+                </button>
+            )}
+            <div className={trackClassName} ref={trackRef}>
+                {ids.map(id => (
+                    <button
+                        key={id}
+                        data-tab-id={id}
+                        data-tour={dataTourFor?.(id)}
+                        className={`${itemClassName} ${activeId === id ? activeClassName : ''}`}
+                        onClick={() => onChange(id)}
+                    >
+                        {labelFor(id)}
+                    </button>
+                ))}
+            </div>
+            {canScrollLeft && <div className={`${styles.tabFade} ${styles.tabFadeLeft}`} />}
+            {canScrollRight && <div className={`${styles.tabFade} ${styles.tabFadeRight}`} />}
+            {canScrollRight && (
+                <button className={`${styles.tabScrollBtn} ${styles.tabScrollBtnRight}`} onClick={() => scrollBy(160)} aria-label="Scroll right">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 3l4 5-4 5" /></svg>
+                </button>
+            )}
+        </div>
+    );
+}
+
+// ── Main tab bar — the fixed-width flex row silently clipped tabs once
+//    there were more than ~3; ScrollableTabRow fixes that. ──
+const ScrollableTabs: React.FC<{ activeTab: TabId; onChange: (id: TabId) => void }> = ({ activeTab, onChange }) => {
+    const { t } = useTranslation();
+    return (
+        <div data-tour="results-tabbar">
+            <ScrollableTabRow
+                ids={TAB_IDS}
+                activeId={activeTab}
+                onChange={onChange}
+                labelFor={id => t(`uploadInfer.workspacePanel.tabs.${id}`)}
+                itemClassName={styles.tab}
+                activeClassName={styles.active}
+                wrapClassName={styles.wsptabsWrap}
+                trackClassName={styles.wsptabs}
+                dataTourFor={id => `results-tab-${id}`}
+            />
+        </div>
+    );
+};
+
+// ── Main panel ────────────────────────────────────────────
+const WorkspacePanel = forwardRef<WorkspacePanelHandle, Props>(({ step2Visible = true, step2Minimized = false, fileResult, fileLoading, activeFileId, onResultUpdate }, ref) => {
+    const { t } = useTranslation();
+    const [activeTab, setActiveTab] = useState<TabId>('summary');
+
+    useImperativeHandle(ref, () => ({
+        setTab: (id: TabId) => setActiveTab(id),
+    }), []);
+
+    return (
+        <div className={`${styles.wspanel} ${(!step2Visible || step2Minimized) ? styles.wspanelExpanded : ''} ${step2Visible ? styles.wspanelWithStep2 : ''}`}>
+            <div className={styles.wspanelHead}>
+                <div className={styles.headLeft}>
+                    {fileResult ? (
+                        <>
+                            <div className={styles.wsftitle}>{fileResult.fileName}</div>
+                            <div className={styles.wsmeta}>
+                                <span className={styles.wsmetaId}>#{fileResult.fileId}</span>
+                                {fileResult.insertedAt && (<><span className={styles.wsmetaSep}>·</span><span className={styles.wsmetaDate}>{fileResult.insertedAt}</span></>)}
+                            </div>
+                        </>
+                    ) : (
+                        <>
+                            <div className={styles.wsftitleEmpty}>—</div>
+                            <div className={styles.wsmeta}><span className={styles.wsmetaHint}>{t('uploadInfer.workspacePanel.clickToView')}</span></div>
+                        </>
+                    )}
+                </div>
+            </div>
+
+            <ScrollableTabs activeTab={activeTab} onChange={setActiveTab} />
+
+            <div className={styles.wsbody}>
+                {fileLoading && (
+                    <div className={styles.wsSpinner}><div className={styles.spinner} /><span>{t('uploadInfer.workspacePanel.loadingFile')}</span></div>
+                )}
+                {!fileLoading && !fileResult && (
+                    <div className={styles.wsEmpty}>
+                        <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="8" y="6" width="32" height="36" rx="3" /><path d="M16 16h16M16 23h16M16 30h10" />
+                        </svg>
+                        <div className={styles.wsEmptyTitle}>{t('uploadInfer.workspacePanel.noFileSelected')}</div>
+                        <div className={styles.wsEmptyDesc}>{t('uploadInfer.workspacePanel.noFileDesc')}</div>
+                    </div>
+                )}
+                {!fileLoading && fileResult && (
+                    <>
+                        {activeTab === 'summary' && <TabSummary summary={fileResult.summary} fileId={fileResult.fileId} onSaved={s => onResultUpdate?.({ summary: s })} />}
+                        {activeTab === 'keywords' && <TabKeywords keywords={fileResult.keywords} fileId={fileResult.fileId} onSaved={kw => onResultUpdate?.({ keywords: kw })} />}
+                        {activeTab === 'assessment' && <TabAssessment faq={fileResult.faq} />}
+                        {activeTab === 'shortAnswer' && <TabShortAnswer raw={fileResult.shortAnswer} />}
+                        {activeTab === 'trueFalse' && <TabTrueFalse raw={fileResult.trueFalse} />}
+                        {activeTab === 'timestampedSummary' && <TabTimestampedSummary raw={fileResult.timestampedSummary} />}
+                        {activeTab === 'keywordInsights' && <TabKeywordInsights data={fileResult.keywordInsights} />}
+                    </>
+                )}
+            </div>
+        </div>
+    );
+});
+
+WorkspacePanel.displayName = 'WorkspacePanel';
+
+export default WorkspacePanel;
