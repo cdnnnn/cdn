@@ -821,6 +821,11 @@ const NodeLinkGraphInner: React.FC<{ nodes: GNode[]; edges: GEdge[]; treeMode?: 
 
     const [rfNodes, setRfNodes] = useState<RFNode[]>(pass1.rfNodes);
     const [rfEdges, setRfEdges] = useState<RFEdge[]>(pass1.rfEdges);
+    // Actual pixel footprint of the laid-out graph, filled in after pass 2.
+    // Used to size the container to the content instead of a large fixed
+    // box — a tall empty container is what was forcing fitView to shrink
+    // small graphs down to a tiny, "zoomed out" look.
+    const [contentBounds, setContentBounds] = useState<{ w: number; h: number } | null>(null);
     const domRefs = useRef<Map<string, HTMLElement>>(new Map());
     const pass2Done = useRef(false);
 
@@ -828,6 +833,7 @@ const NodeLinkGraphInner: React.FC<{ nodes: GNode[]; edges: GEdge[]; treeMode?: 
     useEffect(() => {
         setRfNodes(pass1.rfNodes);
         setRfEdges(pass1.rfEdges);
+        setContentBounds(null);
         pass2Done.current = false;
         domRefs.current.clear();
     }, [pass1.rfNodes, pass1.rfEdges]);
@@ -870,6 +876,17 @@ const NodeLinkGraphInner: React.FC<{ nodes: GNode[]; edges: GEdge[]; treeMode?: 
                 ? runForestDagre(allNodes, edges, sizeOf)
                 : runDagre(allNodes, edges, sizeOf, { rankdir: 'TB', nodesep: 60, ranksep: 120 });
 
+            // Bounding box of the laid-out graph — drives container sizing below.
+            let maxX = 0, maxY = 0;
+            allNodes.forEach(n => {
+                const p = positions.get(n.id);
+                const s = sizeOf(n.id);
+                if (!p) return;
+                maxX = Math.max(maxX, p.x + s.w);
+                maxY = Math.max(maxY, p.y + s.h);
+            });
+            setContentBounds({ w: maxX, h: maxY });
+
             setRfNodes(prev => prev.map(n => ({
                 ...n,
                 position: positions.get(n.id) ?? n.position,
@@ -893,9 +910,15 @@ const NodeLinkGraphInner: React.FC<{ nodes: GNode[]; edges: GEdge[]; treeMode?: 
                 return { ...edge, sourceHandle, targetHandle };
             }));
 
-            // fitView after React re-renders the new positions
+            // fitView after React re-renders the new positions AND the
+            // container has resized to match contentBounds (two frames:
+            // one for the state updates to commit, one for layout).
             rafId = requestAnimationFrame(() => {
-                requestAnimationFrame(() => fitView({ padding: 0.2, duration: 300 }));
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(() => {
+                        fitView({ padding: 0.15, minZoom: 0.4, maxZoom: 1.4, duration: 300 });
+                    });
+                });
             });
         };
 
@@ -914,16 +937,40 @@ const NodeLinkGraphInner: React.FC<{ nodes: GNode[]; edges: GEdge[]; treeMode?: 
 
     if (allNodes.length === 0) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
 
+    // Container sizing: once we know the real content bounds, size the
+    // wrapper to that aspect ratio (clamped to a sane range) instead of
+    // leaving a tall, mostly-empty box. A tall empty container is what
+    // makes fitView zoom a small graph down to a tiny dot in the middle.
+    const MIN_H = 280, MAX_H = 640;
+    let containerStyle: React.CSSProperties;
+    if (contentBounds && contentBounds.w > 0 && contentBounds.h > 0) {
+        const aspect = contentBounds.w / contentBounds.h;
+        containerStyle = {
+            width: '100%',
+            aspectRatio: `${contentBounds.w} / ${contentBounds.h}`,
+            minHeight: MIN_H,
+            maxHeight: MAX_H,
+            // Very wide, short graphs (e.g. a single row) would otherwise
+            // collapse to an unreadably short strip under aspect-ratio —
+            // floor it so there's always room to read node labels.
+            height: aspect > 3 ? MIN_H : undefined,
+        };
+    } else {
+        // Before pass 2 completes, use a reasonable default so pass-1's
+        // own fitView call isn't already working against a huge box.
+        containerStyle = { width: '100%', height: 420 };
+    }
+
     return (
-        <div className={styles.graphWrap} ref={containerRef}>
+        <div className={styles.graphWrap} ref={containerRef} style={containerStyle}>
             <ReactFlow
                 nodes={rfNodes}
                 edges={rfEdges}
                 onNodesChange={onNodesChange}
                 nodeTypes={RF_NODE_TYPES}
                 fitView
-                fitViewOptions={{ padding: 0.2 }}
-                minZoom={0.05}
+                fitViewOptions={{ padding: 0.15, minZoom: 0.4, maxZoom: 1.4 }}
+                minZoom={0.15}
                 maxZoom={2}
                 proOptions={{ hideAttribution: true }}
                 // Let React Flow know node sizes may change after mount
