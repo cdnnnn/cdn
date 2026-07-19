@@ -1094,10 +1094,10 @@ const NodeLinkGraph: React.FC<{ nodes: GNode[]; edges: GEdge[] }> = ({ nodes, ed
     );
 };
 
-// ── Keyword Insights: timeline — one horizontal row per keyword, with
-//    bars laid left-to-right along the time axis and the time label
-//    directly underneath each bar, so time reads left-to-right rather
-//    than the row/column heatmap layout used elsewhere. ──
+// ── Keyword Insights: timeline — heatmap-style grid with time labels
+//    running horizontally across the top header row (guaranteed via
+//    inline styles: nowrap + horizontal writing-mode) and one row per
+//    keyword running down the left. ──
 const TimelineView: React.FC<{ data: TimelineData }> = ({ data }) => {
     const { t } = useTranslation();
     const labels = data.labels ?? [];
@@ -1105,41 +1105,65 @@ const TimelineView: React.FC<{ data: TimelineData }> = ({ data }) => {
     if (!labels.length || !datasets.length) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
 
     const max = Math.max(1, ...datasets.flatMap(d => d.data.filter(v => typeof v === 'number')));
-    const BAR_TRACK_H = 64;
-    const COL_W = 40;
+    const ROW_LABEL_W = 140;
+    const COL_W = 56;
+
+    // Text guaranteed to stay horizontal, left-to-right, single line —
+    // independent of whatever the surrounding stylesheet does elsewhere.
+    const horizontalLabel: React.CSSProperties = {
+        writingMode: 'horizontal-tb',
+        textOrientation: 'mixed',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+    };
 
     return (
         <div style={{ overflowX: 'auto', paddingBottom: 4 }}>
-            {datasets.map((ds, di) => (
-                <div key={di} style={{ marginBottom: 22 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: 'var(--t1)' }}>{ds.label}</div>
-                    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, minWidth: labels.length * COL_W }}>
+            <div style={{ display: 'grid', gridTemplateColumns: `${ROW_LABEL_W}px repeat(${labels.length}, minmax(${COL_W}px, 1fr))`, width: 'max-content', minWidth: '100%' }}>
+                {/* Corner cell */}
+                <div />
+                {/* Time labels — header row, horizontal across the top */}
+                {labels.map((lab, li) => (
+                    <div
+                        key={li}
+                        title={lab}
+                        style={{
+                            ...horizontalLabel,
+                            fontSize: 10.5, fontWeight: 600, color: 'var(--t2)',
+                            textAlign: 'center', padding: '0 4px 8px',
+                        }}
+                    >
+                        {lab}
+                    </div>
+                ))}
+                {/* One row per keyword */}
+                {datasets.map((ds, di) => (
+                    <React.Fragment key={di}>
+                        <div style={{ ...horizontalLabel, fontSize: 12, fontWeight: 600, color: 'var(--t1)', padding: '6px 10px 6px 0', display: 'flex', alignItems: 'center' }} title={ds.label}>
+                            {ds.label}
+                        </div>
                         {labels.map((lab, li) => {
                             const v = ds.data[li] ?? 0;
-                            const h = v > 0 ? Math.max(3, (v / max) * BAR_TRACK_H) : 0;
+                            const alpha = v > 0 ? Math.min(1, 0.22 + (v / max) * 0.78) : 0;
                             return (
-                                <div key={li} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: COL_W, flexShrink: 0 }}>
-                                    <div
-                                        title={`${lab}: ${v}`}
-                                        style={{ height: BAR_TRACK_H, width: '100%', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}
-                                    >
-                                        <div style={{ width: 16, height: h, borderRadius: '3px 3px 0 0', background: 'var(--blue)', opacity: v > 0 ? 1 : 0 }} />
-                                    </div>
-                                    <span
-                                        title={lab}
-                                        style={{
-                                            fontSize: 9, color: 'var(--t2)', marginTop: 5, whiteSpace: 'nowrap',
-                                            maxWidth: COL_W + 8, overflow: 'hidden', textOverflow: 'ellipsis',
-                                        }}
-                                    >
-                                        {lab}
-                                    </span>
+                                <div
+                                    key={li}
+                                    title={`${ds.label} \u00b7 ${lab}: ${v}`}
+                                    style={{
+                                        height: 32, margin: 2, borderRadius: 4,
+                                        background: `rgba(91, 164, 239, ${alpha})`,
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                        fontSize: 10, color: alpha > 0.5 ? '#fff' : 'var(--t2)',
+                                    }}
+                                >
+                                    {v > 0 ? v : ''}
                                 </div>
                             );
                         })}
-                    </div>
-                </div>
-            ))}
+                    </React.Fragment>
+                ))}
+            </div>
         </div>
     );
 };
