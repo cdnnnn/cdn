@@ -1,342 +1,8 @@
 // ═══════════════════════════════════════════════
-// pages/UploadInfer/UploadInfer.tsx
-// LectureAI · Upload & Inference page
-// ═══════════════════════════════════════════════
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useTranslation } from 'react-i18next';
-import { useAppSelector, useAppDispatch } from '../../store/hooks';
-import { clearServerSelection } from '../../store/uploadSlice';
-import api from '../../services/api';
-import FilePanel from './FilePanel';
-import InferencePanel from './InferencePanel';
-import WorkspacePanel from './WorkspacePanel';
-import FileSidebar from './FileSidebar';
-import TourGuide, { TourStep } from './TourGuide';
-import styles from './UploadInfer.module.scss';
-
-// ── Keyword Insights (from GET /files/{id}) ──────
-export interface KGEdge { type: string; source: string; target: string; }
-export interface KGNode { id: string; label: string; title?: string; value?: number; }
-export interface KnowledgeGraph { edges: KGEdge[]; nodes: KGNode[]; }
-export interface WordCloudData { wordcloud: [string, number][]; complexity_map: Record<string, string>; }
-export interface TimelineDataset { data: number[]; label: string; }
-export interface TimelineData { labels: string[]; datasets: TimelineDataset[]; timestamped: boolean; }
-export interface HeatmapData { matrix: number[][]; keywords: string[]; segments: string[]; timestamped: boolean; }
-export interface ClusterItem { id: string; label: string; value: number; }
-export interface ClustersData { clusters: Record<string, ClusterItem[]>; }
-export interface FrequencyItem { count: number; keyword: string; relative_pct: number; first_mention_pct: number; }
-export interface FrequencyData { data: FrequencyItem[]; }
-export interface PrereqEdge { reason: string; enables: string; prerequisite: string; }
-export interface PrereqNode { id: string; label: string; value: number; }
-export interface PrerequisitesData { edges: PrereqEdge[]; nodes: PrereqNode[]; }
-export interface ImportanceComplexityItem { reason: string; keyword: string; frequency: number; complexity: string; importance: number; }
-export interface ImportanceComplexityData { data: ImportanceComplexityItem[]; }
-export interface CooccurrenceData { matrix: number[][]; keywords: string[]; }
-export interface GlossaryItem { term: string; definition: string; first_mentioned_ms: number; }
-export interface GlossaryData { glossary: GlossaryItem[]; }
-
-export interface KeywordInsights {
-  enriched_keywords: unknown | null;
-  knowledge_graph: KnowledgeGraph | null;
-  word_cloud: WordCloudData | null;
-  timeline: TimelineData | null;
-  heatmap: HeatmapData | null;
-  clusters: ClustersData | null;
-  frequency: FrequencyData | null;
-  prerequisites: PrerequisitesData | null;
-  importance_complexity: ImportanceComplexityData | null;
-  cooccurrence: CooccurrenceData | null;
-  congnitive_Load: unknown | null;
-  segments: { segments: unknown[] } | null;
-  glossary: GlossaryData | null;
-}
-
-export interface FileResult {
-  summary: string;
-  keywords: string[];
-  faq: string;
-  shortAnswer: string;
-  trueFalse: string;
-  timestampedSummary: string;
-  keywordInsights: KeywordInsights | null;
-  fileName: string;
-  fileId: number;
-  insertedAt: string;
-}
-
-// ── Tabs ──────────────────────────────────────────
-// All three are always clickable — there's no gating on a previous tab
-// being "complete". Every panel below stays mounted at all times (just
-// hidden with CSS) so file lists, batch polling, and scroll position
-// survive switching tabs instead of resetting.
-type TabId = 'upload' | 'infer' | 'results';
-
-const UploadInfer: React.FC = () => {
-  const { t } = useTranslation();
-  const isBatchRunning = useAppSelector(s => s.upload.isBatchRunning);
-  const dispatch = useAppDispatch();
-
-  const [activeTab, setActiveTab] = useState<TabId>('upload');
-
-  // ── Guided tour ──
-  const TOUR_STORAGE_KEY = 'uploadInfer.tourSeen';
-  const [tourActive, setTourActive] = useState(false);
-  useEffect(() => {
-    try {
-      if (!localStorage.getItem(TOUR_STORAGE_KEY)) setTourActive(true);
-    } catch { /* localStorage unavailable — just skip auto-start */ }
-  }, []);
-  const finishTour = useCallback(() => {
-    setTourActive(false);
-    try { localStorage.setItem(TOUR_STORAGE_KEY, '1'); } catch { /* ignore */ }
-  }, []);
-  const startTour = useCallback(() => { setActiveTab('upload'); setTourActive(true); }, []);
-
-  const tourSteps: TourStep[] = [
-    {
-      target: 'tabbar',
-      title: t('uploadInfer.tour.tabsTitle', 'Three steps, always available'),
-      content: t('uploadInfer.tour.tabsBody', 'Upload & Manage, Inference, and View Results — you can jump between them any time, nothing is locked behind finishing a previous step.'),
-      onEnter: () => setActiveTab('upload'),
-    },
-    {
-      target: 'upload-dropzone',
-      title: t('uploadInfer.tour.uploadTitle', 'Add your files here'),
-      content: t('uploadInfer.tour.uploadBody', 'Drag in a lecture recording\u2019s captions (.vtt or .srt), or browse for one. You can drop in several files at once.'),
-      onEnter: () => setActiveTab('upload'),
-    },
-    {
-      target: 'upload-cards',
-      title: t('uploadInfer.tour.cardsTitle', 'Your uploaded files'),
-      content: t('uploadInfer.tour.cardsBody', 'Every file shows up here as a card. The colored badge in the corner shows the format (VTT/SRT); the small icons below the filename open the exact prompt used for each content type (Summary, Keywords, Questions, Answer, True/False); and the bottom badge shows the file\u2019s current status. If a dictionary or prompt template is linked to the file, you\u2019ll see a small book or checklist icon too.'),
-      onEnter: () => setActiveTab('upload'),
-    },
-    {
-      target: 'upload-sort',
-      title: t('uploadInfer.tour.sortTitle', 'Sort the list'),
-      content: t('uploadInfer.tour.sortBody', 'Sort your files by ID, Name, Date, or Status \u2014 click a column again to flip between ascending and descending.'),
-      onEnter: () => setActiveTab('upload'),
-    },
-    {
-      target: 'upload-date-filter',
-      title: t('uploadInfer.tour.dateFilterTitle', 'Filter by date range'),
-      content: t('uploadInfer.tour.dateFilterBody', 'Narrow the file list down to a date range, then hit Apply. This affects only what\u2019s shown here on the Upload tab.'),
-      onEnter: () => setActiveTab('upload'),
-    },
-    {
-      target: 'upload-status-filter',
-      title: t('uploadInfer.tour.statusFilterTitle', 'Filter by status'),
-      content: t('uploadInfer.tour.statusFilterBody', 'Show only files in one status: All, Waiting, Queued, Running, Inferenced, Error, or Pending \u2014 handy once you have a lot of files in flight.'),
-      onEnter: () => setActiveTab('upload'),
-    },
-    {
-      target: 'upload-actions',
-      title: t('uploadInfer.tour.actionsTitle', 'Bulk actions, one click away'),
-      content: t('uploadInfer.tour.actionsBody', 'Open this for five bulk actions: Dictionary (link a term dictionary to your files), Prompt Template (link a saved prompt set), Search (find files by name), Export (download files), and Delete (remove files) \u2014 each applies to many files at once.'),
-      placement: 'left',
-      onEnter: () => setActiveTab('upload'),
-    },
-    {
-      target: 'infer-sidebar',
-      title: t('uploadInfer.tour.inferSidebarTitle', 'Pick files to analyze'),
-      content: t('uploadInfer.tour.inferSidebarBody', 'Select one or more files here \u2014 this list has its own date range, status filter, search, and sort, all independent of the Upload tab.'),
-      placement: 'right',
-      onEnter: () => setActiveTab('infer'),
-    },
-    {
-      target: 'infer-settings',
-      title: t('uploadInfer.tour.inferSettingsTitle', 'Choose what to generate'),
-      content: t('uploadInfer.tour.inferSettingsBody', 'Turn on Summary, Keywords (with optional Keyword Insights), Assessment Questions, Short Answer, and True/False \u2014 each has its own customizable prompt. These options stay unchecked and disabled until you\u2019ve selected at least one file.'),
-      onEnter: () => setActiveTab('infer'),
-    },
-    {
-      target: 'infer-run',
-      title: t('uploadInfer.tour.inferRunTitle', 'Run it'),
-      content: t('uploadInfer.tour.inferRunBody', 'Once you\u2019ve picked files and settings, run the batch here. You can watch progress or switch tabs \u2014 it keeps running either way.'),
-      placement: 'left',
-      onEnter: () => setActiveTab('infer'),
-    },
-    {
-      target: 'results-sidebar',
-      title: t('uploadInfer.tour.resultsSidebarTitle', 'Find a finished file'),
-      content: t('uploadInfer.tour.resultsSidebarBody', 'Once a file\u2019s done, click it here to open its results. This list also has its own date range, status filter, search, and sort.'),
-      placement: 'right',
-      onEnter: () => setActiveTab('results'),
-    },
-    {
-      target: 'results-content',
-      title: t('uploadInfer.tour.resultsContentTitle', 'Your notes, ready to use'),
-      content: t('uploadInfer.tour.resultsContentBody', 'Summary, keywords, quiz questions, and more \u2014 all generated from the file you selected. You can edit and re-generate individual sections without re-running the whole batch.'),
-      placement: 'left',
-      onEnter: () => setActiveTab('results'),
-    },
-  ];
-
-  // "selectMode" is FilePanel's checkbox-selection UI for building the set
-  // of files to run inference on. Turning it on stays on the Upload tab
-  // (so people can keep browsing/checking files there) — the Infer tab
-  // badge below nudges them over once something's selected.
-  const [selectMode, setSelectMode] = useState(false);
-  useEffect(() => { if (!isBatchRunning) setSelectMode(false); }, [isBatchRunning]);
-  useEffect(() => { if (!selectMode) dispatch(clearServerSelection()); }, [selectMode]); // eslint-disable-line
-  useEffect(() => { return () => { dispatch(clearServerSelection()); }; }, []); // eslint-disable-line
-
-  const enterInferSelection = useCallback(() => setSelectMode(true), []);
-  const exitInferSelection = useCallback(() => setSelectMode(false), []);
-
-  const [fileResult, setFileResult] = useState<FileResult | null>(null);
-  const [fileLoading, setFileLoading] = useState(false);
-  const [activeFileId, setActiveFileId] = useState<number | null>(null);
-
-  const fetchFileData = useCallback(async (fileId: number, knownFileName?: string) => {
-    setFileLoading(true);
-    try {
-      const res = await api.get(`/files/${fileId}`);
-      const d = (res.data as any)?.data ?? {};
-      setFileResult(prev => ({
-        fileId,
-        fileName: d.original_name ?? knownFileName ?? prev?.fileName ?? String(fileId),
-        insertedAt: d.inserted_at ?? prev?.insertedAt ?? '',
-        summary: d.summary ?? '',
-        keywords: d.keywords ?? [],
-        faq: d.faq ?? '[]',
-        shortAnswer: d.short_answer ?? '[]',
-        trueFalse: d.true_false ?? '[]',
-        // NOTE: backend key is genuinely "timstamped_summary" (missing an "e") — match it exactly.
-        timestampedSummary: d.timstamped_summary ?? '[]',
-        keywordInsights: d.keyword_insights ?? null,
-      }));
-    } catch { setFileResult(null); } finally { setFileLoading(false); }
-  }, []);
-
-  // Clicking a file (from the Upload tab's list, or the Workspace tab's
-  // own picker) loads its results and jumps straight to the Workspace tab.
-  // `fileName` is already known from the row that was clicked, so the
-  // title can show it immediately/reliably rather than depending on the
-  // detail endpoint's field naming.
-  const handleFileClick = useCallback(async (fileId: number, fileName?: string) => {
-    setActiveTab('results');
-    if (fileId === activeFileId) return;
-    setActiveFileId(fileId);
-    setFileResult(fileName ? {
-      fileId, fileName, insertedAt: '', summary: '', keywords: [], faq: '[]',
-      shortAnswer: '[]', trueFalse: '[]', timestampedSummary: '[]', keywordInsights: null,
-    } : null);
-    await fetchFileData(fileId, fileName);
-  }, [activeFileId, fetchFileData]);
-
-  const handleDeleteComplete = useCallback((deletedIds: number[], all?: boolean) => {
-    if (all || (activeFileId !== null && deletedIds.includes(activeFileId))) {
-      setActiveFileId(null);
-      setFileResult(null);
-    }
-  }, [activeFileId]);
-
-  const prevBatchRunning = useRef(false);
-  useEffect(() => {
-    const justFinished = prevBatchRunning.current && !isBatchRunning;
-    prevBatchRunning.current = isBatchRunning;
-    if (justFinished && activeFileId !== null) fetchFileData(activeFileId);
-  }, [isBatchRunning]); // eslint-disable-line
-
-  const tabs: { id: TabId; label: string; desc: string }[] = [
-    { id: 'upload', label: t('uploadInfer.tabs.upload'), desc: 'Add & browse your files' },
-    { id: 'infer', label: t('uploadInfer.tabs.infer'), desc: 'Configure & run analysis' },
-    { id: 'results', label: t('uploadInfer.tabs.results'), desc: 'View summaries & quizzes' },
-  ];
-
-  return (
-    <div className={styles.page}>
-      {/* ── Header — title and self-explanatory tab cards share one row ── */}
-      <div className={styles.headerBar}>
-        <div className={styles.phTitleRow}>
-          <div className={styles.phTitle}>{t('uploadInfer.pageTitle')}</div>
-          <button type="button" className={styles.tourTriggerBtn} onClick={startTour}>
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="8" cy="8" r="6.25" />
-              <path d="M6.1 6.2a1.9 1.9 0 013.6.7c0 1.3-1.7 1.5-1.7 2.7M8 11.4v.1" />
-            </svg>
-            {t('uploadInfer.tour.takeTour', 'Take a tour')}
-          </button>
-        </div>
-
-        <div className={styles.tabbar} role="tablist" data-tour="tabbar">
-          {tabs.map(tab => (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={activeTab === tab.id}
-              className={`${styles.tabBtn} ${activeTab === tab.id ? styles.tabBtnActive : ''}`}
-              onClick={() => setActiveTab(tab.id)}
-            >
-              <span className={styles.tabLabel}>{tab.label}</span>
-              <span className={styles.tabDesc}>{tab.desc}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className={styles.upbody}>
-        <div className={styles.tabPane} style={{ display: activeTab === 'upload' ? 'flex' : 'none' }}>
-          <FilePanel
-            selectMode={selectMode}
-            onEnterSelectMode={enterInferSelection}
-            onExitSelectMode={exitInferSelection}
-            onDeleteComplete={handleDeleteComplete}
-            active={activeTab === 'upload'}
-            onGoToInfer={() => setActiveTab('infer')}
-          />
-        </div>
-
-        <div className={styles.tabPane} style={{ display: activeTab === 'infer' ? 'flex' : 'none' }}>
-          <FileSidebar mode="select" active={activeTab === 'infer'} />
-          <InferencePanel />
-        </div>
-
-        <div className={styles.tabPane} style={{ display: activeTab === 'results' ? 'flex' : 'none' }}>
-          <FileSidebar mode="view" active={activeTab === 'results'} activeFileId={activeFileId} onFileClick={handleFileClick} />
-          <div data-tour="results-content" style={{ display: 'contents' }}>
-            <WorkspacePanel
-              step2Visible={false}
-              fileResult={fileResult}
-              fileLoading={fileLoading}
-              activeFileId={activeFileId}
-              onResultUpdate={patch => setFileResult(prev => prev ? { ...prev, ...patch } : prev)}
-            />
-          </div>
-        </div>
-      </div>
-
-      <TourGuide steps={tourSteps} active={tourActive} onFinish={finishTour} />
-    </div>
-  );
-};
-
-export default UploadInfer;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// ═══════════════════════════════════════════════
 // pages/UploadInfer/FilePanel.tsx
 // Content Analytics · Step-1 upload + uploaded files list
 // ═══════════════════════════════════════════════
-import React, { useRef, useState, useCallback, useEffect } from 'react';
+import React, { useRef, useState, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import {
@@ -458,7 +124,15 @@ interface FilePanelProps {
   onGoToInfer?: () => void;
 }
 
-const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, onExitSelectMode, onDeleteComplete, active, onGoToInfer }) => {
+// Exposed to the parent so the guided tour can programmatically open the
+// actions popover for its "here's everything in here" step, without
+// lifting actionsOpen into Redux just for that one use.
+export interface FilePanelHandle {
+  openActionsMenu: () => void;
+  closeActionsMenu: () => void;
+}
+
+const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(({ selectMode, onEnterSelectMode, onExitSelectMode, onDeleteComplete, active, onGoToInfer }, ref) => {
   const { t } = useTranslation();
   const dispatch = useAppDispatch();
   const {
@@ -516,6 +190,11 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
       document.removeEventListener('keydown', onKey);
     };
   }, [actionsOpen]);
+
+  useImperativeHandle(ref, () => ({
+    openActionsMenu: () => setActionsOpen(true),
+    closeActionsMenu: () => setActionsOpen(false),
+  }), []);
 
   // ── Dictionary association modal ─────────────
   const [dictModalOpen, setDictModalOpen] = useState(false);
@@ -1330,7 +1009,7 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
 
               {/* ── Actions — collapsed into a single trigger + popover, only in normal (idle) mode ── */}
               {!selectMode && !deleteMode && !exportMode && !isBatchRunning && (
-                <div className={styles.actionsPopoverWrap} ref={actionsPopoverRef} data-tour="upload-actions">
+                <div className={styles.actionsPopoverWrap} ref={actionsPopoverRef}>
                   <button
                     type="button"
                   className={`${styles.actionsTrigger} ${actionsOpen ? styles.actionsTriggerOpen : ''}`}
@@ -1348,7 +1027,7 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
                 </button>
 
                 {actionsOpen && (
-                  <div className={styles.actionsPopover} role="menu">
+                  <div className={styles.actionsPopover} role="menu" data-tour="upload-actions">
                     {/* Dictionary */}
                     <button
                       className={`${styles.actionTile} ${styles.actionTileDictionary}`}
@@ -1464,7 +1143,7 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
         </div>
 
         {/* File list */}
-        <div className={styles.uploadedBody} data-tour="upload-cards">
+        <div className={styles.uploadedBody} data-tour={filesTotal === 0 ? 'upload-cards' : undefined}>
           {filesLoading && (
             <div className={styles.listState}><div className={styles.spinner} /><span>{t('uploadInfer.filePanel.loadingFiles')}</span></div>
           )}
@@ -1492,7 +1171,7 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
               {t('uploadInfer.filePanel.noFilesMatch', { query: filesSearch })}
             </div>
           )}
-          {!filesLoading && !filesError && displayedFiles.map(f => {
+          {!filesLoading && !filesError && displayedFiles.map((f, idx) => {
             const ext = getExt(f.original_name);
             const isChecked = selectedServerIds.includes(f.id);
             const isDeleteChecked = deleteSelectedIds.includes(f.id);
@@ -1513,6 +1192,7 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
             return (
               <div
                 key={f.id}
+                data-tour={idx === 0 ? 'upload-cards' : undefined}
                 className={`${styles.fcard}
                   ${selectable ? (isChecked ? styles.fcardActive : '') : ''}
                   ${deletable ? (isDeleteChecked ? styles.fcardActiveDelete : '') : ''}
@@ -1792,13 +1472,362 @@ const FilePanel: React.FC<FilePanelProps> = ({ selectMode, onEnterSelectMode, on
       )}
     </div>
   );
-};
+});
+
+FilePanel.displayName = 'FilePanel';
 
 export default FilePanel;
 
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ═══════════════════════════════════════════════
+// pages/UploadInfer/UploadInfer.tsx
+// LectureAI · Upload & Inference page
+// ═══════════════════════════════════════════════
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useAppSelector, useAppDispatch } from '../../store/hooks';
+import { clearServerSelection } from '../../store/uploadSlice';
+import api from '../../services/api';
+import FilePanel, { FilePanelHandle } from './FilePanel';
+import InferencePanel from './InferencePanel';
+import WorkspacePanel from './WorkspacePanel';
+import FileSidebar from './FileSidebar';
+import TourGuide, { TourStep } from './TourGuide';
+import styles from './UploadInfer.module.scss';
+
+// ── Keyword Insights (from GET /files/{id}) ──────
+export interface KGEdge { type: string; source: string; target: string; }
+export interface KGNode { id: string; label: string; title?: string; value?: number; }
+export interface KnowledgeGraph { edges: KGEdge[]; nodes: KGNode[]; }
+export interface WordCloudData { wordcloud: [string, number][]; complexity_map: Record<string, string>; }
+export interface TimelineDataset { data: number[]; label: string; }
+export interface TimelineData { labels: string[]; datasets: TimelineDataset[]; timestamped: boolean; }
+export interface HeatmapData { matrix: number[][]; keywords: string[]; segments: string[]; timestamped: boolean; }
+export interface ClusterItem { id: string; label: string; value: number; }
+export interface ClustersData { clusters: Record<string, ClusterItem[]>; }
+export interface FrequencyItem { count: number; keyword: string; relative_pct: number; first_mention_pct: number; }
+export interface FrequencyData { data: FrequencyItem[]; }
+export interface PrereqEdge { reason: string; enables: string; prerequisite: string; }
+export interface PrereqNode { id: string; label: string; value: number; }
+export interface PrerequisitesData { edges: PrereqEdge[]; nodes: PrereqNode[]; }
+export interface ImportanceComplexityItem { reason: string; keyword: string; frequency: number; complexity: string; importance: number; }
+export interface ImportanceComplexityData { data: ImportanceComplexityItem[]; }
+export interface CooccurrenceData { matrix: number[][]; keywords: string[]; }
+export interface GlossaryItem { term: string; definition: string; first_mentioned_ms: number; }
+export interface GlossaryData { glossary: GlossaryItem[]; }
+
+export interface KeywordInsights {
+  enriched_keywords: unknown | null;
+  knowledge_graph: KnowledgeGraph | null;
+  word_cloud: WordCloudData | null;
+  timeline: TimelineData | null;
+  heatmap: HeatmapData | null;
+  clusters: ClustersData | null;
+  frequency: FrequencyData | null;
+  prerequisites: PrerequisitesData | null;
+  importance_complexity: ImportanceComplexityData | null;
+  cooccurrence: CooccurrenceData | null;
+  congnitive_Load: unknown | null;
+  segments: { segments: unknown[] } | null;
+  glossary: GlossaryData | null;
+}
+
+export interface FileResult {
+  summary: string;
+  keywords: string[];
+  faq: string;
+  shortAnswer: string;
+  trueFalse: string;
+  timestampedSummary: string;
+  keywordInsights: KeywordInsights | null;
+  fileName: string;
+  fileId: number;
+  insertedAt: string;
+}
+
+// ── Tabs ──────────────────────────────────────────
+// All three are always clickable — there's no gating on a previous tab
+// being "complete". Every panel below stays mounted at all times (just
+// hidden with CSS) so file lists, batch polling, and scroll position
+// survive switching tabs instead of resetting.
+type TabId = 'upload' | 'infer' | 'results';
+
+const UploadInfer: React.FC = () => {
+  const { t } = useTranslation();
+  const isBatchRunning = useAppSelector(s => s.upload.isBatchRunning);
+  const dispatch = useAppDispatch();
+
+  const [activeTab, setActiveTab] = useState<TabId>('upload');
+  const filePanelRef = useRef<FilePanelHandle>(null);
+  // Whether the Upload tab currently has any files loaded — lets the tour
+  // adapt its "your uploaded files" step to either point at a real card
+  // or describe what will appear once something's uploaded.
+  const hasUploadedFiles = useAppSelector(s => s.upload.serverFiles.length > 0);
+
+  // ── Guided tour ──
+  const TOUR_STORAGE_KEY = 'uploadInfer.tourSeen';
+  const [tourActive, setTourActive] = useState(false);
+  useEffect(() => {
+    try {
+      if (!localStorage.getItem(TOUR_STORAGE_KEY)) setTourActive(true);
+    } catch { /* localStorage unavailable — just skip auto-start */ }
+  }, []);
+  const finishTour = useCallback(() => {
+    setTourActive(false);
+    filePanelRef.current?.closeActionsMenu();
+    try { localStorage.setItem(TOUR_STORAGE_KEY, '1'); } catch { /* ignore */ }
+  }, []);
+  const startTour = useCallback(() => { setActiveTab('upload'); setTourActive(true); }, []);
+
+  const tourSteps: TourStep[] = [
+    {
+      target: 'tabbar',
+      title: t('uploadInfer.tour.tabsTitle', 'Three steps, always available'),
+      content: t('uploadInfer.tour.tabsBody', 'Upload & Manage, Inference, and View Results — you can jump between them any time, nothing is locked behind finishing a previous step.'),
+      onEnter: () => setActiveTab('upload'),
+    },
+    {
+      target: 'upload-dropzone',
+      title: t('uploadInfer.tour.uploadTitle', 'Add your files here'),
+      content: t('uploadInfer.tour.uploadBody', 'Drag in a lecture recording\u2019s captions (.vtt or .srt), or browse for one. You can drop in several files at once.'),
+      onEnter: () => setActiveTab('upload'),
+    },
+    {
+      target: 'upload-cards',
+      title: t('uploadInfer.tour.cardsTitle', 'Your uploaded files'),
+      content: hasUploadedFiles
+        ? t('uploadInfer.tour.cardsBody', 'Every file shows up here as a card. The colored badge in the corner shows the format (VTT/SRT); the small icons below the filename open the exact prompt used for each content type (Summary, Keywords, Questions, Answer, True/False); and the bottom badge shows the file\u2019s current status. If a dictionary or prompt template is linked to the file, you\u2019ll see a small book or checklist icon too.')
+        : t('uploadInfer.tour.cardsBodyEmpty', 'You haven\u2019t uploaded anything yet, so this area is empty for now. Once you do, each file becomes a card showing: a format badge (VTT/SRT), the filename, small icons for each content type\u2019s prompt (Summary, Keywords, Questions, Answer, True/False), a book/checklist icon if a dictionary or prompt template is linked, and a status badge at the bottom.'),
+      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.closeActionsMenu(); },
+    },
+    {
+      target: 'upload-sort',
+      title: t('uploadInfer.tour.sortTitle', 'Sort the list'),
+      content: t('uploadInfer.tour.sortBody', 'Sort your files by ID, Name, Date, or Status \u2014 click a column again to flip between ascending and descending.'),
+      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.closeActionsMenu(); },
+    },
+    {
+      target: 'upload-date-filter',
+      title: t('uploadInfer.tour.dateFilterTitle', 'Filter by date range'),
+      content: t('uploadInfer.tour.dateFilterBody', 'Narrow the file list down to a date range, then hit Apply. This affects only what\u2019s shown here on the Upload tab.'),
+      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.closeActionsMenu(); },
+    },
+    {
+      target: 'upload-status-filter',
+      title: t('uploadInfer.tour.statusFilterTitle', 'Filter by status'),
+      content: t('uploadInfer.tour.statusFilterBody', 'Show only files in one status: All, Waiting, Queued, Running, Inferenced, Error, or Pending \u2014 handy once you have a lot of files in flight.'),
+      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.closeActionsMenu(); },
+    },
+    {
+      target: 'upload-actions',
+      title: t('uploadInfer.tour.actionsTitle', 'Bulk actions, one click away'),
+      content: t('uploadInfer.tour.actionsBody', 'Here are all five bulk actions: Dictionary (link a term dictionary to your files), Prompt Template (link a saved prompt set), Search (find files by name), Export (download files), and Delete (remove files) \u2014 each applies to many files at once.'),
+      placement: 'left',
+      // Actually opens the menu so every action is visible while this step is shown.
+      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.openActionsMenu(); },
+    },
+    {
+      target: 'infer-sidebar',
+      title: t('uploadInfer.tour.inferSidebarTitle', 'Pick files to analyze'),
+      content: t('uploadInfer.tour.inferSidebarBody', 'Select one or more files here \u2014 this list has its own date range, status filter, search, and sort, all independent of the Upload tab.'),
+      placement: 'right',
+      onEnter: () => { setActiveTab('infer'); filePanelRef.current?.closeActionsMenu(); },
+    },
+    {
+      target: 'infer-settings',
+      title: t('uploadInfer.tour.inferSettingsTitle', 'Choose what to generate'),
+      content: t('uploadInfer.tour.inferSettingsBody', 'Turn on Summary, Keywords (with optional Keyword Insights), Assessment Questions, Short Answer, and True/False \u2014 each has its own customizable prompt. These options stay unchecked and disabled until you\u2019ve selected at least one file.'),
+      onEnter: () => setActiveTab('infer'),
+    },
+    {
+      target: 'infer-run',
+      title: t('uploadInfer.tour.inferRunTitle', 'Run it'),
+      content: t('uploadInfer.tour.inferRunBody', 'Once you\u2019ve picked files and settings, run the batch here. You can watch progress or switch tabs \u2014 it keeps running either way.'),
+      placement: 'left',
+      onEnter: () => setActiveTab('infer'),
+    },
+    {
+      target: 'results-sidebar',
+      title: t('uploadInfer.tour.resultsSidebarTitle', 'Find a finished file'),
+      content: t('uploadInfer.tour.resultsSidebarBody', 'Once a file\u2019s done, click it here to open its results. This list also has its own date range, status filter, search, and sort.'),
+      placement: 'right',
+      onEnter: () => setActiveTab('results'),
+    },
+    {
+      target: 'results-content',
+      title: t('uploadInfer.tour.resultsContentTitle', 'Your notes, ready to use'),
+      content: t('uploadInfer.tour.resultsContentBody', 'Summary, keywords, quiz questions, and more \u2014 all generated from the file you selected. You can edit and re-generate individual sections without re-running the whole batch.'),
+      placement: 'left',
+      onEnter: () => setActiveTab('results'),
+    },
+  ];
+
+  // "selectMode" is FilePanel's checkbox-selection UI for building the set
+  // of files to run inference on. Turning it on stays on the Upload tab
+  // (so people can keep browsing/checking files there) — the Infer tab
+  // badge below nudges them over once something's selected.
+  const [selectMode, setSelectMode] = useState(false);
+  useEffect(() => { if (!isBatchRunning) setSelectMode(false); }, [isBatchRunning]);
+  useEffect(() => { if (!selectMode) dispatch(clearServerSelection()); }, [selectMode]); // eslint-disable-line
+  useEffect(() => { return () => { dispatch(clearServerSelection()); }; }, []); // eslint-disable-line
+
+  const enterInferSelection = useCallback(() => setSelectMode(true), []);
+  const exitInferSelection = useCallback(() => setSelectMode(false), []);
+
+  const [fileResult, setFileResult] = useState<FileResult | null>(null);
+  const [fileLoading, setFileLoading] = useState(false);
+  const [activeFileId, setActiveFileId] = useState<number | null>(null);
+
+  const fetchFileData = useCallback(async (fileId: number, knownFileName?: string) => {
+    setFileLoading(true);
+    try {
+      const res = await api.get(`/files/${fileId}`);
+      const d = (res.data as any)?.data ?? {};
+      setFileResult(prev => ({
+        fileId,
+        fileName: d.original_name ?? knownFileName ?? prev?.fileName ?? String(fileId),
+        insertedAt: d.inserted_at ?? prev?.insertedAt ?? '',
+        summary: d.summary ?? '',
+        keywords: d.keywords ?? [],
+        faq: d.faq ?? '[]',
+        shortAnswer: d.short_answer ?? '[]',
+        trueFalse: d.true_false ?? '[]',
+        // NOTE: backend key is genuinely "timstamped_summary" (missing an "e") — match it exactly.
+        timestampedSummary: d.timstamped_summary ?? '[]',
+        keywordInsights: d.keyword_insights ?? null,
+      }));
+    } catch { setFileResult(null); } finally { setFileLoading(false); }
+  }, []);
+
+  // Clicking a file (from the Upload tab's list, or the Workspace tab's
+  // own picker) loads its results and jumps straight to the Workspace tab.
+  // `fileName` is already known from the row that was clicked, so the
+  // title can show it immediately/reliably rather than depending on the
+  // detail endpoint's field naming.
+  const handleFileClick = useCallback(async (fileId: number, fileName?: string) => {
+    setActiveTab('results');
+    if (fileId === activeFileId) return;
+    setActiveFileId(fileId);
+    setFileResult(fileName ? {
+      fileId, fileName, insertedAt: '', summary: '', keywords: [], faq: '[]',
+      shortAnswer: '[]', trueFalse: '[]', timestampedSummary: '[]', keywordInsights: null,
+    } : null);
+    await fetchFileData(fileId, fileName);
+  }, [activeFileId, fetchFileData]);
+
+  const handleDeleteComplete = useCallback((deletedIds: number[], all?: boolean) => {
+    if (all || (activeFileId !== null && deletedIds.includes(activeFileId))) {
+      setActiveFileId(null);
+      setFileResult(null);
+    }
+  }, [activeFileId]);
+
+  const prevBatchRunning = useRef(false);
+  useEffect(() => {
+    const justFinished = prevBatchRunning.current && !isBatchRunning;
+    prevBatchRunning.current = isBatchRunning;
+    if (justFinished && activeFileId !== null) fetchFileData(activeFileId);
+  }, [isBatchRunning]); // eslint-disable-line
+
+  const tabs: { id: TabId; label: string; desc: string }[] = [
+    { id: 'upload', label: t('uploadInfer.tabs.upload'), desc: 'Add & browse your files' },
+    { id: 'infer', label: t('uploadInfer.tabs.infer'), desc: 'Configure & run analysis' },
+    { id: 'results', label: t('uploadInfer.tabs.results'), desc: 'View summaries & quizzes' },
+  ];
+
+  return (
+    <div className={styles.page}>
+      {/* ── Header — title and self-explanatory tab cards share one row ── */}
+      <div className={styles.headerBar}>
+        <div className={styles.phTitleRow}>
+          <div className={styles.phTitle}>{t('uploadInfer.pageTitle')}</div>
+          <button type="button" className={styles.tourTriggerBtn} onClick={startTour}>
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="8" cy="8" r="6.25" />
+              <path d="M6.1 6.2a1.9 1.9 0 013.6.7c0 1.3-1.7 1.5-1.7 2.7M8 11.4v.1" />
+            </svg>
+            {t('uploadInfer.tour.takeTour', 'Take a tour')}
+          </button>
+        </div>
+
+        <div className={styles.tabbar} role="tablist" data-tour="tabbar">
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              className={`${styles.tabBtn} ${activeTab === tab.id ? styles.tabBtnActive : ''}`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              <span className={styles.tabLabel}>{tab.label}</span>
+              <span className={styles.tabDesc}>{tab.desc}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className={styles.upbody}>
+        <div className={styles.tabPane} style={{ display: activeTab === 'upload' ? 'flex' : 'none' }}>
+          <FilePanel
+            ref={filePanelRef}
+            selectMode={selectMode}
+            onEnterSelectMode={enterInferSelection}
+            onExitSelectMode={exitInferSelection}
+            onDeleteComplete={handleDeleteComplete}
+            active={activeTab === 'upload'}
+            onGoToInfer={() => setActiveTab('infer')}
+          />
+        </div>
+
+        <div className={styles.tabPane} style={{ display: activeTab === 'infer' ? 'flex' : 'none' }}>
+          <FileSidebar mode="select" active={activeTab === 'infer'} />
+          <InferencePanel />
+        </div>
+
+        <div className={styles.tabPane} style={{ display: activeTab === 'results' ? 'flex' : 'none' }}>
+          <FileSidebar mode="view" active={activeTab === 'results'} activeFileId={activeFileId} onFileClick={handleFileClick} />
+          <div data-tour="results-content" style={{ display: 'contents' }}>
+            <WorkspacePanel
+              step2Visible={false}
+              fileResult={fileResult}
+              fileLoading={fileLoading}
+              activeFileId={activeFileId}
+              onResultUpdate={patch => setFileResult(prev => prev ? { ...prev, ...patch } : prev)}
+            />
+          </div>
+        </div>
+      </div>
+
+      <TourGuide steps={tourSteps} active={tourActive} onFinish={finishTour} />
+    </div>
+  );
+};
+
+export default UploadInfer;
 
 
 
@@ -2233,6 +2262,7 @@ export default FilePanel;
       "uploadBody": "Drag in a lecture recording's captions (.vtt or .srt), or browse for one. You can drop in several files at once.",
       "cardsTitle": "Your uploaded files",
       "cardsBody": "Every file shows up here as a card. The colored badge in the corner shows the format (VTT/SRT); the small icons below the filename open the exact prompt used for each content type (Summary, Keywords, Questions, Answer, True/False); and the bottom badge shows the file's current status. If a dictionary or prompt template is linked to the file, you'll see a small book or checklist icon too.",
+      "cardsBodyEmpty": "You haven't uploaded anything yet, so this area is empty for now. Once you do, each file becomes a card showing: a format badge (VTT/SRT), the filename, small icons for each content type's prompt (Summary, Keywords, Questions, Answer, True/False), a book/checklist icon if a dictionary or prompt template is linked, and a status badge at the bottom.",
       "sortTitle": "Sort the list",
       "sortBody": "Sort your files by ID, Name, Date, or Status — click a column again to flip between ascending and descending.",
       "dateFilterTitle": "Filter by date range",
@@ -2240,7 +2270,7 @@ export default FilePanel;
       "statusFilterTitle": "Filter by status",
       "statusFilterBody": "Show only files in one status: All, Waiting, Queued, Running, Inferenced, Error, or Pending — handy once you have a lot of files in flight.",
       "actionsTitle": "Bulk actions, one click away",
-      "actionsBody": "Open this for five bulk actions: Dictionary (link a term dictionary to your files), Prompt Template (link a saved prompt set), Search (find files by name), Export (download files), and Delete (remove files) — each applies to many files at once.",
+      "actionsBody": "Here are all five bulk actions: Dictionary (link a term dictionary to your files), Prompt Template (link a saved prompt set), Search (find files by name), Export (download files), and Delete (remove files) — each applies to many files at once.",
       "inferSidebarTitle": "Pick files to analyze",
       "inferSidebarBody": "Select one or more files here — this list has its own date range, status filter, search, and sort, all independent of the Upload tab.",
       "inferSettingsTitle": "Choose what to generate",
@@ -2922,9 +2952,6 @@ export default FilePanel;
 
 
 
-
-
-
 {
   "header": {
     "logoText": "콘텐츠",
@@ -3345,6 +3372,7 @@ export default FilePanel;
       "uploadBody": "강의 녹화본의 자막 파일(.vtt 또는 .srt)을 끌어다 놓거나 찾아보기로 선택하세요. 여러 파일을 한 번에 넣을 수도 있습니다.",
       "cardsTitle": "업로드한 파일 목록",
       "cardsBody": "업로드한 파일은 이렇게 카드 형태로 표시됩니다. 모서리의 색상 배지는 파일 형식(VTT/SRT)을 나타내고, 파일명 아래의 작은 아이콘들은 각 콘텐츠 유형(요약, 키워드, 질문, 답변, 참/거짓)에 사용된 프롬프트를 보여줍니다. 하단 배지는 파일의 현재 상태를 나타내며, 사전이나 프롬프트 템플릿이 연결된 파일에는 작은 책 또는 체크리스트 아이콘이 함께 표시됩니다.",
+      "cardsBodyEmpty": "아직 업로드한 파일이 없어서 이 영역은 비어 있습니다. 파일을 업로드하면 각 파일이 카드로 표시되며, 형식 배지(VTT/SRT), 파일명, 콘텐츠 유형별 프롬프트 아이콘(요약, 키워드, 질문, 답변, 참/거짓), 사전이나 프롬프트 템플릿이 연결된 경우 책/체크리스트 아이콘, 그리고 하단의 상태 배지를 확인할 수 있습니다.",
       "sortTitle": "목록 정렬하기",
       "sortBody": "파일을 ID, 이름, 날짜, 상태 기준으로 정렬할 수 있습니다 — 같은 항목을 다시 클릭하면 오름차순/내림차순이 바뀝니다.",
       "dateFilterTitle": "날짜 범위로 필터링",
@@ -3352,7 +3380,7 @@ export default FilePanel;
       "statusFilterTitle": "상태로 필터링",
       "statusFilterBody": "전체, 대기, 대기열, 실행 중, 추론 완료, 오류, 보류 중 하나의 상태로 파일을 필터링할 수 있습니다 — 처리 중인 파일이 많을 때 유용합니다.",
       "actionsTitle": "한 번의 클릭으로 실행하는 일괄 작업",
-      "actionsBody": "여기를 열면 5가지 일괄 작업을 사용할 수 있습니다: 사전(파일에 용어 사전 연결), 프롬프트 템플릿(저장된 프롬프트 세트 연결), 검색(파일명으로 찾기), 내보내기(파일 다운로드), 삭제(파일 제거) — 모두 여러 파일에 한 번에 적용됩니다.",
+      "actionsBody": "이제 5가지 일괄 작업을 모두 확인할 수 있습니다: 사전(파일에 용어 사전 연결), 프롬프트 템플릿(저장된 프롬프트 세트 연결), 검색(파일명으로 찾기), 내보내기(파일 다운로드), 삭제(파일 제거) — 모두 여러 파일에 한 번에 적용됩니다.",
       "inferSidebarTitle": "분석할 파일 선택",
       "inferSidebarBody": "여기서 하나 이상의 파일을 선택하세요 — 이 목록은 업로드 탭과 별개로 자체 날짜 범위, 상태 필터, 검색, 정렬 기능을 가지고 있습니다.",
       "inferSettingsTitle": "생성할 항목 선택",
