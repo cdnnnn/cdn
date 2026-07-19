@@ -59,14 +59,14 @@ const STATUS_FILTER_OPTIONS: { value: FileStatus | ''; labelKey: string }[] = [
 ];
 
 // ── Which of the 5 content prompts are customized for this file ──
-const PROMPT_FIELDS: { key: keyof ServerFile; letter: string; labelKey: string; icon: string }[] = [
-  { key: 'summary_prompt', letter: 'S', labelKey: 'uploadInfer.inferencePanel.summaryPrompt', icon: 'M3 2.5h7.5a1.5 1.5 0 011.5 1.5v9a.5.5 0 01-.5.5H4a1 1 0 01-1-1V2.5zM5.5 5.5h5M5.5 8h5M5.5 10.5h3' },
-  { key: 'keywords_prompt', letter: 'K', labelKey: 'uploadInfer.inferencePanel.keywordPrompt', icon: 'M2 8l4.5-4.5H12v5.5L7.5 13.5 2 8z M9.5 5.5h.01' },
-  { key: 'faq_prompt', letter: 'Q', labelKey: 'uploadInfer.inferencePanel.questionPrompt', icon: 'M8 2.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM6.2 6.3a1.8 1.8 0 013.4.7c0 1.2-1.6 1.4-1.6 2.6 M8 11.3v.1' },
+const PROMPT_FIELDS: { key: keyof ServerFile; letter: string; labelKey: string; icon: string; tourId: string }[] = [
+  { key: 'summary_prompt', letter: 'S', labelKey: 'uploadInfer.inferencePanel.summaryPrompt', icon: 'M3 2.5h7.5a1.5 1.5 0 011.5 1.5v9a.5.5 0 01-.5.5H4a1 1 0 01-1-1V2.5zM5.5 5.5h5M5.5 8h5M5.5 10.5h3', tourId: 'upload-card-icon-summary' },
+  { key: 'keywords_prompt', letter: 'K', labelKey: 'uploadInfer.inferencePanel.keywordPrompt', icon: 'M2 8l4.5-4.5H12v5.5L7.5 13.5 2 8z M9.5 5.5h.01', tourId: 'upload-card-icon-keywords' },
+  { key: 'faq_prompt', letter: 'Q', labelKey: 'uploadInfer.inferencePanel.questionPrompt', icon: 'M8 2.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM6.2 6.3a1.8 1.8 0 013.4.7c0 1.2-1.6 1.4-1.6 2.6 M8 11.3v.1', tourId: 'upload-card-icon-questions' },
   // Speech-bubble-with-lines — reads as "a short written reply", distinct from the summary document icon above.
-  { key: 'short_answer_prompt', letter: 'A', labelKey: 'uploadInfer.inferencePanel.shortAnswerPrompt', icon: 'M2.5 3.5h11a1 1 0 011 1v6a1 1 0 01-1 1H6.5L3.5 14.5V11.5h-1a1 1 0 01-1-1v-6a1 1 0 011-1z M5 7h6M5 9h3.5' },
+  { key: 'short_answer_prompt', letter: 'A', labelKey: 'uploadInfer.inferencePanel.shortAnswerPrompt', icon: 'M2.5 3.5h11a1 1 0 011 1v6a1 1 0 01-1 1H6.5L3.5 14.5V11.5h-1a1 1 0 01-1-1v-6a1 1 0 011-1z M5 7h6M5 9h3.5', tourId: 'upload-card-icon-answer' },
   // Toggle switch — a direct visual metaphor for a binary True/False choice, distinct from a generic "done" checkmark.
-  { key: 'true_false_prompt', letter: 'T', labelKey: 'uploadInfer.inferencePanel.trueFalsePrompt', icon: 'M5.5 4h5a4 4 0 010 8h-5a4 4 0 010-8z M10.6 8a1.25 1.25 0 102.5 0 1.25 1.25 0 00-2.5 0z' },
+  { key: 'true_false_prompt', letter: 'T', labelKey: 'uploadInfer.inferencePanel.trueFalsePrompt', icon: 'M5.5 4h5a4 4 0 010 8h-5a4 4 0 010-8z M10.6 8a1.25 1.25 0 102.5 0 1.25 1.25 0 00-2.5 0z', tourId: 'upload-card-icon-truefalse' },
 ];
 
 const filesToBrowsed = (files: File[]): BrowsedFile[] =>
@@ -1030,6 +1030,7 @@ const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(({ selectMode, onE
                   <div className={styles.actionsPopover} role="menu" data-tour="upload-actions">
                     {/* Dictionary */}
                     <button
+                      data-tour="upload-action-dictionary"
                       className={`${styles.actionTile} ${styles.actionTileDictionary}`}
                       onClick={() => { setDictModalOpen(true); setActionsOpen(false); }}
                       disabled={filesTotal === 0}
@@ -1046,6 +1047,7 @@ const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(({ selectMode, onE
 
                     {/* Template */}
                     <button
+                      data-tour="upload-action-template"
                       className={`${styles.actionTile} ${styles.actionTileTemplate}`}
                       onClick={() => { setTemplateModalOpen(true); setActionsOpen(false); }}
                       disabled={filesTotal === 0}
@@ -1061,6 +1063,7 @@ const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(({ selectMode, onE
 
                     {/* Search */}
                     <button
+                      data-tour="upload-action-search"
                       className={`${styles.actionTile} ${styles.actionTileSearch} ${searchOpen ? styles.actionTileActive : ''}`}
                       onClick={() => { openSearch(); setActionsOpen(false); }}
                       title={t('uploadInfer.filePanel.searchBtn')}
@@ -1074,6 +1077,7 @@ const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(({ selectMode, onE
 
                     {/* Export */}
                     <button
+                      data-tour="upload-action-export"
                       className={`${styles.actionTile} ${styles.actionTileExport}`}
                       onClick={() => { enterExportMode(); setActionsOpen(false); }}
                       disabled={filesTotal === 0}
@@ -1090,6 +1094,7 @@ const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(({ selectMode, onE
 
                     {/* Delete */}
                     <button
+                      data-tour="upload-action-delete"
                       className={`${styles.actionTile} ${styles.actionTileDelete}`}
                       onClick={() => { enterDeleteMode(); setActionsOpen(false); }}
                       disabled={filesTotal === 0}
@@ -1188,6 +1193,7 @@ const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(({ selectMode, onE
               // that navigation now only happens from the Workspace tab's own list.
             };
             const statusMeta = STATUS_META[f.status] ?? STATUS_META.tbd;
+            const isFirstCard = idx === 0;
             const hasLinks = !!f.dictionary_id || !!f.prompt_template_id;
             return (
               <div
@@ -1240,15 +1246,16 @@ const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(({ selectMode, onE
                 <div className={styles.fcardPrompts} onClick={e => e.stopPropagation()}>
                   <span className={styles.fcardPromptsLabel}>{t('uploadInfer.filePanel.promptsLabel', 'Prompts')}</span>
                   <div className={styles.fcardPromptsRow}>
-                    {PROMPT_FIELDS.map(({ key, labelKey, icon }, idx) => {
+                    {PROMPT_FIELDS.map(({ key, labelKey, icon, tourId }, fieldIdx) => {
                       const set = !!(f[key] as string)?.trim();
                       return (
                         <button
                           key={key}
                           type="button"
+                          data-tour={isFirstCard ? tourId : undefined}
                           className={`${styles.fcardPromptDot} ${set ? styles.fcardPromptDotSet : ''}`}
                           title={`${t(labelKey)}${set ? ' — ' + t('uploadInfer.filePanel.promptCustomized') : ' — ' + t('uploadInfer.filePanel.promptDefault')}`}
-                          onClick={() => setPromptViewer({ file: f, fieldIdx: idx })}
+                          onClick={() => setPromptViewer({ file: f, fieldIdx })}
                         >
                           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
                             <path d={icon} />
@@ -1490,18 +1497,6 @@ export default FilePanel;
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 // ═══════════════════════════════════════════════
 // pages/UploadInfer/UploadInfer.tsx
 // LectureAI · Upload & Inference page
@@ -1602,7 +1597,7 @@ const UploadInfer: React.FC = () => {
   }, []);
   const startTour = useCallback(() => { setActiveTab('upload'); setTourActive(true); }, []);
 
-  const tourSteps: TourStep[] = [
+  const allTourSteps: TourStep[] = [
     {
       target: 'tabbar',
       title: t('uploadInfer.tour.tabsTitle', 'Three steps, always available'),
@@ -1621,6 +1616,37 @@ const UploadInfer: React.FC = () => {
       content: hasUploadedFiles
         ? t('uploadInfer.tour.cardsBody', 'Every file shows up here as a card. The colored badge in the corner shows the format (VTT/SRT); the small icons below the filename open the exact prompt used for each content type (Summary, Keywords, Questions, Answer, True/False); and the bottom badge shows the file\u2019s current status. If a dictionary or prompt template is linked to the file, you\u2019ll see a small book or checklist icon too.')
         : t('uploadInfer.tour.cardsBodyEmpty', 'You haven\u2019t uploaded anything yet, so this area is empty for now. Once you do, each file becomes a card showing: a format badge (VTT/SRT), the filename, small icons for each content type\u2019s prompt (Summary, Keywords, Questions, Answer, True/False), a book/checklist icon if a dictionary or prompt template is linked, and a status badge at the bottom.'),
+      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.closeActionsMenu(); },
+    },
+    // ── Icon-by-icon walkthrough — only shown when a real card exists to point at ──
+    {
+      target: 'upload-card-icon-summary',
+      title: t('uploadInfer.tour.iconSummaryTitle', 'Summary icon'),
+      content: t('uploadInfer.tour.iconSummaryBody', 'Opens the prompt used to generate this file\u2019s summary. Blue means it\u2019s been customized for this file; gray means it\u2019s still using the default.'),
+      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.closeActionsMenu(); },
+    },
+    {
+      target: 'upload-card-icon-keywords',
+      title: t('uploadInfer.tour.iconKeywordsTitle', 'Keywords icon'),
+      content: t('uploadInfer.tour.iconKeywordsBody', 'Opens the prompt used to extract this file\u2019s keywords \u2014 the tag-shaped icon.'),
+      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.closeActionsMenu(); },
+    },
+    {
+      target: 'upload-card-icon-questions',
+      title: t('uploadInfer.tour.iconQuestionsTitle', 'Assessment Questions icon'),
+      content: t('uploadInfer.tour.iconQuestionsBody', 'Opens the prompt used to generate quiz-style assessment questions \u2014 the question-mark icon.'),
+      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.closeActionsMenu(); },
+    },
+    {
+      target: 'upload-card-icon-answer',
+      title: t('uploadInfer.tour.iconAnswerTitle', 'Short Answer icon'),
+      content: t('uploadInfer.tour.iconAnswerBody', 'Opens the prompt used to generate short written answers \u2014 the speech-bubble icon.'),
+      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.closeActionsMenu(); },
+    },
+    {
+      target: 'upload-card-icon-truefalse',
+      title: t('uploadInfer.tour.iconTrueFalseTitle', 'True/False icon'),
+      content: t('uploadInfer.tour.iconTrueFalseBody', 'Opens the prompt used to generate True/False questions \u2014 the toggle-switch icon.'),
       onEnter: () => { setActiveTab('upload'); filePanelRef.current?.closeActionsMenu(); },
     },
     {
@@ -1647,6 +1673,42 @@ const UploadInfer: React.FC = () => {
       content: t('uploadInfer.tour.actionsBody', 'Here are all five bulk actions: Dictionary (link a term dictionary to your files), Prompt Template (link a saved prompt set), Search (find files by name), Export (download files), and Delete (remove files) \u2014 each applies to many files at once.'),
       placement: 'left',
       // Actually opens the menu so every action is visible while this step is shown.
+      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.openActionsMenu(); },
+    },
+    // ── One step per action button, menu kept open throughout ──
+    {
+      target: 'upload-action-dictionary',
+      title: t('uploadInfer.tour.actionDictionaryTitle', 'Dictionary'),
+      content: t('uploadInfer.tour.actionDictionaryBody', 'Link a term dictionary to one or more files, so inference uses the right spellings and terminology for your subject.'),
+      placement: 'left',
+      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.openActionsMenu(); },
+    },
+    {
+      target: 'upload-action-template',
+      title: t('uploadInfer.tour.actionTemplateTitle', 'Prompt Template'),
+      content: t('uploadInfer.tour.actionTemplateBody', 'Apply a saved set of prompts to one or more files in one go, instead of customizing each file\u2019s prompts by hand.'),
+      placement: 'left',
+      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.openActionsMenu(); },
+    },
+    {
+      target: 'upload-action-search',
+      title: t('uploadInfer.tour.actionSearchTitle', 'Search'),
+      content: t('uploadInfer.tour.actionSearchBody', 'Find a file by name \u2014 opens a search box for the Upload tab\u2019s file list.'),
+      placement: 'left',
+      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.openActionsMenu(); },
+    },
+    {
+      target: 'upload-action-export',
+      title: t('uploadInfer.tour.actionExportTitle', 'Export'),
+      content: t('uploadInfer.tour.actionExportBody', 'Select files and download them \u2014 useful for backing up or sharing results outside the app.'),
+      placement: 'left',
+      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.openActionsMenu(); },
+    },
+    {
+      target: 'upload-action-delete',
+      title: t('uploadInfer.tour.actionDeleteTitle', 'Delete'),
+      content: t('uploadInfer.tour.actionDeleteBody', 'Select files and remove them permanently \u2014 use with care, this can\u2019t be undone.'),
+      placement: 'left',
       onEnter: () => { setActiveTab('upload'); filePanelRef.current?.openActionsMenu(); },
     },
     {
@@ -1684,6 +1746,13 @@ const UploadInfer: React.FC = () => {
       onEnter: () => setActiveTab('results'),
     },
   ];
+
+  // The five per-icon steps only make sense once there's a real card to
+  // spotlight; skip them when the Upload tab is empty rather than showing
+  // five dim, un-anchored tooltips in a row.
+  const tourSteps: TourStep[] = hasUploadedFiles
+    ? allTourSteps
+    : allTourSteps.filter(s => !s.target.startsWith('upload-card-icon-'));
 
   // "selectMode" is FilePanel's checkbox-selection UI for building the set
   // of files to run inference on. Turning it on stays on the Upload tab
@@ -1828,6 +1897,12 @@ const UploadInfer: React.FC = () => {
 };
 
 export default UploadInfer;
+
+
+
+
+
+
 
 
 
@@ -2263,6 +2338,16 @@ export default UploadInfer;
       "cardsTitle": "Your uploaded files",
       "cardsBody": "Every file shows up here as a card. The colored badge in the corner shows the format (VTT/SRT); the small icons below the filename open the exact prompt used for each content type (Summary, Keywords, Questions, Answer, True/False); and the bottom badge shows the file's current status. If a dictionary or prompt template is linked to the file, you'll see a small book or checklist icon too.",
       "cardsBodyEmpty": "You haven't uploaded anything yet, so this area is empty for now. Once you do, each file becomes a card showing: a format badge (VTT/SRT), the filename, small icons for each content type's prompt (Summary, Keywords, Questions, Answer, True/False), a book/checklist icon if a dictionary or prompt template is linked, and a status badge at the bottom.",
+      "iconSummaryTitle": "Summary icon",
+      "iconSummaryBody": "Opens the prompt used to generate this file's summary. Blue means it's been customized for this file; gray means it's still using the default.",
+      "iconKeywordsTitle": "Keywords icon",
+      "iconKeywordsBody": "Opens the prompt used to extract this file's keywords — the tag-shaped icon.",
+      "iconQuestionsTitle": "Assessment Questions icon",
+      "iconQuestionsBody": "Opens the prompt used to generate quiz-style assessment questions — the question-mark icon.",
+      "iconAnswerTitle": "Short Answer icon",
+      "iconAnswerBody": "Opens the prompt used to generate short written answers — the speech-bubble icon.",
+      "iconTrueFalseTitle": "True/False icon",
+      "iconTrueFalseBody": "Opens the prompt used to generate True/False questions — the toggle-switch icon.",
       "sortTitle": "Sort the list",
       "sortBody": "Sort your files by ID, Name, Date, or Status — click a column again to flip between ascending and descending.",
       "dateFilterTitle": "Filter by date range",
@@ -2271,6 +2356,16 @@ export default UploadInfer;
       "statusFilterBody": "Show only files in one status: All, Waiting, Queued, Running, Inferenced, Error, or Pending — handy once you have a lot of files in flight.",
       "actionsTitle": "Bulk actions, one click away",
       "actionsBody": "Here are all five bulk actions: Dictionary (link a term dictionary to your files), Prompt Template (link a saved prompt set), Search (find files by name), Export (download files), and Delete (remove files) — each applies to many files at once.",
+      "actionDictionaryTitle": "Dictionary",
+      "actionDictionaryBody": "Link a term dictionary to one or more files, so inference uses the right spellings and terminology for your subject.",
+      "actionTemplateTitle": "Prompt Template",
+      "actionTemplateBody": "Apply a saved set of prompts to one or more files in one go, instead of customizing each file's prompts by hand.",
+      "actionSearchTitle": "Search",
+      "actionSearchBody": "Find a file by name — opens a search box for the Upload tab's file list.",
+      "actionExportTitle": "Export",
+      "actionExportBody": "Select files and download them — useful for backing up or sharing results outside the app.",
+      "actionDeleteTitle": "Delete",
+      "actionDeleteBody": "Select files and remove them permanently — use with care, this can't be undone.",
       "inferSidebarTitle": "Pick files to analyze",
       "inferSidebarBody": "Select one or more files here — this list has its own date range, status filter, search, and sort, all independent of the Upload tab.",
       "inferSettingsTitle": "Choose what to generate",
@@ -2952,6 +3047,16 @@ export default UploadInfer;
 
 
 
+
+
+
+
+
+
+
+
+
+
 {
   "header": {
     "logoText": "콘텐츠",
@@ -3373,6 +3478,16 @@ export default UploadInfer;
       "cardsTitle": "업로드한 파일 목록",
       "cardsBody": "업로드한 파일은 이렇게 카드 형태로 표시됩니다. 모서리의 색상 배지는 파일 형식(VTT/SRT)을 나타내고, 파일명 아래의 작은 아이콘들은 각 콘텐츠 유형(요약, 키워드, 질문, 답변, 참/거짓)에 사용된 프롬프트를 보여줍니다. 하단 배지는 파일의 현재 상태를 나타내며, 사전이나 프롬프트 템플릿이 연결된 파일에는 작은 책 또는 체크리스트 아이콘이 함께 표시됩니다.",
       "cardsBodyEmpty": "아직 업로드한 파일이 없어서 이 영역은 비어 있습니다. 파일을 업로드하면 각 파일이 카드로 표시되며, 형식 배지(VTT/SRT), 파일명, 콘텐츠 유형별 프롬프트 아이콘(요약, 키워드, 질문, 답변, 참/거짓), 사전이나 프롬프트 템플릿이 연결된 경우 책/체크리스트 아이콘, 그리고 하단의 상태 배지를 확인할 수 있습니다.",
+      "iconSummaryTitle": "요약 아이콘",
+      "iconSummaryBody": "이 파일의 요약을 생성할 때 사용된 프롬프트를 엽니다. 파란색이면 이 파일에 맞게 커스터마이징된 것이고, 회색이면 기본값을 그대로 사용 중이라는 뜻입니다.",
+      "iconKeywordsTitle": "키워드 아이콘",
+      "iconKeywordsBody": "이 파일의 키워드를 추출할 때 사용된 프롬프트를 엽니다 — 태그 모양의 아이콘입니다.",
+      "iconQuestionsTitle": "평가 질문 아이콘",
+      "iconQuestionsBody": "퀴즈 형식의 평가 질문을 생성할 때 사용된 프롬프트를 엽니다 — 물음표 모양의 아이콘입니다.",
+      "iconAnswerTitle": "단답형 답변 아이콘",
+      "iconAnswerBody": "짧은 서술형 답변을 생성할 때 사용된 프롬프트를 엽니다 — 말풍선 모양의 아이콘입니다.",
+      "iconTrueFalseTitle": "참/거짓 아이콘",
+      "iconTrueFalseBody": "참/거짓 질문을 생성할 때 사용된 프롬프트를 엽니다 — 토글 스위치 모양의 아이콘입니다.",
       "sortTitle": "목록 정렬하기",
       "sortBody": "파일을 ID, 이름, 날짜, 상태 기준으로 정렬할 수 있습니다 — 같은 항목을 다시 클릭하면 오름차순/내림차순이 바뀝니다.",
       "dateFilterTitle": "날짜 범위로 필터링",
@@ -3381,6 +3496,16 @@ export default UploadInfer;
       "statusFilterBody": "전체, 대기, 대기열, 실행 중, 추론 완료, 오류, 보류 중 하나의 상태로 파일을 필터링할 수 있습니다 — 처리 중인 파일이 많을 때 유용합니다.",
       "actionsTitle": "한 번의 클릭으로 실행하는 일괄 작업",
       "actionsBody": "이제 5가지 일괄 작업을 모두 확인할 수 있습니다: 사전(파일에 용어 사전 연결), 프롬프트 템플릿(저장된 프롬프트 세트 연결), 검색(파일명으로 찾기), 내보내기(파일 다운로드), 삭제(파일 제거) — 모두 여러 파일에 한 번에 적용됩니다.",
+      "actionDictionaryTitle": "사전",
+      "actionDictionaryBody": "하나 이상의 파일에 용어 사전을 연결하여, 추론 시 해당 분야에 맞는 정확한 철자와 용어를 사용하도록 합니다.",
+      "actionTemplateTitle": "프롬프트 템플릿",
+      "actionTemplateBody": "저장해 둔 프롬프트 세트를 하나 이상의 파일에 한 번에 적용합니다 — 파일마다 프롬프트를 일일이 수정할 필요가 없습니다.",
+      "actionSearchTitle": "검색",
+      "actionSearchBody": "파일명으로 파일을 찾습니다 — 업로드 탭의 파일 목록에 대한 검색창이 열립니다.",
+      "actionExportTitle": "내보내기",
+      "actionExportBody": "파일을 선택해 다운로드합니다 — 앱 외부에서 백업하거나 결과를 공유할 때 유용합니다.",
+      "actionDeleteTitle": "삭제",
+      "actionDeleteBody": "파일을 선택해 영구적으로 삭제합니다 — 되돌릴 수 없으니 신중하게 사용하세요.",
       "inferSidebarTitle": "분석할 파일 선택",
       "inferSidebarBody": "여기서 하나 이상의 파일을 선택하세요 — 이 목록은 업로드 탭과 별개로 자체 날짜 범위, 상태 필터, 검색, 정렬 기능을 가지고 있습니다.",
       "inferSettingsTitle": "생성할 항목 선택",
