@@ -991,7 +991,7 @@ const RF_NODE_TYPES = { mindmap: MindMapNode };
 //    nodes on top of each other once a graph had more than a handful of
 //    them. Dagre lays nodes out in ranked layers with guaranteed spacing,
 //    so nothing overlaps regardless of graph size. ──
-function computeDagreLayout(nodes: GNode[], edges: GEdge[], treeMode = false) {
+function computeDagreLayout(nodes: GNode[], edges: GEdge[]) {
     const g = new dagre.graphlib.Graph();
     g.setGraph({ rankdir: 'TB', nodesep: 72, ranksep: 150, marginx: 60, marginy: 60, acyclicer: 'greedy' });
     g.setDefaultEdgeLabel(() => ({}));
@@ -1010,11 +1010,7 @@ function computeDagreLayout(nodes: GNode[], edges: GEdge[], treeMode = false) {
 
     // Dedupe edges — repeated source/target pairs don't add information but
     // do add extra crowded lines between the same two nodes.
-    // In tree mode, also cap each node at ONE incoming edge (its first),
-    // so the result is a clean forest of trees — no node with multiple
-    // parents, no crossing lines fighting over the same target.
     const seenEdges = new Set<string>();
-    const hasParent = new Set<string>();
     const resolvedEdges: { source: string; target: string; label?: string }[] = [];
     edges.forEach(e => {
         const s = byKey.get(norm(e.source));
@@ -1022,9 +1018,7 @@ function computeDagreLayout(nodes: GNode[], edges: GEdge[], treeMode = false) {
         if (!s || !tg || s === tg) return;
         const key = `${s}→${tg}`;
         if (seenEdges.has(key)) return;
-        if (treeMode && hasParent.has(tg)) return;
         seenEdges.add(key);
-        if (treeMode) hasParent.add(tg);
         // Reserve space for the edge's own label too — without this, dagre
         // has no idea the label text exists and will happily route another
         // node right where that text needs to sit.
@@ -1044,12 +1038,112 @@ function computeDagreLayout(nodes: GNode[], edges: GEdge[], treeMode = false) {
     return { positioned, resolvedEdges };
 }
 
+// ── Forest layout — each disconnected tree gets its own horizontal
+//    (root → children growing left-to-right) dagre layout, then the trees
+//    are stacked vertically underneath one another. Labels stay perfectly
+//    horizontal either way (that's just CSS text direction, unaffected by
+//    which way the tree branches), but growing each tree sideways instead
+//    of downward gives multi-word labels far more horizontal room before
+//    they need to wrap, and keeps unrelated trees visually separated
+//    instead of interleaved in one shared vertical ranking. ──
+function computeForestLayout(nodes: GNode[], edges: GEdge[]) {
+    const norm = (s: string) => s.trim().toLowerCase();
+    const byKey = new Map<string, string>();
+    nodes.forEach(n => { byKey.set(norm(n.id), n.id); byKey.set(norm(n.label), n.id); });
+
+    // Reduce to one parent per node — same rule as treeMode above, so each
+    // node belongs to exactly one tree with no crossing multi-parent edges.
+    const seenEdges = new Set<string>();
+    const hasParent = new Set<string>();
+    const treeEdges: { source: string; target: string; label?: string }[] = [];
+    edges.forEach(e => {
+        const s = byKey.get(norm(e.source));
+        const tg = byKey.get(norm(e.target));
+        if (!s || !tg || s === tg) return;
+        const key = `${s}→${tg}`;
+        if (seenEdges.has(key) || hasParent.has(tg)) return;
+        seenEdges.add(key);
+        hasParent.add(tg);
+        treeEdges.push({ source: s, target: tg, label: e.label });
+    });
+
+    // Union-find to group nodes into connected components (one per tree,
+    // including singleton nodes with no edges at all).
+    const uf = new Map<string, string>();
+    nodes.forEach(n => uf.set(n.id, n.id));
+    const find = (x: string): string => {
+        let root = x;
+        while (uf.get(root) !== root) root = uf.get(root)!;
+        while (uf.get(x) !== root) { const next = uf.get(x)!; uf.set(x, root); x = next; }
+        return root;
+    };
+    const union = (a: string, b: string) => { const ra = find(a), rb = find(b); if (ra !== rb) uf.set(ra, rb); };
+    treeEdges.forEach(e => union(e.source, e.target));
+
+    const groups = new Map<string, GNode[]>();
+    nodes.forEach(n => {
+        const root = find(n.id);
+        if (!groups.has(root)) groups.set(root, []);
+        groups.get(root)!.push(n);
+    });
+
+    const dims = new Map<string, { w: number; h: number; labelWidth: number }>();
+    nodes.forEach(n => {
+        const size = 34 + Math.min(26, (n.value ?? 1) * 4);
+        dims.set(n.id, estimateNodeBox(n.label, size));
+    });
+
+    const TREE_GAP = 56;
+    let yOffset = 0;
+    const positioned: (GNode & { x: number; y: number; labelWidth: number })[] = [];
+
+    for (const groupNodes of groups.values()) {
+        const g = new dagre.graphlib.Graph();
+        g.setGraph({ rankdir: 'LR', nodesep: 28, ranksep: 130, marginx: 20, marginy: 20, acyclicer: 'greedy' });
+        g.setDefaultEdgeLabel(() => ({}));
+        groupNodes.forEach(n => g.setNode(n.id, dims.get(n.id)!));
+
+        const idsInGroup = new Set(groupNodes.map(n => n.id));
+        treeEdges.forEach(e => {
+            if (!idsInGroup.has(e.source) || !idsInGroup.has(e.target)) return;
+            const label = e.label?.trim();
+            g.setEdge(e.source, e.target, label ? { width: Math.min(120, label.length * LABEL_CHAR_W + 12), height: LABEL_LINE_H + 8, labelpos: 'c' } : {});
+        });
+
+        dagre.layout(g);
+
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        groupNodes.forEach(n => {
+            const pos = g.node(n.id);
+            const dim = dims.get(n.id)!;
+            minX = Math.min(minX, pos.x - dim.w / 2);
+            maxX = Math.max(maxX, pos.x + dim.w / 2);
+            minY = Math.min(minY, pos.y - dim.h / 2);
+            maxY = Math.max(maxY, pos.y + dim.h / 2);
+        });
+        const shiftX = -minX;
+        const shiftY = yOffset - minY;
+
+        groupNodes.forEach(n => {
+            const pos = g.node(n.id);
+            const dim = dims.get(n.id)!;
+            positioned.push({ ...n, x: pos.x - dim.w / 2 + shiftX, y: pos.y - dim.h / 2 + shiftY, labelWidth: dim.labelWidth });
+        });
+
+        yOffset += (maxY - minY) + TREE_GAP;
+    }
+
+    return { positioned, resolvedEdges: treeEdges };
+}
+
 const NodeLinkGraph: React.FC<{ nodes: GNode[]; edges: GEdge[]; treeMode?: boolean }> = ({ nodes, edges, treeMode = false }) => {
     const { t } = useTranslation();
     const allNodes = useMemo(() => buildGraphNodes(nodes, edges), [nodes, edges]);
 
     const initial = useMemo(() => {
-        const { positioned, resolvedEdges } = computeDagreLayout(allNodes, edges, treeMode);
+        const { positioned, resolvedEdges } = treeMode
+            ? computeForestLayout(allNodes, edges)
+            : computeDagreLayout(allNodes, edges, false);
 
         const rfNodes: RFNode[] = positioned.map(n => ({
             id: n.id,
