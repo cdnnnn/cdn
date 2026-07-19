@@ -534,13 +534,20 @@ interface GEdge { source: string; target: string; label?: string; }
 // Loose pixel budget used only for the *first* dagre pass so
 // nodes appear somewhere reasonable before measurement. These
 // do NOT affect final positions — the second pass uses real sizes.
-const ESTIMATE_CHAR_W = 8;
-const ESTIMATE_PAD    = 32;
-const ESTIMATE_H      = 64;
+const ESTIMATE_CHAR_W  = 6.2;
+const ESTIMATE_PAD     = 32;
+const ESTIMATE_H       = 64;
+const ESTIMATE_MAX_W   = 320; // matches the label's maxWidth in MindMapNode
+const ESTIMATE_LINE_H  = 15;
 
 function roughNodeSize(label: string) {
-    const w = Math.max(80, label.length * ESTIMATE_CHAR_W + ESTIMATE_PAD);
-    return { w, h: ESTIMATE_H };
+    const rawW = label.length * ESTIMATE_CHAR_W + ESTIMATE_PAD;
+    const w = Math.max(80, Math.min(ESTIMATE_MAX_W, rawW));
+    // If the label is wider than the cap it will wrap onto more lines —
+    // reserve extra height up front so pass-1 doesn't undersize it.
+    const lines = Math.max(1, Math.ceil(rawW / ESTIMATE_MAX_W));
+    const h = ESTIMATE_H + (lines - 1) * ESTIMATE_LINE_H;
+    return { w, h };
 }
 
 function buildAllNodes(nodes: GNode[], edges: GEdge[]): GNode[] {
@@ -705,19 +712,24 @@ const MindMapNode: React.FC<{ data: { label: string; value?: number } }> = ({ da
                 <Handle type="source" position={Position.Right}  id="r" className={styles.rfHandle} style={{ opacity: 0 }} />
             </div>
 
-            {/* Label: below the circle, NOT inside it */}
+            {/* Label: below the circle, NOT inside it.
+                maxWidth raised 220 → 320 so long labels get room to sit
+                on fewer lines. overflowWrap (not wordBreak) only breaks
+                a word when it has no choice — wordBreak was chopping
+                every long word mid-character even when there was space
+                to wrap at the next word boundary instead. */}
             <span
                 className={styles.rfNodeLabel}
                 style={{
                     display:       'block',
                     marginTop:     6,
-                    maxWidth:      220,
+                    maxWidth:      320,
                     textAlign:     'center',
                     whiteSpace:    'normal',
-                    wordBreak:     'break-word',
+                    overflowWrap:  'break-word',
+                    wordBreak:     'normal',
+                    hyphens:       'auto',
                     lineHeight:    1.35,
-                    // 11px so even long labels stay readable without
-                    // making the node too wide
                     fontSize:      11,
                 }}
             >
@@ -728,6 +740,38 @@ const MindMapNode: React.FC<{ data: { label: string; value?: number } }> = ({ da
 };
 
 const RF_NODE_TYPES = { mindmap: MindMapNode };
+
+// ── Dynamic handle selection ──
+//
+// Previously every edge used the same fixed handle pair
+// ('b'→'t' for tree layouts, 'r'→'l' for the free-form graph).
+// That's fine for a strict hierarchy where every edge points
+// the same general direction, but breaks down the moment three
+// or more nodes are mutually connected (a triangle / mesh):
+// some of those edges necessarily point sideways or backwards
+// relative to the fixed pair, so the line has to detour around
+// or straight through the node it's leaving from.
+//
+// Fix: once we know each node's real position (from dagre), work
+// out which side of the source box actually faces the target and
+// exit from there — same for the entry side on the target. This
+// makes every edge in a mesh take the shortest, least-crossing
+// path regardless of how many other nodes connect to the same pair.
+function pickHandles(
+    sPos: { x: number; y: number }, sSize: { w: number; h: number },
+    tPos: { x: number; y: number }, tSize: { w: number; h: number },
+): { sourceHandle: string; targetHandle: string } {
+    const sx = sPos.x + sSize.w / 2, sy = sPos.y + sSize.h / 2;
+    const tx = tPos.x + tSize.w / 2, ty = tPos.y + tSize.h / 2;
+    const dx = tx - sx, dy = ty - sy;
+
+    // Whichever axis has the larger separation decides the side —
+    // this keeps the line short and avoids routing across the node.
+    if (Math.abs(dx) > Math.abs(dy)) {
+        return dx >= 0 ? { sourceHandle: 'r', targetHandle: 'l' } : { sourceHandle: 'l', targetHandle: 'r' };
+    }
+    return dy >= 0 ? { sourceHandle: 'b', targetHandle: 't' } : { sourceHandle: 't', targetHandle: 'b' };
+}
 
 // ── Inner graph component (must live inside ReactFlowProvider) ──
 const NodeLinkGraphInner: React.FC<{ nodes: GNode[]; edges: GEdge[]; treeMode?: boolean }> = ({
@@ -753,32 +797,40 @@ const NodeLinkGraphInner: React.FC<{ nodes: GNode[]; edges: GEdge[]; treeMode?: 
             position: positions.get(n.id) ?? { x: 0, y: 0 },
             data: { label: n.label, value: n.value },
         }));
-        const rfEdges: RFEdge[] = resolvedEdges.map((e, i) => ({
-            id:           `e${i}-${e.source}-${e.target}`,
-            source:       e.source,
-            target:       e.target,
-            // Use whichever handle pair faces the other node naturally
-            sourceHandle: treeMode ? 'r' : 'b',
-            targetHandle: treeMode ? 'l' : 't',
-            type:         'smoothstep',
-            label:        e.label,
-            style:        { stroke: 'var(--bdr2)', strokeWidth: 1.5 },
-            labelStyle:   { fill: 'var(--t2)', fontSize: 10 },
-            labelBgStyle: { fill: 'var(--bg1)' },
-        }));
+        const rfEdges: RFEdge[] = resolvedEdges.map((e, i) => {
+            const sPos = positions.get(e.source) ?? { x: 0, y: 0 };
+            const tPos = positions.get(e.target) ?? { x: 0, y: 0 };
+            const { sourceHandle, targetHandle } = pickHandles(
+                sPos, sizeOf(e.source), tPos, sizeOf(e.target),
+            );
+            return {
+                id: `e${i}-${e.source}-${e.target}`,
+                source: e.source,
+                target: e.target,
+                sourceHandle,
+                targetHandle,
+                type: 'smoothstep',
+                label: e.label,
+                style: { stroke: 'var(--bdr2)', strokeWidth: 1.5 },
+                labelStyle: { fill: 'var(--t2)', fontSize: 10 },
+                labelBgStyle: { fill: 'var(--bg1)' },
+            };
+        });
         return { rfNodes, rfEdges, resolvedEdges };
     }, [allNodes, edges, treeMode]);
 
     const [rfNodes, setRfNodes] = useState<RFNode[]>(pass1.rfNodes);
+    const [rfEdges, setRfEdges] = useState<RFEdge[]>(pass1.rfEdges);
     const domRefs = useRef<Map<string, HTMLElement>>(new Map());
     const pass2Done = useRef(false);
 
     // Reset on new data
     useEffect(() => {
         setRfNodes(pass1.rfNodes);
+        setRfEdges(pass1.rfEdges);
         pass2Done.current = false;
         domRefs.current.clear();
-    }, [pass1.rfNodes]);
+    }, [pass1.rfNodes, pass1.rfEdges]);
 
     // ── Pass 2: measure real DOM sizes → re-run dagre → apply ──
     //
@@ -814,7 +866,7 @@ const NodeLinkGraphInner: React.FC<{ nodes: GNode[]; edges: GEdge[]; treeMode?: 
             pass2Done.current = true;
 
             const sizeOf = (id: string) => measured.get(id) ?? roughNodeSize(id);
-            const { positions } = treeMode
+            const { positions, resolvedEdges } = treeMode
                 ? runForestDagre(allNodes, edges, sizeOf)
                 : runDagre(allNodes, edges, sizeOf, { rankdir: 'TB', nodesep: 60, ranksep: 120 });
 
@@ -822,6 +874,24 @@ const NodeLinkGraphInner: React.FC<{ nodes: GNode[]; edges: GEdge[]; treeMode?: 
                 ...n,
                 position: positions.get(n.id) ?? n.position,
             })));
+
+            // Recompute handles too — with real measured sizes and final
+            // positions, the direction between any two nodes may differ
+            // slightly from the pass-1 estimate. This matters most for
+            // mesh/triangle connections where several edges share a node
+            // and each needs its own correct exit/entry side.
+            setRfEdges(prev => prev.map(edge => {
+                const match = resolvedEdges.find(
+                    re => re.source === edge.source && re.target === edge.target,
+                );
+                if (!match) return edge;
+                const sPos = positions.get(match.source) ?? { x: 0, y: 0 };
+                const tPos = positions.get(match.target) ?? { x: 0, y: 0 };
+                const { sourceHandle, targetHandle } = pickHandles(
+                    sPos, sizeOf(match.source), tPos, sizeOf(match.target),
+                );
+                return { ...edge, sourceHandle, targetHandle };
+            }));
 
             // fitView after React re-renders the new positions
             rafId = requestAnimationFrame(() => {
@@ -848,7 +918,7 @@ const NodeLinkGraphInner: React.FC<{ nodes: GNode[]; edges: GEdge[]; treeMode?: 
         <div className={styles.graphWrap} ref={containerRef}>
             <ReactFlow
                 nodes={rfNodes}
-                edges={pass1.rfEdges}
+                edges={rfEdges}
                 onNodesChange={onNodesChange}
                 nodeTypes={RF_NODE_TYPES}
                 fitView
