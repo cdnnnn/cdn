@@ -26,16 +26,12 @@ interface Props {
     onResultUpdate?: (patch: Partial<Pick<FileResult, 'summary' | 'keywords'>>) => void;
 }
 
-// TABS labels are now driven by i18n — see tabLabels() inside WorkspacePanel
 const TAB_IDS = ['summary', 'keywords', 'assessment', 'shortAnswer', 'trueFalse', 'timestampedSummary', 'keywordInsights'] as const;
 type TabId = typeof TAB_IDS[number];
 
-// Exposed to the parent so the guided tour can drive which tab is showing
-// without lifting activeTab into Redux just for that one use.
 export interface WorkspacePanelHandle {
     setTab: (id: TabId) => void;
 }
-
 
 interface FaqItem {
     question: string;
@@ -52,16 +48,11 @@ function parseFaq(raw: string): FaqItem[] {
         if (Array.isArray(result)) return result as FaqItem[];
         return [];
     } catch {
-        // Fallback: try direct JSON parse (if API returns valid JSON)
         try { return JSON.parse(raw) as FaqItem[]; } catch { }
         return [];
     }
 }
 
-// ── Permissive parser for the newer python-repr-style fields (short_answer,
-//    true_false, timestamped_summary). Handles True/False/None literals that
-//    plain eval() can't, and tries strict JSON first since that's cheaper
-//    and safer whenever the backend does send valid JSON. ──
 function parsePyList<T>(raw: string): T[] {
     if (!raw || raw === '[]') return [];
     try {
@@ -160,7 +151,6 @@ function formatAssessment(faqRaw: string, fmt: string, base = 'assessment'): For
         ).join('');
         return { content: wrapHtml(body, 'Assessment Questions'), filename: `${base}_assessment_${ts}.html`, mime: 'text/html' };
     }
-    // txt
     const txt = items.map((q, i) =>
         `Q${i + 1}. ${q.question}\n` +
         Object.entries(q.options).map(([k, v]) => `  ${k}. ${v}${k === q.correct_answer ? ' ✓' : ''}`).join('\n') +
@@ -213,7 +203,6 @@ function formatTimestampedSummary(raw: string, fmt: string, base = 'timestamped_
     return { content: txt, filename: `${base}_${ts}.txt`, mime: 'text/plain' };
 }
 
-
 const SUMMARY_FMTS = [{ k: 'txt', l: 'Text' }, { k: 'md', l: 'Markdown' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
 const KEYWORDS_FMTS = [{ k: 'txt', l: 'Text' }, { k: 'md', l: 'Markdown' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
 const ASSESSMENT_FMTS = [{ k: 'txt', l: 'Plain Text' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
@@ -229,8 +218,6 @@ const ActionBtn: React.FC<{ title: string; onClick: () => void; active?: boolean
 );
 
 // ── FormatIcon ────────────────────────────────────────────
-// Small colored glyph rendered next to each format option in the
-// Copy / Download dropdowns. Each format has a recognisable hue.
 const FORMAT_ICONS: Record<string, { color: string; bg: string; node: React.ReactNode }> = {
     txt: {
         color: '#64748b',
@@ -350,7 +337,7 @@ const IcoDownload = () => (
     </svg>
 );
 
-// ── TabToolbar: edit + copy + download ───────────────────
+// ── TabToolbar ────────────────────────────────────────────
 const TabToolbar: React.FC<{
     onEdit?: () => void;
     fmts: { k: string; l: string }[];
@@ -368,7 +355,7 @@ const TabToolbar: React.FC<{
     );
 };
 
-// ── Stable keyword chip ───────────────────────────────────
+// ── Keyword chips ─────────────────────────────────────────
 const KeywordChip: React.FC<{ kw: string; isNew: boolean }> = ({ kw, isNew }) => (
     <span className={`${styles.keywordPill} ${isNew ? styles.keywordPillNew : ''}`}
         style={{ background: CHIP_COLORS[seededColorIndex(kw)] }}>
@@ -443,14 +430,9 @@ const TabKeywords: React.FC<{ keywords: string[]; fileId: number; onSaved: (kws:
     const [saving, setSaving] = useState(false);
     const [copied, setCopied] = useState(false);
 
-    // prevSetSnapshot holds the keyword set from the PREVIOUS render of ChipGrid
-    // so only truly new chips get the pop animation
     const prevSetSnapshot = useRef<Set<string>>(new Set(keywords));
-
     const draftKeywords = useMemo(() => draft.split('\n').map(k => k.trim()).filter(Boolean), [draft]);
 
-    // After each render, schedule an update of the snapshot so the *next*
-    // render can compare against what's currently visible
     useEffect(() => {
         const id = setTimeout(() => { prevSetSnapshot.current = new Set(draftKeywords); }, 0);
         return () => clearTimeout(id);
@@ -504,7 +486,6 @@ const TabAssessment: React.FC<{ faq: string }> = ({ faq }) => {
     const { t } = useTranslation();
     const items = useMemo(() => parseFaq(faq), [faq]);
 
-    // Always default to MCQ; reset when faq changes (new file)
     const [mode, setMode] = useState<AssessMode>('mcq');
     const [current, setCurrent] = useState(0);
     const [selected, setSelected] = useState<string | null>(null);
@@ -526,7 +507,6 @@ const TabAssessment: React.FC<{ faq: string }> = ({ faq }) => {
 
     if (!items.length) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noQuestions')}</div>;
 
-    // ── MCQ helpers ───────────────────────────────────────
     const q = items[current];
     const isLast = current === items.length - 1;
     const progress = Math.round(((current + (complete ? 1 : 0)) / items.length) * 100);
@@ -544,23 +524,15 @@ const TabAssessment: React.FC<{ faq: string }> = ({ faq }) => {
 
     return (
         <div className={styles.tabContent}>
-            {/* Toolbar row: mode tabs left, copy/download right */}
             <div className={styles.assessHeader}>
                 <div className={styles.assessModeTabs}>
-                    <button
-                        className={`${styles.assessModeTab} ${mode === 'mcq' ? styles.assessModeTabActive : ''}`}
-                        onClick={() => setMode('mcq')}
-                    >
+                    <button className={`${styles.assessModeTab} ${mode === 'mcq' ? styles.assessModeTabActive : ''}`} onClick={() => setMode('mcq')}>
                         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                            <circle cx="8" cy="8" r="6" />
-                            <path d="M6 8.5l1.5 1.5L10.5 6" />
+                            <circle cx="8" cy="8" r="6" /><path d="M6 8.5l1.5 1.5L10.5 6" />
                         </svg>
                         MCQ
                     </button>
-                    <button
-                        className={`${styles.assessModeTab} ${mode === 'all' ? styles.assessModeTabActive : ''}`}
-                        onClick={() => setMode('all')}
-                    >
+                    <button className={`${styles.assessModeTab} ${mode === 'all' ? styles.assessModeTabActive : ''}`} onClick={() => setMode('all')}>
                         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M2 4h12M2 8h12M2 12h8" />
                         </svg>
@@ -570,7 +542,6 @@ const TabAssessment: React.FC<{ faq: string }> = ({ faq }) => {
                 <TabToolbar fmts={ASSESSMENT_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
             </div>
 
-            {/* ── MCQ mode ── */}
             {mode === 'mcq' && (
                 complete ? (
                     <div className={styles.assessComplete}>
@@ -628,24 +599,17 @@ const TabAssessment: React.FC<{ faq: string }> = ({ faq }) => {
                 )
             )}
 
-            {/* ── View All mode ── */}
             {mode === 'all' && (
                 <div className={styles.viewAllList}>
                     {items.map((item, idx) => (
                         <div key={idx} className={styles.viewAllCard}>
-                            {/* Question */}
                             <div className={styles.viewAllQ}>
                                 <span className={styles.faqNum}>Q{idx + 1}</span>
                                 {item.question}
                             </div>
-
-                            {/* Options */}
                             <div className={styles.faqOptions}>
                                 {Object.entries(item.options).map(([key, val]) => (
-                                    <div
-                                        key={key}
-                                        className={`${styles.faqOpt} ${key === item.correct_answer ? styles.faqOptCorrectAlt : styles.viewAllOptNeutral}`}
-                                    >
+                                    <div key={key} className={`${styles.faqOpt} ${key === item.correct_answer ? styles.faqOptCorrectAlt : styles.viewAllOptNeutral}`}>
                                         <span className={`${styles.faqOptKey} ${key === item.correct_answer ? styles.faqOptKeyCorrect : ''}`}>{key}</span>
                                         <span className={styles.faqOptVal}>{val}</span>
                                         {key === item.correct_answer && (
@@ -656,8 +620,6 @@ const TabAssessment: React.FC<{ faq: string }> = ({ faq }) => {
                                     </div>
                                 ))}
                             </div>
-
-                            {/* Explanation */}
                             <div className={styles.faqExplain}>
                                 <div className={styles.faqExplainLabel}>
                                     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
@@ -675,7 +637,7 @@ const TabAssessment: React.FC<{ faq: string }> = ({ faq }) => {
     );
 };
 
-// ── Tab: Short Answer ──────────────────────────────────────
+// ── Tab: Short Answer ─────────────────────────────────────
 const TabShortAnswer: React.FC<{ raw: string }> = ({ raw }) => {
     const { t } = useTranslation();
     const items = useMemo(() => parsePyList<ShortAnswerItem>(raw), [raw]);
@@ -736,7 +698,7 @@ const TabShortAnswer: React.FC<{ raw: string }> = ({ raw }) => {
     );
 };
 
-// ── Tab: True / False ────────────────────────────────────────
+// ── Tab: True / False ─────────────────────────────────────
 type TfMode = 'quiz' | 'all';
 
 const TabTrueFalse: React.FC<{ raw: string }> = ({ raw }) => {
@@ -888,7 +850,7 @@ const TabTrueFalse: React.FC<{ raw: string }> = ({ raw }) => {
     );
 };
 
-// ── Tab: Timestamped Summary ─────────────────────────────────
+// ── Tab: Timestamped Summary ──────────────────────────────
 const TabTimestampedSummary: React.FC<{ raw: string }> = ({ raw }) => {
     const { t } = useTranslation();
     const items = useMemo(() => parsePyList<TimestampSegment>(raw), [raw]);
@@ -920,10 +882,35 @@ const TabTimestampedSummary: React.FC<{ raw: string }> = ({ raw }) => {
     );
 };
 
+// ═══════════════════════════════════════════════════════════
+// ── Graph / Node-link layout ────────────────────────────
+// ═══════════════════════════════════════════════════════════
 
-// ── Keyword Insights: shared node-link graph (used for Knowledge Graph & Prerequisites) ──
 interface GNode { id: string; label: string; value?: number; }
 interface GEdge { source: string; target: string; label?: string; }
+
+// FIX 1 — increased from 6.1 → 7.5 (more accurate for typical sans-serif)
+const LABEL_MAX_W = 160;
+const LABEL_HARD_MAX_W = 260;
+const LABEL_CHAR_W = 7.5;
+const LABEL_LINE_H = 16;
+
+// FIX 2 — height now adds label lines BELOW the circle, not inside it,
+// so dagre reserves the full space the rendered node actually occupies.
+function estimateNodeBox(label: string, circleSize: number) {
+    const hasBreakPoint = /[\s-]/.test(label);
+    const rawTextWidth = label.length * LABEL_CHAR_W + 16;
+    const capWidth = hasBreakPoint ? LABEL_MAX_W : LABEL_HARD_MAX_W;
+    const labelWidth = Math.min(capWidth, Math.max(rawTextWidth, 52));
+    const lines = hasBreakPoint
+        ? Math.max(1, Math.ceil(rawTextWidth / LABEL_MAX_W))
+        : 1;
+    // Width: widest of circle or label, plus horizontal breathing room
+    const w = Math.max(circleSize, labelWidth) + 24;
+    // Height: circle + 8px gap + label lines below (not inside circle)
+    const h = circleSize + 8 + lines * LABEL_LINE_H + 16;
+    return { w, h, labelWidth };
+}
 
 function buildGraphNodes(nodes: GNode[], edges: GEdge[]): GNode[] {
     const norm = (s: string) => s.trim().toLowerCase();
@@ -944,56 +931,67 @@ function buildGraphNodes(nodes: GNode[], edges: GEdge[]): GNode[] {
     return Array.from(byId.values());
 }
 
-// Custom node — a labeled circle sized by `value`, with an invisible
-// handle on all 4 sides (each doubling as source+target) so edges can
-// connect from whichever side actually faces the other node.
-// Multi-word labels wrap onto multiple lines (capped at LABEL_MAX_W).
-// Single unbroken words (no spaces/hyphens — common for keyword nodes)
-// are NOT force-wrapped: breaking a word with no natural break point
-// inside a narrow box is what produced near-vertical stacks of 1-2
-// characters per line. Those get their own width instead, up to
-// LABEL_HARD_MAX_W.
-const LABEL_MAX_W = 150;
-const LABEL_HARD_MAX_W = 220;
-const LABEL_CHAR_W = 6.1; // ~px per character at the label's font size
-const LABEL_LINE_H = 14;
-
-function estimateNodeBox(label: string, circleSize: number) {
-    const hasBreakPoint = /[\s-]/.test(label);
-    const rawTextWidth = label.length * LABEL_CHAR_W + 8;
-    const capWidth = hasBreakPoint ? LABEL_MAX_W : LABEL_HARD_MAX_W;
-    const labelWidth = Math.min(capWidth, Math.max(rawTextWidth, 44));
-    const lines = hasBreakPoint ? Math.max(1, Math.ceil(rawTextWidth / LABEL_MAX_W)) : 1;
-    const w = Math.max(circleSize, labelWidth, 72) + 16;
-    const h = circleSize + 16 + lines * LABEL_LINE_H;
-    return { w, h, labelWidth };
-}
-
+// FIX 3 — label is rendered BELOW the circle as a sibling element,
+// not squeezed inside the circle div. This eliminates the root cause of
+// vertical/stacked single-character text: the old design forced every
+// label into a div whose width equalled the circle diameter (34–60 px).
 const MindMapNode: React.FC<{ data: { label: string; value?: number; labelWidth?: number } }> = ({ data }) => {
     const size = 34 + Math.min(26, (data.value ?? 1) * 4);
     const hasBreakPoint = /[\s-]/.test(data.label);
+    const labelWidth = data.labelWidth ?? LABEL_MAX_W;
+
     return (
-        <div className={styles.rfNode} style={{ width: size, height: size }} title={data.label}>
-            <Handle type="target" position={Position.Top} id="top-target" className={styles.rfHandle} />
-            <Handle type="source" position={Position.Bottom} id="bottom-source" className={styles.rfHandle} />
+        // Outer wrapper is as wide as the label so the label can breathe;
+        // the circle is centred inside it via alignItems:'center'.
+        <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            width: labelWidth,
+        }}>
+            {/* Circle — handles live here so edge routing still works */}
+            <div
+                className={styles.rfNode}
+                style={{ width: size, height: size, flexShrink: 0 }}
+                title={data.label}
+            >
+                <Handle type="target" position={Position.Top} id="top-target" className={styles.rfHandle} />
+                <Handle type="source" position={Position.Bottom} id="bottom-source" className={styles.rfHandle} />
+            </div>
+
+            {/* Label sits BELOW the circle — no width constraint from the circle */}
             <span
                 className={styles.rfNodeLabel}
-                style={{ maxWidth: data.labelWidth ?? LABEL_MAX_W, whiteSpace: hasBreakPoint ? 'normal' : 'nowrap' }}
+                style={{
+                    maxWidth: labelWidth,
+                    whiteSpace: hasBreakPoint ? 'normal' : 'nowrap',
+                    textAlign: 'center',
+                    marginTop: 5,
+                    lineHeight: '1.35',
+                    wordBreak: 'break-word',
+                    display: 'block',
+                }}
             >
                 {data.label}
             </span>
         </div>
     );
 };
+
 const RF_NODE_TYPES = { mindmap: MindMapNode };
 
-// ── Dagre auto-layout — replaces naive circular placement, which packed
-//    nodes on top of each other once a graph had more than a handful of
-//    them. Dagre lays nodes out in ranked layers with guaranteed spacing,
-//    so nothing overlaps regardless of graph size. ──
+// FIX 4 — much larger nodesep/ranksep so nodes cannot overlap even when
+// labels are long. Values were: nodesep 72, ranksep 150.
 function computeDagreLayout(nodes: GNode[], edges: GEdge[]) {
     const g = new dagre.graphlib.Graph();
-    g.setGraph({ rankdir: 'TB', nodesep: 72, ranksep: 150, marginx: 60, marginy: 60, acyclicer: 'greedy' });
+    g.setGraph({
+        rankdir: 'TB',
+        nodesep: 110,   // ↑ was 72
+        ranksep: 200,   // ↑ was 150
+        marginx: 80,
+        marginy: 80,
+        acyclicer: 'greedy',
+    });
     g.setDefaultEdgeLabel(() => ({}));
 
     const dims = new Map<string, { w: number; h: number; labelWidth: number }>();
@@ -1008,8 +1006,6 @@ function computeDagreLayout(nodes: GNode[], edges: GEdge[]) {
     const byKey = new Map<string, string>();
     nodes.forEach(n => { byKey.set(norm(n.id), n.id); byKey.set(norm(n.label), n.id); });
 
-    // Dedupe edges — repeated source/target pairs don't add information but
-    // do add extra crowded lines between the same two nodes.
     const seenEdges = new Set<string>();
     const resolvedEdges: { source: string; target: string; label?: string }[] = [];
     edges.forEach(e => {
@@ -1019,11 +1015,10 @@ function computeDagreLayout(nodes: GNode[], edges: GEdge[]) {
         const key = `${s}→${tg}`;
         if (seenEdges.has(key)) return;
         seenEdges.add(key);
-        // Reserve space for the edge's own label too — without this, dagre
-        // has no idea the label text exists and will happily route another
-        // node right where that text needs to sit.
         const label = e.label?.trim();
-        g.setEdge(s, tg, label ? { width: Math.min(120, label.length * LABEL_CHAR_W + 12), height: LABEL_LINE_H + 8, labelpos: 'c' } : {});
+        g.setEdge(s, tg, label
+            ? { width: Math.min(120, label.length * LABEL_CHAR_W + 12), height: LABEL_LINE_H + 8, labelpos: 'c' }
+            : {});
         resolvedEdges.push({ source: s, target: tg, label: e.label });
     });
 
@@ -1032,27 +1027,18 @@ function computeDagreLayout(nodes: GNode[], edges: GEdge[]) {
     const positioned = nodes.map(n => {
         const pos = g.node(n.id);
         const dim = dims.get(n.id)!;
-        // Dagre positions are centers — React Flow expects top-left.
         return { ...n, x: pos.x - dim.w / 2, y: pos.y - dim.h / 2, labelWidth: dim.labelWidth };
     });
     return { positioned, resolvedEdges };
 }
 
-// ── Forest layout — each disconnected tree gets its own horizontal
-//    (root → children growing left-to-right) dagre layout, then the trees
-//    are stacked vertically underneath one another. Labels stay perfectly
-//    horizontal either way (that's just CSS text direction, unaffected by
-//    which way the tree branches), but growing each tree sideways instead
-//    of downward gives multi-word labels far more horizontal room before
-//    they need to wrap, and keeps unrelated trees visually separated
-//    instead of interleaved in one shared vertical ranking. ──
+// FIX 5 — forest layout also gets larger spacing.
+// nodesep 28 → 48, ranksep 130 → 180.
 function computeForestLayout(nodes: GNode[], edges: GEdge[]) {
     const norm = (s: string) => s.trim().toLowerCase();
     const byKey = new Map<string, string>();
     nodes.forEach(n => { byKey.set(norm(n.id), n.id); byKey.set(norm(n.label), n.id); });
 
-    // Reduce to one parent per node — same rule as treeMode above, so each
-    // node belongs to exactly one tree with no crossing multi-parent edges.
     const seenEdges = new Set<string>();
     const hasParent = new Set<string>();
     const treeEdges: { source: string; target: string; label?: string }[] = [];
@@ -1067,8 +1053,6 @@ function computeForestLayout(nodes: GNode[], edges: GEdge[]) {
         treeEdges.push({ source: s, target: tg, label: e.label });
     });
 
-    // Union-find to group nodes into connected components (one per tree,
-    // including singleton nodes with no edges at all).
     const uf = new Map<string, string>();
     nodes.forEach(n => uf.set(n.id, n.id));
     const find = (x: string): string => {
@@ -1093,13 +1077,20 @@ function computeForestLayout(nodes: GNode[], edges: GEdge[]) {
         dims.set(n.id, estimateNodeBox(n.label, size));
     });
 
-    const TREE_GAP = 56;
+    const TREE_GAP = 72; // ↑ was 56 — more breathing room between disconnected trees
     let yOffset = 0;
     const positioned: (GNode & { x: number; y: number; labelWidth: number })[] = [];
 
     for (const groupNodes of groups.values()) {
         const g = new dagre.graphlib.Graph();
-        g.setGraph({ rankdir: 'LR', nodesep: 28, ranksep: 130, marginx: 20, marginy: 20, acyclicer: 'greedy' });
+        g.setGraph({
+            rankdir: 'LR',
+            nodesep: 48,    // ↑ was 28
+            ranksep: 180,   // ↑ was 130
+            marginx: 30,
+            marginy: 30,
+            acyclicer: 'greedy',
+        });
         g.setDefaultEdgeLabel(() => ({}));
         groupNodes.forEach(n => g.setNode(n.id, dims.get(n.id)!));
 
@@ -1107,7 +1098,9 @@ function computeForestLayout(nodes: GNode[], edges: GEdge[]) {
         treeEdges.forEach(e => {
             if (!idsInGroup.has(e.source) || !idsInGroup.has(e.target)) return;
             const label = e.label?.trim();
-            g.setEdge(e.source, e.target, label ? { width: Math.min(120, label.length * LABEL_CHAR_W + 12), height: LABEL_LINE_H + 8, labelpos: 'c' } : {});
+            g.setEdge(e.source, e.target, label
+                ? { width: Math.min(120, label.length * LABEL_CHAR_W + 12), height: LABEL_LINE_H + 8, labelpos: 'c' }
+                : {});
         });
 
         dagre.layout(g);
@@ -1136,14 +1129,18 @@ function computeForestLayout(nodes: GNode[], edges: GEdge[]) {
     return { positioned, resolvedEdges: treeEdges };
 }
 
+// FIX 6 — removed the stale third argument `false` that was silently
+// ignored by computeDagreLayout (it only accepts 2 params). treeMode is
+// now correctly routed to computeForestLayout via the ternary below.
 const NodeLinkGraph: React.FC<{ nodes: GNode[]; edges: GEdge[]; treeMode?: boolean }> = ({ nodes, edges, treeMode = false }) => {
     const { t } = useTranslation();
     const allNodes = useMemo(() => buildGraphNodes(nodes, edges), [nodes, edges]);
 
     const initial = useMemo(() => {
+        // FIX 6 — treeMode correctly dispatches to computeForestLayout now
         const { positioned, resolvedEdges } = treeMode
             ? computeForestLayout(allNodes, edges)
-            : computeDagreLayout(allNodes, edges, false);
+            : computeDagreLayout(allNodes, edges);
 
         const rfNodes: RFNode[] = positioned.map(n => ({
             id: n.id,
@@ -1164,6 +1161,7 @@ const NodeLinkGraph: React.FC<{ nodes: GNode[]; edges: GEdge[]; treeMode?: boole
             labelStyle: { fill: 'var(--t2)', fontSize: 10 },
             labelBgStyle: { fill: 'var(--bg1)' },
         }));
+
         return { rfNodes, rfEdges };
     }, [allNodes, edges, treeMode]);
 
@@ -1194,10 +1192,12 @@ const NodeLinkGraph: React.FC<{ nodes: GNode[]; edges: GEdge[]; treeMode?: boole
     );
 };
 
-// ── Keyword Insights: timeline — heatmap-style grid with time labels
-//    running horizontally across the top header row (guaranteed via
-//    inline styles: nowrap + horizontal writing-mode) and one row per
-//    keyword running down the left. ──
+// ── Keyword Insights: timeline ────────────────────────────
+interface TimelineData {
+    labels?: string[];
+    datasets?: { label: string; data: number[] }[];
+}
+
 const TimelineView: React.FC<{ data: TimelineData }> = ({ data }) => {
     const { t } = useTranslation();
     const labels = data.labels ?? [];
@@ -1208,8 +1208,6 @@ const TimelineView: React.FC<{ data: TimelineData }> = ({ data }) => {
     const ROW_LABEL_W = 140;
     const COL_W = 56;
 
-    // Text guaranteed to stay horizontal, left-to-right, single line —
-    // independent of whatever the surrounding stylesheet does elsewhere.
     const horizontalLabel: React.CSSProperties = {
         writingMode: 'horizontal-tb',
         textOrientation: 'mixed',
@@ -1220,89 +1218,55 @@ const TimelineView: React.FC<{ data: TimelineData }> = ({ data }) => {
 
     return (
         <>
-        <div style={{ overflowX: 'auto', paddingBottom: 4 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: `${ROW_LABEL_W}px repeat(${labels.length}, minmax(${COL_W}px, 1fr))`, width: 'max-content', minWidth: '100%' }}>
-                {/* Corner cell */}
-                <div />
-                {/* Time labels — header row, horizontal across the top */}
-                {labels.map((lab, li) => (
-                    <div
-                        key={li}
-                        title={lab}
-                        style={{
-                            ...horizontalLabel,
-                            fontSize: 10.5, fontWeight: 600, color: 'var(--t2)',
-                            textAlign: 'center', padding: '0 4px 8px',
-                        }}
-                    >
-                        {lab}
-                    </div>
-                ))}
-                {/* One row per keyword */}
-                {datasets.map((ds, di) => (
-                    <React.Fragment key={di}>
-                        <div style={{ ...horizontalLabel, fontSize: 12, fontWeight: 600, color: 'var(--t1)', padding: '6px 10px 6px 0', display: 'flex', alignItems: 'center' }} title={ds.label}>
-                            {ds.label}
+            <div style={{ overflowX: 'auto', paddingBottom: 4 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: `${ROW_LABEL_W}px repeat(${labels.length}, minmax(${COL_W}px, 1fr))`, width: 'max-content', minWidth: '100%' }}>
+                    <div />
+                    {labels.map((lab, li) => (
+                        <div key={li} title={lab} style={{ ...horizontalLabel, fontSize: 10.5, fontWeight: 600, color: 'var(--t2)', textAlign: 'center', padding: '0 4px 8px' }}>
+                            {lab}
                         </div>
-                        {labels.map((lab, li) => {
-                            const v = ds.data[li] ?? 0;
-                            const alpha = v > 0 ? Math.min(1, 0.22 + (v / max) * 0.78) : 0;
-                            return (
-                                <div
-                                    key={li}
-                                    title={`${ds.label} \u00b7 ${lab}: ${v}`}
-                                    style={{
-                                        height: 32, margin: 2, borderRadius: 4,
-                                        background: `rgba(91, 164, 239, ${alpha})`,
-                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                        fontSize: 10, color: alpha > 0.5 ? '#fff' : 'var(--t2)',
-                                    }}
-                                >
-                                    {v > 0 ? v : ''}
-                                </div>
-                            );
-                        })}
-                    </React.Fragment>
-                ))}
+                    ))}
+                    {datasets.map((ds, di) => (
+                        <React.Fragment key={di}>
+                            <div style={{ ...horizontalLabel, fontSize: 12, fontWeight: 600, color: 'var(--t1)', padding: '6px 10px 6px 0', display: 'flex', alignItems: 'center' }} title={ds.label}>
+                                {ds.label}
+                            </div>
+                            {labels.map((lab, li) => {
+                                const v = ds.data[li] ?? 0;
+                                const alpha = v > 0 ? Math.min(1, 0.22 + (v / max) * 0.78) : 0;
+                                return (
+                                    <div key={li} title={`${ds.label} · ${lab}: ${v}`} style={{ height: 32, margin: 2, borderRadius: 4, background: `rgba(91, 164, 239, ${alpha})`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: alpha > 0.5 ? '#fff' : 'var(--t2)' }}>
+                                        {v > 0 ? v : ''}
+                                    </div>
+                                );
+                            })}
+                        </React.Fragment>
+                    ))}
+                </div>
             </div>
-        </div>
-        {/* Legend — same intensity scale as the cells above, GitHub contribution-graph style */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 5, marginTop: 10, fontSize: 11, color: 'var(--t2)' }}>
-            <span>{t('uploadInfer.workspacePanel.legendLess', 'Less')}</span>
-            {[0, 0.22, 0.4, 0.6, 0.78, 1].map((alpha, i) => (
-                <div
-                    key={i}
-                    style={{
-                        width: 12, height: 12, borderRadius: 3,
-                        background: alpha === 0 ? 'var(--bg2)' : `rgba(91, 164, 239, ${alpha})`,
-                        border: alpha === 0 ? '1px solid var(--bdr2)' : 'none',
-                    }}
-                />
-            ))}
-            <span>{t('uploadInfer.workspacePanel.legendMore', 'More')}</span>
-        </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 5, marginTop: 10, fontSize: 11, color: 'var(--t2)' }}>
+                <span>{t('uploadInfer.workspacePanel.legendLess', 'Less')}</span>
+                {[0, 0.22, 0.4, 0.6, 0.78, 1].map((alpha, i) => (
+                    <div key={i} style={{ width: 12, height: 12, borderRadius: 3, background: alpha === 0 ? 'var(--bg2)' : `rgba(91, 164, 239, ${alpha})`, border: alpha === 0 ? '1px solid var(--bdr2)' : 'none' }} />
+                ))}
+                <span>{t('uploadInfer.workspacePanel.legendMore', 'More')}</span>
+            </div>
         </>
     );
 };
 
-// ── Keyword Insights: word cloud ──
+// ── Keyword Insights: word cloud ──────────────────────────
 const WordCloudView: React.FC<{ data: WordCloudData }> = ({ data }) => {
     const { t } = useTranslation();
     if (!data.wordcloud_image) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
     return (
         <div className={styles.wordCloudImageWrap} style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
-            <img
-                src={data.wordcloud_image}
-                alt={t('uploadInfer.workspacePanel.kiTabs.wordcloud')}
-                className={styles.wordCloudImage}
-                style={{ maxWidth: '100%', height: 'auto', borderRadius: 8 }}
-            />
+            <img src={data.wordcloud_image} alt={t('uploadInfer.workspacePanel.kiTabs.wordcloud')} className={styles.wordCloudImage} style={{ maxWidth: '100%', height: 'auto', borderRadius: 8 }} />
         </div>
     );
 };
 
-// ── Keyword Insights: importance vs complexity scatter ──
-// Complexity → accent color, reused for the column header, bars, and dots.
+// ── Keyword Insights: importance vs complexity ────────────
 const COMPLEXITY_COLOR: Record<string, string> = {
     Easy: 'var(--green)',
     Medium: 'var(--amber)',
@@ -1320,15 +1284,10 @@ const ImportanceComplexityScatter: React.FC<{ data: ImportanceComplexityData }> 
         .sort((a, b) => {
             const ai = order.indexOf(a), bi = order.indexOf(b);
             if (ai === -1 && bi === -1) return a.localeCompare(b);
-            if (ai === -1) return 1;
-            if (bi === -1) return -1;
+            if (ai === -1) return 1; if (bi === -1) return -1;
             return ai - bi;
         });
 
-    // Importance is always on a fixed 0–10 scale from the backend, so the
-    // bar fill is a direct out-of-10 progress value rather than scaled
-    // against whatever the largest item in this particular file happens
-    // to be — a 6 always fills 60% of the bar, on any file.
     const IMPORTANCE_MAX = 10;
 
     return (
@@ -1348,17 +1307,10 @@ const ImportanceComplexityScatter: React.FC<{ data: ImportanceComplexityData }> 
                                     <span className={styles.importanceDot} style={{ background: color }} />
                                     <span className={styles.importanceKeyword}>{it.keyword}</span>
                                     <div className={styles.importanceBarTrack}>
-                                        <div
-                                            className={styles.importanceBarFill}
-                                            style={{ width: `${Math.min(100, (it.importance / IMPORTANCE_MAX) * 100)}%`, background: color }}
-                                        />
+                                        <div className={styles.importanceBarFill} style={{ width: `${Math.min(100, (it.importance / IMPORTANCE_MAX) * 100)}%`, background: color }} />
                                     </div>
                                     <span className={styles.importanceValue}>{it.importance}/{IMPORTANCE_MAX}</span>
-                                    <span
-                                        className={styles.importanceFrequency}
-                                        style={{ fontSize: 11, color: 'var(--t2)', flexShrink: 0, whiteSpace: 'nowrap' }}
-                                        title={t('uploadInfer.workspacePanel.frequencyTitle')}
-                                    >
+                                    <span className={styles.importanceFrequency} style={{ fontSize: 11, color: 'var(--t2)', flexShrink: 0, whiteSpace: 'nowrap' }} title={t('uploadInfer.workspacePanel.frequencyTitle')}>
                                         {t('uploadInfer.workspacePanel.frequencyCount', { count: it.frequency })}
                                     </span>
                                 </div>
@@ -1371,7 +1323,7 @@ const ImportanceComplexityScatter: React.FC<{ data: ImportanceComplexityData }> 
     );
 };
 
-// ── Keyword Insights: glossary ──
+// ── Keyword Insights: glossary ────────────────────────────
 const GlossaryView: React.FC<{ data: GlossaryData }> = ({ data }) => {
     const { t } = useTranslation();
     const items = data.glossary ?? [];
@@ -1393,7 +1345,7 @@ const GlossaryView: React.FC<{ data: GlossaryData }> = ({ data }) => {
     );
 };
 
-// ── Tab: Keyword Insights ────────────────────────────────────
+// ── Tab: Keyword Insights ─────────────────────────────────
 const KI_SUBTABS = ['graph', 'wordcloud', 'timeline', 'prerequisites', 'importance', 'glossary'] as const;
 type KiSubTab = typeof KI_SUBTABS[number];
 
@@ -1433,9 +1385,7 @@ const TabKeywordInsights: React.FC<{ data: KeywordInsights | null }> = ({ data }
     );
 };
 
-// ── Scrollable tab row — generic horizontal-scroll tab strip with arrow
-//    buttons + edge fades, reused for both the main tab bar and any
-//    sub-navigation row (e.g. Keyword Insights) that could overflow. ──
+// ── Scrollable tab row ────────────────────────────────────
 function ScrollableTabRow<T extends string>({
     ids, activeId, onChange, labelFor,
     itemClassName, activeClassName, wrapClassName, trackClassName,
@@ -1449,10 +1399,6 @@ function ScrollableTabRow<T extends string>({
     activeClassName: string;
     wrapClassName: string;
     trackClassName: string;
-    // Optional — lets a specific caller (e.g. the main results tab bar)
-    // tag each individual tab button for the guided tour, without
-    // affecting other callers that reuse this same component (e.g. the
-    // Keyword Insights sub-tab row).
     dataTourFor?: (id: T) => string | undefined;
 }) {
     const trackRef = useRef<HTMLDivElement>(null);
@@ -1476,7 +1422,6 @@ function ScrollableTabRow<T extends string>({
         return () => { window.removeEventListener('resize', onResize); el.removeEventListener('scroll', updateScrollState); };
     }, []); // eslint-disable-line
 
-    // Keep the active item in view when it changes
     useEffect(() => {
         const el = trackRef.current;
         if (!el) return;
@@ -1519,8 +1464,7 @@ function ScrollableTabRow<T extends string>({
     );
 }
 
-// ── Main tab bar — the fixed-width flex row silently clipped tabs once
-//    there were more than ~3; ScrollableTabRow fixes that. ──
+// ── Main tab bar ──────────────────────────────────────────
 const ScrollableTabs: React.FC<{ activeTab: TabId; onChange: (id: TabId) => void }> = ({ activeTab, onChange }) => {
     const { t } = useTranslation();
     return (
