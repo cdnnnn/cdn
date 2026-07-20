@@ -179,8 +179,8 @@
 .dropzone {
   border: 1.5px dashed var(--bdr2);
   border-radius: var(--rxl);
-  padding: 24px 20px;
-  margin: 12px 14px;
+  padding: 16px 16px;
+  margin: 8px 10px;
   text-align: center;
   background: var(--bg1);
   cursor: pointer;
@@ -208,19 +208,19 @@
 }
 
 .dzIc {
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
   background: var(--blue-dim);
   border: 1px solid var(--blue-bdr);
   display: flex;
   align-items: center;
   justify-content: center;
-  margin: 0 auto 11px;
+  margin: 0 auto 8px;
 
   svg {
-    width: 18px;
-    height: 18px;
+    width: 14px;
+    height: 14px;
   }
 }
 
@@ -240,9 +240,9 @@
 .chips {
   display: flex;
   justify-content: center;
-  gap: 6px;
+  gap: 5px;
   flex-wrap: wrap;
-  margin-top: 10px;
+  margin-top: 7px;
 }
 
 .chip {
@@ -257,9 +257,9 @@
 
 .dzActions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   justify-content: center;
-  margin-top: 11px;
+  margin-top: 8px;
   position: relative;
   z-index: 1;
 }
@@ -273,10 +273,10 @@
 
 .previewList {
   overflow-y: auto;
-  padding: 8px 10px;
+  padding: 6px 8px;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 4px;
   @include m.scrollbar;
 }
 
@@ -284,11 +284,11 @@
 .fileCard {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 11px;
+  gap: 8px;
+  padding: 7px 9px;
   background: var(--bg2);
   border: 1px solid var(--bdr);
-  border-radius: var(--rxl);
+  border-radius: var(--rl);
   transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
   position: relative;
   overflow: hidden;
@@ -307,8 +307,8 @@
     content: '';
     position: absolute;
     left: 0;
-    top: 8px;
-    bottom: 8px;
+    top: 6px;
+    bottom: 6px;
     width: 3px;
     border-radius: 0 3px 3px 0;
     background: var(--bdr2);
@@ -358,9 +358,9 @@
 
 // Extension badge (shared between browsed + uploaded cards)
 .extBadge {
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
+  width: 27px;
+  height: 27px;
+  border-radius: 7px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -433,13 +433,13 @@
 }
 
 .fileMeta {
-  font-size: 10px;
+  font-size: 9px;
   color: var(--t2);
   @include m.mono;
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 2px;
+  gap: 5px;
+  margin-top: 1px;
   flex-wrap: wrap;
 }
 
@@ -3571,11 +3571,6 @@
 .sortAsc {
   transform: rotate(180deg);
 }
-
-
-
-
-
 
 
 
