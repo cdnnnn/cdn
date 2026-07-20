@@ -1,378 +1,4 @@
 // ═══════════════════════════════════════════════
-// pages/SttTranscription/components/SttFileSidebar.tsx
-//
-// Reusable file-picker column used by both the Inference tab
-// (mode="select" — checkbox multi-select feeding InferencePanel) and
-// the View Results tab (mode="view" — click a completed file to open
-// its transcript). Has its own search / status filter, independent of
-// whatever filter state the Upload & Manage tab is using.
-// ═══════════════════════════════════════════════
-import React, { useEffect, useMemo, useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import { useAppSelector } from '../../../store/hooks';
-import { selectSttFileViews, type SttFileView } from '../../../store/sttSlice';
-import styles from '../SttTranscription.module.scss';
-
-type Mode = 'select' | 'view';
-
-interface Props {
-    mode: Mode;
-    active: boolean;
-    // select mode
-    selectedIds?: Set<number>;
-    onToggleSelect?: (id: number) => void;
-    onSelectAll?: (ids: number[]) => void;
-    onClearSelection?: () => void;
-    // view mode
-    activeFileId?: number | null;
-    onFileClick?: (file: SttFileView) => void;
-    // view mode only shows Completed files (nothing else has a transcript yet)
-    onlyCompleted?: boolean;
-}
-
-const IconSearch: React.FC = () => (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="6.5" cy="6.5" r="4" /><path d="M11 11l2.5 2.5" />
-    </svg>
-);
-const IconFilter: React.FC = () => (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M2 4h12M4.5 8h7M7 12h2" />
-    </svg>
-);
-const IconCheck: React.FC = () => (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M3 8.5l3.5 3.5 7-7.5" />
-    </svg>
-);
-const IconSort: React.FC = () => (
-    <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-        <path d="M2 4h10M4 7h6M6 10h2" />
-    </svg>
-);
-const IconSortArrow: React.FC = () => (
-    <svg viewBox="0 0 10 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M5 1v10M2 8l3 3 3-3" />
-    </svg>
-);
-
-type SortKey = 'id' | 'name' | 'date' | 'status';
-
-// Fixed 4-button sliding window around the current page — same pagination
-// treatment as pages/SttTranscription/components/FileLibrary.tsx.
-const PAGE_WINDOW = 4;
-const getPageNumbers = (current: number, total: number): number[] => {
-    if (total <= PAGE_WINDOW) return Array.from({ length: total }, (_, i) => i + 1);
-    const start = Math.max(1, Math.min(current - 1, total - PAGE_WINDOW + 1));
-    return Array.from({ length: PAGE_WINDOW }, (_, i) => start + i);
-};
-const PAGE_SIZE_OPTIONS = [50, 75, 100];
-
-const SttFileSidebar: React.FC<Props> = ({
-    mode, active,
-    selectedIds, onToggleSelect, onSelectAll, onClearSelection,
-    activeFileId, onFileClick,
-    onlyCompleted = false,
-}) => {
-    const { t } = useTranslation();
-    const files = useAppSelector(selectSttFileViews);
-    const filesLoading = useAppSelector(s => s.stt.filesLoading);
-
-    const [search, setSearch]     = useState('');
-    const [status, setStatus]     = useState<'all' | 'completed' | 'pending' | 'queued' | 'running'>(
-        onlyCompleted ? 'completed' : 'all'
-    );
-    const [sortKey, setSortKey]   = useState<SortKey>('date');
-    const [sortAsc, setSortAsc]   = useState(false);
-
-    const toggleSort = (key: SortKey) => {
-        if (sortKey === key) setSortAsc(v => !v);
-        else { setSortKey(key); setSortAsc(true); }
-    };
-
-    const filtered = useMemo(() => {
-        const q = search.trim().toLowerCase();
-        let list = files.filter(f => {
-            if (mode === 'view' && onlyCompleted && f.status !== 'completed') return false;
-            if (status !== 'all' && f.status !== status) return false;
-            if (q && !(String(f.id).includes(q) || f.original_name.toLowerCase().includes(q))) return false;
-            return true;
-        });
-        list = [...list].sort((a, b) => {
-            let cmp = 0;
-            if (sortKey === 'id')     cmp = a.id - b.id;
-            else if (sortKey === 'name')   cmp = a.original_name.localeCompare(b.original_name);
-            else if (sortKey === 'status') cmp = a.status.localeCompare(b.status);
-            else cmp = new Date(a.inserted_at).getTime() - new Date(b.inserted_at).getTime();
-            return sortAsc ? cmp : -cmp;
-        });
-        return list;
-    }, [files, search, status, sortKey, sortAsc, mode, onlyCompleted]);
-
-    const statusOptions: Array<'all' | 'completed' | 'pending' | 'queued' | 'running'> =
-        mode === 'view' && onlyCompleted ? ['completed'] : ['all', 'completed', 'pending', 'queued', 'running'];
-
-    // ── Pagination (client-side, applied after search/status filter/sort) ──
-    const [page, setPage]         = useState(1);
-    const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
-    const goToPage = (p: number) => setPage(Math.max(1, p));
-    const handlePageSizeChange = (size: number) => { setPageSize(size); setPage(1); };
-
-    // Reset to page 1 whenever the filtered result set changes shape, so
-    // the user never lands on a now-empty trailing page.
-    useEffect(() => { setPage(1); }, [search, status, sortKey, sortAsc, mode, onlyCompleted]);
-
-    const totalPages   = Math.max(1, Math.ceil(filtered.length / pageSize));
-    const currentPage  = Math.min(page, totalPages);
-    const paginated    = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-
-    return (
-        <div className={styles.sttSidebar} data-tour={mode === 'select' ? 'infer-sidebar' : 'results-sidebar'}>
-            <div className={styles.sttSidebarHeader}>
-                <span className={styles.sttSidebarTitle}>
-                    {mode === 'select' ? t('stt.sidebar.pickForInference') : t('stt.sidebar.pickToView')}
-                </span>
-                <span className={styles.sttSidebarCount}>{filtered.length}</span>
-            </div>
-
-            {/* Status filter + Search — same row, same design as the Upload tab / reference sidebar */}
-            <div className={styles.sttSidebarFilterRow}>
-                {statusOptions.length > 1 && (
-                    <div className={styles.sttSidebarStatusWrap} data-tour={mode === 'select' ? 'infer-status-filter' : 'results-status-filter'}>
-                        <IconFilter />
-                        <select
-                            className={styles.sttSidebarStatusSelect}
-                            value={status}
-                            disabled={filesLoading}
-                            onChange={e => setStatus(e.target.value as typeof status)}
-                        >
-                            {statusOptions.map(s => (
-                                <option key={s} value={s}>{s === 'all' ? t('stt.library.filterAll') : t(`stt.fileCard.status.${s}`)}</option>
-                            ))}
-                        </select>
-                    </div>
-                )}
-
-                <div className={styles.sttSidebarSearchWrap} data-tour={mode === 'select' ? 'infer-search' : 'results-search'}>
-                    <IconSearch />
-                    <input
-                        type="text"
-                        className={styles.sttSidebarSearchInput}
-                        value={search}
-                        onChange={e => setSearch(e.target.value)}
-                        placeholder={t('stt.library.searchPlaceholder')}
-                    />
-                </div>
-            </div>
-
-            {/* Sort — boxed pill row with arrow-direction icons, same design as the Upload tab / reference sidebar */}
-            <div className={styles.sttSidebarSortHeader} data-tour={mode === 'select' ? 'infer-sort' : 'results-sort'}>
-                <span className={styles.sttSidebarSortHeaderLabel}>
-                    <IconSort />
-                    {t('stt.sortBy')}
-                </span>
-                <div className={styles.sttSidebarSortCols}>
-                    {(['id', 'name', 'date', 'status'] as SortKey[]).map(k => (
-                        <button
-                            key={k}
-                            className={`${styles.sttSidebarSortCol} ${sortKey === k ? styles.sttSidebarSortColActive : ''}`}
-                            onClick={() => toggleSort(k)}
-                            disabled={filesLoading}
-                        >
-                            {t(`stt.sidebar.sort.${k}`)}
-                            <span className={sortKey === k ? (sortAsc ? styles.sttSidebarSortAsc : styles.sttSidebarSortDesc) : styles.sttSidebarSortInactive}>
-                                <IconSortArrow />
-                            </span>
-                        </button>
-                    ))}
-                </div>
-            </div>
-
-            {/* Select all / clear — select mode only */}
-            {mode === 'select' && (
-                <div className={styles.sttSidebarSelectRow}>
-                    <span className={styles.sttSidebarSelectHint}>
-                        {selectedIds && selectedIds.size > 0
-                            ? t('stt.library.selected', { count: selectedIds.size })
-                            : t('stt.library.noneSelected')}
-                    </span>
-                    <div className={styles.selectAllActions}>
-                        <button className={styles.selectAllBtn} onClick={() => onSelectAll?.(filtered.map(f => f.id))}
-                            disabled={filtered.length === 0}>
-                            {t('stt.library.selectAll')}
-                        </button>
-                        <button className={styles.selectAllBtn} onClick={onClearSelection} disabled={!selectedIds || selectedIds.size === 0}>
-                            {t('stt.library.clear')}
-                        </button>
-                    </div>
-                </div>
-            )}
-
-            {/* File list */}
-            <div className={styles.sttSidebarList}>
-                {filesLoading ? (
-                    <div className={styles.libLoading}>
-                        <div className={styles.spinner} />
-                        <span>{t('stt.library.loading')}</span>
-                    </div>
-                ) : filtered.length === 0 ? (
-                    <div className={styles.sttSidebarEmpty}>
-                        {mode === 'view' && onlyCompleted
-                            ? t('stt.sidebar.noCompletedFiles')
-                            : t('stt.library.emptyTitle')}
-                    </div>
-                ) : paginated.map(f => {
-                    const isSelected = mode === 'select' && selectedIds?.has(f.id);
-                    const isActive   = mode === 'view' && activeFileId === f.id;
-                    const clickable  = mode === 'select' || (mode === 'view' && f.status === 'completed');
-                    return (
-                        <button
-                            key={f.id}
-                            type="button"
-                            className={`${styles.sttSidebarRow} ${isSelected ? styles.sttSidebarRowSelected : ''} ${isActive ? styles.sttSidebarRowActive : ''} ${!clickable ? styles.sttSidebarRowDisabled : ''}`}
-                            disabled={!clickable}
-                            onClick={() => {
-                                if (mode === 'select') onToggleSelect?.(f.id);
-                                else onFileClick?.(f);
-                            }}
-                        >
-                            {mode === 'select' && (
-                                <span className={`${styles.sttSidebarCheckbox} ${isSelected ? styles.sttSidebarCheckboxChecked : ''}`}>
-                                    {isSelected && <IconCheck />}
-                                </span>
-                            )}
-                            <div className={styles.sttSidebarRowInfo}>
-                                <div className={styles.sttSidebarRowName} title={f.original_name}>{f.original_name}</div>
-                                <div className={styles.sttSidebarRowMeta}>{f.inserted_at} · #{f.id}</div>
-                            </div>
-                            <span className={`${styles.pill} ${
-                                isSelected               ? styles.pillBlue :
-                                f.status === 'completed' ? styles.pillGreen :
-                                f.status === 'queued'    ? styles.pillAmber :
-                                f.status === 'running'   ? styles.pillBlue :
-                                f.status === 'failed'    ? styles.pillRed :
-                                styles.pillGray
-                            }`}>
-                                {isSelected ? (
-                                    <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="10" height="10">
-                                        <path d="M2 6l3 3 5-5" />
-                                    </svg>
-                                ) : (
-                                    <>
-                                        {f.status === 'completed' && (
-                                            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="9" height="9">
-                                                <path d="M2 6l3 3 5-5" />
-                                            </svg>
-                                        )}
-                                        {(f.status === 'running' || f.status === 'queued') && (
-                                            <span className={styles.pillDot} />
-                                        )}
-                                        {t(`stt.fileCard.status.${f.status}`)}
-                                    </>
-                                )}
-                            </span>
-                        </button>
-                    );
-                })}
-            </div>
-
-            {/* Pagination footer — same client-side behavior/controls as FileLibrary.tsx, compact for the sidebar column */}
-            {!filesLoading && filtered.length > 0 && (
-                <div className={styles.sttSidebarPagination}>
-                    <div className={styles.sttSidebarPaginationTopRow}>
-                        <select
-                            className={styles.sttSidebarPageSizeSelect}
-                            value={pageSize}
-                            onChange={e => handlePageSizeChange(Number(e.target.value))}
-                        >
-                            {PAGE_SIZE_OPTIONS.map(size => (
-                                <option key={size} value={size}>{t('stt.library.perPageShort', { count: size })}</option>
-                            ))}
-                        </select>
-
-                        <div className={styles.sttSidebarPageNav}>
-                            <button
-                                className={styles.sttSidebarPageNavBtn}
-                                onClick={() => goToPage(currentPage - 1)}
-                                disabled={currentPage <= 1}
-                                aria-label="Previous page"
-                            >
-                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                                    <path d="M10 3L6 8l4 5" />
-                                </svg>
-                            </button>
-
-                            {(() => {
-                                const pageWindow = getPageNumbers(currentPage, totalPages);
-                                const showFirst  = pageWindow[0] > 1;
-                                const showLast   = pageWindow[pageWindow.length - 1] < totalPages;
-                                return (
-                                    <>
-                                        {showFirst && (
-                                            <>
-                                                <button className={styles.sttSidebarPageNumBtn} onClick={() => goToPage(1)}>1</button>
-                                                {pageWindow[0] > 2 && <span className={styles.sttSidebarPageEllipsis}>…</span>}
-                                            </>
-                                        )}
-                                        {pageWindow.map(p => (
-                                            <button
-                                                key={p}
-                                                className={`${styles.sttSidebarPageNumBtn} ${p === currentPage ? styles.sttSidebarPageNumBtnActive : ''}`}
-                                                onClick={() => goToPage(p)}
-                                            >
-                                                {p}
-                                            </button>
-                                        ))}
-                                        {showLast && (
-                                            <>
-                                                {pageWindow[pageWindow.length - 1] < totalPages - 1 && <span className={styles.sttSidebarPageEllipsis}>…</span>}
-                                                <button className={styles.sttSidebarPageNumBtn} onClick={() => goToPage(totalPages)}>{totalPages}</button>
-                                            </>
-                                        )}
-                                    </>
-                                );
-                            })()}
-
-                            <button
-                                className={styles.sttSidebarPageNavBtn}
-                                onClick={() => goToPage(currentPage + 1)}
-                                disabled={currentPage >= totalPages}
-                                aria-label="Next page"
-                            >
-                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                                    <path d="M6 3l4 5-4 5" />
-                                </svg>
-                            </button>
-                        </div>
-                    </div>
-                    <div className={styles.sttSidebarPageInfo}>
-                        {t('stt.library.pageInfo', { page: currentPage, totalPages, total: filtered.length })}
-                    </div>
-                </div>
-            )}
-        </div>
-    );
-};
-
-export default SttFileSidebar;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// ═══════════════════════════════════════════════
 // SttTranscription.module.scss
 // Content Analytics · STT Transcription page
 //
@@ -4650,7 +4276,7 @@ export default SttFileSidebar;
 }
 
 .sttSidebarRowName {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--t0);
   white-space: nowrap;
@@ -4659,7 +4285,7 @@ export default SttFileSidebar;
 }
 
 .sttSidebarRowMeta {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--t2);
   margin-top: 2px;
   white-space: nowrap;
@@ -4696,7 +4322,7 @@ export default SttFileSidebar;
   border-radius: var(--r);
   color: var(--t0);
   font-family: var(--font-ui);
-  font-size: 11px;
+  font-size: 12px;
   outline: none;
   cursor: pointer;
   transition: border-color 0.12s;
@@ -4737,7 +4363,7 @@ export default SttFileSidebar;
   background: transparent;
   color: var(--t1);
   font-family: var(--font-ui);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.12s;
@@ -4772,14 +4398,14 @@ export default SttFileSidebar;
 
 .sttSidebarPageEllipsis {
   color: var(--t2);
-  font-size: 11px;
+  font-size: 12px;
   padding: 0 1px;
   user-select: none;
   flex-shrink: 0;
 }
 
 .sttSidebarPageInfo {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--t2);
   white-space: nowrap;
   overflow: hidden;
