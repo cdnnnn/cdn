@@ -12,27 +12,52 @@
   background: var(--bg0);
 }
 
-// ── Header — title row on top, tab bar below (mirrors STT Pipeline) ──
+// ── Header — title row and tab bar share one row, tabs pinned right
+// (avoids the extra height a stacked layout would add) ──
 .headerBar {
   flex-shrink: 0;
-  padding: 16px 24px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 22px 12px;
   background: var(--bg1);
-  border-bottom: 1px solid var(--bdr);
+  border-bottom: none;
+  position: relative;
+
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg,
+        rgba(139, 92, 246, 0.0) 0%,
+        rgba(139, 92, 246, 0.6) 20%,
+        rgba(56, 196, 186, 0.7) 50%,
+        rgba(240, 160, 48, 0.6) 80%,
+        rgba(240, 160, 48, 0.0) 100%);
+    pointer-events: none;
+  }
 }
 
 .phTitleRow {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 14px;
+  gap: 12px;
+  min-width: 0;
+  flex-shrink: 0;
 }
 
 .phTitle {
-  flex-shrink: 0;
   font-size: 18px;
   font-weight: 600;
   color: var(--t0);
+  letter-spacing: -0.3px;
+  line-height: 1.2;
   font-family: var(--font-display);
+  @include m.truncate;
 }
 
 .tourTriggerBtn {
@@ -49,6 +74,8 @@
   font-weight: 500;
   cursor: pointer;
   transition: all 0.12s;
+  white-space: nowrap;
+  flex-shrink: 0;
 
   svg { width: 13px; height: 13px; }
 
@@ -59,10 +86,12 @@
   }
 }
 
-// ── Tab bar — flat, underline style (mirrors STT Pipeline's .sttTabbar) ──
+// ── Tab bar — flat, underline style (mirrors STT Pipeline's .sttTabbar),
+// pinned to the right of the header row ──
 .tabbar {
   display: flex;
   gap: 4px;
+  flex-shrink: 0;
 }
 
 .tabBtn {
@@ -70,7 +99,7 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
-  padding: 10px 18px;
+  padding: 8px 16px;
   border: none;
   border-bottom: 2px solid transparent;
   background: transparent;
@@ -120,8 +149,7 @@
 }
 
 @media (max-width: 860px) {
-  .headerBar { padding: 14px 16px 0; }
-  .phTitleRow { flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+  .headerBar { flex-direction: column; align-items: stretch; gap: 10px; padding: 12px 16px 10px; }
   .tabbar { flex-wrap: wrap; }
   .tabPane { flex-direction: column; }
 }
