@@ -4647,22 +4647,11 @@
   background: var(--bg1);
   cursor: pointer;
   text-align: left;
-  position: relative;
-  overflow: hidden;
-  transition: border-color 0.16s ease, background-color 0.16s ease,
-    background-image 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
   @include m.theme-transition;
 
   &:hover {
     border-color: var(--bdr3);
     background: var(--bg2);
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-  }
-
-  &:active {
-    transform: translateY(0);
-    box-shadow: none;
   }
 }
 
@@ -4670,28 +4659,11 @@
   border-color: var(--blue);
   background-color: var(--bg1);
   background-image: linear-gradient(var(--blue-dim), var(--blue-dim));
-  box-shadow: 0 2px 10px var(--blue-dim);
-
-  // Small gradient accent bar along the bottom edge — a clearer "this one's
-  // selected" cue than the border/background tint alone.
-  &::after {
-    content: '';
-    position: absolute;
-    left: 10px;
-    right: 10px;
-    bottom: 0;
-    height: 2px;
-    border-radius: 2px 2px 0 0;
-    background: linear-gradient(90deg, var(--blue), #a78bfa);
-  }
 
   &:hover {
     border-color: var(--blue);
     background-color: var(--bg1);
     background-image: linear-gradient(var(--blue-dim), var(--blue-dim));
-    // Already the selected tab — skip the lift, just deepen the glow a touch.
-    transform: none;
-    box-shadow: 0 3px 14px var(--blue-dim);
   }
 }
 
