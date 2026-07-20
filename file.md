@@ -39,11 +39,6 @@ const IconCalendar: React.FC = () => (
         <rect x="2" y="3.5" width="12" height="10" rx="1.5" /><path d="M2 6h12M5.5 2v3M10.5 2v3" />
     </svg>
 );
-const IconRefresh: React.FC = () => (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M13.5 8a5.5 5.5 0 11-1.6-3.9" /><path d="M13.5 2.5v3h-3" />
-    </svg>
-);
 const IconSearch: React.FC = () => (
     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
         <circle cx="6.5" cy="6.5" r="4" /><path d="M11 11l2.5 2.5" />
@@ -396,17 +391,7 @@ const FileLibrary: React.FC<Props> = ({ onOpen, onGoToInfer, active, tourActive,
                                     {searchQuery && <button className={styles.searchBoxClear} onClick={() => setSearchQuery('')}><IconClose /></button>}
                                 </div>
                             )}
-                            <button className={`${styles.searchToggleBtn} ${searchOpen ? styles.searchToggleBtnActive : ''}`}
-                                onClick={() => { setSearchOpen(v => !v); if (searchOpen) setSearchQuery(''); }}>
-                                <IconSearch />
-                            </button>
                         </div>
-
-                        <button className={styles.colHeadingRefresh} onClick={handleRefresh}
-                            disabled={initializing || filesLoading || inferenceRunning}
-                            title={inferenceRunning ? t('stt.refreshDisabled') : t('stt.refreshTitle')}>
-                            <IconRefresh />
-                        </button>
                     </div>
 
                     {/* ── Filter row — date filter on the left, status filter + actions grouped on the right (mirrors FilePanel.tsx's .section2 filterSortRow/filterBarRow exactly; sort now lives in the title row above) ── */}
@@ -474,6 +459,14 @@ const FileLibrary: React.FC<Props> = ({ onOpen, onGoToInfer, active, tourActive,
 
                                         {actionsOpen && (
                                             <div className={styles.actionsPopover} role="menu" data-tour="stt-actions">
+                                                <button
+                                                    data-tour="stt-action-search"
+                                                    className={`${styles.actionTile} ${styles.actionTileSearch} ${searchOpen ? styles.actionTileActive : ''}`}
+                                                    onClick={() => { setActionsOpen(false); setSearchOpen(v => !v); if (searchOpen) setSearchQuery(''); }}
+                                                >
+                                                    <IconSearch />
+                                                    <span className={styles.actionTileLabel}>{t('stt.library.searchBtn')}</span>
+                                                </button>
                                                 <button
                                                     data-tour="stt-action-delete"
                                                     className={`${styles.actionTile} ${styles.actionTileDelete}`}
@@ -665,6 +658,13 @@ const FileLibrary: React.FC<Props> = ({ onOpen, onGoToInfer, active, tourActive,
 };
 
 export default FileLibrary;
+
+
+
+
+
+
+
 
 
 
@@ -5441,14 +5441,32 @@ export default FileLibrary;
   &:hover { background: color-mix(in srgb, var(--teal) 22%, var(--bg2)); }
 }
 
-// ── Sort row — now sits inline in .colHeading (next to the title),
-// pushed flush right via margin-left:auto, same as FilePanel.module.scss ──
+.actionTileSearch {
+  background: color-mix(in srgb, var(--amber) 14%, var(--bg2));
+  color: var(--amber);
+  border-color: color-mix(in srgb, var(--amber) 40%, var(--bg2));
+  &:hover { background: color-mix(in srgb, var(--amber) 22%, var(--bg2)); }
+}
+
+.actionTileActive {
+  outline: 2px solid var(--blue-bdr);
+  outline-offset: -1px;
+}
+
+// ── Sort row — bordered pill box, right-aligned in .colHeading, same
+// height/font-size/border treatment as pages/UploadInfer/FilePanel.module.scss ──
 .sortHeader {
   display: flex;
   align-items: center;
-  gap: 10px;
+  height: 32px;
+  background: var(--bg2);
+  border: 1px solid var(--bdr);
+  border-radius: var(--r);
+  padding: 0 6px 0 10px;
+  gap: 6px;
   margin-left: auto;
   flex-shrink: 0;
+  overflow: hidden;
 }
 
 .sortHeaderLabel {
@@ -5505,3 +5523,61 @@ export default FileLibrary;
 .sortInactive { opacity: 0.25; }
 .sortAsc { transform: rotate(180deg); }
 .sortDesc { transform: rotate(0deg); }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+{
+  "_comment": "Add these keys inside the existing 'stt' object in en.json",
+  "stt": {
+    "inference": {
+      "chunkAuto": "Auto"
+    },
+    "library": {
+      "perPage": "Per page",
+      "perPageShort": "{{count}} / page",
+      "pageInfo": "Page {{page}} of {{totalPages}} · {{total}} files",
+      "searchBtn": "Search"
+    }
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+{
+  "_comment": "Add these keys inside the existing 'stt' object in ko.json",
+  "stt": {
+    "inference": {
+      "chunkAuto": "자동"
+    },
+    "library": {
+      "perPage": "페이지당",
+      "perPageShort": "{{count}}개씩",
+      "pageInfo": "{{page}} / {{totalPages}} 페이지 · 총 {{total}}개 파일",
+      "searchBtn": "검색"
+    }
+  }
+}
