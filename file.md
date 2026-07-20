@@ -1,362 +1,596 @@
 // ═══════════════════════════════════════════════
-// pages/SttTranscription/components/InferencePanel.tsx
+// pages/SttTranscription/components/FileLibrary.tsx
 // ═══════════════════════════════════════════════
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAppDispatch, useAppSelector } from '../../../store/hooks';
 import {
-    submitBatchInference,
-    fetchInferenceProgress,
-    fetchInferenceProgressList,
-    closeInference as _unused,
     fetchSttFiles,
+    setSttDateFrom,
+    setSttDateTo,
     clearSttFiles,
-    fetchSttModels,
-    clearInferenceError,
+    selectSttFileViews,
+    selectIsAnyRunning,
+    fetchInferenceProgress,
+    selectInferenceRunning,
+    type SttFileView,
 } from '../../../store/sttSlice';
+import { addToast } from '../../../store/toastSlice';
+import FileCard from './FileCard';
+import UploadInline from './UploadInline';
+import TourGuide, { type TourStep } from './TourGuide';
 import styles from '../SttTranscription.module.scss';
+import sttApi from '../../../services/sttApi';
 
 interface Props {
-    selectedIds: Set<number>;
-    onSubmitted: () => void;
-    onCompleted: () => void; // called when inference finishes — clears selection, no panel to close
+    onOpen: (id: number) => void;
+    onGoToInfer: () => void; // switch the parent tab bar to the Inference tab
+    active: boolean;         // whether this tab is currently visible (for tour targeting)
+    tourActive: boolean;     // tour state now lives in the parent (SttTranscription.tsx) since
+    onTourFinish: () => void; // the trigger button lives in the shared title row
 }
 
-const IconX: React.FC = () => (
+// Panel modes — only one can be active at a time (inference selection now lives in the Inference tab)
+type PanelMode = 'none' | 'delete' | 'pipeline';
+
+// ── Icons ──────────────────────────────────────
+const IconCalendar: React.FC = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="2" y="3.5" width="12" height="10" rx="1.5" /><path d="M2 6h12M5.5 2v3M10.5 2v3" />
+    </svg>
+);
+const IconRefresh: React.FC = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M13.5 8a5.5 5.5 0 11-1.6-3.9" /><path d="M13.5 2.5v3h-3" />
+    </svg>
+);
+const IconSearch: React.FC = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="6.5" cy="6.5" r="4" /><path d="M11 11l2.5 2.5" />
+    </svg>
+);
+const IconClose: React.FC = () => (
     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
         <path d="M4 4l8 8M12 4l-8 8" />
     </svg>
 );
-const IconSpark: React.FC = () => (
+const IconLibrary: React.FC = () => (
     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M8 1.5l1.2 3 3 1.2-3 1.2L8 10l-1.2-3.1-3-1.2 3-1.2z" />
-        <path d="M12.5 10l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" />
+        <rect x="2" y="3" width="4" height="10" rx="1" />
+        <rect x="7" y="3" width="4" height="10" rx="1" />
+        <rect x="12" y="5" width="2" height="8" rx="1" />
     </svg>
 );
+const IconDelete: React.FC = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 4h10M6 4V2.5h4V4M5 4l.5 9h5L11 4" />
+    </svg>
+);
+const IconPipeline: React.FC = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M8 10V3M5 6l3-3 3 3" />
+        <path d="M3 11v2h10v-2" />
+    </svg>
+);
+// ── Date helpers ───────────────────────────────
+const toInputDate = (d: Date) => {
+    const pad = (n: number) => (n < 10 ? `0${n}` : String(n));
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+const defaultDateRange = () => {
+    const to = new Date(); const from = new Date();
+    from.setDate(to.getDate() - 30);
+    return { from: toInputDate(from), to: toInputDate(to) };
+};
 
-const CHUNK_OPTIONS = [
-    { value: 'auto', labelKey: 'stt.inference.chunkAuto' },
-    { value: '5',    labelKey: '5s'  },
-    { value: '10',   labelKey: '10s' },
-    { value: '15',   labelKey: '15s' },
-    { value: '20',   labelKey: '20s' },
+const groupByDate = (files: SttFileView[], unknownLabel: string): { label: string; files: SttFileView[] }[] => {
+    const dateLabel = (iso: string): string => {
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return unknownLabel;
+        return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    };
+    const map = new Map<string, SttFileView[]>();
+    for (const f of files) {
+        const lbl = dateLabel(f.inserted_at);
+        if (!map.has(lbl)) map.set(lbl, []);
+        map.get(lbl)!.push(f);
+    }
+    return Array.from(map.entries()).map(([label, files]) => ({ label, files }));
+};
+
+const DATE_LABEL_COLORS: string[] = [
+    '#818cf8','#38bdf8','#34d399','#fb923c','#f472b6',
+    '#a78bfa','#22d3ee','#4ade80','#fbbf24','#f87171',
+    '#60a5fa','#2dd4bf','#86efac','#fcd34d','#f9a8d4',
+    '#c084fc','#67e8f9','#6ee7b7','#fde68a','#fca5a5',
+    '#93c5fd','#5eead4','#a7f3d0','#fef08a','#fecaca',
+    '#7dd3fc','#99f6e4','#bbf7d0','#fed7aa','#fbcfe8',
 ];
-const POLL_INTERVAL = 10_000;
 
-const InferencePanel: React.FC<Props> = ({ selectedIds, onSubmitted, onCompleted }) => {
+const FileLibrary: React.FC<Props> = ({ onOpen, onGoToInfer, active, tourActive, onTourFinish }) => {
     const dispatch = useAppDispatch();
     const { t } = useTranslation();
+    const files        = useAppSelector(selectSttFileViews);
+    const filesLoading = useAppSelector(s => s.stt.filesLoading);
+    const filesError   = useAppSelector(s => s.stt.filesError);
+    const [initializing, setInitializing] = useState(true);
+    const dateFrom     = useAppSelector(s => s.stt.dateFrom);
+    const dateTo       = useAppSelector(s => s.stt.dateTo);
+    const inferenceRunning = useAppSelector(selectInferenceRunning);
 
-    const models        = useAppSelector(s => s.stt.models);
-    const modelsLoading = useAppSelector(s => s.stt.modelsLoading);
-    const dateFrom      = useAppSelector(s => s.stt.dateFrom);
-    const dateTo        = useAppSelector(s => s.stt.dateTo);
-    const running       = useAppSelector(s => s.stt.inferenceRunning);
-    const submitting    = useAppSelector(s => s.stt.inferenceSubmitting);
-    const error         = useAppSelector(s => s.stt.inferenceError);
-    const queued        = useAppSelector(s => s.stt.inferenceQueued);
-    const runningFiles  = useAppSelector(s => s.stt.inferenceRunningFiles);
-    const completed     = useAppSelector(s => s.stt.inferenceCompleted);
-    const pending       = useAppSelector(s => s.stt.inferencePending);
-    const progressMap   = useAppSelector(s => s.stt.inferenceProgressMap);
+    // ── Panel mode ────────────────────────────────
+    const [panelMode, setPanelMode] = useState<PanelMode>('none');
 
-    const [model, setModel]   = useState('');
-    const [language, setLang] = useState('ko');
-    const [chunk, setChunk]   = useState('auto');
+    const openPanel  = (mode: PanelMode) => setPanelMode(prev => prev === mode ? 'none' : mode);
+    const closePanel = () => { setPanelMode('none'); setSelectedIds(new Set()); };
 
-    const pollRef      = useRef<ReturnType<typeof setInterval> | null>(null);
-    const countRef     = useRef<ReturnType<typeof setInterval> | null>(null);
-    const [countdown, setCountdown] = useState(0);
+    // ── Tour ──────────────────────────────────────
+    const tourSteps: TourStep[] = [
+        { target: 'stt-title',            title: t('stt.tour.titleTitle'),            content: t('stt.tour.titleBody'),            placement: 'bottom' },
+        { target: 'stt-date-filter',      title: t('stt.tour.dateFilterTitle'),       content: t('stt.tour.dateFilterBody'),       placement: 'bottom' },
+        { target: 'stt-upload',           title: t('stt.tour.uploadTitle'),           content: t('stt.tour.uploadBody'),           placement: 'right' },
+        { target: 'stt-library-heading',  title: t('stt.tour.libraryTitle'),          content: t('stt.tour.libraryBody'),          placement: 'bottom' },
+        { target: 'stt-date-filter',      title: t('stt.tour.dateFilterTitle'),       content: t('stt.tour.dateFilterBody'),       placement: 'bottom', onEnter: () => setActionsOpen(false) },
+        { target: 'stt-status-chips',     title: t('stt.tour.statusChipsTitle'),      content: t('stt.tour.statusChipsBody'),      placement: 'bottom', onEnter: () => setActionsOpen(false) },
+        { target: 'stt-sort',             title: t('stt.tour.sortTitle'),             content: t('stt.tour.sortBody'),             placement: 'bottom', onEnter: () => setActionsOpen(false) },
+        {
+            target: 'stt-actions-trigger',
+            title: t('stt.tour.actionsTriggerTitle'),
+            content: t('stt.tour.actionsTriggerBody'),
+            placement: 'bottom',
+            onEnter: () => { setPanelMode('none'); setActionsOpen(false); },
+        },
+        {
+            target: 'stt-action-delete',
+            title: t('stt.tour.actionDeleteTitle'),
+            content: t('stt.tour.actionDeleteBody'),
+            placement: 'left',
+            onEnter: () => { setPanelMode('none'); setActionsOpen(true); },
+        },
+        {
+            target: 'stt-action-pipeline',
+            title: t('stt.tour.actionPipelineTitle'),
+            content: t('stt.tour.actionPipelineBody'),
+            placement: 'left',
+            onEnter: () => { setPanelMode('none'); setActionsOpen(true); },
+        },
+        { target: 'stt-library-body',     title: t('stt.tour.fileCardsTitle'),        content: t('stt.tour.fileCardsBody'),        placement: 'top', onEnter: () => setActionsOpen(false) },
+    ];
 
-    useEffect(() => {
-        if (models.length === 0) dispatch(fetchSttModels());
-    }, [dispatch, models.length]);
+    // ── Selection ──────────────────────────────
+    const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+    const toggleFileSelect = useCallback((id: number) => {
+        setSelectedIds(prev => {
+            const next = new Set(prev);
+            next.has(id) ? next.delete(id) : next.add(id);
+            return next;
+        });
+    }, []);
+    useEffect(() => { if (panelMode === 'none') setSelectedIds(new Set()); }, [panelMode]);
 
-    useEffect(() => {
-        if (!model && models.length > 0) setModel(models[0]);
-    }, [models, model]);
+    // ── Search ──────────────────────────────────
+    const [searchOpen, setSearchOpen]   = useState(false);
+    const [searchQuery, setSearchQuery] = useState('');
 
-    // Poll /by-progress while running.
-    // Stop when queued:[] AND running:[] — inference complete.
-    // Then call /by-date once to refresh the library and close col-3.
-    useEffect(() => {
-        const tick = async () => {
-            const result = await dispatch(fetchInferenceProgress({ from: dateFrom, to: dateTo }));
-            if (!fetchInferenceProgress.fulfilled.match(result)) return;
-
-            const { queued, running: runList } = result.payload;
-
-            // Poll per-file progress for currently running files
-            if (runList.length > 0) {
-                dispatch(fetchInferenceProgressList(runList.map((f: any) => f.id)));
-            }
-
-            // Both empty → inference finished
-            if (queued.length === 0 && runList.length === 0) {
-                if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
-                if (countRef.current) { clearInterval(countRef.current); countRef.current = null; }
-                dispatch(clearSttFiles());
-                await dispatch(fetchSttFiles({ from: dateFrom, to: dateTo }));
-                onCompleted();
-            }
-        };
-
-        if (running) {
-            setCountdown(POLL_INTERVAL / 1000);
-            tick();
-            pollRef.current = setInterval(() => { setCountdown(POLL_INTERVAL / 1000); tick(); }, POLL_INTERVAL);
-            countRef.current = setInterval(() => setCountdown(prev => Math.max(0, prev - 1)), 1000);
-        } else {
-            if (pollRef.current)  { clearInterval(pollRef.current);  pollRef.current  = null; }
-            if (countRef.current) { clearInterval(countRef.current); countRef.current = null; }
-            setCountdown(0);
-        }
-        return () => {
-            if (pollRef.current)  { clearInterval(pollRef.current);  pollRef.current  = null; }
-            if (countRef.current) { clearInterval(countRef.current); countRef.current = null; }
-        };
-    }, [running, dispatch, dateFrom, dateTo]);
-
-    const handleSubmit = async () => {
-        if (selectedIds.size === 0 || !model || submitting) return;
-        dispatch(clearInferenceError());
-        const result = await dispatch(submitBatchInference({
-            fileIds: Array.from(selectedIds),
-            modelName: model,
-            language,
-            chunkSize: chunk === 'auto' ? 0 : Number(chunk),
-        }));
-        if (submitBatchInference.fulfilled.match(result)) {
-            onSubmitted(); // clear selection in parent
-        } else {
-            // Non-200 from /batch_process — fire /by-progress once (no await, fire-and-forget)
-            dispatch(fetchInferenceProgress({ from: dateFrom, to: dateTo }));
-        }
+    // ── Sort (client-side, applied to the library array before date-grouping) ──
+    type SortKey = 'id' | 'name' | 'date' | 'status';
+    const [sortKey, setSortKey] = useState<SortKey>('date');
+    const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+    const handleSort = (key: SortKey) => {
+        if (sortKey === key) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
+        else { setSortKey(key); setSortDir('asc'); }
     };
 
-    const progressOf = (id: number) => progressMap[id] ?? 0;
-    const statusLabel = (id: number) => {
-        const p = progressOf(id);
-        if (p === 100) return 'Done';
-        if (p === -1)  return 'Failed';
-        if (p > 0)     return `${p}%`;
-        return 'Starting…';
+    // ── Actions popover (Inference / Delete / Pipeline collapsed into one trigger) ──
+    const [actionsOpen, setActionsOpen] = useState(false);
+    const actionsPopoverRef = React.useRef<HTMLDivElement | null>(null);
+    useEffect(() => {
+        if (!actionsOpen) return;
+        const onDocClick = (e: MouseEvent) => {
+            if (actionsPopoverRef.current && !actionsPopoverRef.current.contains(e.target as Node)) {
+                setActionsOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', onDocClick);
+        return () => document.removeEventListener('mousedown', onDocClick);
+    }, [actionsOpen]);
+
+    // ── Status filter ────────────────────────────
+    type StatusFilter = 'all' | 'completed' | 'pending' | 'queued' | 'running';
+    const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+
+    // ── Action states ───────────────────────────
+    const [deleting, setDeleting]       = useState(false);
+    const [deleteError, setDeleteError] = useState('');
+    const [moving, setMoving]           = useState(false);
+    const [moveError, setMoveError]     = useState('');
+
+    // ── Date state ──────────────────────────────
+    const freshRange = defaultDateRange();
+    const [draftFrom, setDraftFrom] = useState(freshRange.from);
+    const [draftTo, setDraftTo]     = useState(freshRange.to);
+    const [dateError, setDateError] = useState('');
+
+    const refreshLibrary = useCallback(() => {
+        dispatch(clearSttFiles());
+        dispatch(fetchSttFiles({ from: dateFrom, to: dateTo }));
+    }, [dispatch, dateFrom, dateTo]);
+
+    useEffect(() => {
+        const def = defaultDateRange();
+        setDraftFrom(def.from); setDraftTo(def.to);
+        dispatch(setSttDateFrom(def.from)); dispatch(setSttDateTo(def.to));
+        dispatch(clearSttFiles());
+        dispatch(fetchInferenceProgress({ from: def.from, to: def.to }))
+            .then((progressResult: any) => {
+                if (fetchInferenceProgress.fulfilled.match(progressResult)) {
+                    const { queued, running } = progressResult.payload;
+                    if (queued.length > 0 || running.length > 0) onGoToInfer();
+                }
+            })
+            .finally(() => {
+                dispatch(fetchSttFiles({ from: def.from, to: def.to }))
+                    .finally(() => setInitializing(false));
+            });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const isDirty    = draftFrom !== dateFrom || draftTo !== dateTo;
+    const isDateValid = !!draftFrom && !!draftTo && draftFrom <= draftTo;
+
+    const validateDates = (from: string, to: string): boolean => {
+        if (!from || !to) return true;
+        if (from > to) { setDateError(t('stt.dateError')); return false; }
+        setDateError(''); return true;
     };
+    const handleFromChange = (val: string) => { setDraftFrom(val); validateDates(val, draftTo); };
+    const handleToChange   = (val: string) => { setDraftTo(val);   validateDates(draftFrom, val); };
+    const handleApply = () => {
+        if (!validateDates(draftFrom, draftTo) || !isDirty) return;
+        dispatch(setSttDateFrom(draftFrom)); dispatch(setSttDateTo(draftTo));
+        dispatch(clearSttFiles());
+        dispatch(fetchSttFiles({ from: draftFrom, to: draftTo }));
+    };
+    const handleRefresh = () => { dispatch(clearSttFiles()); dispatch(fetchSttFiles()); };
+
+    // ── Delete ──────────────────────────────────
+    const handleDelete = async () => {
+        if (selectedIds.size === 0 || deleting) return;
+        setDeleting(true); setDeleteError('');
+        try {
+            const res = await sttApi.deleteFiles(Array.from(selectedIds));
+            if (res.status === 'success') {
+                dispatch(addToast(t('stt.library.deletedSuccess', { count: selectedIds.size }), 'success'));
+                closePanel(); refreshLibrary();
+            } else {
+                const msg = t('stt.library.deleteFail');
+                setDeleteError(msg); dispatch(addToast(msg, 'error'));
+            }
+        } catch {
+            const msg = t('stt.library.deleteFail');
+            setDeleteError(msg); dispatch(addToast(msg, 'error'));
+        } finally { setDeleting(false); }
+    };
+
+    // ── Move to lecture pipeline ─────────────────
+    const handleMovePipeline = async () => {
+        if (selectedIds.size === 0 || moving) return;
+        setMoving(true); setMoveError('');
+        try {
+            const res = await sttApi.addToLecturePipeline(Array.from(selectedIds));
+            if (res.status === 'success') {
+                dispatch(addToast(t('stt.library.movedSuccess', { count: selectedIds.size }), 'success'));
+                closePanel(); refreshLibrary();
+            } else {
+                const msg = t('stt.library.moveFail');
+                setMoveError(msg); dispatch(addToast(msg, 'error'));
+            }
+        } catch {
+            const msg = t('stt.library.moveFail');
+            setMoveError(msg); dispatch(addToast(msg, 'error'));
+        } finally { setMoving(false); }
+    };
+
+    // ── Derived data ─────────────────────────────
+    const normalizedQuery = searchQuery.trim().toLowerCase();
+    const matchesSearch = (f: SttFileView) => {
+        if (!normalizedQuery) return true;
+        return String(f.id).includes(normalizedQuery) || f.original_name.toLowerCase().includes(normalizedQuery);
+    };
+    const matchesStatus = (f: SttFileView) => statusFilter === 'all' || f.status === statusFilter;
+
+    const { processing, library } = useMemo(() => {
+        const processing = files.filter(f => f.status === 'queued' || f.status === 'running');
+        const dir = sortDir === 'asc' ? 1 : -1;
+        const cmp = (a: SttFileView, b: SttFileView): number => {
+            if (sortKey === 'id')     return (a.id - b.id) * dir;
+            if (sortKey === 'name')   return a.original_name.localeCompare(b.original_name) * dir;
+            if (sortKey === 'status') return a.status.localeCompare(b.status) * dir;
+            return (new Date(a.inserted_at).getTime() - new Date(b.inserted_at).getTime()) * dir;
+        };
+        const library = [...files].sort(cmp);
+        return { processing, library };
+    }, [files, sortKey, sortDir]);
+
+    const completedFiles = library.filter(f => f.status === 'completed');
+    const visibleLibrary = library.filter(f => matchesSearch(f) && matchesStatus(f));
+
+    const isSelectionMode = panelMode !== 'none' && !inferenceRunning;
+    const canSelectFile   = (f: SttFileView) => panelMode === 'pipeline' ? f.status === 'completed' : true;
+    const selectAllForMode = () => {
+        if (panelMode === 'pipeline') setSelectedIds(new Set(completedFiles.map(f => f.id)));
+        else setSelectedIds(new Set(library.map(f => f.id)));
+    };
+
+    const actionLabel = panelMode === 'delete'
+        ? (deleting ? t('stt.library.deleting', { count: selectedIds.size }) : t('stt.library.delete', { count: selectedIds.size }))
+        : panelMode === 'pipeline'
+        ? (moving ? t('stt.library.moving', { count: selectedIds.size }) : t('stt.library.move', { count: selectedIds.size }))
+        : '';
+
+    const handleAction  = panelMode === 'delete' ? handleDelete : handleMovePipeline;
+    const isActing      = panelMode === 'delete' ? deleting : moving;
+    const actionError   = panelMode === 'delete' ? deleteError : moveError;
+    const actionBtnCls  = panelMode === 'delete' ? `${styles.btn} ${styles.btnRed}` : `${styles.btn} ${styles.btnBlue}`;
 
     return (
-        <div className={styles.inferencePanel}>
-            {/* Heading — countdown badge only; no close button since this is a persistent tab, not a col-3 panel */}
-            {running && countdown > 0 && (
-                <div className={styles.colHeading}>
-                    <span className={styles.colHeadingIc}><IconSpark /></span>
-                    <span className={styles.colHeadingText}>{t('stt.inference.title')}</span>
-                    <span className={styles.infCountdownBadge}>⟳ next check in {countdown}s</span>
-                </div>
-            )}
+        <div className={styles.libPage}>
+            {/* Tour guide */}
+            <TourGuide steps={tourSteps} active={tourActive} onFinish={onTourFinish} />
 
-            {/* CONFIG VIEW */}
-            {!running && (
-                <div className={styles.infColBody}>
-                    {/* Selected files count */}
-                    <div className={styles.infSelectedHint} data-tour="infer-settings">
-                        {selectedIds.size === 0
-                            ? 'Select files from the sidebar to run inference on.'
-                            : `${selectedIds.size} file${selectedIds.size === 1 ? '' : 's'} selected`}
-                    </div>
+            {/* ── Three-column body ── */}
+            <div className={styles.libBody}>
+                {/* COL 1: Upload */}
+                <UploadInline />
 
-                    <div className={styles.infSection} data-tour="infer-model">
-                        <div className={styles.infSectionTitle}>Settings</div>
-
-                        <div className={styles.infField}>
-                            <label className={styles.infLabel}>Model</label>
-                            {modelsLoading
-                                ? <div className={styles.infHint}>Loading…</div>
-                                : <select className={styles.infSelect} value={model} onChange={e => setModel(e.target.value)}>
-                                    {models.map(m => <option key={m} value={m}>{m}</option>)}
-                                  </select>
-                            }
-                        </div>
-
-                        <div className={styles.infField}>
-                            <label className={styles.infLabel}>Language</label>
-                            <select className={styles.infSelect} value={language} onChange={e => setLang(e.target.value)}>
-                                <option value="ko">Korean</option>
-                                <option value="en">English</option>
-                            </select>
-                        </div>
-
-                        <div className={styles.infField}>
-                            <label className={styles.infLabel}>Chunk size</label>
-                            <select className={styles.infSelect} value={chunk} onChange={e => setChunk(e.target.value)}>
-                                {CHUNK_OPTIONS.map(c => <option key={c.value} value={c.value}>{t(c.labelKey)}</option>)}
-                            </select>
-                        </div>
-                    </div>
-
-                    {error && <div className={styles.infError}>{error}</div>}
-
-                    <div className={styles.infActions} data-tour="infer-run">
-                        <button
-                            className={`${styles.btn} ${styles.btnBlue}`}
-                            disabled={selectedIds.size === 0 || !model || submitting}
-                            onClick={handleSubmit}
-                        >
-                            {submitting ? 'Submitting…' : `Run Inference${selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}`}
+                {/* COL 2: Library */}
+                <div className={styles.libCol}>
+                    <div className={styles.colHeading} data-tour="stt-library-heading">
+                        <span className={styles.colHeadingIc}><IconLibrary /></span>
+                        <span className={styles.colHeadingText}>{t('stt.library.title')}</span>
+                        <span className={styles.colHeadingSub}>
+                            {(initializing || filesLoading)
+                                ? t('stt.loading')
+                                : `${t('stt.file', { count: files.length })}${processing.length > 0 ? t('stt.processing', { count: processing.length }) : ''}`}
+                        </span>
+                        <button className={styles.colHeadingRefresh} onClick={handleRefresh}
+                            disabled={initializing || filesLoading || inferenceRunning}
+                            title={inferenceRunning ? t('stt.refreshDisabled') : t('stt.refreshTitle')}>
+                            <IconRefresh />
                         </button>
                     </div>
-                </div>
-            )}
 
-            {/* PROGRESS VIEW */}
-            {running && (
-                <div className={styles.infColBody}>
-                    <div className={styles.infProgressGrid}>
+                    {/* ── Filter / Sort row — date filter + status filter + actions on the left/right, sort + search below ── */}
+                    <div className={styles.filterSortRow}>
+                        <div className={styles.filterBarRow}>
+                            {/* Date filter */}
+                            <div className={styles.dateFilter} data-tour="stt-date-filter">
+                                <svg className={styles.dateIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                    <rect x="2" y="3" width="12" height="11" rx="1.5" /><path d="M2 6.5h12M5 2v2.5M11 2v2.5" />
+                                </svg>
+                                <span className={styles.filterBarLabel}>{t('stt.dateRangeLabel')}</span>
+                                <input type="date" className={styles.dateInput} value={draftFrom}
+                                    onChange={e => handleFromChange(e.target.value)}
+                                    onKeyDown={e => { if (e.key === 'Enter') handleApply(); }}
+                                    disabled={inferenceRunning || initializing || filesLoading} />
+                                <span className={styles.dateSep}>–</span>
+                                <input type="date" className={styles.dateInput} value={draftTo}
+                                    onChange={e => handleToChange(e.target.value)}
+                                    onKeyDown={e => { if (e.key === 'Enter') handleApply(); }}
+                                    disabled={inferenceRunning || filesLoading} />
+                                {isDirty && isDateValid && !inferenceRunning && (
+                                    <button className={styles.applyBtn} onClick={handleApply} disabled={initializing || filesLoading}>{t('stt.apply')}</button>
+                                )}
+                            </div>
+                            {dateError && <span className={styles.dateValidationError}>{dateError}</span>}
 
-                        {/* ── Queued group ── */}
-                        <div className={`${styles.infProgressCol} ${styles.infColPending}`}>
-                            <div className={styles.infProgressColHead}>
-                                <div className={styles.infProgressColIcon}>
-                                    <svg viewBox="0 0 16 16" fill="none" strokeWidth="1.5" strokeLinecap="round" stroke="var(--t2)">
-                                        <circle cx="8" cy="8" r="5.5" /><path d="M8 5v3.5l2 1.5" />
+                            {/* Status filter + Actions — grouped on the right */}
+                            <div className={styles.filterBarRight}>
+                                <div className={styles.statusFilterWrap} data-tour="stt-status-chips">
+                                    <svg className={styles.dateIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M2 4h12M4.5 8h7M7 12h2" />
                                     </svg>
+                                    <span className={styles.filterBarLabel}>{t('stt.statusLabel')}</span>
+                                    <select
+                                        className={styles.statusFilterSelect}
+                                        value={statusFilter}
+                                        disabled={initializing || filesLoading}
+                                        onChange={e => setStatusFilter(e.target.value as StatusFilter)}
+                                    >
+                                        {(['all', 'completed', 'pending', 'queued', 'running'] as const).map(s => (
+                                            <option key={s} value={s}>{s === 'all' ? t('stt.library.filterAll') : t(`stt.fileCard.status.${s}`)}</option>
+                                        ))}
+                                    </select>
                                 </div>
-                                <span>Queued</span>
-                                <span className={styles.infProgressCount}>{queued.length} file{queued.length !== 1 ? 's' : ''}</span>
-                                <span className={`${styles.infProgressBadge} ${styles.infBadgePending}`}>Waiting</span>
-                            </div>
-                            <div className={styles.infProgressBody}>
-                                {queued.length === 0
-                                    ? <div className={styles.infProgressEmpty}>No queued files</div>
-                                    : queued.map(f => (
-                                        <div key={f.id} className={styles.infProgressCard}>
-                                            <div className={styles.infProgressIcon}>STT</div>
-                                            <div className={styles.infProgressName} title={f.original_name}>{f.original_name}</div>
-                                            <span className={`${styles.infProgressBadge} ${styles.infBadgePending}`} style={{ marginLeft: 'auto' }}>In queue</span>
-                                        </div>
-                                    ))
-                                }
-                            </div>
-                        </div>
 
-                        {/* ── Running group ── */}
-                        <div className={`${styles.infProgressCol} ${styles.infColRunning}`}>
-                            <div className={styles.infProgressColHead}>
-                                <div className={styles.infProgressColIcon}>
-                                    <svg viewBox="0 0 16 16" fill="none" strokeWidth="1.5" strokeLinecap="round" stroke="var(--amber)">
-                                        <circle cx="8" cy="8" r="6" /><path d="M8 5v4M8 11v.1" />
-                                    </svg>
-                                </div>
-                                <span>Running</span>
-                                <span className={styles.infProgressCount}>{runningFiles.length} file{runningFiles.length !== 1 ? 's' : ''}</span>
-                                <span className={`${styles.infProgressBadge} ${styles.infBadgeRunning}`}>
-                                    <span className={styles.infBadgeDot} />Active
-                                </span>
-                            </div>
-                            <div className={styles.infProgressBody}>
-                                {runningFiles.length === 0
-                                    ? <div className={styles.infProgressEmpty}>No active files</div>
-                                    : runningFiles.map(f => {
-                                        const pct = progressOf(f.id);
-                                        return (
-                                            <div key={f.id} className={`${styles.infProgressCard} ${styles.infProgressCardRunning}`}>
-                                                <div className={styles.infProgressIcon}>STT</div>
-                                                <div className={styles.infProgressName} title={f.original_name}>{f.original_name}</div>
-                                                <div className={styles.infProgressBar}>
-                                                    <div className={styles.infProgressBarTrack}>
-                                                        <div className={styles.infProgressFill} style={{ width: `${Math.max(3, pct)}%` }} />
-                                                    </div>
-                                                </div>
-                                                <div className={styles.infProgressPct}>{statusLabel(f.id)}</div>
+                                {/* Actions — collapsed into a single trigger + popover */}
+                                {panelMode === 'none' && !inferenceRunning && (
+                                    <div className={styles.actionsPopoverWrap} ref={actionsPopoverRef}>
+                                        <button
+                                            type="button"
+                                            data-tour="stt-actions-trigger"
+                                            className={`${styles.actionsTrigger} ${actionsOpen ? styles.actionsTriggerOpen : ''}`}
+                                            onClick={() => setActionsOpen(o => !o)}
+                                            aria-expanded={actionsOpen}
+                                            aria-haspopup="true"
+                                        >
+                                            <span className={styles.filterBarLabel}>{t('stt.actionsLabel')}</span>
+                                            <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                                <path d="M7 1.5l1.4 3.4L12 6l-3.6 1.4L7 12.5l-1.4-4.1L2 7l3.6-1.1z" />
+                                            </svg>
+                                            <svg className={styles.actionsTriggerChevron} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                                <path d="M3 4.5l3 3 3-3" />
+                                            </svg>
+                                        </button>
+
+                                        {actionsOpen && (
+                                            <div className={styles.actionsPopover} role="menu" data-tour="stt-actions">
+                                                <button
+                                                    data-tour="stt-action-delete"
+                                                    className={`${styles.actionTile} ${styles.actionTileDelete}`}
+                                                    onClick={() => { setActionsOpen(false); openPanel('delete'); }}
+                                                >
+                                                    <IconDelete />
+                                                    <span className={styles.actionTileLabel}>{t('stt.library.deleteFiles')}</span>
+                                                </button>
+                                                <button
+                                                    data-tour="stt-action-pipeline"
+                                                    className={`${styles.actionTile} ${styles.actionTilePipeline}`}
+                                                    onClick={() => { setActionsOpen(false); openPanel('pipeline'); }}
+                                                >
+                                                    <IconPipeline />
+                                                    <span className={styles.actionTileLabel}>{t('stt.library.movePipeline')}</span>
+                                                </button>
                                             </div>
-                                        );
-                                    })
-                                }
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         </div>
 
-                        {/* ── Done group — mirrors .gDone ── */}
-                        <div className={`${styles.infProgressCol} ${styles.infColDone}`}>
-                            <div className={styles.infProgressColHead}>
-                                <div className={styles.infProgressColIcon}>
-                                    <svg viewBox="0 0 16 16" fill="none" strokeWidth="1.5" strokeLinecap="round" stroke="var(--green)">
-                                        <circle cx="8" cy="8" r="5.5" /><path d="M5.5 8l2 2 3-3" />
-                                    </svg>
-                                </div>
-                                <span>Done</span>
-                                <span className={styles.infProgressCount}>{completed.length} file{completed.length !== 1 ? 's' : ''}</span>
-                                <span className={`${styles.infProgressBadge} ${styles.infBadgeDone}`}>
-                                    <span className={styles.infBadgeDot} />
-                                    Done
+                        {/* Sort row + search */}
+                        <div className={styles.sortHeader} data-tour="stt-sort">
+                            <span className={styles.sortHeaderLabel}>
+                                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                                    <path d="M2 4h10M4 7h6M6 10h2" />
+                                </svg>
+                                {t('stt.sortBy')}
+                            </span>
+                            <div className={styles.sortCols}>
+                                {([
+                                    { key: 'id' as SortKey,     label: t('stt.sidebar.sort.id') },
+                                    { key: 'name' as SortKey,   label: t('stt.sidebar.sort.name') },
+                                    { key: 'date' as SortKey,   label: t('stt.sidebar.sort.date') },
+                                    { key: 'status' as SortKey, label: t('stt.sidebar.sort.status') },
+                                ]).map(({ key, label }) => (
+                                    <button
+                                        key={key}
+                                        className={`${styles.sortCol} ${sortKey === key ? styles.sortColActive : ''}`}
+                                        onClick={() => handleSort(key)}
+                                    >
+                                        {label}
+                                        <svg viewBox="0 0 10 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
+                                            className={sortKey === key ? (sortDir === 'asc' ? styles.sortAsc : styles.sortDesc) : styles.sortInactive}>
+                                            <path d="M5 1v10M2 8l3 3 3-3" />
+                                        </svg>
+                                    </button>
+                                ))}
+                            </div>
+
+                            <div className={styles.sectionHeaderRight}>
+                                {searchOpen && (
+                                    <div className={styles.searchBox}>
+                                        <span className={styles.searchBoxIc}><IconSearch /></span>
+                                        <input className={styles.searchBoxInput} type="text" placeholder={t('stt.library.searchPlaceholder')}
+                                            value={searchQuery} onChange={e => setSearchQuery(e.target.value)} autoFocus
+                                            onKeyDown={e => { if (e.key === 'Escape') { setSearchOpen(false); setSearchQuery(''); } }} />
+                                        {searchQuery && <button className={styles.searchBoxClear} onClick={() => setSearchQuery('')}><IconClose /></button>}
+                                    </div>
+                                )}
+                                <button className={`${styles.searchToggleBtn} ${searchOpen ? styles.searchToggleBtnActive : ''}`}
+                                    onClick={() => { setSearchOpen(v => !v); if (searchOpen) setSearchQuery(''); }}>
+                                    <IconSearch />
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Sticky action bars */}
+                    {(panelMode === 'delete' || panelMode === 'pipeline') && library.length > 0 && (
+                        <div className={`${styles.selectAllRow} ${panelMode === 'delete' ? styles.selectAllRowDelete : styles.selectAllRowPipeline}`}>
+                            <div className={styles.selectAllLeft}>
+                                <span className={styles.selectAllHint}>
+                                    {selectedIds.size > 0
+                                        ? t('stt.library.selected', { count: selectedIds.size })
+                                        : panelMode === 'pipeline' && completedFiles.length === 0
+                                        ? t('stt.library.noPipelineFiles')
+                                        : panelMode === 'pipeline'
+                                        ? t('stt.library.selectCompleted')
+                                        : t('stt.library.noneSelected')}
                                 </span>
+                                <div className={styles.selectAllActions}>
+                                    <button className={styles.selectAllBtn} onClick={selectAllForMode}
+                                        disabled={panelMode === 'pipeline'
+                                            ? completedFiles.length === 0 || selectedIds.size === completedFiles.length
+                                            : selectedIds.size === library.length}>
+                                        {t('stt.library.selectAll')}
+                                    </button>
+                                    <button className={styles.selectAllBtn} onClick={() => setSelectedIds(new Set())} disabled={selectedIds.size === 0}>
+                                        {t('stt.library.clear')}
+                                    </button>
+                                </div>
                             </div>
-                            <div className={styles.infProgressBody}>
-                                {completed.length === 0
-                                    ? <div className={styles.infProgressEmpty}>No completed files yet</div>
-                                    : completed.map(f => (
-                                        <div key={f.id} className={`${styles.infProgressCard} ${styles.infProgressCardDone}`}>
-                                            <div className={styles.infProgressIcon}>STT</div>
-                                            <div className={styles.infProgressName} title={f.original_name}>{f.original_name}</div>
-                                            <span className={`${styles.infProgressBadge} ${styles.infBadgeDone}`} style={{ marginLeft: 'auto' }}>
-                                                <span className={styles.infBadgeDot} />Done
-                                            </span>
-                                        </div>
-                                    ))
-                                }
+                            <div className={styles.selectAllRight}>
+                                {actionError && <span className={styles.selectAllError}>{actionError}</span>}
+                                <button className={actionBtnCls} disabled={selectedIds.size === 0 || isActing} onClick={handleAction}>
+                                    {actionLabel}
+                                </button>
+                                <button className={styles.btn} onClick={closePanel} disabled={isActing}><IconClose /></button>
                             </div>
                         </div>
+                    )}
 
+                    {/* Scrollable content */}
+                    <div className={styles.colBody} data-tour="stt-library-body">
+                        {filesError && (
+                            <div className={styles.errorBanner}>
+                                {t('stt.library.loadError', { error: filesError })}
+                                <button className={styles.btn} onClick={handleRefresh}>{t('stt.library.retry')}</button>
+                            </div>
+                        )}
+                        {(initializing || filesLoading) && (
+                            <div className={styles.libLoading}>
+                                <div className={styles.spinner} />
+                                <span>{t('stt.library.loading')}</span>
+                            </div>
+                        )}
+                        {library.length === 0 && !filesLoading && !initializing ? (
+                            <div className={styles.libEmpty}>
+                                <div className={styles.libEmptyTitle}>{t('stt.library.emptyTitle')}</div>
+                                <div className={styles.libEmptyHint}>{t('stt.library.emptyHint')}</div>
+                            </div>
+                        ) : visibleLibrary.length === 0 && normalizedQuery ? (
+                            <div className={styles.libEmpty}>
+                                <div className={styles.libEmptyTitle}>{t('stt.library.noMatchTitle', { query: searchQuery })}</div>
+                                <div className={styles.libEmptyHint}>{t('stt.library.noMatchHint')}</div>
+                            </div>
+                        ) : (
+                            <div className={styles.dateGroups}>
+                                {groupByDate(visibleLibrary, t('stt.unknownDate')).map((group, gi) => (
+                                    <div key={group.label} className={styles.dateGroup}>
+                                        <div className={styles.dateGroupLabel}
+                                            style={{ color: DATE_LABEL_COLORS[gi % DATE_LABEL_COLORS.length] }}>
+                                            <span className={styles.dateGroupDot} />
+                                            {group.label}
+                                        </div>
+                                        <div className={styles.libCardGrid}>
+                                            {group.files.map(f => {
+                                                const selectable = isSelectionMode && canSelectFile(f);
+                                                const dimmed     = isSelectionMode && !canSelectFile(f);
+                                                const handleCardOpen = () => {
+                                                    if (selectable) { toggleFileSelect(f.id); return; }
+                                                    if (!isSelectionMode && f.status === 'completed') onOpen(f.id);
+                                                };
+                                                return (
+                                                    <FileCard key={f.id} file={f} variant="card"
+                                                        onOpen={handleCardOpen}
+                                                        onGenerate={() => {}} disableGenerate={true}
+                                                        selected={selectedIds.has(f.id)}
+                                                        selectionMode={selectable}
+                                                        dimmed={dimmed}
+                                                    />
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 </div>
-            )}
+            </div>
         </div>
     );
 };
 
-export default InferencePanel;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-{
-  "_comment": "Add these keys inside the existing 'stt' object in en.json",
-  "stt": {
-    "inference": {
-      "chunkAuto": "Auto"
-    }
-  }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-{
-  "_comment": "Add these keys inside the existing 'stt' object in ko.json",
-  "stt": {
-    "inference": {
-      "chunkAuto": "자동"
-    }
-  }
-}
+export default FileLibrary;
