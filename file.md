@@ -10,7 +10,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
-import { selectSttFileViews, fetchSttFiles, type SttFileView } from '../../store/sttSlice';
+import { selectSttFileViews, fetchSttFiles, clearSttFiles, type SttFileView } from '../../store/sttSlice';
 import FileLibrary from './components/FileLibrary';
 import SttFileSidebar from './components/SttFileSidebar';
 import InferencePanel from './components/InferencePanel';
@@ -39,6 +39,7 @@ const SttTranscription: React.FC = () => {
             isFirstTabRender.current = false;
             return;
         }
+        dispatch(clearSttFiles());   // wipe stale list + flip filesLoading true so all 3 tabs show a spinner
         dispatch(fetchSttFiles());
     }, [activeTab, dispatch]);
 
@@ -186,3 +187,229 @@ const SttTranscription: React.FC = () => {
 };
 
 export default SttTranscription;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ═══════════════════════════════════════════════
+// pages/SttTranscription/components/SttFileSidebar.tsx
+//
+// Reusable file-picker column used by both the Inference tab
+// (mode="select" — checkbox multi-select feeding InferencePanel) and
+// the View Results tab (mode="view" — click a completed file to open
+// its transcript). Has its own search / status filter, independent of
+// whatever filter state the Upload & Manage tab is using.
+// ═══════════════════════════════════════════════
+import React, { useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useAppSelector } from '../../../store/hooks';
+import { selectSttFileViews, type SttFileView } from '../../../store/sttSlice';
+import styles from '../SttTranscription.module.scss';
+
+type Mode = 'select' | 'view';
+
+interface Props {
+    mode: Mode;
+    active: boolean;
+    // select mode
+    selectedIds?: Set<number>;
+    onToggleSelect?: (id: number) => void;
+    onSelectAll?: (ids: number[]) => void;
+    onClearSelection?: () => void;
+    // view mode
+    activeFileId?: number | null;
+    onFileClick?: (file: SttFileView) => void;
+    // view mode only shows Completed files (nothing else has a transcript yet)
+    onlyCompleted?: boolean;
+}
+
+const IconSearch: React.FC = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="6.5" cy="6.5" r="4" /><path d="M11 11l2.5 2.5" />
+    </svg>
+);
+const IconCheck: React.FC = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 8.5l3.5 3.5 7-7.5" />
+    </svg>
+);
+
+type SortKey = 'id' | 'name' | 'date' | 'status';
+
+const SttFileSidebar: React.FC<Props> = ({
+    mode, active,
+    selectedIds, onToggleSelect, onSelectAll, onClearSelection,
+    activeFileId, onFileClick,
+    onlyCompleted = false,
+}) => {
+    const { t } = useTranslation();
+    const files = useAppSelector(selectSttFileViews);
+    const filesLoading = useAppSelector(s => s.stt.filesLoading);
+
+    const [search, setSearch]     = useState('');
+    const [status, setStatus]     = useState<'all' | 'completed' | 'pending' | 'queued' | 'running'>(
+        onlyCompleted ? 'completed' : 'all'
+    );
+    const [sortKey, setSortKey]   = useState<SortKey>('date');
+    const [sortAsc, setSortAsc]   = useState(false);
+
+    const toggleSort = (key: SortKey) => {
+        if (sortKey === key) setSortAsc(v => !v);
+        else { setSortKey(key); setSortAsc(true); }
+    };
+
+    const filtered = useMemo(() => {
+        const q = search.trim().toLowerCase();
+        let list = files.filter(f => {
+            if (mode === 'view' && onlyCompleted && f.status !== 'completed') return false;
+            if (status !== 'all' && f.status !== status) return false;
+            if (q && !(String(f.id).includes(q) || f.original_name.toLowerCase().includes(q))) return false;
+            return true;
+        });
+        list = [...list].sort((a, b) => {
+            let cmp = 0;
+            if (sortKey === 'id')     cmp = a.id - b.id;
+            else if (sortKey === 'name')   cmp = a.original_name.localeCompare(b.original_name);
+            else if (sortKey === 'status') cmp = a.status.localeCompare(b.status);
+            else cmp = new Date(a.inserted_at).getTime() - new Date(b.inserted_at).getTime();
+            return sortAsc ? cmp : -cmp;
+        });
+        return list;
+    }, [files, search, status, sortKey, sortAsc, mode, onlyCompleted]);
+
+    const statusOptions: Array<'all' | 'completed' | 'pending' | 'queued' | 'running'> =
+        mode === 'view' && onlyCompleted ? ['completed'] : ['all', 'completed', 'pending', 'queued', 'running'];
+
+    return (
+        <div className={styles.sttSidebar} data-tour={mode === 'select' ? 'infer-sidebar' : 'results-sidebar'}>
+            <div className={styles.sttSidebarHeader}>
+                <span className={styles.sttSidebarTitle}>
+                    {mode === 'select' ? t('stt.sidebar.pickForInference') : t('stt.sidebar.pickToView')}
+                </span>
+                <span className={styles.sttSidebarCount}>{filtered.length}</span>
+            </div>
+
+            {/* Search */}
+            <div className={styles.sttSidebarSearch} data-tour={mode === 'select' ? 'infer-search' : 'results-search'}>
+                <IconSearch />
+                <input
+                    type="text"
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                    placeholder={t('stt.library.searchPlaceholder')}
+                />
+            </div>
+
+            {/* Status filter */}
+            {statusOptions.length > 1 && (
+                <div className={styles.sttSidebarChips} data-tour={mode === 'select' ? 'infer-status-filter' : 'results-status-filter'}>
+                    {statusOptions.map(s => (
+                        <button key={s}
+                            className={`${styles.statusChip} ${status === s ? styles.statusChipActive : ''} ${s !== 'all' ? styles[`statusChip_${s}`] : ''}`}
+                            onClick={() => setStatus(s)}>
+                            {s === 'all' ? t('stt.library.filterAll') : t(`stt.fileCard.status.${s}`)}
+                        </button>
+                    ))}
+                </div>
+            )}
+
+            {/* Sort */}
+            <div className={styles.sttSidebarSort} data-tour={mode === 'select' ? 'infer-sort' : 'results-sort'}>
+                {(['id', 'name', 'date', 'status'] as SortKey[]).map(k => (
+                    <button key={k}
+                        className={`${styles.sttSortBtn} ${sortKey === k ? styles.sttSortBtnActive : ''}`}
+                        onClick={() => toggleSort(k)}>
+                        {t(`stt.sidebar.sort.${k}`)}
+                        {sortKey === k && <span className={styles.sttSortArrow}>{sortAsc ? '↑' : '↓'}</span>}
+                    </button>
+                ))}
+            </div>
+
+            {/* Select all / clear — select mode only */}
+            {mode === 'select' && (
+                <div className={styles.sttSidebarSelectRow}>
+                    <span className={styles.sttSidebarSelectHint}>
+                        {selectedIds && selectedIds.size > 0
+                            ? t('stt.library.selected', { count: selectedIds.size })
+                            : t('stt.library.noneSelected')}
+                    </span>
+                    <div className={styles.selectAllActions}>
+                        <button className={styles.selectAllBtn} onClick={() => onSelectAll?.(filtered.map(f => f.id))}
+                            disabled={filtered.length === 0}>
+                            {t('stt.library.selectAll')}
+                        </button>
+                        <button className={styles.selectAllBtn} onClick={onClearSelection} disabled={!selectedIds || selectedIds.size === 0}>
+                            {t('stt.library.clear')}
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* File list */}
+            <div className={styles.sttSidebarList}>
+                {filesLoading ? (
+                    <div className={styles.libLoading}>
+                        <div className={styles.spinner} />
+                        <span>{t('stt.library.loading')}</span>
+                    </div>
+                ) : filtered.length === 0 ? (
+                    <div className={styles.sttSidebarEmpty}>
+                        {mode === 'view' && onlyCompleted
+                            ? t('stt.sidebar.noCompletedFiles')
+                            : t('stt.library.emptyTitle')}
+                    </div>
+                ) : filtered.map(f => {
+                    const isSelected = mode === 'select' && selectedIds?.has(f.id);
+                    const isActive   = mode === 'view' && activeFileId === f.id;
+                    const clickable  = mode === 'select' || (mode === 'view' && f.status === 'completed');
+                    return (
+                        <button
+                            key={f.id}
+                            type="button"
+                            className={`${styles.sttSidebarRow} ${isSelected ? styles.sttSidebarRowSelected : ''} ${isActive ? styles.sttSidebarRowActive : ''} ${!clickable ? styles.sttSidebarRowDisabled : ''}`}
+                            disabled={!clickable}
+                            onClick={() => {
+                                if (mode === 'select') onToggleSelect?.(f.id);
+                                else onFileClick?.(f);
+                            }}
+                        >
+                            {mode === 'select' && (
+                                <span className={`${styles.sttSidebarCheckbox} ${isSelected ? styles.sttSidebarCheckboxChecked : ''}`}>
+                                    {isSelected && <IconCheck />}
+                                </span>
+                            )}
+                            <span className={styles.sttSidebarRowName} title={f.original_name}>{f.original_name}</span>
+                            <span className={`${styles.pill} ${
+                                f.status === 'completed' ? styles.pillGreen :
+                                f.status === 'queued'    ? styles.pillAmber :
+                                f.status === 'running'   ? styles.pillBlue :
+                                f.status === 'failed'    ? styles.pillRed :
+                                styles.pillGray
+                            }`}>
+                                {t(`stt.fileCard.status.${f.status}`)}
+                            </span>
+                        </button>
+                    );
+                })}
+            </div>
+        </div>
+    );
+};
+
+export default SttFileSidebar;
