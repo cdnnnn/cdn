@@ -351,39 +351,32 @@ const FileLibrary: React.FC<Props> = ({ onOpen, onGoToInfer, active }) => {
             {/* Tour guide */}
             <TourGuide steps={tourSteps} active={tourActive} onFinish={() => setTourActive(false)} />
 
-            {/* ── Page header — title row only ── */}
-            <div className={styles.ph}>
-                <div className={styles.phRow}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <div>
-                            <div className={styles.phTitle} data-tour="stt-title">{t('stt.pageTitle')}</div>
-                            <div className={styles.phSub}>
-                                {(initializing || filesLoading)
-                                    ? t('stt.loading')
-                                    : `${t('stt.file', { count: files.length })}${processing.length > 0 ? t('stt.processing', { count: processing.length }) : ''}`}
-                            </div>
-                        </div>
-                        {/* Tour trigger button */}
-                        <button
-                            type="button"
-                            className={styles.tourTriggerBtn}
-                            onClick={() => setTourActive(true)}
-                        >
-                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                <circle cx="8" cy="8" r="6.25" />
-                                <path d="M6.1 6.2a1.9 1.9 0 013.6.7c0 1.3-1.7 1.5-1.7 2.7M8 11.4v.1" />
-                            </svg>
-                            {t('stt.tour.takeTour')}
-                        </button>
-                    </div>
-                    <div className={styles.phActs}>
-                        <button className={styles.btn} onClick={handleRefresh}
-                            disabled={initializing || filesLoading || inferenceRunning}
-                            title={inferenceRunning ? t('stt.refreshDisabled') : t('stt.refreshTitle')}>
-                            <IconRefresh />
-                        </button>
+            {/* ── Title row — title, tour trigger, and refresh, no outer box ── */}
+            <div className={styles.phTitleRow}>
+                <div>
+                    <div className={styles.phTitle} data-tour="stt-title">{t('stt.pageTitle')}</div>
+                    <div className={styles.phSub}>
+                        {(initializing || filesLoading)
+                            ? t('stt.loading')
+                            : `${t('stt.file', { count: files.length })}${processing.length > 0 ? t('stt.processing', { count: processing.length }) : ''}`}
                     </div>
                 </div>
+                <button
+                    type="button"
+                    className={styles.tourTriggerBtn}
+                    onClick={() => setTourActive(true)}
+                >
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="8" cy="8" r="6.25" />
+                        <path d="M6.1 6.2a1.9 1.9 0 013.6.7c0 1.3-1.7 1.5-1.7 2.7M8 11.4v.1" />
+                    </svg>
+                    {t('stt.tour.takeTour')}
+                </button>
+                <button className={`${styles.btn} ${styles.phTitleRowRefresh}`} onClick={handleRefresh}
+                    disabled={initializing || filesLoading || inferenceRunning}
+                    title={inferenceRunning ? t('stt.refreshDisabled') : t('stt.refreshTitle')}>
+                    <IconRefresh />
+                </button>
             </div>
 
             {/* ── Three-column body ── */}
@@ -654,19 +647,6 @@ export default FileLibrary;
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 // ═══════════════════════════════════════════════
 // SttTranscription.module.scss
 // Content Analytics · STT Transcription page
@@ -788,6 +768,36 @@ export default FileLibrary;
   flex-shrink: 0;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+// ── Lean title row used by FileLibrary — no outer .ph box, just title,
+// tour trigger, and refresh sharing one line ──
+.phTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 22px 12px;
+  background: var(--bg1);
+  flex-shrink: 0;
+  position: relative;
+
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg,
+      rgba(139, 92, 246, 0.0) 0%,
+      rgba(139, 92, 246, 0.6) 20%,
+      rgba(56, 196, 186, 0.7) 50%,
+      rgba(240, 160, 48, 0.6) 80%,
+      rgba(240, 160, 48, 0.0) 100%);
+    pointer-events: none;
+  }
+}
+
+.phTitleRowRefresh {
+  margin-left: auto;
 }
 
 .backBtn {
@@ -5065,62 +5075,3 @@ export default FileLibrary;
 .sortInactive { opacity: 0.25; }
 .sortAsc { transform: rotate(180deg); }
 .sortDesc { transform: rotate(0deg); }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-{
-  "_comment": "Add these keys inside the existing 'stt' object in en.json",
-  "stt": {
-    "dateRangeLabel": "Date Range",
-    "statusLabel": "Status",
-    "actionsLabel": "Actions",
-    "sortBy": "Sort by",
-    "tour": {
-      "sortTitle": "Sort the list",
-      "sortBody": "Sort your files by ID, Name, Date, or Status — click a column again to flip between ascending and descending.",
-      "actionsTriggerTitle": "Click here for bulk actions",
-      "actionsTriggerBody": "This button opens a menu of everything you can do with your files — let's take a look inside."
-    }
-  }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-{
-  "_comment": "Add these keys inside the existing 'stt' object in ko.json",
-  "stt": {
-    "dateRangeLabel": "날짜 범위",
-    "statusLabel": "상태",
-    "actionsLabel": "작업",
-    "sortBy": "정렬 기준",
-    "tour": {
-      "sortTitle": "목록 정렬하기",
-      "sortBody": "파일을 ID, 이름, 날짜, 상태 기준으로 정렬할 수 있습니다 — 같은 항목을 다시 클릭하면 오름차순/내림차순이 바뀝니다.",
-      "actionsTriggerTitle": "여기를 클릭하면 작업 메뉴가 열립니다",
-      "actionsTriggerBody": "이 버튼을 누르면 파일에 대해 할 수 있는 모든 작업의 메뉴가 열립니다 — 안을 살펴볼까요."
-    }
-  }
-}
