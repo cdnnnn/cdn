@@ -1,4 +1,1188 @@
 // ═══════════════════════════════════════════════
+// pages/SttTranscription/components/TranscriptDetail.tsx
+//
+// Player + synced transcript editor for a single completed file.
+// On mount, dispatches fetchSttCaptions(id); when the cache fills,
+// renders the editor. Edits save to the server (POST /stt/update_captions),
+// debounced per-cue so rapid typing doesn't hammer the endpoint.
+// ═══════════════════════════════════════════════
+import React, {
+    useRef,
+    useState,
+    useCallback,
+    useEffect,
+    useMemo,
+} from 'react';
+import { useAppDispatch, useAppSelector } from '../../../store/hooks';
+import { fetchSttCaptions, updateSttCaption, type SttFileView } from '../../../store/sttSlice';
+import { fetchMediaBlobUrl } from '../../../services/sttApi';
+import CueTimeline from './CueTimeline';
+import type { Cue, SaveStatus } from '../utils/types';
+import {
+    captionsToCues,
+    cuesToSrt,
+    formatShort,
+} from '../utils/srt';
+import styles from '../SttTranscription.module.scss';
+
+interface Props {
+    file: SttFileView;
+    // Controls the Results tab's file-list sidebar — collapsing it gives the
+    // media player more room, which is the point of the toggle button below.
+    sidebarCollapsed: boolean;
+    onToggleSidebar: () => void;
+}
+
+// ── Icons ────────────────────────────────────────
+const IconMic: React.FC = () => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="9" y="2" width="6" height="11" rx="3" />
+        <path d="M5 10a7 7 0 0014 0" />
+        <path d="M12 21v-4M8 21h8" />
+    </svg>
+);
+const IconDownload: React.FC = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M8 3v8M5 8l3 3 3-3" /><path d="M2.5 13.5h11" />
+    </svg>
+);
+const IconReset: React.FC = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M2.5 8a5.5 5.5 0 109-4M2.5 3v3.5h3.5" />
+    </svg>
+);
+const IconSidebarToggle: React.FC = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="2" y="3" width="12" height="10" rx="1.5" />
+        <path d="M6.5 3v10" />
+        <path d="M10 6.2L8.4 8l1.6 1.8" />
+    </svg>
+);
+
+const IconPencil: React.FC = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M2.5 13.5l3-.5 7-7-2.5-2.5-7 7-.5 3z" />
+        <path d="M9.5 4l2.5 2.5" />
+    </svg>
+);
+
+const IconCheck: React.FC = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 8.5l3.5 3.5 7-7.5" />
+    </svg>
+);
+
+const IconX: React.FC = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+        <path d="M4 4l8 8M12 4l-8 8" />
+    </svg>
+);
+
+// ── File-type detection from server filename ──
+const isVideoName = (n: string) =>
+    /\.(mp4|avi|mov|mkv|webm)$/i.test(n);
+
+const TranscriptDetail: React.FC<Props> = ({ file, sidebarCollapsed, onToggleSidebar }) => {
+    const dispatch = useAppDispatch();
+    const captionsEntry = useAppSelector(s => s.stt.captionsCache[file.id]);
+    const captionsLoadingId = useAppSelector(s => s.stt.captionsLoadingId);
+    const captionsError = useAppSelector(s => s.stt.captionsError);
+
+    const [cues, setCues] = useState<Cue[]>([]);
+    const [activeIndex, setActiveIndex] = useState<number>(-1);
+    const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+    const [toastMsg, setToastMsg] = useState<string>('');
+
+    // ── Media (audio/video) loading state ──
+    // The media endpoint requires auth, so we fetch the bytes through axios
+    // and hand the player an object URL. See fetchMediaBlobUrl for the why.
+    const [mediaUrl, setMediaUrl] = useState<string>('');
+    const [mediaError, setMediaError] = useState<string>('');
+    const [mediaLoading, setMediaLoading] = useState(false);
+
+    const mediaRef = useRef<HTMLVideoElement | null>(null);
+    const cueListRef = useRef<HTMLDivElement>(null);
+    const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const userScrolledRef = useRef(false);
+    const scrollResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // ── Edit mode ──
+    // Only one cue is ever in edit mode at a time. editingIdx is the cue's
+    // index in the cues array; editingText holds the textarea's working copy
+    // so we can cancel without dispatching anything.
+    const [editingIdx, setEditingIdx] = useState<number | null>(null);
+    const [editingText, setEditingText] = useState<string>('');
+    const [savingIdx, setSavingIdx] = useState<number | null>(null);
+
+    // ── Media time tracking for the scrub bar ──
+    const [mediaCurrentTime, setMediaCurrentTime] = useState(0);
+    const [mediaDuration, setMediaDuration] = useState(0);
+
+    const video = isVideoName(file.original_name);
+    const isLoading = captionsLoadingId === file.id || (!captionsEntry && !captionsError);
+
+    // ── Trigger fetch on mount / file change ──
+    useEffect(() => {
+        if (!captionsEntry) {
+            dispatch(fetchSttCaptions(file.id));
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [file.id]);
+
+    // ── Load the media blob ──
+    // Runs whenever file.id changes. Aborts an in-flight fetch if the user
+    // navigates away mid-download, and revokes the previous object URL so we
+    // don't leak blobs.
+    useEffect(() => {
+        const controller = new AbortController();
+        let revokedUrl: string | null = null;
+
+        setMediaLoading(true);
+        setMediaError('');
+        setMediaUrl('');
+
+        fetchMediaBlobUrl(file.id, controller.signal)
+            .then(url => {
+                revokedUrl = url;
+                setMediaUrl(url);
+                setMediaLoading(false);
+            })
+            .catch(err => {
+                // AbortError is expected on unmount/file change — ignore it.
+                if (controller.signal.aborted) return;
+                const msg = err instanceof Error ? err.message : 'Could not load media';
+                setMediaError(msg);
+                setMediaLoading(false);
+            });
+
+        return () => {
+            controller.abort();
+            if (revokedUrl) URL.revokeObjectURL(revokedUrl);
+        };
+    }, [file.id]);
+
+    // ── Toast helper ──
+    const flashToast = useCallback((msg: string) => {
+        setToastMsg(msg);
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = setTimeout(() => setToastMsg(''), 1800);
+    }, []);
+
+    // ── Edit-mode handlers ──
+    // beginEdit/cancelEdit/saveEdit work on the cue index, since that's what
+    // the row knows. saveEdit dispatches a single POST per intentional save —
+    // no debouncing, no auto-save, no surprise writes.
+    const beginEdit = useCallback((idx: number) => {
+        const c = cues[idx];
+        if (!c) return;
+        setEditingIdx(idx);
+        setEditingText(c.text);
+        setSaveStatus('idle');
+    }, [cues]);
+
+    const cancelEdit = useCallback(() => {
+        setEditingIdx(null);
+        setEditingText('');
+    }, []);
+
+    const saveEdit = useCallback(async () => {
+        if (editingIdx === null) return;
+        const c = cues[editingIdx];
+        if (!c || c.captionId === null) {
+            cancelEdit();
+            return;
+        }
+        const next = editingText;
+        // No-op short-circuit — if nothing changed, just exit edit mode.
+        if (next === c.text) {
+            cancelEdit();
+            return;
+        }
+        setSavingIdx(editingIdx);
+        setSaveStatus('editing');
+        const result = await dispatch(updateSttCaption({
+            fileId: file.id,
+            captionId: c.captionId,
+            text: next,
+        }));
+        setSavingIdx(null);
+
+        if (updateSttCaption.fulfilled.match(result)) {
+            // Reflect the server-confirmed text in our local copy.
+            const confirmed = result.payload.text;
+            setCues(prev => prev.map((cc, i) => (i === editingIdx ? { ...cc, text: confirmed } : cc)));
+            setSaveStatus('saved');
+            flashToast('Saved');
+            setEditingIdx(null);
+            setEditingText('');
+        } else {
+            setSaveStatus('failed');
+            flashToast('Save failed');
+            // Stay in edit mode so the user can retry or cancel — their text isn't lost.
+        }
+    }, [editingIdx, editingText, cues, dispatch, file.id, cancelEdit, flashToast]);
+
+    // ── When captions arrive from API, build cues ──
+    useEffect(() => {
+        if (!captionsEntry) return;
+        const parsed = captionsToCues(captionsEntry.lines);
+        if (parsed.length === 0) {
+            flashToast('No captions available');
+            setCues([]);
+            return;
+        }
+        setCues(parsed);
+        setActiveIndex(-1);
+        setSaveStatus('saved');
+    }, [captionsEntry, flashToast]);
+
+    // ── Time tracking ──
+    const findActiveAt = useCallback((t: number): number => {
+        for (let i = 0; i < cues.length; i++) {
+            if (t >= cues[i].start && t < cues[i].end) return i;
+        }
+        return -1;
+    }, [cues]);
+
+    useEffect(() => {
+        const m = mediaRef.current;
+        if (!m) return;
+        const onTime = () => {
+            // Two things track the play position:
+            //   1. activeIndex (which cue row to highlight)
+            //   2. mediaCurrentTime (where the orange playhead dot sits on the scrub bar)
+            const idx = findActiveAt(m.currentTime);
+            setActiveIndex(prev => (prev === idx ? prev : idx));
+            setMediaCurrentTime(m.currentTime);
+        };
+        const onMeta = () => {
+            // Use the media element's duration if known. Fall back to the last cue's
+            // end time, which is at least a sensible bound for the scrub bar even
+            // when the media file isn't loaded yet (or has no duration metadata).
+            if (isFinite(m.duration) && m.duration > 0) {
+                setMediaDuration(m.duration);
+            }
+        };
+        m.addEventListener('timeupdate', onTime);
+        m.addEventListener('seeked', onTime);
+        m.addEventListener('loadedmetadata', onMeta);
+        return () => {
+            m.removeEventListener('timeupdate', onTime);
+            m.removeEventListener('seeked', onTime);
+            m.removeEventListener('loadedmetadata', onMeta);
+        };
+    }, [findActiveAt]);
+
+    // Fallback duration: the latest cue end time. Lets the scrub bar render
+    // sensibly even before the media element reports its own duration.
+    const scrubDuration = useMemo(() => {
+        if (mediaDuration > 0) return mediaDuration;
+        if (cues.length === 0) return 0;
+        return cues[cues.length - 1].end;
+    }, [mediaDuration, cues]);
+
+    // Programmatic seek used by the scrub bar and by clicking a cue row.
+    const seekTo = useCallback((seconds: number) => {
+        const m = mediaRef.current;
+        if (!m) return;
+        m.currentTime = Math.max(0, seconds + 0.001);
+        setMediaCurrentTime(m.currentTime);
+    }, []);
+
+    // ── Auto-scroll active cue ──
+    useEffect(() => {
+        if (activeIndex < 0 || userScrolledRef.current) return;
+        const list = cueListRef.current;
+        if (!list) return;
+        const el = list.querySelector<HTMLElement>(`[data-cue-idx="${activeIndex}"]`);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, [activeIndex]);
+
+    const onCueListScroll = () => {
+        userScrolledRef.current = true;
+        if (scrollResetTimerRef.current) clearTimeout(scrollResetTimerRef.current);
+        scrollResetTimerRef.current = setTimeout(() => {
+            userScrolledRef.current = false;
+        }, 3000);
+    };
+
+    // ── Click a cue row → seek to its start ──
+    const jumpTo = (idx: number) => {
+        const cue = cues[idx];
+        if (!cue) return;
+        seekTo(cue.start);
+        setActiveIndex(idx);
+        const m = mediaRef.current;
+        if (m && m.paused) m.play().catch(() => { /* gesture required */ });
+    };
+
+    // ── Download ──
+    const downloadSrt = () => {
+        if (cues.length === 0) return;
+        const out = cuesToSrt(cues);
+        const blob = new Blob([out], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = (file.original_name.replace(/\.[^.]+$/, '') || 'transcript') + '.srt';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        flashToast('Downloaded');
+    };
+
+    // Status text for the liveBox indicator. With explicit edit mode there's
+    // no per-cue dirty state to track — at any moment, either a save is in
+    // flight or the displayed text matches the server's.
+    const statusText = useMemo(() => {
+        switch (saveStatus) {
+            case 'editing': return 'Saving…';
+            case 'saved': return 'Saved';
+            case 'failed': return 'Save failed';
+            default: return '—';
+        }
+    }, [saveStatus]);
+
+    useEffect(() => () => {
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+        if (scrollResetTimerRef.current) clearTimeout(scrollResetTimerRef.current);
+    }, []);
+
+    // ── Render ──
+    return (
+        <div className={styles.page}>
+            {/* ── Page header ── */}
+            <div className={styles.ph}>
+                <div className={styles.phRow}>
+                    <div className={styles.phTitleWrap}>
+                        <button
+                            className={`${styles.backBtn} ${sidebarCollapsed ? styles.backBtnFlipped : ''}`}
+                            onClick={onToggleSidebar}
+                            aria-label={sidebarCollapsed ? 'Expand file list' : 'Collapse file list'}
+                            title={sidebarCollapsed ? 'Expand file list' : 'Collapse file list'}
+                        >
+                            <IconSidebarToggle />
+                        </button>
+                        <div>
+                            <div className={styles.phTitle}>{file.original_name}</div>
+                            <div className={styles.phSub}>
+                                File #{file.id} · {cues.length} cues
+                            </div>
+                        </div>
+                    </div>
+                    <div className={styles.phActs}>
+                        <button className={`${styles.btn} ${styles.btnBlue}`} onClick={downloadSrt} disabled={cues.length === 0}>
+                            <IconDownload /> Download SRT
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            {captionsError && (
+                <div className={styles.errorBanner}>
+                    Could not load captions: {captionsError}
+                    <button className={styles.btn} onClick={() => dispatch(fetchSttCaptions(file.id))}>
+                        Retry
+                    </button>
+                </div>
+            )}
+
+            <div className={styles.playerBody}>
+                {/* ── LEFT: media player ── */}
+                <div className={styles.mediaPane}>
+                    <div className={styles.mediaFrame}>
+                        {video ? (
+                            <video
+                                ref={mediaRef as React.RefObject<HTMLVideoElement>}
+                                src={mediaUrl || undefined}
+                                controls
+                                className={styles.mediaEl}
+                            />
+                        ) : (
+                            <div className={styles.audioStage}>
+                                <div className={styles.audioStageIc}><IconMic /></div>
+                                <div className={styles.audioStageName}>{file.original_name}</div>
+                                <audio
+                                    ref={mediaRef as React.RefObject<HTMLAudioElement>}
+                                    src={mediaUrl || undefined}
+                                    controls
+                                    className={styles.audioEl}
+                                />
+                            </div>
+                        )}
+
+                        {/* Loading overlay — shown while the blob downloads. Doesn't block
+                the user from reading the transcript pane on the right. */}
+                        {mediaLoading && (
+                            <div className={styles.mediaLoading}>
+                                <div className={styles.spinner} />
+                                <span>Loading media…</span>
+                            </div>
+                        )}
+                        {mediaError && (
+                            <div className={styles.mediaError}>
+                                <div>Could not load media</div>
+                                <div className={styles.mediaErrorMsg}>{mediaError}</div>
+                            </div>
+                        )}
+                    </div>
+
+                    <div className={`${styles.liveBox} ${saveStatus === 'editing' ? styles.liveBoxEditing : ''}`}>
+                        <div className={styles.liveBoxMeta}>
+                            <span className={styles.liveBoxInfo}>
+                                {activeIndex >= 0
+                                    ? `Cue ${activeIndex + 1} of ${cues.length} · ${formatShort(cues[activeIndex].start)} → ${formatShort(cues[activeIndex].end)}`
+                                    : (cues.length > 0 ? `${cues.length} cues · play to begin` : (isLoading ? 'Loading captions…' : 'No transcript'))}
+                            </span>
+                            <span className={`${styles.liveBoxStatus} ${saveStatus === 'editing' ? styles.liveBoxStatusEditing :
+                                saveStatus === 'saved' ? styles.liveBoxStatusSaved :
+                                    saveStatus === 'failed' ? styles.liveBoxStatusFailed : ''
+                                }`}>
+                                {statusText}
+                            </span>
+                        </div>
+                        <div className={styles.liveBoxText}>
+                            {activeIndex >= 0
+                                ? cues[activeIndex].text
+                                : (isLoading ? '' : 'Press play to follow along')}
+                        </div>
+                    </div>
+                </div>
+
+                {/* ── RIGHT: transcript editor ── */}
+                <div className={styles.transcriptPane}>
+                    <div className={styles.transcriptHeader}>
+                        <div className={styles.transcriptTitle}>
+                            Transcript
+                            {cues.length > 0 && <span className={styles.jobCount}>{cues.length}</span>}
+                        </div>
+                        <div className={styles.transcriptHint}>Click a row to jump · click pencil to edit</div>
+                    </div>
+
+                    {/* ── Scrub bar ── */}
+                    {/* Sits between the header and the rows so it's always visible
+              regardless of how the row list scrolls. */}
+                    {cues.length > 0 && scrubDuration > 0 && (
+                        <div className={styles.timelineWrap}>
+                            <CueTimeline
+                                duration={scrubDuration}
+                                currentTime={mediaCurrentTime}
+                                onSeek={seekTo}
+                            />
+                        </div>
+                    )}
+
+                    <div className={styles.cueList} ref={cueListRef} onScroll={onCueListScroll}>
+                        {isLoading && cues.length === 0 && (
+                            <div className={styles.cueEmpty}>
+                                <div className={styles.spinner} />
+                                <span>Loading captions…</span>
+                            </div>
+                        )}
+                        {!isLoading && cues.length === 0 && (
+                            <div className={styles.cueEmpty}>
+                                <span>No captions available for this file</span>
+                            </div>
+                        )}
+                        {cues.map((c, i) => {
+                            const isActive = i === activeIndex;
+                            const isEditing = i === editingIdx;
+                            const isSavingThis = savingIdx === i;
+                            const timeLabel = `${formatShort(c.start)} – ${formatShort(c.end)}`;
+
+                            return (
+                                <div
+                                    key={i}
+                                    data-cue-idx={i}
+                                    className={`${styles.cueCard} ${isActive ? styles.cueCardActive : ''} ${isEditing ? styles.cueCardEditing : ''}`}
+                                >
+                                    {/* ── Time pill row ── */}
+                                    <div className={styles.cueCardTimeRow}>
+                                        <button
+                                            type="button"
+                                            className={styles.cueCardTime}
+                                            onClick={() => !isEditing && jumpTo(i)}
+                                            disabled={isEditing}
+                                            title={isEditing ? '' : 'Jump to this cue'}
+                                        >
+                                            {timeLabel}
+                                        </button>
+                                        {isActive && !isEditing && (
+                                            <span className={styles.cueCardCurrentTag}>· Current</span>
+                                        )}
+                                        <div className={styles.cueCardSpacer} />
+                                        {!isEditing ? (
+                                            <button
+                                                type="button"
+                                                className={styles.cueCardAction}
+                                                onClick={() => beginEdit(i)}
+                                                title="Edit caption"
+                                                aria-label="Edit caption"
+                                            >
+                                                <IconPencil />
+                                            </button>
+                                        ) : (
+                                            <div className={styles.cueCardEditActions}>
+                                                <button
+                                                    type="button"
+                                                    className={styles.cueCardActionCancel}
+                                                    onClick={cancelEdit}
+                                                    disabled={isSavingThis}
+                                                    title="Cancel"
+                                                    aria-label="Cancel edit"
+                                                >
+                                                    <IconX />
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    className={styles.cueCardActionSave}
+                                                    onClick={saveEdit}
+                                                    disabled={isSavingThis || editingText === c.text}
+                                                    title="Save"
+                                                    aria-label="Save edit"
+                                                >
+                                                    {isSavingThis ? <div className={styles.spinnerSmall} /> : <IconCheck />}
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* ── Body: text (read) or textarea (edit) ── */}
+                                    {!isEditing ? (
+                                        <div className={styles.cueCardText} title={c.text}>
+                                            {c.text}
+                                        </div>
+                                    ) : (
+                                        <textarea
+                                            className={styles.cueCardTextarea}
+                                            value={editingText}
+                                            onChange={e => setEditingText(e.target.value)}
+                                            onKeyDown={e => {
+                                                // Cmd/Ctrl+Enter saves, Esc cancels — keyboard niceties
+                                                // that match the explicit-mode pattern (Enter inserts a
+                                                // newline, as users expect inside a textarea).
+                                                if (e.key === 'Escape') {
+                                                    e.preventDefault();
+                                                    cancelEdit();
+                                                } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                                                    e.preventDefault();
+                                                    saveEdit();
+                                                }
+                                            }}
+                                            autoFocus
+                                            rows={3}
+                                        />
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            </div>
+
+            {toastMsg && <div className={styles.toast}>{toastMsg}</div>}
+        </div>
+    );
+};
+
+export default TranscriptDetail;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ═══════════════════════════════════════════════
+// pages/SttTranscription/SttTranscription.tsx
+//
+// Top-level container — 3 persistent tabs (Upload & Manage / Inference /
+// View Results), mirroring pages/UploadInfer/UploadInfer.tsx. All three
+// tab panes stay mounted at all times (toggled via CSS display) so file
+// lists, inference polling, and scroll position survive switching tabs
+// instead of resetting.
+// ═══════════════════════════════════════════════
+import React, { useCallback, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import { selectSttFileViews, fetchSttFiles, clearSttFiles, type SttFileView } from '../../store/sttSlice';
+import FileLibrary from './components/FileLibrary';
+import SttFileSidebar from './components/SttFileSidebar';
+import InferencePanel from './components/InferencePanel';
+import TranscriptDetail from './components/TranscriptDetail';
+import styles from './SttTranscription.module.scss';
+
+type TabId = 'upload' | 'infer' | 'results';
+
+const SttTranscription: React.FC = () => {
+    const { t } = useTranslation();
+    const dispatch = useAppDispatch();
+    const files = useAppSelector(selectSttFileViews);
+
+    const [activeTab, setActiveTab] = useState<TabId>('upload');
+
+    // Refresh the file list (/stt/files/by-date) every time the user
+    // switches tabs, so each tab always shows the latest server state
+    // (e.g. a file finishing inference while the user was on another tab).
+    // No args needed — the thunk falls back to the current dateFrom/dateTo
+    // already held in state.
+    const isFirstTabRender = React.useRef(true);
+    useEffect(() => {
+        if (isFirstTabRender.current) {
+            // FileLibrary's own mount effect already fires the initial
+            // /by-date call — skip firing a duplicate one here.
+            isFirstTabRender.current = false;
+            return;
+        }
+        dispatch(clearSttFiles());   // wipe stale list + flip filesLoading true so all 3 tabs show a spinner
+        dispatch(fetchSttFiles());
+    }, [activeTab, dispatch]);
+
+    // ── Inference tab — selection lifted here so it survives switching
+    // away and back, and so InferencePanel and SttFileSidebar share it ──
+    const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+    const toggleSelect = useCallback((id: number) => {
+        setSelectedIds(prev => {
+            const next = new Set(prev);
+            next.has(id) ? next.delete(id) : next.add(id);
+            return next;
+        });
+    }, []);
+    const selectAll = useCallback((ids: number[]) => setSelectedIds(new Set(ids)), []);
+    const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+
+    // ── Results tab — active file, lifted so both the sidebar and detail
+    // view agree on what's open, and so clicking a file from the Upload
+    // tab's library can jump straight here ──
+    const [activeFileId, setActiveFileId] = useState<number | null>(null);
+    const activeFile: SttFileView | undefined = activeFileId
+        ? files.find(f => f.id === activeFileId)
+        : undefined;
+
+    // Bail out of the open file if it disappears (deleted, moved, etc.)
+    useEffect(() => {
+        if (activeFileId && !activeFile) setActiveFileId(null);
+    }, [activeFileId, activeFile]);
+
+    // Clicking a file (from Upload tab's library, or the Results sidebar)
+    // opens its transcript and jumps to the Results tab.
+    const handleFileClick = useCallback((fileId: number) => {
+        setActiveFileId(fileId);
+        setActiveTab('results');
+    }, []);
+
+    // Results tab sidebar collapse — lets the media player expand to fill
+    // the space once a file is open. Independent of activeFileId so it
+    // doesn't reset every time a different file is opened.
+    const [resultsSidebarCollapsed, setResultsSidebarCollapsed] = useState(false);
+    const toggleResultsSidebar = useCallback(() => setResultsSidebarCollapsed(v => !v), []);
+
+    const goToInfer = useCallback(() => setActiveTab('infer'), []);
+
+    // ── Tour ── The tour's steps all target elements inside the Upload &
+    // Manage tab, so starting it also switches to that tab.
+    const [tourActive, setTourActive] = useState(false);
+    const startTour = useCallback(() => { setActiveTab('upload'); setTourActive(true); }, []);
+
+    const tabs: { id: TabId; label: string; desc: string }[] = [
+        { id: 'upload',  label: t('stt.tabs.upload'),  desc: t('stt.tabs.uploadDesc') },
+        { id: 'infer',   label: t('stt.tabs.infer'),   desc: t('stt.tabs.inferDesc') },
+        { id: 'results', label: t('stt.tabs.results'), desc: t('stt.tabs.resultsDesc') },
+    ];
+
+    return (
+        <div className={styles.sttPage}>
+            {/* ── Header — title and self-explanatory tab cards share one row ── */}
+            <div className={styles.sttHeaderBar}>
+                <div className={styles.phTitleRow}>
+                    <div className={styles.phTitle} data-tour="stt-title">{t('stt.pageTitle')}</div>
+                    <button type="button" className={styles.tourTriggerBtn} onClick={startTour}>
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="8" cy="8" r="6.25" />
+                            <path d="M6.1 6.2a1.9 1.9 0 013.6.7c0 1.3-1.7 1.5-1.7 2.7M8 11.4v.1" />
+                        </svg>
+                        {t('stt.tour.takeTour')}
+                    </button>
+                </div>
+
+                <div className={styles.tabbar} role="tablist" data-tour="stt-tabbar">
+                    {tabs.map(tab => (
+                        <button
+                            key={tab.id}
+                            type="button"
+                            role="tab"
+                            aria-selected={activeTab === tab.id}
+                            className={`${styles.tabBtn} ${activeTab === tab.id ? styles.tabBtnActive : ''}`}
+                            onClick={() => setActiveTab(tab.id)}
+                        >
+                            <span className={styles.tabLabel}>{tab.label}</span>
+                            <span className={styles.tabDesc}>{tab.desc}</span>
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            {/* ── Tab 1: Upload & Manage ── */}
+            <div className={styles.sttTabPane} style={{ display: activeTab === 'upload' ? 'flex' : 'none' }}>
+                <FileLibrary
+                    onOpen={handleFileClick}
+                    onGoToInfer={goToInfer}
+                    active={activeTab === 'upload'}
+                    tourActive={tourActive}
+                    onTourFinish={() => setTourActive(false)}
+                />
+            </div>
+
+            {/* ── Tab 2: Inference ── */}
+            <div className={styles.sttTabPane} style={{ display: activeTab === 'infer' ? 'flex' : 'none' }}>
+                <div className={styles.sttInferTabBody}>
+                    <SttFileSidebar
+                        mode="select"
+                        active={activeTab === 'infer'}
+                        selectedIds={selectedIds}
+                        onToggleSelect={toggleSelect}
+                        onSelectAll={selectAll}
+                        onClearSelection={clearSelection}
+                    />
+                    <div className={styles.sttInferMain}>
+                        <InferencePanel
+                            selectedIds={selectedIds}
+                            onSubmitted={clearSelection}
+                            onCompleted={clearSelection}
+                        />
+                    </div>
+                </div>
+            </div>
+
+            {/* ── Tab 3: View Results ── */}
+            <div className={styles.sttTabPane} style={{ display: activeTab === 'results' ? 'flex' : 'none' }}>
+                <div className={styles.sttResultsTabBody}>
+                    <SttFileSidebar
+                        mode="view"
+                        active={activeTab === 'results'}
+                        onlyCompleted
+                        activeFileId={activeFileId}
+                        onFileClick={f => setActiveFileId(f.id)}
+                        collapsed={resultsSidebarCollapsed}
+                    />
+                    <div className={styles.sttResultsMain} data-tour="results-content">
+                        {activeFile ? (
+                            <TranscriptDetail
+                                file={activeFile}
+                                sidebarCollapsed={resultsSidebarCollapsed}
+                                onToggleSidebar={toggleResultsSidebar}
+                            />
+                        ) : (
+                            <div className={styles.sttResultsEmpty}>
+                                <div className={styles.sttResultsEmptyTitle}>{t('stt.results.noFileSelected')}</div>
+                                <div className={styles.sttResultsEmptyHint}>{t('stt.results.noFileHint')}</div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+export default SttTranscription;
+
+
+
+
+
+
+
+
+
+
+
+
+// ═══════════════════════════════════════════════
+// pages/SttTranscription/components/SttFileSidebar.tsx
+//
+// Reusable file-picker column used by both the Inference tab
+// (mode="select" — checkbox multi-select feeding InferencePanel) and
+// the View Results tab (mode="view" — click a completed file to open
+// its transcript). Has its own search / status filter, independent of
+// whatever filter state the Upload & Manage tab is using.
+// ═══════════════════════════════════════════════
+import React, { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useAppSelector } from '../../../store/hooks';
+import { selectSttFileViews, type SttFileView } from '../../../store/sttSlice';
+import styles from '../SttTranscription.module.scss';
+
+type Mode = 'select' | 'view';
+
+interface Props {
+    mode: Mode;
+    active: boolean;
+    // select mode
+    selectedIds?: Set<number>;
+    onToggleSelect?: (id: number) => void;
+    onSelectAll?: (ids: number[]) => void;
+    onClearSelection?: () => void;
+    // view mode
+    activeFileId?: number | null;
+    onFileClick?: (file: SttFileView) => void;
+    // view mode only shows Completed files (nothing else has a transcript yet)
+    onlyCompleted?: boolean;
+    // When true, collapses this column to 0 width (state/filters stay intact,
+    // just visually hidden) — used by the Results tab so the transcript's
+    // media player can expand to fill the space. Defaults to false.
+    collapsed?: boolean;
+}
+
+const IconSearch: React.FC = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="6.5" cy="6.5" r="4" /><path d="M11 11l2.5 2.5" />
+    </svg>
+);
+const IconFilter: React.FC = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M2 4h12M4.5 8h7M7 12h2" />
+    </svg>
+);
+const IconCheck: React.FC = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 8.5l3.5 3.5 7-7.5" />
+    </svg>
+);
+const IconSort: React.FC = () => (
+    <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+        <path d="M2 4h10M4 7h6M6 10h2" />
+    </svg>
+);
+const IconSortArrow: React.FC = () => (
+    <svg viewBox="0 0 10 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M5 1v10M2 8l3 3 3-3" />
+    </svg>
+);
+
+type SortKey = 'id' | 'name' | 'date' | 'status';
+
+// Fixed 4-button sliding window around the current page — same pagination
+// treatment as pages/SttTranscription/components/FileLibrary.tsx.
+const PAGE_WINDOW = 4;
+const getPageNumbers = (current: number, total: number): number[] => {
+    if (total <= PAGE_WINDOW) return Array.from({ length: total }, (_, i) => i + 1);
+    const start = Math.max(1, Math.min(current - 1, total - PAGE_WINDOW + 1));
+    return Array.from({ length: PAGE_WINDOW }, (_, i) => start + i);
+};
+const PAGE_SIZE_OPTIONS = [50, 75, 100];
+
+const SttFileSidebar: React.FC<Props> = ({
+    mode, active,
+    selectedIds, onToggleSelect, onSelectAll, onClearSelection,
+    activeFileId, onFileClick,
+    onlyCompleted = false,
+    collapsed = false,
+}) => {
+    const { t } = useTranslation();
+    const files = useAppSelector(selectSttFileViews);
+    const filesLoading = useAppSelector(s => s.stt.filesLoading);
+
+    const [search, setSearch]     = useState('');
+    const [status, setStatus]     = useState<'all' | 'completed' | 'pending' | 'queued' | 'running'>(
+        onlyCompleted ? 'completed' : 'all'
+    );
+    const [sortKey, setSortKey]   = useState<SortKey>('date');
+    const [sortAsc, setSortAsc]   = useState(false);
+
+    const toggleSort = (key: SortKey) => {
+        if (sortKey === key) setSortAsc(v => !v);
+        else { setSortKey(key); setSortAsc(true); }
+    };
+
+    const filtered = useMemo(() => {
+        const q = search.trim().toLowerCase();
+        let list = files.filter(f => {
+            if (mode === 'view' && onlyCompleted && f.status !== 'completed') return false;
+            if (status !== 'all' && f.status !== status) return false;
+            if (q && !(String(f.id).includes(q) || f.original_name.toLowerCase().includes(q))) return false;
+            return true;
+        });
+        list = [...list].sort((a, b) => {
+            let cmp = 0;
+            if (sortKey === 'id')     cmp = a.id - b.id;
+            else if (sortKey === 'name')   cmp = a.original_name.localeCompare(b.original_name);
+            else if (sortKey === 'status') cmp = a.status.localeCompare(b.status);
+            else cmp = new Date(a.inserted_at).getTime() - new Date(b.inserted_at).getTime();
+            return sortAsc ? cmp : -cmp;
+        });
+        return list;
+    }, [files, search, status, sortKey, sortAsc, mode, onlyCompleted]);
+
+    const statusOptions: Array<'all' | 'completed' | 'pending' | 'queued' | 'running'> =
+        mode === 'view' && onlyCompleted ? ['completed'] : ['all', 'completed', 'pending', 'queued', 'running'];
+
+    // ── Pagination (client-side, applied after search/status filter/sort) ──
+    const [page, setPage]         = useState(1);
+    const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
+    const goToPage = (p: number) => setPage(Math.max(1, p));
+    const handlePageSizeChange = (size: number) => { setPageSize(size); setPage(1); };
+
+    // Reset to page 1 whenever the filtered result set changes shape, so
+    // the user never lands on a now-empty trailing page.
+    useEffect(() => { setPage(1); }, [search, status, sortKey, sortAsc, mode, onlyCompleted]);
+
+    const totalPages   = Math.max(1, Math.ceil(filtered.length / pageSize));
+    const currentPage  = Math.min(page, totalPages);
+    const paginated    = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
+    return (
+        <div className={`${styles.sttSidebar} ${collapsed ? styles.sttSidebarCollapsed : ''}`} data-tour={mode === 'select' ? 'infer-sidebar' : 'results-sidebar'}>
+            <div className={styles.sttSidebarHeader}>
+                <span className={styles.sttSidebarTitle}>
+                    {mode === 'select' ? t('stt.sidebar.pickForInference') : t('stt.sidebar.pickToView')}
+                </span>
+                <span className={styles.sttSidebarCount}>{filtered.length}</span>
+            </div>
+
+            {/* Status filter + Search — same row, same design as the Upload tab / reference sidebar */}
+            <div className={styles.sttSidebarFilterRow}>
+                {statusOptions.length > 1 && (
+                    <div className={styles.sttSidebarStatusWrap} data-tour={mode === 'select' ? 'infer-status-filter' : 'results-status-filter'}>
+                        <IconFilter />
+                        <select
+                            className={styles.sttSidebarStatusSelect}
+                            value={status}
+                            disabled={filesLoading}
+                            onChange={e => setStatus(e.target.value as typeof status)}
+                        >
+                            {statusOptions.map(s => (
+                                <option key={s} value={s}>{s === 'all' ? t('stt.library.filterAll') : t(`stt.fileCard.status.${s}`)}</option>
+                            ))}
+                        </select>
+                    </div>
+                )}
+
+                <div className={styles.sttSidebarSearchWrap} data-tour={mode === 'select' ? 'infer-search' : 'results-search'}>
+                    <IconSearch />
+                    <input
+                        type="text"
+                        className={styles.sttSidebarSearchInput}
+                        value={search}
+                        onChange={e => setSearch(e.target.value)}
+                        placeholder={t('stt.library.searchPlaceholder')}
+                    />
+                </div>
+            </div>
+
+            {/* Sort — boxed pill row with arrow-direction icons, same design as the Upload tab / reference sidebar */}
+            <div className={styles.sttSidebarSortHeader} data-tour={mode === 'select' ? 'infer-sort' : 'results-sort'}>
+                <span className={styles.sttSidebarSortHeaderLabel}>
+                    <IconSort />
+                    {t('stt.sortBy')}
+                </span>
+                <div className={styles.sttSidebarSortCols}>
+                    {(['id', 'name', 'date', 'status'] as SortKey[]).map(k => (
+                        <button
+                            key={k}
+                            className={`${styles.sttSidebarSortCol} ${sortKey === k ? styles.sttSidebarSortColActive : ''}`}
+                            onClick={() => toggleSort(k)}
+                            disabled={filesLoading}
+                        >
+                            {t(`stt.sidebar.sort.${k}`)}
+                            <span className={sortKey === k ? (sortAsc ? styles.sttSidebarSortAsc : styles.sttSidebarSortDesc) : styles.sttSidebarSortInactive}>
+                                <IconSortArrow />
+                            </span>
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            {/* Select all / clear — select mode only */}
+            {mode === 'select' && (
+                <div className={styles.sttSidebarSelectRow}>
+                    <span className={styles.sttSidebarSelectHint}>
+                        {selectedIds && selectedIds.size > 0
+                            ? t('stt.library.selected', { count: selectedIds.size })
+                            : t('stt.library.noneSelected')}
+                    </span>
+                    <div className={styles.selectAllActions}>
+                        <button className={styles.selectAllBtn} onClick={() => onSelectAll?.(filtered.map(f => f.id))}
+                            disabled={filtered.length === 0}>
+                            {t('stt.library.selectAll')}
+                        </button>
+                        <button className={styles.selectAllBtn} onClick={onClearSelection} disabled={!selectedIds || selectedIds.size === 0}>
+                            {t('stt.library.clear')}
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* File list */}
+            <div className={styles.sttSidebarList}>
+                {filesLoading ? (
+                    <div className={styles.libLoading}>
+                        <div className={styles.spinner} />
+                        <span>{t('stt.library.loading')}</span>
+                    </div>
+                ) : filtered.length === 0 ? (
+                    <div className={styles.sttSidebarEmpty}>
+                        {mode === 'view' && onlyCompleted
+                            ? t('stt.sidebar.noCompletedFiles')
+                            : t('stt.library.emptyTitle')}
+                    </div>
+                ) : paginated.map(f => {
+                    const isSelected = mode === 'select' && selectedIds?.has(f.id);
+                    const isActive   = mode === 'view' && activeFileId === f.id;
+                    const clickable  = mode === 'select' || (mode === 'view' && f.status === 'completed');
+                    return (
+                        <button
+                            key={f.id}
+                            type="button"
+                            className={`${styles.sttSidebarRow} ${isSelected ? styles.sttSidebarRowSelected : ''} ${isActive ? styles.sttSidebarRowActive : ''} ${!clickable ? styles.sttSidebarRowDisabled : ''}`}
+                            disabled={!clickable}
+                            onClick={() => {
+                                if (mode === 'select') onToggleSelect?.(f.id);
+                                else onFileClick?.(f);
+                            }}
+                        >
+                            {mode === 'select' && (
+                                <span className={`${styles.sttSidebarCheckbox} ${isSelected ? styles.sttSidebarCheckboxChecked : ''}`}>
+                                    {isSelected && <IconCheck />}
+                                </span>
+                            )}
+                            <div className={styles.sttSidebarRowInfo}>
+                                <div className={styles.sttSidebarRowName} title={f.original_name}>{f.original_name}</div>
+                                <div className={styles.sttSidebarRowMeta}>{f.inserted_at} · #{f.id}</div>
+                            </div>
+                            <span className={`${styles.pill} ${
+                                isSelected               ? styles.pillBlue :
+                                f.status === 'completed' ? styles.pillGreen :
+                                f.status === 'queued'    ? styles.pillAmber :
+                                f.status === 'running'   ? styles.pillBlue :
+                                f.status === 'failed'    ? styles.pillRed :
+                                styles.pillGray
+                            }`}>
+                                {isSelected ? (
+                                    <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="10" height="10">
+                                        <path d="M2 6l3 3 5-5" />
+                                    </svg>
+                                ) : (
+                                    <>
+                                        {f.status === 'completed' && (
+                                            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="9" height="9">
+                                                <path d="M2 6l3 3 5-5" />
+                                            </svg>
+                                        )}
+                                        {(f.status === 'running' || f.status === 'queued') && (
+                                            <span className={styles.pillDot} />
+                                        )}
+                                        {t(`stt.fileCard.status.${f.status}`)}
+                                    </>
+                                )}
+                            </span>
+                        </button>
+                    );
+                })}
+            </div>
+
+            {/* Pagination footer — same client-side behavior/controls as FileLibrary.tsx, compact for the sidebar column */}
+            {!filesLoading && filtered.length > 0 && (
+                <div className={styles.sttSidebarPagination}>
+                    <div className={styles.sttSidebarPaginationTopRow}>
+                        <select
+                            className={styles.sttSidebarPageSizeSelect}
+                            value={pageSize}
+                            onChange={e => handlePageSizeChange(Number(e.target.value))}
+                        >
+                            {PAGE_SIZE_OPTIONS.map(size => (
+                                <option key={size} value={size}>{t('stt.library.perPageShort', { count: size })}</option>
+                            ))}
+                        </select>
+
+                        <div className={styles.sttSidebarPageNav}>
+                            <button
+                                className={styles.sttSidebarPageNavBtn}
+                                onClick={() => goToPage(currentPage - 1)}
+                                disabled={currentPage <= 1}
+                                aria-label="Previous page"
+                            >
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                                    <path d="M10 3L6 8l4 5" />
+                                </svg>
+                            </button>
+
+                            {(() => {
+                                const pageWindow = getPageNumbers(currentPage, totalPages);
+                                const showFirst  = pageWindow[0] > 1;
+                                const showLast   = pageWindow[pageWindow.length - 1] < totalPages;
+                                return (
+                                    <>
+                                        {showFirst && (
+                                            <>
+                                                <button className={styles.sttSidebarPageNumBtn} onClick={() => goToPage(1)}>1</button>
+                                                {pageWindow[0] > 2 && <span className={styles.sttSidebarPageEllipsis}>…</span>}
+                                            </>
+                                        )}
+                                        {pageWindow.map(p => (
+                                            <button
+                                                key={p}
+                                                className={`${styles.sttSidebarPageNumBtn} ${p === currentPage ? styles.sttSidebarPageNumBtnActive : ''}`}
+                                                onClick={() => goToPage(p)}
+                                            >
+                                                {p}
+                                            </button>
+                                        ))}
+                                        {showLast && (
+                                            <>
+                                                {pageWindow[pageWindow.length - 1] < totalPages - 1 && <span className={styles.sttSidebarPageEllipsis}>…</span>}
+                                                <button className={styles.sttSidebarPageNumBtn} onClick={() => goToPage(totalPages)}>{totalPages}</button>
+                                            </>
+                                        )}
+                                    </>
+                                );
+                            })()}
+
+                            <button
+                                className={styles.sttSidebarPageNavBtn}
+                                onClick={() => goToPage(currentPage + 1)}
+                                disabled={currentPage >= totalPages}
+                                aria-label="Next page"
+                            >
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                                    <path d="M6 3l4 5-4 5" />
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div className={styles.sttSidebarPageInfo}>
+                        {t('stt.library.pageInfo', { page: currentPage, totalPages, total: filtered.length })}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+export default SttFileSidebar;
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ═══════════════════════════════════════════════
 // SttTranscription.module.scss
 // Content Analytics · STT Transcription page
 //
@@ -139,6 +1323,7 @@
   svg {
     width: 14px;
     height: 14px;
+    transition: transform 0.15s ease;
   }
 
   &:hover {
@@ -146,6 +1331,12 @@
     color: var(--t0);
     border-color: var(--bdr3);
   }
+}
+
+// Sidebar-collapsed state — mirror the panel icon so its chevron points
+// the opposite way (open ↔ close), same button otherwise.
+.backBtnFlipped svg {
+  transform: scaleX(-1);
 }
 
 // ══════════════════════════════════════
@@ -3977,12 +5168,24 @@
   background: var(--bg0);
   border-right: 1px solid var(--bdr);
   min-height: 0;
+  transition: width 0.2s ease, opacity 0.15s ease, border-color 0.2s ease;
 
   :global(html.light) & {
     background: #fff;
   }
 
   @media (max-width: 1499px) { width: 350px; }
+}
+
+// Collapses the sidebar to 0 width without unmounting it, so its filters/
+// search/sort/pagination state survive being toggled shut and reopened —
+// used by the Results tab to let the media player expand.
+.sttSidebarCollapsed {
+  width: 0 !important;
+  min-width: 0;
+  border-right-color: transparent;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .sttSidebarHeader {
