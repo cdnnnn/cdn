@@ -1059,7 +1059,7 @@
   border-radius: var(--r);
   color: var(--t0);
   font-family: var(--font-ui);
-  font-size: 12.5px;
+  font-size: 10px;
   outline: none;
   appearance: none;
   transition: border-color 0.12s;
@@ -1078,7 +1078,7 @@
 }
 
 .dateSep {
-  font-size: 12px;
+  font-size: 10px;
   color: var(--t2);
   flex-shrink: 0;
 }
@@ -1825,7 +1825,7 @@
   background: transparent;
   color: var(--t1);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.12s;
@@ -2864,7 +2864,7 @@
   border-radius: var(--r);
   color: var(--t0);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: 10px;
   outline: none;
   appearance: none;
   transition: border-color 0.12s;
@@ -2883,7 +2883,7 @@
 }
 
 .dateSep {
-  font-size: 13px;
+  font-size: 10px;
   color: var(--t2);
   padding-bottom: 4px;
   flex-shrink: 0;
@@ -2942,7 +2942,7 @@
   background: transparent;
   color: var(--t1);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 500;
   cursor: pointer;
   flex-shrink: 0;
@@ -3530,7 +3530,7 @@
   border: none;
   border-radius: 5px;
   color: var(--t2);
-  font-size: 11.5px;
+  font-size: 12px;
   font-family: var(--font-mono);
   cursor: pointer;
   transition: all 0.12s;
@@ -4263,7 +4263,7 @@ textarea.fc {
   background: transparent;
   color: var(--t1);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: 12px;
   cursor: pointer;
   transition: all 0.12s;
   white-space: nowrap;
