@@ -84,7 +84,7 @@
   border: 1px solid var(--bdr2);
   background: transparent;
   color: var(--t2);
-  font-size: 12px;
+  font-size: 11px;
   @include m.mono;
   cursor: pointer;
   transition: all 0.12s;
@@ -128,7 +128,7 @@
 }
 
 .slbl {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--t2);
   text-transform: uppercase;
@@ -147,7 +147,7 @@
   border: 1px solid var(--bdr2);
   background: transparent;
   color: var(--t2);
-  font-size: 12px;
+  font-size: 11px;
   @include m.mono;
   cursor: pointer;
   transition: all 0.12s;
@@ -225,14 +225,14 @@
 }
 
 .dzTitle {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--t0);
   margin-bottom: 4px;
 }
 
 .dzSub {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--t2);
   @include m.mono;
 }
@@ -246,7 +246,7 @@
 }
 
 .chip {
-  font-size: 12px;
+  font-size: 11px;
   padding: 2px 8px;
   border-radius: 99px;
   background: var(--bg3);
@@ -364,7 +364,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 800;
   @include m.mono;
   flex-shrink: 0;
@@ -400,7 +400,7 @@
 }
 
 .fileName {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--t0);
   @include m.truncate;
@@ -410,7 +410,7 @@
 }
 
 .fileId {
-  font-size: 10px;
+  font-size: 9px;
   color: var(--t2);
   @include m.mono;
   flex-shrink: 0;
@@ -419,7 +419,7 @@
 
 // ── File ID badge (shown before ext badge in card) ──
 .fileIdBadge {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   font-family: var(--font-mono);
   color: #a78bfa;
@@ -433,7 +433,7 @@
 }
 
 .fileMeta {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--t2);
   @include m.mono;
   display: flex;
@@ -444,7 +444,7 @@
 }
 
 .fileSizeChip {
-  font-size: 11px;
+  font-size: 10px;
   padding: 1px 6px;
   border-radius: 99px;
   background: var(--bg3);
@@ -453,13 +453,13 @@
 }
 
 .fileStatusText {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--t2);
   opacity: 0.7;
 }
 
 .fileStatusTextSuccess {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--green);
   font-weight: 600;
 }
@@ -562,7 +562,7 @@
 }
 
 .uploadProgressLabel {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--t2);
   @include m.mono;
 }
@@ -606,7 +606,7 @@
 }
 
 .section2Title {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--t2);
   text-transform: uppercase;
@@ -618,7 +618,7 @@
 }
 
 .filesCount {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   color: var(--blue);
   background: var(--blue-dim);
@@ -630,7 +630,7 @@
 // Cross-page selection total — shown next to filesCount while in
 // select/delete/export mode so it's clear selections persist across pages.
 .selectedTotalHint {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   color: var(--green);
   background: var(--green-dim);
@@ -851,7 +851,7 @@
 // Small caption shown inside the date/status/actions pills so their
 // purpose is legible at a glance, not just implied by an icon.
 .filterBarLabel {
-  font-size: 9.5px;
+  font-size: 9px;
   font-weight: 600;
   color: var(--t2);
   text-transform: uppercase;
@@ -941,7 +941,7 @@
   border: 1px solid transparent;
   background: var(--bg3);
   color: var(--t2);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   font-family: var(--font-ui);
   letter-spacing: 0.01em;
@@ -1042,7 +1042,7 @@
 }
 
 .dateLabel {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 600;
   color: var(--t2);
   text-transform: uppercase;
@@ -1059,7 +1059,7 @@
   border-radius: var(--r);
   color: var(--t0);
   font-family: var(--font-ui);
-  font-size: 10px;
+  font-size: 9px;
   outline: none;
   appearance: none;
   transition: border-color 0.12s;
@@ -1078,7 +1078,7 @@
 }
 
 .dateSep {
-  font-size: 10px;
+  font-size: 9px;
   color: var(--t2);
   flex-shrink: 0;
 }
@@ -1100,7 +1100,7 @@
   border-radius: var(--r);
   color: var(--t0);
   font-family: var(--font-ui);
-  font-size: 12.5px;
+  font-size: 11.5px;
   outline: none;
   cursor: pointer;
   transition: border-color 0.12s;
@@ -1117,7 +1117,7 @@
   background: transparent;
   color: var(--t1);
   font-family: var(--font-ui);
-  font-size: 12.5px;
+  font-size: 11.5px;
   font-weight: 500;
   cursor: pointer;
   flex-shrink: 0;
@@ -1270,7 +1270,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10.5px;
+  font-size: 9.5px;
   font-weight: 700;
   transition: top 0.12s;
 
@@ -1289,7 +1289,7 @@
   max-width: 100%;
   min-height: 38px;
   margin-bottom: 8px;
-  font-size: 13.5px;
+  font-size: 12.5px;
   font-weight: 500;
   color: var(--t0);
   line-height: 1.35;
@@ -1302,7 +1302,7 @@
 }
 
 .fcardMeta {
-  font-size: 10.5px;
+  font-size: 9.5px;
   color: var(--t2);
   flex-shrink: 0;
   margin-bottom: 14px;
@@ -1397,7 +1397,7 @@
   bottom: 12px;
   left: 50%;
   transform: translateX(-50%);
-  font-size: 10px;
+  font-size: 9px;
   padding: 3px 8px;
   max-width: calc(100% - 16px);
   overflow: hidden;
@@ -1503,7 +1503,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   @include m.mono;
   flex-shrink: 0;
@@ -1526,14 +1526,14 @@
 }
 
 .hn {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--t0);
   @include m.truncate;
 }
 
 .hm {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--t2);
   margin-top: 2px;
   @include m.mono;
@@ -1547,7 +1547,7 @@
   justify-content: center;
   gap: 10px;
   padding: 32px 16px;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--t2);
   @include m.mono;
   text-align: center;
@@ -1680,7 +1680,7 @@
   outline: none;
   color: var(--t0);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: 12px;
 
   &::placeholder {
     color: var(--t2);
@@ -1716,7 +1716,7 @@
 }
 
 .searchCount {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--t2);
   font-family: var(--font-mono);
   white-space: nowrap;
@@ -1728,7 +1728,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: 11px;
   padding: 2px 8px;
   border-radius: 99px;
   font-weight: 500;
@@ -1825,7 +1825,7 @@
   background: transparent;
   color: var(--t1);
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.12s;
@@ -1864,7 +1864,7 @@
 
 .btnSm {
   padding: 4px 10px;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .btnFull {
@@ -2018,7 +2018,7 @@
   border: 1px solid var(--bdr);
   background: var(--bg3);
   color: var(--t2);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 500;
   font-family: var(--font-ui);
   cursor: pointer;
@@ -2113,7 +2113,7 @@
   border: 1px solid var(--green-bdr);
   background: var(--green-dim);
   color: var(--green);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   font-family: var(--font-ui);
   cursor: pointer;
@@ -2140,7 +2140,7 @@
 }
 
 .modeActionsError {
-  font-size: 11px;
+  font-size: 10px;
   color: #ef4444;
   white-space: nowrap;
   overflow: hidden;
@@ -2159,7 +2159,7 @@
   border: 1px solid rgba(239, 68, 68, 0.5);
   background: rgba(239, 68, 68, 0.14);
   color: #ef4444;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   font-family: var(--font-ui);
   cursor: pointer;
@@ -2231,14 +2231,14 @@
 }
 
 .dangerTitle {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   color: var(--t0);
   font-family: var(--font-ui);
 }
 
 .dangerBody {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--t2);
   line-height: 1.5;
   margin-bottom: 8px;
@@ -2246,7 +2246,7 @@
 
 .dangerLabel {
   align-self: flex-start;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--t1);
   margin-top: 4px;
 }
@@ -2259,7 +2259,7 @@
   border-radius: var(--r);
   color: var(--t0);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: 12px;
   outline: none;
   margin-top: 4px;
   margin-bottom: 6px;
@@ -2277,7 +2277,7 @@
 }
 
 .dangerError {
-  font-size: 12px;
+  font-size: 11px;
   color: #ef4444;
   margin-bottom: 6px;
 }
@@ -2316,7 +2316,7 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 600;
   color: var(--t2);
   font-family: var(--font-mono);
@@ -2349,7 +2349,7 @@
   border: none;
   border-radius: 5px;
   color: var(--t2);
-  font-size: 12px;
+  font-size: 11px;
   font-family: var(--font-mono);
   cursor: pointer;
   transition: all 0.12s;
@@ -2418,12 +2418,12 @@
   }
 
   .dzTitle {
-    font-size: 12px;
+    font-size: 11px;
     margin-bottom: 2px;
   }
 
   .dzSub {
-    font-size: 11px;
+    font-size: 10px;
   }
 
   .dzActions {
@@ -2449,7 +2449,7 @@
 
   .dateInput {
     padding: 3px 6px;
-    font-size: 12px;
+    font-size: 11px;
   }
 
   // Sort header — tighter
@@ -2459,7 +2459,7 @@
 
   .sortCol {
     padding: 4px 4px;
-    font-size: 11px;
+    font-size: 10px;
   }
 
   .sortHeaderLabel {
@@ -2486,16 +2486,16 @@
   }
 
   .hn {
-    font-size: 12px;
+    font-size: 11px;
   }
 
   .hm {
-    font-size: 11px;
+    font-size: 10px;
     margin-top: 1px;
   }
 
   .badge {
-    font-size: 10px;
+    font-size: 9px;
     padding: 1px 6px;
   }
 }
@@ -2528,7 +2528,7 @@
 }
 
 .pageSizeLabel {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--t2);
   white-space: nowrap;
 }
@@ -2540,7 +2540,7 @@
   border-radius: var(--r);
   color: var(--t0);
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: 11px;
   outline: none;
   cursor: pointer;
   transition: border-color 0.12s;
@@ -2584,7 +2584,7 @@
   background: transparent;
   color: var(--t1);
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.12s;
@@ -2622,14 +2622,14 @@
 
 .pageEllipsis {
   color: var(--t2);
-  font-size: 12px;
+  font-size: 11px;
   padding: 0 2px;
   user-select: none;
   flex-shrink: 0;
 }
 
 .pageInfo {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--t2);
   white-space: nowrap;
   overflow: hidden;
@@ -2640,71 +2640,71 @@
 
 @media (min-width: 1920px) {
   .section1Title {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .section2Title {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .uploadHint {
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .uploadZoneText {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .sortHeaderLabel {
-    font-size: 12px;
+    font-size: 11px;
   }
 
   .sortBtn {
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .fileName {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .fileMeta {
-    font-size: 12px;
+    font-size: 11px;
   }
 
   .fileDate {
-    font-size: 12px;
+    font-size: 11px;
   }
 
   .badge {
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .btn {
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .listState {
-    font-size: 14px;
-  }
-
-  .searchInput {
-    font-size: 14px;
-  }
-
-  .searchCount {
-    font-size: 12px;
-  }
-
-  .dateLabel {
-    font-size: 12px;
-  }
-
-  .dateInput {
     font-size: 13px;
   }
 
+  .searchInput {
+    font-size: 13px;
+  }
+
+  .searchCount {
+    font-size: 11px;
+  }
+
+  .dateLabel {
+    font-size: 11px;
+  }
+
+  .dateInput {
+    font-size: 12px;
+  }
+
   .emptyState {
-    font-size: 14px;
+    font-size: 13px;
   }
 }
 
@@ -2733,14 +2733,14 @@
 }
 
 .promptViewerTitle {
-  font-size: 13.5px;
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--t0);
 }
 
 .promptViewerFile {
   margin-top: 2px;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--t2);
   @include m.truncate;
 }
@@ -2769,7 +2769,7 @@
 .promptViewerBody {
   padding: 16px;
   overflow-y: auto;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.6;
   color: var(--t1);
   white-space: pre-wrap;
@@ -2848,7 +2848,7 @@
 }
 
 .dateLabel {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 600;
   color: var(--t2);
   text-transform: uppercase;
@@ -2864,7 +2864,7 @@
   border-radius: var(--r);
   color: var(--t0);
   font-family: var(--font-ui);
-  font-size: 10px;
+  font-size: 9px;
   outline: none;
   appearance: none;
   transition: border-color 0.12s;
@@ -2883,7 +2883,7 @@
 }
 
 .dateSep {
-  font-size: 10px;
+  font-size: 9px;
   color: var(--t2);
   padding-bottom: 4px;
   flex-shrink: 0;
@@ -2925,7 +2925,7 @@
   border-radius: var(--r);
   color: var(--t0);
   font-family: var(--font-ui);
-  font-size: 12.5px;
+  font-size: 11.5px;
   outline: none;
   cursor: pointer;
   transition: border-color 0.12s;
@@ -2942,7 +2942,7 @@
   background: transparent;
   color: var(--t1);
   font-family: var(--font-ui);
-  font-size: 12.5px;
+  font-size: 11.5px;
   font-weight: 500;
   cursor: pointer;
   flex-shrink: 0;
@@ -3004,13 +3004,13 @@
 }
 
 .headTitle {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--t1);
 }
 
 .headCount {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   color: var(--t2);
   background: var(--bg2);
@@ -3020,7 +3020,7 @@
 
 .headSelected {
   margin-left: auto;
-  font-size: 11px;
+  font-size: 10px;
   color: var(--blue);
 }
 
@@ -3051,7 +3051,7 @@
   background: var(--bg1);
   color: var(--t0);
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: 11px;
 
   &::placeholder { color: var(--t2); }
   &:focus { outline: none; border-color: var(--bdr3); }
@@ -3088,7 +3088,7 @@
 .empty {
   padding: 20px 12px;
   text-align: center;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--t2);
 }
 
@@ -3098,7 +3098,7 @@
   align-items: center;
   padding: 24px 12px;
   text-align: center;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--t2);
 }
 
@@ -3183,7 +3183,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   @include m.mono;
   flex-shrink: 0;
@@ -3198,14 +3198,14 @@
 }
 
 .hn {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--t0);
   @include m.truncate;
 }
 
 .hm {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--t2);
   margin-top: 2px;
   @include m.mono;
@@ -3215,7 +3215,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: 10px;
   padding: 2px 7px;
   border-radius: 99px;
   font-weight: 500;
@@ -3354,7 +3354,7 @@
 }
 
 .pageSizeLabel {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--t2);
   white-space: nowrap;
 }
@@ -3366,7 +3366,7 @@
   border-radius: var(--r);
   color: var(--t1);
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: 11px;
   outline: none;
   cursor: pointer;
   transition: border-color 0.12s;
@@ -3419,7 +3419,7 @@
   background: transparent;
   color: var(--t1);
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.12s;
@@ -3452,14 +3452,14 @@
 
 .pageEllipsis {
   color: var(--t2);
-  font-size: 12px;
+  font-size: 11px;
   padding: 0 2px;
   user-select: none;
   flex-shrink: 0;
 }
 
 .pageInfo {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--t2);
   white-space: nowrap;
   overflow: hidden;
@@ -3469,7 +3469,7 @@
 }
 
 .pageIndicator {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--t2);
   @include m.mono;
   min-width: 44px;
@@ -3495,7 +3495,7 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 600;
   color: var(--t2);
   font-family: var(--font-mono);
@@ -3530,7 +3530,7 @@
   border: none;
   border-radius: 5px;
   color: var(--t2);
-  font-size: 12px;
+  font-size: 11px;
   font-family: var(--font-mono);
   cursor: pointer;
   transition: all 0.12s;
@@ -3571,6 +3571,7 @@
 .sortAsc {
   transform: rotate(180deg);
 }
+
 
 
 
@@ -3660,7 +3661,7 @@
 }
 
 .slbl {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--t2);
   text-transform: uppercase;
@@ -3670,7 +3671,7 @@
 }
 
 .selSummary {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--t1);
 }
 
@@ -3767,13 +3768,13 @@
 }
 
 .runBtnTitle {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: -0.1px;
 }
 
 .runBtnSub {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 500;
   opacity: 0.82;
   font-family: var(--font-mono);
@@ -3814,11 +3815,11 @@
 // Large screen tweaks
 @media (min-width: 1920px) {
   .runBtnTitle {
-    font-size: 15px;
+    font-size: 14px;
   }
 
   .runBtnSub {
-    font-size: 12px;
+    font-size: 11px;
   }
 
   .runBtnIconWrap {
@@ -3866,7 +3867,7 @@
 }
 
 .selCt {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--blue);
   font-weight: 600;
   @include m.mono;
@@ -3874,7 +3875,7 @@
 }
 
 .selNm {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--t2);
   @include m.mono;
   overflow: hidden;
@@ -3930,7 +3931,7 @@
 }
 
 .noPromptHint {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--t2);
   font-family: var(--font-mono);
   text-align: center;
@@ -3946,7 +3947,7 @@
 }
 
 .cardT {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -3956,7 +3957,7 @@
 }
 
 .promptMode {
-  font-size: 12px;
+  font-size: 11px;
   margin-left: 8px;
   font-weight: 400;
   text-transform: none;
@@ -3998,7 +3999,7 @@
 
 .fl {
   display: block;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--t1);
   margin-bottom: 0;
   font-weight: 500;
@@ -4012,7 +4013,7 @@
   border-radius: var(--r);
   color: var(--t0);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: 12px;
   transition: border-color 0.12s;
   outline: none;
   appearance: none;
@@ -4042,7 +4043,7 @@ textarea.fc {
 }
 
 .optTag {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--t2);
   margin-left: 4px;
   font-weight: 400;
@@ -4059,7 +4060,7 @@ textarea.fc {
   user-select: none;
 
   label {
-    font-size: 13px;
+    font-size: 12px;
     color: var(--t1);
     cursor: pointer;
   }
@@ -4135,7 +4136,7 @@ textarea.fc {
   }
 
   label {
-    font-size: 12.5px;
+    font-size: 11.5px;
     color: var(--t1);
     cursor: pointer;
   }
@@ -4153,7 +4154,7 @@ textarea.fc {
 
   label {
     display: block;
-    font-size: 11.5px;
+    font-size: 10.5px;
     color: var(--t2);
     margin-bottom: 4px;
   }
@@ -4190,7 +4191,7 @@ textarea.fc {
 .slim {
   display: flex;
   justify-content: space-between;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--t2);
   margin-top: 3px;
   @include m.mono;
@@ -4198,12 +4199,12 @@ textarea.fc {
 
 .sv {
   @include m.mono;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--blue);
 }
 
 .qTypeLabel {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--t1);
   font-weight: 500;
   margin-bottom: 5px;
@@ -4214,7 +4215,7 @@ textarea.fc {
 }
 
 .feasibilityTag {
-  font-size: 10px;
+  font-size: 9px;
   background: var(--amber-dim);
   color: var(--amber);
   padding: 1px 5px;
@@ -4242,7 +4243,7 @@ textarea.fc {
   gap: 8px;
   padding: 9px 12px;
   border-radius: var(--r);
-  font-size: 13px;
+  font-size: 12px;
   margin-bottom: 10px;
 }
 
@@ -4263,7 +4264,7 @@ textarea.fc {
   background: transparent;
   color: var(--t1);
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: 11px;
   cursor: pointer;
   transition: all 0.12s;
   white-space: nowrap;
@@ -4300,7 +4301,7 @@ textarea.fc {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--amber);
   background: var(--amber-dim);
   border: 1px solid var(--amber-bdr);
@@ -4333,7 +4334,7 @@ textarea.fc {
 
 // ── Model loading indicator ───────────────────────
 .loadingDot {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--t2);
   font-family: var(--font-mono);
 }
@@ -4363,7 +4364,7 @@ textarea.fc {
 }
 
 .batchSectionTitle {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--t2);
   text-transform: uppercase;
@@ -4386,7 +4387,7 @@ textarea.fc {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   color: var(--green);
   background: var(--green-dim);
@@ -4425,7 +4426,7 @@ textarea.fc {
 .liveSep {
   color: var(--green);
   opacity: 0.4;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .liveCountdown {
@@ -4465,7 +4466,7 @@ textarea.fc {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   padding: 6px 10px;
   border-radius: 8px;
@@ -4513,7 +4514,7 @@ textarea.fc {
 
 .batchColCount {
   margin-left: auto;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   min-width: 16px;
   text-align: center;
@@ -4531,7 +4532,7 @@ textarea.fc {
 
 .batchEmpty {
   text-align: center;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--t2);
   font-family: var(--font-mono);
   padding: 12px 0;
@@ -4643,7 +4644,7 @@ textarea.fc {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 800;
   font-family: var(--font-mono);
   flex-shrink: 0;
@@ -4683,7 +4684,7 @@ textarea.fc {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 10px;
+  font-size: 9px;
   color: var(--amber);
   font-family: var(--font-mono);
   opacity: 0.8;
@@ -4714,7 +4715,7 @@ textarea.fc {
 
 // ── Completed date meta ──
 .completedMeta {
-  font-size: 10px;
+  font-size: 9px;
   color: var(--green);
   font-family: var(--font-mono);
   opacity: 0.75;
@@ -4735,7 +4736,7 @@ textarea.fc {
 }
 
 .statusName {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--t0);
   white-space: nowrap;
@@ -4746,7 +4747,7 @@ textarea.fc {
 }
 
 .statusIdBadge {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   font-family: var(--font-mono);
   border-radius: 4px;
@@ -4778,7 +4779,7 @@ textarea.fc {
 }
 
 .statusDate {
-  font-size: 10px;
+  font-size: 9px;
   color: var(--t2);
   font-family: var(--font-mono);
 }
@@ -4805,7 +4806,7 @@ textarea.fc {
 }
 
 .statusPct {
-  font-size: 10px;
+  font-size: 9px;
   color: var(--blue);
   font-family: var(--font-mono);
   flex-shrink: 0;
@@ -4833,7 +4834,7 @@ textarea.fc {
   background: transparent;
   color: var(--t2);
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: 11px;
   cursor: pointer;
   transition: all 0.12s;
   flex-shrink: 0;
@@ -4882,7 +4883,7 @@ textarea.fc {
   background: var(--amber-dim);
   border: 1px solid var(--amber-bdr);
   color: var(--amber);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.5;
 
   svg {
@@ -4899,7 +4900,7 @@ textarea.fc {
   align-items: center;
   gap: 6px;
   margin-top: 6px;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--t2);
   font-family: var(--font-mono);
 
@@ -4953,14 +4954,14 @@ textarea.fc {
 }
 
 .submittingTitle {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--t0);
   letter-spacing: -0.2px;
 }
 
 .submittingDesc {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--t2);
   font-family: var(--font-mono);
   line-height: 1.65;
@@ -4978,7 +4979,7 @@ textarea.fc {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--t1);
   font-family: var(--font-mono);
   background: var(--bg2);
@@ -5001,7 +5002,7 @@ textarea.fc {
 }
 
 .submittingMore {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--t2);
   font-family: var(--font-mono);
   text-align: center;
@@ -5055,135 +5056,135 @@ textarea.fc {
 // ── Large screen overrides (> 1900px) ────────────────────
 @media (min-width: 1920px) {
   .slbl {
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .selSummary {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .selCt {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .selNm {
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .cardT {
-    font-size: 11px;
+    font-size: 10px;
   }
 
   .fl {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .fc {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .optTag {
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .cr label {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .slim {
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .sv {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .qTypeLabel {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .noPromptHint {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .btn {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .batchSectionTitle {
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .batchColHead {
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .batchColCount {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .batchEmpty {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .statusName {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .statusIdBadge {
-    font-size: 11px;
+    font-size: 10px;
   }
 
   .statusDate {
-    font-size: 11px;
+    font-size: 10px;
   }
 
   .statusPct {
-    font-size: 11px;
+    font-size: 10px;
   }
 
   .queuedMeta {
-    font-size: 11px;
+    font-size: 10px;
   }
 
   .completedMeta {
-    font-size: 11px;
+    font-size: 10px;
   }
 
   .loadingDot {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .refreshBtn {
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .modelWarn {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .modelOk {
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .submittingTitle {
-    font-size: 15px;
+    font-size: 14px;
   }
 
   .submittingDesc {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .submittingFile {
-    font-size: 14px;
+    font-size: 13px;
   }
 
   .submittingMore {
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .liveStatus {
-    font-size: 13px;
+    font-size: 12px;
   }
 }
 
@@ -5198,7 +5199,7 @@ textarea.fc {
   border: 1px solid var(--bdr2);
   background: transparent;
   color: var(--t2);
-  font-size: 11px;
+  font-size: 10px;
   font-family: var(--font-ui);
   cursor: pointer;
   vertical-align: middle;
@@ -5281,7 +5282,7 @@ textarea.fc {
 }
 
 .perFileName {
-  font-size: 11px;
+  font-size: 10px;
   font-family: var(--font-mono);
   color: var(--t2);
   white-space: nowrap;
@@ -5290,7 +5291,7 @@ textarea.fc {
 }
 
 .perFilePrompt {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--t0);
   line-height: 1.5;
   white-space: pre-wrap;
@@ -5298,7 +5299,7 @@ textarea.fc {
 }
 
 .perFileEmpty {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--t2);
   font-style: italic;
   opacity: 0.6;
@@ -5306,19 +5307,19 @@ textarea.fc {
 
 @media (min-width: 1920px) {
   .perFileBtn {
-    font-size: 12px;
+    font-size: 11px;
   }
 
   .perFileName {
-    font-size: 12px;
+    font-size: 11px;
   }
 
   .perFilePrompt {
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .perFileEmpty {
-    font-size: 13px;
+    font-size: 12px;
   }
 }
 
@@ -5335,7 +5336,7 @@ textarea.fc {
 
 .promptSaveError {
   flex: 1;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--red, #ef4444);
   margin-right: 4px;
 }
@@ -5343,7 +5344,7 @@ textarea.fc {
 .btnSm {
   height: 30px;
   padding: 0 14px;
-  font-size: 12px;
+  font-size: 11px;
   border-radius: 6px;
   border: 1px solid transparent;
   font-family: var(--font-ui);
@@ -5394,12 +5395,12 @@ textarea.fc {
 @media (min-width: 1920px) {
   .btnSm {
     height: 34px;
-    font-size: 13px;
+    font-size: 12px;
     padding: 0 16px;
   }
 
   .promptSaveError {
-    font-size: 13px;
+    font-size: 12px;
   }
 }
 
@@ -5492,7 +5493,7 @@ textarea.fc {
   gap: 8px;
   writing-mode: vertical-rl;
   transform: rotate(180deg);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.04em;
   color: var(--t1);
