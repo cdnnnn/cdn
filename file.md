@@ -1140,8 +1140,8 @@
   overflow-y: auto;
   padding: 10px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  grid-auto-rows: 240px;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  grid-auto-rows: 190px;
   align-content: start;
   gap: 12px;
   @include m.scrollbar;
