@@ -1,340 +1,190 @@
 // ═══════════════════════════════════════════════
-// pages/SttTranscription/components/SttFileSidebar.tsx
+// pages/SttTranscription/SttTranscription.tsx
 //
-// Reusable file-picker column used by both the Inference tab
-// (mode="select" — checkbox multi-select feeding InferencePanel) and
-// the View Results tab (mode="view" — click a completed file to open
-// its transcript). Has its own search / status filter, independent of
-// whatever filter state the Upload & Manage tab is using.
+// Top-level container — 3 persistent tabs (Upload & Manage / Inference /
+// View Results), mirroring pages/UploadInfer/UploadInfer.tsx. All three
+// tab panes stay mounted at all times (toggled via CSS display) so file
+// lists, inference polling, and scroll position survive switching tabs
+// instead of resetting.
 // ═══════════════════════════════════════════════
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useAppSelector } from '../../../store/hooks';
-import { selectSttFileViews, type SttFileView } from '../../../store/sttSlice';
-import styles from '../SttTranscription.module.scss';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import { selectSttFileViews, fetchSttFiles, clearSttFiles, type SttFileView } from '../../store/sttSlice';
+import FileLibrary from './components/FileLibrary';
+import SttFileSidebar from './components/SttFileSidebar';
+import InferencePanel from './components/InferencePanel';
+import TranscriptDetail from './components/TranscriptDetail';
+import styles from './SttTranscription.module.scss';
 
-type Mode = 'select' | 'view';
+type TabId = 'upload' | 'infer' | 'results';
 
-interface Props {
-    mode: Mode;
-    active: boolean;
-    // select mode
-    selectedIds?: Set<number>;
-    onToggleSelect?: (id: number) => void;
-    onSelectAll?: (ids: number[]) => void;
-    onClearSelection?: () => void;
-    // view mode
-    activeFileId?: number | null;
-    onFileClick?: (file: SttFileView) => void;
-    // view mode only shows Completed files (nothing else has a transcript yet)
-    onlyCompleted?: boolean;
-}
-
-const IconSearch: React.FC = () => (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="6.5" cy="6.5" r="4" /><path d="M11 11l2.5 2.5" />
-    </svg>
-);
-const IconFilter: React.FC = () => (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M2 4h12M4.5 8h7M7 12h2" />
-    </svg>
-);
-const IconCheck: React.FC = () => (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M3 8.5l3.5 3.5 7-7.5" />
-    </svg>
-);
-const IconSort: React.FC = () => (
-    <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-        <path d="M2 4h10M4 7h6M6 10h2" />
-    </svg>
-);
-const IconSortArrow: React.FC = () => (
-    <svg viewBox="0 0 10 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M5 1v10M2 8l3 3 3-3" />
-    </svg>
-);
-
-type SortKey = 'id' | 'name' | 'date' | 'status';
-
-// Fixed 4-button sliding window around the current page — same pagination
-// treatment as pages/SttTranscription/components/FileLibrary.tsx.
-const PAGE_WINDOW = 4;
-const getPageNumbers = (current: number, total: number): number[] => {
-    if (total <= PAGE_WINDOW) return Array.from({ length: total }, (_, i) => i + 1);
-    const start = Math.max(1, Math.min(current - 1, total - PAGE_WINDOW + 1));
-    return Array.from({ length: PAGE_WINDOW }, (_, i) => start + i);
-};
-const PAGE_SIZE_OPTIONS = [50, 75, 100];
-
-const SttFileSidebar: React.FC<Props> = ({
-    mode, active,
-    selectedIds, onToggleSelect, onSelectAll, onClearSelection,
-    activeFileId, onFileClick,
-    onlyCompleted = false,
-}) => {
+const SttTranscription: React.FC = () => {
     const { t } = useTranslation();
+    const dispatch = useAppDispatch();
     const files = useAppSelector(selectSttFileViews);
-    const filesLoading = useAppSelector(s => s.stt.filesLoading);
 
-    const [search, setSearch]     = useState('');
-    const [status, setStatus]     = useState<'all' | 'completed' | 'pending' | 'queued' | 'running'>(
-        onlyCompleted ? 'completed' : 'all'
-    );
-    const [sortKey, setSortKey]   = useState<SortKey>('date');
-    const [sortAsc, setSortAsc]   = useState(false);
+    const [activeTab, setActiveTab] = useState<TabId>('upload');
 
-    const toggleSort = (key: SortKey) => {
-        if (sortKey === key) setSortAsc(v => !v);
-        else { setSortKey(key); setSortAsc(true); }
-    };
+    // Refresh the file list (/stt/files/by-date) every time the user
+    // switches tabs, so each tab always shows the latest server state
+    // (e.g. a file finishing inference while the user was on another tab).
+    // No args needed — the thunk falls back to the current dateFrom/dateTo
+    // already held in state.
+    const isFirstTabRender = React.useRef(true);
+    useEffect(() => {
+        if (isFirstTabRender.current) {
+            // FileLibrary's own mount effect already fires the initial
+            // /by-date call — skip firing a duplicate one here.
+            isFirstTabRender.current = false;
+            return;
+        }
+        dispatch(clearSttFiles());   // wipe stale list + flip filesLoading true so all 3 tabs show a spinner
+        dispatch(fetchSttFiles());
+    }, [activeTab, dispatch]);
 
-    const filtered = useMemo(() => {
-        const q = search.trim().toLowerCase();
-        let list = files.filter(f => {
-            if (mode === 'view' && onlyCompleted && f.status !== 'completed') return false;
-            if (status !== 'all' && f.status !== status) return false;
-            if (q && !(String(f.id).includes(q) || f.original_name.toLowerCase().includes(q))) return false;
-            return true;
+    // ── Inference tab — selection lifted here so it survives switching
+    // away and back, and so InferencePanel and SttFileSidebar share it ──
+    const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+    const toggleSelect = useCallback((id: number) => {
+        setSelectedIds(prev => {
+            const next = new Set(prev);
+            next.has(id) ? next.delete(id) : next.add(id);
+            return next;
         });
-        list = [...list].sort((a, b) => {
-            let cmp = 0;
-            if (sortKey === 'id')     cmp = a.id - b.id;
-            else if (sortKey === 'name')   cmp = a.original_name.localeCompare(b.original_name);
-            else if (sortKey === 'status') cmp = a.status.localeCompare(b.status);
-            else cmp = new Date(a.inserted_at).getTime() - new Date(b.inserted_at).getTime();
-            return sortAsc ? cmp : -cmp;
-        });
-        return list;
-    }, [files, search, status, sortKey, sortAsc, mode, onlyCompleted]);
+    }, []);
+    const selectAll = useCallback((ids: number[]) => setSelectedIds(new Set(ids)), []);
+    const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
 
-    const statusOptions: Array<'all' | 'completed' | 'pending' | 'queued' | 'running'> =
-        mode === 'view' && onlyCompleted ? ['completed'] : ['all', 'completed', 'pending', 'queued', 'running'];
+    // ── Results tab — active file, lifted so both the sidebar and detail
+    // view agree on what's open, and so clicking a file from the Upload
+    // tab's library can jump straight here ──
+    const [activeFileId, setActiveFileId] = useState<number | null>(null);
+    const activeFile: SttFileView | undefined = activeFileId
+        ? files.find(f => f.id === activeFileId)
+        : undefined;
 
-    // ── Pagination (client-side, applied after search/status filter/sort) ──
-    const [page, setPage]         = useState(1);
-    const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
-    const goToPage = (p: number) => setPage(Math.max(1, p));
-    const handlePageSizeChange = (size: number) => { setPageSize(size); setPage(1); };
+    // Bail out of the open file if it disappears (deleted, moved, etc.)
+    useEffect(() => {
+        if (activeFileId && !activeFile) setActiveFileId(null);
+    }, [activeFileId, activeFile]);
 
-    // Reset to page 1 whenever the filtered result set changes shape, so
-    // the user never lands on a now-empty trailing page.
-    useEffect(() => { setPage(1); }, [search, status, sortKey, sortAsc, mode, onlyCompleted]);
+    // Clicking a file (from Upload tab's library, or the Results sidebar)
+    // opens its transcript and jumps to the Results tab.
+    const handleFileClick = useCallback((fileId: number) => {
+        setActiveFileId(fileId);
+        setActiveTab('results');
+    }, []);
 
-    const totalPages   = Math.max(1, Math.ceil(filtered.length / pageSize));
-    const currentPage  = Math.min(page, totalPages);
-    const paginated    = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+    const goToInfer = useCallback(() => setActiveTab('infer'), []);
+
+    // ── Tour ── The tour's steps all target elements inside the Upload &
+    // Manage tab, so starting it also switches to that tab.
+    const [tourActive, setTourActive] = useState(false);
+    const startTour = useCallback(() => { setActiveTab('upload'); setTourActive(true); }, []);
+
+    const tabs: { id: TabId; label: string; desc: string }[] = [
+        { id: 'upload',  label: t('stt.tabs.upload'),  desc: t('stt.tabs.uploadDesc') },
+        { id: 'infer',   label: t('stt.tabs.infer'),   desc: t('stt.tabs.inferDesc') },
+        { id: 'results', label: t('stt.tabs.results'), desc: t('stt.tabs.resultsDesc') },
+    ];
 
     return (
-        <div className={styles.sttSidebar} data-tour={mode === 'select' ? 'infer-sidebar' : 'results-sidebar'}>
-            <div className={styles.sttSidebarHeader}>
-                <span className={styles.sttSidebarTitle}>
-                    {mode === 'select' ? t('stt.sidebar.pickForInference') : t('stt.sidebar.pickToView')}
-                </span>
-                <span className={styles.sttSidebarCount}>{filtered.length}</span>
-            </div>
-
-            {/* Status filter + Search — same row, same design as the Upload tab / reference sidebar */}
-            <div className={styles.sttSidebarFilterRow}>
-                {statusOptions.length > 1 && (
-                    <div className={styles.sttSidebarStatusWrap} data-tour={mode === 'select' ? 'infer-status-filter' : 'results-status-filter'}>
-                        <IconFilter />
-                        <select
-                            className={styles.sttSidebarStatusSelect}
-                            value={status}
-                            disabled={filesLoading}
-                            onChange={e => setStatus(e.target.value as typeof status)}
-                        >
-                            {statusOptions.map(s => (
-                                <option key={s} value={s}>{s === 'all' ? t('stt.library.filterAll') : t(`stt.fileCard.status.${s}`)}</option>
-                            ))}
-                        </select>
-                    </div>
-                )}
-
-                <div className={styles.sttSidebarSearchWrap} data-tour={mode === 'select' ? 'infer-search' : 'results-search'}>
-                    <IconSearch />
-                    <input
-                        type="text"
-                        className={styles.sttSidebarSearchInput}
-                        value={search}
-                        onChange={e => setSearch(e.target.value)}
-                        placeholder={t('stt.library.searchPlaceholder')}
-                    />
+        <div className={styles.sttPage}>
+            {/* ── Header — title and self-explanatory tab cards share one row ── */}
+            <div className={styles.sttHeaderBar}>
+                <div className={styles.phTitleRow}>
+                    <div className={styles.phTitle} data-tour="stt-title">{t('stt.pageTitle')}</div>
+                    <button type="button" className={styles.tourTriggerBtn} onClick={startTour}>
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="8" cy="8" r="6.25" />
+                            <path d="M6.1 6.2a1.9 1.9 0 013.6.7c0 1.3-1.7 1.5-1.7 2.7M8 11.4v.1" />
+                        </svg>
+                        {t('stt.tour.takeTour')}
+                    </button>
                 </div>
-            </div>
 
-            {/* Sort — boxed pill row with arrow-direction icons, same design as the Upload tab / reference sidebar */}
-            <div className={styles.sttSidebarSortHeader} data-tour={mode === 'select' ? 'infer-sort' : 'results-sort'}>
-                <span className={styles.sttSidebarSortHeaderLabel}>
-                    <IconSort />
-                    {t('stt.sortBy')}
-                </span>
-                <div className={styles.sttSidebarSortCols}>
-                    {(['id', 'name', 'date', 'status'] as SortKey[]).map(k => (
+                <div className={styles.tabbar} role="tablist" data-tour="stt-tabbar">
+                    {tabs.map(tab => (
                         <button
-                            key={k}
-                            className={`${styles.sttSidebarSortCol} ${sortKey === k ? styles.sttSidebarSortColActive : ''}`}
-                            onClick={() => toggleSort(k)}
-                            disabled={filesLoading}
+                            key={tab.id}
+                            type="button"
+                            role="tab"
+                            aria-selected={activeTab === tab.id}
+                            className={`${styles.tabBtn} ${activeTab === tab.id ? styles.tabBtnActive : ''}`}
+                            onClick={() => setActiveTab(tab.id)}
                         >
-                            {t(`stt.sidebar.sort.${k}`)}
-                            <span className={sortKey === k ? (sortAsc ? styles.sttSidebarSortAsc : styles.sttSidebarSortDesc) : styles.sttSidebarSortInactive}>
-                                <IconSortArrow />
-                            </span>
+                            <span className={styles.tabLabel}>{tab.label}</span>
+                            <span className={styles.tabDesc}>{tab.desc}</span>
                         </button>
                     ))}
                 </div>
             </div>
 
-            {/* Select all / clear — select mode only */}
-            {mode === 'select' && (
-                <div className={styles.sttSidebarSelectRow}>
-                    <span className={styles.sttSidebarSelectHint}>
-                        {selectedIds && selectedIds.size > 0
-                            ? t('stt.library.selected', { count: selectedIds.size })
-                            : t('stt.library.noneSelected')}
-                    </span>
-                    <div className={styles.selectAllActions}>
-                        <button className={styles.selectAllBtn} onClick={() => onSelectAll?.(filtered.map(f => f.id))}
-                            disabled={filtered.length === 0}>
-                            {t('stt.library.selectAll')}
-                        </button>
-                        <button className={styles.selectAllBtn} onClick={onClearSelection} disabled={!selectedIds || selectedIds.size === 0}>
-                            {t('stt.library.clear')}
-                        </button>
-                    </div>
-                </div>
-            )}
-
-            {/* File list */}
-            <div className={styles.sttSidebarList}>
-                {filesLoading ? (
-                    <div className={styles.libLoading}>
-                        <div className={styles.spinner} />
-                        <span>{t('stt.library.loading')}</span>
-                    </div>
-                ) : filtered.length === 0 ? (
-                    <div className={styles.sttSidebarEmpty}>
-                        {mode === 'view' && onlyCompleted
-                            ? t('stt.sidebar.noCompletedFiles')
-                            : t('stt.library.emptyTitle')}
-                    </div>
-                ) : paginated.map(f => {
-                    const isSelected = mode === 'select' && selectedIds?.has(f.id);
-                    const isActive   = mode === 'view' && activeFileId === f.id;
-                    const clickable  = mode === 'select' || (mode === 'view' && f.status === 'completed');
-                    return (
-                        <button
-                            key={f.id}
-                            type="button"
-                            className={`${styles.sttSidebarRow} ${isSelected ? styles.sttSidebarRowSelected : ''} ${isActive ? styles.sttSidebarRowActive : ''} ${!clickable ? styles.sttSidebarRowDisabled : ''}`}
-                            disabled={!clickable}
-                            onClick={() => {
-                                if (mode === 'select') onToggleSelect?.(f.id);
-                                else onFileClick?.(f);
-                            }}
-                        >
-                            {mode === 'select' && (
-                                <span className={`${styles.sttSidebarCheckbox} ${isSelected ? styles.sttSidebarCheckboxChecked : ''}`}>
-                                    {isSelected && <IconCheck />}
-                                </span>
-                            )}
-                            <span className={styles.sttSidebarRowName} title={f.original_name}>{f.original_name}</span>
-                            <span className={`${styles.pill} ${
-                                f.status === 'completed' ? styles.pillGreen :
-                                f.status === 'queued'    ? styles.pillAmber :
-                                f.status === 'running'   ? styles.pillBlue :
-                                f.status === 'failed'    ? styles.pillRed :
-                                styles.pillGray
-                            }`}>
-                                {t(`stt.fileCard.status.${f.status}`)}
-                            </span>
-                        </button>
-                    );
-                })}
+            {/* ── Tab 1: Upload & Manage ── */}
+            <div className={styles.sttTabPane} style={{ display: activeTab === 'upload' ? 'flex' : 'none' }}>
+                <FileLibrary
+                    onOpen={handleFileClick}
+                    onGoToInfer={goToInfer}
+                    active={activeTab === 'upload'}
+                    tourActive={tourActive}
+                    onTourFinish={() => setTourActive(false)}
+                />
             </div>
 
-            {/* Pagination footer — same client-side behavior/controls as FileLibrary.tsx, compact for the sidebar column */}
-            {!filesLoading && filtered.length > 0 && (
-                <div className={styles.sttSidebarPagination}>
-                    <div className={styles.sttSidebarPaginationTopRow}>
-                        <select
-                            className={styles.sttSidebarPageSizeSelect}
-                            value={pageSize}
-                            onChange={e => handlePageSizeChange(Number(e.target.value))}
-                        >
-                            {PAGE_SIZE_OPTIONS.map(size => (
-                                <option key={size} value={size}>{t('stt.library.perPageShort', { count: size })}</option>
-                            ))}
-                        </select>
-
-                        <div className={styles.sttSidebarPageNav}>
-                            <button
-                                className={styles.sttSidebarPageNavBtn}
-                                onClick={() => goToPage(currentPage - 1)}
-                                disabled={currentPage <= 1}
-                                aria-label="Previous page"
-                            >
-                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                                    <path d="M10 3L6 8l4 5" />
-                                </svg>
-                            </button>
-
-                            {(() => {
-                                const pageWindow = getPageNumbers(currentPage, totalPages);
-                                const showFirst  = pageWindow[0] > 1;
-                                const showLast   = pageWindow[pageWindow.length - 1] < totalPages;
-                                return (
-                                    <>
-                                        {showFirst && (
-                                            <>
-                                                <button className={styles.sttSidebarPageNumBtn} onClick={() => goToPage(1)}>1</button>
-                                                {pageWindow[0] > 2 && <span className={styles.sttSidebarPageEllipsis}>…</span>}
-                                            </>
-                                        )}
-                                        {pageWindow.map(p => (
-                                            <button
-                                                key={p}
-                                                className={`${styles.sttSidebarPageNumBtn} ${p === currentPage ? styles.sttSidebarPageNumBtnActive : ''}`}
-                                                onClick={() => goToPage(p)}
-                                            >
-                                                {p}
-                                            </button>
-                                        ))}
-                                        {showLast && (
-                                            <>
-                                                {pageWindow[pageWindow.length - 1] < totalPages - 1 && <span className={styles.sttSidebarPageEllipsis}>…</span>}
-                                                <button className={styles.sttSidebarPageNumBtn} onClick={() => goToPage(totalPages)}>{totalPages}</button>
-                                            </>
-                                        )}
-                                    </>
-                                );
-                            })()}
-
-                            <button
-                                className={styles.sttSidebarPageNavBtn}
-                                onClick={() => goToPage(currentPage + 1)}
-                                disabled={currentPage >= totalPages}
-                                aria-label="Next page"
-                            >
-                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                                    <path d="M6 3l4 5-4 5" />
-                                </svg>
-                            </button>
-                        </div>
-                    </div>
-                    <div className={styles.sttSidebarPageInfo}>
-                        {t('stt.library.pageInfo', { page: currentPage, totalPages, total: filtered.length })}
+            {/* ── Tab 2: Inference ── */}
+            <div className={styles.sttTabPane} style={{ display: activeTab === 'infer' ? 'flex' : 'none' }}>
+                <div className={styles.sttInferTabBody}>
+                    <SttFileSidebar
+                        mode="select"
+                        active={activeTab === 'infer'}
+                        selectedIds={selectedIds}
+                        onToggleSelect={toggleSelect}
+                        onSelectAll={selectAll}
+                        onClearSelection={clearSelection}
+                    />
+                    <div className={styles.sttInferMain}>
+                        <InferencePanel
+                            selectedIds={selectedIds}
+                            onSubmitted={clearSelection}
+                            onCompleted={clearSelection}
+                        />
                     </div>
                 </div>
-            )}
+            </div>
+
+            {/* ── Tab 3: View Results ── */}
+            <div className={styles.sttTabPane} style={{ display: activeTab === 'results' ? 'flex' : 'none' }}>
+                <div className={styles.sttResultsTabBody}>
+                    <SttFileSidebar
+                        mode="view"
+                        active={activeTab === 'results'}
+                        onlyCompleted
+                        activeFileId={activeFileId}
+                        onFileClick={f => setActiveFileId(f.id)}
+                    />
+                    <div className={styles.sttResultsMain} data-tour="results-content">
+                        {activeFile ? (
+                            <TranscriptDetail
+                                file={activeFile}
+                                onBack={() => setActiveFileId(null)}
+                            />
+                        ) : (
+                            <div className={styles.sttResultsEmpty}>
+                                <div className={styles.sttResultsEmptyTitle}>{t('stt.results.noFileSelected')}</div>
+                                <div className={styles.sttResultsEmptyHint}>{t('stt.results.noFileHint')}</div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
         </div>
     );
 };
 
-export default SttFileSidebar;
+export default SttTranscription;
+
+
 
 
 
@@ -4732,47 +4582,100 @@ export default SttFileSidebar;
 
 .sttHeaderBar {
   flex-shrink: 0;
-  padding: 16px 24px 0;
-  background: var(--bg1);
-  border-bottom: 1px solid var(--bdr);
-}
-
-.sttTabbar {
   display: flex;
-  gap: 4px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px 24px;
+  background: var(--bg1);
+  position: relative;
+
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg,
+        rgba(139, 92, 246, 0.0) 0%,
+        rgba(139, 92, 246, 0.6) 20%,
+        rgba(56, 196, 186, 0.7) 50%,
+        rgba(240, 160, 48, 0.6) 80%,
+        rgba(240, 160, 48, 0.0) 100%);
+    pointer-events: none;
+  }
 }
 
-.sttTabBtn {
+.phTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.tabbar {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.tabBtn {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
+  justify-content: center;
   gap: 2px;
-  padding: 10px 18px;
-  border: none;
-  border-bottom: 2px solid transparent;
-  background: transparent;
+  width: 172px;
+  padding: 8px 14px;
+  border-radius: var(--rl);
+  border: 1px solid var(--bdr2);
+  background: var(--bg1);
   cursor: pointer;
-  transition: all 0.14s;
+  text-align: left;
+  @include m.theme-transition;
 
-  &:hover { background: var(--bg2); }
+  &:hover {
+    border-color: var(--bdr3);
+    background: var(--bg2);
+  }
 }
 
-.sttTabBtnActive {
-  border-bottom-color: var(--blue);
-  background: var(--bg2);
+.tabBtnActive {
+  border-color: var(--blue);
+  background-color: var(--bg1);
+  background-image: linear-gradient(var(--blue-dim), var(--blue-dim));
+
+  &:hover {
+    border-color: var(--blue);
+    background-color: var(--bg1);
+    background-image: linear-gradient(var(--blue-dim), var(--blue-dim));
+  }
 }
 
-.sttTabLabel {
-  font-size: 13px;
+.tabLabel {
+  font-family: var(--font-ui);
+  font-size: 13.5px;
   font-weight: 600;
-  color: var(--t0);
-  font-family: var(--font-display);
+  color: var(--t1);
+  letter-spacing: 0.01em;
 }
 
-.sttTabDesc {
-  font-size: 10.5px;
+.tabBtnActive .tabLabel {
+  color: var(--t0);
+}
+
+// Always visible — this is what tells the user what they'll find on
+// this tab, without needing to click it first or read a separate banner.
+.tabDesc {
+  font-size: 11px;
   color: var(--t2);
-  @include m.mono;
+  white-space: nowrap;
+}
+
+.tabBtnActive .tabDesc {
+  color: var(--blue);
 }
 
 .sttTabPane {
@@ -4780,6 +4683,13 @@ export default SttFileSidebar;
   min-height: 0;
   display: flex;
   overflow: hidden;
+}
+
+@media (max-width: 860px) {
+  .sttHeaderBar { flex-direction: column; align-items: stretch; gap: 12px; padding: 14px 16px; }
+  .tabbar { flex-wrap: wrap; }
+  .tabBtn { width: calc(50% - 5px); }
+  .sttTabPane { flex-direction: column; }
 }
 
 // ── Inference tab body — sidebar + full-width InferencePanel ──
@@ -5113,55 +5023,3 @@ export default SttFileSidebar;
 .sortInactive { opacity: 0.25; }
 .sortAsc { transform: rotate(180deg); }
 .sortDesc { transform: rotate(0deg); }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-{
-  "_comment": "Add these keys inside the existing 'stt' object in en.json",
-  "stt": {
-    "inference": {
-      "chunkAuto": "Auto"
-    },
-    "library": {
-      "perPage": "Per page",
-      "perPageShort": "{{count}} / page",
-      "pageInfo": "Page {{page}} of {{totalPages}} · {{total}} files"
-    }
-  }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-{
-  "_comment": "Add these keys inside the existing 'stt' object in ko.json",
-  "stt": {
-    "inference": {
-      "chunkAuto": "자동"
-    },
-    "library": {
-      "perPage": "페이지당",
-      "perPageShort": "{{count}}개씩",
-      "pageInfo": "{{page}} / {{totalPages}} 페이지 · 총 {{total}}개 파일"
-    }
-  }
-}
