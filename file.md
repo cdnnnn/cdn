@@ -485,33 +485,10 @@ const UploadInfer: React.FC = () => {
     if (justFinished && activeFileId !== null) fetchFileData(activeFileId);
   }, [isBatchRunning]); // eslint-disable-line
 
-  const tabs: { id: TabId; label: string; desc: string; icon: React.ReactNode }[] = [
-    {
-      id: 'upload', label: t('uploadInfer.tabs.upload'), desc: t('uploadInfer.tabs.uploadDesc'),
-      icon: (
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M8 10.5V2.5M5 5.3L8 2.3l3 3" />
-          <path d="M2.5 10v2.3a1.2 1.2 0 001.2 1.2h8.6a1.2 1.2 0 001.2-1.2V10" />
-        </svg>
-      ),
-    },
-    {
-      id: 'infer', label: t('uploadInfer.tabs.infer'), desc: t('uploadInfer.tabs.inferDesc'),
-      icon: (
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M8 2.3v1.8M8 11.9v1.8M2.3 8h1.8M11.9 8h1.8M4.2 4.2l1.3 1.3M10.5 10.5l1.3 1.3M4.2 11.8l1.3-1.3M10.5 5.5l1.3-1.3" />
-          <circle cx="8" cy="8" r="2.3" />
-        </svg>
-      ),
-    },
-    {
-      id: 'results', label: t('uploadInfer.tabs.results'), desc: t('uploadInfer.tabs.resultsDesc'),
-      icon: (
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M3 13V7M8 13V3M13 13V9.5" />
-        </svg>
-      ),
-    },
+  const tabs: { id: TabId; label: string }[] = [
+    { id: 'upload', label: t('uploadInfer.tabs.upload') },
+    { id: 'infer', label: t('uploadInfer.tabs.infer') },
+    { id: 'results', label: t('uploadInfer.tabs.results') },
   ];
 
   return (
@@ -539,11 +516,7 @@ const UploadInfer: React.FC = () => {
               className={`${styles.tabBtn} ${activeTab === tab.id ? styles.tabBtnActive : ''}`}
               onClick={() => setActiveTab(tab.id)}
             >
-              <span className={styles.tabIcon}>{tab.icon}</span>
-              <span className={styles.tabTextCol}>
-                <span className={styles.tabLabel}>{tab.label}</span>
-                <span className={styles.tabDesc}>{tab.desc}</span>
-              </span>
+              {tab.label}
             </button>
           ))}
         </div>
@@ -597,6 +570,13 @@ export default UploadInfer;
 
 
 
+
+
+
+
+
+
+
 // ═══════════════════════════════════════════════
 // UploadInfer.module.scss
 // LectureAI · Upload & Inference page shell + tab bar
@@ -613,18 +593,33 @@ export default UploadInfer;
 .headerBar {
   flex-shrink: 0;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 16px 24px 0;
+  padding: 16px 24px;
   background: var(--bg1);
+  position: relative;
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg,
+        rgba(139, 92, 246, 0.0) 0%,
+        rgba(139, 92, 246, 0.6) 20%,
+        rgba(56, 196, 186, 0.7) 50%,
+        rgba(240, 160, 48, 0.6) 80%,
+        rgba(240, 160, 48, 0.0) 100%);
+    pointer-events: none;
+  }
 }
 .phTitleRow {
   display: flex;
   align-items: center;
   gap: 12px;
   flex-shrink: 0;
-  padding-bottom: 14px;
 }
 .phTitle {
   flex-shrink: 0;
@@ -654,94 +649,51 @@ export default UploadInfer;
   }
 }
 
-// ── Tab bar — classic underline tabs sharing one baseline border,
-// matching the convention used elsewhere in this app (e.g. the
-// WorkspacePanel result tabs), not a button/card row. ──
+// ── Tab bar — plain segmented buttons, sized to feel substantial without
+// being oversized. ──
 .tabbar {
   display: flex;
-  align-items: stretch;
-  gap: 28px;
+  align-items: center;
+  gap: 8px;
   flex-shrink: 0;
-  position: relative;
-
-  // Shared baseline the active tab's indicator sits flush against
-  &::after {
-    content: '';
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    height: 1px;
-    background: var(--bdr);
-  }
 }
 .tabBtn {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 8px 2px 11px;
-  border: none;
-  border-bottom: 2px solid transparent;
-  background: transparent;
+  height: 40px;
+  padding: 0 22px;
+  border-radius: var(--rl);
+  border: 1px solid var(--bdr2);
+  background: var(--bg1);
+  color: var(--t1);
   cursor: pointer;
-  text-align: left;
-  position: relative;
-  z-index: 1;
-  transition: border-color 0.15s ease;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  @include m.theme-transition;
+  transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
 
   &:hover {
-    .tabLabel { color: var(--t0); }
-    .tabIcon { color: var(--t1); }
+    border-color: var(--bdr3);
+    background: var(--bg2);
+    color: var(--t0);
+  }
+
+  &:active {
+    transform: scale(0.98);
   }
 }
 .tabBtnActive {
-  border-bottom-color: var(--blue);
-}
-.tabIcon {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--t2);
-  transition: color 0.15s ease;
+  border-color: var(--blue);
+  background: var(--blue);
+  color: #fff;
+  box-shadow: 0 3px 10px var(--blue-dim);
 
-  svg {
-    width: 15px;
-    height: 15px;
+  &:hover {
+    border-color: var(--blue);
+    background: var(--blue);
+    color: #fff;
   }
-}
-.tabBtnActive .tabIcon {
-  color: var(--blue);
-}
-.tabTextCol {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-.tabLabel {
-  font-family: var(--font-ui);
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--t2);
-  letter-spacing: 0.01em;
-  white-space: nowrap;
-  transition: color 0.15s ease;
-}
-.tabBtnActive .tabLabel {
-  color: var(--t0);
-}
-// Always visible — this is what tells the user what they'll find on
-// this tab, without needing to click it first or read a separate banner.
-.tabDesc {
-  font-size: 10.5px;
-  color: var(--t2);
-  opacity: 0.7;
-  white-space: nowrap;
-}
-.tabBtnActive .tabDesc {
-  color: var(--blue);
-  opacity: 1;
 }
 // ── Tab content ──────────────────────────────────
 .upbody {
@@ -760,9 +712,8 @@ export default UploadInfer;
   overflow: hidden;
 }
 @media (max-width: 860px) {
-  .headerBar { flex-direction: column; align-items: stretch; gap: 8px; padding: 14px 16px 0; }
-  .phTitleRow { padding-bottom: 8px; }
-  .tabbar { gap: 18px; overflow-x: auto; }
-  .tabDesc { display: none; }
+  .headerBar { flex-direction: column; align-items: stretch; gap: 12px; padding: 14px 16px; }
+  .tabbar { flex-wrap: wrap; }
+  .tabBtn { flex: 1; }
   .tabPane { flex-direction: column; }
 }
