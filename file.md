@@ -1,3 +1,8 @@
+// ═══════════════════════════════════════════════
+// src/i18n/index.ts
+// react-i18next configuration
+// Default language: Korean (ko)
+// ═══════════════════════════════════════════════
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import LanguageDetector from 'i18next-browser-languagedetector';
@@ -13,15 +18,18 @@ i18n
             ko: { translation: ko },
             en: { translation: en },
         },
-        // No explicit `lng` — LanguageDetector decides based on order below.
-        // First-time visitors (nothing in localStorage) fall back to English.
-        fallbackLng: 'en',
+        // Default to Korean when nothing is saved yet.
+        // Do NOT set `lng` here — that would override the detector entirely.
+        fallbackLng: 'ko',
         supportedLngs: ['ko', 'en'],
         interpolation: {
-            escapeValue: false,
+            escapeValue: false, // React already handles XSS
         },
         detection: {
-            order: ['localStorage', 'navigator'],
+            // Only look at localStorage — ignore browser locale (navigator),
+            // so first-time visitors always start at 'ko' regardless of
+            // their browser/OS language.
+            order: ['localStorage'],
             caches: ['localStorage'],
         },
     });
