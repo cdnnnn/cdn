@@ -485,10 +485,10 @@ const UploadInfer: React.FC = () => {
     if (justFinished && activeFileId !== null) fetchFileData(activeFileId);
   }, [isBatchRunning]); // eslint-disable-line
 
-  const tabs: { id: TabId; label: string }[] = [
-    { id: 'upload', label: t('uploadInfer.tabs.upload') },
-    { id: 'infer', label: t('uploadInfer.tabs.infer') },
-    { id: 'results', label: t('uploadInfer.tabs.results') },
+  const tabs: { id: TabId; label: string; desc: string }[] = [
+    { id: 'upload', label: t('uploadInfer.tabs.upload'), desc: t('uploadInfer.tabs.uploadDesc') },
+    { id: 'infer', label: t('uploadInfer.tabs.infer'), desc: t('uploadInfer.tabs.inferDesc') },
+    { id: 'results', label: t('uploadInfer.tabs.results'), desc: t('uploadInfer.tabs.resultsDesc') },
   ];
 
   return (
@@ -515,8 +515,10 @@ const UploadInfer: React.FC = () => {
               aria-selected={activeTab === tab.id}
               className={`${styles.tabBtn} ${activeTab === tab.id ? styles.tabBtnActive : ''}`}
               onClick={() => setActiveTab(tab.id)}
+              title={tab.desc}
             >
-              {tab.label}
+              <span className={styles.tabLabel}>{tab.label}</span>
+              <span className={styles.tabDesc}>{tab.desc}</span>
             </button>
           ))}
         </div>
@@ -561,6 +563,14 @@ const UploadInfer: React.FC = () => {
 };
 
 export default UploadInfer;
+
+
+
+
+
+
+
+
 
 
 
@@ -653,24 +663,31 @@ export default UploadInfer;
 // being oversized. ──
 .tabbar {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 8px;
   flex-shrink: 0;
 }
 .tabBtn {
-  height: 40px;
-  padding: 0 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  width: 176px;
+  min-width: 0;
+  height: 48px;
+  padding: 0 18px;
   border-radius: var(--rl);
   border: 1px solid var(--bdr2);
   background: var(--bg1);
   color: var(--t1);
   cursor: pointer;
+  text-align: left;
   font-family: var(--font-ui);
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  white-space: nowrap;
-  @include m.theme-transition;
+  // Note: intentionally not using the shared theme-transition mixin here
+  // — it's tuned for light/dark theme swaps and was causing a visible
+  // background flash/crossfade on ordinary tab clicks. This explicit,
+  // fast transition covers the click-driven active/inactive state change.
   transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
 
   &:hover {
@@ -695,6 +712,32 @@ export default UploadInfer;
     color: #fff;
   }
 }
+.tabLabel {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+// Always visible — this is what tells the user what they'll find on this
+// tab, without needing to click it first or read a separate banner.
+// Truncates instead of wrapping or overflowing the button when the
+// translated string runs long.
+.tabDesc {
+  font-size: 10.5px;
+  color: var(--t2);
+  opacity: 0.8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.tabBtnActive .tabDesc {
+  color: rgba(255, 255, 255, 0.85);
+  opacity: 1;
+}
 // ── Tab content ──────────────────────────────────
 .upbody {
   flex: 1;
@@ -714,6 +757,6 @@ export default UploadInfer;
 @media (max-width: 860px) {
   .headerBar { flex-direction: column; align-items: stretch; gap: 12px; padding: 14px 16px; }
   .tabbar { flex-wrap: wrap; }
-  .tabBtn { flex: 1; }
+  .tabBtn { flex: 1; width: auto; min-width: 130px; }
   .tabPane { flex-direction: column; }
 }
