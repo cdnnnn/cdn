@@ -1162,7 +1162,7 @@ const NodeLinkGraph: React.FC<{ nodes: GNode[]; edges: GEdge[]; treeMode?: boole
     const initial = useMemo(() => {
         const { positioned, resolvedEdges } = treeMode
             ? computeForestLayout(allNodes, edges)
-            : computeDagreLayout(allNodes, edges, false);
+            : computeDagreLayout(allNodes, edges);
 
         const rfNodes: RFNode[] = positioned.map(n => ({
             id: n.id,
