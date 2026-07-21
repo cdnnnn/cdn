@@ -968,11 +968,12 @@ const CJK_RE = /[\uac00-\ud7a3\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/;
 
 function estimateNodeBox(label: string, circleSize: number) {
     const isCjk = CJK_RE.test(label);
-    const hasBreakPoint = /[\s-]/.test(label);
+    const hasBreakPoint = !isCjk && /[\s-]/.test(label);
     const charW = isCjk ? LABEL_CHAR_W_CJK : LABEL_CHAR_W;
     const rawTextWidth = label.length * charW + 8;
     const capWidth = hasBreakPoint ? LABEL_MAX_W : LABEL_HARD_MAX_W;
     const labelWidth = Math.min(capWidth, Math.max(rawTextWidth, 44));
+    // CJK labels always render as a single line — never wrapped
     const lines = hasBreakPoint ? Math.max(1, Math.ceil(rawTextWidth / LABEL_MAX_W)) : 1;
     const w = Math.max(circleSize, labelWidth, 72) + 16;
     const h = circleSize + 16 + lines * LABEL_LINE_H;
@@ -982,7 +983,9 @@ function estimateNodeBox(label: string, circleSize: number) {
 const MindMapNode: React.FC<{ data: { label: string; value?: number; labelWidth?: number } }> = ({ data }) => {
     const size = 34 + Math.min(26, (data.value ?? 1) * 4);
     const isCjk = CJK_RE.test(data.label);
-    const hasBreakPoint = /[\s-]/.test(data.label);
+    // Korean/Japanese/Chinese labels never wrap — always a single line,
+    // regardless of whether they contain spaces.
+    const hasBreakPoint = !isCjk && /[\s-]/.test(data.label);
     return (
         <div className={styles.rfNode} style={{ width: size, height: size }} title={data.label}>
             <Handle type="target" position={Position.Top} id="top-target" className={styles.rfHandle} />
@@ -992,10 +995,6 @@ const MindMapNode: React.FC<{ data: { label: string; value?: number; labelWidth?
                 style={{
                     maxWidth: data.labelWidth ?? LABEL_MAX_W,
                     whiteSpace: hasBreakPoint ? 'normal' : 'nowrap',
-                    // Without this, CJK text wraps between every single
-                    // character even with no spaces present, stacking into
-                    // a vertical-looking column. keep-all restricts CJK
-                    // break points to whitespace only, matching Latin behavior.
                     wordBreak: isCjk ? 'keep-all' : 'normal',
                     overflowWrap: isCjk ? 'normal' : undefined,
                 }}
