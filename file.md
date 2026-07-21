@@ -1,1894 +1,1992 @@
 // ═══════════════════════════════════════════════
-// SttTranscription.module.scss
-// Content Analytics · STT Transcription page
-//
-// Three views share this stylesheet:
-//   1. Library  — file grid, date filter, upload panel (new)
-//   2. Detail   — player + transcript editor (unchanged from original)
-//   3. Toast    — shared between views
+// pages/UploadInfer/WorkspacePanel.tsx
+// LectureAI · Step-3 Workspace Result panel
+// ═══════════════════════════════════════════════
+import React, { useState, useMemo, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react';
+import { useTranslation } from 'react-i18next';
+import { marked } from 'marked';
+import {
+    ReactFlow, Background, Controls, MiniMap, Handle, Position, applyNodeChanges,
+    type Node as RFNode, type Edge as RFEdge, type NodeChange,
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
+import dagre from 'dagre';
+import api from '../../services/api';
+import type { FileResult, WordCloudData, ImportanceComplexityData, GlossaryData, KeywordInsights, TimelineData, TimelineTimeUnit } from './UploadInfer';
+import styles from './WorkspacePanel.module.scss';
+
+marked.setOptions({ breaks: false, gfm: true });
+
+interface Props {
+    step2Visible?: boolean;
+    step2Minimized?: boolean;
+    fileResult: FileResult | null;
+    fileLoading: boolean;
+    activeFileId: number | null;
+    onResultUpdate?: (patch: Partial<Pick<FileResult, 'summary' | 'keywords'>>) => void;
+}
+
+// TABS labels are now driven by i18n — see tabLabels() inside WorkspacePanel
+const TAB_IDS = ['summary', 'keywords', 'assessment', 'shortAnswer', 'trueFalse', 'timestampedSummary', 'keywordInsights'] as const;
+type TabId = typeof TAB_IDS[number];
+
+// Exposed to the parent so the guided tour can drive which tab is showing
+// without lifting activeTab into Redux just for that one use.
+export interface WorkspacePanelHandle {
+    setTab: (id: TabId) => void;
+}
+
+
+interface FaqItem {
+    question: string;
+    options: Record<string, string>;
+    correct_answer: string;
+    explanation: string;
+}
+
+function parseFaq(raw: string): FaqItem[] {
+    if (!raw || raw === '[]') return [];
+    try {
+        // eslint-disable-next-line no-eval
+        const result = eval(raw);
+        if (Array.isArray(result)) return result as FaqItem[];
+        return [];
+    } catch {
+        // Fallback: try direct JSON parse (if API returns valid JSON)
+        try { return JSON.parse(raw) as FaqItem[]; } catch { }
+        return [];
+    }
+}
+
+// ── Permissive parser for the newer python-repr-style fields (short_answer,
+//    true_false, timestamped_summary). Handles True/False/None literals that
+//    plain eval() can't, and tries strict JSON first since that's cheaper
+//    and safer whenever the backend does send valid JSON. ──
+function parsePyList<T>(raw: string): T[] {
+    if (!raw || raw === '[]') return [];
+    try {
+        const result = JSON.parse(raw);
+        if (Array.isArray(result)) return result as T[];
+    } catch { /* not valid JSON — fall through to python-ish eval */ }
+    try {
+        const normalized = raw
+            .replace(/\bTrue\b/g, 'true')
+            .replace(/\bFalse\b/g, 'false')
+            .replace(/\bNone\b/g, 'null');
+        // eslint-disable-next-line no-eval
+        const result = eval('(' + normalized + ')');
+        if (Array.isArray(result)) return result as T[];
+    } catch { /* give up */ }
+    return [];
+}
+
+interface ShortAnswerItem { question: string; answer: string; }
+interface TrueFalseItem { statement: string; is_true: boolean; explanation: string; }
+interface TimestampSegment { start_time: string; end_time: string; summary: string; }
+
+const CHIP_COLORS = [
+    'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
+    'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
+    'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)',
+    'linear-gradient(135deg, #fa709a 0%, #fee140 100%)',
+    'linear-gradient(135deg, #30cfd0 0%, #330867 100%)',
+    'linear-gradient(135deg, #a8edea 0%, #fed6e3 100%)',
+    'linear-gradient(135deg, #ff9a56 0%, #ff6a88 100%)',
+    'linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%)',
+    'linear-gradient(135deg, #a1c4fd 0%, #c2e9fb 100%)',
+];
+
+function seededColorIndex(str: string): number {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+    return hash % CHIP_COLORS.length;
+}
+
+// ── Copy / Download helpers ───────────────────────────────
+function copyText(text: string) {
+    if (navigator.clipboard) { navigator.clipboard.writeText(text).catch(() => fallbackCopy(text)); }
+    else fallbackCopy(text);
+}
+function fallbackCopy(text: string) {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch { }
+    document.body.removeChild(ta);
+}
+function downloadFile(content: string, filename: string, mime: string) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+function wrapHtml(body: string, title: string): string {
+    return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${title}</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:900px;margin:40px auto;padding:20px;background:#f8f9fa;color:#333}</style></head><body>${body}</body></html>`;
+}
+
+// ── Format helpers ────────────────────────────────────────
+type Formatted = { content: string; filename: string; mime: string };
+
+function formatSummary(summary: string, fmt: string, base = 'summary'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    if (fmt === 'html') return { content: wrapHtml(marked.parse(summary) as string, 'Summary'), filename: `${base}_summary_${ts}.html`, mime: 'text/html' };
+    if (fmt === 'json') return { content: JSON.stringify({ type: 'summary', content: summary, timestamp: new Date().toISOString() }, null, 2), filename: `${base}_summary_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'md') return { content: summary, filename: `${base}_summary_${ts}.md`, mime: 'text/markdown' };
+    return { content: summary, filename: `${base}_summary_${ts}.txt`, mime: 'text/plain' };
+}
+
+function formatKeywords(keywords: string[], fmt: string, base = 'keywords'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    if (fmt === 'html') return { content: wrapHtml(`<div style="display:flex;flex-wrap:wrap;gap:10px">${keywords.map(k => `<span style="padding:6px 14px;border-radius:20px;background:linear-gradient(135deg,#8b5cf6,#a78bfa);color:#fff;font-weight:600">${k}</span>`).join('')}</div>`, 'Keywords'), filename: `${base}_keywords_${ts}.html`, mime: 'text/html' };
+    if (fmt === 'json') return { content: JSON.stringify({ type: 'keywords', keywords, timestamp: new Date().toISOString() }, null, 2), filename: `${base}_keywords_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'md') return { content: '# Keywords\n\n' + keywords.map(k => `- ${k}`).join('\n'), filename: `${base}_keywords_${ts}.md`, mime: 'text/markdown' };
+    return { content: keywords.join('\n'), filename: `${base}_keywords_${ts}.txt`, mime: 'text/plain' };
+}
+
+function formatAssessment(faqRaw: string, fmt: string, base = 'assessment'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    const items = parseFaq(faqRaw);
+    if (fmt === 'json') return { content: JSON.stringify(items, null, 2), filename: `${base}_assessment_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'html') {
+        const body = items.map((q, i) =>
+            `<div style="background:#fff;border-radius:12px;padding:24px;margin-bottom:20px;box-shadow:0 2px 8px rgba(0,0,0,.08);border-left:4px solid #8b5cf6">
+             <div style="font-weight:700;font-size:16px;margin-bottom:14px"><span style="background:linear-gradient(135deg,#8b5cf6,#a78bfa);color:#fff;padding:3px 10px;border-radius:6px;margin-right:10px;font-size:13px">Q${i + 1}</span>${q.question}</div>
+             ${Object.entries(q.options).map(([k, v]) => `<div style="padding:10px 14px;margin:6px 0;border-radius:8px;border:1px solid ${k === q.correct_answer ? '#10b981' : '#e5e7eb'};background:${k === q.correct_answer ? 'rgba(16,185,129,.08)' : '#f9fafb'}"><b style="color:${k === q.correct_answer ? '#10b981' : '#8b5cf6'}">${k}.</b> ${v}${k === q.correct_answer ? ' <span style="background:#10b981;color:#fff;padding:1px 7px;border-radius:4px;font-size:11px">✓</span>' : ''}</div>`).join('')}
+             <div style="margin-top:14px;padding:12px 16px;background:rgba(139,92,246,.06);border-left:3px solid #8b5cf6;border-radius:0 8px 8px 0;font-size:13px"><b style="color:#8b5cf6;font-size:11px;text-transform:uppercase">Explanation</b><br/>${q.explanation}</div>
+             </div>`
+        ).join('');
+        return { content: wrapHtml(body, 'Assessment Questions'), filename: `${base}_assessment_${ts}.html`, mime: 'text/html' };
+    }
+    // txt
+    const txt = items.map((q, i) =>
+        `Q${i + 1}. ${q.question}\n` +
+        Object.entries(q.options).map(([k, v]) => `  ${k}. ${v}${k === q.correct_answer ? ' ✓' : ''}`).join('\n') +
+        `\n\nAnswer: ${q.correct_answer}\nExplanation: ${q.explanation}`
+    ).join('\n\n' + '─'.repeat(60) + '\n\n');
+    return { content: txt, filename: `${base}_assessment_${ts}.txt`, mime: 'text/plain' };
+}
+
+function formatShortAnswer(raw: string, fmt: string, base = 'short_answer'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    const items = parsePyList<ShortAnswerItem>(raw);
+    if (fmt === 'json') return { content: JSON.stringify(items, null, 2), filename: `${base}_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'html') {
+        const body = items.map((item, i) =>
+            `<div style="background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.08);border-left:4px solid #4facfe">
+             <div style="font-weight:700;font-size:15px;margin-bottom:10px"><span style="background:#4facfe;color:#fff;padding:3px 10px;border-radius:6px;margin-right:10px;font-size:13px">Q${i + 1}</span>${item.question}</div>
+             <div style="padding:10px 14px;background:rgba(79,172,254,.08);border-radius:8px;font-size:13px"><b style="color:#4facfe">Answer:</b> ${item.answer}</div>
+             </div>`
+        ).join('');
+        return { content: wrapHtml(body, 'Short Answer Questions'), filename: `${base}_${ts}.html`, mime: 'text/html' };
+    }
+    const txt = items.map((item, i) => `Q${i + 1}. ${item.question}\nA: ${item.answer}`).join('\n\n' + '─'.repeat(60) + '\n\n');
+    return { content: txt, filename: `${base}_${ts}.txt`, mime: 'text/plain' };
+}
+
+function formatTrueFalse(raw: string, fmt: string, base = 'true_false'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    const items = parsePyList<TrueFalseItem>(raw);
+    if (fmt === 'json') return { content: JSON.stringify(items, null, 2), filename: `${base}_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'html') {
+        const body = items.map((item, i) =>
+            `<div style="background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.08);border-left:4px solid #43e97b">
+             <div style="font-weight:700;font-size:15px;margin-bottom:10px"><span style="background:#43e97b;color:#fff;padding:3px 10px;border-radius:6px;margin-right:10px;font-size:13px">${i + 1}</span>${item.statement}</div>
+             <div style="padding:10px 14px;background:rgba(67,233,123,.08);border-radius:8px;font-size:13px"><b style="color:#43e97b">Answer:</b> ${item.is_true ? 'True' : 'False'}</div>
+             <div style="margin-top:10px;font-size:13px;color:#666"><b>Explanation:</b> ${item.explanation}</div>
+             </div>`
+        ).join('');
+        return { content: wrapHtml(body, 'True / False Questions'), filename: `${base}_${ts}.html`, mime: 'text/html' };
+    }
+    const txt = items.map((item, i) => `${i + 1}. ${item.statement}\nAnswer: ${item.is_true ? 'True' : 'False'}\nExplanation: ${item.explanation}`).join('\n\n' + '─'.repeat(60) + '\n\n');
+    return { content: txt, filename: `${base}_${ts}.txt`, mime: 'text/plain' };
+}
+
+function formatTimestampedSummary(raw: string, fmt: string, base = 'timestamped_summary'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    const items = parsePyList<TimestampSegment>(raw);
+    if (fmt === 'json') return { content: JSON.stringify(items, null, 2), filename: `${base}_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'md') return { content: items.map(s => `### ${s.start_time} – ${s.end_time}\n\n${s.summary}`).join('\n\n'), filename: `${base}_${ts}.md`, mime: 'text/markdown' };
+    const txt = items.map(s => `[${s.start_time} – ${s.end_time}]\n${s.summary}`).join('\n\n');
+    return { content: txt, filename: `${base}_${ts}.txt`, mime: 'text/plain' };
+}
+
+
+const SUMMARY_FMTS = [{ k: 'txt', l: 'Text' }, { k: 'md', l: 'Markdown' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const KEYWORDS_FMTS = [{ k: 'txt', l: 'Text' }, { k: 'md', l: 'Markdown' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const ASSESSMENT_FMTS = [{ k: 'txt', l: 'Plain Text' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const SHORT_ANSWER_FMTS = [{ k: 'txt', l: 'Plain Text' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const TRUE_FALSE_FMTS = [{ k: 'txt', l: 'Plain Text' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const TIMESTAMPED_SUMMARY_FMTS = [{ k: 'txt', l: 'Text' }, { k: 'md', l: 'Markdown' }, { k: 'json', l: 'JSON' }];
+
+// ── ActionBtn ─────────────────────────────────────────────
+const ActionBtn: React.FC<{ title: string; onClick: () => void; active?: boolean; children: React.ReactNode }> = ({ title, onClick, active, children }) => (
+    <button className={`${styles.actionBtn} ${active ? styles.actionBtnActive : ''}`} title={title} onClick={e => { e.stopPropagation(); onClick(); }}>
+        {children}
+    </button>
+);
+
+// ── FormatIcon ────────────────────────────────────────────
+// Small colored glyph rendered next to each format option in the
+// Copy / Download dropdowns. Each format has a recognisable hue.
+const FORMAT_ICONS: Record<string, { color: string; bg: string; node: React.ReactNode }> = {
+    txt: {
+        color: '#64748b',
+        bg: 'rgba(100, 116, 139, 0.12)',
+        node: (
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 2.5h6.5L13 6v7.5A1 1 0 0112 14.5H3a1 1 0 01-1-1v-10a1 1 0 011-1z" />
+                <path d="M9 2.5V6h4" />
+                <path d="M5 9h6M5 11.5h4" />
+            </svg>
+        ),
+    },
+    md: {
+        color: '#3b82f6',
+        bg: 'rgba(59, 130, 246, 0.14)',
+        node: (
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="1.5" y="3.5" width="13" height="9" rx="1.5" />
+                <path d="M4 10.5V6l1.75 2.5L7.5 6v4.5" />
+                <path d="M10.25 6v4.5M8.75 9l1.5 1.5L11.75 9" />
+            </svg>
+        ),
+    },
+    html: {
+        color: '#e34f26',
+        bg: 'rgba(227, 79, 38, 0.14)',
+        node: (
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M2.5 2l1 12 4.5 1.3L12.5 14l1-12z" />
+                <path d="M5 5.5h6L10.6 11l-2.6.8L5.4 11l-.15-2" />
+            </svg>
+        ),
+    },
+    json: {
+        color: '#f59e0b',
+        bg: 'rgba(245, 158, 11, 0.14)',
+        node: (
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M6 2.5C4.5 2.5 4 3.5 4 5v1.5C4 7.5 3 8 2 8c1 0 2 .5 2 1.5V11c0 1.5.5 2.5 2 2.5" />
+                <path d="M10 2.5c1.5 0 2 1 2 2.5v1.5C12 7.5 13 8 14 8c-1 0-2 .5-2 1.5V11c0 1.5-.5 2.5-2 2.5" />
+            </svg>
+        ),
+    },
+};
+
+const FormatIcon: React.FC<{ fmt: string }> = ({ fmt }) => {
+    const def = FORMAT_ICONS[fmt];
+    if (!def) return null;
+    return (
+        <span
+            className={styles.fmtIcon}
+            style={{ color: def.color, background: def.bg }}
+            aria-hidden="true"
+        >
+            {def.node}
+        </span>
+    );
+};
+
+// ── Dropdown ──────────────────────────────────────────────
+const Dropdown: React.FC<{
+    icon: React.ReactNode; title: string; label: string;
+    fmts: { k: string; l: string }[];
+    onSelect: (k: string) => void; active?: boolean;
+}> = ({ icon, title, label, fmts, onSelect, active }) => {
+    const [open, setOpen] = useState(false);
+    const ref = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+        document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h);
+    }, []);
+    return (
+        <div className={styles.dropdownWrap} ref={ref}>
+            <ActionBtn title={title} onClick={() => setOpen(o => !o)} active={open || active}>{icon}</ActionBtn>
+            {open && (
+                <div className={styles.dropdown}>
+                    <div className={styles.dropdownLabel}>{label}</div>
+                    {fmts.map(f => (
+                        <button
+                            key={f.k}
+                            className={styles.dropdownItem}
+                            onClick={() => { onSelect(f.k); setOpen(false); }}
+                        >
+                            <FormatIcon fmt={f.k} />
+                            <span className={styles.dropdownItemLabel}>{f.l}</span>
+                        </button>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Icons ─────────────────────────────────────────────────
+const IcoEdit = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M7 2.5H3.5A1.5 1.5 0 002 4v8.5A1.5 1.5 0 003.5 14H12a1.5 1.5 0 001.5-1.5V9" />
+        <path d="M11.5 1.5a1.414 1.414 0 012 2L8 9l-2.5.5.5-2.5 5.5-5.5z" />
+    </svg>
+);
+const IcoCopy = ({ success }: { success: boolean }) => success ? (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={styles.successIcon}><path d="M3 8l3.5 3.5L13 4" /></svg>
+) : (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="5" y="5" width="8" height="9" rx="1.5" />
+        <path d="M10 5V4a1 1 0 00-1-1H4a1.5 1.5 0 00-1.5 1.5V11a1 1 0 001 1h1" />
+    </svg>
+);
+const IcoDownload = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M8 2v8M5 7l3 3 3-3" />
+        <path d="M2 12v1.5A1.5 1.5 0 003.5 15h9a1.5 1.5 0 001.5-1.5V12" />
+    </svg>
+);
+
+// ── TabToolbar: edit + copy + download ───────────────────
+const TabToolbar: React.FC<{
+    onEdit?: () => void;
+    fmts: { k: string; l: string }[];
+    onCopy: (k: string) => void;
+    onDownload: (k: string) => void;
+    copied: boolean;
+}> = ({ onEdit, fmts, onCopy, onDownload, copied }) => {
+    const { t } = useTranslation();
+    return (
+        <div className={styles.tabToolbar}>
+            {onEdit && <ActionBtn title={t('uploadInfer.workspacePanel.edit')} onClick={onEdit}><IcoEdit /></ActionBtn>}
+            <Dropdown icon={<IcoCopy success={copied} />} title={t('uploadInfer.workspacePanel.copy')} label={t('uploadInfer.workspacePanel.copyAs')} fmts={fmts} onSelect={onCopy} active={copied} />
+            <Dropdown icon={<IcoDownload />} title={t('uploadInfer.workspacePanel.download')} label={t('uploadInfer.workspacePanel.downloadAs')} fmts={fmts} onSelect={onDownload} />
+        </div>
+    );
+};
+
+// ── Stable keyword chip ───────────────────────────────────
+const KeywordChip: React.FC<{ kw: string; isNew: boolean }> = ({ kw, isNew }) => (
+    <span className={`${styles.keywordPill} ${isNew ? styles.keywordPillNew : ''}`}
+        style={{ background: CHIP_COLORS[seededColorIndex(kw)] }}>
+        {kw}
+    </span>
+);
+
+const ChipGrid: React.FC<{ kws: string[]; prevSet?: Set<string> }> = ({ kws, prevSet }) => {
+    const { t } = useTranslation();
+    return kws.length > 0 ? (
+        <div className={styles.keywordGrid}>
+            {kws.map(kw => <KeywordChip key={kw} kw={kw} isNew={prevSet ? !prevSet.has(kw) : false} />)}
+        </div>
+    ) : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noKeywords')}</div>;
+};
+
+// ── Tab: Summary ──────────────────────────────────────────
+const TabSummary: React.FC<{ summary: string; fileId: number; onSaved: (s: string) => void }> = ({ summary, fileId, onSaved }) => {
+    const { t } = useTranslation();
+    const [editing, setEditing] = useState(false);
+    const [draft, setDraft] = useState(summary);
+    const [saving, setSaving] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    const html = useMemo(() => marked.parse(draft) as string, [draft]);
+    const viewHtml = useMemo(() => marked.parse(summary) as string, [summary]);
+
+    const handleSave = async () => {
+        setSaving(true);
+        try { await api.post('/files/update', { fileID: String(fileId), summary: draft }); onSaved(draft); setEditing(false); }
+        finally { setSaving(false); }
+    };
+    const handleCopy = (fmt: string) => { copyText(formatSummary(summary, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatSummary(summary, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!summary && !editing) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noSummary')}</div>;
+
+    return (
+        <div className={`${styles.tabContent} ${editing ? styles.editMode : ''}`}>
+            {!editing ? (
+                <>
+                    <TabToolbar onEdit={() => { setDraft(summary); setEditing(true); }} fmts={SUMMARY_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+                    <div className={styles.summaryMd} dangerouslySetInnerHTML={{ __html: viewHtml }} />
+                </>
+            ) : (
+                <div className={styles.editLayout}>
+                    <div className={styles.editCol}>
+                        <div className={styles.editColHeader}><span className={styles.editColLabel}>{t('uploadInfer.workspacePanel.editColPreview')}</span><span className={styles.editColTag}>{t('uploadInfer.workspacePanel.markdownRenderer')}</span></div>
+                        <div className={styles.editPreview}><div className={styles.summaryMd} dangerouslySetInnerHTML={{ __html: html }} /></div>
+                    </div>
+                    <div className={styles.editCol}>
+                        <div className={styles.editColHeader}><span className={styles.editColLabel}>{t('uploadInfer.workspacePanel.editColEdit')}</span><span className={styles.editColTag}>{t('uploadInfer.workspacePanel.markdownTag')}</span></div>
+                        <textarea className={styles.editTextarea} value={draft} onChange={e => setDraft(e.target.value)} spellCheck={false} />
+                    </div>
+                    <div className={styles.editFooter}>
+                        <button className={styles.cancelBtn} onClick={() => setEditing(false)} disabled={saving}>{t('uploadInfer.workspacePanel.cancel')}</button>
+                        <button className={styles.saveBtn} onClick={handleSave} disabled={saving}>
+                            {saving ? <><span className={styles.inlineSpinner} />{t('uploadInfer.workspacePanel.saving')}</> : t('uploadInfer.workspacePanel.save')}
+                        </button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Tab: Keywords ─────────────────────────────────────────
+const TabKeywords: React.FC<{ keywords: string[]; fileId: number; onSaved: (kws: string[]) => void }> = ({ keywords, fileId, onSaved }) => {
+    const { t } = useTranslation();
+    const [editing, setEditing] = useState(false);
+    const [draft, setDraft] = useState(keywords.join('\n'));
+    const [saving, setSaving] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    // prevSetSnapshot holds the keyword set from the PREVIOUS render of ChipGrid
+    // so only truly new chips get the pop animation
+    const prevSetSnapshot = useRef<Set<string>>(new Set(keywords));
+
+    const draftKeywords = useMemo(() => draft.split('\n').map(k => k.trim()).filter(Boolean), [draft]);
+
+    // After each render, schedule an update of the snapshot so the *next*
+    // render can compare against what's currently visible
+    useEffect(() => {
+        const id = setTimeout(() => { prevSetSnapshot.current = new Set(draftKeywords); }, 0);
+        return () => clearTimeout(id);
+    }, [draftKeywords]);
+
+    const handleSave = async () => {
+        setSaving(true);
+        try { await api.post('/files/update', { fileID: String(fileId), keywords: draftKeywords }); onSaved(draftKeywords); setEditing(false); }
+        finally { setSaving(false); }
+    };
+    const handleCopy = (fmt: string) => { copyText(formatKeywords(keywords, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatKeywords(keywords, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!keywords.length && !editing) return <div className={styles.tabEmpty}>No keywords available.</div>;
+
+    return (
+        <div className={`${styles.tabContent} ${editing ? styles.editMode : ''}`}>
+            {!editing ? (
+                <>
+                    <TabToolbar onEdit={() => { setDraft(keywords.join('\n')); prevSetSnapshot.current = new Set(keywords); setEditing(true); }} fmts={KEYWORDS_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+                    <ChipGrid kws={keywords} />
+                </>
+            ) : (
+                <div className={styles.editLayout}>
+                    <div className={styles.editCol}>
+                        <div className={styles.editColHeader}><span className={styles.editColLabel}>{t('uploadInfer.workspacePanel.editColPreview')}</span><span className={styles.editColTag}>{t('uploadInfer.workspacePanel.chipView')}</span></div>
+                        <div className={styles.editPreview}>
+                            <ChipGrid kws={draftKeywords} prevSet={prevSetSnapshot.current} />
+                        </div>
+                    </div>
+                    <div className={styles.editCol}>
+                        <div className={styles.editColHeader}><span className={styles.editColLabel}>{t('uploadInfer.workspacePanel.editColEdit')}</span><span className={styles.editColTag}>{t('uploadInfer.workspacePanel.onePerLine')}</span></div>
+                        <textarea className={styles.editTextarea} value={draft} onChange={e => setDraft(e.target.value)} spellCheck={false} placeholder={t('uploadInfer.workspacePanel.keywordPlaceholder')} />
+                    </div>
+                    <div className={styles.editFooter}>
+                        <button className={styles.cancelBtn} onClick={() => setEditing(false)} disabled={saving}>{t('uploadInfer.workspacePanel.cancel')}</button>
+                        <button className={styles.saveBtn} onClick={handleSave} disabled={saving}>
+                            {saving ? <><span className={styles.inlineSpinner} />{t('uploadInfer.workspacePanel.saving')}</> : t('uploadInfer.workspacePanel.save')}
+                        </button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Tab: Assessment ───────────────────────────────────────
+type AssessMode = 'mcq' | 'all';
+
+const TabAssessment: React.FC<{ faq: string }> = ({ faq }) => {
+    const { t } = useTranslation();
+    const items = useMemo(() => parseFaq(faq), [faq]);
+
+    // Always default to MCQ; reset when faq changes (new file)
+    const [mode, setMode] = useState<AssessMode>('mcq');
+    const [current, setCurrent] = useState(0);
+    const [selected, setSelected] = useState<string | null>(null);
+    const [revealed, setRevealed] = useState(false);
+    const [complete, setComplete] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    const prevFaq = useRef(faq);
+    useEffect(() => {
+        if (faq !== prevFaq.current) {
+            prevFaq.current = faq;
+            setMode('mcq');
+            setCurrent(0); setSelected(null); setRevealed(false); setComplete(false);
+        }
+    }, [faq]);
+
+    const handleCopy = (fmt: string) => { copyText(formatAssessment(faq, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatAssessment(faq, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!items.length) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noQuestions')}</div>;
+
+    // ── MCQ helpers ───────────────────────────────────────
+    const q = items[current];
+    const isLast = current === items.length - 1;
+    const progress = Math.round(((current + (complete ? 1 : 0)) / items.length) * 100);
+
+    const handleSelect = (key: string) => { if (revealed) return; setSelected(key); setRevealed(true); };
+    const handleNext = () => { if (isLast) setComplete(true); else { setCurrent(c => c + 1); setSelected(null); setRevealed(false); } };
+    const handleRestart = () => { setCurrent(0); setSelected(null); setRevealed(false); setComplete(false); };
+    const getOptClass = (key: string) => {
+        if (!revealed) return selected === key ? styles.faqOptSelected : '';
+        if (key === q.correct_answer && selected === key) return styles.faqOptCorrect;
+        if (key === q.correct_answer) return styles.faqOptCorrectAlt;
+        if (key === selected) return styles.faqOptWrong;
+        return '';
+    };
+
+    return (
+        <div className={styles.tabContent}>
+            {/* Toolbar row: mode tabs left, copy/download right */}
+            <div className={styles.assessHeader}>
+                <div className={styles.assessModeTabs}>
+                    <button
+                        className={`${styles.assessModeTab} ${mode === 'mcq' ? styles.assessModeTabActive : ''}`}
+                        onClick={() => setMode('mcq')}
+                    >
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="8" cy="8" r="6" />
+                            <path d="M6 8.5l1.5 1.5L10.5 6" />
+                        </svg>
+                        MCQ
+                    </button>
+                    <button
+                        className={`${styles.assessModeTab} ${mode === 'all' ? styles.assessModeTabActive : ''}`}
+                        onClick={() => setMode('all')}
+                    >
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M2 4h12M2 8h12M2 12h8" />
+                        </svg>
+                        View All
+                    </button>
+                </div>
+                <TabToolbar fmts={ASSESSMENT_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+            </div>
+
+            {/* ── MCQ mode ── */}
+            {mode === 'mcq' && (
+                complete ? (
+                    <div className={styles.assessComplete}>
+                        <div className={styles.assessCompleteIcon}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                        </div>
+                        <div className={styles.assessCompleteTitle}>{t('uploadInfer.workspacePanel.assessCompleteTitle')}</div>
+                        <div className={styles.assessCompleteDesc}>{t('uploadInfer.workspacePanel.assessCompleteDesc', { count: items.length })}</div>
+                        <button className={styles.assessRestartBtn} onClick={handleRestart}>{t('uploadInfer.workspacePanel.restart')}</button>
+                    </div>
+                ) : (
+                    <>
+                        <div className={styles.assessProgress}>
+                            <div className={styles.assessProgressTrack}>
+                                <div className={styles.assessProgressFill} style={{ width: `${progress}%` }} />
+                            </div>
+                            <span className={styles.assessProgressLabel}>{current + 1} / {items.length}</span>
+                        </div>
+                        <div className={styles.faqCard}>
+                            <div className={styles.faqQ}>
+                                <span className={styles.faqNum}>Q{current + 1}</span>
+                                {q.question}
+                            </div>
+                            <div className={styles.faqOptions}>
+                                {Object.entries(q.options).map(([key, val]) => (
+                                    <button key={key} className={`${styles.faqOpt} ${getOptClass(key)}`} onClick={() => handleSelect(key)} disabled={revealed}>
+                                        <span className={styles.faqOptKey}>{key}</span>
+                                        <span className={styles.faqOptVal}>{val}</span>
+                                        {revealed && key === q.correct_answer && <svg className={styles.faqCheckIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 8l3.5 3.5L13 4" /></svg>}
+                                        {revealed && key === selected && key !== q.correct_answer && <svg className={styles.faqXIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>}
+                                    </button>
+                                ))}
+                            </div>
+                            {revealed && (
+                                <div className={styles.faqExplain}>
+                                    <div className={styles.faqExplainLabel}>
+                                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" /><path d="M8 7v4M8 5.5v.5" /></svg>
+                                        Explanation
+                                    </div>
+                                    <p className={styles.faqExplainText}>{q.explanation}</p>
+                                </div>
+                            )}
+                        </div>
+                        {revealed && (
+                            <button className={`${styles.assessNextBtn} ${isLast ? styles.assessDoneBtn : ''}`} onClick={handleNext}>
+                                {isLast ? t('uploadInfer.workspacePanel.finish') : t('uploadInfer.workspacePanel.next')}
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                    {isLast ? <path d="M3 8l3.5 3.5L13 4" /> : <path d="M3 8h10M9 4l4 4-4 4" />}
+                                </svg>
+                            </button>
+                        )}
+                    </>
+                )
+            )}
+
+            {/* ── View All mode ── */}
+            {mode === 'all' && (
+                <div className={styles.viewAllList}>
+                    {items.map((item, idx) => (
+                        <div key={idx} className={styles.viewAllCard}>
+                            {/* Question */}
+                            <div className={styles.viewAllQ}>
+                                <span className={styles.faqNum}>Q{idx + 1}</span>
+                                {item.question}
+                            </div>
+
+                            {/* Options */}
+                            <div className={styles.faqOptions}>
+                                {Object.entries(item.options).map(([key, val]) => (
+                                    <div
+                                        key={key}
+                                        className={`${styles.faqOpt} ${key === item.correct_answer ? styles.faqOptCorrectAlt : styles.viewAllOptNeutral}`}
+                                    >
+                                        <span className={`${styles.faqOptKey} ${key === item.correct_answer ? styles.faqOptKeyCorrect : ''}`}>{key}</span>
+                                        <span className={styles.faqOptVal}>{val}</span>
+                                        {key === item.correct_answer && (
+                                            <svg className={styles.faqCheckIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                                <path d="M3 8l3.5 3.5L13 4" />
+                                            </svg>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+
+                            {/* Explanation */}
+                            <div className={styles.faqExplain}>
+                                <div className={styles.faqExplainLabel}>
+                                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                                        <circle cx="8" cy="8" r="6" /><path d="M8 7v4M8 5.5v.5" />
+                                    </svg>
+                                    Explanation
+                                </div>
+                                <p className={styles.faqExplainText}>{item.explanation}</p>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Tab: Short Answer ──────────────────────────────────────
+const TabShortAnswer: React.FC<{ raw: string }> = ({ raw }) => {
+    const { t } = useTranslation();
+    const items = useMemo(() => parsePyList<ShortAnswerItem>(raw), [raw]);
+    const [revealedIds, setRevealedIds] = useState<Set<number>>(new Set());
+    const [copied, setCopied] = useState(false);
+
+    const prevRaw = useRef(raw);
+    useEffect(() => { if (raw !== prevRaw.current) { prevRaw.current = raw; setRevealedIds(new Set()); } }, [raw]);
+
+    const toggleReveal = (idx: number) => setRevealedIds(prev => {
+        const next = new Set(prev);
+        if (next.has(idx)) next.delete(idx); else next.add(idx);
+        return next;
+    });
+    const allRevealed = items.length > 0 && revealedIds.size === items.length;
+    const toggleAll = () => setRevealedIds(allRevealed ? new Set() : new Set(items.map((_, i) => i)));
+
+    const handleCopy = (fmt: string) => { copyText(formatShortAnswer(raw, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatShortAnswer(raw, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!items.length) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noShortAnswer')}</div>;
+
+    return (
+        <div className={styles.tabContent}>
+            <div className={styles.assessHeader}>
+                <button className={styles.revealAllBtn} onClick={toggleAll}>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8s-2.5 4.5-6.5 4.5S1.5 8 1.5 8z" /><circle cx="8" cy="8" r="2" />
+                    </svg>
+                    {allRevealed ? t('uploadInfer.workspacePanel.hideAllAnswers') : t('uploadInfer.workspacePanel.showAllAnswers')}
+                </button>
+                <TabToolbar fmts={SHORT_ANSWER_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+            </div>
+            <div className={styles.viewAllList}>
+                {items.map((item, idx) => {
+                    const revealed = revealedIds.has(idx);
+                    return (
+                        <div key={idx} className={styles.viewAllCard}>
+                            <div className={styles.viewAllQ}>
+                                <span className={styles.faqNum}>Q{idx + 1}</span>
+                                {item.question}
+                            </div>
+                            {revealed ? (
+                                <div className={styles.shortAnswerBox}>
+                                    <div className={styles.shortAnswerLabel}>{t('uploadInfer.workspacePanel.answer')}</div>
+                                    <p className={styles.shortAnswerText}>{item.answer}</p>
+                                </div>
+                            ) : (
+                                <button className={styles.revealBtn} onClick={() => toggleReveal(idx)}>
+                                    {t('uploadInfer.workspacePanel.revealAnswer')}
+                                </button>
+                            )}
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
+};
+
+// ── Tab: True / False ────────────────────────────────────────
+type TfMode = 'quiz' | 'all';
+
+const TabTrueFalse: React.FC<{ raw: string }> = ({ raw }) => {
+    const { t } = useTranslation();
+    const items = useMemo(() => parsePyList<TrueFalseItem>(raw), [raw]);
+
+    const [mode, setMode] = useState<TfMode>('quiz');
+    const [current, setCurrent] = useState(0);
+    const [selected, setSelected] = useState<'true' | 'false' | null>(null);
+    const [revealed, setRevealed] = useState(false);
+    const [complete, setComplete] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    const prevRaw = useRef(raw);
+    useEffect(() => {
+        if (raw !== prevRaw.current) {
+            prevRaw.current = raw;
+            setMode('quiz');
+            setCurrent(0); setSelected(null); setRevealed(false); setComplete(false);
+        }
+    }, [raw]);
+
+    const handleCopy = (fmt: string) => { copyText(formatTrueFalse(raw, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatTrueFalse(raw, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!items.length) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noTrueFalse')}</div>;
+
+    const q = items[current];
+    const correctKey: 'true' | 'false' = q.is_true ? 'true' : 'false';
+    const isLast = current === items.length - 1;
+    const progress = Math.round(((current + (complete ? 1 : 0)) / items.length) * 100);
+
+    const handleSelect = (key: 'true' | 'false') => { if (revealed) return; setSelected(key); setRevealed(true); };
+    const handleNext = () => { if (isLast) setComplete(true); else { setCurrent(c => c + 1); setSelected(null); setRevealed(false); } };
+    const handleRestart = () => { setCurrent(0); setSelected(null); setRevealed(false); setComplete(false); };
+    const getOptClass = (key: 'true' | 'false') => {
+        if (!revealed) return selected === key ? styles.faqOptSelected : '';
+        if (key === correctKey && selected === key) return styles.faqOptCorrect;
+        if (key === correctKey) return styles.faqOptCorrectAlt;
+        if (key === selected) return styles.faqOptWrong;
+        return '';
+    };
+
+    return (
+        <div className={styles.tabContent}>
+            <div className={styles.assessHeader}>
+                <div className={styles.assessModeTabs}>
+                    <button className={`${styles.assessModeTab} ${mode === 'quiz' ? styles.assessModeTabActive : ''}`} onClick={() => setMode('quiz')}>
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="8" cy="8" r="6" /><path d="M6 8.5l1.5 1.5L10.5 6" />
+                        </svg>
+                        {t('uploadInfer.workspacePanel.quizMode')}
+                    </button>
+                    <button className={`${styles.assessModeTab} ${mode === 'all' ? styles.assessModeTabActive : ''}`} onClick={() => setMode('all')}>
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M2 4h12M2 8h12M2 12h8" />
+                        </svg>
+                        {t('uploadInfer.workspacePanel.viewAll')}
+                    </button>
+                </div>
+                <TabToolbar fmts={TRUE_FALSE_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+            </div>
+
+            {mode === 'quiz' && (
+                complete ? (
+                    <div className={styles.assessComplete}>
+                        <div className={styles.assessCompleteIcon}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                        </div>
+                        <div className={styles.assessCompleteTitle}>{t('uploadInfer.workspacePanel.assessCompleteTitle')}</div>
+                        <div className={styles.assessCompleteDesc}>{t('uploadInfer.workspacePanel.assessCompleteDesc', { count: items.length })}</div>
+                        <button className={styles.assessRestartBtn} onClick={handleRestart}>{t('uploadInfer.workspacePanel.restart')}</button>
+                    </div>
+                ) : (
+                    <>
+                        <div className={styles.assessProgress}>
+                            <div className={styles.assessProgressTrack}><div className={styles.assessProgressFill} style={{ width: `${progress}%` }} /></div>
+                            <span className={styles.assessProgressLabel}>{current + 1} / {items.length}</span>
+                        </div>
+                        <div className={styles.faqCard}>
+                            <div className={styles.faqQ}>
+                                <span className={styles.faqNum}>{current + 1}</span>
+                                {q.statement}
+                            </div>
+                            <div className={styles.tfOptions}>
+                                {(['true', 'false'] as const).map(key => (
+                                    <button key={key} className={`${styles.tfOpt} ${getOptClass(key)}`} onClick={() => handleSelect(key)} disabled={revealed}>
+                                        <span className={styles.tfOptLabel}>{key === 'true' ? t('uploadInfer.workspacePanel.true') : t('uploadInfer.workspacePanel.false')}</span>
+                                        {revealed && key === correctKey && <svg className={styles.faqCheckIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 8l3.5 3.5L13 4" /></svg>}
+                                        {revealed && key === selected && key !== correctKey && <svg className={styles.faqXIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>}
+                                    </button>
+                                ))}
+                            </div>
+                            {revealed && (
+                                <div className={styles.faqExplain}>
+                                    <div className={styles.faqExplainLabel}>
+                                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" /><path d="M8 7v4M8 5.5v.5" /></svg>
+                                        {t('uploadInfer.workspacePanel.explanation')}
+                                    </div>
+                                    <p className={styles.faqExplainText}>{q.explanation}</p>
+                                </div>
+                            )}
+                        </div>
+                        {revealed && (
+                            <button className={`${styles.assessNextBtn} ${isLast ? styles.assessDoneBtn : ''}`} onClick={handleNext}>
+                                {isLast ? t('uploadInfer.workspacePanel.finish') : t('uploadInfer.workspacePanel.next')}
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                    {isLast ? <path d="M3 8l3.5 3.5L13 4" /> : <path d="M3 8h10M9 4l4 4-4 4" />}
+                                </svg>
+                            </button>
+                        )}
+                    </>
+                )
+            )}
+
+            {mode === 'all' && (
+                <div className={styles.viewAllList}>
+                    {items.map((item, idx) => {
+                        const ck: 'true' | 'false' = item.is_true ? 'true' : 'false';
+                        return (
+                            <div key={idx} className={styles.viewAllCard}>
+                                <div className={styles.viewAllQ}>
+                                    <span className={styles.faqNum}>{idx + 1}</span>
+                                    {item.statement}
+                                </div>
+                                <div className={styles.tfOptions}>
+                                    {(['true', 'false'] as const).map(key => (
+                                        <div key={key} className={`${styles.tfOpt} ${key === ck ? styles.faqOptCorrectAlt : styles.viewAllOptNeutral}`}>
+                                            <span className={styles.tfOptLabel}>{key === 'true' ? t('uploadInfer.workspacePanel.true') : t('uploadInfer.workspacePanel.false')}</span>
+                                            {key === ck && <svg className={styles.faqCheckIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 8l3.5 3.5L13 4" /></svg>}
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className={styles.faqExplain}>
+                                    <div className={styles.faqExplainLabel}>
+                                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" /><path d="M8 7v4M8 5.5v.5" /></svg>
+                                        {t('uploadInfer.workspacePanel.explanation')}
+                                    </div>
+                                    <p className={styles.faqExplainText}>{item.explanation}</p>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Tab: Timestamped Summary ─────────────────────────────────
+const TabTimestampedSummary: React.FC<{ raw: string }> = ({ raw }) => {
+    const { t } = useTranslation();
+    const items = useMemo(() => parsePyList<TimestampSegment>(raw), [raw]);
+    const [copied, setCopied] = useState(false);
+
+    const handleCopy = (fmt: string) => { copyText(formatTimestampedSummary(raw, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatTimestampedSummary(raw, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!items.length) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noTimestampedSummary')}</div>;
+
+    return (
+        <div className={styles.tabContent}>
+            <TabToolbar fmts={TIMESTAMPED_SUMMARY_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+            <div className={styles.tsList}>
+                {items.map((seg, idx) => (
+                    <div key={idx} className={styles.tsRow}>
+                        <div className={styles.tsRail}>
+                            <div className={styles.tsDot} />
+                            {idx < items.length - 1 && <div className={styles.tsLine} />}
+                        </div>
+                        <div className={styles.tsCard}>
+                            <div className={styles.tsRange}>{seg.start_time} <span className={styles.tsArrow}>→</span> {seg.end_time}</div>
+                            <p className={styles.tsText}>{seg.summary}</p>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+
+// ── Keyword Insights: shared node-link graph (used for Knowledge Graph) ──
+interface GNode { id: string; label: string; value?: number; }
+interface GEdge { source: string; target: string; label?: string; }
+
+function buildGraphNodes(nodes: GNode[], edges: GEdge[]): GNode[] {
+    const norm = (s: string) => s.trim().toLowerCase();
+    const byKey = new Map<string, GNode>();
+    const byId = new Map<string, GNode>();
+    nodes.forEach(n => {
+        byKey.set(norm(n.id), n); byKey.set(norm(n.label), n); byId.set(n.id, n);
+    });
+    edges.forEach(e => {
+        [e.source, e.target].forEach(ref => {
+            const k = norm(ref);
+            if (!byKey.has(k)) {
+                const synth: GNode = { id: ref, label: ref, value: 1 };
+                byKey.set(k, synth); byId.set(ref, synth);
+            }
+        });
+    });
+    return Array.from(byId.values());
+}
+
+// Custom node — a labeled circle sized by `value`, with an invisible
+// handle on all 4 sides (each doubling as source+target) so edges can
+// connect from whichever side actually faces the other node.
+// Multi-word labels wrap onto multiple lines (capped at LABEL_MAX_W).
+// Single unbroken words (no spaces/hyphens — common for keyword nodes)
+// are NOT force-wrapped: breaking a word with no natural break point
+// inside a narrow box is what produced near-vertical stacks of 1-2
+// characters per line. Those get their own width instead, up to
+// LABEL_HARD_MAX_W.
+const LABEL_MAX_W = 150;
+const LABEL_HARD_MAX_W = 220;
+const LABEL_CHAR_W = 6.1; // ~px per character at the label's font size
+const LABEL_LINE_H = 14;
+
+function estimateNodeBox(label: string, circleSize: number) {
+    const hasBreakPoint = /[\s-]/.test(label);
+    const rawTextWidth = label.length * LABEL_CHAR_W + 8;
+    const capWidth = hasBreakPoint ? LABEL_MAX_W : LABEL_HARD_MAX_W;
+    const labelWidth = Math.min(capWidth, Math.max(rawTextWidth, 44));
+    const lines = hasBreakPoint ? Math.max(1, Math.ceil(rawTextWidth / LABEL_MAX_W)) : 1;
+    const w = Math.max(circleSize, labelWidth, 72) + 16;
+    const h = circleSize + 16 + lines * LABEL_LINE_H;
+    return { w, h, labelWidth };
+}
+
+const MindMapNode: React.FC<{ data: { label: string; value?: number; labelWidth?: number } }> = ({ data }) => {
+    const size = 34 + Math.min(26, (data.value ?? 1) * 4);
+    const hasBreakPoint = /[\s-]/.test(data.label);
+    return (
+        <div className={styles.rfNode} style={{ width: size, height: size }} title={data.label}>
+            <Handle type="target" position={Position.Top} id="top-target" className={styles.rfHandle} />
+            <Handle type="source" position={Position.Bottom} id="bottom-source" className={styles.rfHandle} />
+            <span
+                className={styles.rfNodeLabel}
+                style={{ maxWidth: data.labelWidth ?? LABEL_MAX_W, whiteSpace: hasBreakPoint ? 'normal' : 'nowrap' }}
+            >
+                {data.label}
+            </span>
+        </div>
+    );
+};
+const RF_NODE_TYPES = { mindmap: MindMapNode };
+
+// ── Dagre auto-layout — replaces naive circular placement, which packed
+//    nodes on top of each other once a graph had more than a handful of
+//    them. Dagre lays nodes out in ranked layers with guaranteed spacing,
+//    so nothing overlaps regardless of graph size. ──
+function computeDagreLayout(nodes: GNode[], edges: GEdge[]) {
+    const g = new dagre.graphlib.Graph();
+    g.setGraph({ rankdir: 'TB', nodesep: 72, ranksep: 150, marginx: 60, marginy: 60, acyclicer: 'greedy' });
+    g.setDefaultEdgeLabel(() => ({}));
+
+    const dims = new Map<string, { w: number; h: number; labelWidth: number }>();
+    nodes.forEach(n => {
+        const size = 34 + Math.min(26, (n.value ?? 1) * 4);
+        const dim = estimateNodeBox(n.label, size);
+        dims.set(n.id, dim);
+        g.setNode(n.id, dim);
+    });
+
+    const norm = (s: string) => s.trim().toLowerCase();
+    const byKey = new Map<string, string>();
+    nodes.forEach(n => { byKey.set(norm(n.id), n.id); byKey.set(norm(n.label), n.id); });
+
+    // Dedupe edges — repeated source/target pairs don't add information but
+    // do add extra crowded lines between the same two nodes.
+    const seenEdges = new Set<string>();
+    const resolvedEdges: { source: string; target: string; label?: string }[] = [];
+    edges.forEach(e => {
+        const s = byKey.get(norm(e.source));
+        const tg = byKey.get(norm(e.target));
+        if (!s || !tg || s === tg) return;
+        const key = `${s}→${tg}`;
+        if (seenEdges.has(key)) return;
+        seenEdges.add(key);
+        // Reserve space for the edge's own label too — without this, dagre
+        // has no idea the label text exists and will happily route another
+        // node right where that text needs to sit.
+        const label = e.label?.trim();
+        g.setEdge(s, tg, label ? { width: Math.min(120, label.length * LABEL_CHAR_W + 12), height: LABEL_LINE_H + 8, labelpos: 'c' } : {});
+        resolvedEdges.push({ source: s, target: tg, label: e.label });
+    });
+
+    dagre.layout(g);
+
+    const positioned = nodes.map(n => {
+        const pos = g.node(n.id);
+        const dim = dims.get(n.id)!;
+        // Dagre positions are centers — React Flow expects top-left.
+        return { ...n, x: pos.x - dim.w / 2, y: pos.y - dim.h / 2, labelWidth: dim.labelWidth };
+    });
+    return { positioned, resolvedEdges };
+}
+
+// ── Forest layout — each disconnected tree gets its own horizontal
+//    (root → children growing left-to-right) dagre layout, then the trees
+//    are stacked vertically underneath one another. Labels stay perfectly
+//    horizontal either way (that's just CSS text direction, unaffected by
+//    which way the tree branches), but growing each tree sideways instead
+//    of downward gives multi-word labels far more horizontal room before
+//    they need to wrap, and keeps unrelated trees visually separated
+//    instead of interleaved in one shared vertical ranking. ──
+function computeForestLayout(nodes: GNode[], edges: GEdge[]) {
+    const norm = (s: string) => s.trim().toLowerCase();
+    const byKey = new Map<string, string>();
+    nodes.forEach(n => { byKey.set(norm(n.id), n.id); byKey.set(norm(n.label), n.id); });
+
+    // Reduce to one parent per node — same rule as treeMode above, so each
+    // node belongs to exactly one tree with no crossing multi-parent edges.
+    const seenEdges = new Set<string>();
+    const hasParent = new Set<string>();
+    const treeEdges: { source: string; target: string; label?: string }[] = [];
+    edges.forEach(e => {
+        const s = byKey.get(norm(e.source));
+        const tg = byKey.get(norm(e.target));
+        if (!s || !tg || s === tg) return;
+        const key = `${s}→${tg}`;
+        if (seenEdges.has(key) || hasParent.has(tg)) return;
+        seenEdges.add(key);
+        hasParent.add(tg);
+        treeEdges.push({ source: s, target: tg, label: e.label });
+    });
+
+    // Union-find to group nodes into connected components (one per tree,
+    // including singleton nodes with no edges at all).
+    const uf = new Map<string, string>();
+    nodes.forEach(n => uf.set(n.id, n.id));
+    const find = (x: string): string => {
+        let root = x;
+        while (uf.get(root) !== root) root = uf.get(root)!;
+        while (uf.get(x) !== root) { const next = uf.get(x)!; uf.set(x, root); x = next; }
+        return root;
+    };
+    const union = (a: string, b: string) => { const ra = find(a), rb = find(b); if (ra !== rb) uf.set(ra, rb); };
+    treeEdges.forEach(e => union(e.source, e.target));
+
+    const groups = new Map<string, GNode[]>();
+    nodes.forEach(n => {
+        const root = find(n.id);
+        if (!groups.has(root)) groups.set(root, []);
+        groups.get(root)!.push(n);
+    });
+
+    const dims = new Map<string, { w: number; h: number; labelWidth: number }>();
+    nodes.forEach(n => {
+        const size = 34 + Math.min(26, (n.value ?? 1) * 4);
+        dims.set(n.id, estimateNodeBox(n.label, size));
+    });
+
+    const TREE_GAP = 56;
+    let yOffset = 0;
+    const positioned: (GNode & { x: number; y: number; labelWidth: number })[] = [];
+
+    for (const groupNodes of groups.values()) {
+        const g = new dagre.graphlib.Graph();
+        g.setGraph({ rankdir: 'LR', nodesep: 28, ranksep: 130, marginx: 20, marginy: 20, acyclicer: 'greedy' });
+        g.setDefaultEdgeLabel(() => ({}));
+        groupNodes.forEach(n => g.setNode(n.id, dims.get(n.id)!));
+
+        const idsInGroup = new Set(groupNodes.map(n => n.id));
+        treeEdges.forEach(e => {
+            if (!idsInGroup.has(e.source) || !idsInGroup.has(e.target)) return;
+            const label = e.label?.trim();
+            g.setEdge(e.source, e.target, label ? { width: Math.min(120, label.length * LABEL_CHAR_W + 12), height: LABEL_LINE_H + 8, labelpos: 'c' } : {});
+        });
+
+        dagre.layout(g);
+
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        groupNodes.forEach(n => {
+            const pos = g.node(n.id);
+            const dim = dims.get(n.id)!;
+            minX = Math.min(minX, pos.x - dim.w / 2);
+            maxX = Math.max(maxX, pos.x + dim.w / 2);
+            minY = Math.min(minY, pos.y - dim.h / 2);
+            maxY = Math.max(maxY, pos.y + dim.h / 2);
+        });
+        const shiftX = -minX;
+        const shiftY = yOffset - minY;
+
+        groupNodes.forEach(n => {
+            const pos = g.node(n.id);
+            const dim = dims.get(n.id)!;
+            positioned.push({ ...n, x: pos.x - dim.w / 2 + shiftX, y: pos.y - dim.h / 2 + shiftY, labelWidth: dim.labelWidth });
+        });
+
+        yOffset += (maxY - minY) + TREE_GAP;
+    }
+
+    return { positioned, resolvedEdges: treeEdges };
+}
+
+const NodeLinkGraph: React.FC<{ nodes: GNode[]; edges: GEdge[]; treeMode?: boolean }> = ({ nodes, edges, treeMode = false }) => {
+    const { t } = useTranslation();
+    const allNodes = useMemo(() => buildGraphNodes(nodes, edges), [nodes, edges]);
+
+    const initial = useMemo(() => {
+        const { positioned, resolvedEdges } = treeMode
+            ? computeForestLayout(allNodes, edges)
+            : computeDagreLayout(allNodes, edges);
+
+        const rfNodes: RFNode[] = positioned.map(n => ({
+            id: n.id,
+            type: 'mindmap',
+            position: { x: n.x, y: n.y },
+            data: { label: n.label, value: n.value, labelWidth: n.labelWidth },
+        }));
+
+        const rfEdges: RFEdge[] = resolvedEdges.map((e, i) => ({
+            id: `e${i}-${e.source}-${e.target}`,
+            source: e.source,
+            target: e.target,
+            sourceHandle: 'bottom-source',
+            targetHandle: 'top-target',
+            type: 'smoothstep',
+            label: e.label,
+            style: { stroke: 'var(--bdr2)' },
+            labelStyle: { fill: 'var(--t2)', fontSize: 10 },
+            labelBgStyle: { fill: 'var(--bg1)' },
+        }));
+        return { rfNodes, rfEdges };
+    }, [allNodes, edges, treeMode]);
+
+    const [rfNodes, setRfNodes] = useState<RFNode[]>(initial.rfNodes);
+    useEffect(() => { setRfNodes(initial.rfNodes); }, [initial.rfNodes]);
+    const onNodesChange = useCallback((changes: NodeChange[]) => setRfNodes(nds => applyNodeChanges(changes, nds)), []);
+
+    if (allNodes.length === 0) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+
+    return (
+        <div className={styles.graphWrap}>
+            <ReactFlow
+                nodes={rfNodes}
+                edges={initial.rfEdges}
+                onNodesChange={onNodesChange}
+                nodeTypes={RF_NODE_TYPES}
+                fitView
+                fitViewOptions={{ padding: 0.25 }}
+                minZoom={0.1}
+                maxZoom={1.5}
+                proOptions={{ hideAttribution: true }}
+            >
+                <Background gap={16} size={1} color="var(--bdr)" />
+                <Controls showInteractive={false} />
+                {allNodes.length > 8 && <MiniMap pannable zoomable style={{ background: 'var(--bg0)' }} />}
+            </ReactFlow>
+        </div>
+    );
+};
+
+// ── Keyword Insights: timeline — heatmap-style grid with time labels
+//    running horizontally across the top header row (guaranteed via
+//    inline styles: nowrap + horizontal writing-mode) and one row per
+//    keyword running down the left. ──
+const TIME_UNIT_LABEL: Record<TimelineTimeUnit, string> = {
+    minutes: 'uploadInfer.workspacePanel.timeUnitMinutes',
+    hours: 'uploadInfer.workspacePanel.timeUnitHours',
+    seconds: 'uploadInfer.workspacePanel.timeUnitSeconds',
+};
+const TIME_UNIT_SHORT: Record<TimelineTimeUnit, string> = {
+    minutes: 'uploadInfer.workspacePanel.timeUnitMinShort',
+    hours: 'uploadInfer.workspacePanel.timeUnitHrShort',
+    seconds: 'uploadInfer.workspacePanel.timeUnitSecShort',
+};
+
+const TimelineView: React.FC<{ data: TimelineData }> = ({ data }) => {
+    const { t } = useTranslation();
+    const labels = data.labels ?? [];
+    const datasets = data.datasets ?? [];
+    if (!labels.length || !datasets.length) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+
+    const max = Math.max(1, ...datasets.flatMap(d => d.data.filter(v => typeof v === 'number')));
+    const ROW_LABEL_W = 140;
+    const COL_W = 56;
+    const timeUnit = data.time_unit ?? 'minutes';
+    const unitLabel = t(TIME_UNIT_LABEL[timeUnit]);
+    // When labels are already actual clock timestamps (e.g. "0:00–5:00"),
+    // the format itself conveys the unit — don't also append a suffix.
+    // Only append the short unit to plain numeric bucket labels.
+    const unitShort = t(TIME_UNIT_SHORT[timeUnit]);
+    const formatTimeLabel = (lab: string) => data.timestamped ? lab : `${lab} ${unitShort}`;
+
+    // Text guaranteed to stay horizontal, left-to-right, single line —
+    // independent of whatever the surrounding stylesheet does elsewhere.
+    const horizontalLabel: React.CSSProperties = {
+        writingMode: 'horizontal-tb',
+        textOrientation: 'mixed',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+    };
+
+    return (
+        <div className={styles.tabContent}>
+            <div className={styles.timelineAxisHint}>
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="8" cy="8" r="6.25" />
+                    <path d="M8 7.2v3.6M8 5.2v.1" />
+                </svg>
+                <span>
+                    {t('uploadInfer.workspacePanel.timelineAxisHint', { unit: unitLabel })}
+                </span>
+            </div>
+        <div style={{ overflowX: 'auto', paddingBottom: 4 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: `${ROW_LABEL_W}px repeat(${labels.length}, minmax(${COL_W}px, 1fr))`, width: 'max-content', minWidth: '100%' }}>
+                {/* Corner cell — axis labels */}
+                <div style={{ ...horizontalLabel, fontSize: 9.5, fontWeight: 700, color: 'var(--t2)', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'flex', alignItems: 'flex-end', padding: '0 10px 8px 0' }}>
+                    {t('uploadInfer.workspacePanel.timelineYAxis', 'Keyword')}
+                </div>
+                {/* Time labels — header row, horizontal across the top */}
+                {labels.map((lab, li) => (
+                    <div
+                        key={li}
+                        title={formatTimeLabel(lab)}
+                        style={{
+                            ...horizontalLabel,
+                            fontSize: 10.5, fontWeight: 600, color: 'var(--t2)',
+                            textAlign: 'center', padding: '0 4px 8px',
+                        }}
+                    >
+                        {formatTimeLabel(lab)}
+                    </div>
+                ))}
+                {/* One row per keyword */}
+                {datasets.map((ds, di) => (
+                    <React.Fragment key={di}>
+                        <div style={{ ...horizontalLabel, fontSize: 12, fontWeight: 600, color: 'var(--t1)', padding: '6px 10px 6px 0', display: 'flex', alignItems: 'center' }} title={ds.label}>
+                            {ds.label}
+                        </div>
+                        {labels.map((lab, li) => {
+                            const v = ds.data[li] ?? 0;
+                            const alpha = v > 0 ? Math.min(1, 0.22 + (v / max) * 0.78) : 0;
+                            return (
+                                <div
+                                    key={li}
+                                    title={`${ds.label} \u00b7 ${formatTimeLabel(lab)}`}
+                                    style={{
+                                        height: 32, margin: 2, borderRadius: 4,
+                                        background: `rgba(91, 164, 239, ${alpha})`,
+                                    }}
+                                />
+                            );
+                        })}
+                    </React.Fragment>
+                ))}
+            </div>
+        </div>
+        </div>
+    );
+};
+
+// ── Keyword Insights: word cloud ──
+// ── Pan/zoom image viewer — same interaction model as the Knowledge Graph
+// tab (drag anywhere to pan, scroll to zoom in/out, buttons for
+// zoom in/out/reset), but self-contained (no react-flow dependency needed
+// for a single static image). ──
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 4;
+const ZOOM_STEP = 0.35;
+
+const ZoomPanImage: React.FC<{ src: string; alt: string }> = ({ src, alt }) => {
+    const { t } = useTranslation();
+    const containerRef = useRef<HTMLDivElement>(null);
+    const [scale, setScale] = useState(1);
+    const [pan, setPan] = useState({ x: 0, y: 0 });
+    const dragRef = useRef<{ startX: number; startY: number; startPanX: number; startPanY: number } | null>(null);
+    const [dragging, setDragging] = useState(false);
+
+    const clampScale = (s: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, s));
+
+    // Zoom while keeping the point under the cursor/center visually fixed —
+    // same "zoom toward where you're pointing" feel as the graph view.
+    const zoomAt = (nextScaleRaw: number, clientX?: number, clientY?: number) => {
+        const nextScale = clampScale(nextScaleRaw);
+        const el = containerRef.current;
+        if (!el) { setScale(nextScale); return; }
+        const rect = el.getBoundingClientRect();
+        const cx = clientX ?? rect.left + rect.width / 2;
+        const cy = clientY ?? rect.top + rect.height / 2;
+        const originX = cx - rect.left - rect.width / 2;
+        const originY = cy - rect.top - rect.height / 2;
+        setPan(prev => {
+            if (nextScale === ZOOM_MIN) return { x: 0, y: 0 };
+            const ratio = nextScale / scale;
+            return {
+                x: originX - (originX - prev.x) * ratio,
+                y: originY - (originY - prev.y) * ratio,
+            };
+        });
+        setScale(nextScale);
+    };
+
+    const handleWheel = (e: React.WheelEvent) => {
+        e.preventDefault();
+        const delta = e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP;
+        zoomAt(scale + delta, e.clientX, e.clientY);
+    };
+
+    const handleMouseDown = (e: React.MouseEvent) => {
+        if (scale <= ZOOM_MIN) return;
+        dragRef.current = { startX: e.clientX, startY: e.clientY, startPanX: pan.x, startPanY: pan.y };
+        setDragging(true);
+    };
+    useEffect(() => {
+        if (!dragging) return;
+        const onMove = (e: MouseEvent) => {
+            const d = dragRef.current;
+            if (!d) return;
+            setPan({ x: d.startPanX + (e.clientX - d.startX), y: d.startPanY + (e.clientY - d.startY) });
+        };
+        const onUp = () => { setDragging(false); dragRef.current = null; };
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+        return () => {
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+        };
+    }, [dragging]);
+
+    const zoomIn = () => zoomAt(scale + ZOOM_STEP);
+    const zoomOut = () => zoomAt(scale - ZOOM_STEP);
+    const reset = () => { setScale(1); setPan({ x: 0, y: 0 }); };
+
+    return (
+        <div
+            ref={containerRef}
+            className={styles.zoomPanWrap}
+            onWheel={handleWheel}
+            onMouseDown={handleMouseDown}
+            onDoubleClick={reset}
+            style={{ cursor: scale > ZOOM_MIN ? (dragging ? 'grabbing' : 'grab') : 'default' }}
+        >
+            <img
+                src={src}
+                alt={alt}
+                className={styles.wordCloudImage}
+                draggable={false}
+                style={{
+                    transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+                    transition: dragging ? 'none' : 'transform 0.15s ease-out',
+                }}
+            />
+            <div className={styles.zoomControls}>
+                <button type="button" className={styles.zoomControlBtn} onClick={zoomIn} disabled={scale >= ZOOM_MAX} title={t('uploadInfer.workspacePanel.zoomIn')}>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="7" cy="7" r="5" /><path d="M13.5 13.5L10.8 10.8M7 4.5v5M4.5 7h5" />
+                    </svg>
+                </button>
+                <button type="button" className={styles.zoomControlBtn} onClick={zoomOut} disabled={scale <= ZOOM_MIN} title={t('uploadInfer.workspacePanel.zoomOut')}>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="7" cy="7" r="5" /><path d="M13.5 13.5L10.8 10.8M4.5 7h5" />
+                    </svg>
+                </button>
+                <button type="button" className={styles.zoomControlBtn} onClick={reset} disabled={scale === ZOOM_MIN && pan.x === 0 && pan.y === 0} title={t('uploadInfer.workspacePanel.zoomReset')}>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M13.5 8a5.5 5.5 0 11-1.6-3.9" /><path d="M13.5 2.5v3h-3" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+    );
+};
+
+const WordCloudView: React.FC<{ data: WordCloudData }> = ({ data }) => {
+    const { t } = useTranslation();
+    if (!data.wordcloud_image) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+    return (
+        <div className={styles.wordCloudImageWrap}>
+            <ZoomPanImage src={data.wordcloud_image} alt={t('uploadInfer.workspacePanel.kiTabs.wordcloud')} />
+        </div>
+    );
+};
+
+// ── Keyword Insights: importance vs complexity scatter ──
+// Complexity → accent color, reused for the column header, bars, and dots.
+const COMPLEXITY_COLOR: Record<string, string> = {
+    Easy: 'var(--green)',
+    Medium: 'var(--amber)',
+    Hard: 'var(--red)',
+};
+const complexityColor = (c: string) => COMPLEXITY_COLOR[c] ?? 'var(--blue)';
+
+const ImportanceComplexityScatter: React.FC<{ data: ImportanceComplexityData }> = ({ data }) => {
+    const { t } = useTranslation();
+    const items = data.data ?? [];
+    if (!items.length) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+
+    const order = ['Easy', 'Medium', 'Hard'];
+    const complexities = Array.from(new Set(items.map(it => it.complexity)))
+        .sort((a, b) => {
+            const ai = order.indexOf(a), bi = order.indexOf(b);
+            if (ai === -1 && bi === -1) return a.localeCompare(b);
+            if (ai === -1) return 1;
+            if (bi === -1) return -1;
+            return ai - bi;
+        });
+
+    // Importance is always on a fixed 0–10 scale from the backend, so the
+    // bar fill is a direct out-of-10 progress value rather than scaled
+    // against whatever the largest item in this particular file happens
+    // to be — a 6 always fills 60% of the bar, on any file.
+    const IMPORTANCE_MAX = 10;
+
+    return (
+        <div className={styles.tabContent}>
+            <div className={styles.importanceHint}>
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="8" cy="8" r="6.25" />
+                    <path d="M8 7.2v3.6M8 5.2v.1" />
+                </svg>
+                <span>{t('uploadInfer.workspacePanel.importanceHint')}</span>
+            </div>
+            <div className={styles.importanceColumns}>
+            {complexities.map(c => {
+                const colItems = items.filter(it => it.complexity === c).sort((a, b) => b.importance - a.importance);
+                const color = complexityColor(c);
+                return (
+                    <div key={c} className={styles.importanceColumn}>
+                        <div className={styles.importanceColumnHead} style={{ color, borderColor: color }}>
+                            {c}
+                            <span className={styles.importanceColumnCount}>{colItems.length}</span>
+                        </div>
+                        <div className={styles.importanceRows}>
+                            {colItems.map((it, i) => (
+                                <div key={i} className={styles.importanceRow} title={it.reason}>
+                                    <span className={styles.importanceDot} style={{ background: color }} />
+                                    <span className={styles.importanceKeyword}>{it.keyword}</span>
+                                    <div className={styles.importanceBarTrack}>
+                                        <div
+                                            className={styles.importanceBarFill}
+                                            style={{ width: `${Math.min(100, (it.importance / IMPORTANCE_MAX) * 100)}%`, background: color }}
+                                        />
+                                    </div>
+                                    <span className={styles.importanceMeta}>
+                                        <span className={styles.importanceValue}>{it.importance}/{IMPORTANCE_MAX}</span>
+                                        <span
+                                            className={styles.importanceFrequency}
+                                            title={t('uploadInfer.workspacePanel.frequencyTitle')}
+                                        >
+                                            {t('uploadInfer.workspacePanel.frequencyCount', { count: it.frequency })}
+                                        </span>
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                );
+            })}
+            </div>
+        </div>
+    );
+};
+
+// ── Keyword Insights: glossary ──
+const GlossaryView: React.FC<{ data: GlossaryData }> = ({ data }) => {
+    const { t } = useTranslation();
+    const items = data.glossary ?? [];
+    if (!items.length) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+    const fmtTime = (ms: number) => {
+        const totalSec = Math.floor(ms / 1000);
+        const m = Math.floor(totalSec / 60), s = totalSec % 60;
+        return `${m}:${String(s).padStart(2, '0')}`;
+    };
+    return (
+        <div className={styles.glossaryList}>
+            {items.map((it, i) => (
+                <div key={i} className={styles.glossaryRow}>
+                    <div className={styles.glossaryTerm}>{it.term}<span className={styles.glossaryTime}>{fmtTime(it.first_mentioned_ms)}</span></div>
+                    <div className={styles.glossaryDef}>{it.definition}</div>
+                </div>
+            ))}
+        </div>
+    );
+};
+
+// ── Tab: Keyword Insights ────────────────────────────────────
+const KI_SUBTABS = ['graph', 'wordcloud', 'timeline', 'importance', 'glossary'] as const;
+type KiSubTab = typeof KI_SUBTABS[number];
+
+const TabKeywordInsights: React.FC<{ data: KeywordInsights | null }> = ({ data }) => {
+    const { t } = useTranslation();
+    const [sub, setSub] = useState<KiSubTab>('graph');
+
+    if (!data) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noKeywordInsights')}</div>;
+
+    return (
+        <div className={styles.tabContent}>
+            <ScrollableTabRow
+                ids={KI_SUBTABS}
+                activeId={sub}
+                onChange={setSub}
+                labelFor={id => t(`uploadInfer.workspacePanel.kiTabs.${id}`)}
+                itemClassName={styles.kiSubTab}
+                activeClassName={styles.kiSubTabActive}
+                wrapClassName={styles.kiSubNavWrap}
+                trackClassName={styles.kiSubNav}
+            />
+            <div className={styles.kiBody}>
+                {sub === 'graph' && (data.knowledge_graph
+                    ? <NodeLinkGraph nodes={data.knowledge_graph.nodes} edges={data.knowledge_graph.edges.map(e => ({ source: e.source, target: e.target, label: e.type }))} treeMode />
+                    : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'wordcloud' && (data.word_cloud ? <WordCloudView data={data.word_cloud} /> : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'timeline' && (data.timeline
+                    ? <TimelineView data={data.timeline} />
+                    : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'importance' && (data.importance_complexity ? <ImportanceComplexityScatter data={data.importance_complexity} /> : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'glossary' && (data.glossary ? <GlossaryView data={data.glossary} /> : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+            </div>
+        </div>
+    );
+};
+
+// ── Scrollable tab row — generic horizontal-scroll tab strip with arrow
+//    buttons + edge fades, reused for both the main tab bar and any
+//    sub-navigation row (e.g. Keyword Insights) that could overflow. ──
+function ScrollableTabRow<T extends string>({
+    ids, activeId, onChange, labelFor,
+    itemClassName, activeClassName, wrapClassName, trackClassName,
+    dataTourFor,
+}: {
+    ids: readonly T[];
+    activeId: T;
+    onChange: (id: T) => void;
+    labelFor: (id: T) => string;
+    itemClassName: string;
+    activeClassName: string;
+    wrapClassName: string;
+    trackClassName: string;
+    // Optional — lets a specific caller (e.g. the main results tab bar)
+    // tag each individual tab button for the guided tour, without
+    // affecting other callers that reuse this same component (e.g. the
+    // Keyword Insights sub-tab row).
+    dataTourFor?: (id: T) => string | undefined;
+}) {
+    const trackRef = useRef<HTMLDivElement>(null);
+    const [canScrollLeft, setCanScrollLeft] = useState(false);
+    const [canScrollRight, setCanScrollRight] = useState(false);
+
+    const updateScrollState = () => {
+        const el = trackRef.current;
+        if (!el) return;
+        setCanScrollLeft(el.scrollLeft > 2);
+        setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 2);
+    };
+
+    useEffect(() => {
+        updateScrollState();
+        const el = trackRef.current;
+        if (!el) return;
+        const onResize = () => updateScrollState();
+        window.addEventListener('resize', onResize);
+        el.addEventListener('scroll', updateScrollState);
+        return () => { window.removeEventListener('resize', onResize); el.removeEventListener('scroll', updateScrollState); };
+    }, []); // eslint-disable-line
+
+    // Keep the active item in view when it changes
+    useEffect(() => {
+        const el = trackRef.current;
+        if (!el) return;
+        const activeEl = el.querySelector<HTMLElement>(`[data-tab-id="${activeId}"]`);
+        activeEl?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+        const id = setTimeout(updateScrollState, 300);
+        return () => clearTimeout(id);
+    }, [activeId]); // eslint-disable-line
+
+    const scrollBy = (dx: number) => trackRef.current?.scrollBy({ left: dx, behavior: 'smooth' });
+
+    return (
+        <div className={wrapClassName}>
+            {canScrollLeft && (
+                <button className={`${styles.tabScrollBtn} ${styles.tabScrollBtnLeft}`} onClick={() => scrollBy(-160)} aria-label="Scroll left">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M10 3L6 8l4 5" /></svg>
+                </button>
+            )}
+            <div className={trackClassName} ref={trackRef}>
+                {ids.map(id => (
+                    <button
+                        key={id}
+                        data-tab-id={id}
+                        data-tour={dataTourFor?.(id)}
+                        className={`${itemClassName} ${activeId === id ? activeClassName : ''}`}
+                        onClick={() => onChange(id)}
+                    >
+                        {labelFor(id)}
+                    </button>
+                ))}
+            </div>
+            {canScrollLeft && <div className={`${styles.tabFade} ${styles.tabFadeLeft}`} />}
+            {canScrollRight && <div className={`${styles.tabFade} ${styles.tabFadeRight}`} />}
+            {canScrollRight && (
+                <button className={`${styles.tabScrollBtn} ${styles.tabScrollBtnRight}`} onClick={() => scrollBy(160)} aria-label="Scroll right">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 3l4 5-4 5" /></svg>
+                </button>
+            )}
+        </div>
+    );
+}
+
+// ── Main tab bar — the fixed-width flex row silently clipped tabs once
+//    there were more than ~3; ScrollableTabRow fixes that. ──
+const ScrollableTabs: React.FC<{ activeTab: TabId; onChange: (id: TabId) => void }> = ({ activeTab, onChange }) => {
+    const { t } = useTranslation();
+    return (
+        <div data-tour="results-tabbar">
+            <ScrollableTabRow
+                ids={TAB_IDS}
+                activeId={activeTab}
+                onChange={onChange}
+                labelFor={id => t(`uploadInfer.workspacePanel.tabs.${id}`)}
+                itemClassName={styles.tab}
+                activeClassName={styles.active}
+                wrapClassName={styles.wsptabsWrap}
+                trackClassName={styles.wsptabs}
+                dataTourFor={id => `results-tab-${id}`}
+            />
+        </div>
+    );
+};
+
+// ── Main panel ────────────────────────────────────────────
+const WorkspacePanel = forwardRef<WorkspacePanelHandle, Props>(({ step2Visible = true, step2Minimized = false, fileResult, fileLoading, activeFileId, onResultUpdate }, ref) => {
+    const { t } = useTranslation();
+    const [activeTab, setActiveTab] = useState<TabId>('summary');
+
+    useImperativeHandle(ref, () => ({
+        setTab: (id: TabId) => setActiveTab(id),
+    }), []);
+
+    return (
+        <div className={`${styles.wspanel} ${(!step2Visible || step2Minimized) ? styles.wspanelExpanded : ''} ${step2Visible ? styles.wspanelWithStep2 : ''}`}>
+            <div className={styles.wspanelHead}>
+                <div className={styles.headLeft}>
+                    {fileResult ? (
+                        <>
+                            <div className={styles.wsftitle}>{fileResult.fileName}</div>
+                            <div className={styles.wsmeta}>
+                                <span className={styles.wsmetaId}>#{fileResult.fileId}</span>
+                                {fileResult.insertedAt && (<><span className={styles.wsmetaSep}>·</span><span className={styles.wsmetaDate}>{fileResult.insertedAt}</span></>)}
+                            </div>
+                        </>
+                    ) : (
+                        <>
+                            <div className={styles.wsftitleEmpty}>—</div>
+                            <div className={styles.wsmeta}><span className={styles.wsmetaHint}>{t('uploadInfer.workspacePanel.clickToView')}</span></div>
+                        </>
+                    )}
+                </div>
+            </div>
+
+            <ScrollableTabs activeTab={activeTab} onChange={setActiveTab} />
+
+            <div className={styles.wsbody}>
+                {fileLoading && (
+                    <div className={styles.wsSpinner}><div className={styles.spinner} /><span>{t('uploadInfer.workspacePanel.loadingFile')}</span></div>
+                )}
+                {!fileLoading && !fileResult && (
+                    <div className={styles.wsEmpty}>
+                        <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="8" y="6" width="32" height="36" rx="3" /><path d="M16 16h16M16 23h16M16 30h10" />
+                        </svg>
+                        <div className={styles.wsEmptyTitle}>{t('uploadInfer.workspacePanel.noFileSelected')}</div>
+                        <div className={styles.wsEmptyDesc}>{t('uploadInfer.workspacePanel.noFileDesc')}</div>
+                    </div>
+                )}
+                {!fileLoading && fileResult && (
+                    <>
+                        {activeTab === 'summary' && <TabSummary summary={fileResult.summary} fileId={fileResult.fileId} onSaved={s => onResultUpdate?.({ summary: s })} />}
+                        {activeTab === 'keywords' && <TabKeywords keywords={fileResult.keywords} fileId={fileResult.fileId} onSaved={kw => onResultUpdate?.({ keywords: kw })} />}
+                        {activeTab === 'assessment' && <TabAssessment faq={fileResult.faq} />}
+                        {activeTab === 'shortAnswer' && <TabShortAnswer raw={fileResult.shortAnswer} />}
+                        {activeTab === 'trueFalse' && <TabTrueFalse raw={fileResult.trueFalse} />}
+                        {activeTab === 'timestampedSummary' && <TabTimestampedSummary raw={fileResult.timestampedSummary} />}
+                        {activeTab === 'keywordInsights' && <TabKeywordInsights data={fileResult.keywordInsights} />}
+                    </>
+                )}
+            </div>
+        </div>
+    );
+});
+
+WorkspacePanel.displayName = 'WorkspacePanel';
+
+export default WorkspacePanel;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ═══════════════════════════════════════════════
+// pages/UploadInfer/WorkspacePanel.module.scss
+// LectureAI · Step-3 Workspace Result panel
 // ═══════════════════════════════════════════════
 @use '../../styles/mixins' as m;
 
-// ══════════════════════════════════════
-// SHARED SHELL
-// ══════════════════════════════════════
-.page {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  overflow: hidden;
+// ── Keyframes ────────────────────────────────────────────
+@keyframes fadein {
+    from {
+        opacity: 0;
+        transform: translateY(2px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
-// Library variant — same layout, but body scrolls instead of flex children
-.libPage {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
-// ── Page header (shared by library + detail) ─────
-.ph {
-  padding: 14px 22px 12px;
-  background: var(--bg1);
-  border-bottom: none;
-  flex-shrink: 0;
-  position: relative;
+@keyframes float {
 
-  &::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-        rgba(139, 92, 246, 0.0) 0%,
-        rgba(139, 92, 246, 0.6) 20%,
-        rgba(56, 196, 186, 0.7) 50%,
-        rgba(240, 160, 48, 0.6) 80%,
-        rgba(240, 160, 48, 0.0) 100%);
-    pointer-events: none;
-  }
+    0%,
+    100% {
+        transform: translateY(0);
+    }
+
+    50% {
+        transform: translateY(-8px);
+    }
 }
 
-.phRow {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
+@keyframes wsSpin {
+    to {
+        transform: rotate(360deg);
+    }
 }
 
-.phTitleWrap {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
+@keyframes chipFadeIn {
+    from {
+        opacity: 0;
+        transform: scale(0.8) translateY(-6px);
+    }
+
+    to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
 }
 
-.phTitle {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--t0);
-  letter-spacing: -0.3px;
-  line-height: 1.2;
-  font-family: var(--font-display);
-  @include m.truncate;
+@keyframes explanationSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-6px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
-.phSub {
-  font-size: 11px;
-  color: var(--t2);
-  margin-top: 3px;
-  @include m.mono;
+@keyframes iconPop {
+    0% {
+        transform: scale(0);
+        opacity: 0;
+    }
+
+    60% {
+        transform: scale(1.2);
+    }
+
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
 }
 
-// Tour trigger button — pill style, appears next to page title
-.tourTriggerBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 99px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.12s;
-  white-space: nowrap;
-  flex-shrink: 0;
+@keyframes completeFadeIn {
+    from {
+        opacity: 0;
+        transform: scale(0.95);
+    }
 
-  svg { width: 13px; height: 13px; }
-
-  &:hover {
-    background: var(--bg3);
-    color: var(--t1);
-    border-color: var(--bdr3);
-  }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
 }
 
-.phActs {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+@keyframes iconBounce {
+
+    0%,
+    100% {
+        transform: scale(1);
+    }
+
+    50% {
+        transform: scale(1.1);
+    }
 }
 
-// ── Lean title row used by FileLibrary — no outer .ph box, just title,
-// tour trigger, and refresh sharing one line ──
-.backBtn {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t1);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.12s;
-
-  svg {
-    width: 14px;
-    height: 14px;
-    transition: transform 0.15s ease;
-  }
-
-  &:hover {
-    background: var(--bg3);
-    color: var(--t0);
-    border-color: var(--bdr3);
-  }
-}
-
-// Sidebar-collapsed state — mirror the panel icon so its chevron points
-// the opposite way (open ↔ close), same button otherwise.
-.backBtnFlipped svg {
-  transform: scaleX(-1);
-}
-
-// ══════════════════════════════════════
-// BUTTONS (preserved from original)
-// ══════════════════════════════════════
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 7px 16px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t1);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.12s;
-  white-space: nowrap;
-  user-select: none;
-  text-decoration: none;
-
-  svg {
-    width: 13px;
-    height: 13px;
-  }
-
-  &:hover {
-    background: var(--bg3);
-    color: var(--t0);
-    border-color: var(--bdr3);
-  }
-
-  &:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-    pointer-events: none;
-  }
-}
-
-.btnBlue {
-  background: var(--blue);
-  color: #fff;
-  border-color: var(--blue);
-  font-weight: 600;
-  box-shadow: 0 2px 12px var(--blue-dim);
-
-  &:hover {
-    background: #a78bfa;
-    border-color: #a78bfa;
-    color: #fff;
-  }
-}
-
-// ══════════════════════════════════════
-// LIBRARY VIEW
-// ══════════════════════════════════════
-.libBody {
-  flex: 1;
-  overflow: hidden;
-  display: grid;
-  // Default: col1=400px, col2=remaining, col3=hidden
-  grid-template-columns: 400px 1fr;
-  gap: 0;
-  min-height: 0;
-  background: var(--bg0);
-
-  @media (max-width: 1500px) {
-    grid-template-columns: 350px 1fr;
-  }
-}
-
-// When inference is open: col1=400px, col3=400px, col2 takes remaining
-.libBodyInference {
-  grid-template-columns: 400px 1fr 400px;
-
-  @media (max-width: 1500px) {
-    grid-template-columns: 350px 1fr 350px;
-  }
-}
-
-// Card selected for inference
-.libCardSelected {
-  border-color: rgba(139, 92, 246, 0.5) !important;
-  background: rgba(139, 92, 246, 0.07) !important;
-  box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.25);
-}
-
-// When inference panel is open, all cards become selectable
-.libCardSelectable {
-  cursor: pointer;
-
-  &:hover {
-    border-color: rgba(139, 92, 246, 0.35);
-    background: var(--bg2);
-  }
-}
-
-// Checkbox overlay in top-left corner of card when in selection mode
-.libCardCheckbox {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  border: 1.5px solid var(--bdr3);
-  background: var(--bg1);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 6;
-  transition: all 0.12s;
-
-  svg { width: 9px; height: 9px; display: none; }
-}
-
-.libCardCheckboxChecked {
-  background: #a78bfa;
-  border-color: #a78bfa;
-  color: #fff;
-
-  svg { display: block; }
-}
-
-// Hint in inference panel when no files selected
-.infSelectedHint {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 7px 12px;
-  background: rgba(139, 92, 246, 0.06);
-  border-bottom: 1px solid rgba(139, 92, 246, 0.2);
-  font-size: 11px;
-  color: #a78bfa;
-  @include m.mono;
-  font-weight: 500;
-  flex-shrink: 0;
-}
-.dateFilterDisabled {
-  opacity: 0.5;
-  pointer-events: none;
-}
-
-// ── Select All / Clear row — sticky, outside scroll area ─────────
-.selectAllRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 7px 12px;
-  background: rgba(139, 92, 246, 0.06);
-  border-bottom: 1px solid rgba(139, 92, 246, 0.2);
-  flex-shrink: 0;
-  animation: fadeSlide 0.15s ease;
-}
-
-.selectAllHint {
-  font-size: 11px;
-  color: #a78bfa;
-  @include m.mono;
-  font-weight: 500;
-}
-
-.selectAllActions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.selectAllBtn {
-  font-size: 11px;
-  font-weight: 500;
-  padding: 3px 9px;
-  border-radius: 99px;
-  border: 1px solid rgba(139,92,246,0.3);
-  background: transparent;
-  color: #a78bfa;
-  cursor: pointer;
-  font-family: var(--font-ui);
-  transition: all 0.12s;
-
-  &:hover:not(:disabled) { background: rgba(139,92,246,0.12); border-color: rgba(139,92,246,0.5); }
-  &:disabled { opacity: 0.35; cursor: not-allowed; }
-}
-
-// Dimmed — not selectable in current mode
-.libCardDimmed {
-  opacity: 0.4;
-  pointer-events: none;
-  filter: grayscale(0.4);
-}
-
-// Generic action icon button (delete, pipeline)
-.actionIconBtn {
-  width: 30px;
-  height: 30px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.14s;
-  flex-shrink: 0;
-
-  svg { width: 13px; height: 13px; }
-  &:hover { background: var(--bg2); color: var(--t0); border-color: var(--bdr3); }
-}
-
-.actionIconBtnDelete {
-  border-color: rgba(239,68,68,0.4);
-  background: rgba(239,68,68,0.08);
-  color: var(--red);
-  &:hover { background: rgba(239,68,68,0.16); border-color: rgba(239,68,68,0.6); }
-}
-
-.actionIconBtnPipeline {
-  border-color: rgba(56,196,186,0.4);
-  background: rgba(56,196,186,0.08);
-  color: #38c4ba;
-  &:hover { background: rgba(56,196,186,0.16); border-color: rgba(56,196,186,0.6); }
-}
-
-.selectAllRowDelete {
-  background: rgba(239,68,68,0.06);
-  border-bottom-color: rgba(239,68,68,0.2);
-  .selectAllHint { color: var(--red); }
-  .selectAllBtn { border-color: rgba(239,68,68,0.3); color: var(--red); &:hover:not(:disabled) { background: rgba(239,68,68,0.1); } }
-}
-
-.selectAllRowPipeline {
-  background: rgba(56,196,186,0.06);
-  border-bottom-color: rgba(56,196,186,0.2);
-  .selectAllHint { color: #38c4ba; }
-  .selectAllBtn { border-color: rgba(56,196,186,0.3); color: #38c4ba; &:hover:not(:disabled) { background: rgba(56,196,186,0.1); } }
-}
-
-.selectAllLeft {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1;
-  min-width: 0;
-}
-
-.selectAllRight {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.selectAllError {
-  font-size: 11px;
-  color: var(--red);
-  @include m.mono;
-}
-
-.btnRed {
-  background: rgba(239,68,68,0.1);
-  color: var(--red);
-  border: 1px solid rgba(239,68,68,0.3);
-  &:hover:not(:disabled) { background: rgba(239,68,68,0.18); }
-  &:disabled { opacity: 0.4; cursor: not-allowed; }
-}
-
-.inferenceIconBtn {
-  width: 30px;
-  height: 30px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  transition: all 0.14s;
-  flex-shrink: 0;
-
-  svg { width: 13px; height: 13px; }
-
-  &:hover:not(:disabled) {
-    background: var(--bg2);
-    color: var(--t0);
-    border-color: var(--bdr3);
-  }
-
-  &:disabled { cursor: not-allowed; opacity: 0.45; }
-}
-
-.inferenceIconBtnActive {
-  background: rgba(139, 92, 246, 0.18);
-  color: #c4b5fd;
-  border-color: rgba(139, 92, 246, 0.55);
-  box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.2);
-}
-
-.inferenceIconBtnRunning {
-  background: rgba(59, 130, 246, 0.1);
-  color: var(--blue);
-  border-color: rgba(59, 130, 246, 0.25);
-}
-
-// Running pulsing dot badge on the inference icon
-.inferenceIconBtnDot {
-  position: absolute;
-  top: 3px;
-  right: 3px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--blue);
-  animation: breathe 1.4s ease-in-out infinite;
-}
-
-// ══════════════════════════════════════
-// INFERENCE PANEL (3rd column)
-// ══════════════════════════════════════
-.inferencePanel {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  position: relative;
-
-  // Left gradient border separator
-  &::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; bottom: 0;
-    width: 1px;
-    background: linear-gradient(180deg,
-      rgba(139,92,246,0) 0%, rgba(139,92,246,0.55) 20%,
-      rgba(56,196,186,0.65) 50%, rgba(240,160,48,0.55) 80%,
-      rgba(240,160,48,0) 100%);
-    pointer-events: none;
-    z-index: 1;
-  }
-}
-
-.inferencePanelClose {
-  width: 24px;
-  height: 24px;
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.12s;
-  margin-left: auto;
-
-  svg { width: 12px; height: 12px; }
-  &:hover { background: var(--bg3); color: var(--t0); border-color: var(--bdr2); }
-}
-
-.infColBody {
-  flex: 1;
-  overflow-y: auto;
-  padding: 14px 18px 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  min-height: 0;
-  @include m.scrollbar;
-}
-
-.infSection {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.infSectionTitle {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--t2);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  @include m.mono;
-}
-
-.infFileList {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  border: 1px solid var(--bdr);
-  border-radius: var(--rl);
-  overflow: hidden;
-  max-height: 280px;
-  overflow-y: auto;
-  @include m.scrollbar;
-}
-
-.infEmpty {
-  font-size: 12px;
-  color: var(--t2);
-  padding: 12px;
-  text-align: center;
-}
-
-.infFileRow {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 12px;
-  background: var(--bg1);
-  border: none;
-  border-bottom: 1px solid var(--bdr);
-  cursor: pointer;
-  transition: background 0.1s;
-  text-align: left;
-  width: 100%;
-
-  &:last-child { border-bottom: none; }
-  &:hover { background: var(--bg2); }
-}
-
-.infFileRowSelected {
-  background: rgba(139,92,246,0.07);
-  &:hover { background: rgba(139,92,246,0.12); }
-}
-
-.infCheckbox {
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  border: 1.5px solid var(--bdr3);
-  background: transparent;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.12s;
-
-  svg { width: 10px; height: 10px; }
-}
-
-.infCheckboxChecked {
-  background: #a78bfa;
-  border-color: #a78bfa;
-  color: #fff;
-}
-
-.infFileName {
-  flex: 1;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--t0);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.infFilePill {
-  font-size: 10px;
-  padding: 2px 7px;
-  border-radius: 99px;
-  font-weight: 500;
-  @include m.mono;
-  flex-shrink: 0;
-}
-
-.infFilePillGreen {
-  background: rgba(34,197,94,0.1);
-  color: var(--green);
-  border: 1px solid rgba(34,197,94,0.2);
-}
-
-.infFilePillGray {
-  background: var(--bg3);
-  color: var(--t2);
-  border: 1px solid var(--bdr2);
-}
-
-.infField {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.infLabel {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--t2);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  @include m.mono;
-}
-
-.infSelect {
-  width: 100%;
-  padding: 7px 10px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: var(--bg2);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  outline: none;
-  cursor: pointer;
-  transition: border-color 0.12s;
-
-  &:focus, &:hover { border-color: var(--bdr3); }
-}
-
-.infHint {
-  font-size: 11px;
-  color: var(--t2);
-  @include m.mono;
-}
-
-.infError {
-  font-size: 11px;
-  color: var(--red);
-  @include m.mono;
-  padding: 8px 10px;
-  background: var(--red-dim);
-  border: 1px solid var(--red-bdr);
-  border-radius: var(--r);
-}
-
-.infActions {
-  padding-top: 4px;
-}
-
-// ── Model field — label row with inline refresh + status message below ──
-.loadingDot {
-  color: var(--t2);
-  font-weight: 400;
-}
-
-.infModelField {
-  padding-bottom: 12px;
-  margin-bottom: 4px;
-  border-bottom: 1px solid var(--bdr);
-}
-
-.infModelLabelRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.infRefreshBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: 99px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  cursor: pointer;
-  transition: all 0.12s;
-  flex-shrink: 0;
-
-  svg {
-    width: 10px;
-    height: 10px;
+// ── Panel shell ──────────────────────────────────────────
+.wspanel {
+    width: 360px;
     flex-shrink: 0;
-  }
-
-  &:hover:not(:disabled) {
-    background: var(--bg3);
-    color: var(--t1);
-    border-color: var(--bdr3);
-  }
-
-  &:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-  }
-}
-
-.spinning {
-  animation: spin 0.8s linear infinite;
-}
-
-.modelWarn {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  margin-top: 7px;
-  padding: 7px 10px;
-  border-radius: var(--r);
-  background: var(--amber-dim);
-  border: 1px solid var(--amber-bdr);
-  color: var(--amber);
-  font-size: 11px;
-  line-height: 1.5;
-  @include m.mono;
-
-  svg {
-    width: 12px;
-    height: 12px;
-    flex-shrink: 0;
-    margin-top: 1px;
-  }
-}
-
-.modelOk {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 6px;
-  font-size: 11px;
-  color: var(--t2);
-  @include m.mono;
-
-  svg {
-    width: 11px;
-    height: 11px;
-    flex-shrink: 0;
-    color: var(--green);
-  }
-}
-
-// ── Run Inference button — large, self-describing, mirrors
-// pages/UploadInfer/InferencePanel.tsx's .runBtn ──
-.runBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 16px 8px 10px;
-  border-radius: var(--rl);
-  border: 1px solid transparent;
-  background: var(--blue);
-  color: #fff;
-  font-family: var(--font-ui);
-  cursor: pointer;
-  transition: background 0.15s, box-shadow 0.15s, opacity 0.15s, border-color 0.15s;
-  white-space: nowrap;
-  user-select: none;
-
-  &:hover:not(:disabled) { background: #6bb3f5; }
-  &:active:not(:disabled) { background: #4a90d9; }
-}
-
-.runBtnIconWrap {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.18);
-  flex-shrink: 0;
-  transition: background 0.14s;
-
-  svg { display: block; }
-
-  .runBtn:hover:not(:disabled) & {
-    background: rgba(255, 255, 255, 0.25);
-  }
-}
-
-.runBtnText {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  line-height: 1.2;
-  gap: 2px;
-}
-
-.runBtnTitle {
-  font-size: 14px;
-  font-weight: 700;
-  letter-spacing: -0.1px;
-}
-
-.runBtnSub {
-  font-size: 11px;
-  font-weight: 500;
-  opacity: 0.82;
-  @include m.mono;
-}
-
-// Ready state — glowing outline pulse to draw the eye
-.runBtnReady {
-  box-shadow:
-    0 0 0 1px rgba(91, 164, 239, 0.7),
-    0 2px 12px rgba(91, 164, 239, 0.35);
-  animation: runReadyPulse 2.4s ease-in-out infinite;
-}
-
-@keyframes runReadyPulse {
-  0%, 100% {
-    box-shadow:
-      0 0 0 1px rgba(91, 164, 239, 0.7),
-      0 2px 12px rgba(91, 164, 239, 0.30);
-  }
-  50% {
-    box-shadow:
-      0 0 0 2px rgba(91, 164, 239, 0.55),
-      0 4px 20px rgba(91, 164, 239, 0.50);
-  }
-}
-
-// Disabled state — muted, clearly not actionable, sub-label explains why
-.runBtnDisabled {
-  opacity: 0.48;
-  cursor: not-allowed;
-  pointer-events: none;
-  box-shadow: none;
-}
-
-// ── Progress view (3 columns) ──
-.infProgressGrid {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-// ── Column (status group) — mirrors .bgroup ──────
-.infProgressCol {
-  background: var(--bg1);
-  border: 1px solid var(--bdr);
-  border-radius: var(--rl);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-
-  // Running group — amber border like .gRun
-  &.infColRunning { border-color: var(--amber-bdr); }
-  // Done group — green border like .gDone
-  &.infColDone    { border-color: var(--green-bdr); }
-  // Pending group — subtle border
-  &.infColPending { border-color: var(--bdr2); }
-}
-
-// ── Column header — mirrors .bgroupHeader ─────────
-.infProgressColHead {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 14px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--t0);
-  border-bottom: 1px solid var(--bdr);
-}
-
-// Icon badge — mirrors .bgroupIcon
-.infProgressColIcon {
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-
-  svg { width: 13px; height: 13px; }
-
-  .infColRunning & { background: var(--amber-dim); }
-  .infColDone    & { background: var(--green-dim); }
-  .infColPending & { background: var(--bg3); }
-}
-
-.infProgressDot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.infProgressCount {
-  font-size: 12px;
-  color: var(--t2);
-  @include m.mono;
-  margin-left: 4px;
-}
-
-// Status badge — mirrors .badge .bRun / .bDone / .bQ
-.infProgressBadge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 99px;
-  font-weight: 500;
-  border: 1px solid transparent;
-  @include m.mono;
-  margin-left: auto;
-
-  // Breathing dot inside badge
-  .infBadgeDot {
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-}
-
-.infBadgeRunning {
-  background: var(--amber-dim);
-  color: var(--amber);
-  border-color: var(--amber-bdr);
-  .infBadgeDot { background: var(--amber); animation: breathe 1.2s infinite; }
-}
-
-.infBadgeDone {
-  background: var(--green-dim);
-  color: var(--green);
-  border-color: var(--green-bdr);
-  .infBadgeDot { background: var(--green); }
-}
-
-.infBadgePending {
-  background: var(--bg3);
-  color: var(--t2);
-  border-color: var(--bdr);
-}
-
-// ── Column body (file rows) — mirrors .bgroupBody ─
-.infProgressBody {
-  padding: 8px 14px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-// ── Individual file row — mirrors .brow ───────────
-.infProgressCard {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 7px 10px;
-  background: var(--bg2);
-  border: 1px solid var(--bdr);
-  border-radius: var(--r);
-  position: relative;
-  overflow: hidden;
-
-  // Raise children above the sweep mask
-  > * { position: relative; z-index: 5; }
-}
-
-.infProgressCardDone {
-  border-color: rgba(34,197,94,0.15);
-  background: rgba(34,197,94,0.04);
-}
-
-// Running card — amber sweep line around the border
-.infProgressCardRunning {
-  border-color: var(--amber-bdr);
-  background: color-mix(in srgb, var(--bg2) 96%, var(--amber) 4%);
-
-  // Sweep: large amber conic-gradient square centred on the card
-  &::before {
-    content: '';
-    position: absolute;
-    width: 300px;
-    height: 300px;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%) rotate(0deg);
-    background: conic-gradient(
-      from 0deg at 50% 50%,
-      transparent    0deg,
-      transparent  310deg,
-      rgba(245, 158, 11, 0.25) 315deg,
-      #f59e0b       325deg,
-      rgba(245, 158, 11, 0.25) 335deg,
-      transparent  338deg,
-      transparent  360deg
-    );
-    animation: infSweep 2s linear infinite;
-    z-index: 3;
-    pointer-events: none;
-  }
-
-  // Mask that leaves only the border strip visible
-  &::after {
-    content: '';
-    position: absolute;
-    inset: 2px;
-    border-radius: calc(var(--r) - 2px);
-    background: color-mix(in srgb, var(--bg2) 96%, var(--amber) 4%);
-    z-index: 4;
-    pointer-events: none;
-  }
-}
-
-@keyframes infSweep {
-  from { transform: translate(-50%, -50%) rotate(0deg); }
-  to   { transform: translate(-50%, -50%) rotate(360deg); }
-}
-
-// File type icon badge — mirrors .browIcon
-.infProgressIcon {
-  width: 22px;
-  height: 22px;
-  border-radius: 5px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 9px;
-  font-weight: 700;
-  @include m.mono;
-  flex-shrink: 0;
-
-  .infColRunning & { background: var(--amber-dim); color: var(--amber); }
-  .infColDone    & { background: var(--green-dim); color: var(--green); }
-  .infColPending & { background: var(--bg3);       color: var(--t2); }
-}
-
-.infProgressName {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--t0);
-  flex: 1;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.infProgressMeta {
-  font-size: 11px;
-  color: var(--t2);
-  @include m.mono;
-  flex-shrink: 0;
-}
-
-// Progress bar — mirrors .browBar / .browFill (amber for running)
-.infProgressBar {
-  width: 60px;
-  flex-shrink: 0;
-}
-
-.infProgressBarTrack {
-  height: 3px;
-  background: var(--bg3);
-  border-radius: 99px;
-  overflow: hidden;
-}
-
-.infProgressFill {
-  height: 100%;
-  border-radius: 99px;
-  background: var(--amber);          // amber fill like .browFill
-  transition: width 0.4s ease;
-}
-
-.infProgressPct {
-  font-size: 11px;
-  color: var(--amber);
-  @include m.mono;
-  min-width: 26px;
-  text-align: right;
-  flex-shrink: 0;
-}
-
-.infProgressEmpty {
-  font-size: 12px;
-  color: var(--t2);
-  padding: 6px 2px;
-  opacity: 0.6;
-  @include m.mono;
-}
-
-.infPollingHint {
-  display: none; // moved to header
-}
-
-.infCountdownBadge {
-  margin-left: auto;
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--blue);
-  @include m.mono;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-  background: var(--blue-dim);
-  border: 1px solid var(--blue-bdr);
-  padding: 2px 7px;
-  border-radius: 99px;
-}
-
-
-
-
-
-// Left column — upload zone
-.uploadCol {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  position: relative;
-
-  // Gradient column separator
-  &::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 1px;
-    background: linear-gradient(180deg,
-      rgba(139, 92, 246, 0.0) 0%,
-      rgba(139, 92, 246, 0.5) 20%,
-      rgba(56, 196, 186, 0.6) 50%,
-      rgba(240, 160, 48, 0.5) 80%,
-      rgba(240, 160, 48, 0.0) 100%);
-    pointer-events: none;
-  }
-}
-
-// Right column — library
-.libCol {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-// ── Column heading — fixed, never scrolls ──
-.colHeading {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 22px;
-  height: 52px;
-  flex-shrink: 0;
-  position: relative;
-  background: var(--bg1);
-
-  // Gradient underline
-  &::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-      rgba(139, 92, 246, 0.0) 0%,
-      rgba(139, 92, 246, 0.6) 20%,
-      rgba(56, 196, 186, 0.7) 50%,
-      rgba(240, 160, 48, 0.6) 80%,
-      rgba(240, 160, 48, 0.0) 100%);
-    pointer-events: none;
-  }
-}
-
-// ── Column scroll body — scrollable content below the heading ──
-.colBody {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px 22px 28px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  min-height: 0;
-  @include m.scrollbar;
-}
-
-.colHeadingIc {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
-  background: var(--bg2);
-  border: 1px solid var(--bdr2);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--t2);
-  flex-shrink: 0;
-
-  svg { width: 12px; height: 12px; }
-}
-
-.colHeadingText {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--t1);
-  font-family: var(--font-display);
-  letter-spacing: 0.02em;
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-
-// File-count subtitle shown next to "Library" in the column heading
-.colHeadingSub {
-  font-size: 10.5px;
-  color: var(--t2);
-  @include m.mono;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-
-// Refresh button, right-aligned in the column heading
-.colHeadingRefresh {
-  margin-left: auto;
-  width: 26px;
-  height: 26px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  transition: all 0.12s;
-
-  svg { width: 12px; height: 12px; }
-
-  &:hover:not(:disabled) { background: var(--bg2); color: var(--t1); border-color: var(--bdr3); }
-  &:disabled { opacity: 0.45; cursor: not-allowed; }
-}
-
-.uploadLimitBadge {
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--amber);
-  background: var(--amber-dim);
-  border: 1px solid var(--amber-bdr);
-  border-radius: 99px;
-  padding: 2px 8px;
-  @include m.mono;
-  white-space: nowrap;
-}
-
-// ── Date filter ─────────────────────────────────
-.dateFilter {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 6px 3px 10px;
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  background: var(--bg1);
-  height: 32px;
-  flex-shrink: 0;
-}
-
-// Small vertical divider used to separate grouped controls (Sort / Date
-// Range in the title row, Status / Actions in the filter row) — mirrors
-// pages/UploadInfer/FilePanel.module.scss's .vSep.
-.vSep {
-  width: 1px;
-  height: 18px;
-  background: var(--bdr2);
-  flex-shrink: 0;
-}
-
-.dateFilterIc {
-  color: var(--t2);
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-
-  svg { width: 11px; height: 11px; }
-}
-
-.dateInput {
-  background: transparent;
-  border: none;
-  outline: none;
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 10px;
-  padding: 1px 2px;
-  font-variant-numeric: tabular-nums;
-  cursor: pointer;
-  color-scheme: dark;
-  width: 90px;
-
-  &::-webkit-calendar-picker-indicator {
-    cursor: pointer;
-    opacity: 0.4;
-    filter: invert(0.5);
-    width: 10px;
-    height: 10px;
-    transition: opacity 0.12s;
-  }
-
-  &:hover::-webkit-calendar-picker-indicator { opacity: 0.8; }
-}
-
-.dateSep {
-  color: var(--t2);
-  font-size: 10px;
-  user-select: none;
-  flex-shrink: 0;
-}
-
-.dateReset {
-  background: transparent;
-  border: none;
-  color: var(--t2);
-  font-size: 10px;
-  padding: 3px 6px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-family: var(--font-ui);
-  transition: all 0.12s;
-  white-space: nowrap;
-
-  &:hover { color: var(--t0); background: var(--bg3); }
-}
-
-.dateValidationError {
-  font-size: 11px;
-  color: var(--red);
-  white-space: nowrap;
-  @include m.mono;
-}
-
-// Light theme date picker
-:global(html.light) {
-  .dateInput {
-    color-scheme: light;
-  }
-  .dateInput::-webkit-calendar-picker-indicator { filter: none; }
-}
-
-// ── Status filter chips (Library column heading) ──
-.colHeadingRight {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  flex: 1;
-  justify-content: flex-end;
-  flex-wrap: nowrap;
-  overflow: hidden;
-}
-
-.statusFilterChips {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  flex-shrink: 0;
-}
-
-// Collapsed filter icon — shown instead of chips when search is open in split view
-.filterIconBtn {
-  width: 28px;
-  height: 28px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
-  flex-shrink: 0;
-  transition: all 0.12s;
-
-  svg { width: 13px; height: 13px; }
-
-  &:hover { background: var(--bg2); color: var(--t1); border-color: var(--bdr3); }
-}
-
-.filterIconBtnActive {
-  background: rgba(139,92,246,0.1);
-  color: #a78bfa;
-  border-color: rgba(139,92,246,0.3);
-}
-
-// Dot badge when a non-'all' filter is active
-.filterIconDot {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #a78bfa;
-}
-
-// ── Action toolbar — icon + text buttons, own row below colHeading ──
-// Lighter background than colHeading so it reads as a distinct toolbar strip.
-.actionToolbar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 8px 22px;
-  background: var(--bg2);
-  border-bottom: 1px solid var(--bdr);
-  flex-shrink: 0;
-}
-
-.actionToolbarBtn {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  min-width: 84px;
-  padding: 8px 10px;
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 600;
-  font-family: var(--font-ui);
-  white-space: nowrap;
-  text-align: center;
-  transition: all 0.14s;
-  flex-shrink: 0;
-
-  svg { width: 16px; height: 16px; flex-shrink: 0; }
-  span { display: inline; line-height: 1.2; }
-
-  &:active { filter: brightness(0.92); }
-}
-
-.actionToolbarBtnInference {
-  background: color-mix(in srgb, var(--violet) 16%, var(--bg2));
-  border-color: color-mix(in srgb, var(--violet) 45%, var(--bg2));
-  color: var(--violet);
-
-  &:hover { background: color-mix(in srgb, var(--violet) 24%, var(--bg2)); }
-}
-
-.actionToolbarBtnDelete {
-  background: color-mix(in srgb, var(--red) 16%, var(--bg2));
-  border-color: color-mix(in srgb, var(--red) 45%, var(--bg2));
-  color: var(--red);
-
-  &:hover { background: color-mix(in srgb, var(--red) 24%, var(--bg2)); }
-}
-
-.actionToolbarBtnPipeline {
-  background: color-mix(in srgb, var(--teal) 16%, var(--bg2));
-  border-color: color-mix(in srgb, var(--teal) 45%, var(--bg2));
-  color: var(--teal);
-
-  &:hover { background: color-mix(in srgb, var(--teal) 24%, var(--bg2)); }
-}
-
-.statusChip {
-  font-size: 10px;
-  font-weight: 500;
-  padding: 3px 9px;
-  border-radius: 99px;
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  font-family: var(--font-ui);
-  transition: all 0.15s;
-  white-space: nowrap;
-
-  &:hover { background: var(--bg2); color: var(--t1); border-color: var(--bdr3); }
-}
-
-// "All" active — blue so it's immediately distinct
-.statusChipActive {
-  background: rgba(59, 130, 246, 0.12);
-  color: var(--blue);
-  border-color: rgba(59, 130, 246, 0.35);
-  font-weight: 600;
-}
-
-// Per-status accent colours when active
-.statusChip_completed.statusChipActive {
-  background: rgba(34, 197, 94, 0.12);
-  color: var(--green);
-  border-color: rgba(34, 197, 94, 0.35);
-  font-weight: 600;
-}
-
-.statusChip_pending.statusChipActive {
-  background: rgba(139, 92, 246, 0.12);
-  color: #a78bfa;
-  border-color: rgba(139, 92, 246, 0.35);
-  font-weight: 600;
-}
-
-.statusChip_failed.statusChipActive {
-  background: rgba(239, 68, 68, 0.12);
-  color: var(--red);
-  border-color: rgba(239, 68, 68, 0.35);
-  font-weight: 600;
-}
-
-.statusChip_queued.statusChipActive {
-  background: rgba(245, 158, 11, 0.12);
-  color: var(--amber);
-  border-color: rgba(245, 158, 11, 0.35);
-  font-weight: 600;
-}
-
-.statusChip_running.statusChipActive {
-  background: rgba(59, 130, 246, 0.12);
-  color: var(--blue);
-  border-color: rgba(59, 130, 246, 0.35);
-  font-weight: 600;
-}
-
-
-
-// ── Sections (Processing / Library) ─────────────
-.section {
-  margin-bottom: 28px;
-
-  &:last-child {
-    margin-bottom: 0;
-  }
-}
-
-.sectionHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-  padding: 0 2px;
-}
-
-.sectionTitle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--t1);
-  font-family: var(--font-display);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.sectionDot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--blue);
-  box-shadow: 0 0 0 3px var(--blue-dim);
-  animation: breathe 1.4s ease-in-out infinite;
-}
-
-.sectionCount {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 20px;
-  height: 18px;
-  padding: 0 6px;
-  border-radius: 9px;
-  background: var(--bg3);
-  color: var(--t1);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0;
-  text-transform: none;
-}
-
-.sectionHint {
-  font-size: 10px;
-  color: var(--t2);
-  @include m.mono;
-  letter-spacing: 0.04em;
-}
-
-// ── Countdown pill ───────────────────────────────
-// Lives in the Processing section header's right slot.
-// Shows "Refreshes in Xs" with a thin arc that drains clockwise.
-.countdownWrap {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.countdownArc {
-  position: relative;
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
-
-  svg {
-    width: 16px;
-    height: 16px;
-    transform: rotate(-90deg); // start arc at 12 o'clock
-  }
-
-  // Background ring
-  .countdownTrack {
-    fill: none;
-    stroke: var(--bdr2);
-    stroke-width: 2;
-  }
-
-  // Draining foreground arc
-  .countdownFill {
-    fill: none;
-    stroke: var(--blue);
-    stroke-width: 2;
-    stroke-linecap: round;
-    transition: stroke-dashoffset 0.25s linear;
-  }
-}
-
-.countdownLabel {
-  font-size: 10px;
-  color: var(--t2);
-  @include m.mono;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-}
-
-// ── Section header right slot (search) ──────────
-.sectionHeaderRight {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.searchToggleBtn {
-  width: 28px;
-  height: 28px;
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.12s;
-  flex-shrink: 0;
-
-  svg {
-    width: 14px;
-    height: 14px;
-  }
-
-  &:hover {
-    background: var(--bg3);
-    color: var(--t0);
-    border-color: var(--bdr2);
-  }
-}
-
-.searchToggleBtnActive {
-  background: var(--blue-dim);
-  color: var(--blue);
-  border-color: var(--blue-bdr);
-
-  &:hover {
-    background: var(--blue-dim);
-    color: var(--blue);
-  }
-}
-
-.searchBox {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  border: 1px solid var(--blue-bdr);
-  border-radius: var(--r);
-  background: var(--bg1);
-  height: 28px;
-  animation: fadeSlide 0.14s ease;
-  width: 140px;
-  flex-shrink: 1;
-  min-width: 0;
-}
-
-.searchBoxIc {
-  color: var(--t2);
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-
-  svg {
-    width: 12px;
-    height: 12px;
-  }
-}
-
-.searchBoxInput {
-  flex: 1;
-  background: transparent;
-  border: none;
-  outline: none;
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  min-width: 0;
-
-  &::placeholder {
-    color: var(--t2);
-  }
-}
-
-.searchBoxClear {
-  width: 18px;
-  height: 18px;
-  border-radius: 3px;
-  border: none;
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  flex-shrink: 0;
-  transition: all 0.12s;
-
-  svg {
-    width: 10px;
-    height: 10px;
-  }
-
-  &:hover {
-    color: var(--t0);
-    background: var(--bg3);
-  }
-}
-
-
-.libLoading {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 60px 20px;
-  color: var(--t2);
-  font-size: 12px;
-  font-family: var(--font-ui);
-}
-
-.libEmpty {
-  padding: 40px 20px;
-  text-align: center;
-  border: 1px dashed var(--bdr2);
-  border-radius: var(--rl);
-  background: var(--bg1);
-}
-
-.libEmptyTitle {
-  font-size: 13px;
-  color: var(--t1);
-  font-weight: 500;
-  font-family: var(--font-display);
-  margin-bottom: 4px;
-}
-
-.libEmptyHint {
-  font-size: 11px;
-  color: var(--t2);
-}
-
-// ══════════════════════════════════════
-// PAGINATION FOOTER — mirrors pages/UploadInfer/FilePanel.module.scss
-// ══════════════════════════════════════
-.paginationBar {
+    border-left: none;
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding: 8px 10px;
-    border-top: 1px solid var(--bdr2);
+    overflow: hidden;
+    background: var(--bg0);
+    transition: width 0.25s ease;
+    position: relative;
+
+    // Gradient border — only visible when step-2 panel is open beside it
+    &::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        width: 1px;
+        background: linear-gradient(180deg,
+                rgba(139, 92, 246, 0.0) 0%,
+                rgba(139, 92, 246, 0.7) 20%,
+                rgba(56, 196, 186, 0.8) 55%,
+                rgba(240, 160, 48, 0.7) 85%,
+                rgba(240, 160, 48, 0.0) 100%);
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.32s ease;
+    }
+}
+
+// Border fades in only when step-2 is visible next to workspace
+.wspanelWithStep2::before {
+    opacity: 1;
+}
+
+.wspanelExpanded {
+    width: auto;
+    flex: 1;
+}
+
+// ── Header — unchanged from original ────────────────────
+.wspanelHead {
+    padding: 12px 18px 9px;
+    border-bottom: 1px solid var(--bdr);
+    background: var(--bg1);
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.headLeft {
+    flex: 1;
+    min-width: 0;
+}
+
+.wsftitle {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--t0);
+    letter-spacing: -0.2px;
+    @include m.truncate;
+    line-height: 1.3;
+}
+
+.wsftitleEmpty {
+    font-size: 18px;
+    font-weight: 300;
+    color: var(--t2);
+    opacity: 0.4;
+}
+
+.wsmeta {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 5px;
+    flex-wrap: wrap;
+}
+
+.wsmetaId {
+    display: inline-flex;
+    align-items: center;
+    font-size: 10px;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    color: #a78bfa;
+    background: rgba(167, 139, 250, 0.12);
+    border: 1px solid rgba(167, 139, 250, 0.3);
+    border-radius: 4px;
+    padding: 1px 6px;
+    flex-shrink: 0;
+    letter-spacing: 0.02em;
+}
+
+.wsmetaSep {
+    color: var(--t2);
+    opacity: 0.4;
+    font-size: 13px;
+}
+
+.wsmetaDate {
+    font-size: 13px;
+    color: var(--t2);
+    font-family: var(--font-mono);
+}
+
+.wsmetaHint {
+    font-size: 13px;
+    color: var(--t2);
+    font-family: var(--font-mono);
+    opacity: 0.6;
+    font-style: italic;
+}
+
+// ── Tab bar ─────────────────────────────────────────────
+.wsptabsWrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid var(--bdr);
     background: var(--bg1);
     flex-shrink: 0;
 }
 
-.paginationTopRow {
+.wsptabs {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    flex-wrap: nowrap;
-    min-width: 0;
-}
-
-.pageSizeGroup {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-shrink: 0;
-}
-
-.pageSizeLabel {
-    font-size: 11px;
-    color: var(--t2);
-    white-space: nowrap;
-}
-
-.pageSizeSelect {
-    padding: 3px 6px;
-    background: var(--bg0);
-    border: 1px solid var(--bdr2);
-    border-radius: var(--r);
-    color: var(--t0);
-    font-family: var(--font-ui);
-    font-size: 12px;
-    outline: none;
-    cursor: pointer;
-    transition: border-color 0.12s;
-
-    &:focus {
-        border-color: var(--blue);
-        box-shadow: 0 0 0 2px var(--blue-dim);
-    }
-}
-
-// Page-number row sits to the right of the page-size selector. It never
-// wraps to its own line — if there isn't room for every number button,
-// this row scrolls horizontally within itself instead.
-.pageNav {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 2px;
-    flex-wrap: nowrap;
-    flex-shrink: 1;
-    min-width: 0;
+    padding: 0 16px;
+    flex: 1;
     overflow-x: auto;
     scrollbar-width: none;
     -ms-overflow-style: none;
@@ -1898,3178 +1996,4596 @@
     }
 }
 
-.pageNavBtn,
-.pageNumBtn {
-    display: inline-flex;
+.tabFade {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 28px;
+    pointer-events: none;
+    z-index: 1;
+}
+
+.tabFadeLeft {
+    left: 28px;
+    background: linear-gradient(90deg, var(--bg1), transparent);
+}
+
+.tabFadeRight {
+    right: 28px;
+    background: linear-gradient(270deg, var(--bg1), transparent);
+}
+
+.tabScrollBtn {
+    flex-shrink: 0;
+    align-self: stretch;
+    width: 28px;
+    display: flex;
     align-items: center;
     justify-content: center;
-    min-width: 24px;
-    height: 24px;
-    padding: 0 6px;
-    border-radius: var(--r);
-    border: 1px solid transparent;
-    background: transparent;
-    color: var(--t1);
-    font-family: var(--font-ui);
-    font-size: 12px;
-    font-weight: 500;
+    border: none;
+    background: var(--bg1);
+    color: var(--t2);
     cursor: pointer;
-    transition: all 0.12s;
-    user-select: none;
-    flex-shrink: 0;
+    z-index: 2;
+    transition: color 0.12s;
 
     svg {
-        width: 11px;
-        height: 11px;
+        width: 13px;
+        height: 13px;
     }
 
-    &:hover:not(:disabled) {
-        background: var(--bg3);
+    &:hover {
         color: var(--t0);
-        border-color: var(--bdr3);
+    }
+}
+
+.tab {
+    padding: 0 14px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    font-size: 14px;
+    color: var(--t2);
+    cursor: pointer;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    font-family: var(--font-ui);
+    transition: all 0.12s;
+    user-select: none;
+    white-space: nowrap;
+    flex-shrink: 0;
+
+    &:hover {
+        color: var(--t1);
+    }
+
+    &.active {
+        color: var(--blue);
+        border-bottom-color: var(--blue);
+        font-weight: 500;
+    }
+}
+
+// ── Tab body ─────────────────────────────────────────────
+.wsbody {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 18px;
+    background: var(--bg0);
+    @include m.scrollbar;
+    animation: fadein 0.15s ease;
+    display: flex;
+    flex-direction: column;
+}
+
+// ── Empty state ──────────────────────────────────────────
+.wsEmpty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    text-align: center;
+
+    svg {
+        width: 44px;
+        height: 44px;
+        color: var(--t2);
+        opacity: 0.25;
+        flex-shrink: 0;
+        animation: float 3s ease-in-out infinite;
+    }
+}
+
+.wsEmptyTitle {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--t1);
+}
+
+.wsEmptyDesc {
+    font-size: 14px;
+    color: var(--t2);
+    @include m.mono;
+    line-height: 1.6;
+    max-width: 200px;
+}
+
+// ── Loading spinner ──────────────────────────────────────
+.wsSpinner {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: var(--t2);
+    font-size: 14px;
+    @include m.mono;
+}
+
+.spinner {
+    width: 28px;
+    height: 28px;
+    border: 2.5px solid var(--bdr2);
+    border-top-color: var(--blue);
+    border-radius: 50%;
+    animation: wsSpin 0.7s linear infinite;
+    flex-shrink: 0;
+}
+
+// ── Tab content wrapper ──────────────────────────────────
+.tabContent {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    animation: fadein 0.15s ease;
+    flex: 1;
+    min-height: 0;
+}
+
+.tabEmpty {
+    font-size: 14px;
+    color: var(--t2);
+    @include m.mono;
+    padding: 24px 0;
+    text-align: center;
+}
+
+// ── Summary — marked library output ─────────────────────
+// Font sizes and spacing match Angular .markdown-content-inline exactly
+.summaryMd {
+    font-size: 14px;
+    color: var(--t1);
+    line-height: 1.7;
+
+    // ── Paragraphs ──────────────────────────────────────
+    // Angular: margin: 8px 0, line-height: 1.7
+    p {
+        margin: 8px 0;
+        line-height: 1.7;
+
+        &:first-child {
+            margin-top: 0;
+        }
+
+        &:last-child {
+            margin-bottom: 0;
+        }
+    }
+
+    // ── Headings ─────────────────────────────────────────
+    // Angular h1: 18px, margin 12px 0 8px 0, padding-bottom 6px
+    h1 {
+        font-size: 18px;
+        font-weight: 700;
+        color: var(--blue);
+        margin: 12px 0 8px;
+        padding-bottom: 6px;
+        border-bottom: 2px solid rgba(139, 92, 246, 0.3);
+        line-height: 1.3;
+        position: relative;
+
+        &:first-child {
+            margin-top: 0;
+        }
+
+        &::before {
+            content: '';
+            position: absolute;
+            bottom: -2px;
+            left: 0;
+            width: 60px;
+            height: 2px;
+            background: var(--blue);
+        }
+    }
+
+    // Angular h2: 16px, margin 10px 0 6px 0, padding-left 12px
+    h2 {
+        font-size: 16px;
+        font-weight: 700;
+        color: #9f7aea;
+        margin: 10px 0 6px;
+        padding-left: 12px;
+        line-height: 1.3;
+        position: relative;
+
+        &:first-child {
+            margin-top: 0;
+        }
+
+        &::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 4px;
+            height: 18px;
+            background: linear-gradient(180deg, var(--blue), #a78bfa);
+            border-radius: 2px;
+        }
+    }
+
+    // Angular h3: 14px, margin 8px 0 4px 0
+    h3 {
+        font-size: 14px;
+        font-weight: 700;
+        color: #a78bfa;
+        margin: 8px 0 4px;
+        line-height: 1.3;
+
+        &:first-child {
+            margin-top: 0;
+        }
+    }
+
+    // Angular h4/h5/h6: 13px, margin 6px 0 4px 0
+    h4,
+    h5,
+    h6 {
+        font-size: 14px;
+        font-weight: 600;
+        color: #b794f4;
+        margin: 6px 0 4px;
+        line-height: 1.3;
+
+        &:first-child {
+            margin-top: 0;
+        }
+    }
+
+    // ── Lists ────────────────────────────────────────────
+    // Angular: margin 8px 0, padding-left 20px
+    ul,
+    ol {
+        margin: 8px 0;
+        padding-left: 20px;
+
+        &:last-child {
+            margin-bottom: 0;
+        }
+    }
+
+    // Angular li: margin 4px 0, line-height 1.6, padding-left 8px
+    li {
+        margin: 4px 0;
+        line-height: 1.6;
+        padding-left: 8px;
+
+        ul,
+        ol {
+            margin-top: 4px;
+            margin-bottom: 4px;
+        }
+    }
+
+    ul li::marker {
+        color: var(--blue);
+        font-weight: bold;
+    }
+
+    ol li::marker {
+        color: var(--blue);
+        font-weight: bold;
+    }
+
+    // ── Inline formatting ────────────────────────────────
+    // Angular strong: color primary, background gradient, padding 2px 4px
+    strong {
+        font-weight: 700;
+        color: var(--blue);
+        background: linear-gradient(135deg,
+                rgba(139, 92, 246, 0.1),
+                rgba(167, 139, 250, 0.05));
+        padding: 2px 4px;
+        border-radius: 3px;
+    }
+
+    em {
+        font-style: italic;
+        color: #a78bfa;
+    }
+
+    // ── HR ───────────────────────────────────────────────
+    // Angular: height 2px, gradient, margin 16px 0, opacity 0.3
+    hr {
+        border: none;
+        height: 2px;
+        background: linear-gradient(90deg, transparent, var(--blue), transparent);
+        margin: 16px 0;
+        opacity: 0.3;
+    }
+
+    // ── Blockquote ───────────────────────────────────────
+    // Angular: border-left 3px, padding 12px 12px 12px 16px, margin 12px 0
+    blockquote {
+        border-left: 3px solid var(--blue);
+        margin: 12px 0;
+        padding: 12px 12px 12px 16px;
+        background: linear-gradient(135deg,
+                rgba(139, 92, 246, 0.08),
+                rgba(167, 139, 250, 0.05));
+        border-radius: 0 6px 6px 0;
+        font-style: italic;
+        opacity: 0.9;
+        position: relative;
+
+        &::before {
+            content: '"';
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            font-size: 32px;
+            color: var(--blue);
+            opacity: 0.3;
+            font-family: Georgia, serif;
+            line-height: 0;
+        }
+
+        // marked wraps blockquote text in <p>
+        p {
+            margin: 0;
+            line-height: 1.6;
+        }
+    }
+
+    // ── Inline code ──────────────────────────────────────
+    // Angular: padding 3px 8px, font-size 0.9em (~11.7px), border rgba purple
+    code {
+        font-family: var(--font-mono);
+        font-size: 0.9em;
+        background: linear-gradient(135deg,
+                rgba(139, 92, 246, 0.15),
+                rgba(167, 139, 250, 0.1));
+        border: 1px solid rgba(139, 92, 246, 0.3);
+        border-radius: 4px;
+        padding: 3px 8px;
+        color: var(--blue);
+        font-weight: 500;
+    }
+
+    // ── Code block ───────────────────────────────────────
+    // Angular: padding 14px, margin 12px 0, border rgba purple
+    pre {
+        background: linear-gradient(135deg,
+                rgba(139, 92, 246, 0.08),
+                rgba(167, 139, 250, 0.05));
+        border: 1px solid rgba(139, 92, 246, 0.25);
+        border-radius: 8px;
+        padding: 14px;
+        overflow-x: auto;
+        margin: 12px 0;
+        position: relative;
+
+        &:last-child {
+            margin-bottom: 0;
+        }
+
+        // Angular pre::before — purple left accent bar
+        &::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background: linear-gradient(180deg, var(--blue), #a78bfa);
+            border-radius: 8px 0 0 8px;
+        }
+
+        code {
+            background: transparent;
+            border: none;
+            padding: 0;
+            font-size: 0.9em;
+            color: var(--t1);
+            font-weight: normal;
+        }
+    }
+
+    // ── Tables ───────────────────────────────────────────
+    table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 12px 0;
+        border-radius: 6px;
+        overflow: hidden;
+    }
+
+    th,
+    td {
+        padding: 10px 12px;
+        border: 1px solid rgba(139, 92, 246, 0.2);
+        text-align: left;
+    }
+
+    th {
+        background: linear-gradient(135deg,
+                rgba(139, 92, 246, 0.15),
+                rgba(167, 139, 250, 0.1));
+        font-weight: 700;
+        color: var(--blue);
+        border-bottom: 2px solid rgba(139, 92, 246, 0.3);
+    }
+
+    tr:hover {
+        background: rgba(139, 92, 246, 0.03);
+    }
+
+    // ── Links ────────────────────────────────────────────
+    a {
+        color: var(--blue);
+        text-decoration: none;
+        font-weight: 500;
+        border-bottom: 1px solid transparent;
+        transition: border-color 0.2s, color 0.2s;
+
+        &:hover {
+            color: #9f7aea;
+            border-bottom-color: var(--blue);
+        }
+    }
+
+    // First child: no top margin
+    >*:first-child {
+        margin-top: 0;
+    }
+
+    // Last child: no bottom margin
+    >*:last-child {
+        margin-bottom: 0;
+    }
+}
+
+// ── Keywords — gradient chips ────────────────────────────
+.keywordGrid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+}
+
+.keywordPill {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    @include m.mono;
+    color: #fff;
+    // background set inline via style prop (gradient)
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.15);
+    animation: chipFadeIn 0.25s ease-out;
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.2s, box-shadow 0.2s;
+    cursor: default;
+
+    // shine on hover
+    &::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: -100%;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(90deg,
+                transparent,
+                rgba(255, 255, 255, 0.25),
+                transparent);
+        transition: left 0.42s ease;
+    }
+
+    &:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+
+        &::before {
+            left: 100%;
+        }
+    }
+}
+
+// ── Assessment — progress bar ────────────────────────────
+.assessProgress {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.assessProgressTrack {
+    flex: 1;
+    height: 4px;
+    background: var(--bg3);
+    border-radius: 99px;
+    overflow: hidden;
+}
+
+.assessProgressFill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--blue), #a78bfa);
+    border-radius: 99px;
+    transition: width 0.3s ease;
+}
+
+.assessProgressLabel {
+    font-size: 13px;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    color: var(--blue);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+// ── Assessment — question card ───────────────────────────
+.faqCard {
+    background: var(--bg1);
+    border: 1px solid var(--bdr);
+    border-radius: var(--r);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    animation: fadeInUp 0.2s ease-out;
+    transition: border-color 0.15s, box-shadow 0.15s;
+
+    &:hover {
+        border-color: var(--blue-bdr);
+        box-shadow: 0 2px 8px rgba(139, 92, 246, 0.07);
+    }
+}
+
+.faqQ {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--t0);
+    line-height: 1.5;
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+.faqNum {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--blue);
+    background: var(--blue-dim);
+    border: 1px solid var(--blue-bdr);
+    border-radius: 4px;
+    padding: 1px 6px;
+    flex-shrink: 0;
+    margin-top: 2px;
+    @include m.mono;
+}
+
+.faqOptions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+// ── Option button — base ─────────────────────────────────
+.faqOpt {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 13px;
+    color: var(--t1);
+    padding: 7px 10px;
+    border-radius: 6px;
+    border: 2px solid var(--bdr);
+    background: var(--bg0);
+    cursor: pointer;
+    text-align: left;
+    font-family: var(--font-ui);
+    width: 100%;
+    transition: border-color 0.15s, background 0.15s, transform 0.15s;
+
+    &:hover:not(:disabled) {
+        border-color: var(--blue-bdr);
+        background: var(--blue-dim);
+        transform: translateX(2px);
     }
 
     &:disabled {
-        opacity: 0.35;
         cursor: default;
     }
 }
 
-.pageNumBtnActive {
+// Circle key badge
+.faqOptKey {
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: var(--bg3);
+    border: 1.5px solid var(--bdr2);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--t1);
+    @include m.mono;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.faqOptVal {
+    flex: 1;
+    line-height: 1.45;
+}
+
+// ── Option states ────────────────────────────────────────
+.faqOptSelected {
+    border-color: var(--blue-bdr);
+    background: var(--blue-dim);
+
+    .faqOptKey {
+        background: var(--blue);
+        border-color: var(--blue);
+        color: #fff;
+    }
+}
+
+.faqOptCorrect {
+    border-color: var(--green-bdr);
+    background: var(--green-dim);
+
+    .faqOptKey {
+        background: var(--green);
+        border-color: var(--green);
+        color: #fff;
+    }
+
+    .faqOptVal {
+        color: var(--green);
+        font-weight: 600;
+    }
+}
+
+.faqOptCorrectAlt {
+    border-color: var(--green-bdr);
+    background: var(--green-dim);
+
+    .faqOptKey {
+        background: var(--green);
+        border-color: var(--green);
+        color: #fff;
+    }
+
+    .faqOptVal {
+        color: var(--green);
+        font-weight: 600;
+    }
+}
+
+.faqOptWrong {
+    border-color: var(--red-bdr);
+    background: var(--red-dim);
+
+    .faqOptKey {
+        background: var(--red);
+        border-color: var(--red);
+        color: #fff;
+    }
+
+    .faqOptVal {
+        color: var(--red);
+        font-weight: 600;
+    }
+}
+
+// ── Check / X icons ──────────────────────────────────────
+.faqCheckIcon,
+.faqXIcon {
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+    margin-left: auto;
+    animation: iconPop 0.25s ease-out;
+}
+
+.faqCheckIcon {
+    color: var(--green);
+}
+
+.faqXIcon {
+    color: var(--red);
+}
+
+// ── Explanation box ──────────────────────────────────────
+.faqExplain {
+    background: var(--bg0);
+    border: 1px solid var(--bdr);
+    border-left: 3px solid var(--blue-bdr);
+    border-radius: 0 5px 5px 0;
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    animation: explanationSlideIn 0.2s ease-out;
+}
+
+.faqExplainLabel {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--blue);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    @include m.mono;
+
+    svg {
+        width: 12px;
+        height: 12px;
+        flex-shrink: 0;
+    }
+}
+
+.faqExplainText {
+    font-size: 13px;
+    color: var(--t2);
+    line-height: 1.6;
+    @include m.mono;
+    margin: 0;
+}
+
+// ── Next / Finish button ─────────────────────────────────
+.assessNextBtn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 6px 14px; // matches .btnSm padding scale
+    border-radius: var(--r);
+    border: none;
+    background: var(--blue);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: var(--font-ui);
+    cursor: pointer;
+    align-self: flex-end;
+    animation: fadein 0.15s ease;
+    box-shadow: 0 2px 6px rgba(91, 164, 239, 0.28);
+    transition: opacity 0.12s, transform 0.15s, box-shadow 0.15s;
+
+    svg {
+        width: 12px;
+        height: 12px;
+    }
+
+    &:hover {
+        opacity: 0.9;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 10px rgba(91, 164, 239, 0.35);
+    }
+}
+
+.assessDoneBtn {
+    background: var(--green);
+    box-shadow: 0 2px 6px rgba(74, 222, 128, 0.28);
+
+    &:hover {
+        box-shadow: 0 4px 10px rgba(74, 222, 128, 0.35);
+    }
+}
+
+// ── Complete screen ──────────────────────────────────────
+.assessComplete {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 28px 16px;
+    text-align: center;
+    animation: completeFadeIn 0.3s ease-out;
+}
+
+.assessCompleteIcon {
+    width: 56px;
+    height: 56px;
+    background: var(--green-dim);
+    border: 2px solid var(--green-bdr);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: iconBounce 0.5s ease-out;
+
+    svg {
+        width: 32px;
+        height: 32px;
+        color: var(--green);
+    }
+}
+
+.assessCompleteTitle {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--t0);
+}
+
+.assessCompleteDesc {
+    font-size: 14px;
+    color: var(--t2);
+    @include m.mono;
+}
+
+.assessRestartBtn {
+    margin-top: 4px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 20px;
+    border-radius: var(--r);
+    border: 1px solid var(--bdr2);
+    background: transparent;
+    color: var(--t1);
+    font-size: 14px;
+    font-family: var(--font-ui);
+    cursor: pointer;
+    transition: all 0.12s;
+
+    &:hover {
+        background: var(--bg3);
+        color: var(--t0);
+        border-color: var(--bdr3);
+    }
+}
+
+// (tabToolbar and editIconBtn replaced by actionBtn/dropdown system below)
+
+// ── Edit mode layout ─────────────────────────────────────
+.editMode {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.editLayout {
+    display: flex;
+    gap: 12px;
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    padding-bottom: 52px; // room for fixed footer
+}
+
+.editCol {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.editColHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.editColLabel {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--t2);
+}
+
+.editColTag {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--t2);
+    opacity: 0.55;
+    font-style: italic;
+    text-transform: none;
+    letter-spacing: 0;
+}
+
+.editTextarea {
+    flex: 1;
+    resize: none;
+    background: var(--bg1);
+    border: 1px solid var(--bdr);
+    border-radius: var(--r);
+    color: var(--t1);
+    font-size: 13px;
+    font-family: var(--font-mono);
+    line-height: 1.6;
+    padding: 10px 12px;
+    outline: none;
+    min-height: 280px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+
+    &:focus {
+        border-color: var(--blue-bdr);
+        box-shadow: 0 0 0 2px rgba(91, 164, 239, 0.12);
+    }
+}
+
+.editPreview {
+    flex: 1;
+    background: var(--bg1);
+    border: 1px solid var(--bdr);
+    border-radius: var(--r);
+    padding: 10px 12px;
+    overflow-y: auto;
+    min-height: 280px;
+}
+
+// ── Fixed footer inside edit layout ──────────────────────
+.editFooter {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    border-top: 1px solid var(--bdr);
+    background: var(--bg1);
+    padding: 0 4px;
+    border-radius: 0 0 var(--r) var(--r);
+}
+
+.cancelBtn {
+    padding: 6px 14px;
+    border-radius: var(--r);
+    border: 1px solid var(--bdr2);
+    background: transparent;
+    color: var(--t1);
+    font-size: 13px;
+    font-family: var(--font-ui);
+    cursor: pointer;
+    transition: all 0.12s;
+
+    &:hover:not(:disabled) {
+        background: var(--bg3);
+        border-color: var(--bdr3);
+    }
+
+    &:disabled {
+        opacity: 0.4;
+        cursor: default;
+    }
+}
+
+.saveBtn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 16px;
+    border-radius: var(--r);
+    border: none;
+    background: var(--blue);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: var(--font-ui);
+    cursor: pointer;
+    transition: opacity 0.12s;
+    box-shadow: 0 2px 6px rgba(91, 164, 239, 0.28);
+
+    &:hover:not(:disabled) {
+        opacity: 0.88;
+    }
+
+    &:disabled {
+        opacity: 0.55;
+        cursor: default;
+    }
+}
+
+// ── Inline spinner for save button ───────────────────────
+.inlineSpinner {
+    width: 11px;
+    height: 11px;
+    border: 1.5px solid rgba(255, 255, 255, 0.35);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: wsSpin 0.65s linear infinite;
+    flex-shrink: 0;
+}
+
+// ── Tab toolbar — icon-only buttons ──────────────────────
+.tabToolbar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    justify-content: flex-end;
+    margin-bottom: 6px;
+}
+
+.actionBtn {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 7px;
+    border: 1px solid var(--bdr2);
+    background: transparent;
+    color: var(--t2);
+    cursor: pointer;
+    padding: 0;
+    transition: all 0.15s;
+    flex-shrink: 0;
+
+    svg {
+        width: 13px;
+        height: 13px;
+    }
+
+    &:hover {
+        background: var(--blue-dim);
+        border-color: var(--blue-bdr);
+        color: var(--blue);
+    }
+}
+
+.actionBtnActive {
     background: var(--blue-dim);
     border-color: var(--blue-bdr);
     color: var(--blue);
-    font-weight: 700;
+}
 
-    &:hover:not(:disabled) {
+.successIcon {
+    color: var(--green) !important;
+}
+
+// ── Dropdown ──────────────────────────────────────────────
+.dropdownWrap {
+    position: relative;
+}
+
+.dropdown {
+    position: absolute;
+    top: calc(100% + 5px);
+    right: 0;
+    min-width: 168px;
+    background: var(--bg1);
+    border: 1px solid var(--bdr);
+    border-radius: var(--r);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+    z-index: 50;
+    overflow: hidden;
+    animation: ddFade 0.12s ease;
+}
+
+@keyframes ddFade {
+    from {
+        opacity: 0;
+        transform: translateY(-4px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.dropdownLabel {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--t2);
+    padding: 7px 11px 4px;
+    opacity: 0.6;
+}
+
+.dropdownItem {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    text-align: left;
+    padding: 7px 11px;
+    font-size: 13px;
+    color: var(--t1);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-family: var(--font-ui);
+    transition: background 0.1s, color 0.1s;
+
+    &:hover {
         background: var(--blue-dim);
         color: var(--blue);
     }
 }
 
-.pageEllipsis {
-    color: var(--t2);
-    font-size: 12px;
-    padding: 0 2px;
-    user-select: none;
-    flex-shrink: 0;
+.dropdownItemLabel {
+    flex: 1;
+    min-width: 0;
 }
 
-.pageInfo {
-    font-size: 11px;
+// Per-format colored glyph in copy/download menus
+.fmtIcon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    flex-shrink: 0;
+    transition: transform 0.12s ease;
+
+    svg {
+        width: 13px;
+        height: 13px;
+    }
+}
+
+.dropdownItem:hover .fmtIcon {
+    transform: scale(1.06);
+}
+
+// ── Keyword pill — new chip animation ────────────────────
+.keywordPillNew {
+    animation: chipFadeIn 0.25s ease-out;
+}
+
+// ── Assessment header row (mode tabs + toolbar) ───────────
+.assessHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    gap: 8px;
+}
+
+// ── Mode toggle tabs ──────────────────────────────────────
+.assessModeTabs {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    background: var(--bg2);
+    border: 1px solid var(--bdr);
+    border-radius: 8px;
+    padding: 3px;
+}
+
+.assessModeTab {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
     color: var(--t2);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    text-align: right;
+    font-size: 12px;
+    font-weight: 500;
+    font-family: var(--font-ui);
+    cursor: pointer;
+    transition: all 0.15s;
+
+    svg {
+        width: 12px;
+        height: 12px;
+        flex-shrink: 0;
+    }
+
+    &:hover {
+        color: var(--t1);
+    }
+}
+
+.assessModeTabActive {
+    background: var(--bg0);
+    color: var(--blue);
+    font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+
+    svg {
+        stroke: var(--blue);
+    }
+}
+
+// ── View All list ─────────────────────────────────────────
+.viewAllList {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    animation: fadein 0.15s ease;
+}
+
+.viewAllCard {
+    background: var(--bg1);
+    border: 1px solid var(--bdr);
+    border-radius: var(--r);
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+
+    &:hover {
+        border-color: var(--blue-bdr);
+        box-shadow: 0 2px 8px rgba(139, 92, 246, 0.07);
+    }
+}
+
+.viewAllQ {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--t0);
+    line-height: 1.5;
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+// Neutral option style for View All (non-correct options)
+.viewAllOptNeutral {
+    cursor: default !important;
+    opacity: 0.65;
+
+    &:hover {
+        transform: none !important;
+        border-color: var(--bdr) !important;
+        background: var(--bg0) !important;
+    }
+}
+
+// Correct key badge in View All mode
+.faqOptKeyCorrect {
+    background: var(--green) !important;
+    border-color: var(--green) !important;
+    color: #fff !important;
+}
+
+// ── Large screen overrides (> 1900px) ────────────────────
+@media (min-width: 1920px) {
+    .wspanel {
+        width: 400px;
+    }
+
+    .wsftitle {
+        font-size: 18px;
+    }
+
+    .wsftitleEmpty {
+        font-size: 20px;
+    }
+
+    .wsmetaId {
+        font-size: 11px;
+    }
+
+    .wsmetaDate {
+        font-size: 14px;
+    }
+
+    .wsmetaHint {
+        font-size: 14px;
+    }
+
+    .tab {
+        font-size: 15px;
+    }
+
+    .wsEmptyTitle {
+        font-size: 18px;
+    }
+
+    .wsEmptyDesc {
+        font-size: 15px;
+    }
+
+    .wsSpinner {
+        font-size: 15px;
+    }
+
+    .tabEmpty {
+        font-size: 15px;
+    }
+
+    .summaryMd {
+        font-size: 15px;
+
+        h1 {
+            font-size: 20px;
+        }
+
+        h2 {
+            font-size: 17px;
+        }
+
+        h3 {
+            font-size: 15px;
+        }
+
+        h4,
+        h5,
+        h6 {
+            font-size: 15px;
+        }
+    }
+
+    .keywordPill {
+        font-size: 14px;
+    }
+
+    .assessProgressLabel {
+        font-size: 14px;
+    }
+
+    .faqQ {
+        font-size: 15px;
+    }
+
+    .faqNum {
+        font-size: 14px;
+    }
+
+    .faqOpt {
+        font-size: 14px;
+    }
+
+    .faqOptKey {
+        font-size: 14px;
+    }
+
+    .faqExplainLabel {
+        font-size: 14px;
+    }
+
+    .faqExplainText {
+        font-size: 14px;
+    }
+
+    .assessNextBtn {
+        font-size: 14px;
+    }
+
+    .assessCompleteTitle {
+        font-size: 18px;
+    }
+
+    .assessCompleteDesc {
+        font-size: 15px;
+    }
+
+    .assessRestartBtn {
+        font-size: 15px;
+    }
+
+    .dropdownItem {
+        font-size: 14px;
+    }
+
+    .dropdownLabel {
+        font-size: 11px;
+    }
+
+    .assessModeTab {
+        font-size: 13px;
+    }
+
+    .viewAllQ {
+        font-size: 15px;
+    }
+
+    .editColLabel {
+        font-size: 12px;
+    }
+
+    .editColTag {
+        font-size: 11px;
+    }
+
+    .editTextarea {
+        font-size: 14px;
+    }
+
+    .cancelBtn {
+        font-size: 14px;
+    }
+
+    .saveBtn {
+        font-size: 14px;
+    }
+}
+// ═══════════════════════════════════════════════
+// New content types — Short Answer, True/False,
+// Timestamped Summary, Keyword Insights
+// ═══════════════════════════════════════════════
+
+// ── Short Answer ──────────────────────────────────
+.revealAllBtn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--bdr2);
+    background: var(--bg0);
+    color: var(--t1);
+    font-size: 12.5px;
+    font-weight: 600;
+    font-family: var(--font-ui);
+    cursor: pointer;
+    transition: all 0.13s;
+
+    svg { width: 14px; height: 14px; }
+
+    &:hover {
+        border-color: var(--blue-bdr);
+        color: var(--blue);
+        background: var(--blue-dim);
+    }
+}
+
+.revealBtn {
+    margin-top: 10px;
+    padding: 7px 14px;
+    border-radius: 6px;
+    border: 1px dashed var(--bdr2);
+    background: transparent;
+    color: var(--t2);
+    font-size: 12.5px;
+    font-weight: 600;
+    font-family: var(--font-ui);
+    cursor: pointer;
+    transition: all 0.13s;
+
+    &:hover {
+        border-color: var(--blue-bdr);
+        border-style: solid;
+        color: var(--blue);
+        background: var(--blue-dim);
+    }
+}
+
+.shortAnswerBox {
+    margin-top: 10px;
+    padding: 12px 14px;
+    background: rgba(79, 172, 254, 0.08);
+    border-left: 3px solid #4facfe;
+    border-radius: 0 8px 8px 0;
+}
+
+.shortAnswerLabel {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #4facfe;
+    margin-bottom: 4px;
     @include m.mono;
 }
 
-// ══════════════════════════════════════
-// FILE LIST — Option D: grouped by date
-// ══════════════════════════════════════
-
-// ── Date groups ──────────────────────────────────
-.dateGroups {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.dateGroup {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  animation: groupEntrance 0.32s ease both;
-}
-
-// Stagger entrance per group (up to 12 groups) via nth-child
-.dateGroup:nth-child(1)  { animation-delay: 0ms; }
-.dateGroup:nth-child(2)  { animation-delay: 40ms; }
-.dateGroup:nth-child(3)  { animation-delay: 80ms; }
-.dateGroup:nth-child(4)  { animation-delay: 120ms; }
-.dateGroup:nth-child(5)  { animation-delay: 160ms; }
-.dateGroup:nth-child(6)  { animation-delay: 200ms; }
-.dateGroup:nth-child(7)  { animation-delay: 240ms; }
-.dateGroup:nth-child(8)  { animation-delay: 280ms; }
-.dateGroup:nth-child(9)  { animation-delay: 320ms; }
-.dateGroup:nth-child(10) { animation-delay: 360ms; }
-.dateGroup:nth-child(11) { animation-delay: 400ms; }
-.dateGroup:nth-child(12) { animation-delay: 440ms; }
-
-@keyframes groupEntrance {
-  from { opacity: 0; transform: translateY(8px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-.dateGroupLabel {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  padding: 0 2px 10px;
-  @include m.mono;
-  // colour is set inline via style prop from FileLibrary
-}
-
-// The animated icon that sits before the date text
-.dateGroupDot {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-
-  // Inner solid dot
-  &::before {
-    content: '';
-    position: absolute;
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    background: currentColor;
-    animation: dotPulse 2.4s ease-in-out infinite;
-  }
-
-  // Expanding ring
-  &::after {
-    content: '';
-    position: absolute;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    border: 1.5px solid currentColor;
-    opacity: 0;
-    animation: ringExpand 2.4s ease-out infinite;
-  }
-}
-
-@keyframes dotPulse {
-  0%, 100% { transform: scale(1);    opacity: 1;    }
-  50%       { transform: scale(1.25); opacity: 0.75; }
-}
-
-@keyframes ringExpand {
-  0%   { transform: scale(0.3); opacity: 0.7; }
-  60%  { transform: scale(1);   opacity: 0;   }
-  100% { transform: scale(1);   opacity: 0;   }
-}
-
-// ── File list (flat rows, borders merge) ──
-.fileList {
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--bdr);
-  border-radius: var(--rl);
-  overflow: hidden;
-}
-
-// ── File row ─────────────────────────────────────
-.fileRow {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 11px 14px;
-  background: var(--bg1);
-  border-bottom: 1px solid var(--bdr);
-  position: relative;
-  transition: background 0.12s;
-
-  &:last-child { border-bottom: none; }
-
-  &::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 3px;
-    background: var(--row-bar, transparent);
-  }
-}
-
-.fileRowBarCompleted { --row-bar: var(--green); }
-.fileRowBarFailed    { --row-bar: var(--red); }
-.fileRowBarPending   { --row-bar: var(--bdr3); }
-
-.fileRowBarQueued {
-  --row-bar: var(--amber);
-  overflow: hidden;
-  .cardSweep {
-    background: conic-gradient(
-      from 0deg at 50% 50%,
-      transparent 0deg, transparent 315deg,
-      rgba(245,158,11,0.3) 320deg, #f59e0b 330deg,
-      rgba(245,158,11,0.3) 340deg, transparent 344deg, transparent 360deg
-    );
-    --sweep-speed: 3s;
-  }
-}
-
-.fileRowBarRunning {
-  --row-bar: var(--blue);
-  overflow: hidden;
-  .cardSweep {
-    background: conic-gradient(
-      from 0deg at 50% 50%,
-      transparent 0deg, transparent 310deg,
-      rgba(59,130,246,0.25) 315deg, #3b82f6 325deg,
-      rgba(59,130,246,0.25) 335deg, transparent 338deg, transparent 360deg
-    );
-    --sweep-speed: 1.8s;
-  }
-}
-
-.fileRowClickable {
-  cursor: pointer;
-  &:hover { background: var(--bg2); }
-  &:focus-visible {
-    outline: none;
-    background: var(--bg2);
-    box-shadow: inset 0 0 0 2px var(--blue-bdr);
-  }
-}
-
-.fileRowIcon {
-  flex-shrink: 0;
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-
-  svg { width: 13px; height: 13px; }
-}
-
-.fileRowIconVideo {
-  background: rgba(99, 102, 241, 0.1);
-  color: rgba(165, 180, 252, 0.9);
-  border: 1px solid rgba(99, 102, 241, 0.18);
-}
-
-.fileRowIconAudio {
-  background: rgba(20, 184, 166, 0.1);
-  color: rgba(94, 234, 212, 0.85);
-  border: 1px solid rgba(20, 184, 166, 0.16);
-}
-
-.fileRowMain {
-  flex: 1;
-  min-width: 0;
-}
-
-.fileRowName {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--t0);
-  @include m.truncate;
-}
-
-.fileRowSub {
-  font-size: 11px;
-  color: var(--t2);
-  margin-top: 1px;
-  @include m.mono;
-}
-
-.pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  font-weight: 500;
-  padding: 3px 9px;
-  border-radius: 99px;
-  white-space: nowrap;
-  flex-shrink: 0;
-  @include m.mono;
-}
-
-.pillDot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
-  flex-shrink: 0;
-  animation: pillPulse 1.4s ease-in-out infinite;
-}
-
-@keyframes pillPulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-}
-
-.pillGreen { background: rgba(34, 197, 94, 0.1);  color: var(--green); border: 1px solid rgba(34, 197, 94, 0.2); }
-.pillBlue  { background: rgba(59, 130, 246, 0.1);  color: var(--blue);  border: 1px solid rgba(59, 130, 246, 0.2); }
-.pillAmber { background: rgba(245, 158, 11, 0.1);  color: var(--amber); border: 1px solid rgba(245, 158, 11, 0.2); }
-.pillRed   { background: rgba(239, 68, 68, 0.1);   color: var(--red);   border: 1px solid rgba(239, 68, 68, 0.2); }
-.pillGray  { background: var(--bg2); color: var(--t2); border: 1px solid var(--bdr2); }
-
-.fileRowProgress {
-  width: 80px;
-  height: 3px;
-  background: var(--bg3);
-  border-radius: 99px;
-  overflow: hidden;
-  flex-shrink: 0;
-}
-
-.fileRowProgressFill {
-  height: 100%;
-  background: var(--blue);
-  border-radius: 99px;
-  transition: width 0.4s ease;
-}
-
-.fileRowAction {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 10px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t1);
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.12s;
-  font-family: var(--font-ui);
-  white-space: nowrap;
-  flex-shrink: 0;
-
-  svg { width: 11px; height: 11px; }
-
-  &:hover {
-    background: var(--bg3);
+.shortAnswerText {
+    font-size: 13.5px;
     color: var(--t0);
-    border-color: var(--bdr3);
-  }
-}
-
-.fileRowChevron {
-  color: var(--bdr3);
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-  svg { width: 14px; height: 14px; }
-}
-
-// ── Processing sweep line ──────────────────────
-// For flat rows the conic-gradient must be a square centred on the row so
-// the arc travels the full perimeter evenly. We use a large fixed square
-// (300px covers any row width up to ~300px). The row's overflow:hidden
-// clips it to the row boundary. The mask leaves a 2px strip on all edges.
-// All row children are raised to z-index:5 so they sit above the mask.
-
-.fileRow > * {
-  position: relative;
-  z-index: 5;
-}
-
-.cardSweep {
-  position: absolute;
-  // Centre a 300px square on the row regardless of row dimensions
-  width: 300px;
-  height: 300px;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%) rotate(0deg);
-  z-index: 3;
-  animation: sweepAround var(--sweep-speed, 2s) linear infinite;
-  pointer-events: none;
-  border-radius: 0;
-}
-
-.cardSweepMask {
-  position: absolute;
-  inset: 2px;
-  border-radius: calc(var(--rl) - 2px);
-  background: var(--bg1);
-  z-index: 4;
-  pointer-events: none;
-}
-
-@keyframes sweepAround {
-  from { transform: translate(-50%, -50%) rotate(0deg); }
-  to   { transform: translate(-50%, -50%) rotate(360deg); }
-}
-
-// ══════════════════════════════════════
-// LIBRARY GRID CARDS
-// Windows-explorer-style tile grid for the library column.
-// Each card: large icon area on top, filename + meta below.
-// ══════════════════════════════════════
-
-.libCardGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 8px;
-}
-
-.libCard {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  background: var(--bg1);
-  border: 1px solid var(--bdr);
-  border-radius: var(--rl);
-  overflow: hidden;
-  position: relative;
-  cursor: default;
-  padding: 10px 12px 10px 17px;
-  min-width: 0;
-  // Animate transform + shadow + border + background
-  transition:
-    transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1),
-    box-shadow 0.22s ease,
-    border-color 0.18s ease,
-    background 0.18s ease;
-
-  // 3px left status bar
-  &::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 3px;
-    background: var(--card-bar, transparent);
-    z-index: 1;
-    transition: width 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
-  }
-
-  // Shimmer sweep overlay — slides across on hover
-  &::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: -100%;
-    width: 60%;
-    height: 100%;
-    background: linear-gradient(
-      105deg,
-      transparent 20%,
-      rgba(255, 255, 255, 0.04) 50%,
-      transparent 80%
-    );
-    transition: left 0.45s ease;
-    pointer-events: none;
-    z-index: 2;
-  }
-}
-
-// NOTE: .libCardClickable previously gave completed cards a pointer cursor
-// + hover lift, signalling "click to view results" — that click behavior
-// was removed from FileLibrary.tsx, so this class is neutralized to match
-// (kept, rather than deleted, in case FileCard.tsx still applies it).
-.libCardClickable {
-  cursor: default;
-}
-
-// Status bar colours
-.libCardBarCompleted { --card-bar: var(--green); }
-.libCardBarPending   { --card-bar: var(--bdr3); }
-.libCardBarFailed    { --card-bar: var(--red); }
-.libCardBarQueued    { --card-bar: var(--amber); }
-.libCardBarRunning   { --card-bar: var(--blue); }
-
-// ── Icon badge (inline, left of text) ─────────────
-.libCardIcon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  align-self: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 7px;
-  position: relative;
-  transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-.libCardIconVideo {
-  background: rgba(99, 102, 241, 0.1);
-  border: 1px solid rgba(99, 102, 241, 0.18);
-  .libCardIconGlyph { color: rgba(165, 180, 252, 0.9); }
-}
-
-.libCardIconAudio {
-  background: rgba(20, 184, 166, 0.1);
-  border: 1px solid rgba(20, 184, 166, 0.16);
-  .libCardIconGlyph { color: rgba(94, 234, 212, 0.85); }
-}
-
-.libCardIconGlyph {
-  svg { width: 14px; height: 14px; }
-}
-
-// Hidden — no longer used
-.libCardStatusBadge { display: none; }
-.libCardProgressBar { display: none; }
-.libCardProgressFill { display: none; }
-
-// ── Info area: three lines ────────────────────────
-.libCardInfo {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-  flex: 1;
-}
-
-.libCardName {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--t0);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.libCardMetaTop {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  color: var(--t2);
-  flex-wrap: nowrap;
-  @include m.mono;
-}
-
-.libCardMetaBottom {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-top: 2px;
-}
-
-.libCardMetaSep { opacity: 0.5; }
-
-.libCardDate { display: none; }
-
-// Card highlight when file has been sent to Lecture Pipeline
-.libCardInPipeline {
-  border-color: rgba(56, 196, 186, 0.45) !important;
-  box-shadow:
-    0 0 0 1px rgba(56, 196, 186, 0.18),
-    inset 0 0 12px rgba(56, 196, 186, 0.05);
-
-  // Override the left accent bar with teal
-  --card-bar: #38c4ba;
-
-  &:hover {
-    border-color: rgba(56, 196, 186, 0.65) !important;
-    box-shadow:
-      0 0 0 1px rgba(56, 196, 186, 0.28),
-      0 4px 16px rgba(56, 196, 186, 0.12),
-      inset 0 0 12px rgba(56, 196, 186, 0.07);
-  }
-}
-
-// Short text badge shown when a file has been added to the lecture
-// pipeline — sits next to the status pill on its own meta line, replacing
-// the old icon-only circular indicator.
-.lecturePipelineBadge {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 7px;
-  border-radius: 99px;
-  background: rgba(56, 196, 186, 0.12);
-  color: #38c4ba;
-  border: 1px solid rgba(56, 196, 186, 0.35);
-  font-size: 10px;
-  font-weight: 600;
-  white-space: nowrap;
-  flex-shrink: 0;
-  @include m.mono;
-}
-
-// libCardBottom no longer used — pill is inline in libCardMeta
-.libCardBottom { display: none; }
-
-// Action button (Generate / Retry / Re-generate)
-.libCardAction {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 9px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t1);
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-  font-family: var(--font-ui);
-  transition: all 0.12s;
-
-  svg { width: 11px; height: 11px; }
-
-  &:hover {
-    background: var(--bg3);
-    color: var(--t0);
-    border-color: var(--bdr3);
-  }
-}
-
-
-.uploadPanel {
-  background: var(--bg1);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--rl);
-  margin-bottom: 22px;
-  overflow: hidden;
-  animation: fadeSlide 0.18s ease;
-  box-shadow: var(--shadow-sm);
-}
-
-.uploadPanelHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: none;
-  position: relative;
-
-  &::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-        rgba(139, 92, 246, 0.0) 0%,
-        rgba(139, 92, 246, 0.35) 20%,
-        rgba(56, 196, 186, 0.4) 50%,
-        rgba(240, 160, 48, 0.35) 80%,
-        rgba(240, 160, 48, 0.0) 100%);
-    pointer-events: none;
-  }
-}
-
-.uploadPanelTitle {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--t0);
-  font-family: var(--font-display);
-  letter-spacing: -0.1px;
-}
-
-.uploadPanelClose {
-  width: 26px;
-  height: 26px;
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.12s;
-
-  svg {
-    width: 13px;
-    height: 13px;
-  }
-
-  &:hover {
-    background: var(--bg3);
-    color: var(--t0);
-    border-color: var(--bdr2);
-  }
-}
-
-.uploadPanelBody {
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.uploadField {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.uploadLabel {
-  @include m.label-caps;
-}
-
-// Drop area
-.uploadDrop {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 22px 16px;
-  border: 1px dashed var(--bdr2);
-  border-radius: var(--r);
-  background: var(--bg2);
-  cursor: pointer;
-  transition: all 0.14s;
-  text-align: center;
-
-  &:hover {
-    border-color: var(--blue-bdr);
-    background: var(--blue-dim);
-  }
-}
-
-.uploadDropActive {
-  border-color: var(--blue);
-  background: var(--blue-dim);
-}
-
-.uploadDropIc {
-  color: var(--blue);
-  margin-bottom: 2px;
-
-  svg {
-    width: 22px;
-    height: 22px;
-  }
-}
-
-.uploadDropText {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--t0);
-  font-family: var(--font-display);
-}
-
-.uploadDropHint {
-  font-size: 10px;
-  color: var(--t2);
-  @include m.mono;
-  letter-spacing: 0.04em;
-}
-
-// Selected file pill
-.uploadFilePill {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  background: var(--bg2);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-}
-
-.uploadFileName {
-  flex: 1;
-  font-size: 12px;
-  color: var(--t0);
-  font-weight: 500;
-  @include m.truncate;
-}
-
-.uploadFileSize {
-  font-size: 10px;
-  color: var(--t2);
-  @include m.mono;
-  white-space: nowrap;
-}
-
-.uploadFileClear {
-  width: 22px;
-  height: 22px;
-  border-radius: 4px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.12s;
-  flex-shrink: 0;
-
-  svg {
-    width: 11px;
-    height: 11px;
-  }
-
-  &:hover {
-    color: var(--red);
-    background: var(--red-dim);
-  }
-}
-
-.uploadError {
-  font-size: 11px;
-  color: var(--red);
-  @include m.mono;
-}
-
-// ── Model selector ──────────────────────────────
-.modelGroup {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 8px;
-}
-
-.modelOpt {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-  padding: 12px 12px 10px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: var(--bg2);
-  cursor: pointer;
-  text-align: left;
-  transition: all 0.12s;
-  font-family: var(--font-ui);
-
-  &:hover {
-    border-color: var(--bdr3);
-    background: var(--bg3);
-  }
-}
-
-.modelOptActive {
-  border-color: var(--blue);
-  background: var(--blue-dim);
-  box-shadow: 0 0 0 1px var(--blue-bdr);
-
-  .modelOptName {
-    color: var(--t0);
-  }
-}
-
-.modelOptName {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--t1);
-}
-
-.modelOptHint {
-  font-size: 10px;
-  color: var(--t2);
-  @include m.mono;
-  letter-spacing: 0.02em;
-}
-
-.modelOptSpeed {
-  display: flex;
-  gap: 3px;
-  margin-top: 4px;
-}
-
-.modelOptSpeedBar {
-  width: 16px;
-  height: 3px;
-  border-radius: 99px;
-  background: var(--bdr2);
-}
-
-.modelOptSpeedBarOn {
-  background: var(--blue);
-}
-
-.uploadActions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding-top: 4px;
-  border-top: 1px solid var(--bdr);
-  margin-top: 4px;
-  padding-top: 14px;
-}
-
-// ══════════════════════════════════════
-// PLAYER + TRANSCRIPT (preserved from original)
-// ══════════════════════════════════════
-.playerBody {
-  flex: 1;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0;
-  overflow: hidden;
-  min-height: 0;
-  background: var(--bg0);
-
-  @media (max-width: 1100px) {
-    grid-template-columns: 1fr;
-    overflow: auto;
-  }
-}
-
-// Left column — video fills the full height
-.mediaPane {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  min-width: 0;
-  padding: 18px 14px 18px 22px;
-  background: var(--bg0);
-}
-
-.mediaFrame {
-  flex: 1;
-  background: #000;
-  border: 1px solid var(--bdr2);
-  border-radius: 0;
-  overflow: hidden;
-  position: relative;
-  box-shadow: none;
-  min-height: 0;
-
-  video, audio { width: 100%; height: 100%; display: block; }
-}
-
-.mediaEl {
-  width: 100%;
-  height: 100%;
-  display: block;
-  background: #000;
-  object-fit: contain;
-}
-
-.mediaLoading {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  background: rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(2px);
-  color: #fff;
-  font-size: 12px;
-  font-family: var(--font-ui);
-  pointer-events: none;
-}
-
-.mediaError {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  background: rgba(0, 0, 0, 0.6);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 500;
-  font-family: var(--font-ui);
-  padding: 20px;
-  text-align: center;
-}
-
-.mediaErrorMsg {
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.6);
-  @include m.mono;
-  max-width: 80%;
-  word-break: break-word;
-}
-
-.audioStage {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 18px;
-  padding: 32px;
-  background: linear-gradient(140deg, #0c0c12 0%, #141420 100%);
-}
-
-.audioStageIc {
-  width: 72px;
-  height: 72px;
-  min-width: 72px;
-  min-height: 72px;
-  border-radius: 50%;
-  background: var(--blue-dim);
-  border: 1px solid var(--blue-bdr);
-  color: var(--blue);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  align-self: center;
-
-  svg { width: 32px; height: 32px; }
-}
-
-.audioStageName {
-  color: rgba(255,255,255,0.65);
-  font-size: 14px;
-  font-weight: 500;
-  text-align: center;
-  word-break: break-all;
-  max-width: 75%;
-  line-height: 1.4;
-}
-
-.audioEl {
-  width: 100%;
-  max-width: 480px;
-}
-
-// Right column — 2 equal sub-columns: liveBox | transcript list
-.transcriptPane {
-  display: grid;
-  grid-template-rows: 300px 1fr;
-  grid-template-columns: 1fr;
-  background: var(--bg0);
-  overflow: hidden;
-  min-height: 0;
-  min-width: 0;
-  position: relative;
-
-  // Left gradient border (separator from mediaPane)
-  &::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; bottom: 0;
-    width: 1px;
-    background: linear-gradient(180deg,
-      rgba(139, 92, 246, 0.0)  0%,
-      rgba(139, 92, 246, 0.55) 20%,
-      rgba(56, 196, 186, 0.65) 50%,
-      rgba(240, 160, 48, 0.55) 80%,
-      rgba(240, 160, 48, 0.0)  100%);
-    pointer-events: none;
-    z-index: 1;
-  }
-
-  @media (max-width: 1500px) {
-    grid-template-rows: 1fr 1fr;
-  }
-
-  @media (max-width: 1100px) {
-    grid-template-rows: auto auto;
-    grid-template-columns: 1fr;
-    max-height: 60vh;
-    overflow: auto;
-  }
-}
-
-// Top row — Live cue spotlight
-.liveBox {
-  display: flex;
-  flex-direction: column;
-  background: var(--bg1);
-  overflow: hidden;
-  min-height: 0;
-  min-width: 0;
-  position: relative;
-
-  // Horizontal gradient separator between liveBox and transcript list
-  &::after {
-    content: '';
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-      rgba(139, 92, 246, 0.0)  0%,
-      rgba(139, 92, 246, 0.5)  20%,
-      rgba(56, 196, 186, 0.6)  50%,
-      rgba(240, 160, 48, 0.5)  80%,
-      rgba(240, 160, 48, 0.0)  100%);
-    pointer-events: none;
-    z-index: 2;
-  }
-
-  // Accent top line
-  &::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 2px;
-    background: linear-gradient(90deg,
-      transparent 0%,
-      var(--blue-bdr) 25%,
-      rgba(56,196,186,0.45) 55%,
-      transparent 100%);
-    transition: background 0.2s;
-    z-index: 1;
-  }
-}
-
-.liveBoxEditing {
-  &::before {
-    background: linear-gradient(90deg, transparent 0%, var(--amber-bdr) 40%, transparent 100%);
-  }
-}
-
-// LiveBox header — fixed at top
-.liveBoxHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px 9px;
-  flex-shrink: 0;
-  position: relative;
-  background: var(--bg1);
-  z-index: 2;
-
-  &::after {
-    content: '';
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-      rgba(139,92,246,0) 0%, rgba(139,92,246,0.3) 30%,
-      rgba(56,196,186,0.35) 60%, rgba(240,160,48,0) 100%);
-  }
-}
-
-.liveBoxHeaderTitle {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--t2);
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  @include m.mono;
-}
-
-// LiveBox body — scrollable, content starts from top
-.liveBoxBody {
-  flex: 1;
-  overflow-y: auto;
-  padding: 14px 16px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  align-items: flex-start;    // content aligns to top
-  justify-content: flex-start;
-  @include m.scrollbar;
-}
-
-.liveBoxMeta {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-  font-size: 10px;
-  color: var(--t2);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  @include m.mono;
-  flex-shrink: 0;
-  width: 100%;
-}
-
-.liveBoxInfo { color: var(--t2); }
-.liveBoxStatus { font-weight: 600; }
-.liveBoxStatusEditing { color: var(--amber); }
-.liveBoxStatusSaved   { color: var(--green); }
-.liveBoxStatusFailed  { color: var(--red); }
-
-.liveBoxText {
-  font-family: var(--font-display);
-  font-size: 16px;
-  line-height: 1.6;
-  color: var(--t0);
-  letter-spacing: -0.1px;
-  flex-shrink: 0;
-  width: 100%;
-}
-
-// Right sub-column — transcript list (70% → now 50%)
-.transcriptScrollPane {
-  display: flex;
-  flex-direction: column;
-  background: var(--bg0);
-  overflow: hidden;
-  min-height: 0;
-}
-
-.transcriptHeader {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 11px 16px 10px;
-  flex-shrink: 0;
-  position: relative;
-  background: var(--bg1);
-
-  &::after {
-    content: '';
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-      rgba(139,92,246,0) 0%, rgba(139,92,246,0.35) 20%,
-      rgba(56,196,186,0.4) 50%, rgba(240,160,48,0.35) 80%,
-      rgba(240,160,48,0) 100%);
-  }
-}
-
-.transcriptTitle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--t1);
-  font-family: var(--font-display);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.jobCount {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 20px;
-  height: 17px;
-  padding: 0 6px;
-  border-radius: 9px;
-  background: var(--bg2);
-  color: var(--t1);
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: none;
-  letter-spacing: 0;
-}
-
-.transcriptHint {
-  font-size: 10px;
-  color: var(--t2);
-  letter-spacing: 0.03em;
-  @include m.mono;
-}
-
-// ── Cue list ──────────────────────────────────
-.cueList {
-  flex: 1;
-  overflow-y: auto;
-  padding: 6px 8px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-
-  &::-webkit-scrollbar { width: 5px; }
-  &::-webkit-scrollbar-thumb {
-    background: var(--bdr2);
-    border-radius: 3px;
-    &:hover { background: var(--bdr3); }
-  }
-}
-
-.cueEmpty {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 40px 20px;
-  color: var(--t2);
-  font-size: 12px;
-}
-
-// ══════════════════════════════════════
-// SCRUB BAR
-// ══════════════════════════════════════
-.timelineWrap {
-  padding: 12px 14px 8px;
-  border-bottom: 1px solid var(--bdr2);
-  flex-shrink: 0;
-  background: var(--bg1);
-}
-
-.timeline {
-  position: relative;
-  width: 100%;
-}
-
-.timelineTrack {
-  position: relative;
-  height: 22px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-}
-
-.timelineLine {
-  position: absolute;
-  left: 0; right: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  height: 2px;
-  background: var(--bdr2);
-  border-radius: 99px;
-}
-
-.timelineLinePlayed {
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  height: 2px;
-  background: linear-gradient(90deg, var(--blue), #38c4ba);
-  border-radius: 99px;
-  transition: width 0.18s linear;
-}
-
-.timelineMarker {
-  position: absolute;
-  top: 50%;
-  width: 18px; height: 18px;
-  margin-left: -9px;
-  border-radius: 50%;
-  border: 2px solid;
-  background: var(--bg1);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  z-index: 2;
-  transform: translateY(-50%);
-  transition: transform 0.12s;
-
-  &:hover { transform: translateY(-50%) scale(1.15); }
-  svg { width: 10px; height: 10px; }
-}
-
-.timelineMarkerPast   { border-color: var(--blue); background: var(--blue); color: #fff; }
-.timelineMarkerActive { border-color: var(--amber); background: var(--amber); color: #fff; box-shadow: 0 0 0 4px rgba(240,160,48,0.18); }
-.timelineMarkerFuture { border-color: var(--bdr3); background: var(--bg1); }
-
-.timelinePlayhead {
-  position: absolute;
-  top: 50%;
-  width: 10px; height: 10px;
-  margin-left: -5px;
-  border-radius: 50%;
-  background: var(--amber);
-  pointer-events: none;
-  z-index: 1;
-  transform: translateY(-50%);
-  transition: left 0.18s linear;
-}
-
-.timelineAxis {
-  position: relative;
-  height: 18px;
-  margin-top: 2px;
-}
-
-.timelineAxisTick {
-  position: absolute;
-  top: 0;
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-  color: var(--t2);
-  transform: translateX(-50%);
-  white-space: nowrap;
-  @include m.mono;
-}
-
-// ══════════════════════════════════════
-// CUE CARDS
-// ══════════════════════════════════════
-.cueCard {
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  padding: 9px 11px;
-  transition: background 0.12s, border-color 0.12s;
-
-  &:hover {
-    background: var(--bg2);
-    border-color: var(--bdr);
-  }
-}
-
-.cueCardActive {
-  background: color-mix(in srgb, var(--blue-dim) 65%, transparent 35%);
-  border-color: var(--blue-bdr);
-  &:hover { background: var(--blue-dim); }
-}
-
-.cueCardEditing {
-  background: var(--bg2);
-  border-color: var(--amber-bdr);
-  box-shadow: 0 0 0 1px var(--amber-dim);
-}
-
-.cueCardTimeRow {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin-bottom: 4px;
-}
-
-.cueCardTime {
-  font-size: 10px;
-  color: var(--blue);
-  background: rgba(59,130,246,0.08);
-  border: 1px solid rgba(59,130,246,0.14);
-  border-radius: 4px;
-  padding: 2px 6px;
-  cursor: pointer;
-  font-weight: 600;
-  @include m.mono;
-  transition: all 0.12s;
-
-  &:hover:not(:disabled) { background: rgba(59,130,246,0.15); }
-  &:disabled { cursor: default; opacity: 0.5; }
-}
-
-.cueCardCurrentTag {
-  font-size: 10px;
-  color: var(--amber);
-  font-weight: 600;
-  @include m.mono;
-}
-
-.cueCardSpacer { flex: 1; }
-
-.cueCardAction {
-  width: 24px; height: 24px;
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  transition: all 0.12s;
-
-  svg { width: 11px; height: 11px; }
-
-  .cueCard:hover &, .cueCardActive & { opacity: 1; }
-  &:hover { background: var(--bg3); color: var(--t0); border-color: var(--bdr2); }
-}
-
-.cueCardEditActions { display: flex; gap: 5px; flex-shrink: 0; }
-
-.cueCardActionSave,
-.cueCardActionCancel {
-  width: 24px; height: 24px;
-  border-radius: var(--r);
-  border: 1px solid;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.12s;
-
-  svg { width: 12px; height: 12px; }
-  &:disabled { opacity: 0.5; cursor: not-allowed; }
-}
-
-.cueCardActionSave {
-  background: var(--green); color: #fff; border-color: var(--green);
-  &:hover:not(:disabled) { opacity: 0.85; }
-}
-
-.cueCardActionCancel {
-  background: transparent; color: var(--t2); border-color: var(--bdr2);
-  &:hover:not(:disabled) { background: var(--bg3); color: var(--red); border-color: var(--red-bdr); }
-}
-
-.cueCardText {
-  font-size: 12.5px;
-  line-height: 1.5;
-  color: var(--t0);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.cueCardTextareaWrap {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  width: 100%;
-}
-
-.cueCardTextarea {
-  width: 100%;
-  background: var(--bg0);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  padding: 7px 10px;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--t0);
-  outline: none;
-  resize: vertical;
-  min-height: 56px;
-  font-family: var(--font-ui);
-  transition: border-color 0.12s;
-
-  &:focus { border-color: var(--amber-bdr); box-shadow: 0 0 0 2px var(--amber-dim); }
-}
-
-.cueCharCount {
-  font-size: 10px;
-  color: var(--t2);
-  text-align: right;
-  @include m.mono;
-  letter-spacing: 0.03em;
-}
-
-.cueCharCountWarn {
-  color: var(--amber);
-  font-weight: 600;
-}
-
-// ── Empty-text save confirmation ────────────────
-.cueCardEmptyConfirm {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
-  background: rgba(245, 158, 11, 0.07);
-  border: 1px solid var(--amber-bdr);
-  border-radius: var(--r);
-  animation: fadeSlide 0.14s ease;
-}
-
-.cueCardEmptyWarn {
-  font-size: 12px;
-  color: var(--amber);
-  font-weight: 500;
-  line-height: 1.4;
-  @include m.mono;
-}
-
-.cueCardEmptyActions {
-  display: flex;
-  gap: 7px;
-  align-items: center;
-}
-
-.cueCardConfirmCancel {
-  font-size: 11px;
-  font-weight: 500;
-  padding: 4px 10px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t1);
-  cursor: pointer;
-  font-family: var(--font-ui);
-  transition: all 0.12s;
-
-  &:hover { background: var(--bg3); color: var(--t0); border-color: var(--bdr3); }
-}
-
-.cueCardConfirmSave {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 4px 12px;
-  border-radius: var(--r);
-  border: 1px solid var(--amber-bdr);
-  background: var(--amber-dim);
-  color: var(--amber);
-  cursor: pointer;
-  font-family: var(--font-ui);
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  transition: all 0.12s;
-
-  &:hover:not(:disabled) { background: rgba(245,158,11,0.2); }
-  &:disabled { opacity: 0.5; cursor: not-allowed; }
-}
-
-
-
-.cueRow {
-  display: grid;
-  grid-template-columns: 52px 1fr 14px;
-  gap: 8px;
-  align-items: start;
-  padding: 8px 8px 8px 6px;
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  transition: background 0.12s, border-color 0.12s;
-  position: relative;
-
-  &:hover {
-    background: var(--bg2);
-  }
-}
-
-.cueRowActive {
-  background: var(--blue-dim);
-  border-color: var(--blue-bdr);
-
-  &:hover {
-    background: var(--blue-dim);
-  }
-
-  .cueTime {
-    background: var(--blue);
-    color: #fff;
-    border-color: var(--blue);
-  }
-}
-
-.cueRowEdited {
-  .cueTime {
-    border-left: 2px solid var(--amber);
-  }
-}
-
-.cueTime {
-  font-family: var(--font-ui);
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-  color: var(--t2);
-  background: var(--bg2);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  padding: 4px;
-  cursor: pointer;
-  height: 24px;
-  letter-spacing: 0.02em;
-  font-weight: 500;
-  margin-top: 1px;
-  transition: all 0.12s;
-
-  &:hover {
-    background: var(--bg3);
-    color: var(--t0);
-  }
-}
-
-.cueText {
-  width: 100%;
-  background: transparent;
-  border: none;
-  outline: none;
-  resize: none;
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 13px;
-  line-height: 1.5;
-  padding: 3px 4px;
-  border-radius: 3px;
-  overflow: hidden;
-  min-height: 24px;
-  transition: background 0.12s;
-
-  &:focus {
-    background: var(--bg0);
-    box-shadow: inset 0 0 0 1px var(--amber-bdr);
-  }
-}
-
-.cueEditedDot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--amber);
-  margin-top: 10px;
-  flex-shrink: 0;
-}
-
-// ══════════════════════════════════════
-// MODAL (upload + future overlays)
-// ══════════════════════════════════════
-.modalBackdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(2px);
-  z-index: 200;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 80px 20px 20px;
-  overflow-y: auto;
-  animation: fadeIn 0.15s ease;
-}
-
-.modalCard {
-  width: 100%;
-  max-width: 560px;
-  background: var(--bg1);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--rl);
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
-  animation: modalSlide 0.18s ease;
-  overflow: hidden;
-
-  // The UploadPanel inside the modal has its own header/border. Strip its
-  // outer border + margin so it doesn't double up with the modal card.
-  >.uploadPanel {
-    border: none;
+    line-height: 1.55;
     margin: 0;
-    box-shadow: none;
-    border-radius: 0;
-  }
 }
 
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-  }
-
-  to {
-    opacity: 1;
-  }
-}
-
-@keyframes modalSlide {
-  from {
-    opacity: 0;
-    transform: translateY(-12px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-// ══════════════════════════════════════
-// DATE FILTER · APPLY BUTTON
-// ══════════════════════════════════════
-.dateApply {
-  background: var(--blue);
-  border: none;
-  color: #fff;
-  font-size: 10px;
-  font-weight: 600;
-  padding: 3px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-family: var(--font-ui);
-  transition: all 0.12s;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-
-  &:hover:not(:disabled) { background: #a78bfa; }
-  &:disabled { opacity: 0.4; cursor: not-allowed; background: var(--bg3); color: var(--t2); }
-}
-
-// ══════════════════════════════════════
-// ERROR BANNER (network / API errors)
-// ══════════════════════════════════════
-.errorBanner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 14px;
-  margin-bottom: 18px;
-  background: var(--red-dim);
-  border: 1px solid var(--red-bdr);
-  border-radius: var(--r);
-  color: var(--red);
-  font-size: 12px;
-  font-family: var(--font-ui);
-}
-
-// ══════════════════════════════════════
-// INFO BANNER (neutral notices, e.g. "a job is running")
-// ══════════════════════════════════════
-.infoBanner {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
-  margin-bottom: 18px;
-  background: var(--blue-dim);
-  border: 1px solid var(--blue-bdr);
-  border-radius: var(--r);
-  color: var(--blue);
-  font-size: 12px;
-  font-family: var(--font-ui);
-}
-
-// Disabled drop-zone treatment (during in-flight upload)
-.uploadDropDisabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-  pointer-events: none;
-}
-
-// ══════════════════════════════════════
-// INLINE UPLOAD WIDGET
-// (replacement for the modal upload flow — background uploads with
-//  per-task progress pills, non-blocking)
-// ══════════════════════════════════════
-// uploadInline wrapper removed — component now renders uploadCol directly
-
-// ── Compact horizontal dropzone ──
-// Taller than before so it reads as a proper landing zone rather than just
-// a hint strip. A vivid blue wash on hover/drag makes the intent obvious.
-// ── Drop zone ─────────────────────────────────
-.uploadInlineDrop {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  min-height: 160px;
-  padding: 28px 20px;
-  border: 1.5px dashed var(--bdr2);
-  border-radius: var(--rl);
-  background: var(--bg1);
-  cursor: pointer;
-  transition: all 0.15s ease;
-  text-align: center;
-
-  &:hover {
-    border-color: var(--blue-bdr);
-    background: var(--blue-dim);
-  }
-}
-
-.uploadInlineDropActive {
-  border-color: var(--blue);
-  border-style: solid;
-  background: var(--blue-dim);
-}
-
-.uploadInlineDropIc {
-  color: var(--t2);
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  background: var(--bg2);
-  border: 1px solid var(--bdr2);
-
-  svg { width: 16px; height: 16px; }
-}
-
-.uploadInlineDropMain {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 5px;
-}
-
-.uploadInlineDropText {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--t1);
-  font-family: var(--font-display);
-}
-
-.uploadInlineDropHint {
-  font-size: 11px;
-  color: var(--t2);
-  line-height: 1.5;
-  @include m.mono;
-  letter-spacing: 0.02em;
-}
-
-.uploadInlineDropFormats {
-  display: none;
-}
-
-// Browse files / folder button row
-.uploadBrowseRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-}
-
-.uploadBrowseBtn {
-  padding: 5px 14px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: var(--bg2);
-  color: var(--t1);
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-  font-family: var(--font-ui);
-  transition: all 0.14s;
-
-  &:hover {
-    background: var(--bg3);
-    border-color: var(--bdr3);
-    color: var(--t0);
-  }
-}
-
-.uploadBrowseSep {
-  font-size: 11px;
-  color: var(--t2);
-}
-
-
-.uploadTaskList {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.uploadTask {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  background: var(--bg1);
-  border: 1px solid var(--bdr);
-  border-radius: var(--r);
-  animation: fadeSlide 0.18s ease;
-  transition: background 0.18s, border-color 0.18s;
-}
-
-.uploadTaskUploading {
-  border-color: var(--blue-bdr);
-}
-
-.uploadTaskDone {
-  border-color: var(--green-bdr);
-  background: var(--green-dim);
-  animation: fadeSlide 0.18s ease, fadeOutLate 2.5s ease forwards;
-}
-
-.uploadTaskFailed {
-  border-color: var(--red-bdr);
-  background: var(--red-dim);
-}
-
-@keyframes fadeOutLate {
-
-  // Stay full opacity for most of the lifetime, then fade out near the end
-  // so the user has time to read "Uploaded" before the row vanishes.
-  0%,
-  80% {
-    opacity: 1;
-  }
-
-  100% {
-    opacity: 0;
-  }
-}
-
-.uploadTaskIc {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-
-  .uploadTaskDone & {
-    color: var(--green);
-  }
-
-  .uploadTaskFailed & {
-    color: var(--red);
-  }
-
-  svg {
-    width: 15px;
-    height: 15px;
-  }
-}
-
-// Small dark spinner (used inside light/blue task rows, not the green save btn)
-.spinnerSmallDark {
-  width: 14px;
-  height: 14px;
-  border: 1.5px solid var(--bdr2);
-  border-top-color: var(--blue);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-.uploadTaskInfo {
-  flex: 1;
-  min-width: 0;
-}
-
-.uploadTaskName {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--t0);
-  @include m.truncate;
-}
-
-.uploadTaskMeta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 10px;
-  color: var(--t2);
-  margin-top: 2px;
-  @include m.mono;
-  letter-spacing: 0.02em;
-}
-
-.uploadTaskDoneText {
-  color: var(--green);
-  font-weight: 600;
-}
-
-.uploadTaskFailText {
-  color: var(--red);
-  font-weight: 500;
-  // Failed messages can be long; let them wrap rather than truncate.
-  white-space: normal;
-}
-
-.uploadTaskProgress {
-  margin-top: 6px;
-  height: 3px;
-  background: var(--bg3);
-  border-radius: 99px;
-  overflow: hidden;
-}
-
-.uploadTaskProgressFill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--blue), #a78bfa);
-  border-radius: 99px;
-  transition: width 0.18s ease;
-}
-
-// Indeterminate slider — shown when the server didn't expose Content-Length.
-// A 30%-wide bar slides back and forth across the track.
-.uploadTaskProgressIndeterminate {
-  width: 30%;
-  height: 100%;
-  background: linear-gradient(90deg, var(--blue), #a78bfa);
-  border-radius: 99px;
-  animation: indeterminate 1.4s ease-in-out infinite;
-}
-
-@keyframes indeterminate {
-  0% {
-    transform: translateX(-100%);
-  }
-
-  100% {
-    transform: translateX(333%);
-  }
-
-  // moves a 30% bar across full width
-}
-
-.uploadTaskActions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.uploadTaskRetry {
-  background: transparent;
-  border: 1px solid var(--red-bdr);
-  color: var(--red);
-  font-size: 11px;
-  font-weight: 600;
-  padding: 3px 9px;
-  border-radius: var(--r);
-  cursor: pointer;
-  font-family: var(--font-ui);
-  transition: all 0.12s;
-
-  &:hover {
-    background: var(--red);
-    color: #fff;
-  }
-}
-
-.uploadTaskDismiss {
-  width: 22px;
-  height: 22px;
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--t2);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.12s;
-
-  svg {
-    width: 11px;
-    height: 11px;
-  }
-
-  &:hover {
-    background: var(--bg3);
-    color: var(--t0);
-    border-color: var(--bdr2);
-  }
-}
-
-// ══════════════════════════════════════
-// UPLOAD-PANEL EXTRAS
-// ══════════════════════════════════════
-.uploadHint {
-  font-size: 11px;
-  color: var(--t2);
-  padding: 8px 2px;
-  @include m.mono;
-}
-
-.uploadLink {
-  background: transparent;
-  border: none;
-  color: var(--blue);
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  margin-left: 8px;
-  padding: 0;
-  font-family: var(--font-ui);
-
-  &:hover {
-    text-decoration: underline;
-  }
-}
-
-.uploadSelect {
-  width: 100%;
-  padding: 8px 10px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: var(--bg2);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  outline: none;
-  cursor: pointer;
-  transition: border-color 0.12s;
-
-  &:hover,
-  &:focus {
-    border-color: var(--bdr3);
-  }
-}
-
-// ══════════════════════════════════════
-// SPINNER (caption loading)
-// ══════════════════════════════════════
-.spinner {
-  width: 22px;
-  height: 22px;
-  border: 2px solid var(--bdr2);
-  border-top-color: var(--blue);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-.spinnerSmall {
-  width: 12px;
-  height: 12px;
-  border: 1.5px solid rgba(255, 255, 255, 0.35);
-  border-top-color: #fff;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-// ══════════════════════════════════════
-// TOAST
-// ══════════════════════════════════════
-.toast {
-  position: fixed;
-  bottom: 24px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: var(--bg1);
-  color: var(--green);
-  border: 1px solid var(--green-bdr);
-  padding: 9px 18px;
-  border-radius: var(--r);
-  font-size: 12px;
-  font-family: var(--font-ui);
-  font-weight: 500;
-  z-index: 100;
-  animation: fadeSlide 0.18s ease;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
-}
-
-// ══════════════════════════════════════
-// ANIMATIONS
-// ══════════════════════════════════════
-@keyframes fadeSlide {
-  from {
-    opacity: 0;
-    transform: translateY(5px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes breathe {
-
-  0%,
-  100% {
-    opacity: 1;
-  }
-
-  50% {
-    opacity: 0.35;
-  }
-}
-// ═══════════════════════════════════════════════
-// SttFileSidebar — reusable file-picker column
-// used by the Inference and View Results tabs
-// ═══════════════════════════════════════════════
-.sttSidebar {
-  width: 400px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--bg0);
-  border-right: 1px solid var(--bdr);
-  min-height: 0;
-  transition: width 0.2s ease, opacity 0.15s ease, border-color 0.2s ease;
-
-  :global(html.light) & {
-    background: #fff;
-  }
-
-  @media (max-width: 1499px) { width: 350px; }
-}
-
-// Collapses the sidebar to 0 width without unmounting it, so its filters/
-// search/sort/pagination state survive being toggled shut and reopened —
-// used by the Results tab to let the media player expand.
-.sttSidebarCollapsed {
-  width: 0 !important;
-  min-width: 0;
-  border-right-color: transparent;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.sttSidebarHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--bdr);
-  flex-shrink: 0;
-}
-
-.sttSidebarTitle {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--t0);
-  font-family: var(--font-display);
-}
-
-.sttSidebarCount {
-  font-size: 11px;
-  color: var(--t2);
-  @include m.mono;
-  background: var(--bg2);
-  padding: 1px 8px;
-  border-radius: 99px;
-}
-
-// ── Status filter + Search row — same design as the reference sidebar ──
-.sttSidebarFilterRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 10px 14px 10px;
-  flex-shrink: 0;
-}
-
-.sttSidebarStatusWrap {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  width: 132px;
-  flex-shrink: 0;
-
-  svg { width: 14px; height: 14px; color: var(--t2); flex-shrink: 0; }
-}
-
-.sttSidebarStatusSelect {
-  flex: 1;
-  height: 30px;
-  padding: 0 8px;
-  background: var(--bg1);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 12.5px;
-  outline: none;
-  cursor: pointer;
-  transition: border-color 0.12s;
-
-  &:focus { border-color: var(--blue); }
-  &:disabled { opacity: 0.5; cursor: default; }
-}
-
-.sttSidebarSearchWrap {
-  position: relative;
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-
-  svg {
-    position: absolute;
-    left: 9px;
-    width: 13px;
-    height: 13px;
-    color: var(--t2);
-    pointer-events: none;
-  }
-}
-
-.sttSidebarSearchInput {
-  width: 100%;
-  height: 30px;
-  padding: 0 10px 0 28px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: var(--bg1);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  outline: none;
-
-  &::placeholder { color: var(--t2); }
-  &:focus { border-color: var(--bdr3); }
-}
-
-// ── Sort — boxed pill row with arrow-direction icons ──
-.sttSidebarSortHeader {
-  display: flex;
-  align-items: center;
-  height: 32px;
-  background: var(--bg2);
-  border: 1px solid var(--bdr);
-  border-radius: var(--r);
-  padding: 0 6px 0 10px;
-  gap: 6px;
-  margin: 0 14px 10px;
-  flex-shrink: 0;
-  overflow: hidden;
-}
-
-.sttSidebarSortHeaderLabel {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--t2);
-  font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  white-space: nowrap;
-  flex-shrink: 0;
-
-  svg { width: 11px; height: 11px; opacity: 0.6; }
-}
-
-.sttSidebarSortCols {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex: 1;
-}
-
-.sttSidebarSortCol {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 6px;
-  background: transparent;
-  border: none;
-  border-radius: 5px;
-  color: var(--t2);
-  font-size: 11.5px;
-  font-family: var(--font-mono);
-  cursor: pointer;
-  transition: all 0.12s;
-  white-space: nowrap;
-
-  svg { width: 8px; height: 10px; flex-shrink: 0; transition: transform 0.2s; }
-
-  &:hover:not(:disabled) { background: var(--bg3); color: var(--t1); }
-  &:disabled { opacity: 0.5; cursor: default; }
-}
-
-.sttSidebarSortColActive {
-  background: var(--blue-dim);
-  color: var(--blue);
-  font-weight: 600;
-  &:hover:not(:disabled) { background: var(--blue-dim); }
-}
-
-.sttSidebarSortInactive { opacity: 0.25; }
-.sttSidebarSortAsc { transform: rotate(180deg); }
-.sttSidebarSortDesc { transform: rotate(0deg); }
-
-.sttSidebarSelectRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 10px 14px;
-  margin: 10px 14px 0;
-  background: rgba(139, 92, 246, 0.06);
-  border: 1px solid rgba(139, 92, 246, 0.2);
-  border-radius: var(--r);
-  flex-shrink: 0;
-}
-
-.sttSidebarSelectHint {
-  font-size: 11px;
-  color: #a78bfa;
-  @include m.mono;
-  font-weight: 500;
-}
-
-.sttSidebarList {
-  flex: 1;
-  overflow-y: auto;
-  padding: 10px 10px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-height: 0;
-  @include m.scrollbar;
-}
-
-.sttSidebarEmpty {
-  font-size: 12px;
-  color: var(--t2);
-  text-align: center;
-  padding: 32px 12px;
-}
-
-.sttSidebarRow {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  background: transparent;
-  cursor: pointer;
-  text-align: left;
-  transition: all 0.12s;
-  width: 100%;
-
-  &:hover:not(:disabled) { background: var(--bg2); border-color: var(--bdr2); }
-}
-
-.sttSidebarRowSelected {
-  background: rgba(139, 92, 246, 0.08);
-  border-color: rgba(139, 92, 246, 0.35);
-
-  &::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 6px;
-    bottom: 6px;
-    width: 3px;
-    border-radius: 0 3px 3px 0;
-    background: linear-gradient(180deg, #a78bfa, var(--blue));
-  }
-}
-
-.sttSidebarRowActive {
-  background: var(--blue-dim);
-  border-color: var(--blue-bdr);
-
-  &::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 6px;
-    bottom: 6px;
-    width: 3px;
-    border-radius: 0 3px 3px 0;
-    background: linear-gradient(180deg, var(--blue), #a78bfa);
-  }
-}
-
-.sttSidebarRowDisabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-  pointer-events: none;
-}
-
-.sttSidebarCheckbox {
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  border: 1.5px solid var(--bdr3);
-  background: transparent;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.12s;
-
-  svg { width: 10px; height: 10px; }
-}
-
-.sttSidebarCheckboxChecked {
-  background: #a78bfa;
-  border-color: #a78bfa;
-  color: #fff;
-}
-
-// ── Row info block — filename on top, "date · #id" meta below,
-// same two-line layout as pages/UploadInfer/FileSidebar.tsx's .hi/.hn/.hm ──
-.sttSidebarRowInfo {
-  flex: 1;
-  min-width: 0;
-}
-
-.sttSidebarRowName {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--t0);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.sttSidebarRowMeta {
-  font-size: 12px;
-  color: var(--t2);
-  margin-top: 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  @include m.mono;
-}
-
-// ── Pagination footer — compact variant of FileLibrary's paginationBar,
-// sized down to fit the narrow sidebar column ──
-.sttSidebarPagination {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  padding: 8px 10px;
-  border-top: 1px solid var(--bdr2);
-  background: var(--bg1);
-  flex-shrink: 0;
-}
-
-.sttSidebarPaginationTopRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  flex-wrap: nowrap;
-  min-width: 0;
-}
-
-.sttSidebarPageSizeSelect {
-  padding: 3px 5px;
-  background: var(--bg0);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  outline: none;
-  cursor: pointer;
-  transition: border-color 0.12s;
-  flex-shrink: 0;
-  max-width: 88px;
-
-  &:focus {
-    border-color: var(--blue);
-    box-shadow: 0 0 0 2px var(--blue-dim);
-  }
-}
-
-.sttSidebarPageNav {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 2px;
-  flex-wrap: nowrap;
-  flex-shrink: 1;
-  min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-
-  &::-webkit-scrollbar { display: none; }
-}
-
-.sttSidebarPageNavBtn,
-.sttSidebarPageNumBtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 4px;
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--t1);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.12s;
-  user-select: none;
-  flex-shrink: 0;
-
-  svg { width: 10px; height: 10px; }
-
-  &:hover:not(:disabled) {
-    background: var(--bg3);
-    color: var(--t0);
-    border-color: var(--bdr3);
-  }
-
-  &:disabled {
-    opacity: 0.35;
-    cursor: default;
-  }
-}
-
-.sttSidebarPageNumBtnActive {
-  background: var(--blue-dim);
-  border-color: var(--blue-bdr);
-  color: var(--blue);
-  font-weight: 700;
-
-  &:hover:not(:disabled) {
-    background: var(--blue-dim);
-    color: var(--blue);
-  }
-}
-
-.sttSidebarPageEllipsis {
-  color: var(--t2);
-  font-size: 12px;
-  padding: 0 1px;
-  user-select: none;
-  flex-shrink: 0;
-}
-
-.sttSidebarPageInfo {
-  font-size: 11px;
-  color: var(--t2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: right;
-  @include m.mono;
-}
-
-// ═══════════════════════════════════════════════
-// Tab shell — page header + tab bar + tab panes
-// ═══════════════════════════════════════════════
-.sttPage {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-  background: var(--bg0);
-}
-
-.sttHeaderBar {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 16px 24px;
-  background: var(--bg1);
-  position: relative;
-
-  &::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-        rgba(139, 92, 246, 0.0) 0%,
-        rgba(139, 92, 246, 0.6) 20%,
-        rgba(56, 196, 186, 0.7) 50%,
-        rgba(240, 160, 48, 0.6) 80%,
-        rgba(240, 160, 48, 0.0) 100%);
-    pointer-events: none;
-  }
-}
-
-.phTitleRow {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-shrink: 0;
-}
-
-.tabbar {
-  display: flex;
-  align-items: stretch;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.tabBtn {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 3px;
-  min-width: 0;
-  height: 54px;
-  padding: 0 20px;
-  border-radius: var(--rl);
-  border: 1px solid var(--bdr2);
-  background: var(--bg1);
-  color: var(--t1);
-  cursor: pointer;
-  text-align: left;
-  font-family: var(--font-ui);
-  // Note: intentionally not using the shared theme-transition mixin here
-  // — it's tuned for light/dark theme swaps and was causing a visible
-  // background flash/crossfade on ordinary tab clicks. This explicit,
-  // fast transition covers the click-driven active/inactive state change.
-  transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
-
-  &:hover {
-    border-color: var(--bdr3);
-    background: var(--bg2);
-    color: var(--t0);
-  }
-
-  &:active {
-    transform: scale(0.98);
-  }
-}
-
-.tabBtnActive {
-  border-color: var(--blue);
-  background: var(--blue);
-  color: #fff;
-  box-shadow: 0 3px 10px var(--blue-dim);
-
-  &:hover {
-    border-color: var(--blue);
+// ── True / False ──────────────────────────────────
+.tfOptions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.tfOpt {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--t1);
+    padding: 16px 10px;
+    border-radius: 8px;
+    border: 2px solid var(--bdr);
+    background: var(--bg0);
+    cursor: pointer;
+    text-align: center;
+    font-family: var(--font-ui);
+    transition: border-color 0.15s, background 0.15s, transform 0.15s;
+
+    &:hover:not(:disabled) {
+        border-color: var(--blue-bdr);
+        background: var(--blue-dim);
+        transform: translateY(-1px);
+    }
+
+    &:disabled {
+        cursor: default;
+    }
+}
+
+.tfOptLabel {
+    letter-spacing: 0.02em;
+}
+
+// ── Timestamped Summary ───────────────────────────
+.tsList {
+    display: flex;
+    flex-direction: column;
+    margin-top: 4px;
+}
+
+.tsRow {
+    display: flex;
+    gap: 14px;
+}
+
+.tsRail {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex-shrink: 0;
+    padding-top: 6px;
+}
+
+.tsDot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
     background: var(--blue);
-    color: #fff;
-  }
+    box-shadow: 0 0 0 3px var(--blue-dim);
+    flex-shrink: 0;
 }
 
-.tabLabel {
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  white-space: nowrap;
+.tsLine {
+    width: 2px;
+    flex: 1;
+    background: var(--bdr2);
+    margin-top: 2px;
 }
 
-// Always visible — this is what tells the user what they'll find on
-// this tab, without needing to click it first or read a separate banner.
-.tabDesc {
-  font-size: 10.5px;
-  color: var(--t2);
-  opacity: 0.8;
-  white-space: nowrap;
+.tsCard {
+    flex: 1;
+    padding-bottom: 20px;
 }
 
-.tabBtnActive .tabDesc {
-  color: rgba(255, 255, 255, 0.85);
-  opacity: 1;
+.tsRange {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--blue);
+    margin-bottom: 4px;
+    @include m.mono;
 }
 
-.sttTabPane {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  overflow: hidden;
+.tsArrow {
+    color: var(--t2);
+    margin: 0 2px;
 }
 
-@media (max-width: 860px) {
-  .sttHeaderBar { flex-direction: column; align-items: stretch; gap: 12px; padding: 14px 16px; }
-  .tabbar { flex-wrap: wrap; }
-  .tabBtn { flex: 1; width: auto; min-width: 130px; }
-  .sttTabPane { flex-direction: column; }
+.tsText {
+    font-size: 13.5px;
+    color: var(--t1);
+    line-height: 1.6;
+    margin: 0;
 }
 
-// ── Inference tab body — sidebar + full-width InferencePanel ──
-.sttInferTabBody {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  overflow: hidden;
+// ── Keyword Insights: sub-nav (scrollable, one line) ──
+.kiSubNavWrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--bdr);
+
+    .tabScrollBtn {
+        background: var(--bg0);
+    }
+
+    .tabFadeLeft {
+        background: linear-gradient(90deg, var(--bg0), transparent);
+    }
+
+    .tabFadeRight {
+        background: linear-gradient(270deg, var(--bg0), transparent);
+    }
 }
 
-.sttInferMain {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+.kiSubNav {
+    display: flex;
+    gap: 4px;
+    flex: 1;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+
+    &::-webkit-scrollbar {
+        display: none;
+    }
 }
 
-// ── Results tab body — sidebar + TranscriptDetail / empty state ──
-.sttResultsTabBody {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  overflow: hidden;
+.kiSubTab {
+    padding: 5px 11px;
+    border-radius: 99px;
+    border: 1px solid var(--bdr2);
+    background: var(--bg0);
+    color: var(--t2);
+    font-size: 12px;
+    font-weight: 600;
+    font-family: var(--font-ui);
+    cursor: pointer;
+    transition: all 0.13s;
+    white-space: nowrap;
+    flex-shrink: 0;
+
+    &:hover {
+        color: var(--t0);
+        border-color: var(--bdr3, var(--bdr2));
+    }
 }
 
-.sttResultsMain {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+.kiSubTabActive {
+    background: var(--blue-dim);
+    border-color: var(--blue-bdr);
+    color: var(--blue);
 }
 
-.sttResultsEmpty {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  color: var(--t2);
-  padding: 40px;
+.kiBody {
+    min-height: 200px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
 }
 
-.sttResultsEmptyTitle {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--t1);
+// ── Keyword Insights: node-link graph (React Flow mindmap) ──
+.graphWrap {
+    width: 100%;
+    flex: 1;
+    min-height: 460px;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid var(--bdr);
+    background: var(--bg0);
+
+    :global(.react-flow__attribution) {
+        display: none;
+    }
+
+    :global(.react-flow__controls) {
+        background: var(--bg1);
+        border: 1px solid var(--bdr2);
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: none;
+    }
+
+    :global(.react-flow__controls-button) {
+        background: var(--bg1);
+        border-bottom: 1px solid var(--bdr2);
+        color: var(--t1);
+
+        &:hover {
+            background: var(--bg3);
+        }
+
+        svg {
+            fill: var(--t1);
+        }
+    }
+
+    :global(.react-flow__minimap) {
+        border-radius: 8px;
+        border: 1px solid var(--bdr2);
+        overflow: hidden;
+    }
+
+    :global(.react-flow__edge-path) {
+        stroke: var(--bdr2);
+    }
+
+    :global(.react-flow__edge:hover) .react-flow__edge-path,
+    :global(.react-flow__edge.selected) .react-flow__edge-path {
+        stroke: var(--blue);
+    }
+
+    :global(.react-flow__edge-text) {
+        fill: var(--t2);
+    }
 }
 
-.sttResultsEmptyHint {
-  font-size: 12px;
-  color: var(--t2);
-  text-align: center;
-  max-width: 320px;
+.rfNode {
+    border-radius: 50%;
+    background: var(--blue-dim);
+    border: 1.6px solid var(--blue);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+    position: relative;
+    transition: background 0.15s;
+
+    &:active {
+        cursor: grabbing;
+    }
+
+    &:hover {
+        background: var(--blue);
+
+        .rfNodeLabel {
+            color: var(--t0);
+        }
+    }
 }
 
-// ═══════════════════════════════════════════════
-// Library header — filter/sort/actions bar
-// (mirrors pages/UploadInfer/FilePanel.tsx's header design)
-// ═══════════════════════════════════════════════
-.filterSortRow {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 10px 22px;
-  background: var(--bg1);
-  flex-shrink: 0;
-  position: relative;
-
-  &::after {
-    content: '';
+.rfNodeLabel {
     position: absolute;
-    bottom: 0; left: 0; right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-      rgba(139, 92, 246, 0.0) 0%,
-      rgba(139, 92, 246, 0.6) 20%,
-      rgba(56, 196, 186, 0.7) 50%,
-      rgba(240, 160, 48, 0.6) 80%,
-      rgba(240, 160, 48, 0.0) 100%);
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 5px;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 14px;
+    color: var(--t1);
+    text-align: center;
+    overflow-wrap: break-word;
+    font-family: var(--font-ui);
     pointer-events: none;
+}
+
+.rfHandle {
+    width: 6px !important;
+    height: 6px !important;
+    min-width: 0 !important;
+    background: transparent !important;
+    border: none !important;
+    opacity: 0;
+}
+
+// ── Keyword Insights: matrix / heatmap grid ───────
+.matrixScroll {
+    overflow-x: auto;
+    @include m.scrollbar;
+}
+
+.matrixGrid {
+    display: grid;
+    gap: 2px;
+    width: max-content;
+    min-width: 100%;
+}
+
+.matrixCorner {
+    background: transparent;
+}
+
+.matrixColHead {
+    font-size: 10px;
+    color: var(--t2);
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-height: 90px;
+    padding: 4px 2px;
+    text-align: left;
+    @include m.mono;
+}
+
+.matrixRowHead {
+    font-size: 11.5px;
+    color: var(--t1);
+    padding: 4px 8px 4px 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 140px;
+    display: flex;
+    align-items: center;
+}
+
+.matrixCell {
+    min-width: 28px;
+    aspect-ratio: 1;
+    border-radius: 3px;
+    border: 1px solid var(--bdr);
+}
+
+// ── Keyword Insights: word cloud ──────────────────
+.wordCloud {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 12px 18px;
+    padding: 24px 12px;
+}
+
+// Server-rendered word cloud image, wrapped in the pan/zoom viewer below.
+.wordCloudImageWrap {
+    flex: 1;
+    display: flex;
+    min-height: 380px;
+}
+
+// Pan/zoom viewer — drag to pan (once zoomed in), scroll to zoom, double
+// click to reset. Same interaction model as the Knowledge Graph tab.
+.zoomPanWrap {
+    position: relative;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    border-radius: 10px;
+    border: 1px solid var(--bdr);
+    background: var(--bg0);
+    touch-action: none;
+    user-select: none;
+}
+
+.wordCloudImage {
+    max-width: 100%;
+    max-height: 100%;
+    border-radius: 8px;
+    pointer-events: none;
+}
+
+.zoomControls {
+    position: absolute;
+    right: 10px;
+    bottom: 10px;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg1);
+    border: 1px solid var(--bdr2);
+    border-radius: 8px;
+    overflow: hidden;
+    z-index: 2;
+}
+
+.zoomControlBtn {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-bottom: 1px solid var(--bdr2);
+    background: var(--bg1);
+    color: var(--t1);
+    cursor: pointer;
+    transition: background 0.12s;
+
+    svg {
+        width: 14px;
+        height: 14px;
+    }
+
+    &:last-child {
+        border-bottom: none;
+    }
+
+    &:hover:not(:disabled) {
+        background: var(--bg3);
+    }
+
+    &:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+    }
+}
+
+.wcWord {
+    font-weight: 700;
+    font-family: var(--font-ui);
+    line-height: 1;
+    cursor: default;
+    transition: transform 0.15s;
+
+    &:hover {
+        transform: scale(1.08);
+    }
+}
+
+// ── Keyword Insights: clusters ────────────────────
+.clusterGrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px;
+}
+
+.clusterCard {
+    padding: 12px 14px;
+    background: var(--bg0);
+    border: 1px solid var(--bdr);
+    border-radius: 10px;
+}
+
+.clusterTitle {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--t2);
+    margin-bottom: 8px;
+    @include m.mono;
+}
+
+.clusterChips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.clusterChip {
+    padding: 3px 9px;
+    border-radius: 99px;
+    background: var(--blue-dim);
+    border: 1px solid var(--blue-bdr);
+    color: var(--blue);
+    font-size: 11.5px;
+    font-weight: 600;
+}
+
+// ── Keyword Insights: frequency bars ──────────────
+.freqList {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.freqRow {
+    display: grid;
+    grid-template-columns: 130px 1fr 130px;
+    align-items: center;
+    gap: 12px;
+}
+
+.freqLabel {
+    font-size: 12.5px;
+    color: var(--t1);
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.freqBarTrack {
+    height: 10px;
+    background: var(--bg0);
+    border: 1px solid var(--bdr);
+    border-radius: 99px;
+    overflow: hidden;
+}
+
+.freqBarFill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--blue), #a78bfa);
+    border-radius: 99px;
+}
+
+.freqMeta {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    font-size: 11px;
+    color: var(--t1);
+    justify-content: flex-end;
+    @include m.mono;
+}
+
+.freqDim {
+    color: var(--t2);
+}
+
+// ── Keyword Insights: importance/complexity columns ──
+// Sorted rows in normal document flow, grouped by complexity — this can
+// never overlap the way freely-positioned dots + floating labels could.
+
+// Explains what "m/n" (importance score) and "f× freq" (occurrence count)
+// mean, shown once above the columns.
+.importanceHint {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+    font-size: 12px;
+    color: var(--t2);
+    line-height: 1.5;
+    background: var(--bg1);
+    border: 1px solid var(--bdr);
+    border-radius: var(--r);
+    padding: 8px 10px;
+    margin-bottom: 12px;
+
+    svg {
+        width: 14px;
+        height: 14px;
+        flex-shrink: 0;
+        margin-top: 1px;
+        color: var(--blue);
+    }
+}
+
+// Explains what the X-axis (time, in whatever unit the backend sends)
+// and Y-axis (keyword) represent, shown once above the timeline grid.
+.timelineAxisHint {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+    font-size: 12px;
+    color: var(--t2);
+    line-height: 1.5;
+    background: var(--bg1);
+    border: 1px solid var(--bdr);
+    border-radius: var(--r);
+    padding: 8px 10px;
+    margin-bottom: 12px;
+
+    svg {
+        width: 14px;
+        height: 14px;
+        flex-shrink: 0;
+        margin-top: 1px;
+        color: var(--blue);
+    }
+}
+
+.importanceColumns {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    align-items: flex-start;
+}
+
+.importanceColumn {
+    flex: 1;
+    min-width: 200px;
+}
+
+.importanceColumnHead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding-bottom: 8px;
+    margin-bottom: 10px;
+    border-bottom: 2px solid;
+    @include m.mono;
+}
+
+.importanceColumnCount {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--t2);
+    background: var(--bg0);
+    border: 1px solid var(--bdr2);
+    border-radius: 99px;
+    padding: 1px 7px;
+}
+
+.importanceRows {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.importanceRow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    row-gap: 4px;
+}
+
+.importanceDot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.importanceKeyword {
+    font-size: 12.5px;
+    color: var(--t0);
+    font-weight: 600;
+    width: 84px;
+    flex-shrink: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.importanceBarTrack {
+    flex: 1 1 60px;
+    height: 7px;
+    background: var(--bg0);
+    border: 1px solid var(--bdr);
+    border-radius: 99px;
+    overflow: hidden;
+    min-width: 0;
+}
+
+.importanceBarFill {
+    height: 100%;
+    border-radius: 99px;
+}
+
+// Value + frequency grouped together so they size to their own content
+// and never fight the bar track for space — the bar shrinks first, this
+// block never wraps or overlaps its neighbors.
+.importanceMeta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    white-space: nowrap;
+    margin-left: auto;
+}
+
+.importanceValue {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--t2);
+    flex-shrink: 0;
+    white-space: nowrap;
+    @include m.mono;
+}
+
+.importanceFrequency {
+    font-size: 11px;
+    color: var(--t2);
+    flex-shrink: 0;
+    white-space: nowrap;
+    @include m.mono;
+}
+
+// ── Keyword Insights: glossary ────────────────────
+.glossaryList {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.glossaryRow {
+    padding: 10px 14px;
+    background: var(--bg0);
+    border: 1px solid var(--bdr);
+    border-radius: 8px;
+}
+
+.glossaryTerm {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13.5px;
+    font-weight: 700;
+    color: var(--t0);
+    margin-bottom: 4px;
+}
+
+.glossaryTime {
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--t2);
+    background: var(--bg1);
+    border: 1px solid var(--bdr2);
+    border-radius: 99px;
+    padding: 1px 7px;
+    @include m.mono;
+}
+
+.glossaryDef {
+    font-size: 13px;
+    color: var(--t1);
+    line-height: 1.55;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+{
+  "header": {
+    "logoText": "Content",
+    "logoTextSpan": "Analytics",
+    "sso": "Knox SSO",
+    "theme": {
+      "label": "Choose theme",
+      "dark": "Dark",
+      "light": "Light",
+      "navy": "Navy"
+    },
+    "userMenu": {
+      "label": "User menu",
+      "administrator": "Administrator",
+      "logout": "Log out"
+    }
+  },
+  "footer": {
+    "copyright": "© {{year}} Knox University. All rights reserved."
+  },
+  "sidebar": {
+    "expand": "Expand sidebar",
+    "collapse": "Collapse sidebar",
+    "menu": "Menu",
+    "soon": "Soon",
+    "groups": {
+      "main": "Main",
+      "analysis": "Analysis",
+      "tools": "Tools",
+      "feedback": "Feedback",
+      "settings": "Settings",
+      "usage": "Usage"
+    },
+    "nav": {
+      "lecturePipeline": "Lecture Pipeline",
+      "historyWorkspace": "History & Workspace",
+      "keywordInsights": "Keyword Insights",
+      "assessment": "Assessment",
+      "sttTranscription": "STT Transcription",
+      "promptTemplates": "Prompt Templates",
+      "generalSettings": "General Settings",
+      "settings": "Settings",
+      "adminDashboard": "Admin Dashboard",
+      "voiceOfCustomer": "Voice of Customer",
+      "userDictionary": "User Dictionary",
+      "dashboard": "Dashboard"
+    }
+  },
+  "ssoLogin": {
+    "title": "Content",
+    "titleSpan": "Analytics",
+    "subtitle": "Lecture Intelligence Platform",
+    "signedOut": "You've been signed out successfully.",
+    "signInBtn": "Sign in with Knox SSO",
+    "hint": "Authentication is handled automatically via your institution's Knox SSO service."
+  },
+  "adminDashboard": {
+    "pageTitle": "Dashboard",
+    "userViewSub": "Your usage statistics and file activity",
+    "adminViewSub": "Platform-wide usage, user management, and system health",
+    "myStats": "My Stats",
+    "admin": "Admin",
+    "administratorBadge": "Administrator",
+    "readOnlyBadge": "Read-only — admin access required for edits",
+    "loading": "Loading dashboard data…",
+    "loadError": "Failed to load dashboard data. Please try again.",
+    "adminLoadError": "Failed to load admin dashboard data. Please try again.",
+    "userStats": {
+      "totalUploaded": "Total files uploaded",
+      "filesInferenced": "Files inferenced",
+      "aiGenerations": "AI generations run",
+      "dictionariesCreated": "Dictionaries created",
+      "audioVideo": "{{audio}} audio · {{video}} video",
+      "ofUploads": "{{pct}}% of uploads",
+      "kwSummaryFaq": "KW · Summary · FAQ",
+      "promptUpdates": "{{count}} prompt updates"
+    },
+    "adminStats": {
+      "totalUploaded": "Total files uploaded",
+      "totalUsers": "Total users",
+      "aiGenerations": "AI generations",
+      "dictionariesCreated": "Dictionaries created",
+      "activeUsers": "{{count}} active users",
+      "activeOf": "{{count}} active",
+      "kwSummaryFaq": "KW · Summary · FAQ",
+      "promptUpdates": "{{count}} prompt updates"
+    },
+    "tabs": {
+      "overview": "Overview",
+      "files": "Per-file stats",
+      "dictionary": "Dictionary usage",
+      "uploadInference": "Upload vs Inference",
+      "users": "User activity",
+      "perUser": "Per-user detail",
+      "upload_inference": "Upload vs Inference",
+      "per_user": "Per-user detail"
+    },
+    "charts": {
+      "uploadVsInference": "Upload vs Inference by Type",
+      "uploadVsInferenceSub": "{{uploaded}} total uploads · {{inferenced}} inferenced",
+      "aiBreakdown": "AI Generation Breakdown",
+      "aiBreakdownSub": "{{total}} total generations",
+      "filesByType": "Files by Type",
+      "filesByTypeSub": "{{total}} total files uploaded",
+      "sttCompletions": "STT Completions",
+      "sttCompletionsSub": "Speech-to-text jobs finished",
+      "audioStt": "Audio STT",
+      "videoStt": "Video STT",
+      "ofAudioUploads": "{{pct}}% of audio uploads",
+      "ofVideoUploads": "{{pct}}% of video uploads",
+      "uploadedLabel": "Uploaded",
+      "inferencedLabel": "Inferenced",
+      "dictUsageFreq": "Dictionary Usage Frequency",
+      "dictUsageFreqSub": "{{count}} dictionaries created",
+      "dailyUploadTrend": "Daily Upload Trend",
+      "dailyUploadTrendSub": "Files uploaded per day",
+      "dailyGenTrend": "Daily Generation Trend",
+      "dailyGenTrendSub": "AI generations per day by type",
+      "uploadsByType": "Uploads by File Type",
+      "uploadsByCategoryTitle": "Upload vs Inference by Category",
+      "uploadsByCategorySub": "{{uploaded}} uploaded · {{inferenced}} inferenced · {{start}} → {{end}}",
+      "dailyUviTrend": "Daily Upload vs Inference Trend",
+      "dailyUviTrendSub": "Uploaded and inferenced per day",
+      "usagePerDict": "Usage per Dictionary",
+      "usageByDept": "Usage by Department",
+      "usageByDeptSub": "Dictionary count and usage per department",
+      "totalDictionaries": "Total dictionaries",
+      "totalUsageCount": "Total usage count",
+      "keywordsLabel": "Keywords",
+      "summaryLabel": "Summary",
+      "faqLabel": "FAQ",
+      "dictionariesLabel": "Dictionaries",
+      "usageLabel": "Usage"
+    },
+    "table": {
+      "hash": "#",
+      "fileName": "File name",
+      "type": "Type",
+      "keywords": "Keywords",
+      "summaries": "Summaries",
+      "faqs": "FAQs",
+      "promptUpdates": "Prompt updates",
+      "noFileStats": "No file stats available",
+      "dictName": "Dictionary name",
+      "timesUsed": "Times used",
+      "created": "Created",
+      "noDicts": "No dictionaries yet",
+      "username": "Username",
+      "department": "Department",
+      "totalFiles": "Total files",
+      "generations": "Generations",
+      "dictionaries": "Dictionaries",
+      "lastActive": "Last active",
+      "noUserActivity": "No user activity data",
+      "owner": "Owner",
+      "category": "Category",
+      "uploaded": "Uploaded",
+      "inferenced": "Inferenced",
+      "coverage": "Coverage",
+      "noPerUserData": "No per-user data available",
+      "noAdminDicts": "No dictionaries yet",
+      "deptSummary": "Department summary",
+      "totalUsage": "Total usage"
+    },
+    "perUser": {
+      "filesUploaded": "Files uploaded",
+      "filesInferenced": "Files inferenced",
+      "aiGenerations": "AI generations",
+      "dictionaries": "Dictionaries",
+      "lastActive": "Last active: {{date}}",
+      "promptUpdates": "{{count}} prompt updates"
+    }
+  },
+  "generalSettings": {
+    "pageTitle": "General Settings",
+    "pageSub": "defaults applied across lecture processing",
+    "loading": "Loading settings…",
+    "resetToDefaults": "Reset to Defaults",
+    "resetting": "Resetting…",
+    "discard": "Discard",
+    "saveChanges": "Save Changes",
+    "saving": "Saving…",
+    "savedSuccess": "Settings updated successfully.",
+    "resetSuccess": "Settings reset to defaults.",
+    "subtitleFormat": {
+      "title": "Subtitle Format",
+      "desc": "Default file format used when generating subtitles."
+    },
+    "defaultTemplate": {
+      "title": "Default Prompt Template",
+      "desc": "Template applied automatically to new lecture uploads.",
+      "none": "None",
+      "viewAriaLabel": "View template details"
+    },
+    "numKeywords": {
+      "title": "Number of Keywords",
+      "desc": "How many keywords to extract per lecture.",
+      "auto": "Auto",
+      "custom": "Custom"
+    },
+    "numQuestions": {
+      "title": "Number of Assessment Questions",
+      "desc": "How many assessment questions to generate per lecture.",
+      "auto": "Auto",
+      "custom": "Custom"
+    },
+    "globalDict": {
+      "title": "Global Dictionary",
+      "desc": "Auto-correct recurring transcription errors across all lectures.",
+      "noTerms": "No dictionary terms yet.",
+      "wrongPlaceholder": "Wrong term (e.g. teh)",
+      "correctPlaceholder": "Correct term (e.g. the)",
+      "addTerm": "Add Term",
+      "removeTerm": "Remove term",
+      "apply": "Apply",
+      "manage": "Manage Dictionary",
+      "termsDefined_one": "{{count}} term defined",
+      "termsDefined_other": "{{count}} terms defined"
+    },
+    "resetModal": {
+      "title": "Reset to Defaults",
+      "body": "This will reset subtitle format, prompt template, keyword/question counts and the global dictionary back to their default values. This can't be undone.",
+      "cancel": "Cancel",
+      "confirm": "Reset"
+    },
+    "templateModal": {
+      "description": "Description",
+      "summaryPrompt": "Summary Prompt",
+      "keywordPrompt": "Keyword Prompt",
+      "faqPrompt": "FAQ Prompt",
+      "close": "Close",
+      "closeAriaLabel": "Close"
+    },
+    "stepper": {
+      "rangeError": "Enter a value between {{min}} and {{max}}",
+      "decreaseAriaLabel": "Decrease",
+      "increaseAriaLabel": "Increase"
+    }
+  },
+  "promptTemplates": {
+    "pageTitle": "Prompt Templates",
+    "pageSub_one": "{{count}} template · reusable prompts for summary, keyword & FAQ generation",
+    "pageSub_other": "{{count}} templates · reusable prompts for summary, keyword & FAQ generation",
+    "newTemplate": "New Template",
+    "loading": "Loading templates…",
+    "createdSuccess": "Template created.",
+    "updatedSuccess": "Template updated.",
+    "deletedSuccess": "Template deleted.",
+    "genericError": "Something went wrong. Please try again.",
+    "allFieldsRequired": "All fields are required.",
+    "table": {
+      "name": "Name",
+      "description": "Description",
+      "updated": "Updated",
+      "empty": "No templates yet — create your first one to standardise summary, keyword and FAQ prompts.",
+      "edit": "Edit",
+      "delete": "Delete",
+      "deleting": "Deleting…"
+    },
+    "modal": {
+      "createTitle": "New Template",
+      "editTitle": "Edit Template",
+      "name": "Name",
+      "namePlaceholder": "e.g. Lecture Summary — Default",
+      "description": "Description",
+      "descPlaceholder": "Short description of when to use this template",
+      "summaryPrompt": "Summary Prompt",
+      "summaryPlaceholder": "Instructions used to generate the summary",
+      "keywordPrompt": "Keyword Prompt",
+      "keywordPlaceholder": "Instructions used to extract keywords",
+      "faqPrompt": "FAQ Prompt",
+      "faqPlaceholder": "Instructions used to generate FAQs",
+      "required": "*",
+      "cancel": "Cancel",
+      "saving": "Saving…",
+      "saveChanges": "Save Changes",
+      "createBtn": "Create Template",
+      "closeAriaLabel": "Close"
+    },
+    "deleteModal": {
+      "title": "Delete Template",
+      "body": "Delete <strong>{{name}}</strong>? This can't be undone.",
+      "cancel": "Cancel",
+      "confirm": "Delete"
+    }
+  },
+  "settings": {
+    "pageTitle": "User Dictionary",
+    "pageSub": "Manage custom term replacements applied during transcription and inference",
+    "dictionaries": "Dictionaries",
+    "newDictTooltip": "New dictionary",
+    "loading": "Loading…",
+    "noDict": "No dictionaries yet.\nClick + to create one.",
+    "unsaved": "Unsaved",
+    "newDict": "New dictionary",
+    "selectOrCreate": "Select a dictionary, or create a new one.",
+    "dictNameLabel": "Dictionary name",
+    "dictNamePlaceholder": "Enter a dictionary name…",
+    "updated": "Updated {{date}}",
+    "cancel": "Cancel",
+    "saving": "Saving…",
+    "saved": "Saved",
+    "create": "Create",
+    "saveChanges": "Save changes",
+    "discardConfirm": "Discard unsaved changes?",
+    "nameRequired": "Dictionary name is required",
+    "termRequired": "Add at least one term with both values filled",
+    "searchPlaceholder": "Search terms…",
+    "term_one": "{{count}} term",
+    "term_other": "{{count}} terms",
+    "addTerm": "Add term",
+    "wrongTerm": "Wrong term",
+    "correctTerm": "Correct term",
+    "wrongPlaceholder": "e.g. teh",
+    "correctPlaceholder": "e.g. the",
+    "removeTerm": "Remove term",
+    "noSearchMatch": "No terms match your search",
+    "noTermsYet": "No terms yet — click \"Add term\" to create one",
+    "dictInfo": "Dictionaries are applied during STT transcription and inference. Wrong terms found in transcripts will be replaced with their correct counterparts."
+  },
+  "landing": {
+    "badge": "Lecture Intelligence Platform · v2.4.1",
+    "hero": {
+      "title1": "Turn lecture transcripts",
+      "title2": "into structured",
+      "titleAccent": "knowledge",
+      "title3": "",
+      "desc": "Content Analytics ingests VTT and SRT files, runs AI inference, and delivers summaries, keyword maps, and assessment questions — all in under a minute per lecture.",
+      "ctaPrimary": "Lecture Pipeline",
+      "ctaSecondary": "View workspace"
+    },
+    "stats": {
+      "fasterReview": "Faster content review",
+      "groundingRate": "Question grounding rate",
+      "maxAudio": "Max audio per STT job",
+      "filesPerBatch": "Files per batch"
+    },
+    "features": {
+      "sectionLabel": "What it does",
+      "sectionTitle": "Every step of the pipeline,\nhandled automatically",
+      "batchUpload": {
+        "title": "Batch Upload",
+        "desc": "Drag-and-drop VTT and SRT transcript files in bulk. Supports up to 100 files, 50 MB each, with folder-level ingestion."
+      },
+      "aiInference": {
+        "title": "AI Inference",
+        "desc": "Powered by large language models — generates structured summaries, timestamped content outlines, and keyword frequency maps."
+      },
+      "smartSummaries": {
+        "title": "Smart Summaries",
+        "desc": "Three summary modes — Table of Contents, Timestamped Core Content, and Comprehensive Overview — across Korean and English."
+      },
+      "assessmentGen": {
+        "title": "Assessment Generation",
+        "desc": "Auto-generates MCQ, True/False, and short-answer questions with anti-hallucination validation — 91%+ content grounding."
+      },
+      "keywordInsights": {
+        "title": "Keyword Insights",
+        "desc": "Frequency analysis, knowledge graphs, and word clouds reveal dominant concepts across single files or entire lecture sets."
+      },
+      "workspaceHistory": {
+        "title": "Workspace History",
+        "desc": "Full audit trail of every inference run — re-open results, re-generate outputs, and export to Excel with one click."
+      }
+    },
+    "workflow": {
+      "steps": {
+        "upload": {
+          "label": "Upload",
+          "sub": "Drop VTT / SRT files"
+        },
+        "configure": {
+          "label": "Configure",
+          "sub": "Set prompts & outputs"
+        },
+        "infer": {
+          "label": "Infer",
+          "sub": "Run AI pipeline"
+        },
+        "review": {
+          "label": "Review",
+          "sub": "Open workspace"
+        },
+        "export": {
+          "label": "Export",
+          "sub": "Download Excel"
+        }
+      }
+    },
+    "ctaSection": {
+      "title": "Ready to analyse your lectures?",
+      "desc": "Upload your first transcript and get a full AI-generated summary, keyword map, and question set in under 60 seconds.",
+      "button": "Lecture Pipeline"
+    },
+    "mockCard": {
+      "tabs": {
+        "summary": "Summary",
+        "keywords": "Keywords",
+        "questions": "Questions"
+      },
+      "status": "Done",
+      "block1Title": "1. Definition & Classification of Algorithms",
+      "block2Title": "2. Comparative Analysis of Sorting Algorithms",
+      "kw1": "Algorithm 18%",
+      "kw2": "Time Complexity 14%",
+      "kw3": "Big-O 8%",
+      "kw4": "Recursion 7%"
+    }
+  },
+  "uploadInfer": {
+    "pageTitle": "Lecture Pipeline",
+    "pageSub": "Step 1 — upload VTT/SRT files · Step 2 — inference · Step 3 — workspace result",
+    "tour": {
+      "takeTour": "Take a tour",
+      "tabsTitle": "Three steps, always available",
+      "tabsBody": "Upload & Manage, Inference, and View Results — you can jump between them any time, nothing is locked behind finishing a previous step.",
+      "uploadTitle": "Add your files here",
+      "uploadBody": "Drag in a lecture recording's captions (.vtt or .srt), or browse for one. You can drop in several files at once.",
+      "cardsTitle": "Your uploaded files",
+      "cardsBody": "Every file shows up here as a card. The colored badge in the corner shows the format (VTT/SRT); the small icons below the filename open the exact prompt used for each content type (Summary, Keywords, Questions, Answer, True/False); and the bottom badge shows the file's current status. If a dictionary or prompt template is linked to the file, you'll see a small book or checklist icon too.",
+      "cardsBodyEmpty": "You haven't uploaded anything yet, so this area is empty for now. Once you do, each file becomes a card showing: a format badge (VTT/SRT), the filename, small icons for each content type's prompt (Summary, Keywords, Questions, Answer, True/False), a book/checklist icon if a dictionary or prompt template is linked, and a status badge at the bottom.",
+      "iconSummaryTitle": "Summary icon",
+      "iconSummaryBody": "Opens the prompt used to generate this file's summary. Blue means it's been customized for this file; gray means it's still using the default.",
+      "iconKeywordsTitle": "Keywords icon",
+      "iconKeywordsBody": "Opens the prompt used to extract this file's keywords — the tag-shaped icon.",
+      "iconQuestionsTitle": "Assessment Questions icon",
+      "iconQuestionsBody": "Opens the prompt used to generate quiz-style assessment questions — the question-mark icon.",
+      "iconAnswerTitle": "Short Answer icon",
+      "iconAnswerBody": "Opens the prompt used to generate short written answers — the speech-bubble icon.",
+      "iconTrueFalseTitle": "True/False icon",
+      "iconTrueFalseBody": "Opens the prompt used to generate True/False questions — the toggle-switch icon.",
+      "sortTitle": "Sort the list",
+      "sortBody": "Sort your files by ID, Name, Date, or Status — click a column again to flip between ascending and descending.",
+      "dateFilterTitle": "Filter by date range",
+      "dateFilterBody": "Narrow the file list down to a date range, then hit Apply. This affects only what's shown here on the Upload tab.",
+      "statusFilterTitle": "Filter by status",
+      "statusFilterBody": "Show only files in one status: All, Waiting, Queued, Running, Inferenced, Error, or Pending — handy once you have a lot of files in flight.",
+      "actionsTriggerTitle": "Click here for bulk actions",
+      "actionsTriggerBody": "This button opens a menu of everything you can do to many files at once — let's take a look inside.",
+      "actionsTitle": "Bulk actions, one click away",
+      "actionsBody": "Here are all five bulk actions: Dictionary (link a term dictionary to your files), Prompt Template (link a saved prompt set), Search (find files by name), Export (download files), and Delete (remove files) — each applies to many files at once.",
+      "actionDictionaryTitle": "Dictionary",
+      "actionDictionaryBody": "Link a term dictionary to one or more files, so inference uses the right spellings and terminology for your subject.",
+      "actionTemplateTitle": "Prompt Template",
+      "actionTemplateBody": "Apply a saved set of prompts to one or more files in one go, instead of customizing each file's prompts by hand.",
+      "actionSearchTitle": "Search",
+      "actionSearchBody": "Find a file by name — opens a search box for the Upload tab's file list.",
+      "actionExportTitle": "Export",
+      "actionExportBody": "Select files and download them — useful for backing up or sharing results outside the app.",
+      "actionDeleteTitle": "Delete",
+      "actionDeleteBody": "Select files and remove them permanently — use with care, this can't be undone.",
+      "inferSidebarTitle": "Pick files to analyze",
+      "inferSidebarBody": "Select one or more files here — this list has its own date range, status filter, search, and sort, all independent of the Upload tab.",
+      "sidebarDateFilterTitle": "Filter by date range",
+      "sidebarDateFilterBody": "Narrow this list down to a date range, then hit Apply — independent of the Upload tab's own date filter.",
+      "sidebarStatusFilterTitle": "Filter by status",
+      "sidebarStatusFilterBody": "Show only files in one status here — independent of the Upload tab's own status filter.",
+      "sidebarSearchTitle": "Search",
+      "sidebarSearchBody": "Find a file by name within this list.",
+      "sidebarSortTitle": "Sort",
+      "sidebarSortBody": "Sort this list by ID, Name, Date, or Status — click again to flip ascending/descending.",
+      "inferSettingsTitle": "Choose what to generate",
+      "inferSettingsBody": "Turn on Summary, Keywords (with optional Keyword Insights), Assessment Questions, Short Answer, and True/False — each has its own customizable prompt. These options stay unchecked and disabled until you've selected at least one file.",
+      "modelTitle": "Pick a model",
+      "modelBody": "Choose which model runs the inference. Hit Refresh if the list looks out of date — you need a model selected before you can run anything.",
+      "checkSummaryTitle": "Summary",
+      "checkSummaryBody": "Generates a written summary of the file's content. Has its own customizable prompt once turned on.",
+      "checkKeywordsTitle": "Keywords",
+      "checkKeywordsBody": "Extracts the key terms from the file. Turning this on reveals a nested Keyword Insights option underneath.",
+      "checkQuestionsTitle": "Assessment Questions",
+      "checkQuestionsBody": "Generates quiz-style assessment questions based on the file's content.",
+      "checkShortAnswerTitle": "Short Answer",
+      "checkShortAnswerBody": "Generates short written-answer questions and responses from the file.",
+      "checkTrueFalseTitle": "True/False",
+      "checkTrueFalseBody": "Generates True/False questions from the file's content.",
+      "checkTimestampedTitle": "Timestamped Summary",
+      "checkTimestampedBody": "Generates a summary broken into timestamped segments, so each point links back to a moment in the recording.",
+      "inferRunTitle": "Run it",
+      "inferRunBody": "Once you've picked files and settings, run the batch here. You can watch progress or switch tabs — it keeps running either way.",
+      "resultsSidebarTitle": "Find a finished file",
+      "resultsSidebarBody": "Once a file's done, click it here to open its results. This list also has its own date range, status filter, search, and sort.",
+      "resultsContentTitle": "Your notes, ready to use",
+      "resultsContentBody": "Summary, keywords, quiz questions, and more — all generated from the file you selected. You can edit and re-generate individual sections without re-running the whole batch.",
+      "resultsTabbarTitle": "Seven kinds of results",
+      "resultsTabbarBody": "Switch between Summary, Keywords, Assessment Questions, Short Answer, True/False, Timestamped Summary, and Keyword Insights — whichever ones you generated for this file.",
+      "tabSummaryTitle": "Summary",
+      "tabSummaryBody": "A written summary of the file's content.",
+      "tabKeywordsTitle": "Keywords",
+      "tabKeywordsBody": "The key terms extracted from the file, shown as chips.",
+      "tabAssessmentTitle": "Assessment Questions",
+      "tabAssessmentBody": "Quiz-style assessment questions, with a multiple-choice quiz mode and a view-all mode.",
+      "tabShortAnswerTitle": "Short Answer",
+      "tabShortAnswerBody": "Short written-answer questions and responses, revealed one at a time or all at once.",
+      "tabTrueFalseTitle": "True/False",
+      "tabTrueFalseBody": "True/False questions, with the same quiz and view-all modes as Assessment Questions.",
+      "tabTimestampedTitle": "Timestamped Summary",
+      "tabTimestampedBody": "A summary broken into timestamped segments, each linking back to a moment in the recording.",
+      "tabKeywordInsightsTitle": "Keyword Insights",
+      "tabKeywordInsightsBody": "Extra visualizations built from the extracted keywords — knowledge graph, word cloud, timeline, heatmap, clusters, and more."
+    },
+    "batchGroups": {
+      "batchTitle": "Batch #{{id}}",
+      "done": "{{done}} / {{total}} done",
+      "running": "Running",
+      "statusTitles": {
+        "running": "Running",
+        "queued": "Queued",
+        "done": "Completed",
+        "pending": "Not selected"
+      },
+      "badgeLabels": {
+        "running": "Active",
+        "queued": "Waiting",
+        "done": "Done",
+        "pending": "Skipped"
+      },
+      "file_one": "{{count}} file",
+      "file_other": "{{count}} files",
+      "inQueue": "In queue",
+      "emptyMsg": "No files were excluded from this batch.",
+      "view": "View"
+    },
+    "filePanel": {
+      "step1Label": "Step 1 — Files",
+      "uploaded_one": "{{count}} uploaded",
+      "uploaded_other": "{{count}} uploaded",
+      "selected_one": "{{count}} selected",
+      "selected_other": "{{count}} selected",
+      "showUpload": "Show upload",
+      "hideUpload": "Hide upload",
+      "dropTitle": "Drop files here",
+      "dropTitleDefault": "Drop .vtt / .srt here",
+      "dropSub": "or click to browse · folder upload supported",
+      "browseFiles": "Browse files",
+      "folder": "Folder",
+      "uploadBtn_one": "Upload {{count}} file",
+      "uploadBtn_other": "Upload {{count}} files",
+      "cancelBtn": "Cancel",
+      "complete": "{{finished}} / {{total}} complete",
+      "failed_one": "· {{count}} failed",
+      "failed_other": "· {{count}} failed",
+      "fileStatus": {
+        "ready": "Ready to upload",
+        "uploading": "Uploading…",
+        "uploaded": "Uploaded"
+      },
+      "uploadedFiles": "Uploaded Files",
+      "inferenceBtn": "Select files for inference",
+      "dictionaryBtn": "Associate / Disassociate dictionary",
+      "templateBtn": "Map prompt template",
+      "searchBtn": "Search files",
+      "exportBtn": "Export files to Excel",
+      "deleteBtn": "Delete files",
+      "dateFrom": "From",
+      "dateTo": "To",
+      "applyDate": "Apply",
+      "sortBy": "Sort by",
+      "sortId": "ID",
+      "sortName": "Name",
+      "sortDate": "Date",
+      "sortStatus": "Status",
+      "searchPlaceholder": "Search by filename or ID…",
+      "loadingFiles": "Loading files…",
+      "noFilesRange": "No files in this date range",
+      "noFilesMatch": "No files match \"{{query}}\"",
+      "inferenced": "Inferenced",
+      "notInferenced": "Not Inferenced",
+      "export": "Export",
+      "exportToExcelTitle": "Export {{count}} file(s) to Excel",
+      "exportSelectFirst": "Select files to export",
+      "selectFilesToExport": "Select files to export",
+      "exportCountTitle": "Export {{count}} file(s) to Excel",
+      "selectFilesToDelete": "Select files to delete",
+      "deleteCountTitle": "Delete {{count}} file(s)",
+      "exportCount": "Export {{count}} file(s)",
+      "deleteCount": "Delete {{count}} file(s)",
+      "cancelTitle": "Cancel",
+      "uploaded": "Uploaded ({{count}})",
+      "selected": "{{count}} selected",
+      "uploadBtn": "Upload {{count}} file(s)",
+      "failed": "· {{count}} failed",
+      "exportAllBtn": "Export All",
+      "exportAllFailed": "Export failed. Please try again.",
+      "deleteAllBtn": "Delete All",
+      "deleteAllConfirmTitle": "Delete All Files",
+      "deleteAllConfirmBody": "This will permanently delete all files uploaded between {{from}} and {{to}}. This action cannot be undone.",
+      "deleteAllConfirmPrompt": "Type <strong>{{phrase}}</strong> to confirm:",
+      "deleteAllConfirmBtn": "Delete All Files",
+      "deleteAllFailed": "Delete failed. Please try again.",
+      "matchCount": "{{count}} files",
+      "pageInfo": "Page {{page}} of {{totalPages}} · {{total}} files",
+      "perPage": "Per page",
+      "selectedTotal": "{{count}} of {{total}} selected",
+      "selectAllFiles": "Select all",
+      "clearAllFiles": "Clear all",
+      "inferenceMode": "Select for Inference",
+      "deleteMode": "Delete Files",
+      "exportMode": "Export Files",
+      "exitMode": "Exit",
+      "noFilesSelected": "No files selected",
+      "runInferenceBtn": "Run Inference",
+      "confirmDeleteBtn": "Confirm Delete",
+      "confirmExportBtn": "Confirm Export",
+      "paginationPrev": "Previous",
+      "paginationNext": "Next",
+      "actionsLabel": "Actions",
+      "continueToInfer": "Continue to Inference",
+      "continueToInferCount": "Continue to Inference ({{count}})",
+      "dictionaryLinked": "Dictionary linked",
+      "templateLinked": "Prompt template linked",
+      "promptCustomized": "Customized",
+      "promptDefault": "Default",
+      "promptDefaultFull": "Using default prompt",
+      "perPageShort": "{{count}} / page",
+      "statusAll": "All",
+      "statusWaiting": "Waiting",
+      "statusQueued": "Queued",
+      "statusRunning": "Running",
+      "statusError": "Error",
+      "statusErrorBadge": "Error (Inference again)",
+      "statusTbd": "Pending"
+    },
+    "inferencePanel": {
+      "step2Label": "Step 2 — Inference Configuration",
+      "step2Running": "Step 2 — Inference Running",
+      "expandStep2": "Expand Step 2",
+      "minimizeStep2": "Minimize Step 2",
+      "closeStep2": "Close Step 2",
+      "filesSelected_one": "{{count}} file selected for inference",
+      "filesSelected_other": "{{count}} files selected for inference",
+      "batchRunning": "Batch running",
+      "runInference": "Run inference",
+      "selectFilesFirst": "Select files first",
+      "noModelSelected": "No model selected",
+      "submitting": "Submitting batch…",
+      "submittingDesc": "Sending {{count}} file(s) to the inference engine.\nThis may take a moment — please wait.",
+      "submittingMore": "+{{count}} more",
+      "selBanner": "{{count}} file(s)",
+      "selBannerEmpty": "Select files from the left panel",
+      "selBannerFilled": "{{count}} file(s) selected for inference",
+      "generateContent": "Generate content",
+      "generateSummary": "Summary",
+      "generateKeywords": "Keywords",
+      "generateQuestions": "Assessment questions",
+      "outputSettings": "Output settings",
+      "modelLabel": "Model",
+      "refreshModels": "Refresh models",
+      "noModels": "No models available — inference cannot be started. Try refreshing or check your connection.",
+      "modelsAvailable_one": "{{count}} model available",
+      "modelsAvailable_other": "{{count}} models available",
+      "noModelsOption": "— no models found —",
+      "promptOverrides": "Prompt overrides",
+      "promptModeSingle": "Single file — autofilled · edit to override.",
+      "promptModeMulti": "Multiple files — enter here to override all.",
+      "summaryPrompt": "Summary prompt",
+      "keywordPrompt": "Keyword prompt",
+      "questionPrompt": "Assessment question prompt",
+      "optional": "optional",
+      "perFile": "Per-file",
+      "hide": "Hide",
+      "noPromptSet": "No prompt set",
+      "autofillPlaceholder": "Autofilled from file — edit to override…",
+      "manualPlaceholder": "Leave blank to use per-file prompts…",
+      "noContentHint": "Enable at least one content type to configure its prompt.",
+      "cancelPrompt": "Cancel",
+      "savePrompts": "Save prompts",
+      "saving": "Saving…",
+      "promptSaveFail": "Failed to save prompts. Please try again.",
+      "inferenceStatus": "Inference status",
+      "live": "Live",
+      "refreshingIn": "refreshing in {{sec}}s",
+      "filesRunning_one": "{{count}} file running",
+      "filesRunning_other": "{{count}} files running",
+      "queued": "Queued",
+      "runningCol": "Running",
+      "completed": "Completed",
+      "waitingQueue": "Waiting in queue",
+      "stopFile": "Stop this file",
+      "stopAlready": "This file has already been processed and cannot be stopped.",
+      "inferenceStarted": "Inference started successfully",
+      "batchRunPill": "Batch running",
+      "collapsePerFile": "Collapse per-file prompts",
+      "viewPerFile": "View per-file prompts",
+      "filesSelected": "{{count}} file(s) selected for inference",
+      "filesRunning": "{{count}} file(s) running",
+      "modelsAvailable": "{{count}} model(s) available",
+      "generateKeywordInsights": "Keyword Insights",
+      "generateShortAnswer": "Short Answer Questions",
+      "generateTrueFalse": "True / False Questions",
+      "timestampedSummary": "Timestamped Summary",
+      "timeInterval": "Time interval",
+      "minutesOption": "{{count}} min",
+      "shortAnswerPrompt": "Short answer prompt",
+      "trueFalsePrompt": "True / False prompt"
+    },
+    "dictModal": {
+      "title": "Dictionary Association",
+      "subtitle": "Assign a dictionary to each file, or apply one to all files at once.",
+      "closeSaving": "Saving — please wait",
+      "close": "Close",
+      "applyToAll": "Apply to all files:",
+      "applyBtn": "Apply to all",
+      "noneOption": "— None (clear) —",
+      "noneRow": "— None —",
+      "changes_one": "{{count}} change pending",
+      "changes_other": "{{count}} changes pending",
+      "noChanges": "No changes yet",
+      "colFile": "File",
+      "colDict": "Dictionary",
+      "loadingDicts": "Loading dictionaries…",
+      "noFiles": "No files available.",
+      "loadFail": "Failed to load dictionaries. Please try again.",
+      "associated": "Associated",
+      "viewDetails": "View dictionary details",
+      "disassociate": "Disassociate",
+      "detailClose": "Close details",
+      "metaId": "ID:",
+      "metaUpdated": "Updated:",
+      "metaTerms": "Terms:",
+      "loadingDetails": "Loading details…",
+      "noTerms": "No terms in this dictionary.",
+      "detailLoadFail": "Failed to load dictionary details.",
+      "noDetailsReturned": "No details returned for this dictionary.",
+      "wrongTerm": "Wrong term",
+      "correctTerm": "Correct term",
+      "savingHint": "Saving — please don't close this window…",
+      "cancel": "Cancel",
+      "save": "Save",
+      "saving": "Saving…",
+      "saveSuccess": "Dictionary settings saved successfully",
+      "saveFail": "Failed to save dictionary settings. Please try again.",
+      "associateAllLabel": "Apply dictionary to all files ({{from}} – {{to}})",
+      "associateAllBtn": "Apply to All Files",
+      "associateAllSuccess": "Dictionary applied to all files successfully.",
+      "associateAllFail": "Failed to apply dictionary to all files. Please try again.",
+      "changes": "{{count}} change(s) pending"
+    },
+    "templateModal": {
+      "title": "Prompt Template Association",
+      "subtitle": "Map a prompt template to each file to update its summary, keyword, and FAQ prompts.",
+      "closeSaving": "Saving — please wait",
+      "close": "Close",
+      "applyToAll": "Apply to all files:",
+      "applyBtn": "Apply to all",
+      "noneOption": "— None —",
+      "noneRow": "— None —",
+      "changes_one": "{{count}} change pending",
+      "changes_other": "{{count}} changes pending",
+      "noChanges": "No changes yet",
+      "colFile": "File",
+      "colTemplate": "Prompt Template",
+      "loadingTemplates": "Loading prompt templates…",
+      "loadFail": "Failed to load prompt templates. Please try again.",
+      "noFiles": "No files available.",
+      "mapped": "Mapped",
+      "viewDetails": "View template details",
+      "detailClose": "Close details",
+      "metaId": "ID:",
+      "metaUpdated": "Updated:",
+      "metaDescription": "Description:",
+      "loadingDetails": "Loading details…",
+      "noDetailsReturned": "No details returned for this template.",
+      "detailLoadFail": "Failed to load template details.",
+      "summaryPrompt": "Summary Prompt",
+      "keywordPrompt": "Keyword Prompt",
+      "faqPrompt": "FAQ Prompt",
+      "savingHint": "Saving — please don't close this window…",
+      "cancel": "Cancel",
+      "save": "Save",
+      "saving": "Saving…",
+      "saveSuccess": "Prompt template applied successfully",
+      "saveFail": "Failed to apply prompt template. Please try again.",
+      "associateAllLabel": "Apply template to all files ({{from}} – {{to}})",
+      "associateAllBtn": "Apply to All Files",
+      "associateAllSuccess": "Template applied to all files successfully.",
+      "associateAllFail": "Failed to apply template to all files. Please try again.",
+      "changes": "{{count}} change(s) pending",
+      "shortAnswerPrompt": "Short Answer Prompt",
+      "trueFalsePrompt": "True / False Prompt"
+    },
+    "workspacePanel": {
+      "clickToView": "Click a file to view results",
+      "noFileSelected": "No file selected",
+      "noFileDesc": "Click any uploaded file to view its inference results here.",
+      "loadingFile": "Loading file data…",
+      "tabs": {
+        "summary": "Summary",
+        "keywords": "Keywords",
+        "assessment": "Assessment Questions",
+        "shortAnswer": "Short Answer",
+        "trueFalse": "True / False",
+        "timestampedSummary": "Timestamped Summary",
+        "keywordInsights": "Keyword Insights",
+        "mcq": "MCQ"
+      },
+      "noSummary": "No summary available.",
+      "noKeywords": "No keywords available.",
+      "noQuestions": "No questions available.",
+      "edit": "Edit",
+      "copy": "Copy",
+      "download": "Download",
+      "copyAs": "Copy as",
+      "downloadAs": "Download as",
+      "editColPreview": "Preview",
+      "editColEdit": "Edit Content",
+      "markdownRenderer": "Markdown Renderer",
+      "markdownTag": "Markdown",
+      "chipView": "Chip View",
+      "onePerLine": "One per line",
+      "cancel": "Cancel",
+      "save": "Save",
+      "saving": "Saving",
+      "autofillPlaceholder": "Autofilled from file — edit to override…",
+      "keywordPlaceholder": "One keyword per line…",
+      "mcq": "MCQ",
+      "viewAll": "View All",
+      "explanation": "Explanation",
+      "complete": "Complete!",
+      "assessCompleteTitle": "Assessment Complete!",
+      "assessCompleteDesc": "You answered all {{count}} question(s).",
+      "restart": "Restart",
+      "next": "Next Question",
+      "finish": "Finish",
+      "question": "Q{{n}}",
+      "answer": "Answer",
+      "true": "True",
+      "false": "False",
+      "revealAnswer": "Reveal answer",
+      "showAllAnswers": "Show all answers",
+      "hideAllAnswers": "Hide all answers",
+      "quizMode": "Quiz mode",
+      "noShortAnswer": "No short answer questions available.",
+      "noTrueFalse": "No true / false questions available.",
+      "noTimestampedSummary": "No timestamped summary available.",
+      "noKeywordInsights": "No keyword insights available.",
+      "noData": "No data available.",
+      "frequencyTitle": "How many times this keyword appears in the file",
+      "legendLess": "Less",
+      "legendMore": "More",
+      "frequencyCount": "{{count}}× freq",
+      "importanceAxis": "Importance",
+      "timelineAxisHint": "X-axis: time, in {{unit}} · Y-axis: keyword mentions per time bucket",
+      "timelineYAxis": "Keyword",
+      "zoomIn": "Zoom in",
+      "zoomOut": "Zoom out",
+      "zoomReset": "Reset zoom",
+      "timeUnitMinutes": "minutes",
+      "timeUnitHours": "hours",
+      "timeUnitSeconds": "seconds",
+      "timeUnitMinShort": "min",
+      "timeUnitHrShort": "hr",
+      "timeUnitSecShort": "sec",
+      "kiTabs": {
+        "graph": "Knowledge Graph",
+        "wordcloud": "Word Cloud",
+        "timeline": "Timeline",
+        "prerequisites": "Prerequisites",
+        "importance": "Importance & Frequency",
+        "glossary": "Glossary"
+      },
+      "scrollLeft": "Scroll tabs left",
+      "scrollRight": "Scroll tabs right",
+      "complexityAxis": "Complexity",
+      "glossaryTerm": "Term",
+      "glossaryDefinition": "Definition",
+      "reason": "Reason",
+      "cluster": "Cluster",
+      "count": "Count",
+      "copied": "Copied!",
+      "score": "Score",
+      "period": "Period",
+      "frequency": "Frequency",
+      "reGenerate": "Re-generate",
+      "reGenerating": "Re-generating…",
+      "reGenerateSuccess": "Re-generated successfully.",
+      "reGenerateFail": "Re-generation failed. Please try again."
+    },
+    "tabs": {
+      "upload": "Upload & Manage",
+      "infer": "Inference",
+      "results": "View Results",
+      "uploadDesc": "Add & browse your files",
+      "inferDesc": "Configure & run analysis",
+      "resultsDesc": "View summaries & quizzes",
+      "fileCount": "{{count}} files",
+      "selectedCount": "{{count}} selected",
+      "runningCount": "{{count}} running",
+      "running": "Running",
+      "resultsHint": "Select a file to view results"
+    },
+    "workspace": {
+      "filesTitle": "Files",
+      "searchFiles": "Search files…",
+      "loadingFiles": "Loading files…",
+      "noFilesYet": "No files yet",
+      "noFilesMatch": "No files match your search"
+    }
+  },
+  "stt": {
+    "pageTitle": "STT Pipeline",
+    "loading": "Loading…",
+    "file_one": "{{count}} file",
+    "file_other": "{{count}} files",
+    "processing_one": " · {{count}} processing",
+    "processing_other": " · {{count}} processing",
+    "dateError": "Start date cannot be after end date.",
+    "apply": "Apply",
+    "refreshTitle": "Refresh",
+    "refreshDisabled": "Disabled during inference",
+    "library": {
+      "title": "Library",
+      "filterAll": "All",
+      "searchPlaceholder": "Search…",
+      "closeInference": "Close inference",
+      "runInference": "Run inference",
+      "cancelDelete": "Cancel delete",
+      "deleteFiles": "Delete Files",
+      "cancelMove": "Cancel move",
+      "movePipeline": "Move to Lecture Pipeline",
+      "selected_one": "{{count}} selected",
+      "selected_other": "{{count}} selected",
+      "noneSelected": "Click cards to select",
+      "noPipelineFiles": "No completed files to select",
+      "selectCompleted": "Select completed files only",
+      "selectAll": "Select all",
+      "clear": "Clear",
+      "inferenceSelected_one": "{{count}} selected",
+      "inferenceSelected_other": "{{count}} selected",
+      "inferenceNone": "Click cards to select",
+      "loading": "Loading files…",
+      "emptyTitle": "No files in this range",
+      "emptyHint": "Try widening the date filter, or upload a new file.",
+      "noMatchTitle": "No files match \"{{query}}\"",
+      "noMatchHint": "Try searching by file ID or a different name.",
+      "loadError": "Could not load files: {{error}}",
+      "retry": "Retry",
+      "deleting_one": "Deleting… ({{count}})",
+      "deleting_other": "Deleting… ({{count}})",
+      "delete_one": "Delete ({{count}})",
+      "delete_other": "Delete ({{count}})",
+      "moving_one": "Moving… ({{count}})",
+      "moving_other": "Moving… ({{count}})",
+      "move_one": "Move to Lecture ({{count}})",
+      "move_other": "Move to Lecture ({{count}})",
+      "deletedSuccess_one": "{{count}} file deleted successfully.",
+      "deletedSuccess_other": "{{count}} files deleted successfully.",
+      "deleteFail": "Delete failed. Please try again.",
+      "movedSuccess_one": "{{count}} file moved to Lecture Pipeline.",
+      "movedSuccess_other": "{{count}} files moved to Lecture Pipeline.",
+      "moveFail": "Move failed. Please try again.",
+      "selectForInference": "Select Files for Inference"
+    },
+    "fileCard": {
+      "status": {
+        "completed": "Completed",
+        "queued": "Queued",
+        "pending": "Pending",
+        "running": "Running",
+        "failed": "Failed"
+      },
+      "type": {
+        "video": "Video",
+        "audio": "Audio"
+      },
+      "generate": "Generate",
+      "reGenerate": "Re-generate",
+      "retry": "Retry",
+      "inPipelineTitle": "Added to Lecture Pipeline"
+    },
+    "inference": {
+      "title": "Inference",
+      "nextCheck": "⟳ next check in {{sec}}s",
+      "selectHint": "Select files from the Library to run inference on.",
+      "selectedHint_one": "{{count}} file selected from Library",
+      "selectedHint_other": "{{count}} files selected from Library",
+      "settingsTitle": "Settings",
+      "modelLabel": "Model",
+      "modelLoading": "Loading…",
+      "languageLabel": "Language",
+      "korean": "Korean",
+      "english": "English",
+      "chunkLabel": "Chunk size",
+      "chunkAuto": "Auto",
+      "submitting": "Submitting…",
+      "runBtn": "Run Inference",
+      "runBtnCount": "Run Inference ({{count}})",
+      "queued": "Queued",
+      "file_one": "{{count}} file",
+      "file_other": "{{count}} files",
+      "waiting": "Waiting",
+      "noQueued": "No queued files",
+      "inQueue": "In queue",
+      "running": "Running",
+      "active": "Active",
+      "noRunning": "No active files",
+      "done": "Done",
+      "noDone": "No completed files yet",
+      "statusDone": "Done",
+      "statusFailed": "Failed",
+      "statusStarting": "Starting…"
+    },
+    "timeline": {
+      "ariaLabel": "Transcript timeline",
+      "seekTo": "Seek to {{time}}"
+    },
+    "unknownDate": "Unknown",
+    "filterLabel": "Filter: {{filter}}"
+  },
+  "modal": {
+    "ariaLabel": "Dialog"
+  },
+  "transcriptDetail": {
+    "backAriaLabel": "Back",
+    "fileSub": "File #{{id}} · {{count}} cues",
+    "downloadSrt": "Download SRT",
+    "captionsError": "Could not load captions: {{error}}",
+    "retry": "Retry",
+    "loadingMedia": "Loading media…",
+    "mediaError": "Could not load media",
+    "nowPlaying": "Now Playing",
+    "saveStatus": {
+      "editing": "Saving…",
+      "saved": "Saved",
+      "failed": "Save failed"
+    },
+    "cueInfo": "Cue {{current}} / {{total}} · {{start}} → {{end}}",
+    "cueCountHint": "{{count}} cues · press play",
+    "loading": "Loading…",
+    "noTranscript": "No transcript",
+    "followAlong": "Press play to follow along",
+    "transcriptTitle": "Transcript",
+    "transcriptHint": "Click to jump · pencil to edit",
+    "loadingCaptions": "Loading captions…",
+    "noCaptions": "No captions available",
+    "noCaptionsToast": "No captions available",
+    "nowTag": "▶ Now",
+    "editTitle": "Edit",
+    "emptyWarn": "⚠ Save with empty text? This will clear the caption.",
+    "keepEditing": "Keep editing",
+    "saveEmpty": "Save empty",
+    "savedToast": "Saved",
+    "saveFailedToast": "Save failed",
+    "downloadedToast": "Downloaded"
+  },
+  "transcribePanel": {
+    "title": "Generate Transcription",
+    "closeAriaLabel": "Close panel",
+    "fileLabel": "File",
+    "modelLabel": "Model",
+    "modelsLoading": "Loading models…",
+    "modelsError": "Could not load models.",
+    "modelsRetry": "Retry",
+    "noModels": "No models available",
+    "languageLabel": "Language",
+    "korean": "Korean",
+    "english": "English",
+    "chunkLabel": "Chunk",
+    "chunk5": "5 sec",
+    "chunk10": "10 sec",
+    "chunk15": "15 sec",
+    "chunk20": "20 sec",
+    "cancel": "Cancel",
+    "starting": "Starting…",
+    "start": "Start transcription"
+  },
+  "uploadInline": {
+    "title": "Upload Files",
+    "limitBadge": "{{active}}/{{max}} uploading",
+    "limitReached": "Upload limit reached",
+    "dropActive": "Drop to upload",
+    "dropDefault": "Drag files or a folder here",
+    "dropHint": "MP3 · WAV · AAC · MP4 · MOV · max {{max}} files",
+    "limitHint": "Max {{max}} files at a time",
+    "browseFiles": "Browse Files",
+    "browseFolder": "Browse Folder",
+    "unsupportedFormat": "Unsupported format. Accepted: MP3, WAV, AAC, FLAC, M4A, OGG, MP4, AVI, MOV, MKV, WEBM.",
+    "allSlotsBusy": "All {{max}} upload slots are busy. Wait for a file to finish, then try again.",
+    "partialQueue": "{{queued}} file(s) queued. {{ignored}} file(s) ignored — only {{max}} uploads run at once. You can upload more as each one completes.",
+    "uploading": "Uploading…",
+    "uploaded": "Uploaded",
+    "failed": "Failed",
+    "retryBtn": "Retry",
+    "dismissAriaLabel": "Dismiss"
+  },
+  "uploadPanel": {
+    "title": "Upload File",
+    "closeAriaLabel": "Close upload panel",
+    "fileLabel": "File",
+    "dropActive": "Drop to attach",
+    "dropDefault": "Drop a file or click to browse",
+    "dropHint": "MP3 WAV AAC FLAC M4A OGG · MP4 AVI MOV MKV WEBM",
+    "unsupportedFormat": "Unsupported file format",
+    "removeAriaLabel": "Remove file",
+    "cancel": "Cancel",
+    "uploading": "Uploading…",
+    "upload": "Upload"
+  },
+  "history": {
+    "pageTitle": "History & Workspace",
+    "pageSub": "Browse past inference runs and review results",
+    "loading": "Loading history…",
+    "loadError": "Failed to load history. Please try again.",
+    "retry": "Retry",
+    "empty": {
+      "title": "No files yet",
+      "hint": "Upload files and run inference to see results here."
+    },
+    "searchPlaceholder": "Search by filename or ID…",
+    "filterAll": "All",
+    "filterInferenced": "Inferenced",
+    "filterPending": "Not inferenced",
+    "sortLabel": "Sort",
+    "sortNewest": "Newest first",
+    "sortOldest": "Oldest first",
+    "sortName": "Name",
+    "fileCount": "{{count}} files",
+    "selectedCount": "{{count}} selected",
+    "selectAll": "Select all",
+    "clearSelection": "Clear",
+    "openWorkspace": "Open Workspace",
+    "deleteSelected": "Delete",
+    "deleting": "Deleting…",
+    "deleteSuccess": "{{count}} file(s) deleted successfully.",
+    "deleteFail": "Delete failed. Please try again.",
+    "deleteConfirm": {
+      "title": "Delete Files",
+      "body": "Are you sure you want to delete {{count}} file(s)? This action cannot be undone.",
+      "cancel": "Cancel",
+      "confirm": "Delete"
+    },
+    "workspace": {
+      "title": "Workspace",
+      "noFile": "No file selected",
+      "noFileHint": "Select a file from the list to view its inference results here.",
+      "tabs": {
+        "summary": "Summary",
+        "keywords": "Keywords",
+        "assessment": "Assessment"
+      },
+      "noSummary": "No summary available.",
+      "noKeywords": "No keywords available.",
+      "noAssessment": "No assessment questions available.",
+      "copy": "Copy",
+      "copied": "Copied!",
+      "download": "Download",
+      "edit": "Edit",
+      "save": "Save",
+      "saving": "Saving…",
+      "cancel": "Cancel",
+      "reGenerate": "Re-generate",
+      "reGenerating": "Re-generating…",
+      "reGenerateFail": "Re-generation failed. Please try again.",
+      "reGenerateSuccess": "Re-generated successfully.",
+      "keywordPlaceholder": "One keyword per line…",
+      "summaryPlaceholder": "Autofilled from file — edit to override…",
+      "editColPreview": "Preview",
+      "editColEdit": "Edit Content",
+      "markdownTag": "Markdown",
+      "chipView": "Chip View",
+      "onePerLine": "One per line",
+      "mcq": "MCQ",
+      "viewAll": "View All",
+      "explanation": "Explanation",
+      "assessComplete": "Assessment Complete!",
+      "assessCompleteDesc": "You answered all {{count}} question(s).",
+      "restart": "Restart",
+      "next": "Next Question",
+      "finish": "Finish",
+      "question": "Q{{n}}"
+    }
   }
 }
 
-.filterBarRow {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  width: 100%;
-}
 
-.dateIcon {
-  width: 14px;
-  height: 14px;
-  color: var(--t2);
-  flex-shrink: 0;
-}
 
-.filterBarRight {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin-left: auto;
-  flex-shrink: 0;
-}
 
-.filterBarLabel {
-  font-size: 9.5px;
-  font-weight: 600;
-  color: var(--t2);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  white-space: nowrap;
-  @include m.mono;
-}
 
-// ── Status filter (single dropdown, replaces the old chip row) ──
-.statusFilterWrap {
-  display: flex;
-  align-items: center;
-  height: 32px;
-  gap: 6px;
-  flex-shrink: 0;
-}
 
-.statusFilterSelect {
-  height: 32px;
-  padding: 0 8px;
-  background: var(--bg2);
-  border: 1px solid var(--bdr2);
-  border-radius: var(--r);
-  color: var(--t0);
-  font-family: var(--font-ui);
-  font-size: 12.5px;
-  outline: none;
-  cursor: pointer;
-  transition: border-color 0.12s;
 
-  &:focus { border-color: var(--blue); }
-  &:disabled { opacity: 0.5; cursor: default; }
-}
 
-.applyBtn {
-  height: 32px;
-  padding: 0 12px;
-  border-radius: var(--r);
-  border: 1px solid var(--bdr2);
-  background: transparent;
-  color: var(--t1);
-  font-family: var(--font-ui);
-  font-size: 12.5px;
-  font-weight: 500;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: all 0.12s;
 
-  &:hover:not(:disabled) { background: var(--bg3); border-color: var(--bdr3); }
-  &:disabled { opacity: 0.5; cursor: default; }
-}
 
-// ── Actions — always-visible inline label + button row, mirrors
-// pages/UploadInfer/FilePanel.module.scss's .actionsInlineWrap ──
-.actionsInlineWrap {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-  flex-wrap: wrap;
-}
 
-.actionTile {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: center;
-  height: 32px;
-  gap: 6px;
-  padding: 0 12px;
-  border-radius: var(--r);
-  border: 1px solid transparent;
-  background: var(--bg3);
-  color: var(--t1);
-  font-size: 12.5px;
-  font-weight: 600;
-  font-family: var(--font-ui);
-  letter-spacing: 0.01em;
-  cursor: pointer;
-  transition: all 0.13s;
-  user-select: none;
-  white-space: nowrap;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 
-  svg { width: 13px; height: 13px; flex-shrink: 0; }
 
-  &:active:not(:disabled) { transform: scale(0.97); }
-  &:disabled { opacity: 0.3; cursor: not-allowed; }
-}
 
-.actionTileLabel {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
 
-// Solid, visible border by default (not a translucent tint matching the
-// background) so these read as distinct buttons at rest, not just on
-// hover — and a solid filled hover state for a clear, confident affordance
-// befitting how important these actions are.
-.actionTileInference {
-  background: var(--violet-dim);
-  color: var(--violet);
-  border-color: var(--violet);
 
-  &:hover:not(:disabled) {
-    background: var(--violet);
-    color: #fff;
-    box-shadow: 0 3px 10px rgba(139, 92, 246, 0.3);
+
+
+{
+  "header": {
+    "logoText": "콘텐츠",
+    "logoTextSpan": "애널리틱스",
+    "sso": "Knox SSO",
+    "theme": {
+      "label": "테마 선택",
+      "dark": "다크",
+      "light": "라이트",
+      "navy": "네이비"
+    },
+    "userMenu": {
+      "label": "사용자 메뉴",
+      "administrator": "관리자",
+      "logout": "로그아웃"
+    }
+  },
+  "footer": {
+    "copyright": "© {{year}} Knox University. All rights reserved."
+  },
+  "sidebar": {
+    "expand": "사이드바 펼치기",
+    "collapse": "사이드바 접기",
+    "menu": "메뉴",
+    "soon": "출시 예정",
+    "groups": {
+      "main": "메인",
+      "analysis": "분석",
+      "tools": "도구",
+      "feedback": "피드백",
+      "settings": "설정",
+      "usage": "사용 현황"
+    },
+    "nav": {
+      "lecturePipeline": "강의 파이프라인",
+      "historyWorkspace": "이력 및 워크스페이스",
+      "keywordInsights": "키워드 인사이트",
+      "assessment": "평가 문항",
+      "sttTranscription": "STT 전사",
+      "promptTemplates": "프롬프트 템플릿",
+      "generalSettings": "일반 설정",
+      "settings": "설정",
+      "adminDashboard": "관리자 대시보드",
+      "voiceOfCustomer": "고객의 소리",
+      "userDictionary": "사용자 사전",
+      "dashboard": "대시보드"
+    }
+  },
+  "ssoLogin": {
+    "title": "콘텐츠",
+    "titleSpan": "애널리틱스",
+    "subtitle": "강의 인텔리전스 플랫폼",
+    "signedOut": "성공적으로 로그아웃되었습니다.",
+    "signInBtn": "Knox SSO로 로그인",
+    "hint": "인증은 기관의 Knox SSO 서비스를 통해 자동으로 처리됩니다."
+  },
+  "adminDashboard": {
+    "pageTitle": "대시보드",
+    "userViewSub": "내 사용 통계 및 파일 활동",
+    "adminViewSub": "플랫폼 전체 사용 현황, 사용자 관리 및 시스템 상태",
+    "myStats": "내 통계",
+    "admin": "관리자",
+    "administratorBadge": "관리자",
+    "readOnlyBadge": "읽기 전용 — 수정은 관리자 권한 필요",
+    "loading": "대시보드 데이터 불러오는 중…",
+    "loadError": "대시보드 데이터를 불러오지 못했습니다. 다시 시도해 주세요.",
+    "adminLoadError": "관리자 대시보드 데이터를 불러오지 못했습니다. 다시 시도해 주세요.",
+    "userStats": {
+      "totalUploaded": "총 업로드 파일",
+      "filesInferenced": "추론된 파일",
+      "aiGenerations": "AI 생성 실행",
+      "dictionariesCreated": "생성된 사전",
+      "audioVideo": "{{audio}} 오디오 · {{video}} 동영상",
+      "ofUploads": "업로드의 {{pct}}%",
+      "kwSummaryFaq": "키워드 · 요약 · FAQ",
+      "promptUpdates": "{{count}}개 프롬프트 업데이트"
+    },
+    "adminStats": {
+      "totalUploaded": "총 업로드 파일",
+      "totalUsers": "전체 사용자",
+      "aiGenerations": "AI 생성",
+      "dictionariesCreated": "생성된 사전",
+      "activeUsers": "{{count}}명 활성 사용자",
+      "activeOf": "{{count}}명 활성",
+      "kwSummaryFaq": "키워드 · 요약 · FAQ",
+      "promptUpdates": "{{count}}개 프롬프트 업데이트"
+    },
+    "tabs": {
+      "overview": "개요",
+      "files": "파일별 통계",
+      "dictionary": "사전 사용",
+      "uploadInference": "업로드 대 추론",
+      "users": "사용자 활동",
+      "perUser": "사용자별 상세",
+      "upload_inference": "업로드 대 추론",
+      "per_user": "사용자별 상세"
+    },
+    "charts": {
+      "uploadVsInference": "유형별 업로드 대 추론",
+      "uploadVsInferenceSub": "총 {{uploaded}}개 업로드 · {{inferenced}}개 추론",
+      "aiBreakdown": "AI 생성 분류",
+      "aiBreakdownSub": "총 {{total}}개 생성",
+      "filesByType": "유형별 파일",
+      "filesByTypeSub": "총 {{total}}개 업로드",
+      "sttCompletions": "STT 완료",
+      "sttCompletionsSub": "완료된 음성 인식 작업",
+      "audioStt": "오디오 STT",
+      "videoStt": "동영상 STT",
+      "ofAudioUploads": "오디오 업로드의 {{pct}}%",
+      "ofVideoUploads": "동영상 업로드의 {{pct}}%",
+      "uploadedLabel": "업로드",
+      "inferencedLabel": "추론",
+      "dictUsageFreq": "사전 사용 빈도",
+      "dictUsageFreqSub": "{{count}}개 사전 생성",
+      "dailyUploadTrend": "일별 업로드 추이",
+      "dailyUploadTrendSub": "일별 업로드 파일 수",
+      "dailyGenTrend": "일별 생성 추이",
+      "dailyGenTrendSub": "유형별 일별 AI 생성",
+      "uploadsByType": "유형별 업로드",
+      "uploadsByCategoryTitle": "카테고리별 업로드 대 추론",
+      "uploadsByCategorySub": "{{uploaded}}개 업로드 · {{inferenced}}개 추론 · {{start}} → {{end}}",
+      "dailyUviTrend": "일별 업로드 대 추론 추이",
+      "dailyUviTrendSub": "일별 업로드 및 추론",
+      "usagePerDict": "사전별 사용 횟수",
+      "usageByDept": "부서별 사용 현황",
+      "usageByDeptSub": "부서별 사전 수 및 사용량",
+      "totalDictionaries": "전체 사전",
+      "totalUsageCount": "총 사용 횟수",
+      "keywordsLabel": "키워드",
+      "summaryLabel": "요약",
+      "faqLabel": "FAQ",
+      "dictionariesLabel": "사전",
+      "usageLabel": "사용"
+    },
+    "table": {
+      "hash": "#",
+      "fileName": "파일명",
+      "type": "유형",
+      "keywords": "키워드",
+      "summaries": "요약",
+      "faqs": "FAQ",
+      "promptUpdates": "프롬프트 업데이트",
+      "noFileStats": "파일 통계 없음",
+      "dictName": "사전명",
+      "timesUsed": "사용 횟수",
+      "created": "생성일",
+      "noDicts": "사전 없음",
+      "username": "사용자명",
+      "department": "부서",
+      "totalFiles": "총 파일",
+      "generations": "생성",
+      "dictionaries": "사전",
+      "lastActive": "마지막 활동",
+      "noUserActivity": "사용자 활동 데이터 없음",
+      "owner": "소유자",
+      "category": "카테고리",
+      "uploaded": "업로드",
+      "inferenced": "추론",
+      "coverage": "처리율",
+      "noPerUserData": "사용자별 데이터 없음",
+      "noAdminDicts": "사전 없음",
+      "deptSummary": "부서 요약",
+      "totalUsage": "총 사용"
+    },
+    "perUser": {
+      "filesUploaded": "업로드 파일",
+      "filesInferenced": "추론 파일",
+      "aiGenerations": "AI 생성",
+      "dictionaries": "사전",
+      "lastActive": "마지막 활동: {{date}}",
+      "promptUpdates": "{{count}}개 프롬프트 업데이트"
+    }
+  },
+  "generalSettings": {
+    "pageTitle": "일반 설정",
+    "pageSub": "강의 처리에 적용되는 기본값",
+    "loading": "설정 불러오는 중…",
+    "resetToDefaults": "기본값으로 초기화",
+    "resetting": "초기화 중…",
+    "discard": "취소",
+    "saveChanges": "변경사항 저장",
+    "saving": "저장 중…",
+    "savedSuccess": "설정이 성공적으로 업데이트되었습니다.",
+    "resetSuccess": "설정이 기본값으로 초기화되었습니다.",
+    "subtitleFormat": {
+      "title": "자막 형식",
+      "desc": "자막 생성 시 사용되는 기본 파일 형식."
+    },
+    "defaultTemplate": {
+      "title": "기본 프롬프트 템플릿",
+      "desc": "새 강의 업로드 시 자동으로 적용되는 템플릿.",
+      "none": "없음",
+      "viewAriaLabel": "템플릿 상세 보기"
+    },
+    "numKeywords": {
+      "title": "키워드 수",
+      "desc": "강의당 추출할 키워드 수.",
+      "auto": "자동",
+      "custom": "직접 지정"
+    },
+    "numQuestions": {
+      "title": "평가 문항 수",
+      "desc": "강의당 생성할 평가 문항 수.",
+      "auto": "자동",
+      "custom": "직접 지정"
+    },
+    "globalDict": {
+      "title": "전역 사전",
+      "desc": "모든 강의에서 반복되는 전사 오류를 자동으로 수정합니다.",
+      "noTerms": "사전 항목이 없습니다.",
+      "wrongPlaceholder": "잘못된 용어 (예: teh)",
+      "correctPlaceholder": "올바른 용어 (예: the)",
+      "addTerm": "항목 추가",
+      "removeTerm": "항목 삭제",
+      "apply": "적용",
+      "manage": "사전 관리",
+      "termsDefined_one": "{{count}}개 항목 정의됨",
+      "termsDefined_other": "{{count}}개 항목 정의됨"
+    },
+    "resetModal": {
+      "title": "기본값으로 초기화",
+      "body": "자막 형식, 프롬프트 템플릿, 키워드/문항 수 및 전역 사전이 기본값으로 초기화됩니다. 이 작업은 취소할 수 없습니다.",
+      "cancel": "취소",
+      "confirm": "초기화"
+    },
+    "templateModal": {
+      "description": "설명",
+      "summaryPrompt": "요약 프롬프트",
+      "keywordPrompt": "키워드 프롬프트",
+      "faqPrompt": "FAQ 프롬프트",
+      "close": "닫기",
+      "closeAriaLabel": "닫기"
+    },
+    "stepper": {
+      "rangeError": "{{min}}에서 {{max}} 사이의 값을 입력하세요",
+      "decreaseAriaLabel": "감소",
+      "increaseAriaLabel": "증가"
+    }
+  },
+  "promptTemplates": {
+    "pageTitle": "프롬프트 템플릿",
+    "pageSub_one": "{{count}}개 템플릿 · 요약, 키워드 및 FAQ 생성을 위한 재사용 가능한 프롬프트",
+    "pageSub_other": "{{count}}개 템플릿 · 요약, 키워드 및 FAQ 생성을 위한 재사용 가능한 프롬프트",
+    "newTemplate": "새 템플릿",
+    "loading": "템플릿 불러오는 중…",
+    "createdSuccess": "템플릿이 생성되었습니다.",
+    "updatedSuccess": "템플릿이 수정되었습니다.",
+    "deletedSuccess": "템플릿이 삭제되었습니다.",
+    "genericError": "오류가 발생했습니다. 다시 시도해 주세요.",
+    "allFieldsRequired": "모든 필드를 입력해야 합니다.",
+    "table": {
+      "name": "이름",
+      "description": "설명",
+      "updated": "수정일",
+      "empty": "아직 템플릿이 없습니다 — 첫 번째 템플릿을 생성하여 요약, 키워드 및 FAQ 프롬프트를 표준화하세요.",
+      "edit": "수정",
+      "delete": "삭제",
+      "deleting": "삭제 중…"
+    },
+    "modal": {
+      "createTitle": "새 템플릿",
+      "editTitle": "템플릿 수정",
+      "name": "이름",
+      "namePlaceholder": "예: 강의 요약 — 기본",
+      "description": "설명",
+      "descPlaceholder": "이 템플릿을 사용하는 상황에 대한 짧은 설명",
+      "summaryPrompt": "요약 프롬프트",
+      "summaryPlaceholder": "요약 생성에 사용되는 지시사항",
+      "keywordPrompt": "키워드 프롬프트",
+      "keywordPlaceholder": "키워드 추출에 사용되는 지시사항",
+      "faqPrompt": "FAQ 프롬프트",
+      "faqPlaceholder": "FAQ 생성에 사용되는 지시사항",
+      "required": "*",
+      "cancel": "취소",
+      "saving": "저장 중…",
+      "saveChanges": "변경사항 저장",
+      "createBtn": "템플릿 생성",
+      "closeAriaLabel": "닫기"
+    },
+    "deleteModal": {
+      "title": "템플릿 삭제",
+      "body": "<strong>{{name}}</strong>을(를) 삭제하시겠습니까? 이 작업은 취소할 수 없습니다.",
+      "cancel": "취소",
+      "confirm": "삭제"
+    }
+  },
+  "settings": {
+    "pageTitle": "사용자 사전",
+    "pageSub": "전사 및 추론 중 적용되는 사용자 정의 용어 교체 관리",
+    "dictionaries": "사전",
+    "newDictTooltip": "새 사전",
+    "loading": "불러오는 중…",
+    "noDict": "사전이 없습니다.\n+ 버튼을 클릭하여 생성하세요.",
+    "unsaved": "저장되지 않음",
+    "newDict": "새 사전",
+    "selectOrCreate": "사전을 선택하거나 새로 만드세요.",
+    "dictNameLabel": "사전 이름",
+    "dictNamePlaceholder": "사전 이름을 입력하세요…",
+    "updated": "{{date}} 업데이트됨",
+    "cancel": "취소",
+    "saving": "저장 중…",
+    "saved": "저장됨",
+    "create": "생성",
+    "saveChanges": "변경사항 저장",
+    "discardConfirm": "저장하지 않은 변경사항을 버리시겠습니까?",
+    "nameRequired": "사전 이름은 필수입니다",
+    "termRequired": "두 값이 모두 입력된 항목이 최소 하나 있어야 합니다",
+    "searchPlaceholder": "용어 검색…",
+    "term_one": "{{count}}개 항목",
+    "term_other": "{{count}}개 항목",
+    "addTerm": "항목 추가",
+    "wrongTerm": "잘못된 용어",
+    "correctTerm": "올바른 용어",
+    "wrongPlaceholder": "예: teh",
+    "correctPlaceholder": "예: the",
+    "removeTerm": "항목 삭제",
+    "noSearchMatch": "검색 결과가 없습니다",
+    "noTermsYet": "아직 항목이 없습니다 — \"항목 추가\"를 클릭하여 생성하세요",
+    "dictInfo": "사전은 STT 전사 및 추론 중 적용됩니다. 전사본에서 발견된 잘못된 용어는 올바른 용어로 교체됩니다."
+  },
+  "landing": {
+    "badge": "강의 인텔리전스 플랫폼 · v2.4.1",
+    "hero": {
+      "title1": "강의 스크립트를",
+      "title2": "체계적인",
+      "titleAccent": "지식",
+      "title3": "으로 변환하세요",
+      "desc": "Content Analytics는 VTT 및 SRT 파일을 수집하고 AI 추론을 실행하여 강의당 1분 이내에 요약, 키워드 맵, 평가 문항을 제공합니다.",
+      "ctaPrimary": "강의 파이프라인",
+      "ctaSecondary": "워크스페이스 보기"
+    },
+    "stats": {
+      "fasterReview": "빠른 콘텐츠 검토",
+      "groundingRate": "문항 근거 비율",
+      "maxAudio": "STT 최대 오디오",
+      "filesPerBatch": "배치당 파일 수"
+    },
+    "features": {
+      "sectionLabel": "주요 기능",
+      "sectionTitle": "파이프라인의 모든 단계를,\n자동으로 처리합니다",
+      "batchUpload": {
+        "title": "일괄 업로드",
+        "desc": "VTT 및 SRT 스크립트 파일을 드래그 앤 드롭으로 대량 업로드. 파일당 최대 50MB, 최대 100개 파일, 폴더 단위 수집 지원."
+      },
+      "aiInference": {
+        "title": "AI 추론",
+        "desc": "대형 언어 모델 기반 — 구조화된 요약, 타임스탬프 콘텐츠 아웃라인, 키워드 빈도 맵을 생성합니다."
+      },
+      "smartSummaries": {
+        "title": "스마트 요약",
+        "desc": "목차, 타임스탬프 핵심 내용, 종합 개요 — 세 가지 요약 모드를 한국어와 영어로 제공합니다."
+      },
+      "assessmentGen": {
+        "title": "평가 문항 생성",
+        "desc": "반환각(hallucination) 검증 기반의 객관식, 진위형, 단답형 문항을 자동 생성 — 91% 이상의 콘텐츠 근거율."
+      },
+      "keywordInsights": {
+        "title": "키워드 인사이트",
+        "desc": "빈도 분석, 지식 그래프, 워드 클라우드로 단일 파일 또는 전체 강의 세트의 핵심 개념을 파악합니다."
+      },
+      "workspaceHistory": {
+        "title": "워크스페이스 이력",
+        "desc": "모든 추론 실행의 완전한 감사 추적 — 결과를 다시 열고, 출력을 재생성하고, 클릭 한 번으로 엑셀로 내보내기."
+      }
+    },
+    "workflow": {
+      "steps": {
+        "upload": {
+          "label": "업로드",
+          "sub": "VTT / SRT 파일 드롭"
+        },
+        "configure": {
+          "label": "설정",
+          "sub": "프롬프트 및 출력 설정"
+        },
+        "infer": {
+          "label": "추론",
+          "sub": "AI 파이프라인 실행"
+        },
+        "review": {
+          "label": "검토",
+          "sub": "워크스페이스 열기"
+        },
+        "export": {
+          "label": "내보내기",
+          "sub": "엑셀 다운로드"
+        }
+      }
+    },
+    "ctaSection": {
+      "title": "강의 분석을 시작할 준비가 되셨나요?",
+      "desc": "첫 번째 스크립트를 업로드하면 60초 이내에 AI 생성 요약, 키워드 맵, 문항 세트를 받아보세요.",
+      "button": "강의 파이프라인"
+    },
+    "mockCard": {
+      "tabs": {
+        "summary": "요약",
+        "keywords": "키워드",
+        "questions": "문항"
+      },
+      "status": "완료",
+      "block1Title": "1. 알고리즘의 정의와 분류",
+      "block2Title": "2. 정렬 알고리즘 비교 분석",
+      "kw1": "알고리즘 18%",
+      "kw2": "시간복잡도 14%",
+      "kw3": "Big-O 8%",
+      "kw4": "재귀 7%"
+    }
+  },
+  "uploadInfer": {
+    "pageTitle": "강의 파이프라인",
+    "pageSub": "1단계 — VTT/SRT 파일 업로드 · 2단계 — 추론 · 3단계 — 워크스페이스 결과",
+    "tour": {
+      "takeTour": "둘러보기",
+      "tabsTitle": "언제든 이동 가능한 3단계",
+      "tabsBody": "업로드 및 관리, 추론, 결과 보기 — 언제든지 자유롭게 탭을 이동할 수 있으며, 이전 단계를 완료해야만 다음으로 넘어갈 수 있는 제약은 없습니다.",
+      "uploadTitle": "여기에 파일을 추가하세요",
+      "uploadBody": "강의 녹화본의 자막 파일(.vtt 또는 .srt)을 끌어다 놓거나 찾아보기로 선택하세요. 여러 파일을 한 번에 넣을 수도 있습니다.",
+      "cardsTitle": "업로드한 파일 목록",
+      "cardsBody": "업로드한 파일은 이렇게 카드 형태로 표시됩니다. 모서리의 색상 배지는 파일 형식(VTT/SRT)을 나타내고, 파일명 아래의 작은 아이콘들은 각 콘텐츠 유형(요약, 키워드, 질문, 답변, 참/거짓)에 사용된 프롬프트를 보여줍니다. 하단 배지는 파일의 현재 상태를 나타내며, 사전이나 프롬프트 템플릿이 연결된 파일에는 작은 책 또는 체크리스트 아이콘이 함께 표시됩니다.",
+      "cardsBodyEmpty": "아직 업로드한 파일이 없어서 이 영역은 비어 있습니다. 파일을 업로드하면 각 파일이 카드로 표시되며, 형식 배지(VTT/SRT), 파일명, 콘텐츠 유형별 프롬프트 아이콘(요약, 키워드, 질문, 답변, 참/거짓), 사전이나 프롬프트 템플릿이 연결된 경우 책/체크리스트 아이콘, 그리고 하단의 상태 배지를 확인할 수 있습니다.",
+      "iconSummaryTitle": "요약 아이콘",
+      "iconSummaryBody": "이 파일의 요약을 생성할 때 사용된 프롬프트를 엽니다. 파란색이면 이 파일에 맞게 커스터마이징된 것이고, 회색이면 기본값을 그대로 사용 중이라는 뜻입니다.",
+      "iconKeywordsTitle": "키워드 아이콘",
+      "iconKeywordsBody": "이 파일의 키워드를 추출할 때 사용된 프롬프트를 엽니다 — 태그 모양의 아이콘입니다.",
+      "iconQuestionsTitle": "평가 질문 아이콘",
+      "iconQuestionsBody": "퀴즈 형식의 평가 질문을 생성할 때 사용된 프롬프트를 엽니다 — 물음표 모양의 아이콘입니다.",
+      "iconAnswerTitle": "단답형 답변 아이콘",
+      "iconAnswerBody": "짧은 서술형 답변을 생성할 때 사용된 프롬프트를 엽니다 — 말풍선 모양의 아이콘입니다.",
+      "iconTrueFalseTitle": "참/거짓 아이콘",
+      "iconTrueFalseBody": "참/거짓 질문을 생성할 때 사용된 프롬프트를 엽니다 — 토글 스위치 모양의 아이콘입니다.",
+      "sortTitle": "목록 정렬하기",
+      "sortBody": "파일을 ID, 이름, 날짜, 상태 기준으로 정렬할 수 있습니다 — 같은 항목을 다시 클릭하면 오름차순/내림차순이 바뀝니다.",
+      "dateFilterTitle": "날짜 범위로 필터링",
+      "dateFilterBody": "파일 목록을 특정 날짜 범위로 좁힌 뒤 적용 버튼을 누르세요. 이 필터는 업로드 탭에서 보이는 목록에만 적용됩니다.",
+      "statusFilterTitle": "상태로 필터링",
+      "statusFilterBody": "전체, 대기, 대기열, 실행 중, 추론 완료, 오류, 보류 중 하나의 상태로 파일을 필터링할 수 있습니다 — 처리 중인 파일이 많을 때 유용합니다.",
+      "actionsTriggerTitle": "여기를 클릭하면 일괄 작업 메뉴가 열립니다",
+      "actionsTriggerBody": "이 버튼을 누르면 여러 파일에 한 번에 적용할 수 있는 작업들의 메뉴가 열립니다 — 안을 살펴볼까요.",
+      "actionsTitle": "한 번의 클릭으로 실행하는 일괄 작업",
+      "actionsBody": "이제 5가지 일괄 작업을 모두 확인할 수 있습니다: 사전(파일에 용어 사전 연결), 프롬프트 템플릿(저장된 프롬프트 세트 연결), 검색(파일명으로 찾기), 내보내기(파일 다운로드), 삭제(파일 제거) — 모두 여러 파일에 한 번에 적용됩니다.",
+      "actionDictionaryTitle": "사전",
+      "actionDictionaryBody": "하나 이상의 파일에 용어 사전을 연결하여, 추론 시 해당 분야에 맞는 정확한 철자와 용어를 사용하도록 합니다.",
+      "actionTemplateTitle": "프롬프트 템플릿",
+      "actionTemplateBody": "저장해 둔 프롬프트 세트를 하나 이상의 파일에 한 번에 적용합니다 — 파일마다 프롬프트를 일일이 수정할 필요가 없습니다.",
+      "actionSearchTitle": "검색",
+      "actionSearchBody": "파일명으로 파일을 찾습니다 — 업로드 탭의 파일 목록에 대한 검색창이 열립니다.",
+      "actionExportTitle": "내보내기",
+      "actionExportBody": "파일을 선택해 다운로드합니다 — 앱 외부에서 백업하거나 결과를 공유할 때 유용합니다.",
+      "actionDeleteTitle": "삭제",
+      "actionDeleteBody": "파일을 선택해 영구적으로 삭제합니다 — 되돌릴 수 없으니 신중하게 사용하세요.",
+      "inferSidebarTitle": "분석할 파일 선택",
+      "inferSidebarBody": "여기서 하나 이상의 파일을 선택하세요 — 이 목록은 업로드 탭과 별개로 자체 날짜 범위, 상태 필터, 검색, 정렬 기능을 가지고 있습니다.",
+      "sidebarDateFilterTitle": "날짜 범위로 필터링",
+      "sidebarDateFilterBody": "이 목록을 특정 날짜 범위로 좁힌 뒤 적용 버튼을 누르세요 — 업로드 탭의 날짜 필터와는 별개입니다.",
+      "sidebarStatusFilterTitle": "상태로 필터링",
+      "sidebarStatusFilterBody": "이 목록에서 특정 상태의 파일만 표시합니다 — 업로드 탭의 상태 필터와는 별개입니다.",
+      "sidebarSearchTitle": "검색",
+      "sidebarSearchBody": "이 목록 안에서 파일명으로 파일을 찾습니다.",
+      "sidebarSortTitle": "정렬",
+      "sidebarSortBody": "이 목록을 ID, 이름, 날짜, 상태 기준으로 정렬합니다 — 다시 클릭하면 오름차순/내림차순이 바뀝니다.",
+      "inferSettingsTitle": "생성할 항목 선택",
+      "inferSettingsBody": "요약, 키워드(키워드 인사이트 옵션 포함), 평가 질문, 단답형 답변, 참/거짓 중에서 선택하세요 — 각 항목은 개별적으로 프롬프트를 커스터마이징할 수 있습니다. 파일을 하나 이상 선택하기 전까지는 이 옵션들이 선택 해제 상태로 비활성화되어 있습니다.",
+      "modelTitle": "모델 선택",
+      "modelBody": "추론을 실행할 모델을 선택하세요. 목록이 오래된 것 같으면 새로고침을 눌러주세요 — 실행하려면 먼저 모델을 선택해야 합니다.",
+      "checkSummaryTitle": "요약",
+      "checkSummaryBody": "파일 내용을 요약하여 생성합니다. 켜면 개별적으로 프롬프트를 커스터마이징할 수 있습니다.",
+      "checkKeywordsTitle": "키워드",
+      "checkKeywordsBody": "파일에서 핵심 용어를 추출합니다. 이 항목을 켜면 하위에 키워드 인사이트 옵션이 나타납니다.",
+      "checkQuestionsTitle": "평가 질문",
+      "checkQuestionsBody": "파일 내용을 바탕으로 퀴즈 형식의 평가 질문을 생성합니다.",
+      "checkShortAnswerTitle": "단답형 답변",
+      "checkShortAnswerBody": "파일을 바탕으로 짧은 서술형 질문과 답변을 생성합니다.",
+      "checkTrueFalseTitle": "참/거짓",
+      "checkTrueFalseBody": "파일 내용을 바탕으로 참/거짓 질문을 생성합니다.",
+      "checkTimestampedTitle": "타임스탬프 요약",
+      "checkTimestampedBody": "구간별로 시간이 표시된 요약을 생성하여, 각 항목이 녹화본의 특정 시점과 연결되도록 합니다.",
+      "inferRunTitle": "실행하기",
+      "inferRunBody": "파일과 설정을 모두 선택했다면 여기서 배치를 실행하세요. 진행 상황을 지켜보거나 다른 탭으로 이동해도 작업은 계속 진행됩니다.",
+      "resultsSidebarTitle": "완료된 파일 찾기",
+      "resultsSidebarBody": "파일 처리가 끝나면 여기서 클릭해 결과를 확인하세요. 이 목록에도 자체 날짜 범위, 상태 필터, 검색, 정렬 기능이 있습니다.",
+      "resultsContentTitle": "바로 활용할 수 있는 결과물",
+      "resultsContentBody": "요약, 키워드, 퀴즈 질문 등 선택한 파일에서 생성된 모든 콘텐츠를 확인할 수 있습니다. 전체 배치를 다시 실행하지 않고도 개별 항목을 수정하거나 재생성할 수 있습니다.",
+      "resultsTabbarTitle": "7가지 결과 유형",
+      "resultsTabbarBody": "요약, 키워드, 평가 질문, 단답형 답변, 참/거짓, 타임스탬프 요약, 키워드 인사이트 중에서 이 파일에 대해 생성된 항목들을 전환하며 확인할 수 있습니다.",
+      "tabSummaryTitle": "요약",
+      "tabSummaryBody": "파일 내용을 요약한 글입니다.",
+      "tabKeywordsTitle": "키워드",
+      "tabKeywordsBody": "파일에서 추출된 핵심 용어들을 칩 형태로 보여줍니다.",
+      "tabAssessmentTitle": "평가 질문",
+      "tabAssessmentBody": "퀴즈 형식의 평가 질문입니다. 객관식 퀴즈 모드와 전체 보기 모드를 제공합니다.",
+      "tabShortAnswerTitle": "단답형 답변",
+      "tabShortAnswerBody": "짧은 서술형 질문과 답변으로, 하나씩 또는 한 번에 모두 확인할 수 있습니다.",
+      "tabTrueFalseTitle": "참/거짓",
+      "tabTrueFalseBody": "참/거짓 질문으로, 평가 질문과 동일한 퀴즈 모드와 전체 보기 모드를 제공합니다.",
+      "tabTimestampedTitle": "타임스탬프 요약",
+      "tabTimestampedBody": "구간별로 시간이 표시된 요약으로, 각 항목이 녹화본의 특정 시점과 연결됩니다.",
+      "tabKeywordInsightsTitle": "키워드 인사이트",
+      "tabKeywordInsightsBody": "추출된 키워드를 바탕으로 만든 추가 시각화 자료입니다 — 지식 그래프, 워드클라우드, 타임라인, 히트맵, 클러스터 등이 포함됩니다."
+    },
+    "batchGroups": {
+      "batchTitle": "배치 #{{id}}",
+      "done": "{{done}} / {{total}} 완료",
+      "running": "실행 중",
+      "statusTitles": {
+        "running": "실행 중",
+        "queued": "대기 중",
+        "done": "완료",
+        "pending": "선택 안 됨"
+      },
+      "badgeLabels": {
+        "running": "활성",
+        "queued": "대기",
+        "done": "완료",
+        "pending": "건너뜀"
+      },
+      "file_one": "{{count}}개 파일",
+      "file_other": "{{count}}개 파일",
+      "inQueue": "대기열에 있음",
+      "emptyMsg": "이 배치에서 제외된 파일이 없습니다.",
+      "view": "보기"
+    },
+    "filePanel": {
+      "step1Label": "1단계 — 파일",
+      "uploaded_one": "{{count}}개 업로드됨",
+      "uploaded_other": "{{count}}개 업로드됨",
+      "selected_one": "{{count}}개 선택됨",
+      "selected_other": "{{count}}개 선택됨",
+      "showUpload": "업로드 표시",
+      "hideUpload": "업로드 숨기기",
+      "dropTitle": "여기에 파일을 드롭하세요",
+      "dropTitleDefault": ".vtt / .srt 파일을 여기에 드롭하세요",
+      "dropSub": "또는 클릭하여 탐색 · 폴더 업로드 지원",
+      "browseFiles": "파일 탐색",
+      "folder": "폴더",
+      "uploadBtn_one": "{{count}}개 파일 업로드",
+      "uploadBtn_other": "{{count}}개 파일 업로드",
+      "cancelBtn": "취소",
+      "complete": "{{finished}} / {{total}} 완료",
+      "failed_one": "· {{count}}개 실패",
+      "failed_other": "· {{count}}개 실패",
+      "fileStatus": {
+        "ready": "업로드 준비 완료",
+        "uploading": "업로드 중…",
+        "uploaded": "업로드됨"
+      },
+      "uploadedFiles": "업로드된 파일",
+      "inferenceBtn": "추론을 위한 파일 선택",
+      "dictionaryBtn": "사전 연결 / 해제",
+      "templateBtn": "프롬프트 템플릿 매핑",
+      "searchBtn": "파일 검색",
+      "exportBtn": "엑셀로 내보내기",
+      "deleteBtn": "파일 삭제",
+      "dateFrom": "시작일",
+      "dateTo": "종료일",
+      "applyDate": "적용",
+      "sortBy": "정렬 기준",
+      "sortId": "ID",
+      "sortName": "이름",
+      "sortDate": "날짜",
+      "sortStatus": "상태",
+      "searchPlaceholder": "파일명 또는 ID로 검색…",
+      "loadingFiles": "파일 불러오는 중…",
+      "noFilesRange": "이 날짜 범위에 파일이 없습니다",
+      "noFilesMatch": "{{query}}와 일치하는 파일이 없습니다",
+      "inferenced": "추론됨",
+      "notInferenced": "추론 안 됨",
+      "export": "내보내기",
+      "exportToExcelTitle": "{{count}}개 파일을 Excel로 내보내기",
+      "exportSelectFirst": "내보낼 파일을 선택하세요",
+      "selectFilesToExport": "내보낼 파일을 선택하세요",
+      "exportCountTitle": "{{count}}개 파일을 Excel로 내보내기",
+      "selectFilesToDelete": "삭제할 파일을 선택하세요",
+      "deleteCountTitle": "{{count}}개 파일 삭제",
+      "exportCount": "{{count}}개 내보내기",
+      "deleteCount": "{{count}}개 삭제",
+      "cancelTitle": "취소",
+      "uploaded": "업로드됨 ({{count}})",
+      "selected": "{{count}}개 선택됨",
+      "uploadBtn": "{{count}}개 파일 업로드",
+      "failed": "· {{count}}개 실패",
+      "exportAllBtn": "전체 내보내기",
+      "exportAllFailed": "내보내기에 실패했습니다. 다시 시도해 주세요.",
+      "deleteAllBtn": "전체 삭제",
+      "deleteAllConfirmTitle": "모든 파일 삭제",
+      "deleteAllConfirmBody": "{{from}}부터 {{to}}까지 업로드된 모든 파일이 영구적으로 삭제됩니다. 이 작업은 취소할 수 없습니다.",
+      "deleteAllConfirmPrompt": "확인을 위해 <strong>{{phrase}}</strong>을(를) 입력하세요:",
+      "deleteAllConfirmBtn": "모든 파일 삭제",
+      "deleteAllFailed": "삭제에 실패했습니다. 다시 시도해 주세요.",
+      "matchCount": "파일 {{count}}개",
+      "pageInfo": "{{page}} / {{totalPages}} 페이지 · 총 {{total}}개",
+      "perPage": "페이지당",
+      "selectedTotal": "{{total}}개 중 {{count}}개 선택됨",
+      "selectAllFiles": "전체 선택",
+      "clearAllFiles": "전체 해제",
+      "inferenceMode": "추론을 위해 선택",
+      "deleteMode": "파일 삭제",
+      "exportMode": "파일 내보내기",
+      "exitMode": "나가기",
+      "noFilesSelected": "선택된 파일 없음",
+      "runInferenceBtn": "추론 실행",
+      "confirmDeleteBtn": "삭제 확인",
+      "confirmExportBtn": "내보내기 확인",
+      "paginationPrev": "이전",
+      "paginationNext": "다음",
+      "actionsLabel": "작업",
+      "continueToInfer": "추론으로 계속",
+      "continueToInferCount": "추론으로 계속 ({{count}})",
+      "dictionaryLinked": "사전 연결됨",
+      "templateLinked": "프롬프트 템플릿 연결됨",
+      "promptCustomized": "사용자 지정",
+      "promptDefault": "기본값",
+      "promptDefaultFull": "기본 프롬프트 사용 중",
+      "perPageShort": "{{count}}개 / 페이지",
+      "statusAll": "전체",
+      "statusWaiting": "대기 중",
+      "statusQueued": "대기열",
+      "statusRunning": "실행 중",
+      "statusError": "오류",
+      "statusErrorBadge": "오류 (다시 추론)",
+      "statusTbd": "미정"
+    },
+    "inferencePanel": {
+      "step2Label": "2단계 — 추론 설정",
+      "step2Running": "2단계 — 추론 실행 중",
+      "expandStep2": "Step 2 펼치기",
+      "minimizeStep2": "Step 2 최소화",
+      "closeStep2": "Step 2 닫기",
+      "filesSelected_one": "추론을 위해 {{count}}개 파일 선택됨",
+      "filesSelected_other": "추론을 위해 {{count}}개 파일 선택됨",
+      "batchRunning": "배치 실행 중",
+      "runInference": "추론 실행",
+      "selectFilesFirst": "먼저 파일을 선택하세요",
+      "noModelSelected": "모델이 선택되지 않음",
+      "submitting": "배치 제출 중…",
+      "submittingDesc": "추론 엔진으로 {{count}}개 파일을 전송 중입니다.\n잠시 기다려 주세요.",
+      "submittingMore": "+{{count}}개 더",
+      "selBanner": "{{count}}개 파일",
+      "selBannerEmpty": "왼쪽 패널에서 파일을 선택하세요",
+      "selBannerFilled": "추론을 위해 {{count}}개 파일이 선택됨",
+      "generateContent": "콘텐츠 생성",
+      "generateSummary": "요약",
+      "generateKeywords": "키워드",
+      "generateQuestions": "평가 문항",
+      "outputSettings": "출력 설정",
+      "modelLabel": "모델",
+      "refreshModels": "모델 새로고침",
+      "noModels": "사용 가능한 모델 없음 — 추론을 시작할 수 없습니다. 새로고침하거나 연결을 확인하세요.",
+      "modelsAvailable_one": "{{count}}개 모델 사용 가능",
+      "modelsAvailable_other": "{{count}}개 모델 사용 가능",
+      "noModelsOption": "— 모델을 찾을 수 없음 —",
+      "promptOverrides": "프롬프트 덮어쓰기",
+      "promptModeSingle": "단일 파일 — 자동 입력됨 · 변경하여 덮어쓰기.",
+      "promptModeMulti": "여러 파일 — 여기에 입력하면 모두 덮어씁니다.",
+      "summaryPrompt": "요약 프롬프트",
+      "keywordPrompt": "키워드 프롬프트",
+      "questionPrompt": "평가 문항 프롬프트",
+      "optional": "선택사항",
+      "perFile": "파일별",
+      "hide": "숨기기",
+      "noPromptSet": "프롬프트 없음",
+      "autofillPlaceholder": "파일에서 자동 입력됨 — 변경하여 덮어쓰기…",
+      "manualPlaceholder": "파일별 프롬프트를 사용하려면 비워두세요…",
+      "noContentHint": "프롬프트를 설정하려면 콘텐츠 유형을 하나 이상 활성화하세요.",
+      "cancelPrompt": "취소",
+      "savePrompts": "프롬프트 저장",
+      "saving": "저장 중…",
+      "promptSaveFail": "프롬프트 저장에 실패했습니다. 다시 시도해 주세요.",
+      "inferenceStatus": "추론 상태",
+      "live": "라이브",
+      "refreshingIn": "{{sec}}초 후 새로고침",
+      "filesRunning_one": "{{count}}개 파일 실행 중",
+      "filesRunning_other": "{{count}}개 파일 실행 중",
+      "queued": "대기 중",
+      "runningCol": "실행 중",
+      "completed": "완료",
+      "waitingQueue": "대기열에 있음",
+      "stopFile": "이 파일 중지",
+      "stopAlready": "이 파일은 이미 처리되어 중지할 수 없습니다.",
+      "inferenceStarted": "추론이 시작되었습니다",
+      "batchRunPill": "배치 실행 중",
+      "collapsePerFile": "파일별 프롬프트 접기",
+      "viewPerFile": "파일별 프롬프트 보기",
+      "filesSelected": "추론을 위해 {{count}}개 파일 선택됨",
+      "filesRunning": "{{count}}개 파일 실행 중",
+      "modelsAvailable": "{{count}}개 모델 사용 가능",
+      "generateKeywordInsights": "키워드 인사이트",
+      "generateShortAnswer": "단답형 문항",
+      "generateTrueFalse": "진위형 문항",
+      "timestampedSummary": "타임스탬프 요약",
+      "timeInterval": "시간 간격",
+      "minutesOption": "{{count}}분",
+      "shortAnswerPrompt": "단답형 프롬프트",
+      "trueFalsePrompt": "진위형 프롬프트"
+    },
+    "dictModal": {
+      "title": "사전 연결",
+      "subtitle": "각 파일에 사전을 할당하거나, 모든 파일에 한 번에 적용하세요.",
+      "closeSaving": "저장 중 — 잠시 기다려 주세요",
+      "close": "닫기",
+      "applyToAll": "모든 파일에 적용:",
+      "applyBtn": "모두에 적용",
+      "noneOption": "— 없음 (초기화) —",
+      "noneRow": "— 없음 —",
+      "changes_one": "{{count}}개 변경 사항 대기 중",
+      "changes_other": "{{count}}개 변경 사항 대기 중",
+      "noChanges": "변경 사항 없음",
+      "colFile": "파일",
+      "colDict": "사전",
+      "loadingDicts": "사전 불러오는 중…",
+      "noFiles": "파일이 없습니다.",
+      "loadFail": "사전을 불러오지 못했습니다. 다시 시도해 주세요.",
+      "associated": "연결됨",
+      "viewDetails": "사전 상세 보기",
+      "disassociate": "연결 해제",
+      "detailClose": "상세 닫기",
+      "metaId": "ID:",
+      "metaUpdated": "수정일:",
+      "metaTerms": "항목 수:",
+      "loadingDetails": "상세 정보 불러오는 중…",
+      "noTerms": "이 사전에 항목이 없습니다.",
+      "detailLoadFail": "사전 상세 정보를 불러오지 못했습니다.",
+      "noDetailsReturned": "이 사전의 상세 정보가 반환되지 않았습니다.",
+      "wrongTerm": "잘못된 용어",
+      "correctTerm": "올바른 용어",
+      "savingHint": "저장 중 — 이 창을 닫지 마세요…",
+      "cancel": "취소",
+      "save": "저장",
+      "saving": "저장 중…",
+      "saveSuccess": "사전 설정이 성공적으로 저장되었습니다",
+      "saveFail": "사전 설정 저장에 실패했습니다. 다시 시도해 주세요.",
+      "associateAllLabel": "모든 파일에 사전 적용 ({{from}} – {{to}})",
+      "associateAllBtn": "모든 파일에 적용",
+      "associateAllSuccess": "모든 파일에 사전이 성공적으로 적용되었습니다.",
+      "associateAllFail": "모든 파일에 사전 적용에 실패했습니다. 다시 시도해 주세요.",
+      "changes": "{{count}}개 변경 사항 대기 중"
+    },
+    "templateModal": {
+      "title": "프롬프트 템플릿 연결",
+      "subtitle": "각 파일에 프롬프트 템플릿을 매핑하여 요약, 키워드, FAQ 프롬프트를 업데이트하세요.",
+      "closeSaving": "저장 중 — 잠시 기다려 주세요",
+      "close": "닫기",
+      "applyToAll": "모든 파일에 적용:",
+      "applyBtn": "모두에 적용",
+      "noneOption": "— 없음 —",
+      "noneRow": "— 없음 —",
+      "changes_one": "{{count}}개 변경 사항 대기 중",
+      "changes_other": "{{count}}개 변경 사항 대기 중",
+      "noChanges": "변경 사항 없음",
+      "colFile": "파일",
+      "colTemplate": "프롬프트 템플릿",
+      "loadingTemplates": "프롬프트 템플릿 불러오는 중…",
+      "loadFail": "프롬프트 템플릿을 불러오지 못했습니다. 다시 시도해 주세요.",
+      "noFiles": "파일이 없습니다.",
+      "mapped": "매핑됨",
+      "viewDetails": "템플릿 상세 보기",
+      "detailClose": "상세 닫기",
+      "metaId": "ID:",
+      "metaUpdated": "수정일:",
+      "metaDescription": "설명:",
+      "loadingDetails": "상세 정보 불러오는 중…",
+      "noDetailsReturned": "이 템플릿의 상세 정보가 반환되지 않았습니다.",
+      "detailLoadFail": "템플릿 상세 정보를 불러오지 못했습니다.",
+      "summaryPrompt": "요약 프롬프트",
+      "keywordPrompt": "키워드 프롬프트",
+      "faqPrompt": "FAQ 프롬프트",
+      "savingHint": "저장 중 — 이 창을 닫지 마세요…",
+      "cancel": "취소",
+      "save": "저장",
+      "saving": "저장 중…",
+      "saveSuccess": "프롬프트 템플릿이 성공적으로 적용되었습니다",
+      "saveFail": "프롬프트 템플릿 적용에 실패했습니다. 다시 시도해 주세요.",
+      "associateAllLabel": "모든 파일에 템플릿 적용 ({{from}} – {{to}})",
+      "associateAllBtn": "모든 파일에 적용",
+      "associateAllSuccess": "모든 파일에 템플릿이 성공적으로 적용되었습니다.",
+      "associateAllFail": "모든 파일에 템플릿 적용에 실패했습니다. 다시 시도해 주세요.",
+      "changes": "{{count}}개 변경 사항 대기 중",
+      "shortAnswerPrompt": "단답형 프롬프트",
+      "trueFalsePrompt": "진위형 프롬프트"
+    },
+    "workspacePanel": {
+      "clickToView": "결과를 보려면 파일을 클릭하세요",
+      "noFileSelected": "파일이 선택되지 않음",
+      "noFileDesc": "업로드된 파일을 클릭하면 추론 결과가 여기에 표시됩니다.",
+      "loadingFile": "파일 데이터 불러오는 중…",
+      "tabs": {
+        "summary": "요약",
+        "keywords": "키워드",
+        "assessment": "평가 문항",
+        "shortAnswer": "단답형",
+        "trueFalse": "진위형",
+        "timestampedSummary": "타임스탬프 요약",
+        "keywordInsights": "키워드 인사이트",
+        "mcq": "객관식"
+      },
+      "noSummary": "요약을 사용할 수 없습니다.",
+      "noKeywords": "키워드를 사용할 수 없습니다.",
+      "noQuestions": "문항을 사용할 수 없습니다.",
+      "edit": "편집",
+      "copy": "복사",
+      "download": "다운로드",
+      "copyAs": "형식으로 복사",
+      "downloadAs": "형식으로 다운로드",
+      "editColPreview": "미리보기",
+      "editColEdit": "내용 편집",
+      "markdownRenderer": "Markdown 렌더러",
+      "markdownTag": "Markdown",
+      "chipView": "칩 뷰",
+      "onePerLine": "한 줄에 하나씩",
+      "cancel": "취소",
+      "save": "저장",
+      "saving": "저장 중",
+      "autofillPlaceholder": "파일에서 자동 입력됨 — 편집하여 덮어쓰기…",
+      "keywordPlaceholder": "키워드를 한 줄에 하나씩…",
+      "mcq": "MCQ",
+      "viewAll": "전체 보기",
+      "explanation": "설명",
+      "complete": "완료!",
+      "assessCompleteTitle": "평가 완료!",
+      "assessCompleteDesc": "{{count}}개의 문항을 모두 완료했습니다.",
+      "restart": "다시 시작",
+      "next": "다음 문항",
+      "finish": "완료",
+      "question": "Q{{n}}",
+      "answer": "정답",
+      "true": "참",
+      "false": "거짓",
+      "revealAnswer": "정답 보기",
+      "showAllAnswers": "전체 정답 보기",
+      "hideAllAnswers": "전체 정답 숨기기",
+      "quizMode": "퀴즈 모드",
+      "noShortAnswer": "단답형 문항이 없습니다.",
+      "noTrueFalse": "진위형 문항이 없습니다.",
+      "noTimestampedSummary": "타임스탬프 요약이 없습니다.",
+      "noKeywordInsights": "키워드 인사이트가 없습니다.",
+      "noData": "데이터가 없습니다.",
+      "frequencyTitle": "이 키워드가 파일에서 언급된 횟수",
+      "legendLess": "적음",
+      "legendMore": "많음",
+      "frequencyCount": "빈도 {{count}}회",
+      "importanceAxis": "중요도",
+      "timelineAxisHint": "X축: 시간({{unit}}) · Y축: 시간 구간별 키워드 언급 횟수",
+      "timelineYAxis": "키워드",
+      "zoomIn": "확대",
+      "zoomOut": "축소",
+      "zoomReset": "확대/축소 초기화",
+      "timeUnitMinutes": "분",
+      "timeUnitHours": "시간",
+      "timeUnitSeconds": "초",
+      "timeUnitMinShort": "분",
+      "timeUnitHrShort": "시간",
+      "timeUnitSecShort": "초",
+      "kiTabs": {
+        "graph": "지식 그래프",
+        "wordcloud": "워드 클라우드",
+        "timeline": "타임라인",
+        "prerequisites": "선수 지식",
+        "importance": "중요도 & 빈도",
+        "glossary": "용어집"
+      },
+      "scrollLeft": "탭 왼쪽으로 스크롤",
+      "scrollRight": "탭 오른쪽으로 스크롤",
+      "complexityAxis": "복잡도",
+      "glossaryTerm": "용어",
+      "glossaryDefinition": "정의",
+      "reason": "이유",
+      "cluster": "클러스터",
+      "count": "횟수",
+      "copied": "복사됨!",
+      "score": "점수",
+      "period": "기간",
+      "frequency": "빈도",
+      "reGenerate": "재생성",
+      "reGenerating": "재생성 중…",
+      "reGenerateSuccess": "재생성이 완료되었습니다.",
+      "reGenerateFail": "재생성에 실패했습니다. 다시 시도해 주세요."
+    },
+    "tabs": {
+      "upload": "업로드 및 관리",
+      "infer": "추론",
+      "results": "결과 보기",
+      "uploadDesc": "파일 추가 및 찾아보기",
+      "inferDesc": "분석 설정 및 실행",
+      "resultsDesc": "요약 및 퀴즈 보기",
+      "fileCount": "파일 {{count}}개",
+      "selectedCount": "{{count}}개 선택됨",
+      "runningCount": "{{count}}개 실행 중",
+      "running": "실행 중",
+      "resultsHint": "파일을 선택하여 결과 보기"
+    },
+    "workspace": {
+      "filesTitle": "파일",
+      "searchFiles": "파일 검색…",
+      "loadingFiles": "파일 불러오는 중…",
+      "noFilesYet": "파일이 없습니다",
+      "noFilesMatch": "검색 결과가 없습니다"
+    }
+  },
+  "stt": {
+    "pageTitle": "STT 파이프라인",
+    "loading": "불러오는 중…",
+    "file_one": "{{count}}개 파일",
+    "file_other": "{{count}}개 파일",
+    "processing_one": " · {{count}}개 처리 중",
+    "processing_other": " · {{count}}개 처리 중",
+    "dateError": "시작일이 종료일보다 늦을 수 없습니다.",
+    "apply": "적용",
+    "refreshTitle": "새로고침",
+    "refreshDisabled": "추론 중 비활성화됨",
+    "library": {
+      "title": "라이브러리",
+      "filterAll": "전체",
+      "searchPlaceholder": "검색…",
+      "closeInference": "추론 닫기",
+      "runInference": "추론 실행",
+      "cancelDelete": "삭제 취소",
+      "deleteFiles": "파일 삭제",
+      "cancelMove": "이동 취소",
+      "movePipeline": "강의 파이프라인으로 이동",
+      "selected_one": "{{count}}개 선택됨",
+      "selected_other": "{{count}}개 선택됨",
+      "noneSelected": "클릭하여 선택",
+      "noPipelineFiles": "선택 가능한 완료 파일 없음",
+      "selectCompleted": "완료된 파일만 선택 가능",
+      "selectAll": "전체 선택",
+      "clear": "초기화",
+      "inferenceSelected_one": "{{count}}개 선택됨",
+      "inferenceSelected_other": "{{count}}개 선택됨",
+      "inferenceNone": "클릭하여 선택",
+      "loading": "파일 불러오는 중…",
+      "emptyTitle": "이 기간에 파일이 없습니다",
+      "emptyHint": "날짜 필터를 넓히거나 새 파일을 업로드하세요.",
+      "noMatchTitle": "\"{{query}}\"와 일치하는 파일이 없습니다",
+      "noMatchHint": "파일 ID 또는 다른 이름으로 검색해 보세요.",
+      "loadError": "파일을 불러오지 못했습니다: {{error}}",
+      "retry": "재시도",
+      "deleting_one": "삭제 중… ({{count}}개)",
+      "deleting_other": "삭제 중… ({{count}}개)",
+      "delete_one": "삭제 ({{count}})",
+      "delete_other": "삭제 ({{count}})",
+      "moving_one": "이동 중… ({{count}}개)",
+      "moving_other": "이동 중… ({{count}}개)",
+      "move_one": "강의로 이동 ({{count}})",
+      "move_other": "강의로 이동 ({{count}})",
+      "deletedSuccess_one": "{{count}}개 파일이 삭제되었습니다.",
+      "deletedSuccess_other": "{{count}}개 파일이 삭제되었습니다.",
+      "deleteFail": "삭제에 실패했습니다. 다시 시도해 주세요.",
+      "movedSuccess_one": "{{count}}개 파일이 강의 파이프라인으로 이동되었습니다.",
+      "movedSuccess_other": "{{count}}개 파일이 강의 파이프라인으로 이동되었습니다.",
+      "moveFail": "이동에 실패했습니다. 다시 시도해 주세요.",
+      "selectForInference": "추론을 위한 파일 선택"
+    },
+    "fileCard": {
+      "status": {
+        "completed": "완료",
+        "queued": "대기 중",
+        "pending": "대기",
+        "running": "실행 중",
+        "failed": "실패"
+      },
+      "type": {
+        "video": "비디오",
+        "audio": "오디오"
+      },
+      "generate": "생성",
+      "reGenerate": "재생성",
+      "retry": "재시도",
+      "inPipelineTitle": "강의 파이프라인에 추가됨"
+    },
+    "inference": {
+      "title": "추론",
+      "nextCheck": "⟳ {{sec}}초 후 확인",
+      "selectHint": "추론을 실행할 파일을 라이브러리에서 선택하세요.",
+      "selectedHint_one": "라이브러리에서 {{count}}개 파일 선택됨",
+      "selectedHint_other": "라이브러리에서 {{count}}개 파일 선택됨",
+      "settingsTitle": "설정",
+      "modelLabel": "모델",
+      "modelLoading": "불러오는 중…",
+      "languageLabel": "언어",
+      "korean": "한국어",
+      "english": "영어",
+      "chunkLabel": "청크 크기",
+      "chunkAuto": "자동",
+      "submitting": "제출 중…",
+      "runBtn": "추론 실행",
+      "runBtnCount": "추론 실행 ({{count}})",
+      "queued": "대기 중",
+      "file_one": "{{count}}개 파일",
+      "file_other": "{{count}}개 파일",
+      "waiting": "대기 중",
+      "noQueued": "대기 중인 파일 없음",
+      "inQueue": "대기열에 있음",
+      "running": "실행 중",
+      "active": "활성",
+      "noRunning": "활성 파일 없음",
+      "done": "완료",
+      "noDone": "아직 완료된 파일 없음",
+      "statusDone": "완료",
+      "statusFailed": "실패",
+      "statusStarting": "시작 중…"
+    },
+    "timeline": {
+      "ariaLabel": "전사 타임라인",
+      "seekTo": "{{time}}(으)로 이동"
+    },
+    "unknownDate": "알 수 없음",
+    "filterLabel": "필터: {{filter}}"
+  },
+  "modal": {
+    "ariaLabel": "대화 상자"
+  },
+  "transcriptDetail": {
+    "backAriaLabel": "뒤로",
+    "fileSub": "파일 #{{id}} · {{count}}개 큐",
+    "downloadSrt": "SRT 다운로드",
+    "captionsError": "자막을 불러오지 못했습니다: {{error}}",
+    "retry": "재시도",
+    "loadingMedia": "미디어 불러오는 중…",
+    "mediaError": "미디어를 불러오지 못했습니다",
+    "nowPlaying": "현재 재생 중",
+    "saveStatus": {
+      "editing": "저장 중…",
+      "saved": "저장됨",
+      "failed": "저장 실패"
+    },
+    "cueInfo": "큐 {{current}} / {{total}} · {{start}} → {{end}}",
+    "cueCountHint": "{{count}}개 큐 · 재생을 눌러 진행하세요",
+    "loading": "불러오는 중…",
+    "noTranscript": "전사 없음",
+    "followAlong": "재생을 눌러 따라가세요",
+    "transcriptTitle": "전사",
+    "transcriptHint": "클릭하여 이동 · 연필 아이콘으로 편집",
+    "loadingCaptions": "자막 불러오는 중…",
+    "noCaptions": "사용 가능한 자막 없음",
+    "noCaptionsToast": "사용 가능한 자막이 없습니다",
+    "nowTag": "▶ 지금",
+    "editTitle": "편집",
+    "emptyWarn": "⚠ 빈 텍스트로 저장하시겠습니까? 자막이 지워집니다.",
+    "keepEditing": "계속 편집",
+    "saveEmpty": "빈 상태로 저장",
+    "savedToast": "저장됨",
+    "saveFailedToast": "저장 실패",
+    "downloadedToast": "다운로드됨"
+  },
+  "transcribePanel": {
+    "title": "전사 생성",
+    "closeAriaLabel": "패널 닫기",
+    "fileLabel": "파일",
+    "modelLabel": "모델",
+    "modelsLoading": "모델 불러오는 중…",
+    "modelsError": "모델을 불러오지 못했습니다.",
+    "modelsRetry": "재시도",
+    "noModels": "사용 가능한 모델 없음",
+    "languageLabel": "언어",
+    "korean": "한국어",
+    "english": "영어",
+    "chunkLabel": "청크",
+    "chunk5": "5초",
+    "chunk10": "10초",
+    "chunk15": "15초",
+    "chunk20": "20초",
+    "cancel": "취소",
+    "starting": "시작 중…",
+    "start": "전사 시작"
+  },
+  "uploadInline": {
+    "title": "파일 업로드",
+    "limitBadge": "{{active}}/{{max}} 업로드 중",
+    "limitReached": "업로드 한도 도달",
+    "dropActive": "드롭하여 업로드",
+    "dropDefault": "파일 또는 폴더를 여기에 드래그하세요",
+    "dropHint": "MP3 · WAV · AAC · MP4 · MOV · 최대 {{max}}개 파일",
+    "limitHint": "한 번에 최대 {{max}}개 파일",
+    "browseFiles": "파일 찾아보기",
+    "browseFolder": "폴더 찾아보기",
+    "unsupportedFormat": "지원하지 않는 형식입니다. 허용 형식: MP3, WAV, AAC, FLAC, M4A, OGG, MP4, AVI, MOV, MKV, WEBM.",
+    "allSlotsBusy": "{{max}}개 업로드 슬롯이 모두 사용 중입니다. 파일 업로드가 완료되면 다시 시도하세요.",
+    "partialQueue": "{{queued}}개 파일 대기 중. {{ignored}}개 파일 무시됨 — 한 번에 {{max}}개까지만 업로드 가능합니다. 각 파일이 완료되면 더 업로드할 수 있습니다.",
+    "uploading": "업로드 중…",
+    "uploaded": "업로드됨",
+    "failed": "실패",
+    "retryBtn": "재시도",
+    "dismissAriaLabel": "닫기"
+  },
+  "uploadPanel": {
+    "title": "파일 업로드",
+    "closeAriaLabel": "업로드 패널 닫기",
+    "fileLabel": "파일",
+    "dropActive": "드롭하여 첨부",
+    "dropDefault": "파일을 드롭하거나 클릭하여 찾아보기",
+    "dropHint": "MP3 WAV AAC FLAC M4A OGG · MP4 AVI MOV MKV WEBM",
+    "unsupportedFormat": "지원하지 않는 파일 형식입니다",
+    "removeAriaLabel": "파일 제거",
+    "cancel": "취소",
+    "uploading": "업로드 중…",
+    "upload": "업로드"
+  },
+  "history": {
+    "pageTitle": "이력 및 워크스페이스",
+    "pageSub": "과거 추론 실행을 탐색하고 결과를 검토하세요",
+    "loading": "이력 불러오는 중…",
+    "loadError": "이력을 불러오지 못했습니다. 다시 시도해 주세요.",
+    "retry": "재시도",
+    "empty": {
+      "title": "파일이 없습니다",
+      "hint": "파일을 업로드하고 추론을 실행하면 여기에 결과가 표시됩니다."
+    },
+    "searchPlaceholder": "파일명 또는 ID로 검색…",
+    "filterAll": "전체",
+    "filterInferenced": "추론됨",
+    "filterPending": "추론 안 됨",
+    "sortLabel": "정렬",
+    "sortNewest": "최신순",
+    "sortOldest": "오래된순",
+    "sortName": "이름순",
+    "fileCount": "파일 {{count}}개",
+    "selectedCount": "{{count}}개 선택됨",
+    "selectAll": "전체 선택",
+    "clearSelection": "초기화",
+    "openWorkspace": "워크스페이스 열기",
+    "deleteSelected": "삭제",
+    "deleting": "삭제 중…",
+    "deleteSuccess": "{{count}}개 파일이 성공적으로 삭제되었습니다.",
+    "deleteFail": "삭제에 실패했습니다. 다시 시도해 주세요.",
+    "deleteConfirm": {
+      "title": "파일 삭제",
+      "body": "{{count}}개 파일을 삭제하시겠습니까? 이 작업은 취소할 수 없습니다.",
+      "cancel": "취소",
+      "confirm": "삭제"
+    },
+    "workspace": {
+      "title": "워크스페이스",
+      "noFile": "파일이 선택되지 않음",
+      "noFileHint": "왼쪽 목록에서 파일을 선택하면 추론 결과가 여기에 표시됩니다.",
+      "tabs": {
+        "summary": "요약",
+        "keywords": "키워드",
+        "assessment": "평가 문항"
+      },
+      "noSummary": "요약을 사용할 수 없습니다.",
+      "noKeywords": "키워드를 사용할 수 없습니다.",
+      "noAssessment": "평가 문항을 사용할 수 없습니다.",
+      "copy": "복사",
+      "copied": "복사됨!",
+      "download": "다운로드",
+      "edit": "편집",
+      "save": "저장",
+      "saving": "저장 중…",
+      "cancel": "취소",
+      "reGenerate": "재생성",
+      "reGenerating": "재생성 중…",
+      "reGenerateFail": "재생성에 실패했습니다. 다시 시도해 주세요.",
+      "reGenerateSuccess": "재생성이 완료되었습니다.",
+      "keywordPlaceholder": "키워드를 한 줄에 하나씩…",
+      "summaryPlaceholder": "파일에서 자동 입력됨 — 편집하여 덮어쓰기…",
+      "editColPreview": "미리보기",
+      "editColEdit": "내용 편집",
+      "markdownTag": "Markdown",
+      "chipView": "칩 뷰",
+      "onePerLine": "한 줄에 하나씩",
+      "mcq": "MCQ",
+      "viewAll": "전체 보기",
+      "explanation": "설명",
+      "assessComplete": "평가 완료!",
+      "assessCompleteDesc": "{{count}}개의 문항을 모두 완료했습니다.",
+      "restart": "다시 시작",
+      "next": "다음 문항",
+      "finish": "완료",
+      "question": "Q{{n}}"
+    }
   }
 }
-
-.actionTileDelete {
-  background: var(--red-dim);
-  color: var(--red);
-  border-color: var(--red);
-
-  &:hover:not(:disabled) {
-    background: var(--red);
-    color: #fff;
-    box-shadow: 0 3px 10px rgba(239, 68, 68, 0.3);
-  }
-}
-
-.actionTilePipeline {
-  background: var(--teal-dim);
-  color: var(--teal);
-  border-color: var(--teal);
-
-  &:hover:not(:disabled) {
-    background: var(--teal);
-    color: #fff;
-    box-shadow: 0 3px 10px rgba(45, 212, 191, 0.3);
-  }
-}
-
-.actionTileSearch {
-  background: var(--amber-dim);
-  color: var(--amber);
-  border-color: var(--amber);
-
-  &:hover:not(:disabled) {
-    background: var(--amber);
-    color: #fff;
-    box-shadow: 0 3px 10px rgba(245, 158, 11, 0.3);
-  }
-}
-
-.actionTileActive {
-  outline: 2px solid var(--blue-bdr);
-  outline-offset: -1px;
-}
-
-// ── Sort row — bordered pill box, right-aligned in .colHeading, same
-// height/font-size/border treatment as pages/UploadInfer/FilePanel.module.scss ──
-.sortHeader {
-  display: flex;
-  align-items: center;
-  height: 32px;
-  background: var(--bg2);
-  border: 1px solid var(--bdr);
-  border-radius: var(--r);
-  padding: 0 6px 0 10px;
-  gap: 6px;
-  margin-left: auto;
-  flex-shrink: 0;
-  overflow: hidden;
-}
-
-.sortHeaderLabel {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--t2);
-  font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  white-space: nowrap;
-  flex-shrink: 0;
-
-  svg { width: 11px; height: 11px; opacity: 0.6; }
-}
-
-.sortCols {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.sortCol {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 8px;
-  background: transparent;
-  border: none;
-  border-radius: 5px;
-  color: var(--t2);
-  font-size: 12px;
-  font-family: var(--font-mono);
-  cursor: pointer;
-  transition: all 0.12s;
-  white-space: nowrap;
-
-  svg { width: 8px; height: 10px; flex-shrink: 0; transition: transform 0.2s; }
-
-  &:hover { background: var(--bg3); color: var(--t1); }
-}
-
-.sortColActive {
-  background: var(--blue-dim);
-  color: var(--blue);
-  font-weight: 600;
-  &:hover { background: var(--blue-dim); }
-}
-
-.sortInactive { opacity: 0.25; }
-.sortAsc { transform: rotate(180deg); }
-.sortDesc { transform: rotate(0deg); }
