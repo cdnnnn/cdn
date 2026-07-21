@@ -968,24 +968,42 @@ function estimateTextWidth(label: string): number {
     return width;
 }
 
+// NOTE: dagre's setNode() specifically reads `node.width` / `node.height` to
+// reserve space for a node in the layout. The previous version of this
+// function returned `{ w, h, labelWidth }`, which meant every node was
+// silently treated by dagre as a 0×0 point — ranks were still spaced apart
+// via ranksep/nodesep, but nothing accounted for how wide/tall a node with
+// a long label actually is, so nodes and their labels overlapped each
+// other and adjacent edges. Returning `width`/`height` (matching what the
+// edge-label reservation code below already does) is the actual fix.
 function estimateNodeBox(label: string, circleSize: number) {
     const hasBreakPoint = /[\s-]/.test(label);
     const rawTextWidth = estimateTextWidth(label);
     const capWidth = hasBreakPoint ? LABEL_MAX_W : LABEL_HARD_MAX_W;
     const labelWidth = Math.min(capWidth, Math.max(rawTextWidth, 44));
     const lines = hasBreakPoint ? Math.max(1, Math.ceil(rawTextWidth / LABEL_MAX_W)) : 1;
-    const w = Math.max(circleSize, labelWidth, 72) + 16;
-    const h = circleSize + 16 + lines * LABEL_LINE_H;
-    return { w, h, labelWidth };
+    const width = Math.max(circleSize, labelWidth, 72) + 16;
+    const height = circleSize + 16 + lines * LABEL_LINE_H;
+    return { width, height, labelWidth };
 }
 
+// The node's DOM box is now sized to `width`×`height` (see NodeLinkGraph,
+// where these are passed onto the React Flow node), and the circle +
+// label are laid out top-to-bottom in normal flow inside that box —
+// instead of the label being position:absolute below a free-floating
+// circle. That keeps the visual box in sync with the box dagre reserved,
+// so nothing drifts as labels get longer.
 const MindMapNode: React.FC<{ data: { label: string; value?: number; labelWidth?: number } }> = ({ data }) => {
     const size = 34 + Math.min(26, (data.value ?? 1) * 4);
     const hasBreakPoint = /[\s-]/.test(data.label);
     return (
-        <div className={styles.rfNode} style={{ width: size, height: size }} title={data.label}>
-            <Handle type="target" position={Position.Top} id="top-target" className={styles.rfHandle} />
-            <Handle type="source" position={Position.Bottom} id="bottom-source" className={styles.rfHandle} />
+        <div className={styles.rfNodeBox}>
+            <div className={styles.rfNode} style={{ width: size, height: size }} title={data.label}>
+                <Handle type="target" position={Position.Top} id="top-target" className={styles.rfHandle} />
+                <Handle type="source" position={Position.Bottom} id="bottom-source" className={styles.rfHandle} />
+                <Handle type="target" position={Position.Left} id="left-target" className={styles.rfHandle} />
+                <Handle type="source" position={Position.Right} id="right-source" className={styles.rfHandle} />
+            </div>
             <span
                 className={styles.rfNodeLabel}
                 style={{ maxWidth: data.labelWidth ?? LABEL_MAX_W, whiteSpace: hasBreakPoint ? 'normal' : 'nowrap' }}
@@ -1000,13 +1018,15 @@ const RF_NODE_TYPES = { mindmap: MindMapNode };
 // ── Dagre auto-layout — replaces naive circular placement, which packed
 //    nodes on top of each other once a graph had more than a handful of
 //    them. Dagre lays nodes out in ranked layers with guaranteed spacing,
-//    so nothing overlaps regardless of graph size. ──
+//    so nothing overlaps regardless of graph size, AS LONG AS the nodes
+//    passed to it actually carry width/height (see estimateNodeBox above —
+//    that mismatch was the actual source of the overlap bug). ──
 function computeDagreLayout(nodes: GNode[], edges: GEdge[]) {
     const g = new dagre.graphlib.Graph();
     g.setGraph({ rankdir: 'TB', nodesep: 72, ranksep: 150, marginx: 60, marginy: 60, acyclicer: 'greedy' });
     g.setDefaultEdgeLabel(() => ({}));
 
-    const dims = new Map<string, { w: number; h: number; labelWidth: number }>();
+    const dims = new Map<string, { width: number; height: number; labelWidth: number }>();
     nodes.forEach(n => {
         const size = 34 + Math.min(26, (n.value ?? 1) * 4);
         const dim = estimateNodeBox(n.label, size);
@@ -1043,7 +1063,7 @@ function computeDagreLayout(nodes: GNode[], edges: GEdge[]) {
         const pos = g.node(n.id);
         const dim = dims.get(n.id)!;
         // Dagre positions are centers — React Flow expects top-left.
-        return { ...n, x: pos.x - dim.w / 2, y: pos.y - dim.h / 2, labelWidth: dim.labelWidth };
+        return { ...n, x: pos.x - dim.width / 2, y: pos.y - dim.height / 2, labelWidth: dim.labelWidth, w: dim.width, h: dim.height };
     });
     return { positioned, resolvedEdges };
 }
@@ -1097,7 +1117,7 @@ function computeForestLayout(nodes: GNode[], edges: GEdge[]) {
         groups.get(root)!.push(n);
     });
 
-    const dims = new Map<string, { w: number; h: number; labelWidth: number }>();
+    const dims = new Map<string, { width: number; height: number; labelWidth: number }>();
     nodes.forEach(n => {
         const size = 34 + Math.min(26, (n.value ?? 1) * 4);
         dims.set(n.id, estimateNodeBox(n.label, size));
@@ -1105,7 +1125,7 @@ function computeForestLayout(nodes: GNode[], edges: GEdge[]) {
 
     const TREE_GAP = 56;
     let yOffset = 0;
-    const positioned: (GNode & { x: number; y: number; labelWidth: number })[] = [];
+    const positioned: (GNode & { x: number; y: number; labelWidth: number; w: number; h: number })[] = [];
 
     for (const groupNodes of groups.values()) {
         const g = new dagre.graphlib.Graph();
@@ -1126,10 +1146,10 @@ function computeForestLayout(nodes: GNode[], edges: GEdge[]) {
         groupNodes.forEach(n => {
             const pos = g.node(n.id);
             const dim = dims.get(n.id)!;
-            minX = Math.min(minX, pos.x - dim.w / 2);
-            maxX = Math.max(maxX, pos.x + dim.w / 2);
-            minY = Math.min(minY, pos.y - dim.h / 2);
-            maxY = Math.max(maxY, pos.y + dim.h / 2);
+            minX = Math.min(minX, pos.x - dim.width / 2);
+            maxX = Math.max(maxX, pos.x + dim.width / 2);
+            minY = Math.min(minY, pos.y - dim.height / 2);
+            maxY = Math.max(maxY, pos.y + dim.height / 2);
         });
         const shiftX = -minX;
         const shiftY = yOffset - minY;
@@ -1137,7 +1157,7 @@ function computeForestLayout(nodes: GNode[], edges: GEdge[]) {
         groupNodes.forEach(n => {
             const pos = g.node(n.id);
             const dim = dims.get(n.id)!;
-            positioned.push({ ...n, x: pos.x - dim.w / 2 + shiftX, y: pos.y - dim.h / 2 + shiftY, labelWidth: dim.labelWidth });
+            positioned.push({ ...n, x: pos.x - dim.width / 2 + shiftX, y: pos.y - dim.height / 2 + shiftY, labelWidth: dim.labelWidth, w: dim.width, h: dim.height });
         });
 
         yOffset += (maxY - minY) + TREE_GAP;
@@ -1159,15 +1179,29 @@ const NodeLinkGraph: React.FC<{ nodes: GNode[]; edges: GEdge[]; treeMode?: boole
             id: n.id,
             type: 'mindmap',
             position: { x: n.x, y: n.y },
+            // Give React Flow the same box dagre reserved, so its own
+            // internal bookkeeping (fitView, minimap, drag bounds) matches
+            // what was actually laid out.
+            width: n.w,
+            height: n.h,
             data: { label: n.label, value: n.value, labelWidth: n.labelWidth },
         }));
+
+        // Forest/tree mode lays out left→right (rankdir: 'LR'), so edges
+        // should leave from the right side of a node and arrive on the
+        // left of the next — using bottom/top handles there forced edges
+        // to arc around the node instead of running straight, which read
+        // as extra crossing/overlap. The plain knowledge-graph layout is
+        // still top→bottom, so it keeps the original top/bottom handles.
+        const sourceHandle = treeMode ? 'right-source' : 'bottom-source';
+        const targetHandle = treeMode ? 'left-target' : 'top-target';
 
         const rfEdges: RFEdge[] = resolvedEdges.map((e, i) => ({
             id: `e${i}-${e.source}-${e.target}`,
             source: e.source,
             target: e.target,
-            sourceHandle: 'bottom-source',
-            targetHandle: 'top-target',
+            sourceHandle,
+            targetHandle,
             type: 'smoothstep',
             label: e.label,
             style: { stroke: 'var(--bdr2)' },
@@ -1737,6 +1771,9 @@ const WorkspacePanel = forwardRef<WorkspacePanelHandle, Props>(({ step2Visible =
 WorkspacePanel.displayName = 'WorkspacePanel';
 
 export default WorkspacePanel;
+
+
+
 
 
 
@@ -3727,6 +3764,20 @@ export default WorkspacePanel;
     }
 }
 
+// Whole node box — same width/height dagre reserved via estimateNodeBox().
+// Laying the circle + label out in normal vertical flow here (rather than
+// absolutely positioning the label under a free-floating circle) keeps
+// what's rendered in sync with what dagre thinks the node's footprint is,
+// which is what actually prevents nodes/labels from drifting into overlap.
+.rfNodeBox {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+}
+
 .rfNode {
     border-radius: 50%;
     background: var(--blue-dim);
@@ -3736,6 +3787,7 @@ export default WorkspacePanel;
     justify-content: center;
     cursor: grab;
     position: relative;
+    flex-shrink: 0;
     transition: background 0.15s;
 
     &:active {
@@ -3745,17 +3797,13 @@ export default WorkspacePanel;
     &:hover {
         background: var(--blue);
 
-        .rfNodeLabel {
+        + .rfNodeLabel {
             color: var(--t0);
         }
     }
 }
 
 .rfNodeLabel {
-    position: absolute;
-    top: 100%;
-    left: 50%;
-    transform: translateX(-50%);
     margin-top: 5px;
     font-size: 11px;
     font-weight: 500;
@@ -4223,5 +4271,3 @@ export default WorkspacePanel;
     color: var(--t1);
     line-height: 1.55;
 }
-
-
