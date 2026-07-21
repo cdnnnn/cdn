@@ -1113,6 +1113,7 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   align-content: start;
+  align-items: start;
   gap: 8px;
   @include m.scrollbar;
 }
@@ -1128,6 +1129,7 @@
 // status-bar colored by file status, and a shimmer sweep + lift on hover.
 .fcard {
   position: relative;
+  align-self: start;
   display: flex;
   flex-direction: row;
   align-items: flex-start;
