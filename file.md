@@ -777,8 +777,10 @@ const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(({ selectMode, onE
               </div>
             </div>
 
+            <span className={styles.vSep} aria-hidden="true" />
+
             {/* ── Date filter — moved here so it's always visible, not just in a filter row ── */}
-            <div className={`${styles.dateFilter} ${styles.dateFilterTitleRow}`} data-tour="upload-date-filter">
+            <div className={styles.dateFilter} data-tour="upload-date-filter">
               <svg className={styles.dateIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="2" y="3" width="12" height="11" rx="1.5" />
                 <path d="M2 6.5h12M5 2v2.5M11 2v2.5" />
@@ -1003,6 +1005,8 @@ const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(({ selectMode, onE
 
               {/* ── Actions — shown inline as a labeled button row, only in normal (idle) mode ── */}
               {!selectMode && !deleteMode && !exportMode && !isBatchRunning && (
+                <>
+                  <span className={styles.vSep} aria-hidden="true" />
                 <div className={styles.actionsInlineWrap} data-tour="upload-actions">
                   <span className={styles.filterBarLabel}>{t('uploadInfer.filePanel.actionsLabel')}</span>
 
@@ -1087,6 +1091,7 @@ const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(({ selectMode, onE
                     <span className={styles.actionTileLabel}>{t('uploadInfer.filePanel.deleteBtn')}</span>
                   </button>
                 </div>
+                </>
               )}
             </div>
           </div>
@@ -2237,6 +2242,7 @@ export default FilePanel;
 .filterSortRow {
   display: flex;
   flex-direction: column;
+  align-items: flex-end;
   gap: 10px;
   padding: 10px 12px;
   background: var(--bg1);
@@ -2266,17 +2272,23 @@ export default FilePanel;
 
 // Extra breathing room between sortHeader and the date filter, now that
 // both live in the title row together (beyond the row's base 8px gap).
-.dateFilterTitleRow {
-  margin-left: 16px;
-}
-
-// Row 2 — status filter + actions toolbar
+// Row 2 — status filter + actions toolbar, right-aligned
 .filterBarRow {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   flex-wrap: wrap;
   gap: 10px;
   width: 100%;
+}
+
+// Small vertical divider used to separate grouped controls (Sort By /
+// Date Range in the title row, Status / Actions in the filter row).
+.vSep {
+  width: 1px;
+  height: 18px;
+  background: var(--bdr2);
+  flex-shrink: 0;
 }
 
 // Groups the status filter and the actions toolbar together, with a
