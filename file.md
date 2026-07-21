@@ -1213,7 +1213,7 @@ const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(({ selectMode, onE
               <div
                 key={f.id}
                 data-tour={idx === 0 ? 'upload-cards' : undefined}
-                className={`${styles.fcard}
+                className={`${styles.fcard} ${styles[`fcardBar_${statusMeta.cls}`] ?? ''}
                   ${selectable ? (isChecked ? styles.fcardActive : '') : ''}
                   ${deletable ? (isDeleteChecked ? styles.fcardActiveDelete : '') : ''}
                   ${exportable ? (isExportChecked ? styles.fcardActiveExport : '') : ''}
@@ -1228,38 +1228,78 @@ const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(({ selectMode, onE
                   </div>
                 )}
 
-                <div className={`${styles.fcardIcon} ${styles[ext]} ${(selectable || deletable || exportable) ? styles.fcardIconShifted : ''}`}>
+                <div className={`${styles.fcardIcon} ${styles[ext]}`}>
                   {ext.toUpperCase()}
                 </div>
 
-                {hasLinks && (
-                  <div className={styles.fcardLinks}>
-                    {f.dictionary_id && (
-                      <span className={`${styles.fcardLinkIcon} ${styles.fcardLinkIconDict}`} title={t('uploadInfer.filePanel.dictionaryLinked')}>
-                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M8 3.7c-1.2-.9-2.9-1.2-4.7-.9v9c1.8-.3 3.5-.1 4.7.9 1.2-.9 2.9-1.2 4.7-.9v-9c-1.8-.3-3.5-.1-4.7.9z" />
-                          <path d="M8 3.7v9" />
-                        </svg>
-                      </span>
-                    )}
-                    {f.prompt_template_id && (
-                      <span className={`${styles.fcardLinkIcon} ${styles.fcardLinkIconTemplate}`} title={t('uploadInfer.filePanel.templateLinked')}>
-                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M5.5 2.5h5v2h-5z" />
-                          <path d="M4.5 4h7a1 1 0 011 1v8a1 1 0 01-1 1h-7a1 1 0 01-1-1V5a1 1 0 011-1z" />
-                          <path d="M6 8.3l1.3 1.3L10.2 7" />
-                        </svg>
-                      </span>
+                <div className={styles.fcardInfo}>
+                  <div className={styles.fcardNameRow}>
+                    <div className={styles.fcardName}>{f.original_name}</div>
+                    {hasLinks && (
+                      <div className={styles.fcardLinks}>
+                        {f.dictionary_id && (
+                          <span className={`${styles.fcardLinkIcon} ${styles.fcardLinkIconDict}`} title={t('uploadInfer.filePanel.dictionaryLinked')}>
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M8 3.7c-1.2-.9-2.9-1.2-4.7-.9v9c1.8-.3 3.5-.1 4.7.9 1.2-.9 2.9-1.2 4.7-.9v-9c-1.8-.3-3.5-.1-4.7.9z" />
+                              <path d="M8 3.7v9" />
+                            </svg>
+                          </span>
+                        )}
+                        {f.prompt_template_id && (
+                          <span className={`${styles.fcardLinkIcon} ${styles.fcardLinkIconTemplate}`} title={t('uploadInfer.filePanel.templateLinked')}>
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M5.5 2.5h5v2h-5z" />
+                              <path d="M4.5 4h7a1 1 0 011 1v8a1 1 0 01-1 1h-7a1 1 0 01-1-1V5a1 1 0 011-1z" />
+                              <path d="M6 8.3l1.3 1.3L10.2 7" />
+                            </svg>
+                          </span>
+                        )}
+                      </div>
                     )}
                   </div>
-                )}
 
-                <div className={styles.fcardName}>{f.original_name}</div>
-                <div className={styles.fcardMeta}>{f.inserted_at} · #{f.id}</div>
+                  <div className={styles.fcardMeta}>
+                    <span>{f.inserted_at} · #{f.id}</span>
+                    <span
+                      className={`${styles.badge} ${styles.fcardBadge} ${isChecked ? styles.bSelected :
+                        isDeleteChecked ? styles.bDelete :
+                          isExportChecked ? styles.bExport :
+                            styles[statusMeta.cls]
+                        }`}
+                      title={!isChecked && !isDeleteChecked && !isExportChecked ? t(statusMeta.labelKey) : undefined}
+                    >
+                      {isChecked ? (
+                        <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="10" height="10">
+                          <path d="M2 6l3 3 5-5" />
+                        </svg>
+                      ) : isDeleteChecked ? (
+                        <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" width="10" height="10">
+                          <path d="M2 2l8 8M10 2l-8 8" />
+                        </svg>
+                      ) : isExportChecked ? (
+                        <>
+                          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="9" height="9">
+                            <path d="M6 1v6M3.5 4.5L6 7l2.5-2.5" /><path d="M2 10h8" />
+                          </svg>
+                          {t('uploadInfer.filePanel.export')}
+                        </>
+                      ) : (
+                        <>
+                          {f.status === 'completed' && (
+                            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="9" height="9">
+                              <path d="M2 6l3 3 5-5" />
+                            </svg>
+                          )}
+                          {(f.status === 'running' || f.status === 'queued') && (
+                            <span className={styles.fcardBadgeDot} />
+                          )}
+                          {t(statusMeta.labelKey)}
+                        </>
+                      )}
+                    </span>
+                  </div>
 
-                <div className={styles.fcardPrompts} onClick={e => e.stopPropagation()}>
-                  <span className={styles.fcardPromptsLabel}>{t('uploadInfer.filePanel.promptsLabel', 'Prompts')}</span>
-                  <div className={styles.fcardPromptsRow}>
+                  <div className={styles.fcardPrompts} onClick={e => e.stopPropagation()}>
                     {PROMPT_FIELDS.map(({ key, labelKey, icon, tourId }, fieldIdx) => {
                       const set = !!(f[key] as string)?.trim();
                       return (
@@ -1279,44 +1319,6 @@ const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(({ selectMode, onE
                     })}
                   </div>
                 </div>
-
-                <span
-                  className={`${styles.badge} ${styles.fcardBadge} ${isChecked ? styles.bSelected :
-                    isDeleteChecked ? styles.bDelete :
-                      isExportChecked ? styles.bExport :
-                        styles[statusMeta.cls]
-                    }`}
-                  title={!isChecked && !isDeleteChecked && !isExportChecked ? t(statusMeta.labelKey) : undefined}
-                >
-                  {isChecked ? (
-                    <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="10" height="10">
-                      <path d="M2 6l3 3 5-5" />
-                    </svg>
-                  ) : isDeleteChecked ? (
-                    <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" width="10" height="10">
-                      <path d="M2 2l8 8M10 2l-8 8" />
-                    </svg>
-                  ) : isExportChecked ? (
-                    <>
-                      <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="9" height="9">
-                        <path d="M6 1v6M3.5 4.5L6 7l2.5-2.5" /><path d="M2 10h8" />
-                      </svg>
-                      {t('uploadInfer.filePanel.export')}
-                    </>
-                  ) : (
-                    <>
-                      {f.status === 'completed' && (
-                        <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="9" height="9">
-                          <path d="M2 6l3 3 5-5" />
-                        </svg>
-                      )}
-                      {(f.status === 'running' || f.status === 'queued') && (
-                        <span className={styles.fcardBadgeDot} />
-                      )}
-                      {t(statusMeta.labelKey)}
-                    </>
-                  )}
-                </span>
               </div>
             );
           })}
@@ -1515,1084 +1517,2800 @@ export default FilePanel;
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 // ═══════════════════════════════════════════════
-// pages/UploadInfer/InferencePanel.tsx
-// Content Analytics · Inference configuration + batch status
+// FilePanel.module.scss
+// Content Analytics · Upload panel — two sections
 // ═══════════════════════════════════════════════
-import React, { useEffect, useRef, useCallback, useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import { useAppDispatch, useAppSelector } from '../../store/hooks';
-import {
-  inferenceStatusSuccess, updateRunningProgress,
-  updateSummaryPrompt, updateKeywordPrompt, updateQuestionPrompt,
-  updateShortAnswerPrompt, updateTrueFalsePrompt, updateSettings,
-  modelsLoading, modelsSuccess, modelsFailure, setSelectedModel,
-  updateFilePrompts,
-  type ServerFile, type ServerFilesData, type TimeInterval,
-} from '../../store/uploadSlice';
-import api from '../../services/api';
-import styles from './InferencePanel.module.scss';
-import { addToast } from '../../store/toastSlice';
+@use '../../styles/mixins' as m;
 
-// ── Batch status columns ──────────────────────────
-const StatusCard: React.FC<{ file: ServerFile; variant: 'queued' | 'running' | 'completed'; onStop?: (id: number) => void; stopping?: boolean }> = ({ file, variant, onStop, stopping }) => {
-  const { t } = useTranslation();
-  const ext = file.original_name.toLowerCase().endsWith('.srt') ? 'srt' : 'vtt';
-  return (
-    <div className={`${styles.statusCardWrap} ${styles[variant + 'Wrap']}`}>
-      <div className={`${styles.statusCard} ${styles[variant]}`}>
+// ── Outer panel shell ─────────────────────────
+.panel {
+  width: 100%;
+  flex: 1;
+  border-right: none;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  overflow: hidden;
+  background: var(--bg0);
+  position: relative;
 
-        {/* Left icon — ext badge for queued/running, green check for completed */}
-        {variant === 'completed' ? (
-          <div className={styles.completedCheck}>
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 8l3.5 3.5L13 5" />
-            </svg>
-          </div>
-        ) : (
-          <div className={`${styles.statusExt} ${styles[ext]}`}>{ext.toUpperCase()}</div>
-        )}
-
-        <div className={styles.statusInfo}>
-          <div className={styles.statusNameRow}>
-            <span className={`${styles.statusIdBadge} ${styles['statusIdBadge_' + variant]}`}>#{file.id}</span>
-            <div className={styles.statusName}>{file.original_name}</div>
-          </div>
-
-          {variant === 'running' && typeof file.progress === 'number' && (
-            <div className={styles.statusProgress}>
-              <div className={styles.statusBar}>
-                <div className={styles.statusFill} style={{ width: `${file.progress}%` }} />
-              </div>
-              <span className={styles.statusPct}>{file.progress}%</span>
-            </div>
-          )}
-
-          {variant === 'queued' && (
-            <div className={styles.queuedMeta}>
-              <span className={styles.queuedDot} />
-              {t('uploadInfer.inferencePanel.waitingQueue')}
-            </div>
-          )}
-
-          {variant === 'completed' && (
-            <div className={styles.completedMeta}>{file.inserted_at}</div>
-          )}
-
-          {variant === 'running' && typeof file.progress !== 'number' && (
-            <div className={styles.statusDate}>{file.inserted_at}</div>
-          )}
-        </div>
-
-        {/* Stop button — queued files only */}
-        {variant === 'queued' && onStop && (
-          <button
-            className={styles.stopBtn}
-            onClick={() => onStop(file.id)}
-            disabled={stopping}
-            title={t('uploadInfer.inferencePanel.stopFile')}
-          >
-            {stopping ? (
-              <span className={styles.stopSpinner} />
-            ) : (
-              <svg viewBox="0 0 16 16" fill="currentColor" stroke="none">
-                <rect x="4" y="4" width="8" height="8" rx="1.5" />
-              </svg>
-            )}
-          </button>
-        )}
-
-      </div>
-    </div>
-  );
-};
-
-// ── InferencePanel ───────────────────────────────
-interface InferencePanelProps {
-  onClose?: () => void;
-  minimized?: boolean;
-  onToggleMinimize?: () => void;
+  &::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 1px;
+    background: linear-gradient(180deg,
+        rgba(139, 92, 246, 0.0) 0%,
+        rgba(139, 92, 246, 0.6) 20%,
+        rgba(56, 196, 186, 0.7) 55%,
+        rgba(240, 160, 48, 0.6) 85%,
+        rgba(240, 160, 48, 0.0) 100%);
+    pointer-events: none;
+    z-index: 1;
+  }
 }
 
-const InferencePanel: React.FC<InferencePanelProps> = ({ onClose, minimized = false, onToggleMinimize }) => {
-  const { t } = useTranslation();
-  const dispatch = useAppDispatch();
-  const {
-    settings,
-    selectedServerIds, isBatchRunning,
-    selectFiles,
-    models, modelsLoading: mlLoading, selectedModel,
-    dateFrom, dateTo,
-  } = useAppSelector(s => s.upload);
+// ══════════════════════════════════════
+// SECTION 1 — Step header + upload zone
+// ══════════════════════════════════════
+.step1 {
+  width: 400px;
+  flex-shrink: 0;
+  border-bottom: none;
+  border-right: 1px solid var(--bdr);
+  background: var(--bg0);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
 
-  const [running, setRunning] = React.useState(false);
-  const [stoppingIds, setStoppingIds] = React.useState<Set<number>>(new Set());
+  @media (max-width: 1499px) {
+    width: 350px;
+  }
+}
 
-  // ── Prompt save state ──────────────────────────
-  const [promptSaving, setPromptSaving] = useState(false);
-  const [promptSaveError, setPromptSaveError] = useState<string | null>(null);
-  const promptSnapshot = useRef({ summary: '', keyword: '', question: '', shortAnswer: '', trueFalse: '' });
-  const promptsDirty =
-    settings.summaryPromptOverride !== promptSnapshot.current.summary ||
-    settings.keywordPromptOverride !== promptSnapshot.current.keyword ||
-    settings.questionPromptOverride !== promptSnapshot.current.question ||
-    settings.shortAnswerPromptOverride !== promptSnapshot.current.shortAnswer ||
-    settings.trueFalsePromptOverride !== promptSnapshot.current.trueFalse;
+// ── The upload zone itself, as a distinct card sitting in the sidebar ──
+.step1Card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg1);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
 
-  const emptyBatch: ServerFilesData = { queued: [], running: [], completed: [], pending: [] };
-  const [batchData, setBatchData] = React.useState<ServerFilesData>(emptyBatch);
-  const [countdown, setCountdown] = React.useState(10);
-  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const n = selectedServerIds.length;
-  // When nothing is selected, every generation checkbox should read as
-  // unchecked and be non-interactive — there's nothing to configure yet.
-  // Settings themselves aren't reset (so a prior selection is restored if
-  // the user re-selects the same files), only the display/interaction is.
-  const noFilesSelected = n === 0;
-  const isChecked = (v: boolean) => v && !noFilesSelected;
-  const canRunInference = n > 0 && !isBatchRunning && !!selectedModel;
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+// Reopen affordance shown in the file-list header once the upload
+// column has been collapsed to width: 0 (and its own header bar with it).
+.reopenUploadBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 8px;
+  padding: 3px 9px;
+  border-radius: 99px;
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t2);
+  font-size: 12px;
+  @include m.mono;
+  cursor: pointer;
+  transition: all 0.12s;
 
-  // ── Fetch models ────────────────────────────
-  // In-flight guard: set synchronously before the await, so a second
-  // overlapping call (e.g. StrictMode's intentional double mount-effect
-  // invocation in dev) bails out instead of firing a second real request.
-  const modelsFetchInFlightRef = useRef(false);
-  const fetchModels = useCallback(async () => {
-    if (modelsFetchInFlightRef.current) return;
-    modelsFetchInFlightRef.current = true;
-    dispatch(modelsLoading());
-    try {
-      const res = await api.get('/get_models');
-      const result = (res.data as any)?.result ?? [];
-      dispatch(modelsSuccess(result));
-    } catch {
-      dispatch(modelsFailure());
-    } finally {
-      modelsFetchInFlightRef.current = false;
+  svg { width: 10px; height: 10px; }
+
+  &:hover {
+    background: var(--bg3);
+    color: var(--t1);
+    border-color: var(--bdr3);
+  }
+}
+
+// ── Step-1 header bar (original design) ──────
+.step1Bar {
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border-bottom: none;
+  background: var(--bg1);
+  flex-shrink: 0;
+  white-space: nowrap;
+  position: relative;
+
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg,
+        rgba(139, 92, 246, 0.0) 0%,
+        rgba(139, 92, 246, 0.6) 20%,
+        rgba(56, 196, 186, 0.7) 50%,
+        rgba(240, 160, 48, 0.6) 80%,
+        rgba(240, 160, 48, 0.0) 100%);
+    pointer-events: none;
+  }
+}
+
+.slbl {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--t2);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  @include m.mono;
+}
+
+// Collapse toggle button — matches original
+.collapseBtn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding: 3px 8px;
+  border-radius: 99px;
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t2);
+  font-size: 12px;
+  @include m.mono;
+  cursor: pointer;
+  transition: all 0.12s;
+  user-select: none;
+  flex-shrink: 0;
+
+  svg {
+    width: 10px;
+    height: 10px;
+  }
+
+  &:hover {
+    background: var(--bg3);
+    color: var(--t1);
+    border-color: var(--bdr3);
+  }
+}
+
+// ── Collapsible content area — fills the rest of the column, scrolls
+// internally so a long browsed/uploading list doesn't blow out the height ──
+.step1Content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  @include m.scrollbar;
+}
+
+// ── Drop zone (original style) ────────────────
+.dropzone {
+  border: 1.5px dashed var(--bdr2);
+  border-radius: var(--rxl);
+  padding: 24px 20px;
+  margin: 12px 14px;
+  text-align: center;
+  background: var(--bg1);
+  cursor: pointer;
+  transition: all 0.18s;
+  position: relative;
+  overflow: hidden;
+
+  &::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at 50% 0%, rgba(139, 92, 246, 0.04), transparent 65%);
+    pointer-events: none;
+  }
+
+  &:hover,
+  &.dragOver {
+    border-color: var(--blue);
+    background: var(--bg2);
+  }
+
+  &.dragOver {
+    background: var(--blue-dim);
+  }
+}
+
+.dzIc {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: var(--blue-dim);
+  border: 1px solid var(--blue-bdr);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 11px;
+
+  svg {
+    width: 18px;
+    height: 18px;
+  }
+}
+
+.dzTitle {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--t0);
+  margin-bottom: 4px;
+}
+
+.dzSub {
+  font-size: 13px;
+  color: var(--t2);
+  @include m.mono;
+}
+
+.chips {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.chip {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  background: var(--bg3);
+  border: 1px solid var(--bdr);
+  color: var(--t2);
+  @include m.mono;
+}
+
+.dzActions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 11px;
+  position: relative;
+  z-index: 1;
+}
+
+// ── Preview / uploading ───────────────────────
+.previewWrap {
+  display: flex;
+  flex-direction: column;
+  animation: fadeSlide 0.18s ease;
+}
+
+.previewList {
+  overflow-y: auto;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  @include m.scrollbar;
+}
+
+// Browsed file card
+.fileCard {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 11px;
+  background: var(--bg2);
+  border: 1px solid var(--bdr);
+  border-radius: var(--rxl);
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+  position: relative;
+  overflow: hidden;
+
+  // Left accent bar
+  &::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 8px;
+    bottom: 8px;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: var(--bdr2);
+    transition: background 0.2s;
+  }
+
+  &.uploading {
+    border-color: rgba(139, 92, 246, 0.35);
+    background: rgba(139, 92, 246, 0.05);
+    box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.12) inset;
+
+    &::after {
+      background: linear-gradient(180deg, var(--blue), #a78bfa);
     }
-  }, [dispatch]); // eslint-disable-line
+  }
 
-  useEffect(() => { fetchModels(); }, []); // eslint-disable-line
+  &.success {
+    border-color: var(--green-bdr);
+    background: var(--green-dim);
 
-  // ── Polling helper ───────────────────────────
-  // Same in-flight guard as fetchModels — this is the one that's called
-  // from two different mount-time effects (the isBatchRunning effect and
-  // the bootstrap effect below), so it's the most exposed to duplicate
-  // overlapping calls.
-  const pollFetchInFlightRef = useRef(false);
-  const fetchFilesForPolling = useCallback(async () => {
-    if (pollFetchInFlightRef.current) return false;
-    pollFetchInFlightRef.current = true;
-    try {
-      const statusRes = await api.post('/files/by-progress/', { start_date: dateFrom, end_date: dateTo });
-      const d = (statusRes.data as any)?.data;
-      const data: ServerFilesData = {
-        queued: d?.queued ?? [],
-        completed: d?.completed ?? [],
-        pending: d?.pending ?? [],
-        running: d?.running ?? [],
-      };
-      dispatch(inferenceStatusSuccess(data));
-      setBatchData(data);
-
-      const stillRunning = data.running.length > 0 || data.queued.length > 0;
-
-      if (data.running.length > 0) {
-        const runningIds = data.running.map(f => f.id);
-        try {
-          const progressRes = await api.post('/files/progress/', { file_ids: runningIds });
-          const progressMap = (progressRes.data as any)?.result ?? {};
-          dispatch(updateRunningProgress(progressMap));
-          setBatchData(prev => ({
-            ...prev,
-            running: prev.running.map(f => {
-              const raw = progressMap[String(f.id)];
-              if (raw === undefined) return f;
-              const pct = typeof raw === 'string' ? parseFloat(raw) : raw;
-              return { ...f, progress: isNaN(pct) ? f.progress : Math.min(100, Math.max(0, pct)) };
-            }),
-          }));
-        } catch {
-          // progress fetch failing is non-critical — silently ignore
-        }
-      }
-
-      if (!stillRunning) setBatchData(emptyBatch);
-      return stillRunning;
-    } catch {
-      return false;
-    } finally {
-      pollFetchInFlightRef.current = false;
+    &::after {
+      background: var(--green);
     }
-  }, [dispatch, dateFrom, dateTo]);
+  }
 
-  const stopCountdown = useCallback(() => {
-    if (countdownRef.current) {
-      clearInterval(countdownRef.current);
-      countdownRef.current = null;
+  &.failed {
+    border-color: var(--red-bdr);
+    background: var(--red-dim);
+
+    &::after {
+      background: var(--red);
     }
-  }, []);
+  }
+}
 
-  const startCountdown = useCallback(() => {
-    stopCountdown();
-    setCountdown(10);
-    countdownRef.current = setInterval(() => {
-      setCountdown(prev => (prev <= 1 ? 10 : prev - 1));
-    }, 1000);
-  }, [stopCountdown]);
+// Extension badge (shared between browsed + uploaded cards)
+.extBadge {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 800;
+  @include m.mono;
+  flex-shrink: 0;
+  letter-spacing: 0.03em;
+  position: relative;
+  z-index: 1;
 
-  const stopPolling = useCallback(() => {
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
+  &.vtt {
+    background: linear-gradient(135deg, rgba(91, 164, 239, 0.18) 0%, rgba(139, 92, 246, 0.14) 100%);
+    color: var(--blue);
+    border: 1px solid rgba(91, 164, 239, 0.3);
+    box-shadow: 0 1px 4px rgba(91, 164, 239, 0.12);
+  }
+
+  &.srt {
+    background: linear-gradient(135deg, rgba(52, 211, 153, 0.18) 0%, rgba(56, 196, 186, 0.14) 100%);
+    color: var(--green);
+    border: 1px solid rgba(52, 211, 153, 0.3);
+    box-shadow: 0 1px 4px rgba(52, 211, 153, 0.12);
+  }
+}
+
+.fileInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.fileNameRow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.fileName {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--t0);
+  @include m.truncate;
+  margin-bottom: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.fileId {
+  font-size: 10px;
+  color: var(--t2);
+  @include m.mono;
+  flex-shrink: 0;
+  opacity: 0.65;
+}
+
+// ── File ID badge (shown before ext badge in card) ──
+.fileIdBadge {
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: #a78bfa;
+  background: rgba(167, 139, 250, 0.12);
+  border: 1px solid rgba(167, 139, 250, 0.3);
+  border-radius: 4px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+
+.fileMeta {
+  font-size: 12px;
+  color: var(--t2);
+  @include m.mono;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  flex-wrap: wrap;
+}
+
+.fileSizeChip {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 99px;
+  background: var(--bg3);
+  border: 1px solid var(--bdr);
+  color: var(--t2);
+}
+
+.fileStatusText {
+  font-size: 11px;
+  color: var(--t2);
+  opacity: 0.7;
+}
+
+.fileStatusTextSuccess {
+  font-size: 11px;
+  color: var(--green);
+  font-weight: 600;
+}
+
+.fileError {
+  color: var(--red);
+}
+
+// Status icon (upload progress)
+.statusIc {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  &.pending {
+    color: var(--t2);
+  }
+
+  &.uploading {
+    color: var(--blue);
+    animation: spin 0.9s linear infinite;
+  }
+
+  &.success {
+    color: var(--green);
+  }
+
+  &.failed {
+    color: var(--red);
+  }
+}
+
+.removeBtn {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0;
+  transition: all 0.12s;
+
+  svg {
+    width: 10px;
+    height: 10px;
+  }
+
+  &:hover {
+    background: var(--red-dim);
+    border-color: var(--red-bdr);
+    color: var(--red);
+  }
+}
+
+// Action bar (Upload / Cancel)
+.step1Footer {
+  flex-shrink: 0;
+  display: flex;
+  gap: 7px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--bdr);
+  background: var(--bg1);
+}
+
+.step1FooterBtn {
+  flex: 1;
+}
+
+// Upload progress bar
+.uploadSummary {
+  width: 100%;
+}
+
+.uploadProgressBar {
+  height: 3px;
+  background: var(--bg3);
+  border-radius: 99px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.uploadProgressFill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--blue), #a78bfa);
+  border-radius: 99px;
+  transition: width 0.4s ease;
+}
+
+.uploadProgressLabel {
+  font-size: 12px;
+  color: var(--t2);
+  @include m.mono;
+}
+
+.failCount {
+  color: var(--red);
+}
+
+// ══════════════════════════════════════
+// SECTION 2 — Uploaded files list
+// ══════════════════════════════════════
+.section2 {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg0);
+}
+
+// Section 2 header — stacked: title row + action row/grid below
+.section2Header {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0;
+  border-bottom: none;
+  background: var(--bg1);
+  flex-shrink: 0;
+  position: relative;
+}
+
+// Title row — checkbox + title + optional search icon
+.section2TitleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px 8px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.section2Title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--t2);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  @include m.mono;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.filesCount {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--blue);
+  background: var(--blue-dim);
+  border: 1px solid var(--blue-bdr);
+  padding: 1px 6px;
+  border-radius: 99px;
+}
+
+// Cross-page selection total — shown next to filesCount while in
+// select/delete/export mode so it's clear selections persist across pages.
+.selectedTotalHint {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--green);
+  background: var(--green-dim);
+  border: 1px solid var(--green-bdr);
+  padding: 1px 6px;
+  border-radius: 99px;
+  margin-left: 4px;
+}
+
+
+
+// ── Delete icon button (used inside mode-bar) ─────────────────
+.deleteIconBtn {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex-shrink: 0;
+  transition: all 0.15s;
+
+  svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  &:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.1);
+    border-color: rgba(239, 68, 68, 0.35);
+    color: #ef4444;
+  }
+
+  &:disabled {
+    opacity: 0.3;
+    cursor: default;
+  }
+}
+
+// Confirm-delete state — always red, solid
+.deleteIconBtnConfirm {
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+
+  &:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.22);
+    border-color: rgba(239, 68, 68, 0.7);
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.25);
+  }
+}
+
+.deleteIconBtnDisabled {
+  opacity: 0.4 !important;
+  cursor: default !important;
+}
+
+// ── Export icon button (used inside mode-bar) ─────────────────
+.exportIconBtn {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex-shrink: 0;
+  transition: all 0.15s;
+
+  svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  &:hover:not(:disabled) {
+    background: rgba(78, 200, 122, 0.10);
+    border-color: rgba(78, 200, 122, 0.35);
+    color: var(--green);
+  }
+
+  &:disabled {
+    opacity: 0.3;
+    cursor: default;
+  }
+}
+
+// Confirm-export state — always green, solid
+.exportIconBtnConfirm {
+  border-color: rgba(78, 200, 122, 0.45);
+  background: rgba(78, 200, 122, 0.10);
+  color: var(--green);
+
+  &:hover:not(:disabled) {
+    background: rgba(78, 200, 122, 0.20);
+    border-color: rgba(78, 200, 122, 0.70);
+    box-shadow: 0 0 8px rgba(78, 200, 122, 0.22);
+  }
+}
+
+.exportIconBtnDisabled {
+  opacity: 0.4 !important;
+  cursor: default !important;
+}
+
+.miniSpinner {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid rgba(239, 68, 68, 0.3);
+  border-top-color: #ef4444;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+.miniSpinnerGreen {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid rgba(78, 200, 122, 0.3);
+  border-top-color: #4ec87a;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+
+// ── Cancel icon button (used inside mode-bar) ─────────────────
+.cancelIconBtn {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.08);
+  color: #ef4444;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex-shrink: 0;
+  transition: all 0.15s;
+
+  svg {
+    width: 13px;
+    height: 13px;
+  }
+
+  &:hover {
+    background: rgba(239, 68, 68, 0.16);
+    border-color: rgba(239, 68, 68, 0.6);
+    box-shadow: 0 0 6px rgba(239, 68, 68, 0.2);
+  }
+}
+
+// Cards get pointer cursor only when in selection mode
+.uploadedCardWrapSelectable {
+  cursor: pointer;
+}
+
+// Date range filter — sits above section2Header
+.filterSortRow {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg1);
+  flex-shrink: 0;
+  position: relative;
+
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg,
+        rgba(139, 92, 246, 0.0) 0%,
+        rgba(139, 92, 246, 0.6) 20%,
+        rgba(56, 196, 186, 0.7) 50%,
+        rgba(240, 160, 48, 0.6) 80%,
+        rgba(240, 160, 48, 0.0) 100%);
+    pointer-events: none;
+  }
+}
+
+.sortHeader {
+  margin-left: auto;
+}
+
+// Row 2 — date filter + status filter on the left, actions trigger on the right
+.filterBarRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  width: 100%;
+}
+
+// Groups the status filter and the actions trigger together, pushed to
+// the right edge of the row, with a visible gap between the two.
+.filterBarRight {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+// Small caption shown inside the date/status/actions pills so their
+// purpose is legible at a glance, not just implied by an icon.
+.filterBarLabel {
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--t2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  @include m.mono;
+}
+
+// ── Actions — collapsed into a single trigger button + popover ──
+.actionsPopoverWrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.actionsTrigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--bdr2);
+  border-radius: var(--r);
+  background: var(--bg2);
+  color: var(--t1);
+  cursor: pointer;
+  transition: all 0.12s;
+
+  svg {
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+  }
+
+  &:hover {
+    background: var(--bg3);
+    border-color: var(--bdr3);
+  }
+}
+
+.actionsTriggerOpen {
+  background: var(--blue-dim);
+  border-color: var(--blue-bdr);
+  color: var(--blue);
+}
+
+.actionsTriggerChevron {
+  transition: transform 0.15s;
+
+  .actionsTriggerOpen & {
+    transform: rotate(180deg);
+  }
+}
+
+.actionsPopover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  min-width: 168px;
+  border: 1px solid var(--bdr2);
+  border-radius: var(--rl);
+  background: var(--bg1);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  animation: fadeSlide 0.14s ease;
+}
+
+.actionsPopover .actionTile {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.actionTile {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  gap: 5px;
+  padding: 0 9px;
+  border-radius: var(--r);
+  border: 1px solid transparent;
+  background: var(--bg3);
+  color: var(--t2);
+  font-size: 12px;
+  font-weight: 500;
+  font-family: var(--font-ui);
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: all 0.13s;
+  user-select: none;
+
+  svg {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+  }
+
+  &:active:not(:disabled) {
+    transform: scale(0.97);
+  }
+
+  &:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+}
+
+.actionTileLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.actionTileDictionary {
+  background: var(--violet-dim);
+  color: var(--violet);
+  border-color: var(--violet-dim);
+
+  &:hover:not(:disabled) { background: var(--violet-dim); border-color: var(--violet); }
+}
+
+.actionTileTemplate {
+  background: var(--teal-dim);
+  color: var(--teal);
+  border-color: var(--teal-bdr);
+
+  &:hover:not(:disabled) { background: var(--teal-dim); border-color: var(--teal); }
+}
+
+.actionTileSearch {
+  background: var(--amber-dim);
+  color: var(--amber);
+  border-color: var(--amber-bdr);
+
+  &:hover:not(:disabled) { background: var(--amber-dim); border-color: var(--amber); }
+}
+
+.actionTileExport {
+  background: var(--green-dim);
+  color: var(--green);
+  border-color: var(--green-bdr);
+
+  &:hover:not(:disabled) { background: var(--green-dim); border-color: var(--green); }
+}
+
+.actionTileDelete {
+  background: var(--red-dim);
+  color: var(--red);
+  border-color: var(--red-bdr);
+
+  &:hover:not(:disabled) { background: var(--red-dim); border-color: var(--red); }
+}
+
+.actionTileActive {
+  outline: 2px solid var(--blue-bdr);
+  outline-offset: -1px;
+}
+
+// Single-line, icon-led date filter — same 32px height as the rest of the row
+.dateFilter {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.dateIcon {
+  width: 14px;
+  height: 14px;
+  color: var(--t2);
+  flex-shrink: 0;
+}
+
+.dateField {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 118px;
+  flex-shrink: 0;
+}
+
+.dateLabel {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--t2);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  @include m.mono;
+}
+
+.dateInput {
+  width: 115px;
+  height: 32px;
+  padding: 0 8px;
+  background: var(--bg2);
+  border: 1px solid var(--bdr2);
+  border-radius: var(--r);
+  color: var(--t0);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  outline: none;
+  appearance: none;
+  transition: border-color 0.12s;
+  cursor: pointer;
+
+  &:focus {
+    border-color: var(--blue);
+    box-shadow: 0 0 0 2px var(--blue-dim);
+  }
+
+  &::-webkit-calendar-picker-indicator {
+    opacity: 0.7;
+    cursor: pointer;
+    filter: var(--date-icon-filter);
+  }
+}
+
+.dateSep {
+  font-size: 12px;
+  color: var(--t2);
+  flex-shrink: 0;
+}
+
+// ── Status filter ──────────────────────────────
+.statusFilterWrap {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.statusFilterSelect {
+  height: 32px;
+  padding: 0 8px;
+  background: var(--bg2);
+  border: 1px solid var(--bdr2);
+  border-radius: var(--r);
+  color: var(--t0);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.12s;
+
+  &:focus { border-color: var(--blue); }
+  &:disabled { opacity: 0.5; cursor: default; }
+}
+
+.applyBtn {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--r);
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t1);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.12s;
+
+  &:hover:not(:disabled) {
+    background: var(--bg3);
+    border-color: var(--bdr3);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}
+
+// Uploaded file cards
+.uploadedBody {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  align-content: start;
+  gap: 8px;
+  @include m.scrollbar;
+}
+
+// listState/errorState (loading, error, empty) span every column so they
+// don't get squeezed into a single grid cell
+.listState {
+  grid-column: 1 / -1;
+}
+
+// ── File cards — row layout, mirrors the SttTranscription .libCard
+// design: icon on the left, name/meta/status on the right, a left
+// status-bar colored by file status, and a shimmer sweep + lift on hover.
+.fcard {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px 10px 17px;
+  border-radius: var(--rl);
+  border: 1px solid var(--bdr3);
+  background: var(--bg1);
+  cursor: default;
+  text-align: left;
+  overflow: hidden;
+  user-select: none;
+  transition:
+    transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow 0.22s ease,
+    border-color 0.18s ease,
+    background 0.18s ease;
+
+  // 3px left status bar, colored per-status via fcardBar_* modifiers below
+  &::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--card-bar, transparent);
+    z-index: 1;
+    transition: width 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  // Shimmer sweep overlay — slides across on hover
+  &::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 60%;
+    height: 100%;
+    background: linear-gradient(105deg,
+        transparent 20%,
+        rgba(255, 255, 255, 0.04) 50%,
+        transparent 80%);
+    transition: left 0.45s ease;
+    pointer-events: none;
+    z-index: 2;
+  }
+}
+
+.fcardStatic {
+  cursor: default;
+}
+
+.fcard:not(.fcardStatic) {
+  cursor: pointer;
+
+  &:hover {
+    transform: translateY(-2px);
+    background: var(--bg2);
+    border-color: var(--bdr2);
+    box-shadow:
+      0 6px 20px rgba(0, 0, 0, 0.2),
+      0 1px 4px rgba(0, 0, 0, 0.08),
+      0 0 0 1px var(--bdr2);
+
+    &::before {
+      width: 4px;
     }
-    stopCountdown();
-    setCountdown(10);
-  }, [stopCountdown]);
 
-  const startPolling = useCallback(() => {
-    stopPolling();
-    startCountdown();
-    pollingRef.current = setInterval(async () => {
-      const stillRunning = await fetchFilesForPolling();
-      if (!stillRunning) stopPolling();
-      else startCountdown();
-    }, 10000);
-  }, [fetchFilesForPolling, stopPolling, startCountdown]);
-
-  useEffect(() => {
-    if (isBatchRunning) {
-      fetchFilesForPolling().then(stillRunning => {
-        if (stillRunning) startPolling();
-        else stopPolling();
-      });
-    } else {
-      stopPolling();
+    &::after {
+      left: 140%;
     }
-    return stopPolling;
-  }, [isBatchRunning]); // eslint-disable-line
 
-  // ── One-time bootstrap check on mount ──
-  // /files/by-date/ is now paginated and no longer tells us whether a batch
-  // is running (a running/queued file may simply be on another page), so we
-  // can't rely on its response to seed isBatchRunning like before. Ask
-  // /files/by-progress/ directly once on mount to catch a batch that was
-  // already running before this page loaded (e.g. after a refresh).
-  useEffect(() => {
-    fetchFilesForPolling().then(stillRunning => { if (stillRunning) startPolling(); });
-  }, []); // eslint-disable-line
-
-  // ── Stop a queued file ───────────────────────
-  const handleStop = useCallback(async (fileId: number) => {
-    setStoppingIds(prev => new Set(prev).add(fileId));
-    try {
-      await api.patch('/files/stop', { fileID: [fileId] });
-    } catch (err: any) {
-      if (err?.response?.status === 403) {
-        dispatch(addToast(t('uploadInfer.inferencePanel.stopAlready'), 'error'));
-      } else {
-        console.error('Stop file failed:', err);
-      }
-    } finally {
-      await fetchFilesForPolling();
-      setStoppingIds(prev => { const s = new Set(prev); s.delete(fileId); return s; });
+    .fcardIcon {
+      transform: scale(1.12);
     }
-  }, [fetchFilesForPolling]);
 
-  // ── Run inference ────────────────────────────
-  const handleRun = async () => {
-    if (!canRunInference) return;
-    setRunning(true);
-    try {
-      await api.post('/batch_process', {
-        all: false, // always false for now — file_ids-driven runs only
-        file_ids: selectedServerIds,
-        start_date: dateFrom,
-        end_date: dateTo,
-        model_name: selectedModel,
-        summary_prompt: settings.summaryPromptOverride,
-        faq_prompt: settings.questionPromptOverride,
-        keywords_prompt: settings.keywordPromptOverride,
-        short_answers_prompt: settings.shortAnswerPromptOverride,
-        true_false_prompt: settings.trueFalsePromptOverride,
-        generate_summary: settings.generateSummary,
-        generate_keywords: settings.generateKeywords,
-        generate_faq: settings.generateQuestions,
-        generate_short_answer: settings.generateShortAnswer,
-        generate_true_false: settings.generateTrueFalse,
-        // Only meaningful — and only ever sent true — when Keywords itself is on.
-        generate_keyword_insights: settings.generateKeywords && settings.generateKeywordInsights,
-        timestamped_summary: settings.timestampedSummary,
-        time_interval: settings.timeInterval,
-      });
-      const stillRunning = await fetchFilesForPolling();
-      if (stillRunning) startPolling();
-      dispatch(addToast(t('uploadInfer.inferencePanel.inferenceStarted'), 'success'));
-    } catch (err) {
-      console.error('Batch process failed:', err);
-    } finally {
-      setRunning(false);
+    .fcardName {
+      color: var(--t0);
     }
-  };
+  }
 
-  // ── Run button sub-label ─────────────────────
-  const runBtnSubLabel = (() => {
-    if (n === 0) return t('uploadInfer.inferencePanel.selectFilesFirst');
-    if (!selectedModel) return t('uploadInfer.inferencePanel.noModelSelected');
-    return `${n} file${n !== 1 ? 's' : ''} ready`;
-  })();
+  &:active {
+    transform: translateY(0px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
+    transition-duration: 0.08s;
+  }
+}
 
-  // ── Auto-fill prompts when exactly 1 file is selected ────────────
-  // Keyed off the *actual selected file id* (or a stable "multi"/"none"
-  // marker), not the selection count and not the selectedServerIds array
-  // reference. Redux can hand us a brand-new array reference for the same
-  // underlying selection on unrelated updates — keying off the array (or
-  // count alone) made this effect refire and stomp on prompt edits the
-  // user was still mid-typing, even though the selection hadn't changed.
-  const singleSelectedId = n === 1 ? selectedServerIds[0] : null;
-  const selectionKey = n === 1 ? `one:${singleSelectedId}` : n === 0 ? 'none' : 'multi';
-  const prevSelectionKey = useRef<string | null>(null);
-  useEffect(() => {
-    if (selectionKey === prevSelectionKey.current) return;
-    prevSelectionKey.current = selectionKey;
+// Status-bar colors, keyed off STATUS_META's `cls` values
+.fcardBar_bInferred    { --card-bar: var(--green); }
+.fcardBar_bRunning     { --card-bar: var(--blue); }
+.fcardBar_bQueued      { --card-bar: var(--amber); }
+.fcardBar_bError       { --card-bar: var(--red); }
+.fcardBar_bWaiting,
+.fcardBar_bNotInferred { --card-bar: var(--bdr3); }
 
-    if (n === 1) {
-      const file = selectFiles.find(f => f.id === singleSelectedId);
-      if (file) {
-        const s = file.summary_prompt ?? '';
-        const k = file.keywords_prompt ?? '';
-        const q = file.faq_prompt ?? '';
-        const sa = file.short_answer_prompt ?? '';
-        const tf = file.true_false_prompt ?? '';
-        dispatch(updateSummaryPrompt(s));
-        dispatch(updateKeywordPrompt(k));
-        dispatch(updateQuestionPrompt(q));
-        dispatch(updateShortAnswerPrompt(sa));
-        dispatch(updateTrueFalsePrompt(tf));
-        promptSnapshot.current = { summary: s, keyword: k, question: q, shortAnswer: sa, trueFalse: tf };
-      }
-    } else {
-      dispatch(updateSummaryPrompt(''));
-      dispatch(updateKeywordPrompt(''));
-      dispatch(updateQuestionPrompt(''));
-      dispatch(updateShortAnswerPrompt(''));
-      dispatch(updateTrueFalsePrompt(''));
-      promptSnapshot.current = { summary: '', keyword: '', question: '', shortAnswer: '', trueFalse: '' };
+.fcardActive,
+.fcardActiveView {
+  background: rgba(91, 164, 239, 0.06);
+  border-color: var(--blue-bdr);
+}
+
+.fcardActiveDelete {
+  background: var(--red-dim);
+  border-color: var(--red-bdr);
+}
+
+.fcardActiveExport {
+  background: var(--green-dim);
+  border-color: var(--green-bdr);
+}
+
+.fcardCheck {
+  position: relative;
+  z-index: 5;
+  flex-shrink: 0;
+}
+
+.fcardIcon {
+  position: relative;
+  z-index: 5;
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9.5px;
+  font-weight: 700;
+  transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  &.vtt { background: var(--blue-dim); color: var(--blue); }
+  &.srt { background: var(--green-dim); color: var(--green); }
+}
+
+// No longer needed now the checkbox sits inline rather than overlapping
+// the icon's corner, kept as a no-op so existing call sites don't break.
+.fcardIconShifted {
+  top: auto;
+}
+
+.fcardInfo {
+  position: relative;
+  z-index: 5;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.fcardNameRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fcardName {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--t0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fcardMeta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--t2);
+  flex-wrap: nowrap;
+  @include m.mono;
+}
+
+.fcardMetaSep {
+  opacity: 0.5;
+}
+
+// Dictionary / prompt-template association icons — now sit inline next to
+// the filename instead of floating in the card's corner.
+.fcardLinks {
+  display: flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.fcardLinkIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  flex-shrink: 0;
+
+  svg { width: 10px; height: 10px; }
+}
+
+.fcardLinkIconDict {
+  background: var(--amber-dim);
+  color: var(--amber);
+}
+
+.fcardLinkIconTemplate {
+  background: var(--violet-dim);
+  color: var(--violet);
+}
+
+// Compact toolbar of "which content prompts are customized" buttons
+// (Summary, Keywords, Questions, short Answer, True/false).
+.fcardPrompts {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  cursor: default;
+}
+
+.fcardPromptDot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  background: var(--bg2);
+  color: var(--t2);
+  cursor: pointer;
+  transition: all 0.12s;
+  flex-shrink: 0;
+
+  svg { width: 10px; height: 10px; }
+
+  &:hover {
+    background: var(--bg3);
+    border-color: var(--bdr3);
+    color: var(--t0);
+    transform: translateY(-1px);
+  }
+}
+
+.fcardPromptDotSet {
+  background: var(--blue-dim);
+  color: var(--blue);
+  border-color: var(--blue-bdr);
+
+  &:hover {
+    background: var(--blue-dim);
+    color: var(--blue);
+    border-color: var(--blue);
+    opacity: 0.9;
+  }
+}
+
+.fcardBadgeDot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: fcardPulse 1.4s ease-in-out infinite;
+}
+
+@keyframes fcardPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+// Status pill — now inline at the end of the meta row instead of an
+// absolutely-positioned bottom banner.
+.fcardBadge {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 10px;
+  padding: 3px 8px;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// ── Uploaded card wrap — carries the static green gradient border ──
+// ── Uploaded file card — mirrors HistoryPanel .hitm ──────────────
+.hitm {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 9px;
+  border-radius: var(--r);
+  border: 1px solid transparent;
+  transition: all 0.12s;
+  margin-bottom: 3px;
+  user-select: none;
+
+  &:hover {
+    background: var(--bg2);
+    border-color: var(--bdr);
+  }
+
+  &.active {
+    background: rgba(91, 164, 239, 0.06);
+    border-color: var(--blue-bdr);
+
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 6px;
+      bottom: 6px;
+      width: 3px;
+      border-radius: 0 3px 3px 0;
+      background: linear-gradient(180deg, var(--blue), #a78bfa);
     }
-    setPromptSaveError(null);
-  }, [selectionKey]); // eslint-disable-line
+  }
 
-  // ── Per-file prompt preview expand/collapse ──
-  const [summaryExpanded, setSummaryExpanded] = useState(false);
-  const [keywordExpanded, setKeywordExpanded] = useState(false);
-  const [questionExpanded, setQuestionExpanded] = useState(false);
-  const [shortAnswerExpanded, setShortAnswerExpanded] = useState(false);
-  const [trueFalseExpanded, setTrueFalseExpanded] = useState(false);
+  // Normal-mode file view highlight — distinct purple/amber accent
+  &.activeView {
+    background: rgba(167, 139, 250, 0.06);
+    border-color: rgba(167, 139, 250, 0.3);
 
-  const prevSelectedCount = useRef(selectedServerIds.length);
-  useEffect(() => {
-    if (selectedServerIds.length !== prevSelectedCount.current) {
-      prevSelectedCount.current = selectedServerIds.length;
-      setSummaryExpanded(false);
-      setKeywordExpanded(false);
-      setQuestionExpanded(false);
-      setShortAnswerExpanded(false);
-      setTrueFalseExpanded(false);
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 6px;
+      bottom: 6px;
+      width: 3px;
+      border-radius: 0 3px 3px 0;
+      background: linear-gradient(180deg, #a78bfa, var(--amber));
     }
-  });
+  }
 
-  const selectedFiles = selectFiles.filter(f => selectedServerIds.includes(f.id));
+  // Delete mode selected — red accent
+  &.activeDelete {
+    background: rgba(239, 68, 68, 0.05);
+    border-color: rgba(239, 68, 68, 0.3);
 
-  const handlePromptCancel = () => {
-    dispatch(updateSummaryPrompt(promptSnapshot.current.summary));
-    dispatch(updateKeywordPrompt(promptSnapshot.current.keyword));
-    dispatch(updateQuestionPrompt(promptSnapshot.current.question));
-    dispatch(updateShortAnswerPrompt(promptSnapshot.current.shortAnswer));
-    dispatch(updateTrueFalsePrompt(promptSnapshot.current.trueFalse));
-    setPromptSaveError(null);
-  };
-
-  const handlePromptSave = async () => {
-    setPromptSaving(true);
-    setPromptSaveError(null);
-    try {
-      const payload: Record<string, unknown> = {
-        file_ids: selectedServerIds,
-      };
-      if (settings.generateSummary) payload.summary_prompt = settings.summaryPromptOverride;
-      if (settings.generateKeywords) payload.keywords_prompt = settings.keywordPromptOverride;
-      if (settings.generateQuestions) payload.faq_prompt = settings.questionPromptOverride;
-      if (settings.generateShortAnswer) payload.short_answers_prompt = settings.shortAnswerPromptOverride;
-      if (settings.generateTrueFalse) payload.true_false_prompt = settings.trueFalsePromptOverride;
-
-      await api.post('/prompt_update', payload);
-
-      dispatch(updateFilePrompts({
-        fileIds: selectedServerIds,
-        ...(settings.generateSummary && { summaryPrompt: settings.summaryPromptOverride }),
-        ...(settings.generateKeywords && { keywordsPrompt: settings.keywordPromptOverride }),
-        ...(settings.generateQuestions && { faqPrompt: settings.questionPromptOverride }),
-        ...(settings.generateShortAnswer && { shortAnswerPrompt: settings.shortAnswerPromptOverride }),
-        ...(settings.generateTrueFalse && { trueFalsePrompt: settings.trueFalsePromptOverride }),
-      }));
-
-      promptSnapshot.current = {
-        summary: settings.summaryPromptOverride,
-        keyword: settings.keywordPromptOverride,
-        question: settings.questionPromptOverride,
-        shortAnswer: settings.shortAnswerPromptOverride,
-        trueFalse: settings.trueFalsePromptOverride,
-      };
-    } catch {
-      setPromptSaveError(t('uploadInfer.inferencePanel.promptSaveFail'));
-    } finally {
-      setPromptSaving(false);
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 6px;
+      bottom: 6px;
+      width: 3px;
+      border-radius: 0 3px 3px 0;
+      background: linear-gradient(180deg, #ef4444, #f97316);
     }
-  };
+  }
 
-  return (
-    <div className={`${styles.infpanel} ${minimized ? styles.infpanelMinimized : ''}`}>
+  // Export mode selected — green accent
+  &.activeExport {
+    background: rgba(78, 200, 122, 0.05);
+    border-color: rgba(78, 200, 122, 0.28);
 
-      {/* ── Minimized rail ── */}
-      {minimized ? (
-        <button
-          type="button"
-          className={styles.minRail}
-          onClick={onToggleMinimize}
-          title={t('uploadInfer.inferencePanel.expandStep2')}
-          aria-label={t('uploadInfer.inferencePanel.expandStep2')}
-        >
-          <span className={styles.minRailIcon}>
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-              strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M6 4l4 4-4 4" />
-            </svg>
-          </span>
-          <span className={styles.minRailLabel}>
-            {t('uploadInfer.inferencePanel.step2Label').replace('Configuration', '').replace('2 —', '2 —')}
-            {isBatchRunning && <span className={styles.minRailDot} />}
-          </span>
-        </button>
-      ) : (
-        <>
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 6px;
+      bottom: 6px;
+      width: 3px;
+      border-radius: 0 3px 3px 0;
+      background: linear-gradient(180deg, #4ec87a, #38c4ba);
+    }
+  }
+}
 
-          {/* ── Header ── */}
-          <div className={styles.infpanelHead}>
-            <div>
-              <div className={styles.slbl}>
-                {isBatchRunning ? (
-                  <span className={styles.inferenceRunningLabel}>{t('uploadInfer.inferencePanel.step2Running')}</span>
-                ) : t('uploadInfer.inferencePanel.step2Label')}
-              </div>
-              <div className={styles.selSummary}>
-                {t('uploadInfer.inferencePanel.filesSelected', { count: n })}
-                {isBatchRunning && <span className={styles.batchRunPill}><span className={styles.batchRunDot} />{t('uploadInfer.inferencePanel.batchRunPill')}</span>}
-              </div>
-            </div>
-            <div className={styles.headActions}>
-              {!isBatchRunning && (
-                <>
-                  {/* ── Run Inference button — large, self-describing ── */}
-                  <button
-                    className={`${styles.runBtn} ${canRunInference ? styles.runBtnReady : styles.runBtnDisabled}`}
-                    onClick={handleRun}
-                    disabled={!canRunInference}
-                    data-tour="infer-run"
-                    aria-label={`Run inference on ${n} file${n !== 1 ? 's' : ''}`}
-                  >
-                    <span className={styles.runBtnIconWrap}>
-                      <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
-                        <path d="M5 3l8 5-8 5V3z" fill="currentColor" />
-                      </svg>
-                    </span>
-                    <span className={styles.runBtnText}>
-                      <span className={styles.runBtnTitle}>Run inference</span>
-                      <span className={styles.runBtnSub}>{runBtnSubLabel}</span>
-                    </span>
-                  </button>
+.hitmSelectable {
+  cursor: pointer;
+}
 
-                  {onToggleMinimize && (
-                    <button
-                      className={styles.minimizeStepBtn}
-                      onClick={onToggleMinimize}
-                      title={t('uploadInfer.inferencePanel.minimizeStep2')}
-                      aria-label={t('uploadInfer.inferencePanel.minimizeStep2')}
-                    >
-                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                        strokeWidth="1.6" strokeLinecap="round">
-                        <path d="M3 8h10" />
-                      </svg>
-                    </button>
-                  )}
-                  {onClose && (
-                    <button
-                      className={styles.closeStepBtn}
-                      onClick={onClose}
-                      title={t('uploadInfer.inferencePanel.closeStep2')}
-                    >
-                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                        <path d="M4 4l8 8M12 4l-8 8" />
-                      </svg>
-                    </button>
-                  )}
-                </>
-              )}
-              {isBatchRunning && onToggleMinimize && (
-                <button
-                  className={styles.minimizeStepBtn}
-                  onClick={onToggleMinimize}
-                  title={t('uploadInfer.inferencePanel.minimizeStep2')}
-                  aria-label={t('uploadInfer.inferencePanel.minimizeStep2')}
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                    strokeWidth="1.6" strokeLinecap="round">
-                    <path d="M3 8h10" />
-                  </svg>
-                </button>
-              )}
-            </div>
-          </div>
+// ── Ext icon ──
+.ficon {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  @include m.mono;
+  flex-shrink: 0;
+
+  &.vtt {
+    background: var(--blue-dim);
+    color: var(--blue);
+  }
+
+  &.srt {
+    background: var(--green-dim);
+    color: var(--green);
+  }
+}
+
+// ── File info ──
+.hi {
+  flex: 1;
+  min-width: 0;
+}
+
+.hn {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--t0);
+  @include m.truncate;
+}
+
+.hm {
+  font-size: 12px;
+  color: var(--t2);
+  margin-top: 2px;
+  @include m.mono;
+}
+
+// Empty / loading / error state
+.listState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 32px 16px;
+  font-size: 13px;
+  color: var(--t2);
+  @include m.mono;
+  text-align: center;
+
+  svg {
+    width: 18px;
+    height: 18px;
+    opacity: 0.5;
+  }
+}
+
+.errorState {
+  color: var(--red);
+
+  svg {
+    opacity: 0.7;
+  }
+}
+
+.spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--bdr2);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+// ── Search icon button ──────────────────────────
+.searchIconBtn {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex-shrink: 0;
+  transition: all 0.15s;
+
+  svg {
+    width: 13px;
+    height: 13px;
+  }
+
+  &:hover {
+    background: var(--bg3);
+    border-color: var(--bdr3);
+    color: var(--t0);
+  }
+}
+
+.searchIconBtnActive {
+  border-color: var(--blue-bdr);
+  background: var(--blue-dim);
+  color: var(--blue);
+
+  &:hover {
+    background: var(--blue-dim);
+    border-color: var(--blue);
+    color: var(--blue);
+  }
+}
+
+// ── Search bar (slides in below sortHeader) ──────
+.searchBar {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.18s ease;
+  overflow: hidden;
+  padding: 0 10px;
+}
+
+.searchBarOpen {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  padding: 6px 10px 4px;
+}
+
+// Flex row: input box + close button — right-aligned, capped width so
+// it doesn't stretch across the whole panel.
+.searchBarRow {
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.searchInner {
+  flex: 0 1 320px;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg2);
+  border: 1px solid var(--bdr2);
+  border-radius: var(--r);
+  padding: 0 8px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+
+  &:focus-within {
+    border-color: var(--blue);
+    box-shadow: 0 0 0 2px var(--blue-dim);
+  }
+}
+
+.searchBarIcon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: var(--t2);
+  opacity: 0.6;
+}
+
+.searchInput {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--t0);
+  font-family: var(--font-ui);
+  font-size: 13px;
+
+  &::placeholder {
+    color: var(--t2);
+    opacity: 0.55;
+  }
+}
+
+.searchCloseBtn {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: rgba(239, 68, 68, 0.08);
+  color: #ef4444;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex-shrink: 0;
+  transition: all 0.12s;
+
+  svg {
+    width: 8px;
+    height: 8px;
+  }
+
+  &:hover {
+    background: rgba(239, 68, 68, 0.18);
+    border-color: rgba(239, 68, 68, 0.6);
+    box-shadow: 0 0 6px rgba(239, 68, 68, 0.2);
+  }
+}
+
+.searchCount {
+  font-size: 11px;
+  color: var(--t2);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 
 
-          {/* ── Main body ── */}
-          <div className={`${styles.infpanelBody} ${isBatchRunning ? styles.infpanelBodyRunning : styles.infpanelBodyConfig}`}>
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-weight: 500;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  @include m.mono;
+}
 
-            {/* ── Submitting overlay — shown while awaiting /batch_process ── */}
-            {running && (
-              <div className={styles.submittingOverlay}>
-                <div className={styles.submittingCard}>
-                  <div className={styles.submittingSpinner} />
-                  <div className={styles.submittingTitle}>{t('uploadInfer.inferencePanel.submitting')}</div>
-                  <div className={styles.submittingDesc}>
-                    {t('uploadInfer.inferencePanel.submittingDesc', { count: n }).split('\n').map((line, i) => <React.Fragment key={i}>{line}{i === 0 && <br />}</React.Fragment>)}
-                  </div>
-                  <div className={styles.submittingFiles}>
-                    {selectedServerIds.slice(0, 5).map((id, i) => {
-                      const f = selectFiles.find(sf => sf.id === id);
-                      return f ? (
-                        <div key={id} className={styles.submittingFile}>
-                          <span className={styles.submittingDot} style={{ animationDelay: `${i * 0.15}s` }} />
-                          {f.original_name}
-                        </div>
-                      ) : null;
-                    })}
-                    {selectedServerIds.length > 5 && (
-                      <div className={styles.submittingMore}>+{selectedServerIds.length - 5} more</div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
+.bReady {
+  background: var(--green-dim);
+  color: var(--green);
+  border-color: var(--green-bdr);
+}
 
-            {/* Selection banner — hidden while batch running or submitting */}
-            {!isBatchRunning && !running && <div className={styles.selBanner}>
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="var(--blue)" strokeWidth="1.5" strokeLinecap="round">
-                <path d="M2 8h12M8 3l5 5-5 5" />
-              </svg>
-              <span className={styles.selCt}>{n} file{n !== 1 ? 's' : ''}</span>
-              <span className={styles.selNm}>
-                {n === 0 ? t('uploadInfer.inferencePanel.selBannerEmpty') : `${n} file${n !== 1 ? 's' : ''} selected for inference`}
-              </span>
-            </div>}
+// Inferenced — green (file has completed inference)
+.bInferred {
+  background: var(--green-dim);
+  color: var(--green);
+  border-color: var(--green-bdr);
+}
 
-            {/* ── Settings — hidden while batch running or submitting ── */}
-            {!isBatchRunning && !running && <div className={styles.infSettingsWrap} data-tour="infer-settings">
-              <div className={styles.settingsGrid}>
+// Not Inferenced — amber (file uploaded but not yet processed)
+.bNotInferred {
+  background: rgba(240, 160, 48, 0.1);
+  color: var(--amber);
+  border-color: rgba(240, 160, 48, 0.3);
+}
 
-                {/* Generate content card */}
-                <div className={styles.card}>
-                  <div className={styles.cardT}>{t('uploadInfer.inferencePanel.generateContent')}</div>
+// Running — blue, with the pulsing dot from fcardBadgeDot
+.bRunning {
+  background: var(--blue-dim);
+  color: var(--blue);
+  border-color: var(--blue-bdr);
+}
 
-                  {/* Model dropdown — moved to the top; deliberately narrow rather than spanning the row */}
-                  <div className={styles.modelFieldTop} data-tour="infer-model">
-                    <div className={styles.fg}>
-                      <div className={styles.modelLabelRow}>
-                        <label className={styles.fl}>
-                          {t('uploadInfer.inferencePanel.modelLabel')} {mlLoading && <span className={styles.loadingDot}>…</span>}
-                        </label>
-                        <button
-                          className={styles.refreshBtn}
-                          onClick={fetchModels}
-                          disabled={mlLoading}
-                          title={t('uploadInfer.inferencePanel.refreshModels')}
-                        >
-                          <svg
-                            viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                            strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"
-                            className={mlLoading ? styles.spinning : undefined}
-                          >
-                            <path d="M13.5 8A5.5 5.5 0 1 1 10 3.07" />
-                            <path d="M10 2v3h3" />
-                          </svg>
-                          Refresh
-                        </button>
-                      </div>
-                      <select className={styles.fc} value={selectedModel}
-                        onChange={e => dispatch(setSelectedModel(e.target.value))}
-                        disabled={mlLoading || models.length === 0}>
-                        {models.length === 0
-                          ? <option value="">{t('uploadInfer.inferencePanel.noModelsOption')}</option>
-                          : models.map(m => <option key={m} value={m}>{m}</option>)
-                        }
-                      </select>
-                      {!mlLoading && models.length === 0 && (
-                        <div className={styles.modelWarn}>
-                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                            <path d="M8 2L14 13H2L8 2z" /><path d="M8 7v3M8 11.5v.1" />
-                          </svg>
-                          {t('uploadInfer.inferencePanel.noModels')}
-                        </div>
-                      )}
-                      {!mlLoading && models.length > 0 && (
-                        <div className={styles.modelOk}>
-                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                            <circle cx="8" cy="8" r="5.5" /><path d="M5.5 8l2 2 3-3" />
-                          </svg>
-                          {t('uploadInfer.inferencePanel.modelsAvailable', { count: models.length })}
-                        </div>
-                      )}
-                    </div>
-                  </div>
+// Queued — amber, waiting its turn in the batch
+.bQueued {
+  background: rgba(240, 160, 48, 0.1);
+  color: var(--amber);
+  border-color: rgba(240, 160, 48, 0.3);
+}
 
-                  <div className={styles.genContentCols}>
+// Error — red, inference failed for this file
+.bError {
+  background: var(--red-dim);
+  color: var(--red);
+  border-color: var(--red-bdr);
+}
 
-                  {/* ── Left column: all checkboxes ── */}
-                  <div className={styles.checkboxCol}>
+// Waiting — neutral gray, distinct from "not inferenced" (amber)
+.bWaiting {
+  background: var(--bg2);
+  color: var(--t2);
+  border-color: var(--bdr2);
+}
 
-                    <div data-tour="infer-check-summary"
-                      className={`${styles.cr} ${isChecked(settings.generateSummary) ? styles.ck : ''} ${styles.mb8} ${noFilesSelected ? styles.crDisabled : ''}`}
-                      onClick={() => { if (noFilesSelected) return; dispatch(updateSettings({ generateSummary: !settings.generateSummary })); }}
-                    >
-                      <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateSummary')}</label>
-                    </div>
+.bSelected {
+  background: var(--blue-dim);
+  color: var(--blue);
+  border-color: var(--blue-bdr);
+  font-weight: 600;
+}
 
-                    <div data-tour="infer-check-keywords"
-                      className={`${styles.cr} ${isChecked(settings.generateKeywords) ? styles.ck : ''} ${styles.mb8} ${noFilesSelected ? styles.crDisabled : ''}`}
-                      onClick={() => {
-                        if (noFilesSelected) return;
-                        dispatch(updateSettings({
-                          generateKeywords: !settings.generateKeywords,
-                          // Force the nested toggle off when the parent turns off,
-                          // so a stale "on" state can never leak into the request.
-                          ...(settings.generateKeywords ? { generateKeywordInsights: false } : {}),
-                        }));
-                      }}
-                    >
-                      <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateKeywords')}</label>
-                    </div>
-                    {isChecked(settings.generateKeywords) && (
-                      <div
-                        className={`${styles.crNested} ${isChecked(settings.generateKeywordInsights) ? styles.ck : ''} ${styles.mb8}`}
-                        onClick={(e) => { e.stopPropagation(); if (noFilesSelected) return; dispatch(updateSettings({ generateKeywordInsights: !settings.generateKeywordInsights })); }}
-                      >
-                        <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateKeywordInsights')}</label>
-                      </div>
-                    )}
+.bDelete {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.3);
+  font-weight: 600;
+}
 
-                    <div data-tour="infer-check-questions"
-                      className={`${styles.cr} ${isChecked(settings.generateQuestions) ? styles.ck : ''} ${styles.mb8} ${noFilesSelected ? styles.crDisabled : ''}`}
-                      onClick={() => { if (noFilesSelected) return; dispatch(updateSettings({ generateQuestions: !settings.generateQuestions })); }}
-                    >
-                      <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateQuestions')}</label>
-                    </div>
+.bExport {
+  background: var(--green-dim);
+  color: var(--green);
+  border-color: var(--green-bdr);
+  font-weight: 600;
+  gap: 4px;
+}
 
-                    <div data-tour="infer-check-shortanswer"
-                      className={`${styles.cr} ${isChecked(settings.generateShortAnswer) ? styles.ck : ''} ${styles.mb8} ${noFilesSelected ? styles.crDisabled : ''}`}
-                      onClick={() => { if (noFilesSelected) return; dispatch(updateSettings({ generateShortAnswer: !settings.generateShortAnswer })); }}
-                    >
-                      <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateShortAnswer')}</label>
-                    </div>
+.bInfo {
+  background: var(--blue-dim);
+  color: var(--blue);
+  border-color: var(--blue-bdr);
+}
 
-                    <div data-tour="infer-check-truefalse"
-                      className={`${styles.cr} ${isChecked(settings.generateTrueFalse) ? styles.ck : ''} ${styles.mb8} ${noFilesSelected ? styles.crDisabled : ''}`}
-                      onClick={() => { if (noFilesSelected) return; dispatch(updateSettings({ generateTrueFalse: !settings.generateTrueFalse })); }}
-                    >
-                      <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateTrueFalse')}</label>
-                    </div>
+// ── Buttons ───────────────────────────────────
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 13px;
+  border-radius: var(--r);
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t1);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+  user-select: none;
 
-                    <div data-tour="infer-check-timestamped"
-                      className={`${styles.cr} ${isChecked(settings.timestampedSummary) ? styles.ck : ''} ${styles.mb8} ${noFilesSelected ? styles.crDisabled : ''}`}
-                      onClick={() => { if (noFilesSelected) return; dispatch(updateSettings({ timestampedSummary: !settings.timestampedSummary })); }}
-                    >
-                      <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.timestampedSummary')}</label>
-                    </div>
-                    {isChecked(settings.timestampedSummary) && (
-                      <div className={styles.nestedField} onClick={(e) => e.stopPropagation()}>
-                        <label>{t('uploadInfer.inferencePanel.timeInterval')}</label>
-                        <select
-                          className={styles.fc}
-                          value={settings.timeInterval}
-                          onChange={e => dispatch(updateSettings({ timeInterval: Number(e.target.value) as TimeInterval }))}
-                        >
-                          {([5, 10, 15, 20, 30, 45, 60] as const).map(min => (
-                            <option key={min} value={min}>{t('uploadInfer.inferencePanel.minutesOption', { count: min })}</option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
+  svg {
+    width: 11px;
+    height: 11px;
+  }
 
-                  </div>
+  &:hover {
+    background: var(--bg3);
+    color: var(--t0);
+    border-color: var(--bdr3);
+  }
 
-                  {/* ── Right column: prompt panel for whichever checkboxes are on ── */}
-                  <div className={styles.promptCol}>
+  &:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+}
 
-                    {!isChecked(settings.generateSummary) && !isChecked(settings.generateKeywords)
-                      && !isChecked(settings.generateQuestions) && !isChecked(settings.generateShortAnswer)
-                      && !isChecked(settings.generateTrueFalse) && (
-                      <div className={styles.noPromptHint}>
-                        {noFilesSelected
-                          ? t('uploadInfer.inferencePanel.selBannerEmpty')
-                          : t('uploadInfer.inferencePanel.noPromptHint', 'Check an option on the left to set its prompt')}
-                      </div>
-                    )}
+.btnP {
+  background: var(--blue);
+  color: #fff;
+  border-color: var(--blue);
+  font-weight: 600;
 
-                    {isChecked(settings.generateSummary) && (
-                      <div className={styles.promptCard}>
-                        <div className={styles.fg}>
-                          <div className={styles.flRow}>
-                            <label className={styles.fl}>
-                              {t('uploadInfer.inferencePanel.summaryPrompt')} <span className={styles.optTag}>{t('uploadInfer.inferencePanel.optional')}</span>
-                            </label>
-                            {n > 1 && (
-                              <button
-                                className={`${styles.perFileBtn} ${summaryExpanded ? styles.perFileBtnActive : ''}`}
-                                onClick={(e) => { e.stopPropagation(); setSummaryExpanded(v => !v); }}
-                                title={summaryExpanded ? 'Collapse per-file prompts' : 'View per-file prompts'}
-                              >
-                                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                  <rect x="1.5" y="2" width="11" height="10" rx="2" />
-                                  <path d="M4 5h6M4 7.5h4" />
-                                </svg>
-                                {summaryExpanded ? 'Hide' : t('uploadInfer.inferencePanel.perFile')}
-                                <svg className={`${styles.perFileChevron} ${summaryExpanded ? styles.perFileChevronOpen : ''}`} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                                  <path d="M2 3.5l3 3 3-3" />
-                                </svg>
-                              </button>
-                            )}
-                          </div>
-                          <div className={`${styles.perFilePanel} ${summaryExpanded ? styles.perFilePanelOpen : ''}`}>
-                            <div className={styles.perFilePanelInner}>
-                              {selectedFiles.map(f => (
-                                <div key={f.id} className={styles.perFileRow}>
-                                  <div className={styles.perFileName}>{f.original_name}</div>
-                                  <div className={styles.perFilePrompt}>{f.summary_prompt || <span className={styles.perFileEmpty}>{t('uploadInfer.inferencePanel.noPromptSet')}</span>}</div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                          <textarea className={styles.fc} rows={3}
-                            value={settings.summaryPromptOverride}
-                            placeholder={n === 1 ? t('uploadInfer.inferencePanel.autofillPlaceholder') : t('uploadInfer.inferencePanel.manualPlaceholder')}
-                            onChange={e => dispatch(updateSummaryPrompt(e.target.value))} />
-                        </div>
-                      </div>
-                    )}
+  &:hover {
+    background: #a78bfa;
+    border-color: #a78bfa;
+    color: #fff;
+  }
+}
 
-                    {isChecked(settings.generateKeywords) && (
-                      <div className={styles.promptCard}>
-                        <div className={styles.fg}>
-                          <div className={styles.flRow}>
-                            <label className={styles.fl}>
-                              {t('uploadInfer.inferencePanel.keywordPrompt')} <span className={styles.optTag}>{t('uploadInfer.inferencePanel.optional')}</span>
-                            </label>
-                            {n > 1 && (
-                              <button
-                                className={`${styles.perFileBtn} ${keywordExpanded ? styles.perFileBtnActive : ''}`}
-                                onClick={(e) => { e.stopPropagation(); setKeywordExpanded(v => !v); }}
-                                title={keywordExpanded ? 'Collapse per-file prompts' : 'View per-file prompts'}
-                              >
-                                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                  <rect x="1.5" y="2" width="11" height="10" rx="2" />
-                                  <path d="M4 5h6M4 7.5h4" />
-                                </svg>
-                                {keywordExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.perFile')}
-                                <svg className={`${styles.perFileChevron} ${keywordExpanded ? styles.perFileChevronOpen : ''}`} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                                  <path d="M2 3.5l3 3 3-3" />
-                                </svg>
-                              </button>
-                            )}
-                          </div>
-                          <div className={`${styles.perFilePanel} ${keywordExpanded ? styles.perFilePanelOpen : ''}`}>
-                            <div className={styles.perFilePanelInner}>
-                              {selectedFiles.map(f => (
-                                <div key={f.id} className={styles.perFileRow}>
-                                  <div className={styles.perFileName}>{f.original_name}</div>
-                                  <div className={styles.perFilePrompt}>{f.keywords_prompt || <span className={styles.perFileEmpty}>No prompt set</span>}</div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                          <textarea className={styles.fc} rows={3}
-                            value={settings.keywordPromptOverride}
-                            placeholder={n === 1 ? 'Autofilled from file — edit to override…' : 'Leave blank to use per-file prompts…'}
-                            onChange={e => dispatch(updateKeywordPrompt(e.target.value))} />
-                        </div>
-                      </div>
-                    )}
+.btnSm {
+  padding: 4px 10px;
+  font-size: 13px;
+}
 
-                    {isChecked(settings.generateQuestions) && (
-                      <div className={styles.promptCard}>
-                        <div className={styles.fg}>
-                          <div className={styles.flRow}>
-                            <label className={styles.fl}>
-                              {t('uploadInfer.inferencePanel.questionPrompt')} <span className={styles.optTag}>{t('uploadInfer.inferencePanel.optional')}</span>
-                            </label>
-                            {n > 1 && (
-                              <button
-                                className={`${styles.perFileBtn} ${questionExpanded ? styles.perFileBtnActive : ''}`}
-                                onClick={(e) => { e.stopPropagation(); setQuestionExpanded(v => !v); }}
-                                title={questionExpanded ? 'Collapse per-file prompts' : 'View per-file prompts'}
-                              >
-                                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                  <rect x="1.5" y="2" width="11" height="10" rx="2" />
-                                  <path d="M4 5h6M4 7.5h4" />
-                                </svg>
-                                {questionExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.perFile')}
-                                <svg className={`${styles.perFileChevron} ${questionExpanded ? styles.perFileChevronOpen : ''}`} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                                  <path d="M2 3.5l3 3 3-3" />
-                                </svg>
-                              </button>
-                            )}
-                          </div>
-                          <div className={`${styles.perFilePanel} ${questionExpanded ? styles.perFilePanelOpen : ''}`}>
-                            <div className={styles.perFilePanelInner}>
-                              {selectedFiles.map(f => (
-                                <div key={f.id} className={styles.perFileRow}>
-                                  <div className={styles.perFileName}>{f.original_name}</div>
-                                  <div className={styles.perFilePrompt}>{f.faq_prompt || <span className={styles.perFileEmpty}>No prompt set</span>}</div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                          <textarea className={styles.fc} rows={3}
-                            value={settings.questionPromptOverride}
-                            placeholder={n === 1 ? 'Autofilled from file — edit to override…' : 'Leave blank to use per-file prompts…'}
-                            onChange={e => dispatch(updateQuestionPrompt(e.target.value))} />
-                        </div>
-                      </div>
-                    )}
+.btnFull {
+  flex: 1;
+}
 
-                    {isChecked(settings.generateShortAnswer) && (
-                      <div className={styles.promptCard}>
-                        <div className={styles.fg}>
-                          <div className={styles.flRow}>
-                            <label className={styles.fl}>
-                              {t('uploadInfer.inferencePanel.shortAnswerPrompt')} <span className={styles.optTag}>{t('uploadInfer.inferencePanel.optional')}</span>
-                            </label>
-                            {n > 1 && (
-                              <button
-                                className={`${styles.perFileBtn} ${shortAnswerExpanded ? styles.perFileBtnActive : ''}`}
-                                onClick={(e) => { e.stopPropagation(); setShortAnswerExpanded(v => !v); }}
-                                title={shortAnswerExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.viewPerFile')}
-                              >
-                                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                  <rect x="1.5" y="2" width="11" height="10" rx="2" />
-                                  <path d="M4 5h6M4 7.5h4" />
-                                </svg>
-                                {shortAnswerExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.perFile')}
-                                <svg className={`${styles.perFileChevron} ${shortAnswerExpanded ? styles.perFileChevronOpen : ''}`} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                                  <path d="M2 3.5l3 3 3-3" />
-                                </svg>
-                              </button>
-                            )}
-                          </div>
-                          <div className={`${styles.perFilePanel} ${shortAnswerExpanded ? styles.perFilePanelOpen : ''}`}>
-                            <div className={styles.perFilePanelInner}>
-                              {selectedFiles.map(f => (
-                                <div key={f.id} className={styles.perFileRow}>
-                                  <div className={styles.perFileName}>{f.original_name}</div>
-                                  <div className={styles.perFilePrompt}>{f.short_answer_prompt || <span className={styles.perFileEmpty}>{t('uploadInfer.inferencePanel.noPromptSet')}</span>}</div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                          <textarea className={styles.fc} rows={3}
-                            value={settings.shortAnswerPromptOverride}
-                            placeholder={n === 1 ? t('uploadInfer.inferencePanel.autofillPlaceholder') : t('uploadInfer.inferencePanel.manualPlaceholder')}
-                            onChange={e => dispatch(updateShortAnswerPrompt(e.target.value))} />
-                        </div>
-                      </div>
-                    )}
+.btnDanger {
+  color: var(--red);
+  border-color: var(--red-bdr);
 
-                    {isChecked(settings.generateTrueFalse) && (
-                      <div className={styles.promptCard}>
-                        <div className={styles.fg}>
-                          <div className={styles.flRow}>
-                            <label className={styles.fl}>
-                              {t('uploadInfer.inferencePanel.trueFalsePrompt')} <span className={styles.optTag}>{t('uploadInfer.inferencePanel.optional')}</span>
-                            </label>
-                            {n > 1 && (
-                              <button
-                                className={`${styles.perFileBtn} ${trueFalseExpanded ? styles.perFileBtnActive : ''}`}
-                                onClick={(e) => { e.stopPropagation(); setTrueFalseExpanded(v => !v); }}
-                                title={trueFalseExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.viewPerFile')}
-                              >
-                                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                  <rect x="1.5" y="2" width="11" height="10" rx="2" />
-                                  <path d="M4 5h6M4 7.5h4" />
-                                </svg>
-                                {trueFalseExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.perFile')}
-                                <svg className={`${styles.perFileChevron} ${trueFalseExpanded ? styles.perFileChevronOpen : ''}`} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                                  <path d="M2 3.5l3 3 3-3" />
-                                </svg>
-                              </button>
-                            )}
-                          </div>
-                          <div className={`${styles.perFilePanel} ${trueFalseExpanded ? styles.perFilePanelOpen : ''}`}>
-                            <div className={styles.perFilePanelInner}>
-                              {selectedFiles.map(f => (
-                                <div key={f.id} className={styles.perFileRow}>
-                                  <div className={styles.perFileName}>{f.original_name}</div>
-                                  <div className={styles.perFilePrompt}>{f.true_false_prompt || <span className={styles.perFileEmpty}>{t('uploadInfer.inferencePanel.noPromptSet')}</span>}</div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                          <textarea className={styles.fc} rows={3}
-                            value={settings.trueFalsePromptOverride}
-                            placeholder={n === 1 ? t('uploadInfer.inferencePanel.autofillPlaceholder') : t('uploadInfer.inferencePanel.manualPlaceholder')}
-                            onChange={e => dispatch(updateTrueFalsePrompt(e.target.value))} />
-                        </div>
-                      </div>
-                    )}
+  &:hover {
+    background: var(--red-dim);
+    border-color: var(--red);
+  }
 
-                  </div>
+  &:disabled {
+    color: var(--t2);
+    border-color: var(--bdr2);
+    background: transparent;
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
 
-                  </div>
+    &:hover {
+      background: transparent;
+      border-color: var(--bdr2);
+    }
+  }
+}
 
-                  {/* Save / Cancel bar — persists any edited prompt overrides above */}
-                  {n > 0 && (settings.generateSummary || settings.generateKeywords || settings.generateQuestions
-                    || settings.generateShortAnswer || settings.generateTrueFalse) && (
-                    <div className={styles.promptActions}>
-                      {promptSaveError && (
-                        <span className={styles.promptSaveError}>{promptSaveError}</span>
-                      )}
-                      <button
-                        className={`${styles.btn} ${styles.btnSm} ${styles.btnGhost}`}
-                        onClick={handlePromptCancel}
-                        disabled={!promptsDirty || promptSaving}
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        className={`${styles.btn} ${styles.btnSm} ${styles.btnPrimary}`}
-                        onClick={handlePromptSave}
-                        disabled={!promptsDirty || promptSaving}
-                      >
-                        {promptSaving ? (
-                          <><span className={styles.btnSpinner} />{t('uploadInfer.inferencePanel.saving')}</>
-                        ) : t('uploadInfer.inferencePanel.savePrompts')}
-                      </button>
-                    </div>
-                  )}
-                </div>
+// ── Animations ───────────────────────────────
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 
-              </div>
-            </div>}
+@keyframes fadeSlide {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
 
-            {/* ══ 3-Column batch status ══ */}
-            {isBatchRunning && (
-              <div className={styles.batchSection}>
-                <div className={styles.batchSectionTitle}>
-                  <span className={styles.liveLabel}>{t('uploadInfer.inferencePanel.inferenceStatus')}</span>
-                  {isBatchRunning && (
-                    <span className={styles.liveStatus}>
-                      <span className={styles.liveDot} />
-                      Live
-                      <span className={styles.liveSep}>·</span>
-                      {t('uploadInfer.inferencePanel.refreshingIn', { sec: countdown })}
-                      {batchData.running.length > 0 && (
-                        <><span className={styles.liveSep}>·</span>
-                          <span className={styles.liveFiles}>
-                            {t('uploadInfer.inferencePanel.filesRunning', { count: batchData.running.length })}
-                          </span></>
-                      )}
-                    </span>
-                  )}
-                </div>
-                <div className={styles.batchColumns}>
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
 
-                  {/* Queued */}
-                  <div className={styles.batchCol}>
-                    <div className={`${styles.batchColHead} ${styles.headQueued}`}>
-                      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
-                        <circle cx="7" cy="7" r="5" /><path d="M7 4v3.5l2 1.5" />
-                      </svg>
-                      Queued
-                      <span className={styles.batchColCount}>{batchData.queued.length}</span>
-                    </div>
-                    <div className={styles.batchColBody}>
-                      {batchData.queued.length === 0
-                        ? <div className={styles.batchEmpty}>—</div>
-                        : batchData.queued.map(f => (
-                          <StatusCard
-                            key={f.id}
-                            file={f}
-                            variant="queued"
-                            onStop={handleStop}
-                            stopping={stoppingIds.has(f.id)}
-                          />
-                        ))
-                      }
-                    </div>
-                  </div>
+// ── Checkbox component ──────────────────────────
+.cb {
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--cb-bdr);
+  border-radius: 4px;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: all 0.12s;
+  position: relative;
+  outline: none;
 
-                  {/* Running */}
-                  <div className={styles.batchCol}>
-                    <div className={`${styles.batchColHead} ${styles.headRunning}`}>
-                      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
-                        <circle cx="7" cy="7" r="5" /><path d="M7 4v3M7 9.5v.2" />
-                      </svg>
-                      Running
-                      <span className={styles.batchColCount}>{batchData.running.length}</span>
-                    </div>
-                    <div className={styles.batchColBody}>
-                      {batchData.running.length === 0
-                        ? <div className={styles.batchEmpty}>—</div>
-                        : batchData.running.map(f => <StatusCard key={f.id} file={f} variant="running" />)
-                      }
-                    </div>
-                  </div>
+  &:hover:not(.cbDisabled) {
+    border-color: var(--blue);
+  }
 
-                  {/* Completed */}
-                  <div className={styles.batchCol}>
-                    <div className={`${styles.batchColHead} ${styles.headCompleted}`}>
-                      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="7" cy="7" r="5" /><path d="M4.5 7l2 2 3-3" />
-                      </svg>
-                      Completed
-                      <span className={styles.batchColCount}>{batchData.completed.length}</span>
-                    </div>
-                    <div className={styles.batchColBody}>
-                      {batchData.completed.length === 0
-                        ? <div className={styles.batchEmpty}>—</div>
-                        : batchData.completed.map(f => <StatusCard key={f.id} file={f} variant="completed" />)
-                      }
-                    </div>
-                  </div>
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--blue-dim);
+  }
 
-                </div>
-              </div>
-            )}
+  &.cbChecked {
+    background: var(--blue);
+    border-color: var(--blue);
 
-          </div>
-        </>
-      )}
-    </div>
-  );
-};
+    &::after {
+      content: '';
+      position: absolute;
+      left: 2px;
+      top: 5px;
+      width: 7px;
+      height: 4px;
+      border-left: 1.5px solid #fff;
+      border-bottom: 1.5px solid #fff;
+      transform: rotate(-45deg) translate(0, -1px);
+    }
+  }
 
-export default InferencePanel;
+  &.cbIndet {
+    background: var(--blue);
+    border-color: var(--blue);
+
+    &::after {
+      content: '';
+      position: absolute;
+      left: 2px;
+      top: 5px;
+      width: 8px;
+      height: 1.5px;
+      background: #fff;
+    }
+  }
+
+  &.cbDisabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+}
+
+// Grouped action buttons — used inside mode-bar (title row)
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+// ── Mode action row: search LEFT, confirm+cancel RIGHT ────────
+.modeActionsRow {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0 10px 8px;
+  min-width: 0;
+}
+
+.modeActionsRight {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.modeActionsLeft {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+// Base tile — icon + label side by side
+.modeTile {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--bdr);
+  background: var(--bg3);
+  color: var(--t2);
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  transition: all 0.13s;
+  user-select: none;
+  white-space: nowrap;
+
+  svg {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+  }
+
+  &:active:not(:disabled) {
+    transform: scale(0.97);
+  }
+
+  &:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+}
+
+// Search tile — amber tint (left side)
+.modeTileSearch {
+  color: var(--amber);
+  border-color: rgba(240, 160, 48, 0.25);
+  background: rgba(240, 160, 48, 0.08);
+
+  &:hover {
+    background: rgba(240, 160, 48, 0.16);
+    border-color: rgba(240, 160, 48, 0.45);
+  }
+}
+
+.modeTileSearchActive {
+  background: rgba(240, 160, 48, 0.15);
+  border-color: rgba(240, 160, 48, 0.45);
+}
+
+// Confirm export — green
+.modeTileConfirmExport {
+  color: var(--green);
+  border-color: var(--green-bdr);
+  background: var(--green-dim);
+
+  &:hover:not(:disabled) {
+    background: var(--green);
+    border-color: var(--green);
+    color: #fff;
+  }
+}
+
+// Confirm delete — red
+.modeTileConfirmDelete {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.25);
+  background: rgba(239, 68, 68, 0.08);
+
+  &:hover:not(:disabled) {
+    background: rgba(239, 68, 68, 0.18);
+    border-color: rgba(239, 68, 68, 0.5);
+  }
+}
+
+// Cancel
+.modeTileCancel {
+  color: var(--t2);
+  border-color: var(--bdr2);
+  background: transparent;
+
+  &:hover {
+    background: var(--bg2);
+    border-color: var(--bdr3);
+    color: var(--t0);
+  }
+}
+
+// Disabled state
+.modeTileDisabled {
+  opacity: 0.35 !important;
+  cursor: not-allowed !important;
+}
+
+// "Export all files" trigger — mirrors modeTileDeleteAll but green/non-destructive
+.modeTileExportAll {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--green-bdr);
+  background: var(--green-dim);
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  transition: all 0.13s;
+  user-select: none;
+  white-space: nowrap;
+
+  svg {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+  }
+
+  &:hover:not(:disabled) {
+    background: var(--green);
+    border-color: var(--green);
+    color: #fff;
+  }
+
+  &:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+}
+
+.modeActionsError {
+  font-size: 11px;
+  color: #ef4444;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+
+// "Delete all files" trigger — deliberately louder/more solid than the
+// per-row delete tile since it's an account-wide destructive action.
+.modeTileDeleteAll {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  background: rgba(239, 68, 68, 0.14);
+  color: #ef4444;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  transition: all 0.13s;
+  user-select: none;
+  white-space: nowrap;
+
+  svg {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+  }
+
+  &:hover:not(:disabled) {
+    background: #ef4444;
+    border-color: #ef4444;
+    color: #fff;
+  }
+
+  &:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+}
+
+// ── Delete-ALL confirmation (danger zone) ───────────────────────────
+.dangerOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  padding: 16px;
+}
+
+.dangerModal {
+  width: 100%;
+  max-width: 360px;
+  background: var(--bg1);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 10px;
+  padding: 20px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 4px;
+}
+
+.dangerIcon {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(239, 68, 68, 0.14);
+  color: #ef4444;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 6px;
+
+  svg {
+    width: 22px;
+    height: 22px;
+  }
+}
+
+.dangerTitle {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--t0);
+  font-family: var(--font-ui);
+}
+
+.dangerBody {
+  font-size: 13px;
+  color: var(--t2);
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+.dangerLabel {
+  align-self: flex-start;
+  font-size: 12px;
+  color: var(--t1);
+  margin-top: 4px;
+}
+
+.dangerInput {
+  width: 100%;
+  padding: 7px 10px;
+  background: var(--bg0);
+  border: 1px solid var(--bdr2);
+  border-radius: var(--r);
+  color: var(--t0);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  outline: none;
+  margin-top: 4px;
+  margin-bottom: 6px;
+  text-align: center;
+  transition: border-color 0.12s;
+
+  &:focus {
+    border-color: #ef4444;
+    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.15);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+  }
+}
+
+.dangerError {
+  font-size: 12px;
+  color: #ef4444;
+  margin-bottom: 6px;
+}
+
+.dangerActions {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  margin-top: 6px;
+}
+
+// .uploadedCardSel replaced by .hitm.active
+
+// Uploaded card disabled (batch running)
+.uploadedCardDisabled {
+  cursor: default !important;
+  opacity: 0.65;
+  pointer-events: none;
+}
+
+// ── Sort header ─────────────────────────────────────
+.sortHeader {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  background: var(--bg2);
+  border: 1px solid var(--bdr);
+  border-radius: var(--r);
+  padding: 0 6px 0 10px;
+  gap: 6px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.sortHeaderLabel {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--t2);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  flex-shrink: 0;
+
+  svg {
+    width: 11px;
+    height: 11px;
+    opacity: 0.6;
+  }
+}
+
+.sortCols {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.sortCol {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--t2);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+
+  svg {
+    width: 8px;
+    height: 10px;
+    flex-shrink: 0;
+    transition: transform 0.2s;
+  }
+
+  &:hover {
+    background: var(--bg3);
+    color: var(--t1);
+  }
+}
+
+.sortColActive {
+  background: var(--blue-dim);
+  color: var(--blue);
+  font-weight: 600;
+
+  &:hover {
+    background: var(--blue-dim);
+  }
+}
+
+.sortInactive {
+  opacity: 0.25;
+}
+
+.sortAsc {
+  transform: rotate(180deg);
+}
+
+// arrow up
+.sortDesc {
+  transform: rotate(0deg);
+}
+
+// arrow down (default path direction)
+// ── Small screen overrides (height < 1000px) ─────────────────
+@media (max-height: 999px) {
+
+  // Step-1 bar — tighter
+  .step1Bar {
+    padding: 7px 14px;
+  }
+
+  // Dropzone — much more compact
+  .dropzone {
+    padding: 10px 16px;
+    margin: 6px 10px;
+  }
+
+  .dzIc {
+    width: 28px;
+    height: 28px;
+    margin-bottom: 6px;
+
+    svg {
+      width: 14px;
+      height: 14px;
+    }
+  }
+
+  .dzTitle {
+    font-size: 12px;
+    margin-bottom: 2px;
+  }
+
+  .dzSub {
+    font-size: 11px;
+  }
+
+  .dzActions {
+    margin-top: 7px;
+    gap: 6px;
+  }
+
+  // Section2 title row
+  .section2TitleRow {
+    padding: 7px 14px 6px;
+  }
+
+  // Mode action row
+  .modeActionsRow {
+    padding: 0 8px 6px;
+  }
+
+  // Date filter — tighter
+  .dateFilter {
+    padding: 5px 10px 5px;
+    gap: 5px;
+  }
+
+  .dateInput {
+    padding: 3px 6px;
+    font-size: 12px;
+  }
+
+  // Sort header — tighter
+  .sortHeader {
+    margin-bottom: 4px;
+  }
+
+  .sortCol {
+    padding: 4px 4px;
+    font-size: 11px;
+  }
+
+  .sortHeaderLabel {
+    padding: 4px 0;
+    padding-right: 6px;
+    font-size: 9px;
+  }
+
+  // File list — tighter items, ensure it can grow
+  .uploadedBody {
+    padding: 4px 8px;
+    gap: 2px;
+  }
+
+  .hitm {
+    padding: 5px 8px;
+    margin-bottom: 1px;
+  }
+
+  .ficon {
+    width: 22px;
+    height: 22px;
+    font-size: 9px;
+  }
+
+  .hn {
+    font-size: 12px;
+  }
+
+  .hm {
+    font-size: 11px;
+    margin-top: 1px;
+  }
+
+  .badge {
+    font-size: 10px;
+    padding: 1px 6px;
+  }
+}
+
+// ── Pagination footer (bottom of the uploaded-files list) ──────────
+.paginationBar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--bdr2);
+  background: var(--bg1);
+  flex-shrink: 0;
+}
+
+.paginationTopRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.pageSizeGroup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.pageSizeLabel {
+  font-size: 11px;
+  color: var(--t2);
+  white-space: nowrap;
+}
+
+.pageSizeSelect {
+  padding: 3px 6px;
+  background: var(--bg0);
+  border: 1px solid var(--bdr2);
+  border-radius: var(--r);
+  color: var(--t0);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.12s;
+
+  &:focus {
+    border-color: var(--blue);
+    box-shadow: 0 0 0 2px var(--blue-dim);
+  }
+}
+
+// Page-number row sits to the right of the page-size selector. It never
+// wraps to its own line — if there isn't room for every number button,
+// this row scrolls horizontally within itself instead.
+.pageNav {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  flex-wrap: nowrap;
+  flex-shrink: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.pageNavBtn,
+.pageNumBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: var(--r);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--t1);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s;
+  user-select: none;
+  flex-shrink: 0;
+
+  svg {
+    width: 11px;
+    height: 11px;
+  }
+
+  &:hover:not(:disabled) {
+    background: var(--bg3);
+    color: var(--t0);
+    border-color: var(--bdr3);
+  }
+
+  &:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+}
+
+.pageNumBtnActive {
+  background: var(--blue-dim);
+  border-color: var(--blue-bdr);
+  color: var(--blue);
+  font-weight: 700;
+
+  &:hover:not(:disabled) {
+    background: var(--blue-dim);
+    color: var(--blue);
+  }
+}
+
+.pageEllipsis {
+  color: var(--t2);
+  font-size: 12px;
+  padding: 0 2px;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.pageInfo {
+  font-size: 11px;
+  color: var(--t2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+  @include m.mono;
+}
+
+@media (min-width: 1920px) {
+  .section1Title {
+    font-size: 14px;
+  }
+
+  .section2Title {
+    font-size: 14px;
+  }
+
+  .uploadHint {
+    font-size: 13px;
+  }
+
+  .uploadZoneText {
+    font-size: 14px;
+  }
+
+  .sortHeaderLabel {
+    font-size: 12px;
+  }
+
+  .sortBtn {
+    font-size: 13px;
+  }
+
+  .fileName {
+    font-size: 14px;
+  }
+
+  .fileMeta {
+    font-size: 12px;
+  }
+
+  .fileDate {
+    font-size: 12px;
+  }
+
+  .badge {
+    font-size: 13px;
+  }
+
+  .btn {
+    font-size: 13px;
+  }
+
+  .listState {
+    font-size: 14px;
+  }
+
+  .searchInput {
+    font-size: 14px;
+  }
+
+  .searchCount {
+    font-size: 12px;
+  }
+
+  .dateLabel {
+    font-size: 12px;
+  }
+
+  .dateInput {
+    font-size: 13px;
+  }
+
+  .emptyState {
+    font-size: 14px;
+  }
+}
+
+// ── Per-file prompt viewer popup ─────────────────
+.promptViewerModal {
+  width: 100%;
+  max-width: 480px;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg1);
+  border: 1px solid var(--bdr2);
+  border-radius: var(--rl);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.promptViewerHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--bdr);
+  flex-shrink: 0;
+}
+
+.promptViewerTitle {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--t0);
+}
+
+.promptViewerFile {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--t2);
+  @include m.truncate;
+}
+
+.promptViewerClose {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--t2);
+  cursor: pointer;
+
+  svg { width: 13px; height: 13px; }
+
+  &:hover {
+    background: var(--bg3);
+    color: var(--t0);
+  }
+}
+
+.promptViewerBody {
+  padding: 16px;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--t1);
+  white-space: pre-wrap;
+  word-break: break-word;
+  @include m.scrollbar;
+}
+
+.promptViewerEmpty {
+  color: var(--t2);
+  font-style: italic;
+}
