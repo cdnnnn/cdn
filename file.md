@@ -485,10 +485,33 @@ const UploadInfer: React.FC = () => {
     if (justFinished && activeFileId !== null) fetchFileData(activeFileId);
   }, [isBatchRunning]); // eslint-disable-line
 
-  const tabs: { id: TabId; label: string }[] = [
-    { id: 'upload', label: t('uploadInfer.tabs.upload') },
-    { id: 'infer', label: t('uploadInfer.tabs.infer') },
-    { id: 'results', label: t('uploadInfer.tabs.results') },
+  const tabs: { id: TabId; label: string; desc: string; icon: React.ReactNode }[] = [
+    {
+      id: 'upload', label: t('uploadInfer.tabs.upload'), desc: t('uploadInfer.tabs.uploadDesc'),
+      icon: (
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M8 10.5V2.5M5 5.3L8 2.3l3 3" />
+          <path d="M2.5 10v2.3a1.2 1.2 0 001.2 1.2h8.6a1.2 1.2 0 001.2-1.2V10" />
+        </svg>
+      ),
+    },
+    {
+      id: 'infer', label: t('uploadInfer.tabs.infer'), desc: t('uploadInfer.tabs.inferDesc'),
+      icon: (
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M8 2.3v1.8M8 11.9v1.8M2.3 8h1.8M11.9 8h1.8M4.2 4.2l1.3 1.3M10.5 10.5l1.3 1.3M4.2 11.8l1.3-1.3M10.5 5.5l1.3-1.3" />
+          <circle cx="8" cy="8" r="2.3" />
+        </svg>
+      ),
+    },
+    {
+      id: 'results', label: t('uploadInfer.tabs.results'), desc: t('uploadInfer.tabs.resultsDesc'),
+      icon: (
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3 13V7M8 13V3M13 13V9.5" />
+        </svg>
+      ),
+    },
   ];
 
   return (
@@ -507,17 +530,29 @@ const UploadInfer: React.FC = () => {
         </div>
 
         <div className={styles.tabbar} role="tablist" data-tour="tabbar">
-          {tabs.map(tab => (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={activeTab === tab.id}
-              className={`${styles.tabBtn} ${activeTab === tab.id ? styles.tabBtnActive : ''}`}
-              onClick={() => setActiveTab(tab.id)}
-            >
-              <span className={styles.tabLabel}>{tab.label}</span>
-            </button>
+          {tabs.map((tab, idx) => (
+            <React.Fragment key={tab.id}>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === tab.id}
+                className={`${styles.tabBtn} ${activeTab === tab.id ? styles.tabBtnActive : ''}`}
+                onClick={() => setActiveTab(tab.id)}
+              >
+                <span className={styles.tabIcon}>{tab.icon}</span>
+                <span className={styles.tabTextCol}>
+                  <span className={styles.tabLabel}>{tab.label}</span>
+                  <span className={styles.tabDesc}>{tab.desc}</span>
+                </span>
+              </button>
+              {idx < tabs.length - 1 && (
+                <span className={styles.tabChevron} aria-hidden="true">
+                  <svg viewBox="0 0 8 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M1.5 1.5l5 4.5-5 4.5" />
+                  </svg>
+                </span>
+              )}
+            </React.Fragment>
           ))}
         </div>
       </div>
@@ -561,6 +596,11 @@ const UploadInfer: React.FC = () => {
 };
 
 export default UploadInfer;
+
+
+
+
+
 
 
 
@@ -645,48 +685,126 @@ export default UploadInfer;
 }
 .tabbar {
   display: flex;
-  align-items: stretch;
-  gap: 10px;
+  align-items: center;
+  gap: 6px;
   flex-shrink: 0;
 }
 .tabBtn {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 2px;
-  width: 172px;
-  padding: 8px 14px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px 8px 10px;
   border-radius: var(--rl);
   border: 1px solid var(--bdr2);
   background: var(--bg1);
   cursor: pointer;
   text-align: left;
+  position: relative;
+  overflow: hidden;
   @include m.theme-transition;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+
   &:hover {
     border-color: var(--bdr3);
     background: var(--bg2);
+    transform: translateY(-1px);
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.08);
+  }
+
+  &:active {
+    transform: translateY(0);
   }
 }
+// Bottom accent bar — gradient underline that only shows on the active tab
+.tabBtn::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2.5px;
+  background: linear-gradient(90deg, var(--blue), #a78bfa);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.18s ease;
+}
 .tabBtnActive {
-  border-color: var(--blue);
-  background-color: var(--bg1);
-  background-image: linear-gradient(var(--blue-dim), var(--blue-dim));
+  border-color: var(--blue-bdr);
+  background-color: var(--blue-dim);
+
   &:hover {
-    border-color: var(--blue);
-    background-color: var(--bg1);
-    background-image: linear-gradient(var(--blue-dim), var(--blue-dim));
+    border-color: var(--blue-bdr);
+    background-color: var(--blue-dim);
+    transform: none;
+    box-shadow: none;
   }
+
+  &::after {
+    transform: scaleX(1);
+  }
+}
+.tabIcon {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg3);
+  color: var(--t2);
+  transition: background 0.15s ease, color 0.15s ease;
+
+  svg {
+    width: 15px;
+    height: 15px;
+  }
+}
+.tabBtnActive .tabIcon {
+  background: var(--blue);
+  color: #fff;
+}
+.tabTextCol {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
 }
 .tabLabel {
   font-family: var(--font-ui);
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--t1);
   letter-spacing: 0.01em;
+  white-space: nowrap;
 }
 .tabBtnActive .tabLabel {
   color: var(--t0);
+}
+// Always visible — this is what tells the user what they'll find on
+// this tab, without needing to click it first or read a separate banner.
+.tabDesc {
+  font-size: 10.5px;
+  color: var(--t2);
+  white-space: nowrap;
+}
+.tabBtnActive .tabDesc {
+  color: var(--blue);
+}
+// Small chevron sitting between tab cards — reinforces the natural
+// left-to-right pipeline flow (Upload → Infer → Results) without adding
+// clutter or being clickable itself.
+.tabChevron {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--bdr3);
+
+  svg {
+    width: 7px;
+    height: 11px;
+  }
 }
 // ── Tab content ──────────────────────────────────
 .upbody {
@@ -707,6 +825,7 @@ export default UploadInfer;
 @media (max-width: 860px) {
   .headerBar { flex-direction: column; align-items: stretch; gap: 12px; padding: 14px 16px; }
   .tabbar { flex-wrap: wrap; }
-  .tabBtn { width: calc(50% - 5px); }
+  .tabDesc { display: none; }
+  .tabChevron { display: none; }
   .tabPane { flex-direction: column; }
 }
