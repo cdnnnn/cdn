@@ -530,29 +530,21 @@ const UploadInfer: React.FC = () => {
         </div>
 
         <div className={styles.tabbar} role="tablist" data-tour="tabbar">
-          {tabs.map((tab, idx) => (
-            <React.Fragment key={tab.id}>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === tab.id}
-                className={`${styles.tabBtn} ${activeTab === tab.id ? styles.tabBtnActive : ''}`}
-                onClick={() => setActiveTab(tab.id)}
-              >
-                <span className={styles.tabIcon}>{tab.icon}</span>
-                <span className={styles.tabTextCol}>
-                  <span className={styles.tabLabel}>{tab.label}</span>
-                  <span className={styles.tabDesc}>{tab.desc}</span>
-                </span>
-              </button>
-              {idx < tabs.length - 1 && (
-                <span className={styles.tabChevron} aria-hidden="true">
-                  <svg viewBox="0 0 8 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M1.5 1.5l5 4.5-5 4.5" />
-                  </svg>
-                </span>
-              )}
-            </React.Fragment>
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              className={`${styles.tabBtn} ${activeTab === tab.id ? styles.tabBtnActive : ''}`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              <span className={styles.tabIcon}>{tab.icon}</span>
+              <span className={styles.tabTextCol}>
+                <span className={styles.tabLabel}>{tab.label}</span>
+                <span className={styles.tabDesc}>{tab.desc}</span>
+              </span>
+            </button>
           ))}
         </div>
       </div>
@@ -605,13 +597,6 @@ export default UploadInfer;
 
 
 
-
-
-
-
-
-
-
 // ═══════════════════════════════════════════════
 // UploadInfer.module.scss
 // LectureAI · Upload & Inference page shell + tab bar
@@ -628,33 +613,18 @@ export default UploadInfer;
 .headerBar {
   flex-shrink: 0;
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
   gap: 20px;
-  padding: 16px 24px;
+  padding: 16px 24px 0;
   background: var(--bg1);
-  position: relative;
-  &::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: linear-gradient(90deg,
-        rgba(139, 92, 246, 0.0) 0%,
-        rgba(139, 92, 246, 0.6) 20%,
-        rgba(56, 196, 186, 0.7) 50%,
-        rgba(240, 160, 48, 0.6) 80%,
-        rgba(240, 160, 48, 0.0) 100%);
-    pointer-events: none;
-  }
 }
 .phTitleRow {
   display: flex;
   align-items: center;
   gap: 12px;
   flex-shrink: 0;
+  padding-bottom: 14px;
 }
 .phTitle {
   flex-shrink: 0;
@@ -683,77 +653,57 @@ export default UploadInfer;
     border-color: var(--bdr3);
   }
 }
+
+// ── Tab bar — classic underline tabs sharing one baseline border,
+// matching the convention used elsewhere in this app (e.g. the
+// WorkspacePanel result tabs), not a button/card row. ──
 .tabbar {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  align-items: stretch;
+  gap: 28px;
   flex-shrink: 0;
+  position: relative;
+
+  // Shared baseline the active tab's indicator sits flush against
+  &::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 1px;
+    background: var(--bdr);
+  }
 }
 .tabBtn {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 16px 8px 10px;
-  border-radius: var(--rl);
-  border: 1px solid var(--bdr2);
-  background: var(--bg1);
+  gap: 7px;
+  padding: 8px 2px 11px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
   cursor: pointer;
   text-align: left;
   position: relative;
-  overflow: hidden;
-  @include m.theme-transition;
-  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  z-index: 1;
+  transition: border-color 0.15s ease;
 
   &:hover {
-    border-color: var(--bdr3);
-    background: var(--bg2);
-    transform: translateY(-1px);
-    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.08);
+    .tabLabel { color: var(--t0); }
+    .tabIcon { color: var(--t1); }
   }
-
-  &:active {
-    transform: translateY(0);
-  }
-}
-// Bottom accent bar — gradient underline that only shows on the active tab
-.tabBtn::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 2.5px;
-  background: linear-gradient(90deg, var(--blue), #a78bfa);
-  transform: scaleX(0);
-  transform-origin: left;
-  transition: transform 0.18s ease;
 }
 .tabBtnActive {
-  border-color: var(--blue-bdr);
-  background-color: var(--blue-dim);
-
-  &:hover {
-    border-color: var(--blue-bdr);
-    background-color: var(--blue-dim);
-    transform: none;
-    box-shadow: none;
-  }
-
-  &::after {
-    transform: scaleX(1);
-  }
+  border-bottom-color: var(--blue);
 }
 .tabIcon {
   flex-shrink: 0;
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg3);
   color: var(--t2);
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: color 0.15s ease;
 
   svg {
     width: 15px;
@@ -761,8 +711,7 @@ export default UploadInfer;
   }
 }
 .tabBtnActive .tabIcon {
-  background: var(--blue);
-  color: #fff;
+  color: var(--blue);
 }
 .tabTextCol {
   display: flex;
@@ -774,9 +723,10 @@ export default UploadInfer;
   font-family: var(--font-ui);
   font-size: 13px;
   font-weight: 600;
-  color: var(--t1);
+  color: var(--t2);
   letter-spacing: 0.01em;
   white-space: nowrap;
+  transition: color 0.15s ease;
 }
 .tabBtnActive .tabLabel {
   color: var(--t0);
@@ -786,25 +736,12 @@ export default UploadInfer;
 .tabDesc {
   font-size: 10.5px;
   color: var(--t2);
+  opacity: 0.7;
   white-space: nowrap;
 }
 .tabBtnActive .tabDesc {
   color: var(--blue);
-}
-// Small chevron sitting between tab cards — reinforces the natural
-// left-to-right pipeline flow (Upload → Infer → Results) without adding
-// clutter or being clickable itself.
-.tabChevron {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--bdr3);
-
-  svg {
-    width: 7px;
-    height: 11px;
-  }
+  opacity: 1;
 }
 // ── Tab content ──────────────────────────────────
 .upbody {
@@ -823,9 +760,9 @@ export default UploadInfer;
   overflow: hidden;
 }
 @media (max-width: 860px) {
-  .headerBar { flex-direction: column; align-items: stretch; gap: 12px; padding: 14px 16px; }
-  .tabbar { flex-wrap: wrap; }
+  .headerBar { flex-direction: column; align-items: stretch; gap: 8px; padding: 14px 16px 0; }
+  .phTitleRow { padding-bottom: 8px; }
+  .tabbar { gap: 18px; overflow-x: auto; }
   .tabDesc { display: none; }
-  .tabChevron { display: none; }
   .tabPane { flex-direction: column; }
 }
