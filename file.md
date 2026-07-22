@@ -1,1106 +1,1808 @@
 // ═══════════════════════════════════════════════
-// pages/UploadInfer/UploadInfer.tsx
-// LectureAI · Upload & Inference page
+// pages/UploadInfer/WorkspacePanel.tsx
+// LectureAI · Step-3 Workspace Result panel
 // ═══════════════════════════════════════════════
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useAppSelector, useAppDispatch } from '../../store/hooks';
-import { clearServerSelection, resetInferenceSettings } from '../../store/uploadSlice';
+import { marked } from 'marked';
+import {
+    ReactFlow, Background, Controls, MiniMap, Handle, Position, applyNodeChanges,
+    type Node as RFNode, type Edge as RFEdge, type NodeChange,
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
+import dagre from 'dagre';
 import api from '../../services/api';
-import FilePanel, { FilePanelHandle } from './FilePanel';
-import InferencePanel from './InferencePanel';
-import WorkspacePanel, { WorkspacePanelHandle } from './WorkspacePanel';
-import FileSidebar from './FileSidebar';
-import TourGuide, { TourStep } from './TourGuide';
-import styles from './UploadInfer.module.scss';
+import type { FileResult, WordCloudData, ImportanceComplexityData, GlossaryData, KeywordInsights, TimelineData, TimelineTimeUnit } from './UploadInfer';
+import styles from './WorkspacePanel.module.scss';
 
-// ── Keyword Insights (from GET /files/{id}) ──────
-export interface KGEdge { type: string; source: string; target: string; }
-export interface KGNode { id: string; label: string; title?: string; value?: number; }
-export interface KnowledgeGraph { edges: KGEdge[]; nodes: KGNode[]; }
-export interface WordCloudData { wordcloud_image: string; }
-export interface TimelineDataset { data: number[]; label: string; }
-export type TimelineTimeUnit = 'minutes' | 'hours' | 'seconds';
-export interface TimelineData { labels: string[]; datasets: TimelineDataset[]; timestamped: boolean; time_unit?: TimelineTimeUnit; }
-// importance is out of a fixed max of 10 (see ImportanceComplexityScatter)
-export interface ImportanceComplexityItem { reason: string; keyword: string; frequency: number; complexity: string; importance: number; }
-export interface ImportanceComplexityData { data: ImportanceComplexityItem[]; }
-export interface GlossaryItem { term: string; definition: string; first_mentioned_ms: number; }
-export interface GlossaryData { glossary: GlossaryItem[]; }
+marked.setOptions({ breaks: false, gfm: true });
 
-export interface KeywordInsights {
-  enriched_keywords: unknown | null;
-  knowledge_graph: KnowledgeGraph | null;
-  word_cloud: WordCloudData | null;
-  timeline: TimelineData | null;
-  importance_complexity: ImportanceComplexityData | null;
-  congnitive_Load: unknown | null;
-  segments: { segments: unknown[] } | null;
-  glossary: GlossaryData | null;
+interface Props {
+    step2Visible?: boolean;
+    step2Minimized?: boolean;
+    fileResult: FileResult | null;
+    fileLoading: boolean;
+    activeFileId: number | null;
+    onResultUpdate?: (patch: Partial<Pick<FileResult, 'summary' | 'keywords'>>) => void;
 }
 
-export interface FileResult {
-  summary: string;
-  keywords: string[];
-  faq: string;
-  shortAnswer: string;
-  trueFalse: string;
-  timestampedSummary: string;
-  keywordInsights: KeywordInsights | null;
-  fileName: string;
-  fileId: number;
-  insertedAt: string;
+// TABS labels are now driven by i18n — see tabLabels() inside WorkspacePanel
+const TAB_IDS = ['summary', 'keywords', 'assessment', 'shortAnswer', 'trueFalse', 'timestampedSummary', 'keywordInsights'] as const;
+type TabId = typeof TAB_IDS[number];
+
+// Exposed to the parent so the guided tour can drive which tab is showing
+// without lifting activeTab into Redux just for that one use.
+export interface WorkspacePanelHandle {
+    setTab: (id: TabId) => void;
 }
 
-// ── Tabs ──────────────────────────────────────────
-// All three are always clickable — there's no gating on a previous tab
-// being "complete". Every panel below stays mounted at all times (just
-// hidden with CSS) so file lists, batch polling, and scroll position
-// survive switching tabs instead of resetting.
-type TabId = 'upload' | 'infer' | 'results';
 
-const UploadInfer: React.FC = () => {
-  const { t } = useTranslation();
-  const isBatchRunning = useAppSelector(s => s.upload.isBatchRunning);
-  const dispatch = useAppDispatch();
+interface FaqItem {
+    question: string;
+    options: Record<string, string>;
+    correct_answer: string;
+    explanation: string;
+}
 
-  const [activeTab, setActiveTab] = useState<TabId>('upload');
-  const filePanelRef = useRef<FilePanelHandle>(null);
-  const workspacePanelRef = useRef<WorkspacePanelHandle>(null);
-  // Whether the Upload tab currently has any files loaded — lets the tour
-  // adapt its "your uploaded files" step to either point at a real card
-  // or describe what will appear once something's uploaded. Kept in a ref
-  // too (always current, no stale-closure risk) so it can be read at the
-  // exact moment the tour starts, from callbacks with static deps.
-  const hasUploadedFiles = useAppSelector(s => s.upload.serverFiles.length > 0);
-  const hasUploadedFilesRef = useRef(hasUploadedFiles);
-  useEffect(() => { hasUploadedFilesRef.current = hasUploadedFiles; }, [hasUploadedFiles]);
-
-  // ── Guided tour ──
-  const [tourActive, setTourActive] = useState(false);
-  // Snapshotted once when the tour opens, then left untouched until it
-  // closes. tourSteps' length/content depends on this — if it tracked the
-  // live value instead, a file list finishing its load mid-tour would
-  // change the step array under TourGuide's feet, desyncing its internal
-  // step index from what's actually being shown (e.g. "Next" appearing to
-  // do nothing, or landing on the wrong tab).
-  const [tourHasFiles, setTourHasFiles] = useState(false);
-  const finishTour = useCallback(() => {
-    setTourActive(false);
-    filePanelRef.current?.closeActionsMenu();
-  }, []);
-  const startTour = useCallback(() => {
-    setActiveTab('upload');
-    setTourHasFiles(hasUploadedFilesRef.current);
-    setTourActive(true);
-  }, []);
-
-  const allTourSteps: TourStep[] = [
-    {
-      target: 'tabbar',
-      title: t('uploadInfer.tour.tabsTitle', 'Three steps, always available'),
-      content: t('uploadInfer.tour.tabsBody', 'Upload & Manage, Inference, and View Results — you can jump between them any time, nothing is locked behind finishing a previous step.'),
-      onEnter: () => setActiveTab('upload'),
-    },
-    {
-      target: 'upload-dropzone',
-      title: t('uploadInfer.tour.uploadTitle', 'Add your files here'),
-      content: t('uploadInfer.tour.uploadBody', 'Drag in a lecture recording\u2019s captions (.vtt or .srt), or browse for one. You can drop in several files at once.'),
-      onEnter: () => setActiveTab('upload'),
-    },
-    {
-      target: 'upload-cards',
-      title: t('uploadInfer.tour.cardsTitle', 'Your uploaded files'),
-      content: tourHasFiles
-        ? t('uploadInfer.tour.cardsBody', 'Every file shows up here as a card. The colored badge in the corner shows the format (VTT/SRT); the small icons below the filename open the exact prompt used for each content type (Summary, Keywords, Questions, Answer, True/False); and the bottom badge shows the file\u2019s current status. If a dictionary or prompt template is linked to the file, you\u2019ll see a small book or checklist icon too.')
-        : t('uploadInfer.tour.cardsBodyEmpty', 'You haven\u2019t uploaded anything yet, so this area is empty for now. Once you do, each file becomes a card showing: a format badge (VTT/SRT), the filename, small icons for each content type\u2019s prompt (Summary, Keywords, Questions, Answer, True/False), a book/checklist icon if a dictionary or prompt template is linked, and a status badge at the bottom.'),
-      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.closeActionsMenu(); },
-    },
-    // ── Icon-by-icon walkthrough — only shown when a real card exists to point at ──
-    {
-      target: 'upload-card-icon-summary',
-      title: t('uploadInfer.tour.iconSummaryTitle', 'Summary icon'),
-      content: t('uploadInfer.tour.iconSummaryBody', 'Opens the prompt used to generate this file\u2019s summary. Blue means it\u2019s been customized for this file; gray means it\u2019s still using the default.'),
-      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.closeActionsMenu(); },
-    },
-    {
-      target: 'upload-card-icon-keywords',
-      title: t('uploadInfer.tour.iconKeywordsTitle', 'Keywords icon'),
-      content: t('uploadInfer.tour.iconKeywordsBody', 'Opens the prompt used to extract this file\u2019s keywords \u2014 the tag-shaped icon.'),
-      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.closeActionsMenu(); },
-    },
-    {
-      target: 'upload-card-icon-questions',
-      title: t('uploadInfer.tour.iconQuestionsTitle', 'Assessment Questions icon'),
-      content: t('uploadInfer.tour.iconQuestionsBody', 'Opens the prompt used to generate quiz-style assessment questions \u2014 the question-mark icon.'),
-      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.closeActionsMenu(); },
-    },
-    {
-      target: 'upload-card-icon-answer',
-      title: t('uploadInfer.tour.iconAnswerTitle', 'Short Answer icon'),
-      content: t('uploadInfer.tour.iconAnswerBody', 'Opens the prompt used to generate short written answers \u2014 the speech-bubble icon.'),
-      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.closeActionsMenu(); },
-    },
-    {
-      target: 'upload-card-icon-truefalse',
-      title: t('uploadInfer.tour.iconTrueFalseTitle', 'True/False icon'),
-      content: t('uploadInfer.tour.iconTrueFalseBody', 'Opens the prompt used to generate True/False questions \u2014 the toggle-switch icon.'),
-      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.closeActionsMenu(); },
-    },
-    {
-      target: 'upload-sort',
-      title: t('uploadInfer.tour.sortTitle', 'Sort the list'),
-      content: t('uploadInfer.tour.sortBody', 'Sort your files by ID, Name, Date, or Status \u2014 click a column again to flip between ascending and descending.'),
-      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.closeActionsMenu(); },
-    },
-    {
-      target: 'upload-date-filter',
-      title: t('uploadInfer.tour.dateFilterTitle', 'Filter by date range'),
-      content: t('uploadInfer.tour.dateFilterBody', 'Narrow the file list down to a date range, then hit Apply. This affects only what\u2019s shown here on the Upload tab.'),
-      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.closeActionsMenu(); },
-    },
-    {
-      target: 'upload-status-filter',
-      title: t('uploadInfer.tour.statusFilterTitle', 'Filter by status'),
-      content: t('uploadInfer.tour.statusFilterBody', 'Show only files in one status: All, Waiting, Queued, Running, Inferenced, Error, or Pending \u2014 handy once you have a lot of files in flight.'),
-      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.closeActionsMenu(); },
-    },
-    {
-      target: 'upload-actions-trigger',
-      title: t('uploadInfer.tour.actionsTriggerTitle', 'Click here for bulk actions'),
-      content: t('uploadInfer.tour.actionsTriggerBody', 'This button opens a menu of everything you can do to many files at once \u2014 let\u2019s take a look inside.'),
-      placement: 'left',
-      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.closeActionsMenu(); },
-    },
-    {
-      target: 'upload-actions',
-      title: t('uploadInfer.tour.actionsTitle', 'Bulk actions, one click away'),
-      content: t('uploadInfer.tour.actionsBody', 'Here are all five bulk actions: Dictionary (link a term dictionary to your files), Prompt Template (link a saved prompt set), Search (find files by name), Export (download files), and Delete (remove files) \u2014 each applies to many files at once.'),
-      placement: 'left',
-      // Actually opens the menu so every action is visible while this step is shown.
-      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.openActionsMenu(); },
-    },
-    // ── One step per action button, menu kept open throughout ──
-    {
-      target: 'upload-action-dictionary',
-      title: t('uploadInfer.tour.actionDictionaryTitle', 'Dictionary'),
-      content: t('uploadInfer.tour.actionDictionaryBody', 'Link a term dictionary to one or more files, so inference uses the right spellings and terminology for your subject.'),
-      placement: 'left',
-      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.openActionsMenu(); },
-    },
-    {
-      target: 'upload-action-template',
-      title: t('uploadInfer.tour.actionTemplateTitle', 'Prompt Template'),
-      content: t('uploadInfer.tour.actionTemplateBody', 'Apply a saved set of prompts to one or more files in one go, instead of customizing each file\u2019s prompts by hand.'),
-      placement: 'left',
-      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.openActionsMenu(); },
-    },
-    {
-      target: 'upload-action-search',
-      title: t('uploadInfer.tour.actionSearchTitle', 'Search'),
-      content: t('uploadInfer.tour.actionSearchBody', 'Find a file by name \u2014 opens a search box for the Upload tab\u2019s file list.'),
-      placement: 'left',
-      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.openActionsMenu(); },
-    },
-    {
-      target: 'upload-action-export',
-      title: t('uploadInfer.tour.actionExportTitle', 'Export'),
-      content: t('uploadInfer.tour.actionExportBody', 'Select files and download them \u2014 useful for backing up or sharing results outside the app.'),
-      placement: 'left',
-      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.openActionsMenu(); },
-    },
-    {
-      target: 'upload-action-delete',
-      title: t('uploadInfer.tour.actionDeleteTitle', 'Delete'),
-      content: t('uploadInfer.tour.actionDeleteBody', 'Select files and remove them permanently \u2014 use with care, this can\u2019t be undone.'),
-      placement: 'left',
-      onEnter: () => { setActiveTab('upload'); filePanelRef.current?.openActionsMenu(); },
-    },
-    {
-      target: 'infer-sidebar',
-      title: t('uploadInfer.tour.inferSidebarTitle', 'Pick files to analyze'),
-      content: t('uploadInfer.tour.inferSidebarBody', 'Select one or more files here \u2014 this list has its own date range, status filter, search, and sort, all independent of the Upload tab.'),
-      placement: 'right',
-      onEnter: () => { setActiveTab('infer'); filePanelRef.current?.closeActionsMenu(); },
-    },
-    {
-      target: 'infer-date-filter',
-      title: t('uploadInfer.tour.sidebarDateFilterTitle', 'Filter by date range'),
-      content: t('uploadInfer.tour.sidebarDateFilterBody', 'Narrow this list down to a date range, then hit Apply \u2014 independent of the Upload tab\u2019s own date filter.'),
-      placement: 'right',
-      onEnter: () => setActiveTab('infer'),
-    },
-    {
-      target: 'infer-status-filter',
-      title: t('uploadInfer.tour.sidebarStatusFilterTitle', 'Filter by status'),
-      content: t('uploadInfer.tour.sidebarStatusFilterBody', 'Show only files in one status here \u2014 independent of the Upload tab\u2019s own status filter.'),
-      placement: 'right',
-      onEnter: () => setActiveTab('infer'),
-    },
-    {
-      target: 'infer-search',
-      title: t('uploadInfer.tour.sidebarSearchTitle', 'Search'),
-      content: t('uploadInfer.tour.sidebarSearchBody', 'Find a file by name within this list.'),
-      placement: 'right',
-      onEnter: () => setActiveTab('infer'),
-    },
-    {
-      target: 'infer-sort',
-      title: t('uploadInfer.tour.sidebarSortTitle', 'Sort'),
-      content: t('uploadInfer.tour.sidebarSortBody', 'Sort this list by ID, Name, Date, or Status \u2014 click again to flip ascending/descending.'),
-      placement: 'right',
-      onEnter: () => setActiveTab('infer'),
-    },
-    {
-      target: 'infer-settings',
-      title: t('uploadInfer.tour.inferSettingsTitle', 'Choose what to generate'),
-      content: t('uploadInfer.tour.inferSettingsBody', 'Turn on Summary, Keywords (with optional Keyword Insights), Assessment Questions, Short Answer, and True/False \u2014 each has its own customizable prompt. These options stay unchecked and disabled until you\u2019ve selected at least one file.'),
-      onEnter: () => setActiveTab('infer'),
-    },
-    {
-      target: 'infer-model',
-      title: t('uploadInfer.tour.modelTitle', 'Pick a model'),
-      content: t('uploadInfer.tour.modelBody', 'Choose which model runs the inference. Hit Refresh if the list looks out of date \u2014 you need a model selected before you can run anything.'),
-      onEnter: () => setActiveTab('infer'),
-    },
-    // ── One step per checkbox, explaining what each generates ──
-    {
-      target: 'infer-check-summary',
-      title: t('uploadInfer.tour.checkSummaryTitle', 'Summary'),
-      content: t('uploadInfer.tour.checkSummaryBody', 'Generates a written summary of the file\u2019s content. Has its own customizable prompt once turned on.'),
-      onEnter: () => setActiveTab('infer'),
-    },
-    {
-      target: 'infer-check-keywords',
-      title: t('uploadInfer.tour.checkKeywordsTitle', 'Keywords'),
-      content: t('uploadInfer.tour.checkKeywordsBody', 'Extracts the key terms from the file. Turning this on reveals a nested Keyword Insights option underneath.'),
-      onEnter: () => setActiveTab('infer'),
-    },
-    {
-      target: 'infer-check-questions',
-      title: t('uploadInfer.tour.checkQuestionsTitle', 'Assessment Questions'),
-      content: t('uploadInfer.tour.checkQuestionsBody', 'Generates quiz-style assessment questions based on the file\u2019s content.'),
-      onEnter: () => setActiveTab('infer'),
-    },
-    {
-      target: 'infer-check-shortanswer',
-      title: t('uploadInfer.tour.checkShortAnswerTitle', 'Short Answer'),
-      content: t('uploadInfer.tour.checkShortAnswerBody', 'Generates short written-answer questions and responses from the file.'),
-      onEnter: () => setActiveTab('infer'),
-    },
-    {
-      target: 'infer-check-truefalse',
-      title: t('uploadInfer.tour.checkTrueFalseTitle', 'True/False'),
-      content: t('uploadInfer.tour.checkTrueFalseBody', 'Generates True/False questions from the file\u2019s content.'),
-      onEnter: () => setActiveTab('infer'),
-    },
-    {
-      target: 'infer-check-timestamped',
-      title: t('uploadInfer.tour.checkTimestampedTitle', 'Timestamped Summary'),
-      content: t('uploadInfer.tour.checkTimestampedBody', 'Generates a summary broken into timestamped segments, so each point links back to a moment in the recording.'),
-      onEnter: () => setActiveTab('infer'),
-    },
-    {
-      target: 'infer-run',
-      title: t('uploadInfer.tour.inferRunTitle', 'Run it'),
-      content: t('uploadInfer.tour.inferRunBody', 'Once you\u2019ve picked files and settings, run the batch here. You can watch progress or switch tabs \u2014 it keeps running either way.'),
-      placement: 'left',
-      onEnter: () => setActiveTab('infer'),
-    },
-    {
-      target: 'results-sidebar',
-      title: t('uploadInfer.tour.resultsSidebarTitle', 'Find a finished file'),
-      content: t('uploadInfer.tour.resultsSidebarBody', 'Once a file\u2019s done, click it here to open its results. This list also has its own date range, status filter, search, and sort.'),
-      placement: 'right',
-      onEnter: () => setActiveTab('results'),
-    },
-    {
-      target: 'results-date-filter',
-      title: t('uploadInfer.tour.sidebarDateFilterTitle', 'Filter by date range'),
-      content: t('uploadInfer.tour.sidebarDateFilterBody', 'Narrow this list down to a date range, then hit Apply \u2014 independent of the Upload tab\u2019s own date filter.'),
-      placement: 'right',
-      onEnter: () => setActiveTab('results'),
-    },
-    {
-      target: 'results-status-filter',
-      title: t('uploadInfer.tour.sidebarStatusFilterTitle', 'Filter by status'),
-      content: t('uploadInfer.tour.sidebarStatusFilterBody', 'Show only files in one status here \u2014 independent of the Upload tab\u2019s own status filter.'),
-      placement: 'right',
-      onEnter: () => setActiveTab('results'),
-    },
-    {
-      target: 'results-search',
-      title: t('uploadInfer.tour.sidebarSearchTitle', 'Search'),
-      content: t('uploadInfer.tour.sidebarSearchBody', 'Find a file by name within this list.'),
-      placement: 'right',
-      onEnter: () => setActiveTab('results'),
-    },
-    {
-      target: 'results-sort',
-      title: t('uploadInfer.tour.sidebarSortTitle', 'Sort'),
-      content: t('uploadInfer.tour.sidebarSortBody', 'Sort this list by ID, Name, Date, or Status \u2014 click again to flip ascending/descending.'),
-      placement: 'right',
-      onEnter: () => setActiveTab('results'),
-    },
-    {
-      target: 'results-content',
-      title: t('uploadInfer.tour.resultsContentTitle', 'Your notes, ready to use'),
-      content: t('uploadInfer.tour.resultsContentBody', 'Summary, keywords, quiz questions, and more \u2014 all generated from the file you selected. You can edit and re-generate individual sections without re-running the whole batch.'),
-      placement: 'left',
-      onEnter: () => setActiveTab('results'),
-    },
-    {
-      target: 'results-tabbar',
-      title: t('uploadInfer.tour.resultsTabbarTitle', 'Seven kinds of results'),
-      content: t('uploadInfer.tour.resultsTabbarBody', 'Switch between Summary, Keywords, Assessment Questions, Short Answer, True/False, Timestamped Summary, and Keyword Insights \u2014 whichever ones you generated for this file.'),
-      placement: 'bottom',
-      onEnter: () => { setActiveTab('results'); workspacePanelRef.current?.setTab('summary'); },
-    },
-    // ── One step per tab, switching to it as it's highlighted ──
-    {
-      target: 'results-tab-summary',
-      title: t('uploadInfer.tour.tabSummaryTitle', 'Summary'),
-      content: t('uploadInfer.tour.tabSummaryBody', 'A written summary of the file\u2019s content.'),
-      placement: 'bottom',
-      onEnter: () => { setActiveTab('results'); workspacePanelRef.current?.setTab('summary'); },
-    },
-    {
-      target: 'results-tab-keywords',
-      title: t('uploadInfer.tour.tabKeywordsTitle', 'Keywords'),
-      content: t('uploadInfer.tour.tabKeywordsBody', 'The key terms extracted from the file, shown as chips.'),
-      placement: 'bottom',
-      onEnter: () => { setActiveTab('results'); workspacePanelRef.current?.setTab('keywords'); },
-    },
-    {
-      target: 'results-tab-assessment',
-      title: t('uploadInfer.tour.tabAssessmentTitle', 'Assessment Questions'),
-      content: t('uploadInfer.tour.tabAssessmentBody', 'Quiz-style assessment questions, with a multiple-choice quiz mode and a view-all mode.'),
-      placement: 'bottom',
-      onEnter: () => { setActiveTab('results'); workspacePanelRef.current?.setTab('assessment'); },
-    },
-    {
-      target: 'results-tab-shortAnswer',
-      title: t('uploadInfer.tour.tabShortAnswerTitle', 'Short Answer'),
-      content: t('uploadInfer.tour.tabShortAnswerBody', 'Short written-answer questions and responses, revealed one at a time or all at once.'),
-      placement: 'bottom',
-      onEnter: () => { setActiveTab('results'); workspacePanelRef.current?.setTab('shortAnswer'); },
-    },
-    {
-      target: 'results-tab-trueFalse',
-      title: t('uploadInfer.tour.tabTrueFalseTitle', 'True/False'),
-      content: t('uploadInfer.tour.tabTrueFalseBody', 'True/False questions, with the same quiz and view-all modes as Assessment Questions.'),
-      placement: 'bottom',
-      onEnter: () => { setActiveTab('results'); workspacePanelRef.current?.setTab('trueFalse'); },
-    },
-    {
-      target: 'results-tab-timestampedSummary',
-      title: t('uploadInfer.tour.tabTimestampedTitle', 'Timestamped Summary'),
-      content: t('uploadInfer.tour.tabTimestampedBody', 'A summary broken into timestamped segments, each linking back to a moment in the recording.'),
-      placement: 'bottom',
-      onEnter: () => { setActiveTab('results'); workspacePanelRef.current?.setTab('timestampedSummary'); },
-    },
-    {
-      target: 'results-tab-keywordInsights',
-      title: t('uploadInfer.tour.tabKeywordInsightsTitle', 'Keyword Insights'),
-      content: t('uploadInfer.tour.tabKeywordInsightsBody', 'Extra visualizations built from the extracted keywords \u2014 knowledge graph, word cloud, timeline, heatmap, clusters, and more.'),
-      placement: 'bottom',
-      onEnter: () => { setActiveTab('results'); workspacePanelRef.current?.setTab('keywordInsights'); },
-    },
-  ];
-
-  // The five per-icon steps only make sense once there's a real card to
-  // spotlight; skip them when the Upload tab is empty rather than showing
-  // five dim, un-anchored tooltips in a row.
-  const tourSteps: TourStep[] = tourHasFiles
-    ? allTourSteps
-    : allTourSteps.filter(s => !s.target.startsWith('upload-card-icon-'));
-
-  // "selectMode" is FilePanel's checkbox-selection UI for building the set
-  // of files to run inference on. Turning it on stays on the Upload tab
-  // (so people can keep browsing/checking files there) — the Infer tab
-  // badge below nudges them over once something's selected.
-  const [selectMode, setSelectMode] = useState(false);
-  useEffect(() => { if (!isBatchRunning) setSelectMode(false); }, [isBatchRunning]);
-  useEffect(() => { if (!selectMode) dispatch(clearServerSelection()); }, [selectMode]); // eslint-disable-line
-  useEffect(() => { return () => { dispatch(clearServerSelection()); }; }, []); // eslint-disable-line
-
-  const enterInferSelection = useCallback(() => setSelectMode(true), []);
-  const exitInferSelection = useCallback(() => setSelectMode(false), []);
-
-  // Leaving the Infer tab for Upload or Results should wipe whatever was
-  // in-progress there: any files checked in its FileSidebar, and any
-  // customization (content-type toggles + prompt overrides) made in
-  // InferencePanel. Coming back to Infer should always start clean rather
-  // than silently resuming a half-configured run from before.
-  const prevActiveTabRef = useRef<TabId>('upload');
-  useEffect(() => {
-    const prevTab = prevActiveTabRef.current;
-    if (prevTab === 'infer' && activeTab !== 'infer') {
-      dispatch(clearServerSelection());
-      dispatch(resetInferenceSettings());
-    }
-    prevActiveTabRef.current = activeTab;
-  }, [activeTab, dispatch]);
-
-  const [fileResult, setFileResult] = useState<FileResult | null>(null);
-  const [fileLoading, setFileLoading] = useState(false);
-  const [activeFileId, setActiveFileId] = useState<number | null>(null);
-
-  const fetchFileData = useCallback(async (fileId: number, knownFileName?: string) => {
-    setFileLoading(true);
+function parseFaq(raw: string): FaqItem[] {
+    if (!raw || raw === '[]') return [];
     try {
-      const res = await api.get(`/files/${fileId}`);
-      const d = (res.data as any)?.data ?? {};
-      setFileResult(prev => ({
-        fileId,
-        fileName: d.original_name ?? knownFileName ?? prev?.fileName ?? String(fileId),
-        insertedAt: d.inserted_at ?? prev?.insertedAt ?? '',
-        summary: d.summary ?? '',
-        keywords: d.keywords ?? [],
-        faq: d.faq ?? '[]',
-        shortAnswer: d.short_answer ?? '[]',
-        trueFalse: d.true_false ?? '[]',
-        timestampedSummary: d.timestamped_summary ?? '[]',
-        keywordInsights: d.keyword_insights ?? null,
-      }));
-    } catch { setFileResult(null); } finally { setFileLoading(false); }
-  }, []);
-
-  // Clicking a file (from the Upload tab's list, or the Workspace tab's
-  // own picker) loads its results and jumps straight to the Workspace tab.
-  // `fileName` is already known from the row that was clicked, so the
-  // title can show it immediately/reliably rather than depending on the
-  // detail endpoint's field naming.
-  const handleFileClick = useCallback(async (fileId: number, fileName?: string) => {
-    setActiveTab('results');
-    if (fileId === activeFileId) return;
-    setActiveFileId(fileId);
-    setFileResult(fileName ? {
-      fileId, fileName, insertedAt: '', summary: '', keywords: [], faq: '[]',
-      shortAnswer: '[]', trueFalse: '[]', timestampedSummary: '[]', keywordInsights: null,
-    } : null);
-    await fetchFileData(fileId, fileName);
-  }, [activeFileId, fetchFileData]);
-
-  const handleDeleteComplete = useCallback((deletedIds: number[], all?: boolean) => {
-    if (all || (activeFileId !== null && deletedIds.includes(activeFileId))) {
-      setActiveFileId(null);
-      setFileResult(null);
+        // eslint-disable-next-line no-eval
+        const result = eval(raw);
+        if (Array.isArray(result)) return result as FaqItem[];
+        return [];
+    } catch {
+        // Fallback: try direct JSON parse (if API returns valid JSON)
+        try { return JSON.parse(raw) as FaqItem[]; } catch { }
+        return [];
     }
-  }, [activeFileId]);
+}
 
-  const prevBatchRunning = useRef(false);
-  useEffect(() => {
-    const justFinished = prevBatchRunning.current && !isBatchRunning;
-    prevBatchRunning.current = isBatchRunning;
-    if (justFinished && activeFileId !== null) fetchFileData(activeFileId);
-  }, [isBatchRunning]); // eslint-disable-line
+// ── Permissive parser for the newer python-repr-style fields (short_answer,
+//    true_false, timestamped_summary). Handles True/False/None literals that
+//    plain eval() can't, and tries strict JSON first since that's cheaper
+//    and safer whenever the backend does send valid JSON. ──
+function parsePyList<T>(raw: string): T[] {
+    if (!raw || raw === '[]') return [];
+    try {
+        const result = JSON.parse(raw);
+        if (Array.isArray(result)) return result as T[];
+    } catch { /* not valid JSON — fall through to python-ish eval */ }
+    try {
+        const normalized = raw
+            .replace(/\bTrue\b/g, 'true')
+            .replace(/\bFalse\b/g, 'false')
+            .replace(/\bNone\b/g, 'null');
+        // eslint-disable-next-line no-eval
+        const result = eval('(' + normalized + ')');
+        if (Array.isArray(result)) return result as T[];
+    } catch { /* give up */ }
+    return [];
+}
 
-  const tabs: { id: TabId; label: string; desc: string }[] = [
-    { id: 'upload', label: t('uploadInfer.tabs.upload'), desc: t('uploadInfer.tabs.uploadDesc') },
-    { id: 'infer', label: t('uploadInfer.tabs.infer'), desc: t('uploadInfer.tabs.inferDesc') },
-    { id: 'results', label: t('uploadInfer.tabs.results'), desc: t('uploadInfer.tabs.resultsDesc') },
-  ];
+interface ShortAnswerItem { question: string; answer: string; }
+interface TrueFalseItem { statement: string; is_true: boolean; explanation: string; }
+interface TimestampSegment { start_time: string; end_time: string; summary: string; }
 
-  return (
-    <div className={styles.page}>
-      {/* ── Header — title and self-explanatory tab cards share one row ── */}
-      <div className={styles.headerBar}>
-        <div className={styles.phTitleRow}>
-          <div className={styles.phTitle}>{t('uploadInfer.pageTitle')}</div>
-          <button type="button" className={styles.tourTriggerBtn} onClick={startTour}>
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="8" cy="8" r="6.25" />
-              <path d="M6.1 6.2a1.9 1.9 0 013.6.7c0 1.3-1.7 1.5-1.7 2.7M8 11.4v.1" />
+const CHIP_COLORS = [
+    'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
+    'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
+    'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)',
+    'linear-gradient(135deg, #fa709a 0%, #fee140 100%)',
+    'linear-gradient(135deg, #30cfd0 0%, #330867 100%)',
+    'linear-gradient(135deg, #a8edea 0%, #fed6e3 100%)',
+    'linear-gradient(135deg, #ff9a56 0%, #ff6a88 100%)',
+    'linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%)',
+    'linear-gradient(135deg, #a1c4fd 0%, #c2e9fb 100%)',
+];
+
+function seededColorIndex(str: string): number {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+    return hash % CHIP_COLORS.length;
+}
+
+// ── Copy / Download helpers ───────────────────────────────
+function copyText(text: string) {
+    if (navigator.clipboard) { navigator.clipboard.writeText(text).catch(() => fallbackCopy(text)); }
+    else fallbackCopy(text);
+}
+function fallbackCopy(text: string) {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch { }
+    document.body.removeChild(ta);
+}
+function downloadFile(content: string, filename: string, mime: string) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+// Handles both data: URIs (the common case — API returns base64 PNGs
+// inline) and plain image URLs, downloading either as a real file rather
+// than just opening it in a new tab.
+function downloadImage(src: string, filename: string) {
+    if (src.startsWith('data:')) {
+        const a = document.createElement('a');
+        a.href = src; a.download = filename;
+        document.body.appendChild(a); a.click();
+        document.body.removeChild(a);
+        return;
+    }
+    fetch(src)
+        .then(r => r.blob())
+        .then(blob => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = filename;
+            document.body.appendChild(a); a.click();
+            document.body.removeChild(a); URL.revokeObjectURL(url);
+        })
+        .catch(() => { window.open(src, '_blank'); });
+}
+function wrapHtml(body: string, title: string): string {
+    return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${title}</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:900px;margin:40px auto;padding:20px;background:#f8f9fa;color:#333}</style></head><body>${body}</body></html>`;
+}
+
+// ── Format helpers ────────────────────────────────────────
+type Formatted = { content: string; filename: string; mime: string };
+
+function formatSummary(summary: string, fmt: string, base = 'summary'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    if (fmt === 'html') return { content: wrapHtml(marked.parse(summary) as string, 'Summary'), filename: `${base}_summary_${ts}.html`, mime: 'text/html' };
+    if (fmt === 'json') return { content: JSON.stringify({ type: 'summary', content: summary, timestamp: new Date().toISOString() }, null, 2), filename: `${base}_summary_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'md') return { content: summary, filename: `${base}_summary_${ts}.md`, mime: 'text/markdown' };
+    return { content: summary, filename: `${base}_summary_${ts}.txt`, mime: 'text/plain' };
+}
+
+function formatKeywords(keywords: string[], fmt: string, base = 'keywords'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    if (fmt === 'html') return { content: wrapHtml(`<div style="display:flex;flex-wrap:wrap;gap:10px">${keywords.map(k => `<span style="padding:6px 14px;border-radius:20px;background:linear-gradient(135deg,#8b5cf6,#a78bfa);color:#fff;font-weight:600">${k}</span>`).join('')}</div>`, 'Keywords'), filename: `${base}_keywords_${ts}.html`, mime: 'text/html' };
+    if (fmt === 'json') return { content: JSON.stringify({ type: 'keywords', keywords, timestamp: new Date().toISOString() }, null, 2), filename: `${base}_keywords_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'md') return { content: '# Keywords\n\n' + keywords.map(k => `- ${k}`).join('\n'), filename: `${base}_keywords_${ts}.md`, mime: 'text/markdown' };
+    return { content: keywords.join('\n'), filename: `${base}_keywords_${ts}.txt`, mime: 'text/plain' };
+}
+
+function formatAssessment(faqRaw: string, fmt: string, base = 'assessment'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    const items = parseFaq(faqRaw);
+    if (fmt === 'json') return { content: JSON.stringify(items, null, 2), filename: `${base}_assessment_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'html') {
+        const body = items.map((q, i) =>
+            `<div style="background:#fff;border-radius:12px;padding:24px;margin-bottom:20px;box-shadow:0 2px 8px rgba(0,0,0,.08);border-left:4px solid #8b5cf6">
+             <div style="font-weight:700;font-size:16px;margin-bottom:14px"><span style="background:linear-gradient(135deg,#8b5cf6,#a78bfa);color:#fff;padding:3px 10px;border-radius:6px;margin-right:10px;font-size:13px">Q${i + 1}</span>${q.question}</div>
+             ${Object.entries(q.options).map(([k, v]) => `<div style="padding:10px 14px;margin:6px 0;border-radius:8px;border:1px solid ${k === q.correct_answer ? '#10b981' : '#e5e7eb'};background:${k === q.correct_answer ? 'rgba(16,185,129,.08)' : '#f9fafb'}"><b style="color:${k === q.correct_answer ? '#10b981' : '#8b5cf6'}">${k}.</b> ${v}${k === q.correct_answer ? ' <span style="background:#10b981;color:#fff;padding:1px 7px;border-radius:4px;font-size:11px">✓</span>' : ''}</div>`).join('')}
+             <div style="margin-top:14px;padding:12px 16px;background:rgba(139,92,246,.06);border-left:3px solid #8b5cf6;border-radius:0 8px 8px 0;font-size:13px"><b style="color:#8b5cf6;font-size:11px;text-transform:uppercase">Explanation</b><br/>${q.explanation}</div>
+             </div>`
+        ).join('');
+        return { content: wrapHtml(body, 'Assessment Questions'), filename: `${base}_assessment_${ts}.html`, mime: 'text/html' };
+    }
+    // txt
+    const txt = items.map((q, i) =>
+        `Q${i + 1}. ${q.question}\n` +
+        Object.entries(q.options).map(([k, v]) => `  ${k}. ${v}${k === q.correct_answer ? ' ✓' : ''}`).join('\n') +
+        `\n\nAnswer: ${q.correct_answer}\nExplanation: ${q.explanation}`
+    ).join('\n\n' + '─'.repeat(60) + '\n\n');
+    return { content: txt, filename: `${base}_assessment_${ts}.txt`, mime: 'text/plain' };
+}
+
+function formatShortAnswer(raw: string, fmt: string, base = 'short_answer'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    const items = parsePyList<ShortAnswerItem>(raw);
+    if (fmt === 'json') return { content: JSON.stringify(items, null, 2), filename: `${base}_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'html') {
+        const body = items.map((item, i) =>
+            `<div style="background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.08);border-left:4px solid #4facfe">
+             <div style="font-weight:700;font-size:15px;margin-bottom:10px"><span style="background:#4facfe;color:#fff;padding:3px 10px;border-radius:6px;margin-right:10px;font-size:13px">Q${i + 1}</span>${item.question}</div>
+             <div style="padding:10px 14px;background:rgba(79,172,254,.08);border-radius:8px;font-size:13px"><b style="color:#4facfe">Answer:</b> ${item.answer}</div>
+             </div>`
+        ).join('');
+        return { content: wrapHtml(body, 'Short Answer Questions'), filename: `${base}_${ts}.html`, mime: 'text/html' };
+    }
+    const txt = items.map((item, i) => `Q${i + 1}. ${item.question}\nA: ${item.answer}`).join('\n\n' + '─'.repeat(60) + '\n\n');
+    return { content: txt, filename: `${base}_${ts}.txt`, mime: 'text/plain' };
+}
+
+function formatTrueFalse(raw: string, fmt: string, base = 'true_false'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    const items = parsePyList<TrueFalseItem>(raw);
+    if (fmt === 'json') return { content: JSON.stringify(items, null, 2), filename: `${base}_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'html') {
+        const body = items.map((item, i) =>
+            `<div style="background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.08);border-left:4px solid #43e97b">
+             <div style="font-weight:700;font-size:15px;margin-bottom:10px"><span style="background:#43e97b;color:#fff;padding:3px 10px;border-radius:6px;margin-right:10px;font-size:13px">${i + 1}</span>${item.statement}</div>
+             <div style="padding:10px 14px;background:rgba(67,233,123,.08);border-radius:8px;font-size:13px"><b style="color:#43e97b">Answer:</b> ${item.is_true ? 'True' : 'False'}</div>
+             <div style="margin-top:10px;font-size:13px;color:#666"><b>Explanation:</b> ${item.explanation}</div>
+             </div>`
+        ).join('');
+        return { content: wrapHtml(body, 'True / False Questions'), filename: `${base}_${ts}.html`, mime: 'text/html' };
+    }
+    const txt = items.map((item, i) => `${i + 1}. ${item.statement}\nAnswer: ${item.is_true ? 'True' : 'False'}\nExplanation: ${item.explanation}`).join('\n\n' + '─'.repeat(60) + '\n\n');
+    return { content: txt, filename: `${base}_${ts}.txt`, mime: 'text/plain' };
+}
+
+function formatTimestampedSummary(raw: string, fmt: string, base = 'timestamped_summary'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    const items = parsePyList<TimestampSegment>(raw);
+    if (fmt === 'json') return { content: JSON.stringify(items, null, 2), filename: `${base}_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'md') return { content: items.map(s => `### ${s.start_time} – ${s.end_time}\n\n${s.summary}`).join('\n\n'), filename: `${base}_${ts}.md`, mime: 'text/markdown' };
+    const txt = items.map(s => `[${s.start_time} – ${s.end_time}]\n${s.summary}`).join('\n\n');
+    return { content: txt, filename: `${base}_${ts}.txt`, mime: 'text/plain' };
+}
+
+
+const SUMMARY_FMTS = [{ k: 'txt', l: 'Text' }, { k: 'md', l: 'Markdown' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const KEYWORDS_FMTS = [{ k: 'txt', l: 'Text' }, { k: 'md', l: 'Markdown' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const ASSESSMENT_FMTS = [{ k: 'txt', l: 'Plain Text' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const SHORT_ANSWER_FMTS = [{ k: 'txt', l: 'Plain Text' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const TRUE_FALSE_FMTS = [{ k: 'txt', l: 'Plain Text' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const TIMESTAMPED_SUMMARY_FMTS = [{ k: 'txt', l: 'Text' }, { k: 'md', l: 'Markdown' }, { k: 'json', l: 'JSON' }];
+
+// ── ActionBtn ─────────────────────────────────────────────
+const ActionBtn: React.FC<{ title: string; onClick: () => void; active?: boolean; children: React.ReactNode }> = ({ title, onClick, active, children }) => (
+    <button className={`${styles.actionBtn} ${active ? styles.actionBtnActive : ''}`} title={title} onClick={e => { e.stopPropagation(); onClick(); }}>
+        {children}
+    </button>
+);
+
+// ── FormatIcon ────────────────────────────────────────────
+// Small colored glyph rendered next to each format option in the
+// Copy / Download dropdowns. Each format has a recognisable hue.
+const FORMAT_ICONS: Record<string, { color: string; bg: string; node: React.ReactNode }> = {
+    txt: {
+        color: '#64748b',
+        bg: 'rgba(100, 116, 139, 0.12)',
+        node: (
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 2.5h6.5L13 6v7.5A1 1 0 0112 14.5H3a1 1 0 01-1-1v-10a1 1 0 011-1z" />
+                <path d="M9 2.5V6h4" />
+                <path d="M5 9h6M5 11.5h4" />
             </svg>
-            {t('uploadInfer.tour.takeTour', 'Take a tour')}
-          </button>
-        </div>
+        ),
+    },
+    md: {
+        color: '#3b82f6',
+        bg: 'rgba(59, 130, 246, 0.14)',
+        node: (
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="1.5" y="3.5" width="13" height="9" rx="1.5" />
+                <path d="M4 10.5V6l1.75 2.5L7.5 6v4.5" />
+                <path d="M10.25 6v4.5M8.75 9l1.5 1.5L11.75 9" />
+            </svg>
+        ),
+    },
+    html: {
+        color: '#e34f26',
+        bg: 'rgba(227, 79, 38, 0.14)',
+        node: (
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M2.5 2l1 12 4.5 1.3L12.5 14l1-12z" />
+                <path d="M5 5.5h6L10.6 11l-2.6.8L5.4 11l-.15-2" />
+            </svg>
+        ),
+    },
+    json: {
+        color: '#f59e0b',
+        bg: 'rgba(245, 158, 11, 0.14)',
+        node: (
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M6 2.5C4.5 2.5 4 3.5 4 5v1.5C4 7.5 3 8 2 8c1 0 2 .5 2 1.5V11c0 1.5.5 2.5 2 2.5" />
+                <path d="M10 2.5c1.5 0 2 1 2 2.5v1.5C12 7.5 13 8 14 8c-1 0-2 .5-2 1.5V11c0 1.5-.5 2.5-2 2.5" />
+            </svg>
+        ),
+    },
+};
 
-        <div className={styles.tabbar} role="tablist" data-tour="tabbar">
-          {tabs.map(tab => (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={activeTab === tab.id}
-              className={`${styles.tabBtn} ${activeTab === tab.id ? styles.tabBtnActive : ''}`}
-              onClick={() => setActiveTab(tab.id)}
-              title={tab.desc}
+const FormatIcon: React.FC<{ fmt: string }> = ({ fmt }) => {
+    const def = FORMAT_ICONS[fmt];
+    if (!def) return null;
+    return (
+        <span
+            className={styles.fmtIcon}
+            style={{ color: def.color, background: def.bg }}
+            aria-hidden="true"
+        >
+            {def.node}
+        </span>
+    );
+};
+
+// ── Dropdown ──────────────────────────────────────────────
+const Dropdown: React.FC<{
+    icon: React.ReactNode; title: string; label: string;
+    fmts: { k: string; l: string }[];
+    onSelect: (k: string) => void; active?: boolean;
+}> = ({ icon, title, label, fmts, onSelect, active }) => {
+    const [open, setOpen] = useState(false);
+    const ref = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+        document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h);
+    }, []);
+    return (
+        <div className={styles.dropdownWrap} ref={ref}>
+            <ActionBtn title={title} onClick={() => setOpen(o => !o)} active={open || active}>{icon}</ActionBtn>
+            {open && (
+                <div className={styles.dropdown}>
+                    <div className={styles.dropdownLabel}>{label}</div>
+                    {fmts.map(f => (
+                        <button
+                            key={f.k}
+                            className={styles.dropdownItem}
+                            onClick={() => { onSelect(f.k); setOpen(false); }}
+                        >
+                            <FormatIcon fmt={f.k} />
+                            <span className={styles.dropdownItemLabel}>{f.l}</span>
+                        </button>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Icons ─────────────────────────────────────────────────
+const IcoEdit = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M7 2.5H3.5A1.5 1.5 0 002 4v8.5A1.5 1.5 0 003.5 14H12a1.5 1.5 0 001.5-1.5V9" />
+        <path d="M11.5 1.5a1.414 1.414 0 012 2L8 9l-2.5.5.5-2.5 5.5-5.5z" />
+    </svg>
+);
+const IcoCopy = ({ success }: { success: boolean }) => success ? (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={styles.successIcon}><path d="M3 8l3.5 3.5L13 4" /></svg>
+) : (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="5" y="5" width="8" height="9" rx="1.5" />
+        <path d="M10 5V4a1 1 0 00-1-1H4a1.5 1.5 0 00-1.5 1.5V11a1 1 0 001 1h1" />
+    </svg>
+);
+const IcoDownload = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M8 2v8M5 7l3 3 3-3" />
+        <path d="M2 12v1.5A1.5 1.5 0 003.5 15h9a1.5 1.5 0 001.5-1.5V12" />
+    </svg>
+);
+
+// ── TabToolbar: edit + copy + download ───────────────────
+const TabToolbar: React.FC<{
+    onEdit?: () => void;
+    fmts: { k: string; l: string }[];
+    onCopy: (k: string) => void;
+    onDownload: (k: string) => void;
+    copied: boolean;
+}> = ({ onEdit, fmts, onCopy, onDownload, copied }) => {
+    const { t } = useTranslation();
+    return (
+        <div className={styles.tabToolbar}>
+            {onEdit && <ActionBtn title={t('uploadInfer.workspacePanel.edit')} onClick={onEdit}><IcoEdit /></ActionBtn>}
+            <Dropdown icon={<IcoCopy success={copied} />} title={t('uploadInfer.workspacePanel.copy')} label={t('uploadInfer.workspacePanel.copyAs')} fmts={fmts} onSelect={onCopy} active={copied} />
+            <Dropdown icon={<IcoDownload />} title={t('uploadInfer.workspacePanel.download')} label={t('uploadInfer.workspacePanel.downloadAs')} fmts={fmts} onSelect={onDownload} />
+        </div>
+    );
+};
+
+// ── Stable keyword chip ───────────────────────────────────
+const KeywordChip: React.FC<{ kw: string; isNew: boolean }> = ({ kw, isNew }) => (
+    <span className={`${styles.keywordPill} ${isNew ? styles.keywordPillNew : ''}`}
+        style={{ background: CHIP_COLORS[seededColorIndex(kw)] }}>
+        {kw}
+    </span>
+);
+
+const ChipGrid: React.FC<{ kws: string[]; prevSet?: Set<string> }> = ({ kws, prevSet }) => {
+    const { t } = useTranslation();
+    return kws.length > 0 ? (
+        <div className={styles.keywordGrid}>
+            {kws.map(kw => <KeywordChip key={kw} kw={kw} isNew={prevSet ? !prevSet.has(kw) : false} />)}
+        </div>
+    ) : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noKeywords')}</div>;
+};
+
+// ── Tab: Summary ──────────────────────────────────────────
+const TabSummary: React.FC<{ summary: string; fileId: number; onSaved: (s: string) => void }> = ({ summary, fileId, onSaved }) => {
+    const { t } = useTranslation();
+    const [editing, setEditing] = useState(false);
+    const [draft, setDraft] = useState(summary);
+    const [saving, setSaving] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    const html = useMemo(() => marked.parse(draft) as string, [draft]);
+    const viewHtml = useMemo(() => marked.parse(summary) as string, [summary]);
+
+    const handleSave = async () => {
+        setSaving(true);
+        try { await api.post('/files/update', { fileID: String(fileId), summary: draft }); onSaved(draft); setEditing(false); }
+        finally { setSaving(false); }
+    };
+    const handleCopy = (fmt: string) => { copyText(formatSummary(summary, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatSummary(summary, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!summary && !editing) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noSummary')}</div>;
+
+    return (
+        <div className={`${styles.tabContent} ${editing ? styles.editMode : ''}`}>
+            {!editing ? (
+                <>
+                    <TabToolbar onEdit={() => { setDraft(summary); setEditing(true); }} fmts={SUMMARY_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+                    <div className={styles.summaryMd} dangerouslySetInnerHTML={{ __html: viewHtml }} />
+                </>
+            ) : (
+                <div className={styles.editLayout}>
+                    <div className={styles.editCol}>
+                        <div className={styles.editColHeader}><span className={styles.editColLabel}>{t('uploadInfer.workspacePanel.editColPreview')}</span><span className={styles.editColTag}>{t('uploadInfer.workspacePanel.markdownRenderer')}</span></div>
+                        <div className={styles.editPreview}><div className={styles.summaryMd} dangerouslySetInnerHTML={{ __html: html }} /></div>
+                    </div>
+                    <div className={styles.editCol}>
+                        <div className={styles.editColHeader}><span className={styles.editColLabel}>{t('uploadInfer.workspacePanel.editColEdit')}</span><span className={styles.editColTag}>{t('uploadInfer.workspacePanel.markdownTag')}</span></div>
+                        <textarea className={styles.editTextarea} value={draft} onChange={e => setDraft(e.target.value)} spellCheck={false} />
+                    </div>
+                    <div className={styles.editFooter}>
+                        <button className={styles.cancelBtn} onClick={() => setEditing(false)} disabled={saving}>{t('uploadInfer.workspacePanel.cancel')}</button>
+                        <button className={styles.saveBtn} onClick={handleSave} disabled={saving}>
+                            {saving ? <><span className={styles.inlineSpinner} />{t('uploadInfer.workspacePanel.saving')}</> : t('uploadInfer.workspacePanel.save')}
+                        </button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Tab: Keywords ─────────────────────────────────────────
+const TabKeywords: React.FC<{ keywords: string[]; fileId: number; onSaved: (kws: string[]) => void }> = ({ keywords, fileId, onSaved }) => {
+    const { t } = useTranslation();
+    const [editing, setEditing] = useState(false);
+    const [draft, setDraft] = useState(keywords.join('\n'));
+    const [saving, setSaving] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    // prevSetSnapshot holds the keyword set from the PREVIOUS render of ChipGrid
+    // so only truly new chips get the pop animation
+    const prevSetSnapshot = useRef<Set<string>>(new Set(keywords));
+
+    const draftKeywords = useMemo(() => draft.split('\n').map(k => k.trim()).filter(Boolean), [draft]);
+
+    // After each render, schedule an update of the snapshot so the *next*
+    // render can compare against what's currently visible
+    useEffect(() => {
+        const id = setTimeout(() => { prevSetSnapshot.current = new Set(draftKeywords); }, 0);
+        return () => clearTimeout(id);
+    }, [draftKeywords]);
+
+    const handleSave = async () => {
+        setSaving(true);
+        try { await api.post('/files/update', { fileID: String(fileId), keywords: draftKeywords }); onSaved(draftKeywords); setEditing(false); }
+        finally { setSaving(false); }
+    };
+    const handleCopy = (fmt: string) => { copyText(formatKeywords(keywords, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatKeywords(keywords, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!keywords.length && !editing) return <div className={styles.tabEmpty}>No keywords available.</div>;
+
+    return (
+        <div className={`${styles.tabContent} ${editing ? styles.editMode : ''}`}>
+            {!editing ? (
+                <>
+                    <TabToolbar onEdit={() => { setDraft(keywords.join('\n')); prevSetSnapshot.current = new Set(keywords); setEditing(true); }} fmts={KEYWORDS_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+                    <ChipGrid kws={keywords} />
+                </>
+            ) : (
+                <div className={styles.editLayout}>
+                    <div className={styles.editCol}>
+                        <div className={styles.editColHeader}><span className={styles.editColLabel}>{t('uploadInfer.workspacePanel.editColPreview')}</span><span className={styles.editColTag}>{t('uploadInfer.workspacePanel.chipView')}</span></div>
+                        <div className={styles.editPreview}>
+                            <ChipGrid kws={draftKeywords} prevSet={prevSetSnapshot.current} />
+                        </div>
+                    </div>
+                    <div className={styles.editCol}>
+                        <div className={styles.editColHeader}><span className={styles.editColLabel}>{t('uploadInfer.workspacePanel.editColEdit')}</span><span className={styles.editColTag}>{t('uploadInfer.workspacePanel.onePerLine')}</span></div>
+                        <textarea className={styles.editTextarea} value={draft} onChange={e => setDraft(e.target.value)} spellCheck={false} placeholder={t('uploadInfer.workspacePanel.keywordPlaceholder')} />
+                    </div>
+                    <div className={styles.editFooter}>
+                        <button className={styles.cancelBtn} onClick={() => setEditing(false)} disabled={saving}>{t('uploadInfer.workspacePanel.cancel')}</button>
+                        <button className={styles.saveBtn} onClick={handleSave} disabled={saving}>
+                            {saving ? <><span className={styles.inlineSpinner} />{t('uploadInfer.workspacePanel.saving')}</> : t('uploadInfer.workspacePanel.save')}
+                        </button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Tab: Assessment ───────────────────────────────────────
+type AssessMode = 'mcq' | 'all';
+
+const TabAssessment: React.FC<{ faq: string }> = ({ faq }) => {
+    const { t } = useTranslation();
+    const items = useMemo(() => parseFaq(faq), [faq]);
+
+    // Always default to MCQ; reset when faq changes (new file)
+    const [mode, setMode] = useState<AssessMode>('mcq');
+    const [current, setCurrent] = useState(0);
+    const [selected, setSelected] = useState<string | null>(null);
+    const [revealed, setRevealed] = useState(false);
+    const [complete, setComplete] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    const prevFaq = useRef(faq);
+    useEffect(() => {
+        if (faq !== prevFaq.current) {
+            prevFaq.current = faq;
+            setMode('mcq');
+            setCurrent(0); setSelected(null); setRevealed(false); setComplete(false);
+        }
+    }, [faq]);
+
+    const handleCopy = (fmt: string) => { copyText(formatAssessment(faq, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatAssessment(faq, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!items.length) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noQuestions')}</div>;
+
+    // ── MCQ helpers ───────────────────────────────────────
+    const q = items[current];
+    const isLast = current === items.length - 1;
+    const progress = Math.round(((current + (complete ? 1 : 0)) / items.length) * 100);
+
+    const handleSelect = (key: string) => { if (revealed) return; setSelected(key); setRevealed(true); };
+    const handleNext = () => { if (isLast) setComplete(true); else { setCurrent(c => c + 1); setSelected(null); setRevealed(false); } };
+    const handleRestart = () => { setCurrent(0); setSelected(null); setRevealed(false); setComplete(false); };
+    const getOptClass = (key: string) => {
+        if (!revealed) return selected === key ? styles.faqOptSelected : '';
+        if (key === q.correct_answer && selected === key) return styles.faqOptCorrect;
+        if (key === q.correct_answer) return styles.faqOptCorrectAlt;
+        if (key === selected) return styles.faqOptWrong;
+        return '';
+    };
+
+    return (
+        <div className={styles.tabContent}>
+            {/* Toolbar row: mode tabs left, copy/download right */}
+            <div className={styles.assessHeader}>
+                <div className={styles.assessModeTabs}>
+                    <button
+                        className={`${styles.assessModeTab} ${mode === 'mcq' ? styles.assessModeTabActive : ''}`}
+                        onClick={() => setMode('mcq')}
+                    >
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="8" cy="8" r="6" />
+                            <path d="M6 8.5l1.5 1.5L10.5 6" />
+                        </svg>
+                        MCQ
+                    </button>
+                    <button
+                        className={`${styles.assessModeTab} ${mode === 'all' ? styles.assessModeTabActive : ''}`}
+                        onClick={() => setMode('all')}
+                    >
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M2 4h12M2 8h12M2 12h8" />
+                        </svg>
+                        View All
+                    </button>
+                </div>
+                <TabToolbar fmts={ASSESSMENT_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+            </div>
+
+            {/* ── MCQ mode ── */}
+            {mode === 'mcq' && (
+                complete ? (
+                    <div className={styles.assessComplete}>
+                        <div className={styles.assessCompleteIcon}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                        </div>
+                        <div className={styles.assessCompleteTitle}>{t('uploadInfer.workspacePanel.assessCompleteTitle')}</div>
+                        <div className={styles.assessCompleteDesc}>{t('uploadInfer.workspacePanel.assessCompleteDesc', { count: items.length })}</div>
+                        <button className={styles.assessRestartBtn} onClick={handleRestart}>{t('uploadInfer.workspacePanel.restart')}</button>
+                    </div>
+                ) : (
+                    <>
+                        <div className={styles.assessProgress}>
+                            <div className={styles.assessProgressTrack}>
+                                <div className={styles.assessProgressFill} style={{ width: `${progress}%` }} />
+                            </div>
+                            <span className={styles.assessProgressLabel}>{current + 1} / {items.length}</span>
+                        </div>
+                        <div className={styles.faqCard}>
+                            <div className={styles.faqQ}>
+                                <span className={styles.faqNum}>Q{current + 1}</span>
+                                {q.question}
+                            </div>
+                            <div className={styles.faqOptions}>
+                                {Object.entries(q.options).map(([key, val]) => (
+                                    <button key={key} className={`${styles.faqOpt} ${getOptClass(key)}`} onClick={() => handleSelect(key)} disabled={revealed}>
+                                        <span className={styles.faqOptKey}>{key}</span>
+                                        <span className={styles.faqOptVal}>{val}</span>
+                                        {revealed && key === q.correct_answer && <svg className={styles.faqCheckIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 8l3.5 3.5L13 4" /></svg>}
+                                        {revealed && key === selected && key !== q.correct_answer && <svg className={styles.faqXIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>}
+                                    </button>
+                                ))}
+                            </div>
+                            {revealed && (
+                                <div className={styles.faqExplain}>
+                                    <div className={styles.faqExplainLabel}>
+                                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" /><path d="M8 7v4M8 5.5v.5" /></svg>
+                                        Explanation
+                                    </div>
+                                    <p className={styles.faqExplainText}>{q.explanation}</p>
+                                </div>
+                            )}
+                        </div>
+                        {revealed && (
+                            <button className={`${styles.assessNextBtn} ${isLast ? styles.assessDoneBtn : ''}`} onClick={handleNext}>
+                                {isLast ? t('uploadInfer.workspacePanel.finish') : t('uploadInfer.workspacePanel.next')}
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                    {isLast ? <path d="M3 8l3.5 3.5L13 4" /> : <path d="M3 8h10M9 4l4 4-4 4" />}
+                                </svg>
+                            </button>
+                        )}
+                    </>
+                )
+            )}
+
+            {/* ── View All mode ── */}
+            {mode === 'all' && (
+                <div className={styles.viewAllList}>
+                    {items.map((item, idx) => (
+                        <div key={idx} className={styles.viewAllCard}>
+                            {/* Question */}
+                            <div className={styles.viewAllQ}>
+                                <span className={styles.faqNum}>Q{idx + 1}</span>
+                                {item.question}
+                            </div>
+
+                            {/* Options */}
+                            <div className={styles.faqOptions}>
+                                {Object.entries(item.options).map(([key, val]) => (
+                                    <div
+                                        key={key}
+                                        className={`${styles.faqOpt} ${key === item.correct_answer ? styles.faqOptCorrectAlt : styles.viewAllOptNeutral}`}
+                                    >
+                                        <span className={`${styles.faqOptKey} ${key === item.correct_answer ? styles.faqOptKeyCorrect : ''}`}>{key}</span>
+                                        <span className={styles.faqOptVal}>{val}</span>
+                                        {key === item.correct_answer && (
+                                            <svg className={styles.faqCheckIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                                <path d="M3 8l3.5 3.5L13 4" />
+                                            </svg>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+
+                            {/* Explanation */}
+                            <div className={styles.faqExplain}>
+                                <div className={styles.faqExplainLabel}>
+                                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                                        <circle cx="8" cy="8" r="6" /><path d="M8 7v4M8 5.5v.5" />
+                                    </svg>
+                                    Explanation
+                                </div>
+                                <p className={styles.faqExplainText}>{item.explanation}</p>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Tab: Short Answer ──────────────────────────────────────
+const TabShortAnswer: React.FC<{ raw: string }> = ({ raw }) => {
+    const { t } = useTranslation();
+    const items = useMemo(() => parsePyList<ShortAnswerItem>(raw), [raw]);
+    const [revealedIds, setRevealedIds] = useState<Set<number>>(new Set());
+    const [copied, setCopied] = useState(false);
+
+    const prevRaw = useRef(raw);
+    useEffect(() => { if (raw !== prevRaw.current) { prevRaw.current = raw; setRevealedIds(new Set()); } }, [raw]);
+
+    const toggleReveal = (idx: number) => setRevealedIds(prev => {
+        const next = new Set(prev);
+        if (next.has(idx)) next.delete(idx); else next.add(idx);
+        return next;
+    });
+    const allRevealed = items.length > 0 && revealedIds.size === items.length;
+    const toggleAll = () => setRevealedIds(allRevealed ? new Set() : new Set(items.map((_, i) => i)));
+
+    const handleCopy = (fmt: string) => { copyText(formatShortAnswer(raw, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatShortAnswer(raw, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!items.length) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noShortAnswer')}</div>;
+
+    return (
+        <div className={styles.tabContent}>
+            <div className={styles.assessHeader}>
+                <button className={styles.revealAllBtn} onClick={toggleAll}>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8s-2.5 4.5-6.5 4.5S1.5 8 1.5 8z" /><circle cx="8" cy="8" r="2" />
+                    </svg>
+                    {allRevealed ? t('uploadInfer.workspacePanel.hideAllAnswers') : t('uploadInfer.workspacePanel.showAllAnswers')}
+                </button>
+                <TabToolbar fmts={SHORT_ANSWER_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+            </div>
+            <div className={styles.viewAllList}>
+                {items.map((item, idx) => {
+                    const revealed = revealedIds.has(idx);
+                    return (
+                        <div key={idx} className={styles.viewAllCard}>
+                            <div className={styles.viewAllQ}>
+                                <span className={styles.faqNum}>Q{idx + 1}</span>
+                                {item.question}
+                            </div>
+                            {revealed ? (
+                                <div className={styles.shortAnswerBox}>
+                                    <div className={styles.shortAnswerLabel}>{t('uploadInfer.workspacePanel.answer')}</div>
+                                    <p className={styles.shortAnswerText}>{item.answer}</p>
+                                </div>
+                            ) : (
+                                <button className={styles.revealBtn} onClick={() => toggleReveal(idx)}>
+                                    {t('uploadInfer.workspacePanel.revealAnswer')}
+                                </button>
+                            )}
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
+};
+
+// ── Tab: True / False ────────────────────────────────────────
+type TfMode = 'quiz' | 'all';
+
+const TabTrueFalse: React.FC<{ raw: string }> = ({ raw }) => {
+    const { t } = useTranslation();
+    const items = useMemo(() => parsePyList<TrueFalseItem>(raw), [raw]);
+
+    const [mode, setMode] = useState<TfMode>('quiz');
+    const [current, setCurrent] = useState(0);
+    const [selected, setSelected] = useState<'true' | 'false' | null>(null);
+    const [revealed, setRevealed] = useState(false);
+    const [complete, setComplete] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    const prevRaw = useRef(raw);
+    useEffect(() => {
+        if (raw !== prevRaw.current) {
+            prevRaw.current = raw;
+            setMode('quiz');
+            setCurrent(0); setSelected(null); setRevealed(false); setComplete(false);
+        }
+    }, [raw]);
+
+    const handleCopy = (fmt: string) => { copyText(formatTrueFalse(raw, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatTrueFalse(raw, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!items.length) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noTrueFalse')}</div>;
+
+    const q = items[current];
+    const correctKey: 'true' | 'false' = q.is_true ? 'true' : 'false';
+    const isLast = current === items.length - 1;
+    const progress = Math.round(((current + (complete ? 1 : 0)) / items.length) * 100);
+
+    const handleSelect = (key: 'true' | 'false') => { if (revealed) return; setSelected(key); setRevealed(true); };
+    const handleNext = () => { if (isLast) setComplete(true); else { setCurrent(c => c + 1); setSelected(null); setRevealed(false); } };
+    const handleRestart = () => { setCurrent(0); setSelected(null); setRevealed(false); setComplete(false); };
+    const getOptClass = (key: 'true' | 'false') => {
+        if (!revealed) return selected === key ? styles.faqOptSelected : '';
+        if (key === correctKey && selected === key) return styles.faqOptCorrect;
+        if (key === correctKey) return styles.faqOptCorrectAlt;
+        if (key === selected) return styles.faqOptWrong;
+        return '';
+    };
+
+    return (
+        <div className={styles.tabContent}>
+            <div className={styles.assessHeader}>
+                <div className={styles.assessModeTabs}>
+                    <button className={`${styles.assessModeTab} ${mode === 'quiz' ? styles.assessModeTabActive : ''}`} onClick={() => setMode('quiz')}>
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="8" cy="8" r="6" /><path d="M6 8.5l1.5 1.5L10.5 6" />
+                        </svg>
+                        {t('uploadInfer.workspacePanel.quizMode')}
+                    </button>
+                    <button className={`${styles.assessModeTab} ${mode === 'all' ? styles.assessModeTabActive : ''}`} onClick={() => setMode('all')}>
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M2 4h12M2 8h12M2 12h8" />
+                        </svg>
+                        {t('uploadInfer.workspacePanel.viewAll')}
+                    </button>
+                </div>
+                <TabToolbar fmts={TRUE_FALSE_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+            </div>
+
+            {mode === 'quiz' && (
+                complete ? (
+                    <div className={styles.assessComplete}>
+                        <div className={styles.assessCompleteIcon}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                        </div>
+                        <div className={styles.assessCompleteTitle}>{t('uploadInfer.workspacePanel.assessCompleteTitle')}</div>
+                        <div className={styles.assessCompleteDesc}>{t('uploadInfer.workspacePanel.assessCompleteDesc', { count: items.length })}</div>
+                        <button className={styles.assessRestartBtn} onClick={handleRestart}>{t('uploadInfer.workspacePanel.restart')}</button>
+                    </div>
+                ) : (
+                    <>
+                        <div className={styles.assessProgress}>
+                            <div className={styles.assessProgressTrack}><div className={styles.assessProgressFill} style={{ width: `${progress}%` }} /></div>
+                            <span className={styles.assessProgressLabel}>{current + 1} / {items.length}</span>
+                        </div>
+                        <div className={styles.faqCard}>
+                            <div className={styles.faqQ}>
+                                <span className={styles.faqNum}>{current + 1}</span>
+                                {q.statement}
+                            </div>
+                            <div className={styles.tfOptions}>
+                                {(['true', 'false'] as const).map(key => (
+                                    <button key={key} className={`${styles.tfOpt} ${getOptClass(key)}`} onClick={() => handleSelect(key)} disabled={revealed}>
+                                        <span className={styles.tfOptLabel}>{key === 'true' ? t('uploadInfer.workspacePanel.true') : t('uploadInfer.workspacePanel.false')}</span>
+                                        {revealed && key === correctKey && <svg className={styles.faqCheckIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 8l3.5 3.5L13 4" /></svg>}
+                                        {revealed && key === selected && key !== correctKey && <svg className={styles.faqXIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>}
+                                    </button>
+                                ))}
+                            </div>
+                            {revealed && (
+                                <div className={styles.faqExplain}>
+                                    <div className={styles.faqExplainLabel}>
+                                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" /><path d="M8 7v4M8 5.5v.5" /></svg>
+                                        {t('uploadInfer.workspacePanel.explanation')}
+                                    </div>
+                                    <p className={styles.faqExplainText}>{q.explanation}</p>
+                                </div>
+                            )}
+                        </div>
+                        {revealed && (
+                            <button className={`${styles.assessNextBtn} ${isLast ? styles.assessDoneBtn : ''}`} onClick={handleNext}>
+                                {isLast ? t('uploadInfer.workspacePanel.finish') : t('uploadInfer.workspacePanel.next')}
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                    {isLast ? <path d="M3 8l3.5 3.5L13 4" /> : <path d="M3 8h10M9 4l4 4-4 4" />}
+                                </svg>
+                            </button>
+                        )}
+                    </>
+                )
+            )}
+
+            {mode === 'all' && (
+                <div className={styles.viewAllList}>
+                    {items.map((item, idx) => {
+                        const ck: 'true' | 'false' = item.is_true ? 'true' : 'false';
+                        return (
+                            <div key={idx} className={styles.viewAllCard}>
+                                <div className={styles.viewAllQ}>
+                                    <span className={styles.faqNum}>{idx + 1}</span>
+                                    {item.statement}
+                                </div>
+                                <div className={styles.tfOptions}>
+                                    {(['true', 'false'] as const).map(key => (
+                                        <div key={key} className={`${styles.tfOpt} ${key === ck ? styles.faqOptCorrectAlt : styles.viewAllOptNeutral}`}>
+                                            <span className={styles.tfOptLabel}>{key === 'true' ? t('uploadInfer.workspacePanel.true') : t('uploadInfer.workspacePanel.false')}</span>
+                                            {key === ck && <svg className={styles.faqCheckIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 8l3.5 3.5L13 4" /></svg>}
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className={styles.faqExplain}>
+                                    <div className={styles.faqExplainLabel}>
+                                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" /><path d="M8 7v4M8 5.5v.5" /></svg>
+                                        {t('uploadInfer.workspacePanel.explanation')}
+                                    </div>
+                                    <p className={styles.faqExplainText}>{item.explanation}</p>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Tab: Timestamped Summary ─────────────────────────────────
+const TabTimestampedSummary: React.FC<{ raw: string }> = ({ raw }) => {
+    const { t } = useTranslation();
+    const items = useMemo(() => parsePyList<TimestampSegment>(raw), [raw]);
+    const [copied, setCopied] = useState(false);
+
+    const handleCopy = (fmt: string) => { copyText(formatTimestampedSummary(raw, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatTimestampedSummary(raw, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!items.length) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noTimestampedSummary')}</div>;
+
+    return (
+        <div className={styles.tabContent}>
+            <TabToolbar fmts={TIMESTAMPED_SUMMARY_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+            <div className={styles.tsList}>
+                {items.map((seg, idx) => (
+                    <div key={idx} className={styles.tsRow}>
+                        <div className={styles.tsRail}>
+                            <div className={styles.tsDot} />
+                            {idx < items.length - 1 && <div className={styles.tsLine} />}
+                        </div>
+                        <div className={styles.tsCard}>
+                            <div className={styles.tsRange}>{seg.start_time} <span className={styles.tsArrow}>→</span> {seg.end_time}</div>
+                            <p className={styles.tsText}>{seg.summary}</p>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+
+// ── Keyword Insights: shared node-link graph (used for Knowledge Graph) ──
+interface GNode { id: string; label: string; value?: number; }
+interface GEdge { source: string; target: string; label?: string; }
+
+function buildGraphNodes(nodes: GNode[], edges: GEdge[]): GNode[] {
+    const norm = (s: string) => s.trim().toLowerCase();
+    const byKey = new Map<string, GNode>();
+    const byId = new Map<string, GNode>();
+    nodes.forEach(n => {
+        byKey.set(norm(n.id), n); byKey.set(norm(n.label), n); byId.set(n.id, n);
+    });
+    edges.forEach(e => {
+        [e.source, e.target].forEach(ref => {
+            const k = norm(ref);
+            if (!byKey.has(k)) {
+                const synth: GNode = { id: ref, label: ref, value: 1 };
+                byKey.set(k, synth); byId.set(ref, synth);
+            }
+        });
+    });
+    return Array.from(byId.values());
+}
+
+// Custom node — a labeled circle sized by `value`, with an invisible
+// handle on all 4 sides (each doubling as source+target) so edges can
+// connect from whichever side actually faces the other node.
+// Multi-word labels wrap onto multiple lines (capped at LABEL_MAX_W).
+// Single unbroken words (no spaces/hyphens — common for keyword nodes)
+// are NOT force-wrapped: breaking a word with no natural break point
+// inside a narrow box is what produced near-vertical stacks of 1-2
+// characters per line. Those get their own width instead, up to
+// LABEL_HARD_MAX_W.
+const LABEL_MAX_W = 150;
+const LABEL_HARD_MAX_W = 220;
+const LABEL_CHAR_W = 6.1; // ~px per Latin character at the label's font size
+const LABEL_CJK_CHAR_W = 12.5; // ~px per CJK character (Hangul/Kanji/Kana glyphs render roughly 2x as wide as Latin at the same font-size)
+const LABEL_LINE_H = 14;
+
+// Matches Hangul syllables/Jamo, CJK Unified Ideographs, and Hiragana/Katakana.
+const CJK_CHAR_RE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7a3\uf900-\ufaff]/;
+
+function estimateTextWidth(label: string): number {
+    let width = 8;
+    for (const ch of label) width += CJK_CHAR_RE.test(ch) ? LABEL_CJK_CHAR_W : LABEL_CHAR_W;
+    return width;
+}
+
+// NOTE: dagre's setNode() specifically reads `node.width` / `node.height` to
+// reserve space for a node in the layout. The previous version of this
+// function returned `{ w, h, labelWidth }`, which meant every node was
+// silently treated by dagre as a 0×0 point — ranks were still spaced apart
+// via ranksep/nodesep, but nothing accounted for how wide/tall a node with
+// a long label actually is, so nodes and their labels overlapped each
+// other and adjacent edges. Returning `width`/`height` (matching what the
+// edge-label reservation code below already does) is the actual fix.
+function estimateNodeBox(label: string, circleSize: number) {
+    const hasBreakPoint = /[\s-]/.test(label);
+    const rawTextWidth = estimateTextWidth(label);
+    const capWidth = hasBreakPoint ? LABEL_MAX_W : LABEL_HARD_MAX_W;
+    const labelWidth = Math.min(capWidth, Math.max(rawTextWidth, 44));
+    const lines = hasBreakPoint ? Math.max(1, Math.ceil(rawTextWidth / LABEL_MAX_W)) : 1;
+    const width = Math.max(circleSize, labelWidth, 72) + 16;
+    const height = circleSize + 16 + lines * LABEL_LINE_H;
+    return { width, height, labelWidth };
+}
+
+// The node's DOM box is now sized to `width`×`height` (see NodeLinkGraph,
+// where these are passed onto the React Flow node), and the circle +
+// label are laid out top-to-bottom in normal flow inside that box —
+// instead of the label being position:absolute below a free-floating
+// circle. That keeps the visual box in sync with the box dagre reserved,
+// so nothing drifts as labels get longer.
+const MindMapNode: React.FC<{ data: { label: string; value?: number; labelWidth?: number } }> = ({ data }) => {
+    const size = 34 + Math.min(26, (data.value ?? 1) * 4);
+    const hasBreakPoint = /[\s-]/.test(data.label);
+    return (
+        <div className={styles.rfNodeBox}>
+            <div className={styles.rfNode} style={{ width: size, height: size }} title={data.label}>
+                <Handle type="target" position={Position.Top} id="top-target" className={styles.rfHandle} />
+                <Handle type="source" position={Position.Bottom} id="bottom-source" className={styles.rfHandle} />
+                <Handle type="target" position={Position.Left} id="left-target" className={styles.rfHandle} />
+                <Handle type="source" position={Position.Right} id="right-source" className={styles.rfHandle} />
+            </div>
+            <span
+                className={styles.rfNodeLabel}
+                style={{ maxWidth: data.labelWidth ?? LABEL_MAX_W, whiteSpace: hasBreakPoint ? 'normal' : 'nowrap' }}
             >
-              <span className={styles.tabLabel}>{tab.label}</span>
-              <span className={styles.tabDesc}>{tab.desc}</span>
-            </button>
-          ))}
+                {data.label}
+            </span>
         </div>
-      </div>
+    );
+};
+const RF_NODE_TYPES = { mindmap: MindMapNode };
 
-      <div className={styles.upbody}>
-        <div className={styles.tabPane} style={{ display: activeTab === 'upload' ? 'flex' : 'none' }}>
-          <FilePanel
-            ref={filePanelRef}
-            selectMode={selectMode}
-            onEnterSelectMode={enterInferSelection}
-            onExitSelectMode={exitInferSelection}
-            onDeleteComplete={handleDeleteComplete}
-            active={activeTab === 'upload'}
-            onGoToInfer={() => setActiveTab('infer')}
-          />
+// ── Dagre auto-layout — replaces naive circular placement, which packed
+//    nodes on top of each other once a graph had more than a handful of
+//    them. Dagre lays nodes out in ranked layers with guaranteed spacing,
+//    so nothing overlaps regardless of graph size, AS LONG AS the nodes
+//    passed to it actually carry width/height (see estimateNodeBox above —
+//    that mismatch was the actual source of the overlap bug). ──
+function computeDagreLayout(nodes: GNode[], edges: GEdge[]) {
+    const g = new dagre.graphlib.Graph();
+    g.setGraph({ rankdir: 'TB', nodesep: 72, ranksep: 150, marginx: 60, marginy: 60, acyclicer: 'greedy' });
+    g.setDefaultEdgeLabel(() => ({}));
+
+    const dims = new Map<string, { width: number; height: number; labelWidth: number }>();
+    nodes.forEach(n => {
+        const size = 34 + Math.min(26, (n.value ?? 1) * 4);
+        const dim = estimateNodeBox(n.label, size);
+        dims.set(n.id, dim);
+        g.setNode(n.id, dim);
+    });
+
+    const norm = (s: string) => s.trim().toLowerCase();
+    const byKey = new Map<string, string>();
+    nodes.forEach(n => { byKey.set(norm(n.id), n.id); byKey.set(norm(n.label), n.id); });
+
+    // Dedupe edges — repeated source/target pairs don't add information but
+    // do add extra crowded lines between the same two nodes.
+    const seenEdges = new Set<string>();
+    const resolvedEdges: { source: string; target: string; label?: string }[] = [];
+    edges.forEach(e => {
+        const s = byKey.get(norm(e.source));
+        const tg = byKey.get(norm(e.target));
+        if (!s || !tg || s === tg) return;
+        const key = `${s}→${tg}`;
+        if (seenEdges.has(key)) return;
+        seenEdges.add(key);
+        // Reserve space for the edge's own label too — without this, dagre
+        // has no idea the label text exists and will happily route another
+        // node right where that text needs to sit.
+        const label = e.label?.trim();
+        g.setEdge(s, tg, label ? { width: Math.min(120, estimateTextWidth(label) + 4), height: LABEL_LINE_H + 8, labelpos: 'c' } : {});
+        resolvedEdges.push({ source: s, target: tg, label: e.label });
+    });
+
+    dagre.layout(g);
+
+    const positioned = nodes.map(n => {
+        const pos = g.node(n.id);
+        const dim = dims.get(n.id)!;
+        // Dagre positions are centers — React Flow expects top-left.
+        return { ...n, x: pos.x - dim.width / 2, y: pos.y - dim.height / 2, labelWidth: dim.labelWidth, w: dim.width, h: dim.height };
+    });
+    return { positioned, resolvedEdges };
+}
+
+// ── Forest layout — each disconnected tree gets its own horizontal
+//    (root → children growing left-to-right) dagre layout, then the trees
+//    are stacked vertically underneath one another. Labels stay perfectly
+//    horizontal either way (that's just CSS text direction, unaffected by
+//    which way the tree branches), but growing each tree sideways instead
+//    of downward gives multi-word labels far more horizontal room before
+//    they need to wrap, and keeps unrelated trees visually separated
+//    instead of interleaved in one shared vertical ranking. ──
+function computeForestLayout(nodes: GNode[], edges: GEdge[]) {
+    const norm = (s: string) => s.trim().toLowerCase();
+    const byKey = new Map<string, string>();
+    nodes.forEach(n => { byKey.set(norm(n.id), n.id); byKey.set(norm(n.label), n.id); });
+
+    // Reduce to one parent per node — same rule as treeMode above, so each
+    // node belongs to exactly one tree with no crossing multi-parent edges.
+    const seenEdges = new Set<string>();
+    const hasParent = new Set<string>();
+    const treeEdges: { source: string; target: string; label?: string }[] = [];
+    edges.forEach(e => {
+        const s = byKey.get(norm(e.source));
+        const tg = byKey.get(norm(e.target));
+        if (!s || !tg || s === tg) return;
+        const key = `${s}→${tg}`;
+        if (seenEdges.has(key) || hasParent.has(tg)) return;
+        seenEdges.add(key);
+        hasParent.add(tg);
+        treeEdges.push({ source: s, target: tg, label: e.label });
+    });
+
+    // Union-find to group nodes into connected components (one per tree,
+    // including singleton nodes with no edges at all).
+    const uf = new Map<string, string>();
+    nodes.forEach(n => uf.set(n.id, n.id));
+    const find = (x: string): string => {
+        let root = x;
+        while (uf.get(root) !== root) root = uf.get(root)!;
+        while (uf.get(x) !== root) { const next = uf.get(x)!; uf.set(x, root); x = next; }
+        return root;
+    };
+    const union = (a: string, b: string) => { const ra = find(a), rb = find(b); if (ra !== rb) uf.set(ra, rb); };
+    treeEdges.forEach(e => union(e.source, e.target));
+
+    const groups = new Map<string, GNode[]>();
+    nodes.forEach(n => {
+        const root = find(n.id);
+        if (!groups.has(root)) groups.set(root, []);
+        groups.get(root)!.push(n);
+    });
+
+    const dims = new Map<string, { width: number; height: number; labelWidth: number }>();
+    nodes.forEach(n => {
+        const size = 34 + Math.min(26, (n.value ?? 1) * 4);
+        dims.set(n.id, estimateNodeBox(n.label, size));
+    });
+
+    const TREE_GAP = 56;
+    let yOffset = 0;
+    const positioned: (GNode & { x: number; y: number; labelWidth: number; w: number; h: number })[] = [];
+
+    for (const groupNodes of groups.values()) {
+        const g = new dagre.graphlib.Graph();
+        g.setGraph({ rankdir: 'LR', nodesep: 28, ranksep: 130, marginx: 20, marginy: 20, acyclicer: 'greedy' });
+        g.setDefaultEdgeLabel(() => ({}));
+        groupNodes.forEach(n => g.setNode(n.id, dims.get(n.id)!));
+
+        const idsInGroup = new Set(groupNodes.map(n => n.id));
+        treeEdges.forEach(e => {
+            if (!idsInGroup.has(e.source) || !idsInGroup.has(e.target)) return;
+            const label = e.label?.trim();
+            g.setEdge(e.source, e.target, label ? { width: Math.min(120, estimateTextWidth(label) + 4), height: LABEL_LINE_H + 8, labelpos: 'c' } : {});
+        });
+
+        dagre.layout(g);
+
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        groupNodes.forEach(n => {
+            const pos = g.node(n.id);
+            const dim = dims.get(n.id)!;
+            minX = Math.min(minX, pos.x - dim.width / 2);
+            maxX = Math.max(maxX, pos.x + dim.width / 2);
+            minY = Math.min(minY, pos.y - dim.height / 2);
+            maxY = Math.max(maxY, pos.y + dim.height / 2);
+        });
+        const shiftX = -minX;
+        const shiftY = yOffset - minY;
+
+        groupNodes.forEach(n => {
+            const pos = g.node(n.id);
+            const dim = dims.get(n.id)!;
+            positioned.push({ ...n, x: pos.x - dim.width / 2 + shiftX, y: pos.y - dim.height / 2 + shiftY, labelWidth: dim.labelWidth, w: dim.width, h: dim.height });
+        });
+
+        yOffset += (maxY - minY) + TREE_GAP;
+    }
+
+    return { positioned, resolvedEdges: treeEdges };
+}
+
+const NodeLinkGraph: React.FC<{ nodes: GNode[]; edges: GEdge[]; treeMode?: boolean }> = ({ nodes, edges, treeMode = false }) => {
+    const { t } = useTranslation();
+    const allNodes = useMemo(() => buildGraphNodes(nodes, edges), [nodes, edges]);
+
+    const initial = useMemo(() => {
+        const { positioned, resolvedEdges } = treeMode
+            ? computeForestLayout(allNodes, edges)
+            : computeDagreLayout(allNodes, edges);
+
+        const rfNodes: RFNode[] = positioned.map(n => ({
+            id: n.id,
+            type: 'mindmap',
+            position: { x: n.x, y: n.y },
+            // Give React Flow the same box dagre reserved, so its own
+            // internal bookkeeping (fitView, minimap, drag bounds) matches
+            // what was actually laid out.
+            width: n.w,
+            height: n.h,
+            data: { label: n.label, value: n.value, labelWidth: n.labelWidth },
+        }));
+
+        // Forest/tree mode lays out left→right (rankdir: 'LR'), so edges
+        // should leave from the right side of a node and arrive on the
+        // left of the next — using bottom/top handles there forced edges
+        // to arc around the node instead of running straight, which read
+        // as extra crossing/overlap. The plain knowledge-graph layout is
+        // still top→bottom, so it keeps the original top/bottom handles.
+        const sourceHandle = treeMode ? 'right-source' : 'bottom-source';
+        const targetHandle = treeMode ? 'left-target' : 'top-target';
+
+        const rfEdges: RFEdge[] = resolvedEdges.map((e, i) => ({
+            id: `e${i}-${e.source}-${e.target}`,
+            source: e.source,
+            target: e.target,
+            sourceHandle,
+            targetHandle,
+            type: 'smoothstep',
+            label: e.label,
+            style: { stroke: 'var(--bdr2)' },
+            labelStyle: { fill: 'var(--t2)', fontSize: 10 },
+            labelBgStyle: { fill: 'var(--bg1)' },
+        }));
+        return { rfNodes, rfEdges };
+    }, [allNodes, edges, treeMode]);
+
+    const [rfNodes, setRfNodes] = useState<RFNode[]>(initial.rfNodes);
+    useEffect(() => { setRfNodes(initial.rfNodes); }, [initial.rfNodes]);
+    const onNodesChange = useCallback((changes: NodeChange[]) => setRfNodes(nds => applyNodeChanges(changes, nds)), []);
+
+    if (allNodes.length === 0) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+
+    return (
+        <div className={styles.graphWrap}>
+            <ReactFlow
+                nodes={rfNodes}
+                edges={initial.rfEdges}
+                onNodesChange={onNodesChange}
+                nodeTypes={RF_NODE_TYPES}
+                fitView
+                fitViewOptions={{ padding: 0.25 }}
+                minZoom={0.1}
+                maxZoom={1.5}
+                proOptions={{ hideAttribution: true }}
+            >
+                <Background gap={16} size={1} color="var(--bdr)" />
+                <Controls showInteractive={false} />
+                {allNodes.length > 8 && <MiniMap pannable zoomable style={{ background: 'var(--bg0)' }} />}
+            </ReactFlow>
         </div>
+    );
+};
 
-        <div className={styles.tabPane} style={{ display: activeTab === 'infer' ? 'flex' : 'none' }}>
-          <FileSidebar mode="select" active={activeTab === 'infer'} />
-          <InferencePanel />
+// ── Keyword Insights: timeline — heatmap-style grid with time labels
+//    running horizontally across the top header row (guaranteed via
+//    inline styles: nowrap + horizontal writing-mode) and one row per
+//    keyword running down the left. ──
+const TIME_UNIT_LABEL: Record<TimelineTimeUnit, string> = {
+    minutes: 'uploadInfer.workspacePanel.timeUnitMinutes',
+    hours: 'uploadInfer.workspacePanel.timeUnitHours',
+    seconds: 'uploadInfer.workspacePanel.timeUnitSeconds',
+};
+const TIME_UNIT_SHORT: Record<TimelineTimeUnit, string> = {
+    minutes: 'uploadInfer.workspacePanel.timeUnitMinShort',
+    hours: 'uploadInfer.workspacePanel.timeUnitHrShort',
+    seconds: 'uploadInfer.workspacePanel.timeUnitSecShort',
+};
+
+const TimelineView: React.FC<{ data: TimelineData }> = ({ data }) => {
+    const { t } = useTranslation();
+    const labels = data.labels ?? [];
+    const datasets = data.datasets ?? [];
+    if (!labels.length || !datasets.length) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+
+    const max = Math.max(1, ...datasets.flatMap(d => d.data.filter(v => typeof v === 'number')));
+    const ROW_LABEL_W = 140;
+    const COL_W = 56;
+    const timeUnit = data.time_unit ?? 'minutes';
+    const unitLabel = t(TIME_UNIT_LABEL[timeUnit]);
+    // When labels are already actual clock timestamps (e.g. "0:00–5:00"),
+    // the format itself conveys the unit — don't also append a suffix.
+    // Only append the short unit to plain numeric bucket labels.
+    const unitShort = t(TIME_UNIT_SHORT[timeUnit]);
+    const formatTimeLabel = (lab: string) => data.timestamped ? lab : `${lab} ${unitShort}`;
+
+    // Text guaranteed to stay horizontal, left-to-right, single line —
+    // independent of whatever the surrounding stylesheet does elsewhere.
+    const horizontalLabel: React.CSSProperties = {
+        writingMode: 'horizontal-tb',
+        textOrientation: 'mixed',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+    };
+
+    return (
+        <div className={styles.tabContent}>
+            <div className={styles.timelineAxisHint}>
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="8" cy="8" r="6.25" />
+                    <path d="M8 7.2v3.6M8 5.2v.1" />
+                </svg>
+                <span>
+                    {t('uploadInfer.workspacePanel.timelineAxisHint', { unit: unitLabel })}
+                </span>
+            </div>
+        <div style={{ overflowX: 'auto', paddingBottom: 4 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: `${ROW_LABEL_W}px repeat(${labels.length}, minmax(${COL_W}px, 1fr))`, width: 'max-content', minWidth: '100%' }}>
+                {/* Corner cell — axis labels */}
+                <div style={{ ...horizontalLabel, fontSize: 9.5, fontWeight: 700, color: 'var(--t2)', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'flex', alignItems: 'flex-end', padding: '0 10px 8px 0' }}>
+                    {t('uploadInfer.workspacePanel.timelineYAxis', 'Keyword')}
+                </div>
+                {/* Time labels — header row, horizontal across the top */}
+                {labels.map((lab, li) => (
+                    <div
+                        key={li}
+                        title={formatTimeLabel(lab)}
+                        style={{
+                            ...horizontalLabel,
+                            fontSize: 10.5, fontWeight: 600, color: 'var(--t2)',
+                            textAlign: 'center', padding: '0 4px 8px',
+                        }}
+                    >
+                        {formatTimeLabel(lab)}
+                    </div>
+                ))}
+                {/* One row per keyword */}
+                {datasets.map((ds, di) => (
+                    <React.Fragment key={di}>
+                        <div style={{ ...horizontalLabel, fontSize: 12, fontWeight: 600, color: 'var(--t1)', padding: '6px 10px 6px 0', display: 'flex', alignItems: 'center' }} title={ds.label}>
+                            {ds.label}
+                        </div>
+                        {labels.map((lab, li) => {
+                            const v = ds.data[li] ?? 0;
+                            const alpha = v > 0 ? Math.min(1, 0.22 + (v / max) * 0.78) : 0;
+                            return (
+                                <div
+                                    key={li}
+                                    title={`${ds.label} \u00b7 ${formatTimeLabel(lab)}`}
+                                    style={{
+                                        height: 32, margin: 2, borderRadius: 4,
+                                        background: `rgba(91, 164, 239, ${alpha})`,
+                                    }}
+                                />
+                            );
+                        })}
+                    </React.Fragment>
+                ))}
+            </div>
         </div>
+        </div>
+    );
+};
 
-        <div className={styles.tabPane} style={{ display: activeTab === 'results' ? 'flex' : 'none' }}>
-          <FileSidebar mode="view" active={activeTab === 'results'} activeFileId={activeFileId} onFileClick={handleFileClick} />
-          <div data-tour="results-content" style={{ display: 'contents' }}>
-            <WorkspacePanel
-              ref={workspacePanelRef}
-              step2Visible={false}
-              fileResult={fileResult}
-              fileLoading={fileLoading}
-              activeFileId={activeFileId}
-              onResultUpdate={patch => setFileResult(prev => prev ? { ...prev, ...patch } : prev)}
+// ── Keyword Insights: word cloud ──
+// ── Pan/zoom image viewer — same interaction model as the Knowledge Graph
+// tab (drag anywhere to pan, scroll to zoom in/out, buttons for
+// zoom in/out/reset), but self-contained (no react-flow dependency needed
+// for a single static image). ──
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 4;
+const ZOOM_STEP = 0.35;
+
+const ZoomPanImage: React.FC<{ src: string; alt: string; onDownload?: () => void }> = ({ src, alt, onDownload }) => {
+    const { t } = useTranslation();
+    const containerRef = useRef<HTMLDivElement>(null);
+    const [scale, setScale] = useState(1);
+    const [pan, setPan] = useState({ x: 0, y: 0 });
+    const dragRef = useRef<{ startX: number; startY: number; startPanX: number; startPanY: number } | null>(null);
+    const [dragging, setDragging] = useState(false);
+
+    const clampScale = (s: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, s));
+
+    // Zoom while keeping the point under the cursor/center visually fixed —
+    // same "zoom toward where you're pointing" feel as the graph view.
+    const zoomAt = (nextScaleRaw: number, clientX?: number, clientY?: number) => {
+        const nextScale = clampScale(nextScaleRaw);
+        const el = containerRef.current;
+        if (!el) { setScale(nextScale); return; }
+        const rect = el.getBoundingClientRect();
+        const cx = clientX ?? rect.left + rect.width / 2;
+        const cy = clientY ?? rect.top + rect.height / 2;
+        const originX = cx - rect.left - rect.width / 2;
+        const originY = cy - rect.top - rect.height / 2;
+        setPan(prev => {
+            if (nextScale === ZOOM_MIN) return { x: 0, y: 0 };
+            const ratio = nextScale / scale;
+            return {
+                x: originX - (originX - prev.x) * ratio,
+                y: originY - (originY - prev.y) * ratio,
+            };
+        });
+        setScale(nextScale);
+    };
+
+    const handleWheel = (e: React.WheelEvent) => {
+        e.preventDefault();
+        const delta = e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP;
+        zoomAt(scale + delta, e.clientX, e.clientY);
+    };
+
+    const handleMouseDown = (e: React.MouseEvent) => {
+        if (scale <= ZOOM_MIN) return;
+        dragRef.current = { startX: e.clientX, startY: e.clientY, startPanX: pan.x, startPanY: pan.y };
+        setDragging(true);
+    };
+    useEffect(() => {
+        if (!dragging) return;
+        const onMove = (e: MouseEvent) => {
+            const d = dragRef.current;
+            if (!d) return;
+            setPan({ x: d.startPanX + (e.clientX - d.startX), y: d.startPanY + (e.clientY - d.startY) });
+        };
+        const onUp = () => { setDragging(false); dragRef.current = null; };
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+        return () => {
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+        };
+    }, [dragging]);
+
+    const zoomIn = () => zoomAt(scale + ZOOM_STEP);
+    const zoomOut = () => zoomAt(scale - ZOOM_STEP);
+    const reset = () => { setScale(1); setPan({ x: 0, y: 0 }); };
+
+    return (
+        <div
+            ref={containerRef}
+            className={styles.zoomPanWrap}
+            onWheel={handleWheel}
+            onMouseDown={handleMouseDown}
+            onDoubleClick={reset}
+            style={{ cursor: scale > ZOOM_MIN ? (dragging ? 'grabbing' : 'grab') : 'default' }}
+        >
+            <img
+                src={src}
+                alt={alt}
+                className={styles.wordCloudImage}
+                draggable={false}
+                style={{
+                    transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+                    transition: dragging ? 'none' : 'transform 0.15s ease-out',
+                }}
             />
-          </div>
+            <div className={styles.zoomControls}>
+                <button type="button" className={styles.zoomControlBtn} onClick={zoomIn} disabled={scale >= ZOOM_MAX} title={t('uploadInfer.workspacePanel.zoomIn')}>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="7" cy="7" r="5" /><path d="M13.5 13.5L10.8 10.8M7 4.5v5M4.5 7h5" />
+                    </svg>
+                </button>
+                <button type="button" className={styles.zoomControlBtn} onClick={zoomOut} disabled={scale <= ZOOM_MIN} title={t('uploadInfer.workspacePanel.zoomOut')}>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="7" cy="7" r="5" /><path d="M13.5 13.5L10.8 10.8M4.5 7h5" />
+                    </svg>
+                </button>
+                <button type="button" className={styles.zoomControlBtn} onClick={reset} disabled={scale === ZOOM_MIN && pan.x === 0 && pan.y === 0} title={t('uploadInfer.workspacePanel.zoomReset')}>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M13.5 8a5.5 5.5 0 11-1.6-3.9" /><path d="M13.5 2.5v3h-3" />
+                    </svg>
+                </button>
+                {onDownload && (
+                    <button type="button" className={styles.zoomControlBtn} onClick={onDownload} title={t('uploadInfer.workspacePanel.download')}>
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M8 2.5v8M4.8 7.3L8 10.5l3.2-3.2" /><path d="M3 13.5h10" />
+                        </svg>
+                    </button>
+                )}
+            </div>
         </div>
-      </div>
-
-      <TourGuide steps={tourSteps} active={tourActive} onFinish={finishTour} />
-    </div>
-  );
+    );
 };
 
-export default UploadInfer;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// ═══════════════════════════════════════════════
-// store/uploadSlice.ts
-// Content Analytics · Upload & Inference state
-// ═══════════════════════════════════════════════
-import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
-
-// ── Server file (from /files/by-date/) ──────────
-// "tbd" = not yet inferenced, "completed" = inferenced.
-export type FileStatus = 'waiting' | 'running' | 'completed' | 'error' | 'tbd' | 'queued';
-
-export interface ServerFile {
-  id: number;
-  original_name: string;
-  inserted_at: string;
-  summary_prompt: string;
-  keywords_prompt: string;
-  faq_prompt: string;
-  short_answer_prompt: string;
-  true_false_prompt: string;
-  progress: string | number | null;
-  dictionary_id?: number | null;
-  prompt_template_id?: number | null;
-  status: FileStatus;
-}
-
-// ── /files/by-date/ pagination params & sort keys ──
-export type FilesSortBy = 'id' | 'original_name' | 'inserted_at' | 'status';
-export type SortOrder = 'asc' | 'desc';
-
-export interface ServerFilesData {
-  queued: ServerFile[];
-  completed: ServerFile[];
-  pending: ServerFile[];
-  running: ServerFile[];
-}
-
-export interface UploadedFile {
-  id: number;
-  name: string;
-  size: string;
-  type: 'vtt' | 'srt';
-  status: 'ready' | 'running' | 'done' | 'failed';
-  summaryPrompt: string;
-  questionPrompt: string;
-}
-
-export interface BatchFile {
-  id: number;
-  name: string;
-  size: string;
-  type: 'vtt' | 'srt';
-  progress?: number;
-}
-
-export interface BatchGroup {
-  id: string;
-  status: 'running' | 'queued' | 'done' | 'pending';
-  files: BatchFile[];
-  collapsed: boolean;
-}
-
-export type TimeInterval = 5 | 10 | 15 | 20 | 30 | 45 | 60;
-
-export interface InferenceSettings {
-  generateSummary: boolean;
-  generateKeywords: boolean;
-  generateQuestions: boolean;
-  summaryStyle: string;
-  timestampInterval: string;
-  languageOutput: string;
-  mcq: boolean;
-  trueFalse: boolean;
-  shortAnswer: boolean;
-  questionCount: number;
-  keywordCount: number;
-  summaryPromptOverride: string;
-  keywordPromptOverride: string;
-  questionPromptOverride: string;
-
-  // ── New independent content types ──
-  generateShortAnswer: boolean;
-  generateTrueFalse: boolean;
-  // Only meaningful (and only sent as true) when generateKeywords is also true.
-  generateKeywordInsights: boolean;
-  timestampedSummary: boolean;
-  timeInterval: TimeInterval;
-  shortAnswerPromptOverride: string;
-  trueFalsePromptOverride: string;
-}
-
-interface UploadState {
-  files: UploadedFile[];
-  selectedIds: number[];
-  settingsCollapsed: boolean;
-  batchVisible: boolean;
-  batchGroups: BatchGroup[];
-  settings: InferenceSettings;
-  uploadZoneCollapsed: boolean;
-
-  // ── Server files (from /files/by-date/) ──
-  // NOTE: serverFilesData is now populated exclusively by inferenceStatusSuccess
-  // (the /files/by-progress/ polling endpoint), which still returns the old
-  // bucketed shape. /files/by-date/ is paginated and returns a flat, per-file
-  // `status` — so it no longer feeds serverFilesData.
-  serverFilesData: ServerFilesData;          // raw split by status (from /files/by-progress/)
-  serverFiles: ServerFile[];             // current page of /files/by-date/ results (Upload tab only)
-  serverFilesLoading: boolean;
-  serverFilesError: string | null;
-  // Separate from serverFiles above — that one belongs to the Upload tab
-  // and gets cleared whenever it goes inactive. FileSidebar (Infer tab,
-  // mode="select") publishes its own fetched page here instead, so
-  // InferencePanel has a live source of full file objects (prompt
-  // defaults included) for whichever file(s) are currently selected.
-  selectFiles: ServerFile[];
-  dateFrom: string;
-  dateTo: string;
-  statusFilter: FileStatus | '';
-
-  // ── /files/by-date/ pagination, sort & search ──
-  filesPage: number;
-  filesPageSize: number;
-  filesTotal: number;
-  filesTotalPages: number;
-  filesSortBy: FilesSortBy;
-  filesSortOrder: SortOrder;
-  filesSearch: string;
-
-  // ── Selection on uploaded files ──
-  selectedServerIds: number[];
-
-  // ── Batch running state ──
-  isBatchRunning: boolean;                  // true while queued/running not empty
-  lastBatchFinishedAt: number | null;       // timestamp (Date.now()) set when batch transitions running→done
-  lastFileCompletedAt: number | null;       // timestamp (Date.now()) set whenever any individual file finishes inferring
-
-  // ── Models ──
-  models: string[];
-  modelsLoading: boolean;
-  selectedModel: string;
-}
-
-function toDateStr(d: Date) { return d.toISOString().slice(0, 10); }
-function defaultFrom() { const d = new Date(); d.setMonth(d.getMonth() - 1); return toDateStr(d); }
-function defaultTo() { return toDateStr(new Date()); }
-
-const emptyData: ServerFilesData = { queued: [], completed: [], pending: [], running: [] };
-
-const initialState: UploadState = {
-  files: [],
-  selectedIds: [],
-  uploadZoneCollapsed: false,
-  settingsCollapsed: false,
-  batchVisible: false,
-  batchGroups: [],
-  settings: {
-    generateSummary: true, generateKeywords: true, generateQuestions: true,
-    summaryStyle: 'Table of Contents', timestampInterval: '5 minute segments',
-    languageOutput: 'Korean + English',
-    mcq: true, trueFalse: true, shortAnswer: false,
-    questionCount: 10, keywordCount: 15,
-    summaryPromptOverride: '', keywordPromptOverride: '', questionPromptOverride: '',
-
-    generateShortAnswer: false, generateTrueFalse: false,
-    generateKeywordInsights: false,
-    timestampedSummary: false, timeInterval: 5,
-    shortAnswerPromptOverride: '', trueFalsePromptOverride: '',
-  },
-  serverFilesData: emptyData,
-  serverFiles: [],
-  selectFiles: [],
-  serverFilesLoading: false,
-  serverFilesError: null,
-  dateFrom: defaultFrom(),
-  dateTo: defaultTo(),
-  statusFilter: '',
-
-  filesPage: 1,
-  filesPageSize: 50,
-  filesTotal: 0,
-  filesTotalPages: 1,
-  filesSortBy: 'id',
-  filesSortOrder: 'desc',
-  filesSearch: '',
-
-  selectedServerIds: [],
-  isBatchRunning: false,
-  lastBatchFinishedAt: null,
-  lastFileCompletedAt: null,
-  models: [],
-  modelsLoading: false,
-  selectedModel: '',
+const WordCloudView: React.FC<{ data: WordCloudData }> = ({ data }) => {
+    const { t } = useTranslation();
+    if (!data.wordcloud_image) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+    const handleDownload = () => {
+        const mimeMatch = data.wordcloud_image.match(/^data:image\/(\w+);/);
+        const ext = mimeMatch ? mimeMatch[1] : 'png';
+        const ts = new Date().toISOString().slice(0, 10);
+        downloadImage(data.wordcloud_image, `wordcloud_${ts}.${ext}`);
+    };
+    return (
+        <div className={styles.wordCloudImageWrap}>
+            <ZoomPanImage src={data.wordcloud_image} alt={t('uploadInfer.workspacePanel.kiTabs.wordcloud')} onDownload={handleDownload} />
+        </div>
+    );
 };
 
-const uploadSlice = createSlice({
-  name: 'upload',
-  initialState,
-  reducers: {
-    // ── Inference legacy ──
-    toggleFileSelection(state, action: PayloadAction<number>) {
-      const idx = state.selectedIds.indexOf(action.payload);
-      if (idx > -1) state.selectedIds.splice(idx, 1);
-      else state.selectedIds.push(action.payload);
-    },
-    toggleSelectAll(state) {
-      const allIds = state.files.map(f => f.id);
-      state.selectedIds = state.selectedIds.length === allIds.length ? [] : allIds;
-    },
-    toggleUploadZone(state) {
-      state.uploadZoneCollapsed = !state.uploadZoneCollapsed;
-    },
-    toggleBatchGroup(state, action: PayloadAction<string>) {
-      const g = state.batchGroups.find(g => g.id === action.payload);
-      if (g) g.collapsed = !g.collapsed;
-    },
-    runInference(state) {
-      state.batchVisible = true;
-    },
-    updateSummaryPrompt(state, action: PayloadAction<string>) {
-      state.settings.summaryPromptOverride = action.payload;
-    },
-    updateKeywordPrompt(state, action: PayloadAction<string>) {
-      state.settings.keywordPromptOverride = action.payload;
-    },
-    updateQuestionPrompt(state, action: PayloadAction<string>) {
-      state.settings.questionPromptOverride = action.payload;
-    },
-    updateShortAnswerPrompt(state, action: PayloadAction<string>) {
-      state.settings.shortAnswerPromptOverride = action.payload;
-    },
-    updateTrueFalsePrompt(state, action: PayloadAction<string>) {
-      state.settings.trueFalsePromptOverride = action.payload;
-    },
-    updateSettings(state, action: PayloadAction<Partial<InferenceSettings>>) {
-      state.settings = { ...state.settings, ...action.payload };
-    },
+// ── Keyword Insights: importance vs complexity scatter ──
+// Complexity → accent color, reused for the column header, bars, and dots.
+const COMPLEXITY_COLOR: Record<string, string> = {
+    Easy: 'var(--green)',
+    Medium: 'var(--amber)',
+    Hard: 'var(--red)',
+};
+const complexityColor = (c: string) => COMPLEXITY_COLOR[c] ?? 'var(--blue)';
 
-    // ── Date range ──
-    setDateFrom(state, action: PayloadAction<string>) { state.dateFrom = action.payload; },
-    setDateTo(state, action: PayloadAction<string>) { state.dateTo = action.payload; },
-    setStatusFilter(state, action: PayloadAction<FileStatus | ''>) { state.statusFilter = action.payload; },
+const ImportanceComplexityScatter: React.FC<{ data: ImportanceComplexityData }> = ({ data }) => {
+    const { t } = useTranslation();
+    const items = data.data ?? [];
+    if (!items.length) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
 
-    // ── Patch progress % onto running files from /files/progress/ response ──
-    updateRunningProgress(state, action: PayloadAction<Record<string, number | string>>) {
-      const progressMap = action.payload;
-      state.serverFilesData.running = state.serverFilesData.running.map(f => {
-        const raw = progressMap[String(f.id)];
-        if (raw === undefined) return f;
-        const pct = typeof raw === 'string' ? parseFloat(raw) : raw;
-        return { ...f, progress: isNaN(pct) ? f.progress : Math.min(100, Math.max(0, pct)) };
-      });
-    },
+    const order = ['Easy', 'Medium', 'Hard'];
+    const complexities = Array.from(new Set(items.map(it => it.complexity)))
+        .sort((a, b) => {
+            const ai = order.indexOf(a), bi = order.indexOf(b);
+            if (ai === -1 && bi === -1) return a.localeCompare(b);
+            if (ai === -1) return 1;
+            if (bi === -1) return -1;
+            return ai - bi;
+        });
 
-    // ── Inference-only status update (does NOT touch the FilePanel file list) ──
-    inferenceStatusSuccess(state, action: PayloadAction<ServerFilesData>) {
-      const d = action.payload;
-      // Merge any newly-completed files from the polling response into the
-      // existing completed bucket. We keep the historical /by-date/ entries
-      // and append/replace any IDs that just finished in the active batch,
-      // so FilePanel badges flip to "Inferenced" the moment Step-2 moves a
-      // file into its Completed column — without needing another API call.
-      const incomingCompleted = d.completed ?? [];
-      const incomingCompletedIds = new Set(incomingCompleted.map(f => f.id));
-      const priorCompletedIds = new Set(state.serverFilesData.completed.map(f => f.id));
-      const mergedCompleted = [
-        ...state.serverFilesData.completed.filter(f => !incomingCompletedIds.has(f.id)),
-        ...incomingCompleted,
-      ];
-      // A file just finished inferring individually (as opposed to the whole
-      // batch finishing) whenever an id shows up in `completed` that wasn't
-      // there on the previous poll. Stamp a timestamp so FileSidebar can
-      // re-fetch /files/by-date/ right away instead of waiting for the
-      // entire batch to drain.
-      const hasNewlyCompleted = incomingCompleted.some(f => !priorCompletedIds.has(f.id));
-      if (hasNewlyCompleted) {
-        state.lastFileCompletedAt = Date.now();
-      }
-      state.serverFilesData = {
-        queued: d.queued ?? [],
-        running: d.running ?? [],
-        pending: d.pending ?? [],
-        completed: mergedCompleted,
-      };
-      const running = (d.queued?.length ?? 0) > 0 || (d.running?.length ?? 0) > 0;
-      // Clear selections the moment the batch becomes active so highlighted
-      // cards stop showing the blue selected state after a successful submit.
-      if (running && !state.isBatchRunning) {
-        state.selectedServerIds = [];
-      }
-      // Auto-collapse settings when a batch starts running. (Previously derived
-      // from /files/by-date/, which is now paginated and can't reliably tell us this.)
-      if (running) state.settingsCollapsed = true;
-      // When batch transitions running → done, stamp a timestamp so FilePanel
-      // knows to re-fetch /by-date/ and refresh the completed list.
-      if (!running && state.isBatchRunning) {
-        state.lastBatchFinishedAt = Date.now();
-      }
-      state.isBatchRunning = running;
-    },
+    // Importance is always on a fixed 0–10 scale from the backend, so the
+    // bar fill is a direct out-of-10 progress value rather than scaled
+    // against whatever the largest item in this particular file happens
+    // to be — a 6 always fills 60% of the bar, on any file.
+    const IMPORTANCE_MAX = 10;
 
-    // ── Select-mode files (Infer tab's FileSidebar, mode="select") ──
-    // Deliberately minimal — just the current page of full ServerFile
-    // objects, so InferencePanel can look up prompt defaults for whatever
-    // is in selectedServerIds. No pagination/sort/search mirrored here;
-    // FileSidebar keeps that locally, this is purely a lookup source.
-    selectFilesSuccess(state, action: PayloadAction<ServerFile[]>) {
-      state.selectFiles = action.payload;
-    },
+    return (
+        <div className={styles.tabContent}>
+            <div className={styles.importanceHint}>
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="8" cy="8" r="6.25" />
+                    <path d="M8 7.2v3.6M8 5.2v.1" />
+                </svg>
+                <span>{t('uploadInfer.workspacePanel.importanceHint')}</span>
+            </div>
+            <div className={styles.importanceColumns}>
+            {complexities.map(c => {
+                const colItems = items.filter(it => it.complexity === c).sort((a, b) => b.importance - a.importance);
+                const color = complexityColor(c);
+                return (
+                    <div key={c} className={styles.importanceColumn}>
+                        <div className={styles.importanceColumnHead} style={{ color, borderColor: color }}>
+                            {c}
+                            <span className={styles.importanceColumnCount}>{colItems.length}</span>
+                        </div>
+                        <div className={styles.importanceRows}>
+                            {colItems.map((it, i) => (
+                                <div key={i} className={styles.importanceRow} title={it.reason}>
+                                    <span className={styles.importanceDot} style={{ background: color }} />
+                                    <span className={styles.importanceKeyword}>{it.keyword}</span>
+                                    <div className={styles.importanceBarTrack}>
+                                        <div
+                                            className={styles.importanceBarFill}
+                                            style={{ width: `${Math.min(100, (it.importance / IMPORTANCE_MAX) * 100)}%`, background: color }}
+                                        />
+                                    </div>
+                                    <span className={styles.importanceMeta}>
+                                        <span className={styles.importanceValue}>{it.importance}/{IMPORTANCE_MAX}</span>
+                                        <span
+                                            className={styles.importanceFrequency}
+                                            title={t('uploadInfer.workspacePanel.frequencyTitle')}
+                                        >
+                                            {t('uploadInfer.workspacePanel.frequencyCount', { count: it.frequency })}
+                                        </span>
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                );
+            })}
+            </div>
+        </div>
+    );
+};
 
-    // ── Server files (paginated /files/by-date/) ──
-    serverFilesLoading(state) {
-      state.serverFilesLoading = true;
-      state.serverFilesError = null;
-    },
-    serverFilesSuccess(state, action: PayloadAction<{
-      files: ServerFile[];
-      total: number;
-      page: number;
-      pageSize: number;
-      totalPages: number;
-      sortBy: FilesSortBy;
-      sortOrder: SortOrder;
-      search: string;
-    }>) {
-      const { files, total, page, pageSize, totalPages, sortBy, sortOrder, search } = action.payload;
-      state.serverFiles = files;
-      state.serverFilesLoading = false;
-      state.serverFilesError = null;
+// ── Keyword Insights: glossary ──
+const GlossaryView: React.FC<{ data: GlossaryData }> = ({ data }) => {
+    const { t } = useTranslation();
+    const items = data.glossary ?? [];
+    if (!items.length) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+    const fmtTime = (ms: number) => {
+        const totalSec = Math.floor(ms / 1000);
+        const m = Math.floor(totalSec / 60), s = totalSec % 60;
+        return `${m}:${String(s).padStart(2, '0')}`;
+    };
+    return (
+        <div className={styles.glossaryList}>
+            {items.map((it, i) => (
+                <div key={i} className={styles.glossaryRow}>
+                    <div className={styles.glossaryTerm}>{it.term}<span className={styles.glossaryTime}>{fmtTime(it.first_mentioned_ms)}</span></div>
+                    <div className={styles.glossaryDef}>{it.definition}</div>
+                </div>
+            ))}
+        </div>
+    );
+};
 
-      state.filesTotal = total;
-      state.filesPage = page;
-      state.filesPageSize = pageSize;
-      state.filesTotalPages = totalPages;
-      state.filesSortBy = sortBy;
-      state.filesSortOrder = sortOrder;
-      state.filesSearch = search;
+// ── Tab: Keyword Insights ────────────────────────────────────
+const KI_SUBTABS = ['graph', 'wordcloud', 'timeline', 'importance', 'glossary'] as const;
+type KiSubTab = typeof KI_SUBTABS[number];
 
-      // NOTE: isBatchRunning is no longer derived here — /files/by-date/ is
-      // paginated so a running/queued file may simply be on another page.
-      // isBatchRunning is set by inferenceStatusSuccess (/files/by-progress/),
-      // which always reflects the full, unpaginated set of active files.
+const TabKeywordInsights: React.FC<{ data: KeywordInsights | null }> = ({ data }) => {
+    const { t } = useTranslation();
+    const [sub, setSub] = useState<KiSubTab>('graph');
 
-      // NOTE: selections are intentionally NOT pruned against this page's ids —
-      // a file not present here may just be on a different page, not deleted.
-      // Deletion flows already clear selectedServerIds explicitly on success.
-    },
-    serverFilesFailure(state, action: PayloadAction<string>) {
-      state.serverFilesLoading = false;
-      state.serverFilesError = action.payload;
-    },
+    if (!data) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noKeywordInsights')}</div>;
 
-    // ── Pagination / sort / search (kept in sync for UI display; the actual
-    //     fetch is triggered imperatively by the component with these values) ──
-    setFilesPage(state, action: PayloadAction<number>) {
-      state.filesPage = action.payload;
-    },
-    setFilesPageSize(state, action: PayloadAction<number>) {
-      state.filesPageSize = action.payload;
-      state.filesPage = 1;
-    },
-    setFilesSort(state, action: PayloadAction<{ sortBy: FilesSortBy; sortOrder: SortOrder }>) {
-      state.filesSortBy = action.payload.sortBy;
-      state.filesSortOrder = action.payload.sortOrder;
-      state.filesPage = 1;
-    },
-    setFilesSearch(state, action: PayloadAction<string>) {
-      state.filesSearch = action.payload;
-      state.filesPage = 1;
-    },
+    return (
+        <div className={styles.tabContent}>
+            <ScrollableTabRow
+                ids={KI_SUBTABS}
+                activeId={sub}
+                onChange={setSub}
+                labelFor={id => t(`uploadInfer.workspacePanel.kiTabs.${id}`)}
+                itemClassName={styles.kiSubTab}
+                activeClassName={styles.kiSubTabActive}
+                wrapClassName={styles.kiSubNavWrap}
+                trackClassName={styles.kiSubNav}
+            />
+            <div className={styles.kiBody}>
+                {sub === 'graph' && (data.knowledge_graph
+                    ? <NodeLinkGraph nodes={data.knowledge_graph.nodes} edges={data.knowledge_graph.edges.map(e => ({ source: e.source, target: e.target, label: e.type }))} treeMode />
+                    : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'wordcloud' && (data.word_cloud ? <WordCloudView data={data.word_cloud} /> : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'timeline' && (data.timeline
+                    ? <TimelineView data={data.timeline} />
+                    : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'importance' && (data.importance_complexity ? <ImportanceComplexityScatter data={data.importance_complexity} /> : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'glossary' && (data.glossary ? <GlossaryView data={data.glossary} /> : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+            </div>
+        </div>
+    );
+};
 
-    // ── Server file selection ──
-    toggleServerFileSelection(state, action: PayloadAction<number>) {
-      if (state.isBatchRunning) return;  // no selection while batch running
-      const idx = state.selectedServerIds.indexOf(action.payload);
-      if (idx > -1) state.selectedServerIds.splice(idx, 1);
-      else state.selectedServerIds.push(action.payload);
-    },
-    toggleSelectAllServerFiles(state, action: PayloadAction<number[]>) {
-      if (state.isBatchRunning) return;
-      const pageIds = action.payload;
-      if (pageIds.length === 0) return;
-      const selectedSet = new Set(state.selectedServerIds);
-      const allPageSelected = pageIds.every(id => selectedSet.has(id));
-      if (allPageSelected) {
-        // Uncheck — remove only this page's ids, leave other pages' selections alone.
-        const pageIdSet = new Set(pageIds);
-        state.selectedServerIds = state.selectedServerIds.filter(id => !pageIdSet.has(id));
-      } else {
-        // Check — add this page's ids on top of whatever's already selected elsewhere.
-        pageIds.forEach(id => { if (!selectedSet.has(id)) state.selectedServerIds.push(id); });
-      }
-    },
-    clearServerSelection(state) {
-      state.selectedServerIds = [];
-    },
+// ── Scrollable tab row — generic horizontal-scroll tab strip with arrow
+//    buttons + edge fades, reused for both the main tab bar and any
+//    sub-navigation row (e.g. Keyword Insights) that could overflow. ──
+function ScrollableTabRow<T extends string>({
+    ids, activeId, onChange, labelFor,
+    itemClassName, activeClassName, wrapClassName, trackClassName,
+    dataTourFor,
+}: {
+    ids: readonly T[];
+    activeId: T;
+    onChange: (id: T) => void;
+    labelFor: (id: T) => string;
+    itemClassName: string;
+    activeClassName: string;
+    wrapClassName: string;
+    trackClassName: string;
+    // Optional — lets a specific caller (e.g. the main results tab bar)
+    // tag each individual tab button for the guided tour, without
+    // affecting other callers that reuse this same component (e.g. the
+    // Keyword Insights sub-tab row).
+    dataTourFor?: (id: T) => string | undefined;
+}) {
+    const trackRef = useRef<HTMLDivElement>(null);
+    const [canScrollLeft, setCanScrollLeft] = useState(false);
+    const [canScrollRight, setCanScrollRight] = useState(false);
 
-    // ── Patch prompt fields on saved files ──
-    updateFilePrompts(state, action: PayloadAction<{
-      fileIds: number[];
-      summaryPrompt?: string;
-      keywordsPrompt?: string;
-      faqPrompt?: string;
-      shortAnswerPrompt?: string;
-      trueFalsePrompt?: string;
-    }>) {
-      const { fileIds, summaryPrompt, keywordsPrompt, faqPrompt, shortAnswerPrompt, trueFalsePrompt } = action.payload;
-      const idSet = new Set(fileIds);
-      state.serverFiles = state.serverFiles.map(f => {
-        if (!idSet.has(f.id)) return f;
-        return {
-          ...f,
-          ...(summaryPrompt !== undefined && { summary_prompt: summaryPrompt }),
-          ...(keywordsPrompt !== undefined && { keywords_prompt: keywordsPrompt }),
-          ...(faqPrompt !== undefined && { faq_prompt: faqPrompt }),
-          ...(shortAnswerPrompt !== undefined && { short_answer_prompt: shortAnswerPrompt }),
-          ...(trueFalsePrompt !== undefined && { true_false_prompt: trueFalsePrompt }),
-        };
-      });
-      // Also patch inside serverFilesData buckets so the per-file preview reflects the change
-      const patchBucket = (bucket: ServerFile[]) => bucket.map(f => {
-        if (!idSet.has(f.id)) return f;
-        return {
-          ...f,
-          ...(summaryPrompt !== undefined && { summary_prompt: summaryPrompt }),
-          ...(keywordsPrompt !== undefined && { keywords_prompt: keywordsPrompt }),
-          ...(faqPrompt !== undefined && { faq_prompt: faqPrompt }),
-          ...(shortAnswerPrompt !== undefined && { short_answer_prompt: shortAnswerPrompt }),
-          ...(trueFalsePrompt !== undefined && { true_false_prompt: trueFalsePrompt }),
-        };
-      });
-      state.serverFilesData.completed = patchBucket(state.serverFilesData.completed);
-      state.serverFilesData.queued = patchBucket(state.serverFilesData.queued);
-      state.serverFilesData.running = patchBucket(state.serverFilesData.running);
-      state.serverFilesData.pending = patchBucket(state.serverFilesData.pending);
-    },
+    const updateScrollState = () => {
+        const el = trackRef.current;
+        if (!el) return;
+        setCanScrollLeft(el.scrollLeft > 2);
+        setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 2);
+    };
 
+    useEffect(() => {
+        updateScrollState();
+        const el = trackRef.current;
+        if (!el) return;
+        const onResize = () => updateScrollState();
+        window.addEventListener('resize', onResize);
+        el.addEventListener('scroll', updateScrollState);
+        return () => { window.removeEventListener('resize', onResize); el.removeEventListener('scroll', updateScrollState); };
+    }, []); // eslint-disable-line
 
-    // ── Patch dictionary_id on saved files (after associate/disassociate) ──
-    patchFileDictionaries(state, action: PayloadAction<Record<number, number | null>>) {
-      const map = action.payload;
-      const apply = (f: ServerFile): ServerFile =>
-        map[f.id] !== undefined ? { ...f, dictionary_id: map[f.id] } : f;
-      state.serverFiles = state.serverFiles.map(apply);
-      state.serverFilesData.completed = state.serverFilesData.completed.map(apply);
-      state.serverFilesData.queued = state.serverFilesData.queued.map(apply);
-      state.serverFilesData.running = state.serverFilesData.running.map(apply);
-      state.serverFilesData.pending = state.serverFilesData.pending.map(apply);
-    },
+    // Keep the active item in view when it changes
+    useEffect(() => {
+        const el = trackRef.current;
+        if (!el) return;
+        const activeEl = el.querySelector<HTMLElement>(`[data-tab-id="${activeId}"]`);
+        activeEl?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+        const id = setTimeout(updateScrollState, 300);
+        return () => clearTimeout(id);
+    }, [activeId]); // eslint-disable-line
 
-    // ── Patch prompt_template_id on saved files (after template association) ──
-    patchFilePromptTemplate(state, action: PayloadAction<Record<number, number | null>>) {
-      const map = action.payload;
-      const apply = (f: ServerFile): ServerFile =>
-        map[f.id] !== undefined ? { ...f, prompt_template_id: map[f.id] } : f;
-      state.serverFiles = state.serverFiles.map(apply);
-      state.serverFilesData.completed = state.serverFilesData.completed.map(apply);
-      state.serverFilesData.queued = state.serverFilesData.queued.map(apply);
-      state.serverFilesData.running = state.serverFilesData.running.map(apply);
-      state.serverFilesData.pending = state.serverFilesData.pending.map(apply);
-    },
+    const scrollBy = (dx: number) => trackRef.current?.scrollBy({ left: dx, behavior: 'smooth' });
 
-    // ── Models ──
-    modelsLoading(state) {
-      state.modelsLoading = true;
-    },
-    modelsSuccess(state, action: PayloadAction<string[]>) {
-      state.models = action.payload;
-      state.modelsLoading = false;
-      if (action.payload.length > 0 && !state.selectedModel) {
-        state.selectedModel = action.payload[0];
-      }
-    },
-    modelsFailure(state) {
-      state.modelsLoading = false;
-    },
-    setSelectedModel(state, action: PayloadAction<string>) {
-      state.selectedModel = action.payload;
-    },
+    return (
+        <div className={wrapClassName}>
+            {canScrollLeft && (
+                <button className={`${styles.tabScrollBtn} ${styles.tabScrollBtnLeft}`} onClick={() => scrollBy(-160)} aria-label="Scroll left">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M10 3L6 8l4 5" /></svg>
+                </button>
+            )}
+            <div className={trackClassName} ref={trackRef}>
+                {ids.map(id => (
+                    <button
+                        key={id}
+                        data-tab-id={id}
+                        data-tour={dataTourFor?.(id)}
+                        className={`${itemClassName} ${activeId === id ? activeClassName : ''}`}
+                        onClick={() => onChange(id)}
+                    >
+                        {labelFor(id)}
+                    </button>
+                ))}
+            </div>
+            {canScrollLeft && <div className={`${styles.tabFade} ${styles.tabFadeLeft}`} />}
+            {canScrollRight && <div className={`${styles.tabFade} ${styles.tabFadeRight}`} />}
+            {canScrollRight && (
+                <button className={`${styles.tabScrollBtn} ${styles.tabScrollBtnRight}`} onClick={() => scrollBy(160)} aria-label="Scroll right">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 3l4 5-4 5" /></svg>
+                </button>
+            )}
+        </div>
+    );
+}
 
-    // ── Reset Inference tab config back to defaults ──
-    // Fired when navigating away from the Infer tab so a stale selection/
-    // customization doesn't silently carry over into the next visit.
-    resetInferenceSettings(state) {
-      state.settings = initialState.settings;
-    },
-  },
+// ── Main tab bar — the fixed-width flex row silently clipped tabs once
+//    there were more than ~3; ScrollableTabRow fixes that. ──
+const ScrollableTabs: React.FC<{ activeTab: TabId; onChange: (id: TabId) => void }> = ({ activeTab, onChange }) => {
+    const { t } = useTranslation();
+    return (
+        <div data-tour="results-tabbar">
+            <ScrollableTabRow
+                ids={TAB_IDS}
+                activeId={activeTab}
+                onChange={onChange}
+                labelFor={id => t(`uploadInfer.workspacePanel.tabs.${id}`)}
+                itemClassName={styles.tab}
+                activeClassName={styles.active}
+                wrapClassName={styles.wsptabsWrap}
+                trackClassName={styles.wsptabs}
+                dataTourFor={id => `results-tab-${id}`}
+            />
+        </div>
+    );
+};
+
+// ── Main panel ────────────────────────────────────────────
+const WorkspacePanel = forwardRef<WorkspacePanelHandle, Props>(({ step2Visible = true, step2Minimized = false, fileResult, fileLoading, activeFileId, onResultUpdate }, ref) => {
+    const { t } = useTranslation();
+    const [activeTab, setActiveTab] = useState<TabId>('summary');
+
+    useImperativeHandle(ref, () => ({
+        setTab: (id: TabId) => setActiveTab(id),
+    }), []);
+
+    return (
+        <div className={`${styles.wspanel} ${(!step2Visible || step2Minimized) ? styles.wspanelExpanded : ''} ${step2Visible ? styles.wspanelWithStep2 : ''}`}>
+            <div className={styles.wspanelHead}>
+                <div className={styles.headLeft}>
+                    {fileResult ? (
+                        <>
+                            <div className={styles.wsftitle}>{fileResult.fileName}</div>
+                            <div className={styles.wsmeta}>
+                                <span className={styles.wsmetaId}>#{fileResult.fileId}</span>
+                                {fileResult.insertedAt && (<><span className={styles.wsmetaSep}>·</span><span className={styles.wsmetaDate}>{fileResult.insertedAt}</span></>)}
+                            </div>
+                        </>
+                    ) : (
+                        <>
+                            <div className={styles.wsftitleEmpty}>—</div>
+                            <div className={styles.wsmeta}><span className={styles.wsmetaHint}>{t('uploadInfer.workspacePanel.clickToView')}</span></div>
+                        </>
+                    )}
+                </div>
+            </div>
+
+            <ScrollableTabs activeTab={activeTab} onChange={setActiveTab} />
+
+            <div className={styles.wsbody}>
+                {fileLoading && (
+                    <div className={styles.wsSpinner}><div className={styles.spinner} /><span>{t('uploadInfer.workspacePanel.loadingFile')}</span></div>
+                )}
+                {!fileLoading && !fileResult && (
+                    <div className={styles.wsEmpty}>
+                        <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="8" y="6" width="32" height="36" rx="3" /><path d="M16 16h16M16 23h16M16 30h10" />
+                        </svg>
+                        <div className={styles.wsEmptyTitle}>{t('uploadInfer.workspacePanel.noFileSelected')}</div>
+                        <div className={styles.wsEmptyDesc}>{t('uploadInfer.workspacePanel.noFileDesc')}</div>
+                    </div>
+                )}
+                {!fileLoading && fileResult && (
+                    <>
+                        {activeTab === 'summary' && <TabSummary summary={fileResult.summary} fileId={fileResult.fileId} onSaved={s => onResultUpdate?.({ summary: s })} />}
+                        {activeTab === 'keywords' && <TabKeywords keywords={fileResult.keywords} fileId={fileResult.fileId} onSaved={kw => onResultUpdate?.({ keywords: kw })} />}
+                        {activeTab === 'assessment' && <TabAssessment faq={fileResult.faq} />}
+                        {activeTab === 'shortAnswer' && <TabShortAnswer raw={fileResult.shortAnswer} />}
+                        {activeTab === 'trueFalse' && <TabTrueFalse raw={fileResult.trueFalse} />}
+                        {activeTab === 'timestampedSummary' && <TabTimestampedSummary raw={fileResult.timestampedSummary} />}
+                        {activeTab === 'keywordInsights' && <TabKeywordInsights data={fileResult.keywordInsights} />}
+                    </>
+                )}
+            </div>
+        </div>
+    );
 });
 
-export const {
-  toggleFileSelection, toggleSelectAll,
-  toggleUploadZone, toggleBatchGroup,
-  runInference, updateSummaryPrompt, updateKeywordPrompt, updateQuestionPrompt,
-  updateShortAnswerPrompt, updateTrueFalsePrompt, updateSettings,
-  setDateFrom, setDateTo, setStatusFilter,
-  inferenceStatusSuccess,
-  updateRunningProgress,
-  serverFilesLoading, serverFilesSuccess, serverFilesFailure,
-  selectFilesSuccess,
-  setFilesPage, setFilesPageSize, setFilesSort, setFilesSearch,
-  toggleServerFileSelection, toggleSelectAllServerFiles, clearServerSelection,
-  updateFilePrompts,
-  patchFileDictionaries,
-  patchFilePromptTemplate,
-  modelsLoading, modelsSuccess, modelsFailure, setSelectedModel,
-  resetInferenceSettings,
-} = uploadSlice.actions;
+WorkspacePanel.displayName = 'WorkspacePanel';
 
-export default uploadSlice.reducer;
+export default WorkspacePanel;
