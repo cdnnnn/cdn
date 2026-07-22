@@ -1,3 +1,22 @@
+"tabUploadTitle": "Upload & Manage",
+"tabUploadBody": "This tab is where you upload files and manage your file library.",
+"tabInferTitle": "Inference",
+"tabInferBody": "Once your files are uploaded, come here to run transcription on them.",
+"tabResultsTitle": "View Results",
+"tabResultsBody": "Completed transcriptions show up here for you to review and export."
+
+
+
+"tabUploadTitle": "업로드 및 관리",
+"tabUploadBody": "이 탭에서 파일을 업로드하고 파일 라이브러리를 관리할 수 있습니다.",
+"tabInferTitle": "추론",
+"tabInferBody": "파일 업로드가 끝나면 이곳에서 전사(음성 인식)를 실행하세요.",
+"tabResultsTitle": "결과 보기",
+"tabResultsBody": "완료된 전사 결과가 이곳에 표시되며, 검토하고 내보낼 수 있습니다."
+
+
+
+
 // ═══════════════════════════════════════════════
 // pages/SttTranscription/SttTranscription.tsx
 //
@@ -113,62 +132,72 @@ const SttTranscription: React.FC = () => {
         setTourActive(true);
     }, [files]);
 
+    // Small helpers so every content step — not just the first in each
+    // section — re-asserts the correct active tab on entry. Without this,
+    // if the person manually switches tabs mid-tour (or a middle step is
+    // reached via "Back"), a step with no onEnter of its own would try to
+    // measure a target that's hidden behind display:none.
+    const enterUpload = () => setActiveTab('upload');
+    const enterUploadClean = () => { setActiveTab('upload'); fileLibraryRef.current?.closePanel(); };
+    const enterInfer = () => setActiveTab('infer');
+    const enterResults = () => setActiveTab('results');
+
     const tourAllSteps: TourStep[] = [
         // ── 1. STT Pipeline (page title) ──
-        { target: 'stt-title',            title: t('stt.tour.titleTitle'),            content: t('stt.tour.titleBody'),            placement: 'bottom', onEnter: () => setActiveTab('upload') },
+        { target: 'stt-title',            title: t('stt.tour.titleTitle'),            content: t('stt.tour.titleBody'),            placement: 'bottom', onEnter: enterUpload },
 
-        // ── 2. Upload & Manage tab itself ──
+        // ── 2. Upload & Manage tab itself (tabbar is always rendered, no tab switch needed) ──
         { target: 'tab-upload',           title: t('stt.tour.tabUploadTitle'),        content: t('stt.tour.tabUploadBody'),        placement: 'bottom' },
 
         // ── 3. Upload Files (right sidebar) ──
-        { target: 'stt-upload',           title: t('stt.tour.uploadTitle'),           content: t('stt.tour.uploadBody'),           placement: 'right' },
+        { target: 'stt-upload',           title: t('stt.tour.uploadTitle'),           content: t('stt.tour.uploadBody'),           placement: 'right', onEnter: enterUpload },
 
         // ── 4. Library column heading ──
-        { target: 'stt-library-heading',  title: t('stt.tour.libraryTitle'),          content: t('stt.tour.libraryBody'),          placement: 'bottom' },
+        { target: 'stt-library-heading',  title: t('stt.tour.libraryTitle'),          content: t('stt.tour.libraryBody'),          placement: 'bottom', onEnter: enterUpload },
 
         // ── 5. Sort By ──
-        { target: 'stt-sort',             title: t('stt.tour.sortTitle'),             content: t('stt.tour.sortBody'),             placement: 'bottom' },
+        { target: 'stt-sort',             title: t('stt.tour.sortTitle'),             content: t('stt.tour.sortBody'),             placement: 'bottom', onEnter: enterUpload },
 
         // ── 6. Date Range ──
-        { target: 'stt-date-filter',      title: t('stt.tour.dateFilterTitle'),       content: t('stt.tour.dateFilterBody'),       placement: 'bottom', onEnter: () => fileLibraryRef.current?.closePanel() },
+        { target: 'stt-date-filter',      title: t('stt.tour.dateFilterTitle'),       content: t('stt.tour.dateFilterBody'),       placement: 'bottom', onEnter: enterUploadClean },
 
         // ── 7. Status dropdown ──
-        { target: 'stt-status-chips',     title: t('stt.tour.statusChipsTitle'),      content: t('stt.tour.statusChipsBody'),      placement: 'bottom', onEnter: () => fileLibraryRef.current?.closePanel() },
+        { target: 'stt-status-chips',     title: t('stt.tour.statusChipsTitle'),      content: t('stt.tour.statusChipsBody'),      placement: 'bottom', onEnter: enterUploadClean },
 
         // ── 8. Search Files ──
-        { target: 'stt-action-search',    title: t('stt.tour.actionsTriggerTitle'),   content: t('stt.tour.actionsTriggerBody'),   placement: 'bottom', onEnter: () => fileLibraryRef.current?.closePanel() },
+        { target: 'stt-action-search',    title: t('stt.tour.actionsTriggerTitle'),   content: t('stt.tour.actionsTriggerBody'),   placement: 'bottom', onEnter: enterUploadClean },
 
         // ── 9. Delete Files ──
-        { target: 'stt-action-delete',    title: t('stt.tour.actionDeleteTitle'),     content: t('stt.tour.actionDeleteBody'),     placement: 'left',   onEnter: () => fileLibraryRef.current?.closePanel() },
+        { target: 'stt-action-delete',    title: t('stt.tour.actionDeleteTitle'),     content: t('stt.tour.actionDeleteBody'),     placement: 'left',   onEnter: enterUploadClean },
 
         // ── 10. Move to Lecture Pipeline ──
-        { target: 'stt-action-pipeline',  title: t('stt.tour.actionPipelineTitle'),   content: t('stt.tour.actionPipelineBody'),   placement: 'left',   onEnter: () => fileLibraryRef.current?.closePanel() },
+        { target: 'stt-action-pipeline',  title: t('stt.tour.actionPipelineTitle'),   content: t('stt.tour.actionPipelineBody'),   placement: 'left',   onEnter: enterUploadClean },
 
         // ── 11. File cards ──
-        { target: 'stt-library-body',     title: t('stt.tour.fileCardsTitle'),        content: t('stt.tour.fileCardsBody'),        placement: 'top',    onEnter: () => fileLibraryRef.current?.closePanel() },
+        { target: 'stt-library-body',     title: t('stt.tour.fileCardsTitle'),        content: t('stt.tour.fileCardsBody'),        placement: 'top',    onEnter: enterUploadClean },
 
-        // ── 12. Inference tab itself ──
+        // ── 12. Inference tab itself (tabbar always visible, no switch needed) ──
         { target: 'tab-infer',            title: t('stt.tour.tabInferTitle'),         content: t('stt.tour.tabInferBody'),         placement: 'bottom' },
 
-        // ── 13. Inference tab contents (unchanged) ──
-        { target: 'infer-status-filter', title: t('stt.tour.inferStatusTitle'), content: t('stt.tour.inferStatusBody'), placement: 'bottom', onEnter: () => setActiveTab('infer') },
-        { target: 'infer-search',        title: t('stt.tour.inferSearchTitle'), content: t('stt.tour.inferSearchBody'), placement: 'bottom' },
-        { target: 'infer-file-row',      title: t('stt.tour.inferFilesTitle'), content: t('stt.tour.inferFilesBody'),      placement: 'right' },
-        { target: 'infer-file-empty',    title: t('stt.tour.inferFilesTitle'), content: t('stt.tour.inferFilesEmptyBody'), placement: 'right' },
-        { target: 'infer-model-field',   title: t('stt.tour.inferModelTitle'),    content: t('stt.tour.inferModelBody'),    placement: 'right' },
-        { target: 'infer-language-field',title: t('stt.tour.inferLanguageTitle'), content: t('stt.tour.inferLanguageBody'), placement: 'right' },
-        { target: 'infer-chunk-field',   title: t('stt.tour.inferChunkTitle'),    content: t('stt.tour.inferChunkBody'),    placement: 'right' },
-        { target: 'infer-run',           title: t('stt.tour.inferRunTitle'),      content: t('stt.tour.inferRunBody'),      placement: 'top' },
+        // ── 13. Inference tab contents ──
+        { target: 'infer-status-filter', title: t('stt.tour.inferStatusTitle'), content: t('stt.tour.inferStatusBody'), placement: 'bottom', onEnter: enterInfer },
+        { target: 'infer-search',        title: t('stt.tour.inferSearchTitle'), content: t('stt.tour.inferSearchBody'), placement: 'bottom', onEnter: enterInfer },
+        { target: 'infer-file-row',      title: t('stt.tour.inferFilesTitle'), content: t('stt.tour.inferFilesBody'),      placement: 'right', onEnter: enterInfer },
+        { target: 'infer-file-empty',    title: t('stt.tour.inferFilesTitle'), content: t('stt.tour.inferFilesEmptyBody'), placement: 'right', onEnter: enterInfer },
+        { target: 'infer-model-field',   title: t('stt.tour.inferModelTitle'),    content: t('stt.tour.inferModelBody'),    placement: 'right', onEnter: enterInfer },
+        { target: 'infer-language-field',title: t('stt.tour.inferLanguageTitle'), content: t('stt.tour.inferLanguageBody'), placement: 'right', onEnter: enterInfer },
+        { target: 'infer-chunk-field',   title: t('stt.tour.inferChunkTitle'),    content: t('stt.tour.inferChunkBody'),    placement: 'right', onEnter: enterInfer },
+        { target: 'infer-run',           title: t('stt.tour.inferRunTitle'),      content: t('stt.tour.inferRunBody'),      placement: 'top',   onEnter: enterInfer },
 
-        // ── 14. View Results tab itself ──
+        // ── 14. View Results tab itself (tabbar always visible, no switch needed) ──
         { target: 'tab-results',         title: t('stt.tour.tabResultsTitle'),    content: t('stt.tour.tabResultsBody'),    placement: 'bottom' },
 
-        // ── 15. Results tab contents (unchanged) ──
-        { target: 'results-search',      title: t('stt.tour.resultsSearchTitle'), content: t('stt.tour.resultsSearchBody'), placement: 'bottom', onEnter: () => setActiveTab('results') },
-        { target: 'results-sort',        title: t('stt.tour.resultsSortTitle'),   content: t('stt.tour.resultsSortBody'),   placement: 'bottom' },
-        { target: 'results-file-row',    title: t('stt.tour.resultsFilesTitle'), content: t('stt.tour.resultsFilesBody'),      placement: 'right' },
-        { target: 'results-file-empty',  title: t('stt.tour.resultsFilesTitle'), content: t('stt.tour.resultsFilesEmptyBody'), placement: 'right' },
-        { target: 'results-content',     title: t('stt.tour.resultsContentTitle'), content: t('stt.tour.resultsContentBody'), placement: 'left' },
+        // ── 15. Results tab contents ──
+        { target: 'results-search',      title: t('stt.tour.resultsSearchTitle'), content: t('stt.tour.resultsSearchBody'), placement: 'bottom', onEnter: enterResults },
+        { target: 'results-sort',        title: t('stt.tour.resultsSortTitle'),   content: t('stt.tour.resultsSortBody'),   placement: 'bottom', onEnter: enterResults },
+        { target: 'results-file-row',    title: t('stt.tour.resultsFilesTitle'), content: t('stt.tour.resultsFilesBody'),      placement: 'right', onEnter: enterResults },
+        { target: 'results-file-empty',  title: t('stt.tour.resultsFilesTitle'), content: t('stt.tour.resultsFilesEmptyBody'), placement: 'right', onEnter: enterResults },
+        { target: 'results-content',     title: t('stt.tour.resultsContentTitle'), content: t('stt.tour.resultsContentBody'), placement: 'left', onEnter: enterResults },
     ];
 
     // Only one of each file-list pair makes sense to show — drop whichever
