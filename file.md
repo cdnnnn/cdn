@@ -1,23 +1,22 @@
-Dear Test User,
+For Visual Studio 2019
+Open Visual Studio 2019.
+Navigate to Extensions → Manage Extensions.
+Select Installed and locate the Test extension.
+Click Uninstall.
+Close Visual Studio to complete the uninstallation (the uninstall will be applied when Visual Studio exits).
+Reopen Visual Studio 2019.
+Go to Extensions → Manage Extensions → Online (or the appropriate extension source).
+Search for Test and install the latest version.
+Restart Visual Studio to complete the installation.
 
-We would like to inform you that the Test application has been migrated to a new URL as part of our ongoing platform improvements.
 
-To ensure uninterrupted access and compatibility with the updated application, new versions of the VS Code and PyCharm/IntelliJ IDEA extensions have been released.
-
-Please update your IDE extension by following the steps below:
-
-For Visual Studio Code
-Open Visual Studio Code.
-Go to the Extensions view (Ctrl+Shift+X).
-Locate the Test extension and click Uninstall.
-Install the latest version of the Test extension.
-Reload or restart VS Code if prompted.
-For PyCharm / IntelliJ IDEA
-Open PyCharm or IntelliJ IDEA.
-Navigate to Settings → Plugins.
-Locate the Test plugin and click Uninstall.
-Restart the IDE if prompted.
-Open the Marketplace, search for Test, and install the latest version.
-Restart the IDE to complete the installation.
-
-Thank you for your cooperation and continued support. Updating to the latest extension ensures a seamless experience with the new Test application URL and provides you with the latest features, improvements, and bug fixes.
+For Visual Studio 2022
+Open Visual Studio 2022.
+Navigate to Extensions → Manage Extensions.
+Select Installed and locate the Test extension.
+Click Uninstall.
+Close Visual Studio to complete the uninstallation (the uninstall will be applied when Visual Studio exits).
+Reopen Visual Studio 2022.
+Go to Extensions → Manage Extensions → Online (or the appropriate extension source).
+Search for Test and install the latest version.
+Restart Visual Studio to complete the installation.
