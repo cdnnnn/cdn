@@ -103,8 +103,14 @@ const extOf = (name: string) => name.split('.').pop()?.toLowerCase() ?? '';
 
 const mediaKindOf = (name: string): MediaKind => (AUDIO_EXT.includes(extOf(name)) ? 'audio' : 'video');
 
-// TODO: point this at your real streaming/download endpoint for a file id.
-const buildMediaUrl = (fileId: number) => `/api/stt/files/${fileId}/stream`;
+// Streams/loads the raw media bytes for a given file id.
+// Resolved against the API's base URL since this gets used directly as a
+// <video>/<audio> src (not routed through the axios instance), so a bare
+// relative path would only work if the media endpoint were same-origin.
+const buildMediaUrl = (fileId: number) => {
+    const base = axios.defaults.baseURL?.replace(/\/$/, '') ?? '';
+    return `${base}/stt/files/load_media?fileID=${fileId}`;
+};
 
 const toLibraryItem = (file: ServerFile, status: LibraryStatus): LibraryItem => ({
     ...file,
