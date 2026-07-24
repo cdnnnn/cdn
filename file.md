@@ -32,7 +32,7 @@ const AudioIc: React.FC = () => (
     </svg>
 );
 const BackIc: React.FC = () => (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
         <path d="M10 4L6 8l4 4" />
     </svg>
 );
@@ -497,6 +497,16 @@ export default VideoExplorer;
 
 
 
+
+
+
+
+
+
+
+
+
+
 // ═══════════════════════════════════════════════
 // VideoExplorer.module.scss
 // Content Analytics · Video Explorer
@@ -761,21 +771,32 @@ export default VideoExplorer;
 .watchBackBtn {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    margin-bottom: 12px;
-    padding: 6px 12px 6px 8px;
+    gap: 6px;
+    margin-bottom: 14px;
+    padding: 7px 14px 7px 10px;
     border-radius: 99px;
     border: 1px solid var(--bdr2);
     background: var(--bg2);
     color: var(--t1);
     font-family: var(--font-ui);
-    font-size: 11.5px;
+    font-size: 12px;
     font-weight: 600;
     cursor: pointer;
     transition: all 0.12s;
     flex-shrink: 0;
+    align-self: flex-start;
 
-    &:hover { border-color: var(--bdr3); color: var(--t0); }
+    svg {
+        width: 14px;
+        height: 14px;
+        flex-shrink: 0;
+    }
+
+    &:hover {
+        border-color: var(--bdr3);
+        color: var(--t0);
+        background: var(--bg3);
+    }
 }
 
 .watchGrid {
