@@ -54,18 +54,6 @@ const STATUS_LABEL: Record<LibraryItem['status'], string> = {
     pending: 'Pending',
 };
 
-// Deterministic "cover" gradient per file, so cards without real thumbnails
-// still look visually distinct — swap for a real thumbnail_url once available.
-const COVER_PALETTES = [
-    ['#2b3a67', '#496a9c'],
-    ['#3a2b57', '#7a4d9c'],
-    ['#1f4a44', '#2f7c6d'],
-    ['#5a2e2e', '#a3564f'],
-    ['#33405c', '#5c7aa8'],
-    ['#4a3320', '#a3743f'],
-];
-const coverFor = (id: number) => COVER_PALETTES[id % COVER_PALETTES.length];
-
 const formatDate = (iso: string) => {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return iso;
@@ -86,21 +74,87 @@ const pickTrending = (items: LibraryItem[], count: number) => {
 };
 
 // ─────────────────────────────────────────────
+// Client-side video thumbnail generator
+// No thumbnail_url exists on ServerFile, so for video files we grab a
+// real frame ourselves: fetch the media blob, seek a hidden <video> to
+// ~1s in, draw it to a canvas, cache the resulting dataURL by file id.
+// Audio files skip this entirely (nothing visual to grab).
+// ─────────────────────────────────────────────
+const thumbCache = new Map<number, string>();
+
+function useVideoThumbnail(item: LibraryItem): string | null {
+    const [thumb, setThumb] = useState<string | null>(thumbCache.get(item.id) ?? null);
+
+    useEffect(() => {
+        if (item.mediaKind !== 'video' || thumbCache.has(item.id)) return undefined;
+        let cancelled = false;
+        let objectUrl: string | null = null;
+        const video = document.createElement('video');
+        video.muted = true;
+        video.playsInline = true;
+        video.preload = 'metadata';
+
+        fetchMediaBlobUrl(item.id)
+            .then((url) => {
+                if (cancelled) return;
+                objectUrl = url;
+                video.src = url;
+            })
+            .catch(() => {});
+
+        const onLoadedMetadata = () => {
+            video.currentTime = Math.min(1, (video.duration || 2) / 2);
+        };
+        const onSeeked = () => {
+            try {
+                const canvas = document.createElement('canvas');
+                canvas.width = video.videoWidth || 320;
+                canvas.height = video.videoHeight || 180;
+                const ctx = canvas.getContext('2d');
+                if (ctx) {
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+                    thumbCache.set(item.id, dataUrl);
+                    if (!cancelled) setThumb(dataUrl);
+                }
+            } catch {
+                // canvas draw can fail on some codecs/CORS setups — silently fall back to icon tile
+            }
+        };
+        video.addEventListener('loadedmetadata', onLoadedMetadata);
+        video.addEventListener('seeked', onSeeked);
+
+        return () => {
+            cancelled = true;
+            video.removeEventListener('loadedmetadata', onLoadedMetadata);
+            video.removeEventListener('seeked', onSeeked);
+            if (objectUrl) URL.revokeObjectURL(objectUrl);
+        };
+    }, [item.id, item.mediaKind]);
+
+    return thumb;
+}
+
+// ─────────────────────────────────────────────
 // Video/audio card (grid tile — home + search results)
 // ─────────────────────────────────────────────
 const MediaCard: React.FC<{ item: LibraryItem; onClick: () => void }> = ({ item, onClick }) => {
-    const [c1, c2] = coverFor(item.id);
+    const thumb = useVideoThumbnail(item);
     return (
         <button type="button" className={styles.card} onClick={onClick}>
-            <div className={styles.cardThumb} style={{ background: `linear-gradient(135deg, ${c1}, ${c2})` }}>
-                <div className={styles.cardThumbIc}>{item.mediaKind === 'audio' ? <AudioIc /> : <VideoIc />}</div>
+            <div className={styles.cardThumb}>
+                {thumb ? (
+                    <img className={styles.cardThumbImg} src={thumb} alt="" />
+                ) : (
+                    <div className={styles.cardThumbIc}>{item.mediaKind === 'audio' ? <AudioIc /> : <VideoIc />}</div>
+                )}
                 <span className={`${styles.cardStatusTag} ${styles[`status_${item.status}`]}`}>
                     {STATUS_LABEL[item.status]}
                 </span>
                 <span className={styles.cardKindTag}>{item.mediaKind === 'audio' ? 'Audio' : 'Video'}</span>
             </div>
             <div className={styles.cardMeta}>
-                <div className={styles.cardAvatar} style={{ background: `linear-gradient(135deg, ${c1}, ${c2})` }} />
+                <div className={styles.cardAvatar}>{item.mediaKind === 'audio' ? <AudioIc /> : <VideoIc />}</div>
                 <div className={styles.cardText}>
                     <div className={styles.cardTitle}>{item.original_name}</div>
                     <div className={styles.cardSub}>Uploaded {formatDate(item.inserted_at)}</div>
@@ -114,11 +168,11 @@ const MediaCard: React.FC<{ item: LibraryItem; onClick: () => void }> = ({ item,
 // Up-next row (compact horizontal card, watch page sidebar)
 // ─────────────────────────────────────────────
 const UpNextRow: React.FC<{ item: LibraryItem; active: boolean; onClick: () => void }> = ({ item, active, onClick }) => {
-    const [c1, c2] = coverFor(item.id);
+    const thumb = useVideoThumbnail(item);
     return (
         <button type="button" className={`${styles.upNextRow} ${active ? styles.upNextRowActive : ''}`} onClick={onClick}>
-            <div className={styles.upNextThumb} style={{ background: `linear-gradient(135deg, ${c1}, ${c2})` }}>
-                {item.mediaKind === 'audio' ? <AudioIc /> : <VideoIc />}
+            <div className={styles.upNextThumb}>
+                {thumb ? <img className={styles.upNextThumbImg} src={thumb} alt="" /> : (item.mediaKind === 'audio' ? <AudioIc /> : <VideoIc />)}
             </div>
             <div className={styles.upNextMeta}>
                 <div className={styles.upNextTitle}>{item.original_name}</div>
@@ -413,10 +467,6 @@ export default VideoExplorer;
 
 
 
-
-
-
-
 // ═══════════════════════════════════════════════
 // VideoExplorer.module.scss
 // Content Analytics · Video Explorer
@@ -554,8 +604,8 @@ export default VideoExplorer;
 
 .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 18px 14px;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 26px 20px;
 }
 
 .skeletonCard {
@@ -586,6 +636,16 @@ export default VideoExplorer;
     padding-top: 56.25%;
     border-radius: var(--rl);
     overflow: hidden;
+    background: var(--bg3);
+    border: 1px solid var(--bdr2);
+}
+
+.cardThumbImg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
 }
 
 .cardThumbIc {
@@ -594,9 +654,9 @@ export default VideoExplorer;
     display: flex;
     align-items: center;
     justify-content: center;
-    color: rgba(255, 255, 255, 0.85);
+    color: var(--t2);
 
-    svg { width: 34px; height: 34px; }
+    svg { width: 30px; height: 30px; }
 }
 
 .cardStatusTag,
@@ -628,15 +688,23 @@ export default VideoExplorer;
 
 .cardMeta {
     display: flex;
-    gap: 8px;
+    gap: 10px;
 }
 
 .cardAvatar {
-    width: 26px;
-    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
     border-radius: 50%;
     flex-shrink: 0;
     margin-top: 1px;
+    background: var(--bg3);
+    border: 1px solid var(--bdr2);
+    color: var(--t2);
+
+    svg { width: 14px; height: 14px; }
 }
 
 .cardText {
@@ -644,7 +712,7 @@ export default VideoExplorer;
 }
 
 .cardTitle {
-    font-size: 12.5px;
+    font-size: 13.5px;
     font-weight: 600;
     color: var(--t0);
     line-height: 1.35;
@@ -656,7 +724,7 @@ export default VideoExplorer;
 }
 
 .cardSub {
-    font-size: 10.5px;
+    font-size: 11px;
     color: var(--t2);
     margin-top: 3px;
 }
@@ -856,6 +924,7 @@ export default VideoExplorer;
 }
 
 .upNextThumb {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -863,9 +932,20 @@ export default VideoExplorer;
     height: 42px;
     flex-shrink: 0;
     border-radius: 6px;
-    color: rgba(255, 255, 255, 0.85);
+    background: var(--bg3);
+    border: 1px solid var(--bdr2);
+    color: var(--t2);
+    overflow: hidden;
 
     svg { width: 16px; height: 16px; }
+}
+
+.upNextThumbImg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
 }
 
 .upNextMeta {
@@ -1088,268 +1168,3 @@ export default VideoExplorer;
 @keyframes veSpin {
     to { transform: rotate(360deg); }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// ═══════════════════════════════════════════════
-// store/videoExplorerSlice.ts
-// Content Analytics · Video Explorer
-// ═══════════════════════════════════════════════
-import { createSlice, createAsyncThunk, type PayloadAction } from '@reduxjs/toolkit';
-import axios from '../utils/axiosInstance'; // adjust to your existing axios wrapper
-
-// ─────────────────────────────────────────────
-// Server file types (local copies — kept in sync with the
-// /stt/files/by-date/ response shape used elsewhere in the app)
-// ─────────────────────────────────────────────
-export interface ServerFile {
-    id: number;
-    original_name: string;
-    inserted_at: string;
-    summary_prompt: string;
-    keywords_prompt: string;
-    faq_prompt: string;
-    progress: string | number | null;
-    dictionary_id?: number | null;
-    prompt_template_id?: number | null;
-}
-
-export interface ServerFilesData {
-    queued: ServerFile[];
-    completed: ServerFile[];
-    pending: ServerFile[];
-    running: ServerFile[];
-}
-
-interface FilesByDateResponse {
-    data: Partial<ServerFilesData>;
-}
-
-// Local copy of the fetch call — swap the endpoint below if it differs
-// from the one used by the upload page.
-async function fetchFilesByDate(startDate: string, endDate: string): Promise<ServerFilesData> {
-    const { data } = await axios.post<FilesByDateResponse>('/stt/files/by-date/', {
-        start_date: startDate,
-        end_date: endDate,
-    });
-    // Defensive: fill in any missing buckets so consumers can always rely on arrays
-    return {
-        queued: data.data?.queued ?? [],
-        running: data.data?.running ?? [],
-        pending: data.data?.pending ?? [],
-        completed: data.data?.completed ?? [],
-    };
-}
-
-// ─────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────
-export type MediaKind = 'video' | 'audio';
-export type LibraryStatus = 'queued' | 'running' | 'pending' | 'completed';
-
-export interface LibraryItem extends ServerFile {
-    status: LibraryStatus;
-    mediaKind: MediaKind;
-    mediaEndpoint: string; // API path — fetch via fetchMediaBlobUrl(item.id), not usable as a direct <video>/<audio> src
-}
-
-export interface ChatMessage {
-    id: string;
-    role: 'user' | 'assistant';
-    content: string;
-    timestamp_seconds?: number; // optional: playback position the question refers to
-    created_at: string;
-}
-
-interface VideoExplorerState {
-    library: LibraryItem[];
-    libraryLoading: boolean;
-    libraryError: string | null;
-    libraryLoaded: boolean; // guards against re-fetching after the one-time initial load
-
-    selectedFileId: number | null;
-
-    chatByFileId: Record<number, ChatMessage[]>;
-    chatLoading: boolean;
-    chatError: string | null;
-}
-
-const initialState: VideoExplorerState = {
-    library: [],
-    libraryLoading: false,
-    libraryError: null,
-    libraryLoaded: false,
-
-    selectedFileId: null,
-
-    chatByFileId: {},
-    chatLoading: false,
-    chatError: null,
-};
-
-// ─────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────
-const AUDIO_EXT = ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac'];
-
-const extOf = (name: string) => name.split('.').pop()?.toLowerCase() ?? '';
-
-const mediaKindOf = (name: string): MediaKind => (AUDIO_EXT.includes(extOf(name)) ? 'audio' : 'video');
-
-// Endpoint for a given file id's raw media bytes. Relative — resolved
-// through the axios instance (so auth headers/cookies are attached),
-// NOT used directly as a <video>/<audio> src.
-const buildMediaUrl = (fileId: number) => `/stt/files/load_media?fileID=${fileId}`;
-
-// Fetches the media as a blob and returns an object URL, mirroring the
-// working pattern used in TranscriptDetail.tsx (fetchMediaBlobUrl). A
-// bare <video src="...api url...">  won't carry axios's auth headers/
-// cookies, which is why that approach didn't actually play anything.
-export async function fetchMediaBlobUrl(fileId: number, signal?: AbortSignal): Promise<string> {
-    const res = await axios.get(buildMediaUrl(fileId), {
-        responseType: 'blob',
-        signal,
-    });
-    return URL.createObjectURL(res.data as Blob);
-}
-
-const toLibraryItem = (file: ServerFile, status: LibraryStatus): LibraryItem => ({
-    ...file,
-    status,
-    mediaKind: mediaKindOf(file.original_name),
-    mediaEndpoint: buildMediaUrl(file.id),
-});
-
-const flattenServerFiles = (data: ServerFilesData): LibraryItem[] => [
-    ...data.completed.map((f) => toLibraryItem(f, 'completed')),
-    ...data.running.map((f) => toLibraryItem(f, 'running')),
-    ...data.queued.map((f) => toLibraryItem(f, 'queued')),
-    ...data.pending.map((f) => toLibraryItem(f, 'pending')),
-];
-
-const toDateStr = (d: Date) => d.toISOString().slice(0, 10);
-
-// ─────────────────────────────────────────────
-// Thunks
-// ─────────────────────────────────────────────
-
-// One-time initial load: last 1 year → today. Static range per current requirement.
-export const loadLibrary = createAsyncThunk('videoExplorer/loadLibrary', async () => {
-    const end = new Date();
-    const start = new Date();
-    start.setFullYear(start.getFullYear() - 1);
-
-    const data = await fetchFilesByDate(toDateStr(start), toDateStr(end));
-    return flattenServerFiles(data);
-});
-
-// NOTE: endpoint paths are placeholders — wire these up to your actual backend.
-export const fetchChatHistory = createAsyncThunk(
-    'videoExplorer/fetchChatHistory',
-    async (fileId: number) => {
-        const res = await axios.get(`/api/stt/files/${fileId}/chat`);
-        return { fileId, messages: res.data as ChatMessage[] };
-    },
-);
-
-export const sendChatMessage = createAsyncThunk(
-    'videoExplorer/sendChatMessage',
-    async (payload: { fileId: number; content: string; timestamp_seconds?: number }) => {
-        const res = await axios.post(`/api/stt/files/${payload.fileId}/chat`, {
-            content: payload.content,
-            timestamp_seconds: payload.timestamp_seconds,
-        });
-        // Expected shape: { userMessage: ChatMessage, assistantMessage: ChatMessage }
-        return { fileId: payload.fileId, ...res.data } as {
-            fileId: number;
-            userMessage: ChatMessage;
-            assistantMessage: ChatMessage;
-        };
-    },
-);
-
-// ─────────────────────────────────────────────
-// Slice
-// ─────────────────────────────────────────────
-const videoExplorerSlice = createSlice({
-    name: 'videoExplorer',
-    initialState,
-    reducers: {
-        selectFile(state, action: PayloadAction<number | null>) {
-            state.selectedFileId = action.payload;
-        },
-        clearChatError(state) {
-            state.chatError = null;
-        },
-    },
-    extraReducers: (builder) => {
-        builder
-            // library (loaded once)
-            .addCase(loadLibrary.pending, (state) => {
-                state.libraryLoading = true;
-                state.libraryError = null;
-            })
-            .addCase(loadLibrary.fulfilled, (state, action) => {
-                state.libraryLoading = false;
-                state.libraryLoaded = true;
-                state.library = action.payload;
-            })
-            .addCase(loadLibrary.rejected, (state, action) => {
-                state.libraryLoading = false;
-                state.libraryLoaded = true; // don't hammer the endpoint on failure; user can retry explicitly
-                state.libraryError = action.error.message ?? 'Could not load files.';
-            })
-            // chat history
-            .addCase(fetchChatHistory.pending, (state) => {
-                state.chatLoading = true;
-                state.chatError = null;
-            })
-            .addCase(fetchChatHistory.fulfilled, (state, action) => {
-                state.chatLoading = false;
-                state.chatByFileId[action.payload.fileId] = action.payload.messages;
-            })
-            .addCase(fetchChatHistory.rejected, (state, action) => {
-                state.chatLoading = false;
-                state.chatError = action.error.message ?? 'Could not load chat history.';
-            })
-            // send message
-            .addCase(sendChatMessage.pending, (state) => {
-                state.chatLoading = true;
-                state.chatError = null;
-            })
-            .addCase(sendChatMessage.fulfilled, (state, action) => {
-                state.chatLoading = false;
-                const { fileId, userMessage, assistantMessage } = action.payload;
-                const existing = state.chatByFileId[fileId] ?? [];
-                state.chatByFileId[fileId] = [...existing, userMessage, assistantMessage];
-            })
-            .addCase(sendChatMessage.rejected, (state, action) => {
-                state.chatLoading = false;
-                state.chatError = action.error.message ?? 'Message failed to send.';
-            });
-    },
-});
-
-export const { selectFile, clearChatError } = videoExplorerSlice.actions;
-export default videoExplorerSlice.reducer;
