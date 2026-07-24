@@ -253,8 +253,11 @@ const ChatPanel: React.FC<{ fileId: number; currentTime: number }> = ({ fileId, 
             <div className={styles.chatHead}>
                 <div className={styles.chatHeadIc}><SparkleIc /></div>
                 <div>
-                    <div className={styles.chatHeadTitle}>Ask AI about this file</div>
-                    <div className={styles.chatHeadSub}>Grounded in the transcript · LLM wiring coming next</div>
+                    <div className={styles.chatHeadTitle}>AI Assistant</div>
+                    <div className={styles.chatHeadSub}>
+                        Grounded in the transcript
+                        <span className={styles.chatHeadBetaTag}>Soon</span>
+                    </div>
                 </div>
             </div>
 
@@ -297,29 +300,31 @@ const ChatPanel: React.FC<{ fileId: number; currentTime: number }> = ({ fileId, 
                 )}
             </div>
 
-            <div className={styles.chatToolsRow}>
-                <button type="button" className={`${styles.timestampChip} ${tagTimestamp ? styles.timestampChipActive : ''}`} onClick={() => setTagTimestamp((v) => !v)}>
-                    <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="8" cy="8" r="6" /><path d="M8 4.5V8l2.5 1.5" />
-                    </svg>
-                    {tagTimestamp ? `Referencing ${formatTime(currentTime)}` : 'Reference current moment'}
-                </button>
-            </div>
+            <div className={styles.chatFooter}>
+                <div className={styles.chatToolsRow}>
+                    <button type="button" className={`${styles.timestampChip} ${tagTimestamp ? styles.timestampChipActive : ''}`} onClick={() => setTagTimestamp((v) => !v)}>
+                        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="8" cy="8" r="6" /><path d="M8 4.5V8l2.5 1.5" />
+                        </svg>
+                        {tagTimestamp ? `Referencing ${formatTime(currentTime)}` : 'Reference current moment'}
+                    </button>
+                </div>
 
-            <div className={styles.chatInputRow}>
-                <textarea
-                    className={styles.chatInput}
-                    placeholder="Ask a question…"
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(draft); } }}
-                    rows={2}
-                />
-                <button type="button" className={styles.sendBtn} onClick={() => send(draft)} disabled={!draft.trim() || chatLoading} aria-label="Send">
-                    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M14.5 1.5L7.5 8.5M14.5 1.5L10 14.5l-2.5-6-6-2.5z" />
-                    </svg>
-                </button>
+                <div className={styles.chatInputRow}>
+                    <textarea
+                        className={styles.chatInput}
+                        placeholder="Ask a question…"
+                        value={draft}
+                        onChange={(e) => setDraft(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(draft); } }}
+                        rows={1}
+                    />
+                    <button type="button" className={styles.sendBtn} onClick={() => send(draft)} disabled={!draft.trim() || chatLoading} aria-label="Send">
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M14.5 1.5L7.5 8.5M14.5 1.5L10 14.5l-2.5-6-6-2.5z" />
+                        </svg>
+                    </button>
+                </div>
             </div>
         </div>
     );
@@ -355,7 +360,7 @@ const WatchPage: React.FC<{ item: LibraryItem; onBack: () => void }> = ({ item, 
             </button>
 
             <div className={styles.watchGrid}>
-                {/* Main column */}
+                {/* Main column — scrolls independently if content overflows */}
                 <div className={styles.watchMain}>
                     <div className={`${styles.playerFrame} ${item.mediaKind === 'audio' ? styles.playerFrameAudio : ''}`}>
                         {item.mediaKind === 'audio' ? (
@@ -377,7 +382,7 @@ const WatchPage: React.FC<{ item: LibraryItem; onBack: () => void }> = ({ item, 
                     </div>
                 </div>
 
-                {/* Sidebar: chat only */}
+                {/* Sidebar: chat only, fills the column height, no page scroll */}
                 <div className={styles.watchSide}>
                     <ChatPanel fileId={item.id} currentTime={currentTime} />
                 </div>
@@ -418,7 +423,7 @@ const VideoExplorer: React.FC = () => {
 
     if (selectedItem) {
         return (
-            <div className={styles.page}>
+            <div className={`${styles.page} ${styles.pageWatch}`}>
                 <WatchPage item={selectedItem} onBack={backToBrowse} />
             </div>
         );
@@ -487,6 +492,11 @@ export default VideoExplorer;
 
 
 
+
+
+
+
+
 // ═══════════════════════════════════════════════
 // VideoExplorer.module.scss
 // Content Analytics · Video Explorer
@@ -497,6 +507,12 @@ export default VideoExplorer;
     height: 100%;
     overflow-y: auto;
     @include m.scrollbar;
+}
+
+.pageWatch {
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
 }
 
 // ── Header ───────────────────────────────────────
@@ -735,7 +751,11 @@ export default VideoExplorer;
 
 // ── Watch page ───────────────────────────────────
 .watchPage {
-    padding: 14px 24px 32px;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 14px 24px 16px;
 }
 
 .watchBackBtn {
@@ -753,28 +773,32 @@ export default VideoExplorer;
     font-weight: 600;
     cursor: pointer;
     transition: all 0.12s;
+    flex-shrink: 0;
 
     &:hover { border-color: var(--bdr3); color: var(--t0); }
 }
 
 .watchGrid {
+    flex: 1;
+    min-height: 0;
     display: flex;
     gap: 20px;
-    align-items: flex-start;
+    align-items: stretch;
 }
 
 .watchMain {
     flex: 1.7;
     min-width: 0;
+    overflow-y: auto;
+    padding-right: 4px;
+    @include m.scrollbar;
 }
 
 .watchSide {
     flex: 1;
     min-width: 340px;
     max-width: 440px;
-    position: sticky;
-    top: 84px;
-    height: calc(100vh - 116px);
+    min-height: 0;
 }
 
 .playerFrame {
@@ -888,16 +912,16 @@ export default VideoExplorer;
     height: 100%;
     background: var(--bg1);
     border: 1px solid var(--bdr);
-    border-radius: var(--rl);
+    border-radius: 16px;
     overflow: hidden;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
 }
 
 .chatHead {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 14px 16px;
+    gap: 11px;
+    padding: 16px 18px;
     border-bottom: 1px solid var(--bdr);
     flex-shrink: 0;
     background: linear-gradient(180deg, var(--bg2), var(--bg1));
@@ -907,35 +931,52 @@ export default VideoExplorer;
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 30px;
-    height: 30px;
-    border-radius: 9px;
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
     flex-shrink: 0;
-    background: var(--blue);
+    background: linear-gradient(135deg, var(--blue), #7c5cff);
     color: #fff;
+    box-shadow: 0 3px 12px rgba(76, 120, 255, 0.35);
 
-    svg { width: 16px; height: 16px; }
+    svg { width: 17px; height: 17px; }
 }
 
 .chatHeadTitle {
-    font-size: 13.5px;
+    font-size: 14px;
     font-weight: 700;
     color: var(--t0);
+    letter-spacing: -0.1px;
 }
 
 .chatHeadSub {
+    display: flex;
+    align-items: center;
+    gap: 5px;
     font-size: 10.5px;
     color: var(--t2);
     margin-top: 2px;
 }
 
+.chatHeadBetaTag {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    border-radius: 5px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    background: var(--amber-dim);
+    color: var(--amber);
+}
+
 .chatBody {
     flex: 1;
     overflow-y: auto;
-    padding: 14px 16px;
+    padding: 16px 16px 8px;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 14px;
     min-height: 80px;
     @include m.scrollbar;
 }
@@ -955,18 +996,18 @@ export default VideoExplorer;
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 40px;
-    height: 40px;
+    width: 46px;
+    height: 46px;
     border-radius: 50%;
-    background: var(--blue-dim);
+    background: linear-gradient(135deg, var(--blue-dim), rgba(124, 92, 255, 0.14));
     color: var(--blue);
-    margin-bottom: 6px;
+    margin-bottom: 8px;
 
-    svg { width: 18px; height: 18px; }
+    svg { width: 20px; height: 20px; }
 }
 
 .chatEmptyTitle {
-    font-size: 13px;
+    font-size: 13.5px;
     font-weight: 700;
     color: var(--t0);
 }
@@ -980,15 +1021,18 @@ export default VideoExplorer;
 .suggestedPrompts {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 7px;
     width: 100%;
-    max-width: 260px;
-    margin-top: 16px;
+    max-width: 270px;
+    margin-top: 18px;
 }
 
 .suggestedChip {
-    padding: 9px 12px;
-    border-radius: var(--r);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 13px;
+    border-radius: 10px;
     border: 1px solid var(--bdr2);
     background: var(--bg2);
     color: var(--t1);
@@ -997,12 +1041,13 @@ export default VideoExplorer;
     font-weight: 500;
     text-align: left;
     cursor: pointer;
-    transition: all 0.12s;
+    transition: all 0.14s;
 
     &:hover {
         border-color: var(--blue-bdr);
         background: var(--blue-dim);
         color: var(--blue);
+        transform: translateX(2px);
     }
 }
 
@@ -1027,40 +1072,42 @@ export default VideoExplorer;
     height: 24px;
     border-radius: 50%;
     flex-shrink: 0;
-    background: var(--blue);
+    background: linear-gradient(135deg, var(--blue), #7c5cff);
     color: #fff;
     margin-top: 2px;
+    box-shadow: 0 2px 6px rgba(76, 120, 255, 0.3);
 
     svg { width: 12px; height: 12px; }
 }
 
 .bubble {
     max-width: 80%;
-    padding: 9px 12px;
-    border-radius: 12px;
+    padding: 10px 13px;
+    border-radius: 14px;
     font-size: 12.5px;
     line-height: 1.55;
     white-space: pre-wrap;
 }
 
 .bubbleAssistant {
-    background: var(--bg3);
+    background: var(--bg2);
     color: var(--t0);
     border: 1px solid var(--bdr2);
     border-bottom-left-radius: 4px;
 }
 
 .bubbleUser {
-    background: var(--blue);
+    background: linear-gradient(135deg, var(--blue), #4f6bff);
     color: #fff;
     border-bottom-right-radius: 4px;
+    box-shadow: 0 2px 8px rgba(76, 120, 255, 0.25);
 }
 
 .bubbleTyping {
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 10px 12px;
+    padding: 11px 13px;
 }
 
 .typingDot {
@@ -1083,20 +1130,26 @@ export default VideoExplorer;
     @include m.mono;
 }
 
+.chatFooter {
+    flex-shrink: 0;
+    padding: 10px 14px 14px;
+    border-top: 1px solid var(--bdr);
+    background: var(--bg1);
+}
+
 .chatToolsRow {
     display: flex;
-    padding: 0 12px 8px;
-    flex-shrink: 0;
+    padding-bottom: 8px;
 }
 
 .timestampChip {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    padding: 4px 9px;
+    padding: 4px 10px;
     border-radius: 99px;
     border: 1px solid var(--bdr2);
-    background: transparent;
+    background: var(--bg2);
     color: var(--t2);
     font-family: var(--font-ui);
     font-size: 10.5px;
@@ -1117,48 +1170,51 @@ export default VideoExplorer;
     display: flex;
     align-items: flex-end;
     gap: 8px;
-    padding: 10px 12px;
-    border-top: 1px solid var(--bdr);
-    flex-shrink: 0;
+    padding: 6px 6px 6px 14px;
+    border-radius: 14px;
+    background: var(--bg2);
+    border: 1px solid var(--bdr2);
+    transition: border-color 0.14s, box-shadow 0.14s;
+
+    &:focus-within {
+        border-color: var(--blue-bdr);
+        box-shadow: 0 0 0 3px var(--blue-dim);
+    }
 }
 
 .chatInput {
     flex: 1;
     resize: none;
-    background: var(--bg3);
-    border: 1px solid var(--bdr2);
-    border-radius: var(--r);
+    background: transparent;
+    border: none;
     color: var(--t0);
     font-family: var(--font-ui);
     font-size: 12.5px;
-    padding: 8px 10px;
+    padding: 8px 0;
     outline: none;
-    transition: border-color 0.12s, box-shadow 0.12s;
+    line-height: 1.4;
 
     &::placeholder { color: var(--t2); }
-
-    &:focus {
-        border-color: var(--blue-bdr);
-        box-shadow: 0 0 0 2px var(--blue-dim);
-    }
 }
 
 .sendBtn {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 34px;
-    height: 34px;
+    width: 32px;
+    height: 32px;
     flex-shrink: 0;
-    border-radius: var(--r);
-    border: 1px solid var(--blue-bdr);
-    background: var(--blue);
+    margin-bottom: 3px;
+    border-radius: 50%;
+    border: none;
+    background: linear-gradient(135deg, var(--blue), #4f6bff);
     color: #fff;
     cursor: pointer;
-    transition: all 0.12s;
+    transition: all 0.14s;
+    box-shadow: 0 2px 8px rgba(76, 120, 255, 0.3);
 
-    &:hover:not(:disabled) { filter: brightness(1.08); }
-    &:disabled { opacity: 0.5; cursor: default; }
+    &:hover:not(:disabled) { transform: scale(1.06); }
+    &:disabled { opacity: 0.4; cursor: default; box-shadow: none; }
 }
 
 // ── Animations ────────────────────────────────────
