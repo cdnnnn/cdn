@@ -173,9 +173,7 @@ function useHoverPreview(item: LibraryItem) {
 
 const AudioCover: React.FC = () => (
     <div className={styles.audioCover}>
-        <span className={styles.audioRing} />
-        <span className={styles.audioRing2} />
-        <span className={styles.audioIconBadge}><AudioIc /></span>
+        <AudioIc />
     </div>
 );
 
@@ -519,9 +517,6 @@ export default VideoExplorer;
 
 
 
-
-
-
 // ═══════════════════════════════════════════════
 // VideoExplorer.module.scss
 // Content Analytics · Video Explorer
@@ -684,7 +679,6 @@ export default VideoExplorer;
 
     &:hover .cardTitle { color: var(--blue); }
     &:hover .cardThumb { border-color: var(--bdr3); }
-    &:hover .audioIconBadge { transform: scale(1.08); }
 }
 
 .cardThumb {
@@ -747,44 +741,12 @@ export default VideoExplorer;
     align-items: center;
     justify-content: center;
     background: var(--bg3);
-    overflow: hidden;
-}
+    color: var(--t2);
 
-.audioRing,
-.audioRing2 {
-    position: absolute;
-    border-radius: 50%;
-    border: 1.5px solid var(--blue);
-    opacity: 0.16;
-}
-
-.audioRing {
-    width: 46%;
-    aspect-ratio: 1;
-}
-
-.audioRing2 {
-    width: 68%;
-    aspect-ratio: 1;
-    opacity: 0.08;
-}
-
-.audioIconBadge {
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 30%;
-    aspect-ratio: 1;
-    min-width: 44px;
-    min-height: 44px;
-    border-radius: 50%;
-    background: var(--blue);
-    color: #fff;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
-    transition: transform 0.15s ease;
-
-    svg { width: 42%; height: 42%; }
+    svg {
+        width: 28px;
+        height: 28px;
+    }
 }
 
 .cardMeta {
@@ -1056,7 +1018,7 @@ export default VideoExplorer;
     align-items: center;
     justify-content: center;
     background: var(--bg3);
-    color: var(--blue);
+    color: var(--t2);
 }
 
 .upNextMeta {
