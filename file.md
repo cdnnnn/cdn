@@ -216,30 +216,18 @@ const MediaCard: React.FC<{ item: LibraryItem; onClick: () => void }> = ({ item,
 // ─────────────────────────────────────────────
 // Up-next row (compact horizontal card, watch page sidebar)
 // ─────────────────────────────────────────────
-const UpNextRow: React.FC<{ item: LibraryItem; active: boolean; onClick: () => void }> = ({ item, active, onClick }) => {
-    const thumb = useVideoThumbnail(item);
-    return (
-        <button type="button" className={`${styles.upNextRow} ${active ? styles.upNextRowActive : ''}`} onClick={onClick}>
-            <div className={styles.upNextThumb}>
-                {item.mediaKind === 'audio' ? (
-                    <div className={styles.upNextAudioCover}><AudioIc /></div>
-                ) : thumb ? (
-                    <img className={styles.upNextThumbImg} src={thumb} alt="" />
-                ) : (
-                    <VideoIc />
-                )}
-            </div>
-            <div className={styles.upNextMeta}>
-                <div className={styles.upNextTitle}>{item.original_name}</div>
-                <div className={styles.upNextSub}>{formatDate(item.inserted_at)}</div>
-            </div>
-        </button>
-    );
-};
+// ─────────────────────────────────────────────
+// Chat panel — redesigned as the sole, full-height sidebar
+// ─────────────────────────────────────────────
+const SparkleIc: React.FC = () => (
+    <svg viewBox="0 0 16 16" fill="currentColor">
+        <path d="M8 1.5l1.1 3.4L12.5 6l-3.4 1.1L8 10.5 6.9 7.1 3.5 6l3.4-1.1L8 1.5z" />
+        <path d="M13 9.5l.55 1.7 1.7.55-1.7.55-.55 1.7-.55-1.7-1.7-.55 1.7-.55.55-1.7z" opacity="0.7" />
+    </svg>
+);
 
-// ─────────────────────────────────────────────
-// Chat panel
-// ─────────────────────────────────────────────
+const SUGGESTED_PROMPTS = ['Summarize this file', 'What are the key points?', 'List any action items'];
+
 const ChatPanel: React.FC<{ fileId: number; currentTime: number }> = ({ fileId, currentTime }) => {
     const dispatch = useAppDispatch();
     const { chatByFileId, chatLoading, chatError } = useAppSelector((s) => s.videoExplorer);
@@ -253,27 +241,43 @@ const ChatPanel: React.FC<{ fileId: number; currentTime: number }> = ({ fileId, 
         dispatch(clearChatError());
     }, [dispatch, fileId]);
 
-    const handleSend = () => {
-        const content = draft.trim();
-        if (!content || chatLoading) return;
+    const send = (content: string) => {
+        const trimmed = content.trim();
+        if (!trimmed || chatLoading) return;
         setDraft('');
-        dispatch(sendChatMessage({ fileId, content, timestamp_seconds: tagTimestamp ? Math.floor(currentTime) : undefined }));
+        dispatch(sendChatMessage({ fileId, content: trimmed, timestamp_seconds: tagTimestamp ? Math.floor(currentTime) : undefined }));
     };
 
     return (
         <div className={styles.chatPanel}>
             <div className={styles.chatHead}>
-                <div className={styles.chatHeadTitle}>Ask about this file</div>
-                <div className={styles.chatHeadSub}>LLM integration coming next — UI only for now</div>
+                <div className={styles.chatHeadIc}><SparkleIc /></div>
+                <div>
+                    <div className={styles.chatHeadTitle}>Ask AI about this file</div>
+                    <div className={styles.chatHeadSub}>Grounded in the transcript · LLM wiring coming next</div>
+                </div>
             </div>
 
             <div className={styles.chatBody}>
                 {chatError && <div className={styles.chatErrorBanner}>{chatError}</div>}
+
                 {messages.length === 0 && !chatLoading ? (
-                    <div className={styles.chatEmpty}>Ask a question — e.g. "Summarize this" or "What's said about X?"</div>
+                    <div className={styles.chatEmptyState}>
+                        <div className={styles.chatEmptyIc}><SparkleIc /></div>
+                        <div className={styles.chatEmptyTitle}>Ask anything about this file</div>
+                        <div className={styles.chatEmptyText}>Try one of these to get started</div>
+                        <div className={styles.suggestedPrompts}>
+                            {SUGGESTED_PROMPTS.map((p) => (
+                                <button key={p} type="button" className={styles.suggestedChip} onClick={() => send(p)}>
+                                    {p}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
                 ) : (
                     messages.map((m) => (
                         <div key={m.id} className={`${styles.msgRow} ${m.role === 'user' ? styles.msgRowUser : ''}`}>
+                            {m.role === 'assistant' && <div className={styles.msgAvatar}><SparkleIc /></div>}
                             <div className={`${styles.bubble} ${m.role === 'user' ? styles.bubbleUser : styles.bubbleAssistant}`}>
                                 {typeof m.timestamp_seconds === 'number' && (
                                     <span className={styles.msgTimestamp}>@ {formatTime(m.timestamp_seconds)}</span>
@@ -285,6 +289,7 @@ const ChatPanel: React.FC<{ fileId: number; currentTime: number }> = ({ fileId, 
                 )}
                 {chatLoading && (
                     <div className={styles.msgRow}>
+                        <div className={styles.msgAvatar}><SparkleIc /></div>
                         <div className={`${styles.bubble} ${styles.bubbleAssistant} ${styles.bubbleTyping}`}>
                             <span className={styles.typingDot} /><span className={styles.typingDot} /><span className={styles.typingDot} />
                         </div>
@@ -307,10 +312,10 @@ const ChatPanel: React.FC<{ fileId: number; currentTime: number }> = ({ fileId, 
                     placeholder="Ask a question…"
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(draft); } }}
                     rows={2}
                 />
-                <button type="button" className={styles.sendBtn} onClick={handleSend} disabled={!draft.trim() || chatLoading} aria-label="Send">
+                <button type="button" className={styles.sendBtn} onClick={() => send(draft)} disabled={!draft.trim() || chatLoading} aria-label="Send">
                     <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M14.5 1.5L7.5 8.5M14.5 1.5L10 14.5l-2.5-6-6-2.5z" />
                     </svg>
@@ -323,9 +328,7 @@ const ChatPanel: React.FC<{ fileId: number; currentTime: number }> = ({ fileId, 
 // ─────────────────────────────────────────────
 // Watch page
 // ─────────────────────────────────────────────
-const WatchPage: React.FC<{ item: LibraryItem; all: LibraryItem[]; onBack: () => void; onSelect: (i: LibraryItem) => void }> = ({
-    item, all, onBack, onSelect,
-}) => {
+const WatchPage: React.FC<{ item: LibraryItem; onBack: () => void }> = ({ item, onBack }) => {
     const [mediaUrl, setMediaUrl] = useState('');
     const [mediaLoading, setMediaLoading] = useState(false);
     const [mediaError, setMediaError] = useState('');
@@ -344,8 +347,6 @@ const WatchPage: React.FC<{ item: LibraryItem; all: LibraryItem[]; onBack: () =>
             });
         return () => { controller.abort(); if (revokedUrl) URL.revokeObjectURL(revokedUrl); };
     }, [item.id]);
-
-    const upNext = useMemo(() => all.filter((f) => f.id !== item.id), [all, item.id]);
 
     return (
         <div className={styles.watchPage}>
@@ -376,19 +377,9 @@ const WatchPage: React.FC<{ item: LibraryItem; all: LibraryItem[]; onBack: () =>
                     </div>
                 </div>
 
-                {/* Sidebar: chat + up next */}
+                {/* Sidebar: chat only */}
                 <div className={styles.watchSide}>
                     <ChatPanel fileId={item.id} currentTime={currentTime} />
-
-                    <div className={styles.upNextPanel}>
-                        <div className={styles.upNextHead}>Up next</div>
-                        <div className={styles.upNextList}>
-                            {upNext.length === 0 && <div className={styles.resultsEmpty}>No other files.</div>}
-                            {upNext.map((f) => (
-                                <UpNextRow key={f.id} item={f} active={false} onClick={() => onSelect(f)} />
-                            ))}
-                        </div>
-                    </div>
                 </div>
             </div>
         </div>
@@ -428,7 +419,7 @@ const VideoExplorer: React.FC = () => {
     if (selectedItem) {
         return (
             <div className={styles.page}>
-                <WatchPage item={selectedItem} all={library} onBack={backToBrowse} onSelect={openItem} />
+                <WatchPage item={selectedItem} onBack={backToBrowse} />
             </div>
         );
     }
@@ -484,17 +475,6 @@ const VideoExplorer: React.FC = () => {
 };
 
 export default VideoExplorer;
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -790,11 +770,11 @@ export default VideoExplorer;
 
 .watchSide {
     flex: 1;
-    min-width: 320px;
-    max-width: 420px;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
+    min-width: 340px;
+    max-width: 440px;
+    position: sticky;
+    top: 84px;
+    height: calc(100vh - 116px);
 }
 
 .playerFrame {
@@ -901,125 +881,45 @@ export default VideoExplorer;
     color: var(--t2);
 }
 
-// ── Up next ──────────────────────────────────────
-.upNextPanel {
+// ── Chat panel — the whole sidebar now ───────────
+.chatPanel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
     background: var(--bg1);
     border: 1px solid var(--bdr);
     border-radius: var(--rl);
     overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
 }
 
-.upNextHead {
-    padding: 10px 14px;
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--t0);
-    border-bottom: 1px solid var(--bdr);
-}
-
-.upNextList {
-    max-height: 420px;
-    overflow-y: auto;
-    padding: 8px;
+.chatHead {
     display: flex;
-    flex-direction: column;
-    gap: 4px;
-    @include m.scrollbar;
-}
-
-.upNextRow {
-    display: flex;
-    gap: 9px;
     align-items: center;
-    padding: 6px;
-    border-radius: var(--r);
-    border: 1px solid transparent;
-    background: transparent;
-    cursor: pointer;
-    text-align: left;
-    transition: all 0.12s;
-
-    &:hover { background: var(--bg2); }
+    gap: 10px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--bdr);
+    flex-shrink: 0;
+    background: linear-gradient(180deg, var(--bg2), var(--bg1));
 }
 
-.upNextRowActive {
-    background: var(--bg3);
-    border-color: var(--blue-bdr);
-}
-
-.upNextThumb {
-    position: relative;
+.chatHeadIc {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 68px;
-    height: 42px;
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
     flex-shrink: 0;
-    border-radius: 6px;
-    background: var(--bg3);
-    border: 1px solid var(--bdr2);
-    color: var(--t2);
-    overflow: hidden;
+    background: var(--blue);
+    color: #fff;
 
     svg { width: 16px; height: 16px; }
 }
 
-.upNextThumbImg {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-}
-
-.upNextAudioCover {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--bg3);
-    color: var(--t2);
-}
-
-.upNextMeta {
-    min-width: 0;
-}
-
-.upNextTitle {
-    font-size: 11.5px;
-    font-weight: 600;
-    color: var(--t0);
-    line-height: 1.3;
-    @include m.truncate;
-}
-
-.upNextSub {
-    font-size: 10px;
-    color: var(--t2);
-    margin-top: 2px;
-}
-
-// ── Chat panel ───────────────────────────────────
-.chatPanel {
-    display: flex;
-    flex-direction: column;
-    background: var(--bg1);
-    border: 1px solid var(--bdr);
-    border-radius: var(--rl);
-    overflow: hidden;
-    max-height: 420px;
-}
-
-.chatHead {
-    padding: 12px 14px;
-    border-bottom: 1px solid var(--bdr);
-    flex-shrink: 0;
-}
-
 .chatHeadTitle {
-    font-size: 13px;
-    font-weight: 600;
+    font-size: 13.5px;
+    font-weight: 700;
     color: var(--t0);
 }
 
@@ -1027,25 +927,83 @@ export default VideoExplorer;
     font-size: 10.5px;
     color: var(--t2);
     margin-top: 2px;
-    @include m.mono;
 }
 
 .chatBody {
     flex: 1;
     overflow-y: auto;
-    padding: 12px 14px;
+    padding: 14px 16px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 12px;
     min-height: 80px;
     @include m.scrollbar;
 }
 
-.chatEmpty {
+.chatEmptyState {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    gap: 4px;
+    padding: 12px;
+}
+
+.chatEmptyIc {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: var(--blue-dim);
+    color: var(--blue);
+    margin-bottom: 6px;
+
+    svg { width: 18px; height: 18px; }
+}
+
+.chatEmptyTitle {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--t0);
+}
+
+.chatEmptyText {
+    font-size: 11.5px;
     color: var(--t2);
-    font-size: 12px;
-    line-height: 1.6;
-    padding: 8px 2px;
+    margin-top: 2px;
+}
+
+.suggestedPrompts {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+    max-width: 260px;
+    margin-top: 16px;
+}
+
+.suggestedChip {
+    padding: 9px 12px;
+    border-radius: var(--r);
+    border: 1px solid var(--bdr2);
+    background: var(--bg2);
+    color: var(--t1);
+    font-family: var(--font-ui);
+    font-size: 11.5px;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+    transition: all 0.12s;
+
+    &:hover {
+        border-color: var(--blue-bdr);
+        background: var(--blue-dim);
+        color: var(--blue);
+    }
 }
 
 .chatErrorBanner {
@@ -1058,15 +1016,30 @@ export default VideoExplorer;
     font-weight: 500;
 }
 
-.msgRow { display: flex; justify-content: flex-start; }
+.msgRow { display: flex; justify-content: flex-start; gap: 8px; }
 .msgRowUser { justify-content: flex-end; }
 
+.msgAvatar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--blue);
+    color: #fff;
+    margin-top: 2px;
+
+    svg { width: 12px; height: 12px; }
+}
+
 .bubble {
-    max-width: 85%;
-    padding: 8px 11px;
-    border-radius: 11px;
+    max-width: 80%;
+    padding: 9px 12px;
+    border-radius: 12px;
     font-size: 12.5px;
-    line-height: 1.5;
+    line-height: 1.55;
     white-space: pre-wrap;
 }
 
