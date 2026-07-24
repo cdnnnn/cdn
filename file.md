@@ -585,18 +585,18 @@ const WatchPage: React.FC<{ item: LibraryItem; onBack: () => void }> = ({ item, 
                         )}
                         {mediaLoading && <div className={styles.mediaLoadingOverlay}><div className={styles.spinner} /><span>Loading media…</span></div>}
                         {mediaError && <div className={styles.mediaErrorOverlay}><div>Could not load media</div><div className={styles.mediaErrorMsg}>{mediaError}</div></div>}
-                    </div>
 
-                    {!mediaLoading && !mediaError && (
-                        <MediaControls
-                            mediaRef={mediaRef}
-                            duration={duration}
-                            currentTime={currentTime}
-                            chapters={chapters}
-                            isVideo={item.mediaKind === 'video'}
-                            fullscreenTargetRef={playerFrameRef}
-                        />
-                    )}
+                        {!mediaLoading && !mediaError && (
+                            <MediaControls
+                                mediaRef={mediaRef}
+                                duration={duration}
+                                currentTime={currentTime}
+                                chapters={chapters}
+                                isVideo={item.mediaKind === 'video'}
+                                fullscreenTargetRef={playerFrameRef}
+                            />
+                        )}
+                    </div>
 
                     <div className={styles.watchTitle}>{item.original_name}</div>
                     <div className={styles.watchMetaRow}>
@@ -1063,7 +1063,7 @@ export default VideoExplorer;
 }
 
 .playerFrameAudio {
-    padding-top: 32%;
+    padding-top: 40%;
     background: var(--bg2);
 }
 
@@ -1075,7 +1075,7 @@ export default VideoExplorer;
     align-items: center;
     justify-content: center;
     gap: 16px;
-    padding: 0 24px;
+    padding: 0 24px 56px;
 }
 
 .audioIcBig {
@@ -1146,22 +1146,27 @@ export default VideoExplorer;
     color: var(--t2);
 }
 
-// ── Custom media control bar (chapters embedded in the scrub track) ──
+// ── Custom media control bar (overlaid on the player, YouTube-style) ──
 .mediaControls {
-    margin-top: 10px;
-    padding: 10px 12px 8px;
-    background: var(--bg2);
-    border: 1px solid var(--bdr2);
-    border-radius: var(--rl);
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 3;
+    padding: 22px 12px 8px;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.82) 0%, rgba(0, 0, 0, 0.5) 55%, rgba(0, 0, 0, 0) 100%);
 }
 
 .scrubTrack {
     position: relative;
-    height: 6px;
+    height: 4px;
     border-radius: 3px;
-    background: var(--bg3);
+    background: rgba(255, 255, 255, 0.28);
     cursor: pointer;
     touch-action: none;
+    transition: height 0.1s;
+
+    &:hover { height: 6px; }
 }
 
 .scrubChapterTick {
@@ -1169,7 +1174,7 @@ export default VideoExplorer;
     top: 0;
     width: 2px;
     height: 100%;
-    background: var(--bg1);
+    background: rgba(0, 0, 0, 0.5);
     transform: translateX(-1px);
     pointer-events: none;
 }
@@ -1189,8 +1194,8 @@ export default VideoExplorer;
     height: 12px;
     border-radius: 50%;
     background: var(--blue);
-    border: 2px solid var(--bg1);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+    border: 2px solid #fff;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
     transform: translate(-50%, -50%);
     pointer-events: none;
 }
@@ -1199,15 +1204,15 @@ export default VideoExplorer;
     position: absolute;
     bottom: 16px;
     transform: translateX(-50%);
-    background: var(--t0);
-    color: var(--bg1);
+    background: rgba(20, 20, 20, 0.95);
+    color: #fff;
     padding: 5px 9px;
     border-radius: 7px;
     font-size: 10.5px;
     white-space: nowrap;
     pointer-events: none;
     text-align: center;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
 }
 
 .scrubHoverChapter {
@@ -1223,29 +1228,29 @@ export default VideoExplorer;
 .controlsRow {
     display: flex;
     align-items: center;
-    gap: 4px;
-    margin-top: 8px;
+    gap: 2px;
+    margin-top: 6px;
 }
 
 .controlsBtn {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
+    width: 30px;
+    height: 30px;
     border-radius: 7px;
     border: none;
     background: transparent;
-    color: var(--t1);
+    color: #fff;
     cursor: pointer;
     transition: all 0.12s;
 
-    &:hover { background: var(--bg3); color: var(--t0); }
+    &:hover { background: rgba(255, 255, 255, 0.15); }
 }
 
 .controlsTime {
     font-size: 11px;
-    color: var(--t2);
+    color: rgba(255, 255, 255, 0.85);
     margin-left: 4px;
     @include m.mono;
 }
