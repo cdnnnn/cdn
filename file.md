@@ -67,6 +67,56 @@ const pickTrending = (items: LibraryItem[], count: number) => {
 };
 
 // ─────────────────────────────────────────────
+// Chapter/segment generation (dev placeholder)
+// No chapter data exists yet — for now we generate deterministic,
+// evenly-jittered segments from the file's real duration so the UI/UX
+// can be built and wired up. Swap `buildChapters` for real chapter data
+// (e.g. transcript-derived topic boundaries) once the backend has it.
+// ─────────────────────────────────────────────
+export interface Chapter {
+    start: number;
+    end: number;
+    title: string;
+}
+
+const CHAPTER_TITLE_POOL = [
+    'Introduction', 'Overview', 'Key Concepts', 'Chapter 1', 'Deep Dive',
+    'Chapter 2', 'Case Study', 'Discussion', 'Chapter 3', 'Q & A',
+    'Recap', 'Conclusion',
+];
+
+function seededRandom(seed: number) {
+    let s = seed % 2147483647;
+    if (s <= 0) s += 2147483646;
+    return () => {
+        s = (s * 16807) % 2147483647;
+        return (s - 1) / 2147483646;
+    };
+}
+
+function buildChapters(durationSec: number, seed: number): Chapter[] {
+    if (!durationSec || durationSec < 30) return [];
+    const rand = seededRandom(seed || 1);
+    const count = Math.max(3, Math.min(7, Math.round(3 + rand() * 4)));
+
+    // Split duration into `count` roughly-even parts with some jitter,
+    // enforcing a minimum segment length so tiny slivers don't show up.
+    const minGap = Math.max(15, durationSec / (count * 3));
+    let points = Array.from({ length: count - 1 }, () => rand() * durationSec).sort((a, b) => a - b);
+    points = points.reduce<number[]>((acc, p) => {
+        const prev = acc.length ? acc[acc.length - 1] : 0;
+        return p - prev >= minGap ? [...acc, p] : acc;
+    }, []);
+
+    const boundaries = [0, ...points, durationSec];
+    return boundaries.slice(0, -1).map((start, i) => ({
+        start,
+        end: boundaries[i + 1],
+        title: CHAPTER_TITLE_POOL[i % CHAPTER_TITLE_POOL.length],
+    }));
+}
+
+// ─────────────────────────────────────────────
 // Client-side video thumbnail generator
 // No thumbnail_url exists on ServerFile, so for video files we grab a
 // real frame ourselves: fetch the media blob, seek a hidden <video> to
@@ -338,11 +388,13 @@ const WatchPage: React.FC<{ item: LibraryItem; onBack: () => void }> = ({ item, 
     const [mediaLoading, setMediaLoading] = useState(false);
     const [mediaError, setMediaError] = useState('');
     const [currentTime, setCurrentTime] = useState(0);
+    const [duration, setDuration] = useState(0);
+    const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement>(null);
 
     useEffect(() => {
         const controller = new AbortController();
         let revokedUrl: string | null = null;
-        setMediaLoading(true); setMediaError(''); setMediaUrl(''); setCurrentTime(0);
+        setMediaLoading(true); setMediaError(''); setMediaUrl(''); setCurrentTime(0); setDuration(0);
         fetchMediaBlobUrl(item.id, controller.signal)
             .then((url) => { revokedUrl = url; setMediaUrl(url); setMediaLoading(false); })
             .catch((err) => {
@@ -352,6 +404,16 @@ const WatchPage: React.FC<{ item: LibraryItem; onBack: () => void }> = ({ item, 
             });
         return () => { controller.abort(); if (revokedUrl) URL.revokeObjectURL(revokedUrl); };
     }, [item.id]);
+
+    const chapters = useMemo(() => buildChapters(duration, item.id), [duration, item.id]);
+    const activeChapterIdx = chapters.findIndex((c) => currentTime >= c.start && currentTime < c.end);
+
+    const seekTo = (seconds: number) => {
+        if (mediaRef.current) {
+            mediaRef.current.currentTime = seconds;
+            setCurrentTime(seconds);
+        }
+    };
 
     return (
         <div className={styles.watchPage}>
@@ -366,10 +428,24 @@ const WatchPage: React.FC<{ item: LibraryItem; onBack: () => void }> = ({ item, 
                         {item.mediaKind === 'audio' ? (
                             <div className={styles.audioStage}>
                                 <div className={styles.audioIcBig}><AudioIc /></div>
-                                <audio key={item.id} src={mediaUrl || undefined} controls onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)} />
+                                <audio
+                                    key={item.id}
+                                    ref={mediaRef as React.RefObject<HTMLAudioElement>}
+                                    src={mediaUrl || undefined}
+                                    controls
+                                    onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+                                    onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
+                                />
                             </div>
                         ) : (
-                            <video key={item.id} src={mediaUrl || undefined} controls onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)} />
+                            <video
+                                key={item.id}
+                                ref={mediaRef as React.RefObject<HTMLVideoElement>}
+                                src={mediaUrl || undefined}
+                                controls
+                                onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+                                onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
+                            />
                         )}
                         {mediaLoading && <div className={styles.mediaLoadingOverlay}><div className={styles.spinner} /><span>Loading media…</span></div>}
                         {mediaError && <div className={styles.mediaErrorOverlay}><div>Could not load media</div><div className={styles.mediaErrorMsg}>{mediaError}</div></div>}
@@ -380,6 +456,50 @@ const WatchPage: React.FC<{ item: LibraryItem; onBack: () => void }> = ({ item, 
                         <span>Uploaded {formatDate(item.inserted_at)}</span>
                         <span className={styles.cardKindTag}>{item.mediaKind === 'audio' ? 'Audio' : 'Video'}</span>
                     </div>
+
+                    {chapters.length > 0 && (
+                        <div className={styles.chaptersPanel}>
+                            <div className={styles.chaptersHead}>
+                                <span>Chapters</span>
+                                <span className={styles.chaptersCount}>{chapters.length}</span>
+                            </div>
+
+                            <div className={styles.chaptersBar}>
+                                {chapters.map((c, i) => (
+                                    <button
+                                        key={i}
+                                        type="button"
+                                        className={`${styles.chaptersBarSeg} ${i === activeChapterIdx ? styles.chaptersBarSegActive : ''}`}
+                                        style={{ flexGrow: c.end - c.start }}
+                                        onClick={() => seekTo(c.start)}
+                                        title={c.title}
+                                    >
+                                        {duration > 0 && i === activeChapterIdx && (
+                                            <span
+                                                className={styles.chaptersBarPlayhead}
+                                                style={{ left: `${((currentTime - c.start) / (c.end - c.start)) * 100}%` }}
+                                            />
+                                        )}
+                                    </button>
+                                ))}
+                            </div>
+
+                            <div className={styles.chaptersList}>
+                                {chapters.map((c, i) => (
+                                    <button
+                                        key={i}
+                                        type="button"
+                                        className={`${styles.chapterRow} ${i === activeChapterIdx ? styles.chapterRowActive : ''}`}
+                                        onClick={() => seekTo(c.start)}
+                                    >
+                                        <span className={styles.chapterTime}>{formatTime(c.start)}</span>
+                                        <span className={styles.chapterTitle}>{c.title}</span>
+                                        {i === activeChapterIdx && <span className={styles.chapterNowTag}>▶ Now</span>}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 {/* Sidebar: chat only, fills the column height, no page scroll */}
@@ -480,21 +600,6 @@ const VideoExplorer: React.FC = () => {
 };
 
 export default VideoExplorer;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -924,6 +1029,126 @@ export default VideoExplorer;
     margin-top: 6px;
     font-size: 11.5px;
     color: var(--t2);
+}
+
+// ── Chapters ─────────────────────────────────────
+.chaptersPanel {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--bdr);
+}
+
+.chaptersHead {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--t0);
+    margin-bottom: 10px;
+}
+
+.chaptersCount {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 99px;
+    background: var(--bg3);
+    color: var(--t2);
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.chaptersBar {
+    display: flex;
+    gap: 3px;
+    height: 6px;
+    margin-bottom: 12px;
+}
+
+.chaptersBarSeg {
+    position: relative;
+    height: 100%;
+    min-width: 3px;
+    border: none;
+    border-radius: 3px;
+    background: var(--bg3);
+    cursor: pointer;
+    padding: 0;
+    transition: background 0.12s;
+
+    &:hover { background: var(--bdr3); }
+}
+
+.chaptersBarSegActive {
+    background: var(--blue-dim);
+}
+
+.chaptersBarPlayhead {
+    position: absolute;
+    top: -3px;
+    width: 2px;
+    height: 12px;
+    border-radius: 1px;
+    background: var(--blue);
+    transform: translateX(-1px);
+}
+
+.chaptersList {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.chapterRow {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 10px;
+    border-radius: var(--r);
+    border: 1px solid transparent;
+    background: transparent;
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.12s;
+
+    &:hover { background: var(--bg2); }
+}
+
+.chapterRowActive {
+    background: var(--blue-dim);
+    border-color: var(--blue-bdr);
+}
+
+.chapterTime {
+    flex-shrink: 0;
+    width: 42px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--t2);
+    @include m.mono;
+}
+
+.chapterRowActive .chapterTime {
+    color: var(--blue);
+}
+
+.chapterTitle {
+    flex: 1;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--t0);
+    @include m.truncate;
+}
+
+.chapterNowTag {
+    flex-shrink: 0;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--blue);
 }
 
 // ── Chat panel — the whole sidebar now ───────────
