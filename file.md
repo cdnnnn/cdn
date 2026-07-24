@@ -445,34 +445,41 @@ const VideoExplorer: React.FC = () => {
     return (
         <div className={styles.page}>
 
-            {/* ── Search header ── */}
+            {/* ── Header ── */}
             <div className={styles.ph}>
-                <div className={styles.searchRow}>
-                    <SearchIc />
-                    <input
-                        className={styles.searchInput}
-                        placeholder="Search video and audio files…"
-                        value={query}
-                        onChange={(e) => setQuery(e.target.value)}
-                    />
-                    {query && (
-                        <button type="button" className={styles.searchClearBtn} onClick={() => setQuery('')} aria-label="Clear search">
-                            <ClearIc />
-                        </button>
-                    )}
+                <div className={styles.phTitleRow}>
+                    <div className={styles.phTitle}>Video Explorer</div>
+                    <div className={styles.phSub}>Browse, search, and chat with your video & audio library</div>
                 </div>
 
-                <div className={styles.chipsRow}>
-                    {(['all', 'video', 'audio'] as const).map((k) => (
-                        <button
-                            key={k}
-                            type="button"
-                            className={`${styles.chip} ${kindFilter === k ? styles.chipActive : ''}`}
-                            onClick={() => setKindFilter(k)}
-                        >
-                            {k === 'all' ? 'All' : k === 'video' ? 'Video' : 'Audio'}
-                        </button>
-                    ))}
+                <div className={styles.phToolbar}>
+                    <div className={styles.searchRow}>
+                        <SearchIc />
+                        <input
+                            className={styles.searchInput}
+                            placeholder="Search video and audio files…"
+                            value={query}
+                            onChange={(e) => setQuery(e.target.value)}
+                        />
+                        {query && (
+                            <button type="button" className={styles.searchClearBtn} onClick={() => setQuery('')} aria-label="Clear search">
+                                <ClearIc />
+                            </button>
+                        )}
+                    </div>
+
+                    <div className={styles.chipsRow}>
+                        {(['all', 'video', 'audio'] as const).map((k) => (
+                            <button
+                                key={k}
+                                type="button"
+                                className={`${styles.chip} ${kindFilter === k ? styles.chipActive : ''}`}
+                                onClick={() => setKindFilter(k)}
+                            >
+                                {k === 'all' ? 'All' : k === 'video' ? 'Video' : 'Audio'}
+                            </button>
+                        ))}
+                    </div>
                 </div>
             </div>
 
@@ -517,6 +524,19 @@ export default VideoExplorer;
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
 // ═══════════════════════════════════════════════
 // VideoExplorer.module.scss
 // Content Analytics · Video Explorer
@@ -529,24 +549,52 @@ export default VideoExplorer;
     @include m.scrollbar;
 }
 
-// ── Search header ────────────────────────────────
+// ── Header ───────────────────────────────────────
 .ph {
     position: sticky;
     top: 0;
     z-index: 2;
-    padding: 18px 24px 12px;
+    padding: 18px 24px 14px;
     background: var(--bg1);
     border-bottom: 1px solid var(--bdr);
     display: flex;
     flex-direction: column;
+    gap: 14px;
+}
+
+.phTitleRow {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.phTitle {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--t0);
+    letter-spacing: -0.3px;
+    font-family: var(--font-display);
+}
+
+.phSub {
+    font-size: 11.5px;
+    color: var(--t2);
+}
+
+.phToolbar {
+    display: flex;
     align-items: center;
-    gap: 12px;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
 }
 
 .searchRow {
     position: relative;
-    width: 100%;
-    max-width: 560px;
+    flex: 1;
+    min-width: 220px;
+    max-width: 440px;
     display: flex;
     align-items: center;
     color: var(--t2);
@@ -599,6 +647,7 @@ export default VideoExplorer;
 .chipsRow {
     display: flex;
     gap: 8px;
+    flex-shrink: 0;
 }
 
 .chip {
