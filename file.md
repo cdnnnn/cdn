@@ -173,11 +173,9 @@ function useHoverPreview(item: LibraryItem) {
 
 const AudioCover: React.FC = () => (
     <div className={styles.audioCover}>
-        <div className={styles.audioDisk}>
-            <span className={styles.audioDiskGroove} />
-            <span className={styles.audioDiskGrooveInner} />
-            <span className={styles.audioDiskCenter}><AudioIc /></span>
-        </div>
+        <span className={styles.audioRing} />
+        <span className={styles.audioRing2} />
+        <span className={styles.audioIconBadge}><AudioIc /></span>
     </div>
 );
 
@@ -524,19 +522,6 @@ export default VideoExplorer;
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 // ═══════════════════════════════════════════════
 // VideoExplorer.module.scss
 // Content Analytics · Video Explorer
@@ -699,7 +684,7 @@ export default VideoExplorer;
 
     &:hover .cardTitle { color: var(--blue); }
     &:hover .cardThumb { border-color: var(--bdr3); }
-    &:hover .audioDisk { animation: veSpin 6s linear infinite; }
+    &:hover .audioIconBadge { transform: scale(1.08); }
 }
 
 .cardThumb {
@@ -761,53 +746,45 @@ export default VideoExplorer;
     display: flex;
     align-items: center;
     justify-content: center;
-    background:
-        radial-gradient(circle at 30% 20%, var(--bg3), var(--bg2) 65%);
+    background: var(--bg3);
+    overflow: hidden;
 }
 
-.audioDisk {
-    position: relative;
-    width: 46%;
-    aspect-ratio: 1;
-    border-radius: 50%;
-    background:
-        radial-gradient(circle at 35% 30%, #3a3f4a, #14161b 70%);
-    box-shadow:
-        0 6px 18px rgba(0, 0, 0, 0.35),
-        inset 0 0 0 1px rgba(255, 255, 255, 0.06);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.audioDiskGroove,
-.audioDiskGrooveInner {
+.audioRing,
+.audioRing2 {
     position: absolute;
     border-radius: 50%;
-    border: 1px solid rgba(255, 255, 255, 0.07);
+    border: 1.5px solid var(--blue);
+    opacity: 0.16;
 }
 
-.audioDiskGroove {
-    inset: 10%;
+.audioRing {
+    width: 46%;
+    aspect-ratio: 1;
 }
 
-.audioDiskGrooveInner {
-    inset: 22%;
+.audioRing2 {
+    width: 68%;
+    aspect-ratio: 1;
+    opacity: 0.08;
 }
 
-.audioDiskCenter {
+.audioIconBadge {
     position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 40%;
+    width: 30%;
     aspect-ratio: 1;
+    min-width: 44px;
+    min-height: 44px;
     border-radius: 50%;
     background: var(--blue);
     color: #fff;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+    transition: transform 0.15s ease;
 
-    svg { width: 45%; height: 45%; }
+    svg { width: 42%; height: 42%; }
 }
 
 .cardMeta {
@@ -1078,7 +1055,7 @@ export default VideoExplorer;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: linear-gradient(160deg, var(--bg3), var(--bg2));
+    background: var(--bg3);
     color: var(--blue);
 }
 
