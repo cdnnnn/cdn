@@ -46,6 +46,31 @@ const ClearIc: React.FC = () => (
         <path d="M4 4l8 8M12 4l-8 8" />
     </svg>
 );
+const PlayIc: React.FC = () => (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.5l10 5.5-10 5.5z" /></svg>
+);
+const PauseIc: React.FC = () => (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor">
+        <rect x="3.5" y="2.5" width="3.2" height="11" rx="1" /><rect x="9.3" y="2.5" width="3.2" height="11" rx="1" />
+    </svg>
+);
+const VolumeIc: React.FC = () => (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M2 6h2.5L8 3v10L4.5 10H2z" fill="currentColor" stroke="none" />
+        <path d="M10.5 5.5a4 4 0 010 5.6" /><path d="M12.3 3.7a7 7 0 010 8.6" />
+    </svg>
+);
+const MuteIc: React.FC = () => (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M2 6h2.5L8 3v10L4.5 10H2z" fill="currentColor" stroke="none" />
+        <path d="M10.5 6l3.5 4M14 6l-3.5 4" />
+    </svg>
+);
+const FullscreenIc: React.FC = () => (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M2 5.5V2h3.5M14 5.5V2h-3.5M2 10.5V14h3.5M14 10.5V14h-3.5" />
+    </svg>
+);
 
 const formatDate = (iso: string) => {
     const d = new Date(iso);
@@ -383,6 +408,122 @@ const ChatPanel: React.FC<{ fileId: number; currentTime: number }> = ({ fileId, 
 // ─────────────────────────────────────────────
 // Watch page
 // ─────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// Custom control bar — replaces native controls so chapter
+// boundaries can be embedded directly in the scrub track, YouTube-style.
+// ─────────────────────────────────────────────
+const MediaControls: React.FC<{
+    mediaRef: React.RefObject<HTMLVideoElement | HTMLAudioElement>;
+    duration: number;
+    currentTime: number;
+    chapters: Chapter[];
+    isVideo: boolean;
+    fullscreenTargetRef?: React.RefObject<HTMLElement>;
+}> = ({ mediaRef, duration, currentTime, chapters, isVideo, fullscreenTargetRef }) => {
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [isMuted, setIsMuted] = useState(false);
+    const [hoverPct, setHoverPct] = useState<number | null>(null);
+    const trackRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        const el = mediaRef.current;
+        if (!el) return undefined;
+        const onPlay = () => setIsPlaying(true);
+        const onPause = () => setIsPlaying(false);
+        const onVolume = () => setIsMuted(el.muted);
+        el.addEventListener('play', onPlay);
+        el.addEventListener('pause', onPause);
+        el.addEventListener('volumechange', onVolume);
+        return () => {
+            el.removeEventListener('play', onPlay);
+            el.removeEventListener('pause', onPause);
+            el.removeEventListener('volumechange', onVolume);
+        };
+    }, [mediaRef]);
+
+    const togglePlay = () => {
+        const el = mediaRef.current; if (!el) return;
+        if (el.paused) el.play().catch(() => {}); else el.pause();
+    };
+    const toggleMute = () => {
+        const el = mediaRef.current; if (!el) return;
+        el.muted = !el.muted;
+    };
+    const toggleFullscreen = () => {
+        const target = fullscreenTargetRef?.current;
+        if (!target) return;
+        if (document.fullscreenElement) document.exitFullscreen();
+        else target.requestFullscreen?.();
+    };
+
+    const pctFromEvent = (clientX: number) => {
+        const track = trackRef.current;
+        if (!track || duration <= 0) return 0;
+        const rect = track.getBoundingClientRect();
+        return Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    };
+
+    const seekToClientX = (clientX: number) => {
+        const el = mediaRef.current; if (!el || duration <= 0) return;
+        el.currentTime = pctFromEvent(clientX) * duration;
+    };
+
+    const onTrackPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+        (e.target as HTMLElement).setPointerCapture(e.pointerId);
+        seekToClientX(e.clientX);
+    };
+    const onTrackPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+        setHoverPct(pctFromEvent(e.clientX));
+        if (e.buttons === 1) seekToClientX(e.clientX);
+    };
+
+    const progressPct = duration > 0 ? (currentTime / duration) * 100 : 0;
+    const hoverTime = hoverPct !== null ? hoverPct * duration : null;
+    const hoverChapter = hoverTime !== null ? chapters.find((c) => hoverTime >= c.start && hoverTime < c.end) : null;
+
+    return (
+        <div className={styles.mediaControls}>
+            <div
+                ref={trackRef}
+                className={styles.scrubTrack}
+                onPointerDown={onTrackPointerDown}
+                onPointerMove={onTrackPointerMove}
+                onPointerLeave={() => setHoverPct(null)}
+            >
+                {/* Chapter divider ticks, embedded directly in the track */}
+                {chapters.slice(1).map((c, i) => (
+                    <span key={i} className={styles.scrubChapterTick} style={{ left: `${(c.start / duration) * 100}%` }} />
+                ))}
+                <div className={styles.scrubFill} style={{ width: `${progressPct}%` }} />
+                <div className={styles.scrubHandle} style={{ left: `${progressPct}%` }} />
+
+                {hoverPct !== null && (
+                    <div className={styles.scrubHoverTooltip} style={{ left: `${hoverPct * 100}%` }}>
+                        {hoverChapter && <div className={styles.scrubHoverChapter}>{hoverChapter.title}</div>}
+                        <div className={styles.scrubHoverTime}>{formatTime(hoverTime ?? 0)}</div>
+                    </div>
+                )}
+            </div>
+
+            <div className={styles.controlsRow}>
+                <button type="button" className={styles.controlsBtn} onClick={togglePlay} aria-label={isPlaying ? 'Pause' : 'Play'}>
+                    {isPlaying ? <PauseIc /> : <PlayIc />}
+                </button>
+                <span className={styles.controlsTime}>{formatTime(currentTime)} / {formatTime(duration)}</span>
+                <div className={styles.controlsSpacer} />
+                <button type="button" className={styles.controlsBtn} onClick={toggleMute} aria-label={isMuted ? 'Unmute' : 'Mute'}>
+                    {isMuted ? <MuteIc /> : <VolumeIc />}
+                </button>
+                {isVideo && (
+                    <button type="button" className={styles.controlsBtn} onClick={toggleFullscreen} aria-label="Fullscreen">
+                        <FullscreenIc />
+                    </button>
+                )}
+            </div>
+        </div>
+    );
+};
+
 const WatchPage: React.FC<{ item: LibraryItem; onBack: () => void }> = ({ item, onBack }) => {
     const [mediaUrl, setMediaUrl] = useState('');
     const [mediaLoading, setMediaLoading] = useState(false);
@@ -390,6 +531,7 @@ const WatchPage: React.FC<{ item: LibraryItem; onBack: () => void }> = ({ item, 
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
     const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement>(null);
+    const playerFrameRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         const controller = new AbortController();
@@ -406,14 +548,6 @@ const WatchPage: React.FC<{ item: LibraryItem; onBack: () => void }> = ({ item, 
     }, [item.id]);
 
     const chapters = useMemo(() => buildChapters(duration, item.id), [duration, item.id]);
-    const activeChapterIdx = chapters.findIndex((c) => currentTime >= c.start && currentTime < c.end);
-
-    const seekTo = (seconds: number) => {
-        if (mediaRef.current) {
-            mediaRef.current.currentTime = seconds;
-            setCurrentTime(seconds);
-        }
-    };
 
     return (
         <div className={styles.watchPage}>
@@ -424,7 +558,10 @@ const WatchPage: React.FC<{ item: LibraryItem; onBack: () => void }> = ({ item, 
             <div className={styles.watchGrid}>
                 {/* Main column — scrolls independently if content overflows */}
                 <div className={styles.watchMain}>
-                    <div className={`${styles.playerFrame} ${item.mediaKind === 'audio' ? styles.playerFrameAudio : ''}`}>
+                    <div
+                        ref={playerFrameRef}
+                        className={`${styles.playerFrame} ${item.mediaKind === 'audio' ? styles.playerFrameAudio : ''}`}
+                    >
                         {item.mediaKind === 'audio' ? (
                             <div className={styles.audioStage}>
                                 <div className={styles.audioIcBig}><AudioIc /></div>
@@ -432,7 +569,6 @@ const WatchPage: React.FC<{ item: LibraryItem; onBack: () => void }> = ({ item, 
                                     key={item.id}
                                     ref={mediaRef as React.RefObject<HTMLAudioElement>}
                                     src={mediaUrl || undefined}
-                                    controls
                                     onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
                                     onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
                                 />
@@ -442,64 +578,31 @@ const WatchPage: React.FC<{ item: LibraryItem; onBack: () => void }> = ({ item, 
                                 key={item.id}
                                 ref={mediaRef as React.RefObject<HTMLVideoElement>}
                                 src={mediaUrl || undefined}
-                                controls
                                 onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
                                 onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
+                                onClick={() => (mediaRef.current?.paused ? mediaRef.current.play().catch(() => {}) : mediaRef.current?.pause())}
                             />
                         )}
                         {mediaLoading && <div className={styles.mediaLoadingOverlay}><div className={styles.spinner} /><span>Loading media…</span></div>}
                         {mediaError && <div className={styles.mediaErrorOverlay}><div>Could not load media</div><div className={styles.mediaErrorMsg}>{mediaError}</div></div>}
                     </div>
 
+                    {!mediaLoading && !mediaError && (
+                        <MediaControls
+                            mediaRef={mediaRef}
+                            duration={duration}
+                            currentTime={currentTime}
+                            chapters={chapters}
+                            isVideo={item.mediaKind === 'video'}
+                            fullscreenTargetRef={playerFrameRef}
+                        />
+                    )}
+
                     <div className={styles.watchTitle}>{item.original_name}</div>
                     <div className={styles.watchMetaRow}>
                         <span>Uploaded {formatDate(item.inserted_at)}</span>
                         <span className={styles.cardKindTag}>{item.mediaKind === 'audio' ? 'Audio' : 'Video'}</span>
                     </div>
-
-                    {chapters.length > 0 && (
-                        <div className={styles.chaptersPanel}>
-                            <div className={styles.chaptersHead}>
-                                <span>Chapters</span>
-                                <span className={styles.chaptersCount}>{chapters.length}</span>
-                            </div>
-
-                            <div className={styles.chaptersBar}>
-                                {chapters.map((c, i) => (
-                                    <button
-                                        key={i}
-                                        type="button"
-                                        className={`${styles.chaptersBarSeg} ${i === activeChapterIdx ? styles.chaptersBarSegActive : ''}`}
-                                        style={{ flexGrow: c.end - c.start }}
-                                        onClick={() => seekTo(c.start)}
-                                        title={c.title}
-                                    >
-                                        {duration > 0 && i === activeChapterIdx && (
-                                            <span
-                                                className={styles.chaptersBarPlayhead}
-                                                style={{ left: `${((currentTime - c.start) / (c.end - c.start)) * 100}%` }}
-                                            />
-                                        )}
-                                    </button>
-                                ))}
-                            </div>
-
-                            <div className={styles.chaptersList}>
-                                {chapters.map((c, i) => (
-                                    <button
-                                        key={i}
-                                        type="button"
-                                        className={`${styles.chapterRow} ${i === activeChapterIdx ? styles.chapterRowActive : ''}`}
-                                        onClick={() => seekTo(c.start)}
-                                    >
-                                        <span className={styles.chapterTime}>{formatTime(c.start)}</span>
-                                        <span className={styles.chapterTitle}>{c.title}</span>
-                                        {i === activeChapterIdx && <span className={styles.chapterNowTag}>▶ Now</span>}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                    )}
                 </div>
 
                 {/* Sidebar: chat only, fills the column height, no page scroll */}
@@ -600,6 +703,18 @@ const VideoExplorer: React.FC = () => {
 };
 
 export default VideoExplorer;
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1031,124 +1146,112 @@ export default VideoExplorer;
     color: var(--t2);
 }
 
-// ── Chapters ─────────────────────────────────────
-.chaptersPanel {
-    margin-top: 20px;
-    padding-top: 16px;
-    border-top: 1px solid var(--bdr);
+// ── Custom media control bar (chapters embedded in the scrub track) ──
+.mediaControls {
+    margin-top: 10px;
+    padding: 10px 12px 8px;
+    background: var(--bg2);
+    border: 1px solid var(--bdr2);
+    border-radius: var(--rl);
 }
 
-.chaptersHead {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--t0);
-    margin-bottom: 10px;
-}
-
-.chaptersCount {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 18px;
-    height: 18px;
-    padding: 0 5px;
-    border-radius: 99px;
-    background: var(--bg3);
-    color: var(--t2);
-    font-size: 10px;
-    font-weight: 700;
-}
-
-.chaptersBar {
-    display: flex;
-    gap: 3px;
-    height: 6px;
-    margin-bottom: 12px;
-}
-
-.chaptersBarSeg {
+.scrubTrack {
     position: relative;
-    height: 100%;
-    min-width: 3px;
-    border: none;
+    height: 6px;
     border-radius: 3px;
     background: var(--bg3);
     cursor: pointer;
-    padding: 0;
-    transition: background 0.12s;
-
-    &:hover { background: var(--bdr3); }
+    touch-action: none;
 }
 
-.chaptersBarSegActive {
-    background: var(--blue-dim);
-}
-
-.chaptersBarPlayhead {
+.scrubChapterTick {
     position: absolute;
-    top: -3px;
+    top: 0;
     width: 2px;
-    height: 12px;
-    border-radius: 1px;
-    background: var(--blue);
+    height: 100%;
+    background: var(--bg1);
     transform: translateX(-1px);
+    pointer-events: none;
 }
 
-.chaptersList {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+.scrubFill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    border-radius: 3px;
+    background: var(--blue);
+    pointer-events: none;
 }
 
-.chapterRow {
+.scrubHandle {
+    position: absolute;
+    top: 50%;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--blue);
+    border: 2px solid var(--bg1);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+}
+
+.scrubHoverTooltip {
+    position: absolute;
+    bottom: 16px;
+    transform: translateX(-50%);
+    background: var(--t0);
+    color: var(--bg1);
+    padding: 5px 9px;
+    border-radius: 7px;
+    font-size: 10.5px;
+    white-space: nowrap;
+    pointer-events: none;
+    text-align: center;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.scrubHoverChapter {
+    font-weight: 700;
+}
+
+.scrubHoverTime {
+    @include m.mono;
+    opacity: 0.75;
+    font-size: 9.5px;
+}
+
+.controlsRow {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 8px 10px;
-    border-radius: var(--r);
-    border: 1px solid transparent;
+    gap: 4px;
+    margin-top: 8px;
+}
+
+.controlsBtn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    border: none;
     background: transparent;
+    color: var(--t1);
     cursor: pointer;
-    text-align: left;
-    transition: background 0.12s;
+    transition: all 0.12s;
 
-    &:hover { background: var(--bg2); }
+    &:hover { background: var(--bg3); color: var(--t0); }
 }
 
-.chapterRowActive {
-    background: var(--blue-dim);
-    border-color: var(--blue-bdr);
-}
-
-.chapterTime {
-    flex-shrink: 0;
-    width: 42px;
+.controlsTime {
     font-size: 11px;
-    font-weight: 600;
     color: var(--t2);
+    margin-left: 4px;
     @include m.mono;
 }
 
-.chapterRowActive .chapterTime {
-    color: var(--blue);
-}
-
-.chapterTitle {
+.controlsSpacer {
     flex: 1;
-    font-size: 12.5px;
-    font-weight: 500;
-    color: var(--t0);
-    @include m.truncate;
-}
-
-.chapterNowTag {
-    flex-shrink: 0;
-    font-size: 10px;
-    font-weight: 700;
-    color: var(--blue);
 }
 
 // ── Chat panel — the whole sidebar now ───────────
