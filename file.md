@@ -47,13 +47,6 @@ const ClearIc: React.FC = () => (
     </svg>
 );
 
-const STATUS_LABEL: Record<LibraryItem['status'], string> = {
-    completed: 'Ready',
-    running: 'Processing',
-    queued: 'Queued',
-    pending: 'Pending',
-};
-
 const formatDate = (iso: string) => {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return iso;
@@ -138,19 +131,34 @@ function useVideoThumbnail(item: LibraryItem): string | null {
 // ─────────────────────────────────────────────
 // Video/audio card (grid tile — home + search results)
 // ─────────────────────────────────────────────
+const AudioCover: React.FC = () => {
+    // Deterministic-looking waveform so every audio card shares one
+    // consistent, intentional design instead of a blank/white tile.
+    const bars = [8, 16, 26, 14, 30, 20, 34, 18, 24, 12, 28, 16, 22, 10, 18, 26, 14, 20, 30, 16];
+    return (
+        <div className={styles.audioCover}>
+            <svg viewBox="0 0 200 60" preserveAspectRatio="none" className={styles.audioCoverWave}>
+                {bars.map((h, i) => (
+                    <rect key={i} x={i * 10 + 2} y={30 - h / 2} width="5" height={h} rx="2.5" />
+                ))}
+            </svg>
+            <div className={styles.audioCoverIc}><AudioIc /></div>
+        </div>
+    );
+};
+
 const MediaCard: React.FC<{ item: LibraryItem; onClick: () => void }> = ({ item, onClick }) => {
     const thumb = useVideoThumbnail(item);
     return (
         <button type="button" className={styles.card} onClick={onClick}>
             <div className={styles.cardThumb}>
-                {thumb ? (
+                {item.mediaKind === 'audio' ? (
+                    <AudioCover />
+                ) : thumb ? (
                     <img className={styles.cardThumbImg} src={thumb} alt="" />
                 ) : (
-                    <div className={styles.cardThumbIc}>{item.mediaKind === 'audio' ? <AudioIc /> : <VideoIc />}</div>
+                    <div className={styles.cardThumbIc}><VideoIc /></div>
                 )}
-                <span className={`${styles.cardStatusTag} ${styles[`status_${item.status}`]}`}>
-                    {STATUS_LABEL[item.status]}
-                </span>
                 <span className={styles.cardKindTag}>{item.mediaKind === 'audio' ? 'Audio' : 'Video'}</span>
             </div>
             <div className={styles.cardMeta}>
@@ -172,11 +180,17 @@ const UpNextRow: React.FC<{ item: LibraryItem; active: boolean; onClick: () => v
     return (
         <button type="button" className={`${styles.upNextRow} ${active ? styles.upNextRowActive : ''}`} onClick={onClick}>
             <div className={styles.upNextThumb}>
-                {thumb ? <img className={styles.upNextThumbImg} src={thumb} alt="" /> : (item.mediaKind === 'audio' ? <AudioIc /> : <VideoIc />)}
+                {item.mediaKind === 'audio' ? (
+                    <div className={styles.upNextAudioCover}><AudioIc /></div>
+                ) : thumb ? (
+                    <img className={styles.upNextThumbImg} src={thumb} alt="" />
+                ) : (
+                    <VideoIc />
+                )}
             </div>
             <div className={styles.upNextMeta}>
                 <div className={styles.upNextTitle}>{item.original_name}</div>
-                <div className={styles.upNextSub}>{formatDate(item.inserted_at)} · {STATUS_LABEL[item.status]}</div>
+                <div className={styles.upNextSub}>{formatDate(item.inserted_at)}</div>
             </div>
         </button>
     );
@@ -317,7 +331,6 @@ const WatchPage: React.FC<{ item: LibraryItem; all: LibraryItem[]; onBack: () =>
                     <div className={styles.watchTitle}>{item.original_name}</div>
                     <div className={styles.watchMetaRow}>
                         <span>Uploaded {formatDate(item.inserted_at)}</span>
-                        <span className={`${styles.cardStatusTag} ${styles[`status_${item.status}`]}`}>{STATUS_LABEL[item.status]}</span>
                         <span className={styles.cardKindTag}>{item.mediaKind === 'audio' ? 'Audio' : 'Video'}</span>
                     </div>
                 </div>
@@ -449,6 +462,13 @@ const VideoExplorer: React.FC = () => {
 };
 
 export default VideoExplorer;
+
+
+
+
+
+
+
 
 
 
@@ -659,32 +679,53 @@ export default VideoExplorer;
     svg { width: 30px; height: 30px; }
 }
 
-.cardStatusTag,
 .cardKindTag {
     position: absolute;
+    top: 8px;
+    right: 8px;
     padding: 2px 7px;
     border-radius: 5px;
     font-size: 9.5px;
     font-weight: 700;
     letter-spacing: 0.02em;
-}
-
-.cardStatusTag {
-    top: 8px;
-    left: 8px;
-}
-
-.cardKindTag {
-    bottom: 8px;
-    right: 8px;
     background: rgba(0, 0, 0, 0.7);
     color: #fff;
 }
 
-.status_completed { background: var(--green-dim); color: var(--green); }
-.status_running { background: var(--blue-dim); color: var(--blue); }
-.status_queued,
-.status_pending { background: var(--amber-dim); color: var(--amber); }
+// ── Audio cover art ──────────────────────────────
+.audioCover {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(160deg, var(--bg3), var(--bg2));
+}
+
+.audioCoverWave {
+    width: 68%;
+    height: 42%;
+    color: var(--blue);
+    opacity: 0.55;
+
+    rect { fill: currentColor; }
+}
+
+.audioCoverIc {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    background: var(--bg1);
+    border: 1px solid var(--bdr2);
+    color: var(--blue);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+
+    svg { width: 18px; height: 18px; }
+}
 
 .cardMeta {
     display: flex;
@@ -946,6 +987,16 @@ export default VideoExplorer;
     width: 100%;
     height: 100%;
     object-fit: cover;
+}
+
+.upNextAudioCover {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(160deg, var(--bg3), var(--bg2));
+    color: var(--blue);
 }
 
 .upNextMeta {
