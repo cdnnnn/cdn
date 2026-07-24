@@ -2,7 +2,7 @@
 // pages/VideoExplorer/VideoExplorer.tsx
 // Content Analytics · Video Explorer
 // ═══════════════════════════════════════════════
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import {
     loadLibrary,
@@ -131,33 +131,78 @@ function useVideoThumbnail(item: LibraryItem): string | null {
 // ─────────────────────────────────────────────
 // Video/audio card (grid tile — home + search results)
 // ─────────────────────────────────────────────
-const AudioCover: React.FC = () => {
-    // Deterministic-looking waveform so every audio card shares one
-    // consistent, intentional design instead of a blank/white tile.
-    const bars = [8, 16, 26, 14, 30, 20, 34, 18, 24, 12, 28, 16, 22, 10, 18, 26, 14, 20, 30, 16];
-    return (
-        <div className={styles.audioCover}>
-            <svg viewBox="0 0 200 60" preserveAspectRatio="none" className={styles.audioCoverWave}>
-                {bars.map((h, i) => (
-                    <rect key={i} x={i * 10 + 2} y={30 - h / 2} width="5" height={h} rx="2.5" />
-                ))}
-            </svg>
-            <div className={styles.audioCoverIc}><AudioIc /></div>
+// Kept alive for the session (not revoked) so hover-preview playback can
+// reuse the same blob without refetching every time — fine at dev/local
+// scale; revisit if the library gets large (see WIRING_NOTES).
+const previewUrlCache = new Map<number, string>();
+
+function useHoverPreview(item: LibraryItem) {
+    const [hovering, setHovering] = useState(false);
+    const [previewUrl, setPreviewUrl] = useState<string | null>(previewUrlCache.get(item.id) ?? null);
+    const videoRef = useRef<HTMLVideoElement>(null);
+
+    const onEnter = () => {
+        if (item.mediaKind !== 'video') return;
+        setHovering(true);
+        if (!previewUrlCache.has(item.id)) {
+            fetchMediaBlobUrl(item.id)
+                .then((url) => {
+                    previewUrlCache.set(item.id, url);
+                    setPreviewUrl(url);
+                })
+                .catch(() => {});
+        }
+    };
+
+    const onLeave = () => {
+        setHovering(false);
+        if (videoRef.current) {
+            videoRef.current.pause();
+            videoRef.current.currentTime = 0;
+        }
+    };
+
+    useEffect(() => {
+        if (hovering && previewUrl && videoRef.current) {
+            videoRef.current.play().catch(() => {});
+        }
+    }, [hovering, previewUrl]);
+
+    return { hovering, previewUrl, videoRef, onEnter, onLeave };
+}
+
+const AudioCover: React.FC = () => (
+    <div className={styles.audioCover}>
+        <div className={styles.audioDisk}>
+            <span className={styles.audioDiskGroove} />
+            <span className={styles.audioDiskGrooveInner} />
+            <span className={styles.audioDiskCenter}><AudioIc /></span>
         </div>
-    );
-};
+    </div>
+);
 
 const MediaCard: React.FC<{ item: LibraryItem; onClick: () => void }> = ({ item, onClick }) => {
     const thumb = useVideoThumbnail(item);
+    const { hovering, previewUrl, videoRef, onEnter, onLeave } = useHoverPreview(item);
     return (
-        <button type="button" className={styles.card} onClick={onClick}>
+        <button type="button" className={styles.card} onClick={onClick} onMouseEnter={onEnter} onMouseLeave={onLeave}>
             <div className={styles.cardThumb}>
                 {item.mediaKind === 'audio' ? (
                     <AudioCover />
-                ) : thumb ? (
-                    <img className={styles.cardThumbImg} src={thumb} alt="" />
                 ) : (
-                    <div className={styles.cardThumbIc}><VideoIc /></div>
+                    <>
+                        {thumb ? <img className={styles.cardThumbImg} src={thumb} alt="" /> : <div className={styles.cardThumbIc}><VideoIc /></div>}
+                        {hovering && previewUrl && (
+                            <video
+                                ref={videoRef}
+                                className={styles.cardThumbPreview}
+                                src={previewUrl}
+                                muted
+                                loop
+                                playsInline
+                            />
+                        )}
+                    </>
                 )}
                 <span className={styles.cardKindTag}>{item.mediaKind === 'audio' ? 'Audio' : 'Video'}</span>
             </div>
@@ -487,6 +532,11 @@ export default VideoExplorer;
 
 
 
+
+
+
+
+
 // ═══════════════════════════════════════════════
 // VideoExplorer.module.scss
 // Content Analytics · Video Explorer
@@ -648,6 +698,8 @@ export default VideoExplorer;
     text-align: left;
 
     &:hover .cardTitle { color: var(--blue); }
+    &:hover .cardThumb { border-color: var(--bdr3); }
+    &:hover .audioDisk { animation: veSpin 6s linear infinite; }
 }
 
 .cardThumb {
@@ -666,6 +718,16 @@ export default VideoExplorer;
     width: 100%;
     height: 100%;
     object-fit: cover;
+}
+
+.cardThumbPreview {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    background: #000;
+    animation: veFadeIn 0.15s ease;
 }
 
 .cardThumbIc {
@@ -699,32 +761,53 @@ export default VideoExplorer;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: linear-gradient(160deg, var(--bg3), var(--bg2));
+    background:
+        radial-gradient(circle at 30% 20%, var(--bg3), var(--bg2) 65%);
 }
 
-.audioCoverWave {
-    width: 68%;
-    height: 42%;
-    color: var(--blue);
-    opacity: 0.55;
-
-    rect { fill: currentColor; }
-}
-
-.audioCoverIc {
-    position: absolute;
+.audioDisk {
+    position: relative;
+    width: 46%;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    background:
+        radial-gradient(circle at 35% 30%, #3a3f4a, #14161b 70%);
+    box-shadow:
+        0 6px 18px rgba(0, 0, 0, 0.35),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.06);
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 42px;
-    height: 42px;
-    border-radius: 50%;
-    background: var(--bg1);
-    border: 1px solid var(--bdr2);
-    color: var(--blue);
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+}
 
-    svg { width: 18px; height: 18px; }
+.audioDiskGroove,
+.audioDiskGrooveInner {
+    position: absolute;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.audioDiskGroove {
+    inset: 10%;
+}
+
+.audioDiskGrooveInner {
+    inset: 22%;
+}
+
+.audioDiskCenter {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40%;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    background: var(--blue);
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+
+    svg { width: 45%; height: 45%; }
 }
 
 .cardMeta {
@@ -1218,4 +1301,9 @@ export default VideoExplorer;
 
 @keyframes veSpin {
     to { transform: rotate(360deg); }
+}
+
+@keyframes veFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
