@@ -403,16 +403,10 @@ const VideoExplorer: React.FC = () => {
     const { library, libraryLoading, libraryError, libraryLoaded, selectedFileId } = useAppSelector((s) => s.videoExplorer);
 
     const [query, setQuery] = useState('');
-    const [kindFilter, setKindFilter] = useState<'all' | 'video' | 'audio'>('all');
 
     useEffect(() => {
         if (!libraryLoaded && !libraryLoading) dispatch(loadLibrary());
     }, [dispatch, libraryLoaded, libraryLoading]);
-
-    const kindFiltered = useMemo(
-        () => (kindFilter === 'all' ? library : library.filter((f) => f.mediaKind === kindFilter)),
-        [library, kindFilter],
-    );
 
     const isSearching = query.trim().length > 0;
 
@@ -421,10 +415,10 @@ const VideoExplorer: React.FC = () => {
         if (!q) return [];
         // TODO: replace with the real search algorithm/backend later.
         // For now: client-side match over the already-loaded library.
-        return kindFiltered.filter((f) => f.original_name.toLowerCase().includes(q));
-    }, [kindFiltered, query]);
+        return library.filter((f) => f.original_name.toLowerCase().includes(q));
+    }, [library, query]);
 
-    const trending = useMemo(() => pickTrending(kindFiltered, 24), [kindFiltered]);
+    const trending = useMemo(() => pickTrending(library, 24), [library]);
 
     const selectedItem = useMemo(() => library.find((f) => f.id === selectedFileId) ?? null, [library, selectedFileId]);
 
@@ -447,39 +441,19 @@ const VideoExplorer: React.FC = () => {
 
             {/* ── Header ── */}
             <div className={styles.ph}>
-                <div className={styles.phTitleRow}>
-                    <div className={styles.phTitle}>Video Explorer</div>
-                    <div className={styles.phSub}>Browse, search, and chat with your video & audio library</div>
-                </div>
-
-                <div className={styles.phToolbar}>
-                    <div className={styles.searchRow}>
-                        <SearchIc />
-                        <input
-                            className={styles.searchInput}
-                            placeholder="Search video and audio files…"
-                            value={query}
-                            onChange={(e) => setQuery(e.target.value)}
-                        />
-                        {query && (
-                            <button type="button" className={styles.searchClearBtn} onClick={() => setQuery('')} aria-label="Clear search">
-                                <ClearIc />
-                            </button>
-                        )}
-                    </div>
-
-                    <div className={styles.chipsRow}>
-                        {(['all', 'video', 'audio'] as const).map((k) => (
-                            <button
-                                key={k}
-                                type="button"
-                                className={`${styles.chip} ${kindFilter === k ? styles.chipActive : ''}`}
-                                onClick={() => setKindFilter(k)}
-                            >
-                                {k === 'all' ? 'All' : k === 'video' ? 'Video' : 'Audio'}
-                            </button>
-                        ))}
-                    </div>
+                <div className={styles.searchRow}>
+                    <SearchIc />
+                    <input
+                        className={styles.searchInput}
+                        placeholder="Search video and audio files…"
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                    />
+                    {query && (
+                        <button type="button" className={styles.searchClearBtn} onClick={() => setQuery('')} aria-label="Clear search">
+                            <ClearIc />
+                        </button>
+                    )}
                 </div>
             </div>
 
@@ -533,10 +507,6 @@ export default VideoExplorer;
 
 
 
-
-
-
-
 // ═══════════════════════════════════════════════
 // VideoExplorer.module.scss
 // Content Analytics · Video Explorer
@@ -554,47 +524,17 @@ export default VideoExplorer;
     position: sticky;
     top: 0;
     z-index: 2;
-    padding: 18px 24px 14px;
+    padding: 20px 24px;
     background: var(--bg1);
     border-bottom: 1px solid var(--bdr);
     display: flex;
-    flex-direction: column;
-    gap: 14px;
-}
-
-.phTitleRow {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-    flex-wrap: wrap;
-}
-
-.phTitle {
-    font-size: 18px;
-    font-weight: 700;
-    color: var(--t0);
-    letter-spacing: -0.3px;
-    font-family: var(--font-display);
-}
-
-.phSub {
-    font-size: 11.5px;
-    color: var(--t2);
-}
-
-.phToolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    flex-wrap: wrap;
+    justify-content: center;
 }
 
 .searchRow {
     position: relative;
-    flex: 1;
-    min-width: 220px;
-    max-width: 440px;
+    width: 100%;
+    max-width: 520px;
     display: flex;
     align-items: center;
     color: var(--t2);
@@ -641,34 +581,6 @@ export default VideoExplorer;
     cursor: pointer;
 
     &:hover { background: var(--bg3); color: var(--t0); }
-}
-
-// ── Chip filters ─────────────────────────────────
-.chipsRow {
-    display: flex;
-    gap: 8px;
-    flex-shrink: 0;
-}
-
-.chip {
-    padding: 5px 14px;
-    border-radius: 99px;
-    border: 1px solid var(--bdr2);
-    background: var(--bg2);
-    color: var(--t1);
-    font-family: var(--font-ui);
-    font-size: 11.5px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.12s;
-
-    &:hover { border-color: var(--bdr3); }
-}
-
-.chipActive {
-    background: var(--t0);
-    border-color: var(--t0);
-    color: var(--bg1);
 }
 
 // ── Browse body / grid ───────────────────────────
