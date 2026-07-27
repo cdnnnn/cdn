@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>One platform for every video in the organization</title>
+<title>Content Analytics — One Stop Video Hub</title>
 <style>
   :root{
     --paper:#F4F5F8; --surface:#FFFFFF;
@@ -37,18 +37,16 @@
   .slide.title .kicker{ color:var(--accent); }
   .slide.title h1{ color:#fff; }
   .slide.title .sub{ color:#AEB6DA; }
-  .mark{ display:flex; align-items:center; gap:12px; margin-bottom:30px; }
+  .mark{ display:flex; align-items:center; gap:12px; margin-bottom:28px; }
   .mark .glyph{ width:34px; height:34px; border-radius:10px; background:var(--accent); position:relative; }
   .mark .glyph::before{ content:""; position:absolute; inset:0; margin:auto; width:0; height:0; border-left:10px solid var(--brand-900); border-top:6px solid transparent; border-bottom:6px solid transparent; transform:translateX(1px); }
   .mark span{ font-weight:700; font-size:20px; letter-spacing:-.03em; }
 
-  .kicker{ font-family:'SFMono-Regular', Consolas, monospace; font-size:13px; letter-spacing:.14em; text-transform:uppercase; color:var(--brand); margin:0 0 14px; }
-  h1{ font-size:clamp(26px,3.8vw,44px); font-weight:700; letter-spacing:-.035em; color:var(--brand-900); margin:0 0 16px; text-align:center; max-width:19ch; line-height:1.12; }
-  .sub{ font-size:16.5px; color:var(--ink-2); max-width:58ch; text-align:center; margin:0 0 36px; line-height:1.6; }
+  .kicker{ font-family:'SFMono-Regular', Consolas, monospace; font-size:12.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--brand); margin:0 0 12px; }
+  h1{ font-size:clamp(24px,3.4vw,40px); font-weight:700; letter-spacing:-.032em; color:var(--brand-900); margin:0 0 14px; text-align:center; max-width:20ch; line-height:1.14; }
+  .sub{ font-size:15.5px; color:var(--ink-2); max-width:56ch; text-align:center; margin:0 0 30px; line-height:1.6; }
 
-  .visual{ display:flex; align-items:center; justify-content:center; gap:26px; min-height:220px; flex-wrap:wrap; }
-
-  .stepnum{ position:absolute; top:6vh; left:8vw; font-family:'SFMono-Regular', Consolas, monospace; font-size:14px; color:var(--ink-3); letter-spacing:.06em; }
+  .visual{ display:flex; align-items:center; justify-content:center; gap:22px; min-height:190px; flex-wrap:wrap; }
 
   .bar{ position:fixed; bottom:0; left:0; right:0; height:4px; background:var(--line); z-index:20; }
   .bar span{ display:block; height:100%; background:var(--brand); width:0; transition:width .4s ease; }
@@ -58,29 +56,29 @@
 
   .arrow{
     position:fixed; top:50%; transform:translateY(-50%); z-index:16;
-    width:44px; height:44px; border-radius:50%; border:1px solid var(--line);
+    width:42px; height:42px; border-radius:50%; border:1px solid var(--line);
     background:rgba(255,255,255,.9); display:flex; align-items:center; justify-content:center;
     cursor:pointer; color:var(--brand-900); opacity:0; transition:opacity .2s, border-color .2s, background .2s;
     pointer-events:none;
   }
   .deck:hover .arrow{ opacity:1; pointer-events:auto; }
   .arrow:hover{ border-color:var(--brand); background:#fff; }
-  .arrow.left{ left:24px; } .arrow.right{ right:24px; }
-  .arrow svg{ width:16px; height:16px; }
+  .arrow.left{ left:20px; } .arrow.right{ right:20px; }
+  .arrow svg{ width:15px; height:15px; }
   .arrow[disabled]{ opacity:0 !important; pointer-events:none; }
 
-  .counter{ position:fixed; top:24px; right:28px; z-index:16; font-family:'SFMono-Regular', Consolas, monospace; font-size:13px; color:var(--ink-3); background:rgba(255,255,255,.85); border:1px solid var(--line); border-radius:999px; padding:6px 14px; }
-  .dots{ position:fixed; bottom:16px; left:50%; transform:translateX(-50%); z-index:16; display:flex; gap:7px; }
-  .dot{ width:7px; height:7px; border-radius:50%; background:var(--line); border:0; padding:0; cursor:pointer; }
+  .counter{ position:fixed; top:22px; right:26px; z-index:16; font-family:'SFMono-Regular', Consolas, monospace; font-size:12.5px; color:var(--ink-3); background:rgba(255,255,255,.85); border:1px solid var(--line); border-radius:999px; padding:6px 13px; }
+  .dots{ position:fixed; bottom:15px; left:50%; transform:translateX(-50%); z-index:16; display:flex; gap:6px; flex-wrap:wrap; max-width:60vw; justify-content:center; }
+  .dot{ width:6px; height:6px; border-radius:50%; background:var(--line); border:0; padding:0; cursor:pointer; }
   .dot.is-on{ background:var(--brand); }
-  .hint{ position:fixed; bottom:20px; right:28px; z-index:16; font-size:12px; color:var(--ink-3); }
+  .hint{ position:fixed; bottom:18px; right:26px; z-index:16; font-size:11.5px; color:var(--ink-3); }
 
-  .icon-circle{ width:88px; height:88px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex:none; }
-  .icon-circle svg{ width:38px; height:38px; }
-  .icon-circle.lg{ width:100px; height:100px; }
-  .icon-circle.lg svg{ width:44px; height:44px; }
-  .icon-circle.sm{ width:60px; height:60px; }
-  .icon-circle.sm svg{ width:26px; height:26px; }
+  .icon-circle{ width:80px; height:80px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex:none; }
+  .icon-circle svg{ width:34px; height:34px; }
+  .icon-circle.lg{ width:96px; height:96px; }
+  .icon-circle.lg svg{ width:42px; height:42px; }
+  .icon-circle.sm{ width:56px; height:56px; }
+  .icon-circle.sm svg{ width:24px; height:24px; }
   .ic-blue{ background:var(--tint); color:var(--brand); }
   .ic-red{ background:var(--red-tint); color:var(--red); }
   .ic-green{ background:var(--green-tint); color:var(--green); }
@@ -88,71 +86,63 @@
   .ic-purple{ background:var(--purple-tint); color:var(--purple); }
   .ic-amber{ background:#FAEEDA; color:#854F0B; }
 
-  .badge{ font-family:'SFMono-Regular', Consolas, monospace; font-size:12px; font-weight:600; padding:3px 10px; border-radius:999px; }
+  .badge{ font-family:'SFMono-Regular', Consolas, monospace; font-size:11.5px; font-weight:600; padding:3px 10px; border-radius:999px; }
   .badge.problem{ background:var(--red-tint); color:var(--red); }
   .badge.solution{ background:var(--green-tint); color:var(--green); }
 
-  .card{ display:flex; flex-direction:column; align-items:center; gap:10px; width:160px; }
-  .card .label{ font-size:13.5px; font-weight:600; color:var(--brand-900); text-align:center; }
-  .card .sublabel{ font-size:12px; color:var(--ink-3); text-align:center; }
+  .card{ display:flex; flex-direction:column; align-items:center; gap:9px; width:150px; }
+  .card .label{ font-size:13px; font-weight:600; color:var(--brand-900); text-align:center; }
+  .card .sublabel{ font-size:11.5px; color:var(--ink-3); text-align:center; }
 
-  .flow-arrow{ width:30px; height:14px; flex:none; color:var(--ink-3); }
+  .flow-arrow{ width:26px; height:13px; flex:none; color:var(--ink-3); }
   .flow-arrow svg{ width:100%; height:100%; }
 
-  /* scattered silos */
-  .silos{ display:flex; gap:20px; flex-wrap:wrap; justify-content:center; max-width:520px; }
-  .silo{ display:flex; flex-direction:column; align-items:center; gap:8px; }
+  .silos{ display:flex; gap:18px; flex-wrap:wrap; justify-content:center; max-width:520px; }
+  .silo{ display:flex; flex-direction:column; align-items:center; gap:7px; }
   .silo .box{
-    width:64px; height:64px; border-radius:12px; background:var(--surface); border:1.5px dashed var(--line);
+    width:60px; height:60px; border-radius:12px; background:var(--surface); border:1.5px dashed var(--line);
     display:flex; align-items:center; justify-content:center; position:relative;
   }
-  .silo .box svg{ width:26px; height:26px; color:var(--ink-3); }
+  .silo .box svg{ width:24px; height:24px; color:var(--ink-3); }
   .silo .dupe{
     position:absolute; top:-7px; right:-7px; background:var(--red); color:#fff;
-    font-family:'SFMono-Regular', Consolas, monospace; font-size:10px; font-weight:700;
+    font-family:'SFMono-Regular', Consolas, monospace; font-size:9.5px; font-weight:700;
     border-radius:999px; padding:2px 6px;
   }
-  .silo .name{ font-size:12px; color:var(--ink-3); }
+  .silo .name{ font-size:11.5px; color:var(--ink-3); }
 
-  /* funnel into hub */
-  .funnel-scene{ display:flex; align-items:center; gap:30px; }
-  .hub{
-    width:110px; height:110px; border-radius:50%; background:var(--brand-900); color:#fff;
-    display:flex; align-items:center; justify-content:center; flex:none;
-    box-shadow:0 16px 32px -16px rgba(16,26,74,.5);
-  }
-  .hub svg{ width:44px; height:44px; }
+  .stat-row{ display:flex; gap:30px; flex-wrap:wrap; justify-content:center; }
+  .stat{ display:flex; flex-direction:column; align-items:center; gap:6px; width:150px; }
+  .stat .lbl{ font-size:12px; color:var(--ink-3); text-align:center; }
+  .stat .lbltitle{ font-size:13.5px; font-weight:700; }
+  .stat .lbltitle.red{ color:var(--red); }
 
-  .stat-row{ display:flex; gap:36px; }
-  .stat{ display:flex; flex-direction:column; align-items:center; gap:6px; }
-  .stat .num{ font-size:34px; font-weight:700; color:var(--brand-900); letter-spacing:-.02em; }
-  .stat .num.red{ color:var(--red); }
-  .stat .lbl{ font-size:12.5px; color:var(--ink-3); text-align:center; max-width:14ch; }
-
-  .feature-row{ display:flex; gap:24px; flex-wrap:wrap; justify-content:center; }
+  .feature-row{ display:flex; gap:20px; flex-wrap:wrap; justify-content:center; }
   .feature{
-    width:190px; background:var(--surface); border:1px solid var(--line); border-radius:16px;
-    padding:20px 18px; display:flex; flex-direction:column; align-items:center; gap:12px;
-    text-align:center; box-shadow:0 10px 24px -18px rgba(16,26,74,.3);
+    width:172px; background:var(--surface); border:1px solid var(--line); border-radius:14px;
+    padding:18px 16px; display:flex; flex-direction:column; align-items:center; gap:10px;
+    text-align:center; box-shadow:0 10px 22px -18px rgba(16,26,74,.3);
   }
-  .feature .ftitle{ font-size:14px; font-weight:700; color:var(--brand-900); }
-  .feature .fbody{ font-size:12.5px; color:var(--ink-2); line-height:1.5; }
+  .feature .ftitle{ font-size:13px; font-weight:700; color:var(--brand-900); }
+  .feature .fbody{ font-size:11.5px; color:var(--ink-2); line-height:1.5; }
 
-  .speechcard{
-    background:var(--surface); border:1px solid var(--line); border-radius:16px;
-    padding:14px 18px; max-width:250px; font-size:14px; color:var(--ink-2); line-height:1.5;
-    box-shadow:0 10px 24px -16px rgba(16,26,74,.3);
+  .compare{ display:flex; align-items:center; gap:30px; flex-wrap:wrap; justify-content:center; }
+
+  .videocard{
+    width:160px; background:var(--surface); border:1px solid var(--line); border-radius:14px;
+    padding:16px; display:flex; flex-direction:column; align-items:center; gap:8px; position:relative;
+    box-shadow:0 10px 22px -18px rgba(16,26,74,.3);
   }
-  .speechcard.you{ border-color:var(--brand); }
-  .speechcard .who{ font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; margin-bottom:5px; }
-  .speechcard.you .who{ color:var(--brand); }
-  .speechcard.ai .who{ color:var(--green); }
+  .videocard .banner{ font-size:10.5px; font-weight:700; padding:3px 8px; border-radius:6px; text-align:center; }
+  .videocard .banner.info{ background:var(--tint); color:var(--brand); }
 
-  .compare{ display:flex; align-items:center; gap:36px; }
+  .recap-row{ display:flex; gap:26px; flex-wrap:wrap; justify-content:center; }
+  .recap{ display:flex; flex-direction:column; align-items:center; gap:8px; width:110px; }
+  .recap .rl{ font-size:12px; font-weight:600; color:var(--brand-900); text-align:center; }
 
   @media (max-width:760px){
-    .visual, .compare, .funnel-scene, .stat-row{ flex-direction:column; }
-    .flow-arrow{ width:14px; height:30px; transform:rotate(90deg); }
+    .visual, .compare, .stat-row{ flex-direction:column; }
+    .flow-arrow{ width:13px; height:26px; transform:rotate(90deg); }
     .arrow{ display:none; }
   }
   @media (prefers-reduced-motion: reduce){ *{ animation:none !important; } }
@@ -162,178 +152,189 @@
 
 <div class="deck" id="deck">
 
-  <!-- 0: title -->
   <div class="slide title is-active" data-slide="0">
-    <div class="mark"><span class="glyph"></span><span>One video hub</span></div>
-    <p class="kicker">Business case walkthrough</p>
-    <h1>One platform for every video in the organization</h1>
-    <p class="sub">Why finding the right video today takes too long — and how a central, searchable, AI-assisted hub fixes that.</p>
+    <div class="mark"><span class="glyph"></span><span>Content Analytics</span></div>
+    <p class="kicker">A simple walkthrough</p>
+    <h1>Content Analytics — One Stop Video Hub</h1>
+    <p class="sub">A few problems with how we handle training videos today — and a simple solution for each.</p>
   </div>
 
-  <!-- 1: problem - scattered, duplicated -->
   <div class="slide" data-slide="1">
-    <span class="badge problem">The problem</span>
-    <h1 style="margin-top:16px;">Videos are scattered everywhere, with copies of the same one</h1>
-    <p class="sub">Different teams upload to different places — shared drives, team folders, personal libraries. The same recording often gets saved in three places, slightly renamed each time.</p>
+    <span class="badge problem">Problem 1</span>
+    <h1 style="margin-top:14px;">Different departments keep making the same training video</h1>
+    <p class="sub">Finance, HR, Dev, QC, and Ops all need similar training, like onboarding or basic company policies. But there's no shared place to check what already exists — so each department ends up recording its own version of a video that's already been made elsewhere in the company.</p>
     <div class="visual">
       <div class="silos">
-        <div class="silo">
-          <div class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h6l2 2h10v10H3z"/></svg><span class="dupe">×2</span></div>
-          <span class="name">Sales drive</span>
-        </div>
-        <div class="silo">
-          <div class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h6l2 2h10v10H3z"/></svg></div>
-          <span class="name">HR folder</span>
-        </div>
-        <div class="silo">
-          <div class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h6l2 2h10v10H3z"/></svg><span class="dupe">×3</span></div>
-          <span class="name">Engineering wiki</span>
-        </div>
-        <div class="silo">
-          <div class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h6l2 2h10v10H3z"/></svg></div>
-          <span class="name">Someone's laptop</span>
-        </div>
+        <div class="silo"><div class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></svg><span class="dupe">AGAIN</span></div><span class="name">Finance team</span></div>
+        <div class="silo"><div class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></svg><span class="dupe">AGAIN</span></div><span class="name">HR team</span></div>
+        <div class="silo"><div class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></svg><span class="dupe">AGAIN</span></div><span class="name">Dev team</span></div>
+        <div class="silo"><div class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></svg><span class="dupe">AGAIN</span></div><span class="name">QC team</span></div>
+        <div class="silo"><div class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></svg><span class="dupe">AGAIN</span></div><span class="name">Ops team</span></div>
       </div>
     </div>
   </div>
 
-  <!-- 2: problem - time cost -->
   <div class="slide" data-slide="2">
-    <span class="badge problem">The cost</span>
-    <h1 style="margin-top:16px;">People spend real work time just hunting for a video</h1>
-    <p class="sub">Ask three people where "the onboarding walkthrough" is and you'll get three different links — or none. That search happens over and over, across the whole company.</p>
+    <span class="badge solution">Solution 1</span>
+    <h1 style="margin-top:14px;">Check first. Reuse if it's already there.</h1>
+    <p class="sub">Before anyone creates a new training video, the platform looks for a match. If one already exists, the team reuses it instead of making a new one.</p>
     <div class="visual">
-      <div class="stat-row">
-        <div class="stat">
-          <div class="icon-circle sm ic-red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg></div>
-          <div class="num red">Manual</div>
-          <div class="lbl">searching across drives, chats, and folders</div>
-        </div>
-        <div class="stat">
-          <div class="icon-circle sm ic-red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></div>
-          <div class="num red">Repeated</div>
-          <div class="lbl">the same search, done by every employee</div>
-        </div>
-        <div class="stat">
-          <div class="icon-circle sm ic-red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8"/></svg></div>
-          <div class="num red">Unclear</div>
-          <div class="lbl">which copy is the right, current one</div>
-        </div>
+      <div class="card">
+        <div class="icon-circle ic-blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></svg></div>
+        <div class="label">A team wants to create a video</div>
       </div>
-    </div>
-  </div>
-
-  <!-- 3: solution intro -->
-  <div class="slide" data-slide="3">
-    <span class="badge solution">The solution</span>
-    <h1 style="margin-top:16px;">Bring every video into one, organization-wide platform</h1>
-    <p class="sub">Every department's videos live in a single place — deduplicated and organized — so there is exactly one place to look, not five.</p>
-    <div class="visual">
-      <div class="funnel-scene">
-        <div class="silos" style="gap:12px;">
-          <div class="silo"><div class="box" style="width:44px;height:44px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px;"><path d="M3 7h6l2 2h10v10H3z"/></svg></div></div>
-          <div class="silo"><div class="box" style="width:44px;height:44px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px;"><path d="M3 7h6l2 2h10v10H3z"/></svg></div></div>
-          <div class="silo"><div class="box" style="width:44px;height:44px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px;"><path d="M3 7h6l2 2h10v10H3z"/></svg></div></div>
-        </div>
-        <div class="flow-arrow"><svg viewBox="0 0 34 16" fill="none"><path d="M0 8h28M22 2l8 6-8 6" stroke="currentColor" stroke-width="2"/></svg></div>
-        <div class="hub"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- 4: feature - search -->
-  <div class="slide" data-slide="4">
-    <span class="stepnum">Feature 1</span>
-    <p class="kicker">Find it instantly</p>
-    <h1>A search engine built for this library</h1>
-    <p class="sub">Search across every video in the organization at once, and get back the exact match — not ten near-duplicates to sort through by hand.</p>
-    <div class="visual">
-      <div class="icon-circle lg ic-blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg></div>
       <div class="flow-arrow"><svg viewBox="0 0 34 16" fill="none"><path d="M0 8h28M22 2l8 6-8 6" stroke="currentColor" stroke-width="2"/></svg></div>
       <div class="card">
-        <div class="icon-circle ic-blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg></div>
-        <div class="label">The one right video</div>
-        <div class="sublabel">no duplicates, no guesswork</div>
+        <div class="icon-circle ic-blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg></div>
+        <div class="label">We check the library</div>
+      </div>
+      <div class="flow-arrow"><svg viewBox="0 0 34 16" fill="none"><path d="M0 8h28M22 2l8 6-8 6" stroke="currentColor" stroke-width="2"/></svg></div>
+      <div class="card">
+        <div class="icon-circle ic-green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg></div>
+        <div class="label">Found it — reuse it</div>
+        <div class="sublabel">no need to create a new one</div>
       </div>
     </div>
   </div>
 
-  <!-- 5: feature - recommendations -->
+  <div class="slide" data-slide="3">
+    <span class="badge problem">Problem 2</span>
+    <h1 style="margin-top:14px;">Newer videos don't get shown to people watching the old one</h1>
+    <p class="sub">A video covers a topic well. Later, a new video is made that adds more detail on the same topic. Someone watching the old video today has no way of knowing the newer video exists.</p>
+    <div class="visual">
+      <div class="compare">
+        <div class="videocard">
+          <div class="icon-circle sm ic-blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></svg></div>
+          <div class="label">Video — MLCC basics</div>
+          <div class="sublabel">made in January</div>
+        </div>
+        <div class="flow-arrow"><svg viewBox="0 0 34 16" fill="none"><path d="M0 8h28M22 2l8 6-8 6" stroke="currentColor" stroke-width="2"/></svg></div>
+        <div class="videocard">
+          <div class="icon-circle sm ic-amber"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></svg></div>
+          <div class="label">Video — MLCC, new details</div>
+          <div class="sublabel">made in June, covers more</div>
+        </div>
+      </div>
+      <p class="sub" style="margin:22px 0 0; font-size:13.5px;">Both videos are correct — the second one just covers more. But today, nothing tells the viewer it exists.</p>
+    </div>
+  </div>
+
+  <div class="slide" data-slide="4">
+    <span class="badge solution">Solution 2</span>
+    <h1 style="margin-top:14px;">Suggest the newer video while the old one plays</h1>
+    <p class="sub">While someone watches the older video, we show the newer one as a suggestion, clearly tagged "Latest video" — so they know more information is available.</p>
+    <div class="visual">
+      <div class="card">
+        <div class="icon-circle ic-blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></svg></div>
+        <div class="label">Now playing</div>
+        <div class="sublabel">MLCC basics</div>
+      </div>
+      <div class="flow-arrow"><svg viewBox="0 0 34 16" fill="none"><path d="M0 8h28M22 2l8 6-8 6" stroke="currentColor" stroke-width="2"/></svg></div>
+      <div class="videocard">
+        <div class="banner info">🆕 Latest video</div>
+        <div class="icon-circle sm ic-green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></svg></div>
+        <div class="label">Suggested</div>
+        <div class="sublabel">MLCC, new details</div>
+      </div>
+    </div>
+  </div>
+
   <div class="slide" data-slide="5">
-    <span class="stepnum">Feature 2</span>
-    <p class="kicker">Suggested for you</p>
-    <h1>Recommendations based on your department</h1>
-    <p class="sub">Someone in Sales sees what's relevant to Sales. Someone in Engineering sees what's relevant to Engineering — instead of one generic list for everyone.</p>
+    <span class="badge problem">Problem 3</span>
+    <h1 style="margin-top:14px;">Finding one fact means watching the whole video</h1>
+    <p class="sub">Need just one fact from a long video? Today you have to fast-forward and rewind by hand, or watch the whole video again just to find it.</p>
+    <div class="visual">
+      <div class="icon-circle lg ic-red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/></svg></div>
+    </div>
+  </div>
+
+  <div class="slide" data-slide="6">
+    <span class="badge solution">Solution 3</span>
+    <h1 style="margin-top:14px;">Just ask the video what you want to know</h1>
+    <p class="sub">Type a question and get a direct answer right away. The AI has already gone through the whole video for you, so you don't have to.</p>
     <div class="visual">
       <div class="feature-row">
         <div class="feature">
-          <div class="icon-circle sm ic-purple"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg></div>
-          <div class="ftitle">Sales</div>
-          <div class="fbody">Pitch decks, product demos, deal reviews</div>
+          <div class="icon-circle sm ic-navy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3" cy="6" r="1" fill="currentColor"/><circle cx="3" cy="12" r="1" fill="currentColor"/><circle cx="3" cy="18" r="1" fill="currentColor"/></svg></div>
+          <div class="ftitle">Get a summary</div>
+          <div class="fbody">The whole video in a few lines</div>
         </div>
         <div class="feature">
-          <div class="icon-circle sm ic-purple"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg></div>
-          <div class="ftitle">Engineering</div>
-          <div class="fbody">Architecture reviews, tech talks, postmortems</div>
+          <div class="icon-circle sm ic-navy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 7h.01M3 11l8-8h8v8l-8 8-8-8z"/></svg></div>
+          <div class="ftitle">See the key topics</div>
+          <div class="fbody">What the video is really about</div>
         </div>
         <div class="feature">
-          <div class="icon-circle sm ic-purple"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg></div>
-          <div class="ftitle">HR</div>
-          <div class="fbody">Onboarding, policy updates, training</div>
+          <div class="icon-circle sm ic-navy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg></div>
+          <div class="ftitle">Ask anything</div>
+          <div class="fbody">Type your question, get an answer</div>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- 6: feature - LLM interaction -->
-  <div class="slide" data-slide="6">
-    <span class="stepnum">Feature 3</span>
-    <p class="kicker">Ask, don't rewatch</p>
-    <h1>Talk to the video with AI, instead of scrubbing through it</h1>
-    <p class="sub">Instead of rewatching a 40-minute recording to find one detail, just ask. The AI has already gone through the whole video and answers directly.</p>
-    <div class="visual">
-      <div class="icon-circle lg ic-navy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="12" height="16" rx="2"/><path d="M19 8v3M19 15v3" stroke-linecap="round"/><path d="M17 10.5h4M17 16.5h4" stroke-linecap="round"/></svg></div>
-      <div class="speechcard you">
-        <div class="who">You ask</div>
-        Which slide covered the Q3 budget numbers?
-      </div>
-      <div class="speechcard ai">
-        <div class="who">AI answers</div>
-        Around the 14-minute mark, right after the hiring plan.
-      </div>
-    </div>
-  </div>
-
-  <!-- 7: outcome -->
   <div class="slide" data-slide="7">
-    <span class="badge solution">The outcome</span>
-    <h1 style="margin-top:16px;">Less time searching, more time working</h1>
-    <p class="sub">One place to look, a search that actually works, content matched to your role, and instant answers instead of a full rewatch. The time saved adds up across every employee, every week.</p>
+    <span class="badge problem">Problem 4</span>
+    <h1 style="margin-top:14px;">We don't know if training is actually working</h1>
+    <p class="sub">Once a video is uploaded, we have no idea who finished it, who stopped halfway, or which part confused people.</p>
     <div class="visual">
-      <div class="compare">
-        <div class="card">
-          <div class="icon-circle ic-red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/></svg></div>
-          <div class="label">Before</div>
-          <div class="sublabel">manual search across scattered, duplicated files</div>
+      <div class="stat-row">
+        <div class="stat">
+          <div class="icon-circle sm ic-red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V12M10 20V6M16 20v-9M22 20H2"/></svg></div>
+          <div class="lbltitle red">We don't know</div>
+          <div class="lbl">how many people finished it</div>
         </div>
-        <span class="flow-arrow"><svg viewBox="0 0 34 16" fill="none"><path d="M0 8h28M22 2l8 6-8 6" stroke="currentColor" stroke-width="2"/></svg></span>
-        <div class="card">
-          <div class="icon-circle ic-green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg></div>
-          <div class="label">After</div>
-          <div class="sublabel">one search, the right video, an instant answer</div>
+        <div class="stat">
+          <div class="icon-circle sm ic-red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></div>
+          <div class="lbltitle red">We don't know</div>
+          <div class="lbl">where people stop watching</div>
+        </div>
+        <div class="stat">
+          <div class="icon-circle sm ic-red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8"/></svg></div>
+          <div class="lbltitle red">We don't know</div>
+          <div class="lbl">what confuses people most</div>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- 8: closing -->
   <div class="slide" data-slide="8">
-    <div class="icon-circle ic-green" style="margin-bottom:20px;">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12l5 5L19 7"/></svg>
+    <span class="badge solution">Solution 4</span>
+    <h1 style="margin-top:14px;">Show how well each video is working</h1>
+    <p class="sub">We track how many people finished, where they stopped, and what they asked the AI most. That tells us what's working and what to improve.</p>
+    <div class="visual">
+      <div class="feature-row">
+        <div class="feature">
+          <div class="icon-circle sm ic-green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg></div>
+          <div class="ftitle">Who finished it</div>
+          <div class="fbody">See who watched to the end</div>
+        </div>
+        <div class="feature">
+          <div class="icon-circle sm ic-green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V12M10 20V6M16 20v-9M22 20H2"/></svg></div>
+          <div class="ftitle">Where they stopped</div>
+          <div class="fbody">The exact moment people leave</div>
+        </div>
+        <div class="feature">
+          <div class="icon-circle sm ic-green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg></div>
+          <div class="ftitle">What they asked</div>
+          <div class="fbody">The questions people needed answered</div>
+        </div>
+      </div>
     </div>
-    <p class="kicker">In short</p>
-    <h1>One home for every video. One search that works. One click to the answer.</h1>
-    <p class="sub">A central, deduplicated video platform with department-aware recommendations and AI-powered Q&amp;A — built to save the whole organization time.</p>
+  </div>
+
+  <div class="slide" data-slide="9">
+    <p class="kicker">To sum up</p>
+    <h1>A few problems. One simple solution for each.</h1>
+    <p class="sub">One video library that doesn't repeat itself, points people to newer information, answers questions with AI, and shows what's actually working.</p>
+    <div class="visual">
+      <div class="recap-row">
+        <div class="recap"><div class="icon-circle sm ic-blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg></div><div class="rl">No repeats</div></div>
+        <div class="recap"><div class="icon-circle sm ic-amber"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/></svg></div><div class="rl">Newer video suggested</div></div>
+        <div class="recap"><div class="icon-circle sm ic-navy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg></div><div class="rl">Ask the AI</div></div>
+        <div class="recap"><div class="icon-circle sm ic-purple"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V12M10 20V6M16 20v-9M22 20H2"/></svg></div><div class="rl">Clear numbers</div></div>
+      </div>
+    </div>
   </div>
 
   <div class="bar"><span id="barFill"></span></div>
@@ -345,7 +346,7 @@
   </button>
   <div class="navzone left" id="zoneLeft"></div>
   <div class="navzone right" id="zoneRight"></div>
-  <div class="counter" id="counter">1 / 9</div>
+  <div class="counter" id="counter">1 / 10</div>
   <div class="dots" id="dots"></div>
   <div class="hint">Use ← → or click the edges</div>
 </div>
