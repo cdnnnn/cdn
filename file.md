@@ -1,1966 +1,406 @@
-//AppHeader.jsx
-import { Link } from 'react-router-dom';
-import { useState } from 'react';
-import shared from '../../styles/shared.module.scss';
-import styles from './AppHeader.module.scss';
-
-export default function AppHeader({ onSearch }) {
-  const [query, setQuery] = useState('');
-
-  function handleSubmit(e) {
-    e.preventDefault();
-    onSearch?.(query.trim());
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>One platform for every video in the organization</title>
+<style>
+  :root{
+    --paper:#F4F5F8; --surface:#FFFFFF;
+    --ink:#141829; --ink-2:#4C5570; --ink-3:#848CA4; --line:#E1E4EE;
+    --brand:#2743C4; --brand-900:#101A4A; --tint:#EAEDFB;
+    --accent:#FFB454; --accent-ink:#3D2606;
+    --red:#D85A30; --red-tint:#FAECE7;
+    --green:#0F6E56; --green-tint:#E1F5EE;
+    --purple:#7F77DD; --purple-tint:#EEEDFE;
+    --font: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   }
+  *{ box-sizing:border-box; }
+  html,body{ height:100%; margin:0; }
+  body{ background:var(--brand-900); color:var(--ink); font-family:var(--font); overflow:hidden; }
 
-  return (
-    <header className={styles.appHead}>
-      <div className={styles.inner}>
-        <Link className={shared.mark} to="/">
-          <span className={shared.markGlyph} aria-hidden="true" />
-          Sidenote
-        </Link>
+  .deck{ position:relative; width:100vw; height:100vh; }
 
-        <form className={styles.search} role="search" onSubmit={handleSubmit}>
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#7D8D84" strokeWidth="2" aria-hidden="true">
-            <circle cx="11" cy="11" r="7" /><path d="m20 20-3.6-3.6" />
-          </svg>
-          <input
-            type="search"
-            placeholder="Search videos, or a phrase said inside one"
-            aria-label="Search videos"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          <button type="submit">Search</button>
-        </form>
+  .slide{
+    position:absolute; inset:0;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    background:var(--paper);
+    opacity:0; visibility:hidden;
+    transform:translateX(60px);
+    transition:opacity .5s ease, transform .5s ease, visibility 0s linear .5s;
+    padding:6vh 8vw;
+  }
+  .slide.is-active{ opacity:1; visibility:visible; transform:translateX(0); transition:opacity .5s ease, transform .5s ease, visibility 0s; }
+  .slide.is-prev{ transform:translateX(-60px); }
 
-        <span className={styles.avatar} title="Your account">AR</span>
+  .slide.title{ background:var(--brand-900); color:#fff; }
+  .slide.title .kicker{ color:var(--accent); }
+  .slide.title h1{ color:#fff; }
+  .slide.title .sub{ color:#AEB6DA; }
+  .mark{ display:flex; align-items:center; gap:12px; margin-bottom:30px; }
+  .mark .glyph{ width:34px; height:34px; border-radius:10px; background:var(--accent); position:relative; }
+  .mark .glyph::before{ content:""; position:absolute; inset:0; margin:auto; width:0; height:0; border-left:10px solid var(--brand-900); border-top:6px solid transparent; border-bottom:6px solid transparent; transform:translateX(1px); }
+  .mark span{ font-weight:700; font-size:20px; letter-spacing:-.03em; }
+
+  .kicker{ font-family:'SFMono-Regular', Consolas, monospace; font-size:13px; letter-spacing:.14em; text-transform:uppercase; color:var(--brand); margin:0 0 14px; }
+  h1{ font-size:clamp(26px,3.8vw,44px); font-weight:700; letter-spacing:-.035em; color:var(--brand-900); margin:0 0 16px; text-align:center; max-width:19ch; line-height:1.12; }
+  .sub{ font-size:16.5px; color:var(--ink-2); max-width:58ch; text-align:center; margin:0 0 36px; line-height:1.6; }
+
+  .visual{ display:flex; align-items:center; justify-content:center; gap:26px; min-height:220px; flex-wrap:wrap; }
+
+  .stepnum{ position:absolute; top:6vh; left:8vw; font-family:'SFMono-Regular', Consolas, monospace; font-size:14px; color:var(--ink-3); letter-spacing:.06em; }
+
+  .bar{ position:fixed; bottom:0; left:0; right:0; height:4px; background:var(--line); z-index:20; }
+  .bar span{ display:block; height:100%; background:var(--brand); width:0; transition:width .4s ease; }
+
+  .navzone{ position:fixed; top:0; bottom:0; width:14%; z-index:15; cursor:pointer; }
+  .navzone.left{ left:0; } .navzone.right{ right:0; }
+
+  .arrow{
+    position:fixed; top:50%; transform:translateY(-50%); z-index:16;
+    width:44px; height:44px; border-radius:50%; border:1px solid var(--line);
+    background:rgba(255,255,255,.9); display:flex; align-items:center; justify-content:center;
+    cursor:pointer; color:var(--brand-900); opacity:0; transition:opacity .2s, border-color .2s, background .2s;
+    pointer-events:none;
+  }
+  .deck:hover .arrow{ opacity:1; pointer-events:auto; }
+  .arrow:hover{ border-color:var(--brand); background:#fff; }
+  .arrow.left{ left:24px; } .arrow.right{ right:24px; }
+  .arrow svg{ width:16px; height:16px; }
+  .arrow[disabled]{ opacity:0 !important; pointer-events:none; }
+
+  .counter{ position:fixed; top:24px; right:28px; z-index:16; font-family:'SFMono-Regular', Consolas, monospace; font-size:13px; color:var(--ink-3); background:rgba(255,255,255,.85); border:1px solid var(--line); border-radius:999px; padding:6px 14px; }
+  .dots{ position:fixed; bottom:16px; left:50%; transform:translateX(-50%); z-index:16; display:flex; gap:7px; }
+  .dot{ width:7px; height:7px; border-radius:50%; background:var(--line); border:0; padding:0; cursor:pointer; }
+  .dot.is-on{ background:var(--brand); }
+  .hint{ position:fixed; bottom:20px; right:28px; z-index:16; font-size:12px; color:var(--ink-3); }
+
+  .icon-circle{ width:88px; height:88px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex:none; }
+  .icon-circle svg{ width:38px; height:38px; }
+  .icon-circle.lg{ width:100px; height:100px; }
+  .icon-circle.lg svg{ width:44px; height:44px; }
+  .icon-circle.sm{ width:60px; height:60px; }
+  .icon-circle.sm svg{ width:26px; height:26px; }
+  .ic-blue{ background:var(--tint); color:var(--brand); }
+  .ic-red{ background:var(--red-tint); color:var(--red); }
+  .ic-green{ background:var(--green-tint); color:var(--green); }
+  .ic-navy{ background:var(--brand-900); color:#fff; }
+  .ic-purple{ background:var(--purple-tint); color:var(--purple); }
+  .ic-amber{ background:#FAEEDA; color:#854F0B; }
+
+  .badge{ font-family:'SFMono-Regular', Consolas, monospace; font-size:12px; font-weight:600; padding:3px 10px; border-radius:999px; }
+  .badge.problem{ background:var(--red-tint); color:var(--red); }
+  .badge.solution{ background:var(--green-tint); color:var(--green); }
+
+  .card{ display:flex; flex-direction:column; align-items:center; gap:10px; width:160px; }
+  .card .label{ font-size:13.5px; font-weight:600; color:var(--brand-900); text-align:center; }
+  .card .sublabel{ font-size:12px; color:var(--ink-3); text-align:center; }
+
+  .flow-arrow{ width:30px; height:14px; flex:none; color:var(--ink-3); }
+  .flow-arrow svg{ width:100%; height:100%; }
+
+  /* scattered silos */
+  .silos{ display:flex; gap:20px; flex-wrap:wrap; justify-content:center; max-width:520px; }
+  .silo{ display:flex; flex-direction:column; align-items:center; gap:8px; }
+  .silo .box{
+    width:64px; height:64px; border-radius:12px; background:var(--surface); border:1.5px dashed var(--line);
+    display:flex; align-items:center; justify-content:center; position:relative;
+  }
+  .silo .box svg{ width:26px; height:26px; color:var(--ink-3); }
+  .silo .dupe{
+    position:absolute; top:-7px; right:-7px; background:var(--red); color:#fff;
+    font-family:'SFMono-Regular', Consolas, monospace; font-size:10px; font-weight:700;
+    border-radius:999px; padding:2px 6px;
+  }
+  .silo .name{ font-size:12px; color:var(--ink-3); }
+
+  /* funnel into hub */
+  .funnel-scene{ display:flex; align-items:center; gap:30px; }
+  .hub{
+    width:110px; height:110px; border-radius:50%; background:var(--brand-900); color:#fff;
+    display:flex; align-items:center; justify-content:center; flex:none;
+    box-shadow:0 16px 32px -16px rgba(16,26,74,.5);
+  }
+  .hub svg{ width:44px; height:44px; }
+
+  .stat-row{ display:flex; gap:36px; }
+  .stat{ display:flex; flex-direction:column; align-items:center; gap:6px; }
+  .stat .num{ font-size:34px; font-weight:700; color:var(--brand-900); letter-spacing:-.02em; }
+  .stat .num.red{ color:var(--red); }
+  .stat .lbl{ font-size:12.5px; color:var(--ink-3); text-align:center; max-width:14ch; }
+
+  .feature-row{ display:flex; gap:24px; flex-wrap:wrap; justify-content:center; }
+  .feature{
+    width:190px; background:var(--surface); border:1px solid var(--line); border-radius:16px;
+    padding:20px 18px; display:flex; flex-direction:column; align-items:center; gap:12px;
+    text-align:center; box-shadow:0 10px 24px -18px rgba(16,26,74,.3);
+  }
+  .feature .ftitle{ font-size:14px; font-weight:700; color:var(--brand-900); }
+  .feature .fbody{ font-size:12.5px; color:var(--ink-2); line-height:1.5; }
+
+  .speechcard{
+    background:var(--surface); border:1px solid var(--line); border-radius:16px;
+    padding:14px 18px; max-width:250px; font-size:14px; color:var(--ink-2); line-height:1.5;
+    box-shadow:0 10px 24px -16px rgba(16,26,74,.3);
+  }
+  .speechcard.you{ border-color:var(--brand); }
+  .speechcard .who{ font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; margin-bottom:5px; }
+  .speechcard.you .who{ color:var(--brand); }
+  .speechcard.ai .who{ color:var(--green); }
+
+  .compare{ display:flex; align-items:center; gap:36px; }
+
+  @media (max-width:760px){
+    .visual, .compare, .funnel-scene, .stat-row{ flex-direction:column; }
+    .flow-arrow{ width:14px; height:30px; transform:rotate(90deg); }
+    .arrow{ display:none; }
+  }
+  @media (prefers-reduced-motion: reduce){ *{ animation:none !important; } }
+</style>
+</head>
+<body>
+
+<div class="deck" id="deck">
+
+  <!-- 0: title -->
+  <div class="slide title is-active" data-slide="0">
+    <div class="mark"><span class="glyph"></span><span>One video hub</span></div>
+    <p class="kicker">Business case walkthrough</p>
+    <h1>One platform for every video in the organization</h1>
+    <p class="sub">Why finding the right video today takes too long — and how a central, searchable, AI-assisted hub fixes that.</p>
+  </div>
+
+  <!-- 1: problem - scattered, duplicated -->
+  <div class="slide" data-slide="1">
+    <span class="badge problem">The problem</span>
+    <h1 style="margin-top:16px;">Videos are scattered everywhere, with copies of the same one</h1>
+    <p class="sub">Different teams upload to different places — shared drives, team folders, personal libraries. The same recording often gets saved in three places, slightly renamed each time.</p>
+    <div class="visual">
+      <div class="silos">
+        <div class="silo">
+          <div class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h6l2 2h10v10H3z"/></svg><span class="dupe">×2</span></div>
+          <span class="name">Sales drive</span>
+        </div>
+        <div class="silo">
+          <div class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h6l2 2h10v10H3z"/></svg></div>
+          <span class="name">HR folder</span>
+        </div>
+        <div class="silo">
+          <div class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h6l2 2h10v10H3z"/></svg><span class="dupe">×3</span></div>
+          <span class="name">Engineering wiki</span>
+        </div>
+        <div class="silo">
+          <div class="box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h6l2 2h10v10H3z"/></svg></div>
+          <span class="name">Someone's laptop</span>
+        </div>
       </div>
-    </header>
-  );
-}
+    </div>
+  </div>
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//AppHeader.module.scss
-.appHead {
-  position: sticky;
-  top: 0;
-  z-index: 50;
-  background: var(--surface);
-  border-bottom: 1px solid var(--line);
-}
-
-.inner {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: 24px;
-  height: 66px;
-  max-width: 1440px;
-  margin-inline: auto;
-  padding-inline: 24px;
-
-  @media (max-width: 860px) {
-    grid-template-columns: auto 1fr;
-    grid-template-rows: auto auto;
-    height: auto;
-    padding-block: 12px;
-    gap: 12px 16px;
-  }
-}
-
-.search {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  max-width: 560px;
-  width: 100%;
-  justify-self: center;
-  background: var(--paper);
-  border: 1px solid var(--line);
-  border-radius: var(--r-pill);
-  padding: 0 6px 0 18px;
-  transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
-
-  &:focus-within {
-    background: var(--surface);
-    border-color: var(--brand);
-    box-shadow: 0 0 0 4px rgba(39, 67, 196, .13);
-  }
-
-  input {
-    flex: 1;
-    border: 0;
-    background: none;
-    outline: none;
-    padding: 12px 0;
-    font-size: 15px;
-
-    &::placeholder { color: var(--ink-3); }
-  }
-
-  button {
-    border: 0;
-    background: var(--brand);
-    color: #fff;
-    border-radius: var(--r-pill);
-    padding: 8px 18px;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-
-    &:hover { background: var(--brand-600); }
-  }
-
-  @media (max-width: 860px) {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    max-width: none;
-  }
-}
-
-.avatar {
-  width: 36px; height: 36px;
-  border-radius: 50%;
-  background: var(--tint);
-  color: var(--brand-900);
-  display: grid;
-  place-items: center;
-  font-size: 13px;
-  font-weight: 600;
-  border: 1px solid var(--line);
-
-  @media (max-width: 860px) {
-    justify-self: end;
-  }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//SiteHeader.jsx
-import { Link } from 'react-router-dom';
-import shared from '../../styles/shared.module.scss';
-import styles from './SiteHeader.module.scss';
-
-export default function SiteHeader() {
-  return (
-    <header className={styles.siteHead}>
-      <div className={`${shared.wrap} ${styles.inner}`}>
-        <Link className={shared.mark} to="/">
-          <span className={shared.markGlyph} aria-hidden="true" />
-          Sidenote
-        </Link>
-
-        <nav className={styles.siteNav}>
-          <a href="#how">How it works</a>
-          <a href="#asks">What you can ask</a>
-          <Link to="/app">Library</Link>
-        </nav>
-
-        <Link className={`${shared.btn} ${shared.btnPrimary} ${shared.btnSm}`} to="/app">
-          Start watching
-        </Link>
+  <!-- 2: problem - time cost -->
+  <div class="slide" data-slide="2">
+    <span class="badge problem">The cost</span>
+    <h1 style="margin-top:16px;">People spend real work time just hunting for a video</h1>
+    <p class="sub">Ask three people where "the onboarding walkthrough" is and you'll get three different links — or none. That search happens over and over, across the whole company.</p>
+    <div class="visual">
+      <div class="stat-row">
+        <div class="stat">
+          <div class="icon-circle sm ic-red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg></div>
+          <div class="num red">Manual</div>
+          <div class="lbl">searching across drives, chats, and folders</div>
+        </div>
+        <div class="stat">
+          <div class="icon-circle sm ic-red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg></div>
+          <div class="num red">Repeated</div>
+          <div class="lbl">the same search, done by every employee</div>
+        </div>
+        <div class="stat">
+          <div class="icon-circle sm ic-red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8"/></svg></div>
+          <div class="num red">Unclear</div>
+          <div class="lbl">which copy is the right, current one</div>
+        </div>
       </div>
-    </header>
-  );
-}
+    </div>
+  </div>
 
-
-
-
-
-
-
-
-
-
-
-
-
-//SiteHeader.module.scss
-.siteHead {
-  position: sticky;
-  top: 0;
-  z-index: 40;
-  background: rgba(244, 245, 248, .86);
-  backdrop-filter: blur(10px);
-  border-bottom: 1px solid var(--line);
-}
-
-.inner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 68px;
-}
-
-.siteNav {
-  display: flex;
-  gap: 28px;
-  font-size: 15px;
-  color: var(--ink-2);
-
-  a:hover { color: var(--brand); }
-
-  @media (max-width: 860px) {
-    display: none;
-  }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//VideoCard.jsx
-import shared from '../../styles/shared.module.scss';
-import styles from './VideoCard.module.scss';
-
-/**
- * A video thumbnail. `variant="grid"` renders the browse-page card,
- * `variant="upnext"` renders the compact row used in the watch view.
- */
-export default function VideoCard({ video, variant = 'grid', onClick }) {
-  const thumbStyle = { '--thumb-a': video.a, '--thumb-b': video.b };
-
-  if (variant === 'upnext') {
-    return (
-      <article className={styles.upItem} onClick={onClick}>
-        <div className={shared.thumb} style={thumbStyle}>
-          <span className={shared.dur}>{video.dur}</span>
+  <!-- 3: solution intro -->
+  <div class="slide" data-slide="3">
+    <span class="badge solution">The solution</span>
+    <h1 style="margin-top:16px;">Bring every video into one, organization-wide platform</h1>
+    <p class="sub">Every department's videos live in a single place — deduplicated and organized — so there is exactly one place to look, not five.</p>
+    <div class="visual">
+      <div class="funnel-scene">
+        <div class="silos" style="gap:12px;">
+          <div class="silo"><div class="box" style="width:44px;height:44px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px;"><path d="M3 7h6l2 2h10v10H3z"/></svg></div></div>
+          <div class="silo"><div class="box" style="width:44px;height:44px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px;"><path d="M3 7h6l2 2h10v10H3z"/></svg></div></div>
+          <div class="silo"><div class="box" style="width:44px;height:44px;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:18px;height:18px;"><path d="M3 7h6l2 2h10v10H3z"/></svg></div></div>
         </div>
-        <div>
-          <h4 className={styles.upTitle}>{video.title}</h4>
-          <p className={styles.upMeta}>{video.chan}</p>
-          <p className={styles.upMeta}>{video.stats}</p>
-        </div>
-      </article>
-    );
-  }
-
-  return (
-    <article className={styles.card} tabIndex={0} onClick={onClick}
-      onKeyDown={(e) => { if (e.key === 'Enter') onClick?.(); }}>
-      <div className={shared.thumb} style={thumbStyle}>
-        <span className={shared.badgeAi}>Ask enabled</span>
-        <span className={shared.dur}>{video.dur}</span>
+        <div class="flow-arrow"><svg viewBox="0 0 34 16" fill="none"><path d="M0 8h28M22 2l8 6-8 6" stroke="currentColor" stroke-width="2"/></svg></div>
+        <div class="hub"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg></div>
       </div>
-      <h3 className={styles.cardTitle}>{video.title}</h3>
-      <p className={styles.meta}>{video.chan}</p>
-      <p className={styles.meta}>{video.stats}</p>
-    </article>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//VideoCard.module.scss
-.card {
-  cursor: pointer;
-
-  &:hover > div:first-child {
-    transform: translateY(-3px);
-    box-shadow: var(--shadow-m);
-  }
-}
-
-.cardTitle {
-  font-size: 15.5px;
-  font-weight: 600;
-  line-height: 1.35;
-  letter-spacing: -.015em;
-  margin: 12px 0 5px;
-
-  .card:hover & { color: var(--brand); }
-}
-
-.meta {
-  font-size: 13.5px;
-  color: var(--ink-3);
-  margin: 0;
-}
-
-.upItem {
-  display: grid;
-  grid-template-columns: 158px 1fr;
-  gap: 14px;
-  cursor: pointer;
-
-  @media (max-width: 860px) {
-    grid-template-columns: 128px 1fr;
-  }
-}
-
-.upTitle {
-  font-size: 14.5px;
-  font-weight: 600;
-  line-height: 1.35;
-  margin: 0 0 4px;
-  letter-spacing: -.015em;
-
-  .upItem:hover & { color: var(--brand); }
-}
-
-.upMeta {
-  margin: 0;
-  font-size: 13px;
-  color: var(--ink-3);
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//videos.js
-export const VIDEOS = [
-  { id: 1, title: "How ocean currents move heat around the planet", chan: "Deep Field", stats: "412K views · 3 weeks ago", dur: "11:47", a: "#1E3A8A", b: "#0B1638" },
-  { id: 2, title: "The Kalman filter, explained without a single matrix", chan: "Signal Shop", stats: "188K views · 5 days ago", dur: "18:03", a: "#2743C4", b: "#141A4D" },
-  { id: 3, title: "Why your rent went up: land value in six charts", chan: "Ground Floor", stats: "1.2M views · 2 months ago", dur: "14:20", a: "#6D3C9E", b: "#26143F" },
-  { id: 4, title: "Bridge that shouldn't stand: the Firth of Forth", chan: "Load Path", stats: "602K views · 1 week ago", dur: "22:36", a: "#1C5F6B", b: "#0B2A33" },
-  { id: 5, title: "Sourdough is a chemistry problem", chan: "Slow Rise", stats: "940K views · 4 months ago", dur: "09:12", a: "#A85A2B", b: "#3A1D10" },
-  { id: 6, title: "What a typeface is actually doing to your reading speed", chan: "Counterform", stats: "77K views · 2 days ago", dur: "12:55", a: "#3F4A6B", b: "#171B2E" },
-  { id: 7, title: "Sleep debt: what the science does and doesn't say", chan: "Night Shift", stats: "1.8M views · 6 months ago", dur: "16:41", a: "#3B2FA0", b: "#120F38" },
-  { id: 8, title: "The bank run, from the teller's side of the counter", chan: "Ground Floor", stats: "355K views · 3 weeks ago", dur: "20:08", a: "#8C2F4A", b: "#300F1C" },
-];
-
-export const SUGGESTIONS = [
-  "Summarise in 5 bullets",
-  "Explain that simpler",
-  "Where does she cover the poles?",
-  "Is this still accurate?",
-];
-
-export const FILTERS = ["All", "Science", "Engineering", "Money", "History", "Design", "Health", "Watch later"];
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Landing.jsx
-import { Link } from 'react-router-dom';
-import SiteHeader from '../../components/SiteHeader/SiteHeader';
-import shared from '../../styles/shared.module.scss';
-import styles from './Landing.module.scss';
-
-const RAIL_STEPS = [
-  {
-    at: '00:00',
-    title: 'Find something worth watching',
-    body: 'Search by topic or scroll the shelf. Every video ships with a transcript, so search reaches the words spoken inside it, not just the title.',
-  },
-  {
-    at: '02:31',
-    title: 'Ask without pausing',
-    body: 'The panel sits beside the player. Type a question, keep watching — the answer arrives in the margin while the video runs.',
-  },
-  {
-    at: '04:12',
-    title: 'Jump to the proof',
-    body: 'Answers carry timestamps. Tap one and the player skips to the moment it came from, so nothing has to be taken on trust.',
-  },
-  {
-    at: '11:47',
-    title: 'Leave with the summary',
-    body: 'When the video ends, the thread collapses into a set of notes and key moments you can save or send to someone else.',
-  },
-];
-
-const ASK_CHIPS = [
-  'Explain that last part again, simpler',
-  'What did she mean by "thermohaline"?',
-  'Give me the three main points',
-  'Where does he cover the cost side?',
-  'Is this still accurate in 2026?',
-  'Turn this into study notes',
-  'Skip me to the demo',
-];
-
-export default function Landing() {
-  return (
-    <>
-      <SiteHeader />
-
-      <main>
-        {/* ================= HERO ================= */}
-        <section className={styles.hero}>
-          <div className={`${shared.wrap} ${styles.inner}`}>
-            <div>
-              <p className={shared.eyebrow}>Video + answers, side by side</p>
-              <h1 className={styles.h1}>
-                Watch the video.<br />
-                Ask it <span className={shared.swipe}>anything.</span>
-              </h1>
-              <p className={styles.lede}>
-                Search a library of explainers, hit play, and keep asking questions in the
-                margin. Every answer points back to the second it came from, so you can
-                check the tape yourself.
-              </p>
-              <div className={styles.heroActions}>
-                <Link className={`${shared.btn} ${shared.btnPrimary}`} to="/app">Start watching</Link>
-                <a className={`${shared.btn} ${shared.btnGhost}`} href="#how">See how it works</a>
-              </div>
-              <p className={styles.heroMeta}>Free to browse · No account needed to ask your first five questions</p>
-            </div>
-
-            {/* live-feel demo of the product's core mechanic */}
-            <div className={styles.demo} aria-hidden="true">
-              <div className={styles.demoVideo}><span className={styles.demoPlay} /></div>
-              <div className={styles.demoThread}>
-                <div className={styles.demoQ}>Wait — why does the current sink there?</div>
-                <div className={styles.demoA}>
-                  Cold, salty water is denser, so it drops at the poles and pulls the
-                  surface water behind it. She draws it out at <span className={styles.stamp}>4:12</span>.
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* ================= HOW IT WORKS ================= */}
-        <section className={styles.rail} id="how">
-          <div className={shared.wrap}>
-            <h2 className={styles.railHeading}>One video, one running conversation</h2>
-            <ol className={styles.railList}>
-              {RAIL_STEPS.map((step) => (
-                <li className={styles.railItem} key={step.at}>
-                  <span className={styles.at}>{step.at}</span>
-                  <h3>{step.title}</h3>
-                  <p>{step.body}</p>
-                </li>
-              ))}
-            </ol>
-          </div>
-        </section>
-
-        {/* ================= QUESTION STRIP ================= */}
-        <section className={styles.strip} id="asks">
-          <div className={shared.wrap}>
-            <p className={shared.eyebrow}>Things people actually ask</p>
-            <h2 className={styles.stripHeading}>Written like you'd say it out loud</h2>
-            <div className={styles.chips}>
-              {ASK_CHIPS.map((chip) => (
-                <span className={shared.chip} key={chip}>{chip}</span>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        {/* ================= CLOSER ================= */}
-        <section className={styles.closer}>
-          <div className={shared.wrap}>
-            <h2 className={styles.closerHeading}>Stop rewinding to find that one bit.</h2>
-            <p className={styles.closerBody}>Ask instead. Sidenote knows the whole video and remembers where everything was said.</p>
-            <Link className={`${shared.btn} ${shared.btnPrimary} ${styles.closerBtn}`} to="/app">Open the library</Link>
-          </div>
-        </section>
-      </main>
-
-      <footer className={styles.siteFoot}>
-        <div className={`${shared.wrap} ${styles.footInner}`}>
-          <span>© 2026 Sidenote</span>
-          <span>Privacy · Terms · Contact</span>
+    </div>
+  </div>
+
+  <!-- 4: feature - search -->
+  <div class="slide" data-slide="4">
+    <span class="stepnum">Feature 1</span>
+    <p class="kicker">Find it instantly</p>
+    <h1>A search engine built for this library</h1>
+    <p class="sub">Search across every video in the organization at once, and get back the exact match — not ten near-duplicates to sort through by hand.</p>
+    <div class="visual">
+      <div class="icon-circle lg ic-blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg></div>
+      <div class="flow-arrow"><svg viewBox="0 0 34 16" fill="none"><path d="M0 8h28M22 2l8 6-8 6" stroke="currentColor" stroke-width="2"/></svg></div>
+      <div class="card">
+        <div class="icon-circle ic-blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg></div>
+        <div class="label">The one right video</div>
+        <div class="sublabel">no duplicates, no guesswork</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5: feature - recommendations -->
+  <div class="slide" data-slide="5">
+    <span class="stepnum">Feature 2</span>
+    <p class="kicker">Suggested for you</p>
+    <h1>Recommendations based on your department</h1>
+    <p class="sub">Someone in Sales sees what's relevant to Sales. Someone in Engineering sees what's relevant to Engineering — instead of one generic list for everyone.</p>
+    <div class="visual">
+      <div class="feature-row">
+        <div class="feature">
+          <div class="icon-circle sm ic-purple"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg></div>
+          <div class="ftitle">Sales</div>
+          <div class="fbody">Pitch decks, product demos, deal reviews</div>
         </div>
-      </footer>
-    </>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Landing.module.scss
-.hero { padding: 84px 0 72px; }
-
-.inner {
-  display: grid;
-  grid-template-columns: 1.05fr .95fr;
-  gap: 64px;
-  align-items: center;
-
-  @media (max-width: 860px) {
-    grid-template-columns: 1fr;
-    gap: 40px;
-  }
-}
-
-.h1 {
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: clamp(40px, 5.2vw, 64px);
-  line-height: 1.04;
-  letter-spacing: -.042em;
-  margin: 0 0 22px;
-  color: var(--brand-900);
-}
-
-.lede {
-  font-size: 18px;
-  line-height: 1.6;
-  color: var(--ink-2);
-  max-width: 46ch;
-  margin: 0 0 30px;
-}
-
-.heroActions { display: flex; gap: 12px; flex-wrap: wrap; }
-
-.heroMeta {
-  margin-top: 28px;
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  color: var(--ink-3);
-  letter-spacing: .01em;
-}
-
-/* hero demo card */
-.demo {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--r-l);
-  box-shadow: var(--shadow-m);
-  padding: 14px;
-}
-
-.demoVideo {
-  aspect-ratio: 16 / 9;
-  border-radius: var(--r-m);
-  background:
-    radial-gradient(120% 90% at 22% 12%, #3F5BE0 0%, transparent 58%),
-    linear-gradient(140deg, #101A4A, #1B2A6B 55%, #0C1236);
-  position: relative;
-  overflow: hidden;
-
-  &::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: repeating-linear-gradient(115deg,
-      rgba(255,255,255,.05) 0 2px, transparent 2px 9px);
-  }
-}
-
-.demoPlay {
-  position: absolute;
-  inset: 0;
-  margin: auto;
-  width: 54px; height: 54px;
-  border-radius: 50%;
-  background: rgba(255,255,255,.95);
-  display: grid;
-  place-items: center;
-  z-index: 2;
-
-  &::before {
-    content: "";
-    width: 0; height: 0;
-    border-left: 14px solid var(--brand-900);
-    border-top: 9px solid transparent;
-    border-bottom: 9px solid transparent;
-    transform: translateX(2px);
-  }
-}
-
-.demoThread { padding: 16px 8px 6px; }
-
-.demoQ, .demoA {
-  font-size: 14.5px;
-  line-height: 1.5;
-  border-radius: var(--r-m);
-  padding: 10px 14px;
-  margin-bottom: 10px;
-  max-width: 92%;
-}
-
-.demoQ {
-  background: var(--brand);
-  color: #fff;
-  margin-left: auto;
-  border-bottom-right-radius: 5px;
-}
-
-.demoA {
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  color: var(--ink-2);
-  border-bottom-left-radius: 5px;
-}
-
-.stamp {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  background: var(--accent);
-  color: #3D2606;
-  padding: 1px 7px;
-  border-radius: 5px;
-  white-space: nowrap;
-}
-
-/* ---------------- how it works rail ---------------- */
-
-.rail { padding: 76px 0; background: var(--surface); border-block: 1px solid var(--line); }
-
-.railHeading {
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: clamp(28px, 3.2vw, 40px);
-  letter-spacing: -.035em;
-  line-height: 1.12;
-  margin: 0 0 46px;
-  color: var(--brand-900);
-}
-
-.railList {
-  list-style: none;
-  margin: 0;
-  padding: 0 0 0 118px;
-  border-left: 1px solid var(--line);
-  position: relative;
-
-  @media (max-width: 860px) {
-    padding-left: 0;
-    border-left: 0;
-  }
-}
-
-.railItem {
-  position: relative;
-  padding: 0 0 42px;
-
-  &:last-child { padding-bottom: 0; }
-
-  h3 {
-    font-size: 19px;
-    font-weight: 600;
-    letter-spacing: -.02em;
-    margin: 0 0 6px;
-  }
-
-  p {
-    margin: 0;
-    color: var(--ink-2);
-    max-width: 58ch;
-  }
-}
-
-.at {
-  position: absolute;
-  left: -118px;
-  top: 2px;
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  color: var(--brand);
-  letter-spacing: .03em;
-
-  &::after {
-    content: "";
-    position: absolute;
-    left: 62px; top: 9px;
-    width: 24px;
-    border-top: 1px dashed var(--line);
-  }
-
-  @media (max-width: 860px) {
-    position: static;
-    display: block;
-    margin-bottom: 6px;
-
-    &::after { display: none; }
-  }
-}
-
-/* ---------------- question strip ---------------- */
-
-.strip { padding: 76px 0; }
-
-.stripHeading {
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: clamp(28px, 3.2vw, 40px);
-  letter-spacing: -.035em;
-  line-height: 1.12;
-  margin: 0 0 46px;
-  color: var(--brand-900);
-}
-
-.chips { display: flex; flex-wrap: wrap; gap: 10px; }
-
-/* ---------------- closer ---------------- */
-
-.closer {
-  background: var(--brand-900);
-  color: #E8EBF9;
-  padding: 84px 0;
-  text-align: center;
-}
-
-.closerHeading {
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: clamp(28px, 3.2vw, 40px);
-  letter-spacing: -.035em;
-  line-height: 1.12;
-  color: #fff;
-  margin: 0 0 14px;
-}
-
-.closerBody { margin: 0 auto 30px; max-width: 48ch; color: #AEB6DA; }
-
-.closerBtn {
-  background: var(--accent);
-  color: #3D2606;
-
-  &:hover { background: var(--accent-600); }
-}
-
-.siteFoot { }
-
-.footInner {
-  padding: 26px 0;
-  font-size: 14px;
-  color: var(--ink-3);
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Library.jsx
-import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import AppHeader from '../../components/AppHeader/AppHeader';
-import VideoCard from '../../components/VideoCard/VideoCard';
-import { VIDEOS, FILTERS } from '../../data/videos';
-import shared from '../../styles/shared.module.scss';
-import styles from './Library.module.scss';
-
-export default function Library() {
-  const navigate = useNavigate();
-  const [activeFilter, setActiveFilter] = useState('All');
-  const [query, setQuery] = useState('');
-
-  const results = useMemo(() => {
-    if (!query) return VIDEOS;
-    const q = query.toLowerCase();
-    return VIDEOS.filter((v) => (v.title + v.chan).toLowerCase().includes(q));
-  }, [query]);
-
-  const title = query
-    ? `${results.length} result${results.length === 1 ? '' : 's'} for “${query}”`
-    : 'Recommended for you';
-
-  return (
-    <>
-      <AppHeader onSearch={setQuery} />
-
-      <main className={styles.appWrap}>
-        <div className={styles.filters}>
-          {FILTERS.map((f) => (
-            <button
-              key={f}
-              className={`${styles.filter} ${activeFilter === f ? styles.isOn : ''}`}
-              onClick={() => setActiveFilter(f)}
-            >
-              {f}
-            </button>
-          ))}
+        <div class="feature">
+          <div class="icon-circle sm ic-purple"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg></div>
+          <div class="ftitle">Engineering</div>
+          <div class="fbody">Architecture reviews, tech talks, postmortems</div>
         </div>
-
-        <h1 className={shared.sectionTitle}>{title}</h1>
-
-        {results.length ? (
-          <div className={styles.grid}>
-            {results.map((v) => (
-              <VideoCard key={v.id} video={v} onClick={() => navigate(`/app/watch/${v.id}`)} />
-            ))}
-          </div>
-        ) : (
-          <p className={styles.empty}>Nothing matched that. Try a broader word — “currents”, “rent”, “sleep”.</p>
-        )}
-      </main>
-    </>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Library.module.scss
-.appWrap {
-  max-width: 1440px;
-  margin-inline: auto;
-  padding: 26px 24px 64px;
-
-  @media (max-width: 520px) {
-    padding-inline: 16px;
-  }
-}
-
-.filters {
-  display: flex;
-  gap: 9px;
-  overflow-x: auto;
-  padding-bottom: 20px;
-  scrollbar-width: none;
-
-  &::-webkit-scrollbar { display: none; }
-}
-
-.filter {
-  border: 1px solid var(--line);
-  background: var(--surface);
-  border-radius: var(--r-pill);
-  padding: 7px 15px;
-  font-size: 14px;
-  white-space: nowrap;
-  cursor: pointer;
-  color: var(--ink-2);
-
-  &:hover { border-color: var(--brand); color: var(--brand-900); }
-}
-
-.isOn {
-  background: var(--brand-900);
-  border-color: var(--brand-900);
-  color: #fff;
-}
-
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(272px, 1fr));
-  gap: 28px 22px;
-
-  @media (max-width: 520px) {
-    grid-template-columns: 1fr;
-  }
-}
-
-.empty {
-  font-size: 13.5px;
-  color: var(--ink-3);
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Watch.jsx
-import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
-import AppHeader from '../../components/AppHeader/AppHeader';
-import VideoCard from '../../components/VideoCard/VideoCard';
-import { VIDEOS, SUGGESTIONS } from '../../data/videos';
-import shared from '../../styles/shared.module.scss';
-import styles from './Watch.module.scss';
-
-function initials(chan) {
-  return chan.split(' ').map((w) => w[0]).join('').slice(0, 2);
-}
-
-export default function Watch() {
-  const { id } = useParams();
-  const navigate = useNavigate();
-  const video = VIDEOS.find((v) => v.id === Number(id)) ?? VIDEOS[0];
-
-  const [thread, setThread] = useState([]);
-  const [pending, setPending] = useState(false);
-  const [input, setInput] = useState('');
-  const threadRef = useRef(null);
-  const textareaRef = useRef(null);
-  const timerRef = useRef(null);
-
-  // reset the conversation whenever the video changes
-  useEffect(() => {
-    setThread([
-      { role: 'ai', text: `Hi — I've read the whole transcript of "${video.title}". Ask me anything while it plays, or start with one of the prompts below.` },
-    ]);
-    setPending(false);
-    setInput('');
-    window.scrollTo({ top: 0 });
-    return () => clearTimeout(timerRef.current);
-  }, [video.id]);
-
-  useEffect(() => {
-    if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
-  }, [thread, pending]);
-
-  function ask(question) {
-    const q = question.trim();
-    if (!q) return;
-    setThread((t) => [...t, { role: 'you', text: q }]);
-    setInput('');
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
-    setPending(true);
-
-    timerRef.current = setTimeout(() => {
-      setPending(false);
-      setThread((t) => [...t, {
-        role: 'ai',
-        text: "She sets this up in the middle section: cold, salty water sinks at the poles and drags the surface flow behind it — that's the engine for the whole loop.",
-        jump: '4:12',
-      }]);
-    }, 900);
-  }
-
-  function handleSubmit(e) {
-    e.preventDefault();
-    ask(input);
-  }
-
-  function handleTextareaChange(e) {
-    setInput(e.target.value);
-    const el = e.target;
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
-  }
-
-  function handleTextareaKeyDown(e) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      ask(input);
-    }
-  }
-
-  const upNext = VIDEOS.filter((v) => v.id !== video.id).slice(0, 5);
-
-  return (
-    <>
-      <AppHeader onSearch={(q) => navigate(`/app${q ? `?q=${encodeURIComponent(q)}` : ''}`)} />
-
-      <main className={styles.appWrap}>
-        <button className={styles.back} onClick={() => navigate('/app')}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-            <path d="M15 5l-7 7 7 7" />
-          </svg>
-          Back to library
-        </button>
-
-        <div className={styles.watch}>
-          {/* player column */}
-          <div>
-            <div className={styles.player}>
-              <div className={styles.playerBar}>
-                <button className={styles.iconBtn} aria-label="Pause">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                    <rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" />
-                  </svg>
-                </button>
-                <span className={styles.time}>4:12</span>
-                <div className={styles.scrub}><span /></div>
-                <span className={styles.time}>{video.dur}</span>
-                <button className={styles.iconBtn} aria-label="Full screen">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden="true">
-                    <path d="M4 9V4h5M20 15v5h-5M15 4h5v5M9 20H4v-5" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-
-            <h1 className={styles.videoTitle}>{video.title}</h1>
-            <div className={styles.videoMeta}>
-              <span className={styles.channel}>
-                <span className={styles.dot}>{initials(video.chan)}</span>
-                <span>{video.chan}</span>
-              </span>
-              <span>{video.stats}</span>
-              <span className={styles.spacer} />
-              <button className={`${shared.btn} ${shared.btnQuiet} ${shared.btnSm}`}>Save</button>
-              <button className={`${shared.btn} ${shared.btnQuiet} ${shared.btnSm}`}>Share</button>
-            </div>
-
-            <div className={styles.upNext}>
-              <h2 className={shared.sectionTitle}>Up next</h2>
-              <div className={styles.upList}>
-                {upNext.map((v) => (
-                  <VideoCard key={v.id} video={v} variant="upnext" onClick={() => navigate(`/app/watch/${v.id}`)} />
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* AI side panel */}
-          <aside className={styles.notes}>
-            <div className={styles.notesHead}>
-              <h2>Sidenote</h2>
-              <p>Ask about this video. Answers link back to the timestamp.</p>
-            </div>
-
-            <div className={styles.tabs}>
-              <button className={styles.tabOn}>Ask</button>
-              <button className={styles.tab}>Summary</button>
-              <button className={styles.tab}>Key moments</button>
-              <button className={styles.tab}>Transcript</button>
-            </div>
-
-            <div className={styles.thread} ref={threadRef}>
-              {thread.map((m, i) => (
-                <div key={i} className={m.role === 'you' ? styles.msgYou : styles.msgAi}>
-                  {m.text}
-                  {m.jump && (
-                    <>
-                      {' '}
-                      <button className={styles.jump} type="button">Jump to {m.jump}</button>
-                    </>
-                  )}
-                </div>
-              ))}
-              {pending && (
-                <div className={styles.msgAi}>
-                  <div className={styles.typing}><i /><i /><i /></div>
-                </div>
-              )}
-            </div>
-
-            <div className={styles.suggest}>
-              {SUGGESTIONS.map((s) => (
-                <button key={s} className={shared.chip} type="button" onClick={() => ask(s)}>{s}</button>
-              ))}
-            </div>
-
-            <form className={styles.ask} onSubmit={handleSubmit}>
-              <textarea
-                ref={textareaRef}
-                rows={1}
-                placeholder="Ask about what you're watching…"
-                aria-label="Ask about this video"
-                value={input}
-                onChange={handleTextareaChange}
-                onKeyDown={handleTextareaKeyDown}
-              />
-              <button className={styles.send} type="submit" aria-label="Send question">
-                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
-                  <path d="M5 12h13M12 5l7 7-7 7" />
-                </svg>
-              </button>
-            </form>
-          </aside>
+        <div class="feature">
+          <div class="icon-circle sm ic-purple"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg></div>
+          <div class="ftitle">HR</div>
+          <div class="fbody">Onboarding, policy updates, training</div>
         </div>
-      </main>
-    </>
-  );
-}
+      </div>
+    </div>
+  </div>
 
+  <!-- 6: feature - LLM interaction -->
+  <div class="slide" data-slide="6">
+    <span class="stepnum">Feature 3</span>
+    <p class="kicker">Ask, don't rewatch</p>
+    <h1>Talk to the video with AI, instead of scrubbing through it</h1>
+    <p class="sub">Instead of rewatching a 40-minute recording to find one detail, just ask. The AI has already gone through the whole video and answers directly.</p>
+    <div class="visual">
+      <div class="icon-circle lg ic-navy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="12" height="16" rx="2"/><path d="M19 8v3M19 15v3" stroke-linecap="round"/><path d="M17 10.5h4M17 16.5h4" stroke-linecap="round"/></svg></div>
+      <div class="speechcard you">
+        <div class="who">You ask</div>
+        Which slide covered the Q3 budget numbers?
+      </div>
+      <div class="speechcard ai">
+        <div class="who">AI answers</div>
+        Around the 14-minute mark, right after the hiring plan.
+      </div>
+    </div>
+  </div>
 
+  <!-- 7: outcome -->
+  <div class="slide" data-slide="7">
+    <span class="badge solution">The outcome</span>
+    <h1 style="margin-top:16px;">Less time searching, more time working</h1>
+    <p class="sub">One place to look, a search that actually works, content matched to your role, and instant answers instead of a full rewatch. The time saved adds up across every employee, every week.</p>
+    <div class="visual">
+      <div class="compare">
+        <div class="card">
+          <div class="icon-circle ic-red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/></svg></div>
+          <div class="label">Before</div>
+          <div class="sublabel">manual search across scattered, duplicated files</div>
+        </div>
+        <span class="flow-arrow"><svg viewBox="0 0 34 16" fill="none"><path d="M0 8h28M22 2l8 6-8 6" stroke="currentColor" stroke-width="2"/></svg></span>
+        <div class="card">
+          <div class="icon-circle ic-green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg></div>
+          <div class="label">After</div>
+          <div class="sublabel">one search, the right video, an instant answer</div>
+        </div>
+      </div>
+    </div>
+  </div>
 
+  <!-- 8: closing -->
+  <div class="slide" data-slide="8">
+    <div class="icon-circle ic-green" style="margin-bottom:20px;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12l5 5L19 7"/></svg>
+    </div>
+    <p class="kicker">In short</p>
+    <h1>One home for every video. One search that works. One click to the answer.</h1>
+    <p class="sub">A central, deduplicated video platform with department-aware recommendations and AI-powered Q&amp;A — built to save the whole organization time.</p>
+  </div>
 
+  <div class="bar"><span id="barFill"></span></div>
+  <button class="arrow left" id="arrowLeft" aria-label="Previous slide">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 5l-7 7 7 7"/></svg>
+  </button>
+  <button class="arrow right" id="arrowRight" aria-label="Next slide">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5l7 7-7 7"/></svg>
+  </button>
+  <div class="navzone left" id="zoneLeft"></div>
+  <div class="navzone right" id="zoneRight"></div>
+  <div class="counter" id="counter">1 / 9</div>
+  <div class="dots" id="dots"></div>
+  <div class="hint">Use ← → or click the edges</div>
+</div>
 
+<script>
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let current = 0;
 
+  const barFill = document.getElementById('barFill');
+  const counter = document.getElementById('counter');
+  const dotsEl = document.getElementById('dots');
+  const arrowLeft = document.getElementById('arrowLeft');
+  const arrowRight = document.getElementById('arrowRight');
 
+  slides.forEach((_, i) => {
+    const dot = document.createElement('button');
+    dot.className = 'dot';
+    dot.setAttribute('aria-label', 'Go to slide ' + (i + 1));
+    dot.addEventListener('click', () => goTo(i));
+    dotsEl.appendChild(dot);
+  });
+  const dotEls = Array.from(dotsEl.children);
 
-
-
-
-
-
-
-
-
-
-
-
-
-//Watch.module.scss
-.appWrap {
-  max-width: 1440px;
-  margin-inline: auto;
-  padding: 26px 24px 64px;
-
-  @media (max-width: 520px) {
-    padding-inline: 16px;
-  }
-}
-
-.back {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 14px;
-  color: var(--ink-2);
-  margin-bottom: 16px;
-  cursor: pointer;
-  background: none;
-  border: 0;
-  padding: 0;
-
-  &:hover { color: var(--brand); }
-}
-
-.watch {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 396px;
-  gap: 28px;
-  align-items: start;
-
-  @media (max-width: 1080px) {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* ---------------- player ---------------- */
-
-.player {
-  aspect-ratio: 16 / 9;
-  border-radius: var(--r-l);
-  overflow: hidden;
-  position: relative;
-  background:
-    radial-gradient(120% 90% at 25% 10%, #3F5BE0 0%, transparent 60%),
-    linear-gradient(140deg, #101A4A, #1B2A6B 55%, #0A0E24);
-
-  &::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: repeating-linear-gradient(115deg,
-      rgba(255,255,255,.05) 0 2px, transparent 2px 9px);
-  }
-}
-
-.playerBar {
-  position: absolute;
-  left: 0; right: 0; bottom: 0;
-  z-index: 3;
-  padding: 30px 18px 14px;
-  background: linear-gradient(transparent, rgba(6, 9, 26, .74));
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.scrub {
-  flex: 1;
-  height: 4px;
-  border-radius: 3px;
-  background: rgba(255, 255, 255, .28);
-  position: relative;
-
-  span {
-    position: absolute;
-    inset: 0 62% 0 0;
-    background: var(--accent);
-    border-radius: 3px;
-
-    &::after {
-      content: "";
-      position: absolute;
-      right: -5px; top: 50%;
-      width: 11px; height: 11px;
-      border-radius: 50%;
-      background: var(--accent);
-      transform: translateY(-50%);
-    }
-  }
-}
-
-.time {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  color: #E8EBF9;
-}
-
-.iconBtn {
-  width: 34px; height: 34px;
-  border-radius: 50%;
-  border: 0;
-  background: rgba(255, 255, 255, .15);
-  color: #fff;
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  flex: none;
-
-  &:hover { background: rgba(255, 255, 255, .28); }
-}
-
-/* ---------------- meta ---------------- */
-
-.videoTitle {
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 26px;
-  line-height: 1.2;
-  letter-spacing: -.035em;
-  color: var(--brand-900);
-  margin: 20px 0 10px;
-
-  @media (max-width: 520px) {
-    font-size: 22px;
-  }
-}
-
-.videoMeta {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-  font-size: 14px;
-  color: var(--ink-3);
-  padding-bottom: 18px;
-  border-bottom: 1px solid var(--line);
-}
-
-.channel {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: var(--ink);
-  font-weight: 600;
-  font-size: 14.5px;
-}
-
-.dot {
-  width: 34px; height: 34px;
-  border-radius: 50%;
-  background: var(--tint);
-  color: var(--brand-900);
-  display: grid;
-  place-items: center;
-  font-size: 13px;
-}
-
-.spacer { margin-left: auto; }
-
-.upNext { margin-top: 30px; }
-
-.upList { display: grid; gap: 16px; }
-
-/* ---------------- Sidenote panel ---------------- */
-
-.notes {
-  position: sticky;
-  top: 92px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--r-l);
-  box-shadow: var(--shadow-s);
-  display: flex;
-  flex-direction: column;
-  height: calc(100vh - 122px);
-  min-height: 540px;
-  overflow: hidden;
-
-  @media (max-width: 1080px) {
-    position: static;
-    height: auto;
-    min-height: 0;
-  }
-}
-
-.notesHead {
-  padding: 16px 18px 12px;
-  border-bottom: 1px solid var(--line);
-
-  h2 {
-    font-family: var(--font-display);
-    font-weight: 700;
-    font-size: 18px;
-    letter-spacing: -.03em;
-    color: var(--brand-900);
-    margin: 0 0 3px;
+  function render() {
+    slides.forEach((el, i) => {
+      el.classList.remove('is-active', 'is-prev');
+      if (i === current) el.classList.add('is-active');
+      else if (i < current) el.classList.add('is-prev');
+    });
+    dotEls.forEach((d, i) => d.classList.toggle('is-on', i === current));
+    counter.textContent = (current + 1) + ' / ' + total;
+    barFill.style.width = ((current + 1) / total * 100) + '%';
+    arrowLeft.disabled = current === 0;
+    arrowRight.disabled = current === total - 1;
   }
 
-  p {
-    margin: 0;
-    font-size: 13px;
-    color: var(--ink-3);
+  function goTo(index) {
+    if (index < 0 || index >= total) return;
+    current = index;
+    render();
   }
-}
 
-.tabs {
-  display: flex;
-  gap: 4px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface-2);
-}
+  arrowLeft.addEventListener('click', () => goTo(current - 1));
+  arrowRight.addEventListener('click', () => goTo(current + 1));
+  document.getElementById('zoneLeft').addEventListener('click', () => goTo(current - 1));
+  document.getElementById('zoneRight').addEventListener('click', () => goTo(current + 1));
 
-.tab, .tabOn {
-  border: 0;
-  background: none;
-  border-radius: var(--r-pill);
-  padding: 6px 14px;
-  font-size: 13.5px;
-  color: var(--ink-2);
-  cursor: pointer;
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' || e.key === ' ') goTo(current + 1);
+    if (e.key === 'ArrowLeft') goTo(current - 1);
+  });
 
-  &:hover { background: var(--tint); }
-}
+  render();
+</script>
 
-.tabOn {
-  background: var(--brand-900);
-  color: #fff;
-
-  &:hover { background: var(--brand-900); }
-}
-
-.thread {
-  flex: 1;
-  overflow-y: auto;
-  padding: 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  max-height: 100%;
-
-  &::-webkit-scrollbar { width: 8px; }
-  &::-webkit-scrollbar-thumb { background: var(--line); border-radius: 8px; }
-
-  @media (max-width: 1080px) {
-    max-height: 420px;
-  }
-}
-
-.msgYou, .msgAi {
-  font-size: 14.5px;
-  line-height: 1.55;
-  border-radius: var(--r-m);
-  padding: 11px 14px;
-  max-width: 88%;
-}
-
-.msgYou {
-  background: var(--brand);
-  color: #fff;
-  align-self: flex-end;
-  border-bottom-right-radius: 5px;
-}
-
-.msgAi {
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  color: var(--ink-2);
-  align-self: flex-start;
-  border-bottom-left-radius: 5px;
-}
-
-.jump {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  background: var(--accent);
-  color: #3D2606;
-  border: 0;
-  padding: 2px 7px;
-  border-radius: 5px;
-  cursor: pointer;
-
-  &:hover { background: var(--accent-600); }
-}
-
-.suggest {
-  padding: 0 18px 12px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.ask {
-  border-top: 1px solid var(--line);
-  padding: 12px;
-  display: flex;
-  gap: 10px;
-  align-items: flex-end;
-  background: var(--surface);
-
-  textarea {
-    flex: 1;
-    resize: none;
-    border: 1px solid var(--line);
-    border-radius: var(--r-m);
-    padding: 11px 14px;
-    font-size: 14.5px;
-    max-height: 120px;
-    background: var(--paper);
-    outline: none;
-    transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
-
-    &:focus {
-      background: var(--surface);
-      border-color: var(--brand);
-      box-shadow: 0 0 0 4px rgba(39, 67, 196, .13);
-    }
-  }
-}
-
-.send {
-  width: 42px; height: 42px;
-  flex: none;
-  border: 0;
-  border-radius: 50%;
-  background: var(--brand);
-  color: #fff;
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-
-  &:hover { background: var(--brand-600); }
-}
-
-.typing {
-  display: flex;
-  gap: 4px;
-  padding: 4px 2px;
-
-  i {
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: var(--ink-3);
-    animation: blip 1s infinite ease-in-out;
-
-    &:nth-child(2) { animation-delay: .15s; }
-    &:nth-child(3) { animation-delay: .3s; }
-  }
-}
-
-@keyframes blip {
-  0%, 60%, 100% { opacity: .3; transform: translateY(0); }
-  30% { opacity: 1; transform: translateY(-3px); }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//global.scss
-/* =========================================================
-   Sidenote — global styles
-   Design tokens live here as CSS custom properties so every
-   CSS-Module file in the app can reference var(--brand) etc.
-   ========================================================= */
-
-:root {
-  /* surfaces */
-  --paper:      #F4F5F8;
-  --surface:    #FFFFFF;
-  --surface-2:  #F8F9FC;
-
-  /* ink */
-  --ink:        #141829;
-  --ink-2:      #4C5570;
-  --ink-3:      #848CA4;
-  --line:       #E1E4EE;
-
-  /* brand */
-  --brand:      #2743C4;
-  --brand-600:  #1F35A3;
-  --brand-900:  #101A4A;
-  --tint:       #EAEDFB;
-  --accent:     #FFB454;
-  --accent-600: #F5A23C;
-
-  /* shape */
-  --r-s: 8px;
-  --r-m: 14px;
-  --r-l: 22px;
-  --r-pill: 999px;
-
-  --shadow-s: 0 1px 2px rgba(16,26,74,.07);
-  --shadow-m: 0 12px 32px -14px rgba(16,26,74,.30);
-
-  /* type */
-  --font-display: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  --font-ui: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-
-  --wrap: 1180px;
-}
-
-* { box-sizing: border-box; }
-
-html { scroll-behavior: smooth; }
-
-body {
-  margin: 0;
-  background: var(--paper);
-  color: var(--ink);
-  font-family: var(--font-ui);
-  font-size: 16px;
-  line-height: 1.55;
-  -webkit-font-smoothing: antialiased;
-}
-
-img, svg { display: block; max-width: 100%; }
-a { color: inherit; text-decoration: none; }
-button, input, textarea { font: inherit; color: inherit; }
-
-:focus-visible {
-  outline: 2px solid var(--brand);
-  outline-offset: 3px;
-  border-radius: 4px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
-  html { scroll-behavior: auto; }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//shared.module.scss
-/* =========================================================
-   Shared, reusable pieces (buttons, wrap, chips, eyebrow…)
-   Exposed as a CSS Module so components can do:
-     import shared from '../../styles/shared.module.scss';
-     <button className={shared.btn + ' ' + shared.btnPrimary}>
-   ========================================================= */
-
-.wrap {
-  width: 100%;
-  max-width: var(--wrap);
-  margin-inline: auto;
-  padding-inline: 24px;
-
-  @media (max-width: 520px) {
-    padding-inline: 16px;
-  }
-}
-
-.eyebrow {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  letter-spacing: .14em;
-  text-transform: uppercase;
-  color: var(--brand);
-  margin: 0 0 14px;
-}
-
-.swipe {
-  position: relative;
-  white-space: nowrap;
-
-  &::after {
-    content: "";
-    position: absolute;
-    left: -.12em; right: -.12em;
-    bottom: .08em;
-    height: .32em;
-    background: var(--accent);
-    border-radius: 2px;
-    transform: skewX(-14deg);
-    z-index: -1;
-  }
-}
-
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid transparent;
-  border-radius: var(--r-pill);
-  padding: 11px 22px;
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -.005em;
-  cursor: pointer;
-  transition: background .18s ease, color .18s ease,
-              border-color .18s ease, transform .18s ease;
-
-  &:active { transform: translateY(1px); }
-}
-
-.btnPrimary {
-  background: var(--brand);
-  color: #fff;
-  box-shadow: var(--shadow-s);
-
-  &:hover { background: var(--brand-600); }
-}
-
-.btnGhost {
-  background: transparent;
-  color: var(--brand-900);
-  border-color: var(--line);
-
-  &:hover { border-color: var(--brand); background: var(--tint); }
-}
-
-.btnQuiet {
-  background: var(--tint);
-  color: var(--brand-900);
-
-  &:hover { background: #DDE2F8; }
-}
-
-.btnSm { padding: 8px 16px; font-size: 14px; }
-
-.mark {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 20px;
-  letter-spacing: -.035em;
-  color: var(--brand-900);
-}
-
-.markGlyph {
-  width: 26px; height: 26px;
-  border-radius: 8px;
-  background: var(--brand);
-  position: relative;
-  flex: none;
-
-  &::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    margin: auto;
-    width: 0; height: 0;
-    border-left: 8px solid var(--accent);
-    border-top: 5px solid transparent;
-    border-bottom: 5px solid transparent;
-    transform: translateX(1px);
-  }
-}
-
-.chip {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--r-pill);
-  padding: 9px 16px;
-  font-size: 14.5px;
-  color: var(--ink-2);
-  cursor: pointer;
-  transition: border-color .18s ease, color .18s ease, background .18s ease;
-
-  &:hover { border-color: var(--brand); color: var(--brand-900); background: var(--tint); }
-}
-
-.sectionTitle {
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 24px;
-  letter-spacing: -.032em;
-  color: var(--brand-900);
-  margin: 8px 0 18px;
-}
-
-.thumb {
-  aspect-ratio: 16 / 9;
-  border-radius: var(--r-m);
-  position: relative;
-  overflow: hidden;
-  background: linear-gradient(145deg, var(--thumb-a, #1B2A6B), var(--thumb-b, #0C1236));
-  transition: transform .22s ease, box-shadow .22s ease;
-
-  &::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: repeating-linear-gradient(115deg,
-      rgba(255,255,255,.06) 0 2px, transparent 2px 10px);
-  }
-}
-
-.dur {
-  position: absolute;
-  right: 8px; bottom: 8px;
-  z-index: 2;
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  background: rgba(10,14,34,.82);
-  color: #fff;
-  padding: 2px 6px;
-  border-radius: 5px;
-}
-
-.badgeAi {
-  position: absolute;
-  left: 8px; top: 8px;
-  z-index: 2;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-  background: var(--accent);
-  color: #3D2606;
-  padding: 3px 7px;
-  border-radius: 5px;
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//App.jsx
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import Landing from './pages/Landing/Landing';
-import Library from './pages/Library/Library';
-import Watch from './pages/Watch/Watch';
-
-export default function App() {
-  return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Landing />} />
-        <Route path="/app" element={<Library />} />
-        <Route path="/app/watch/:id" element={<Watch />} />
-      </Routes>
-    </BrowserRouter>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-//package.json
-{
-  "name": "sidenote",
-  "private": true,
-  "version": "0.0.1",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-router-dom": "^6.26.0"
-  },
-  "devDependencies": {
-    "@vitejs/plugin-react": "^4.3.1",
-    "sass": "^1.77.8",
-    "vite": "^5.4.0"
-  }
-}
+</body>
+</html>
