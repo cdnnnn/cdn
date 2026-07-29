@@ -1,3 +1,237 @@
+import { useState, type FC } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { ArrowLeft, ArrowRight, Play, Check, Clock3 } from 'lucide-react';
+import NameStep from './steps/NameStep';
+import TypeStep from './steps/TypeStep';
+import ProvidersStep from './steps/ProvidersStep';
+import ModelsStep from './steps/ModelsStep';
+import DatasetStep from './steps/DatasetStep';
+import MetricsStep from './steps/MetricsStep';
+import ReviewStep from './steps/ReviewStep';
+import { METRICS } from './data';
+import { WIZARD_STEPS, type EvaluationDraft } from './types';
+import './RunEvaluation.scss';
+
+const EMPTY_DRAFT: EvaluationDraft = {
+  name: '',
+  type: null,
+  providers: [],
+  models: [],
+  dataset: null,
+  metrics: [],
+};
+
+const RunEvaluation: FC = () => {
+  const navigate = useNavigate();
+  const [step, setStep] = useState(1);
+  const [draft, setDraft] = useState<EvaluationDraft>(EMPTY_DRAFT);
+  const [error, setError] = useState<string | null>(null);
+  const totalSteps = WIZARD_STEPS.length;
+
+  const toggleInArray = (key: 'providers' | 'models' | 'metrics', id: string) => {
+    setDraft((d) => {
+      const arr = d[key];
+      const next = arr.includes(id) ? arr.filter((x) => x !== id) : [...arr, id];
+      return { ...d, [key]: next };
+    });
+  };
+
+  const setType = (id: EvaluationDraft['type']) => {
+    setDraft((d) => {
+      if (d.type === id) return d;
+      const defaults = [
+        ...METRICS.universal.filter((m) => m.defaultChecked).map((m) => m.id),
+        ...(id === 'agent' ? METRICS.agent : id === 'rag' ? METRICS.rag : METRICS.model)
+          .filter((m) => m.defaultChecked)
+          .map((m) => m.id),
+      ];
+      return { ...d, type: id, metrics: defaults };
+    });
+  };
+
+  const validate = (): boolean => {
+    setError(null);
+    if (step === 1 && !draft.name.trim()) {
+      setError('Enter an evaluation name to continue.');
+      return false;
+    }
+    if (step === 2 && !draft.type) {
+      setError('Select an evaluation type to continue.');
+      return false;
+    }
+    if (step === 3 && draft.providers.length === 0) {
+      setError('Select at least one provider to continue.');
+      return false;
+    }
+    if (step === 4 && draft.models.length === 0) {
+      setError('Select at least one model to continue.');
+      return false;
+    }
+    if (step === 5 && !draft.dataset) {
+      setError('Select a test suite to continue.');
+      return false;
+    }
+    if (step === 6 && draft.metrics.length === 0) {
+      setError('Select at least one metric to continue.');
+      return false;
+    }
+    return true;
+  };
+
+  const goNext = () => {
+    if (!validate()) return;
+    setStep((s) => Math.min(totalSteps, s + 1));
+  };
+  const goBack = () => setStep((s) => Math.max(1, s - 1));
+  const goToStep = (target: number) => {
+    if (target < step) setStep(target);
+  };
+
+  const startEvaluation = () => {
+    if (!validate()) return;
+    navigate('/app/history');
+  };
+
+  return (
+    <div className="run-eval">
+      <div className="run-eval__header">
+        <div className="run-eval__header-left">
+          <p className="run-eval__header-eyebrow">Create evaluation</p>
+          <h1 className="run-eval__title">New Evaluation</h1>
+          <p className="run-eval__subtitle">Compare AI models with standardized tests</p>
+        </div>
+
+        <div className="run-eval__header-meta">
+          <Clock3 size={13} />
+          ~5 min guided setup
+        </div>
+      </div>
+
+      <div className="run-eval__wizard">
+        <div className="run-eval__tracker">
+          <div className="run-eval__tracker-bar">
+            <div
+              className="run-eval__tracker-fill"
+              style={{ width: `${((step - 1) / (totalSteps - 1)) * 100}%` }}
+            />
+          </div>
+          <div className="run-eval__tracker-nodes">
+            {WIZARD_STEPS.map((label, i) => {
+              const num = i + 1;
+              const state = num === step ? 'active' : num < step ? 'complete' : 'upcoming';
+              return (
+                <button
+                  key={label}
+                  type="button"
+                  className={`run-eval__node run-eval__node--${state}`}
+                  onClick={() => goToStep(num)}
+                  disabled={num > step}
+                >
+                  <span className="run-eval__node-dot">
+                    {state === 'complete' ? <Check size={12} strokeWidth={3} /> : num}
+                  </span>
+                  <span className="run-eval__node-label">{label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <p className="run-eval__step-kicker">
+          Step {step} of {totalSteps}
+        </p>
+
+        <div className="run-eval__body">
+          {step === 1 && <NameStep name={draft.name} onChange={(name) => setDraft((d) => ({ ...d, name }))} />}
+          {step === 2 && <TypeStep value={draft.type} onChange={setType} />}
+          {step === 3 && (
+            <ProvidersStep
+              selected={draft.providers}
+              onToggle={(id) => toggleInArray('providers', id)}
+              onGoToProviders={() => navigate('/app/providers')}
+            />
+          )}
+          {step === 4 && (
+            <ModelsStep
+              providers={draft.providers}
+              selected={draft.models}
+              onToggle={(id) => toggleInArray('models', id)}
+              onClear={() => setDraft((d) => ({ ...d, models: [] }))}
+            />
+          )}
+          {step === 5 && (
+            <DatasetStep
+              evalType={draft.type}
+              selected={draft.dataset}
+              onSelect={(id) => setDraft((d) => ({ ...d, dataset: id }))}
+            />
+          )}
+          {step === 6 && (
+            <MetricsStep evalType={draft.type} selected={draft.metrics} onToggle={(id) => toggleInArray('metrics', id)} />
+          )}
+          {step === 7 && <ReviewStep draft={draft} />}
+
+          {error && <p className="run-eval__error">{error}</p>}
+        </div>
+
+        <div className="run-eval__nav">
+          {step > 1 ? (
+            <button type="button" className="run-eval__btn run-eval__btn--secondary run-eval__btn--lg" onClick={goBack}>
+              <ArrowLeft size={16} /> Back
+            </button>
+          ) : (
+            <span />
+          )}
+
+          {step < totalSteps ? (
+            <button type="button" className="run-eval__btn run-eval__btn--primary run-eval__btn--lg" onClick={goNext}>
+              Continue <ArrowRight size={16} />
+            </button>
+          ) : (
+            <button type="button" className="run-eval__btn run-eval__btn--primary run-eval__btn--lg" onClick={startEvaluation}>
+              <Play size={16} /> Start Evaluation
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default RunEvaluation;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 @use '../../../styles/variables' as *;
 
 .run-eval {
@@ -16,30 +250,38 @@
   &__header {
     flex-shrink: 0;
     display: flex;
-    align-items: center;
+    align-items: flex-end;
     justify-content: space-between;
     gap: 1rem;
-    padding-bottom: 20px;
+    padding-bottom: 18px;
     margin-bottom: 20px;
     border-bottom: 1px solid $border-subtle;
   }
 
   &__header-left {
     display: flex;
-    align-items: center;
-    gap: 14px;
+    flex-direction: column;
   }
 
-  &__header-icon {
-    width: 42px;
-    height: 42px;
-    flex-shrink: 0;
-    border-radius: 12px;
-    background: $primary-light;
-    border: 1px solid $primary-subtle;
+  &__header-eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: $font-mono;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
     color: $primary;
-    display: grid;
-    place-items: center;
+    margin-bottom: 6px;
+
+    &::before {
+      content: '';
+      width: 16px;
+      height: 2px;
+      border-radius: 2px;
+      background: $primary;
+    }
   }
 
   &__header-meta {
@@ -55,6 +297,7 @@
     border-radius: 999px;
     padding: 7px 13px;
     white-space: nowrap;
+    margin-bottom: 3px;
   }
 
   &__title {
