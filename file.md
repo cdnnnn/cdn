@@ -19,46 +19,16 @@
     margin: 0 auto;
     padding: 0 clamp(1.25rem, 5vw, 3.75rem);
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
-    gap: 0.875rem;
-
-    p {
-      font-size: 0.78125rem;
-      color: $text-tertiary;
-    }
+    justify-content: space-between;
   }
 
-  &__links {
-    margin-left: auto;
-    display: flex;
-    gap: 1.25rem;
-
-    a {
-      font-size: 0.8125rem;
-      color: $text-secondary;
-      text-decoration: none;
-
-      &:hover {
-        color: $text-primary;
-      }
-    }
+  &__version,
+  &__copyright {
+    font-size: 0.6875rem;
+    color: $text-tertiary;
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -71,22 +41,22 @@
 import type { FC } from 'react';
 import './Footer.scss';
 
+const APP_VERSION = 'v1.0.0';
+
 const Footer: FC = () => {
+  const year = new Date().getFullYear();
+
   return (
     <footer className="app-footer">
       <div className="app-footer__inner">
-        <p>SemcoEval — Semco Enterprise Labs</p>
-        <div className="app-footer__links">
-          <a href="/#run">Docs</a>
-          <a href="/#platform">Security</a>
-        </div>
+        <span className="app-footer__version">{APP_VERSION}</span>
+        <span className="app-footer__copyright">&copy; {year} SemcoEval</span>
       </div>
     </footer>
   );
 };
 
 export default Footer;
-
 
 
 
@@ -117,21 +87,15 @@ export default Footer;
   right: 0;
   z-index: $z-header;
   height: $header-height;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0 1.125rem;
   background: rgba(255, 255, 255, 0.88);
   backdrop-filter: blur(0.75rem);
   border-bottom: 0.0625rem solid $border-subtle;
-
-  &__inner {
-    width: 100%;
-    max-width: 75rem; // 1200px
-    margin: 0 auto;
-    padding: 0 clamp(1.25rem, 5vw, 3.75rem);
-    display: flex;
-    align-items: center;
-    gap: 1.875rem;
-  }
 
   &__brand {
     display: flex;
@@ -139,47 +103,143 @@ export default Footer;
     gap: 0.625rem;
     text-decoration: none;
     color: $text-primary;
+    flex-shrink: 0;
   }
 
   &__brand-mark {
-    width: 1.75rem;
-    height: 1.75rem;
-    border-radius: 0.4375rem;
-    background: $text-primary;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 0.5rem;
+    background: linear-gradient(155deg, $primary 0%, $primary-hover 100%);
     color: #fff;
     display: grid;
     place-items: center;
-    font-weight: 700;
-    font-size: 0.875rem;
+    box-shadow: 0 0.0625rem 0.125rem rgba(14, 21, 38, 0.06), inset 0 0 0 0.0625rem rgba(255, 255, 255, 0.14);
   }
 
   &__brand-name {
+    font-family: $font-display;
     font-weight: 700;
     font-size: 1.03rem;
     letter-spacing: -0.02em;
+    white-space: nowrap;
   }
 
-  &__nav {
-    margin-left: auto;
+  &__user {
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  &__avatar {
+    width: 2.125rem;
+    height: 2.125rem;
+    border-radius: 50%;
+    border: 0.0625rem solid $border-default;
+    background: $primary-light;
+    color: $primary;
+    font-family: $font-display;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+    }
+
+    &--open,
+    &:focus-visible {
+      outline: none;
+      border-color: $primary;
+      box-shadow: 0 0 0 0.1875rem $primary-subtle;
+    }
+  }
+
+  &__dropdown {
+    position: absolute;
+    top: calc(100% + 0.625rem);
+    right: 0;
+    width: 14.5rem;
+    background: $bg-main;
+    border: 0.0625rem solid $border-subtle;
+    border-radius: 0.75rem;
+    box-shadow: $shadow-lg;
+    padding: 0.625rem;
+    z-index: $z-header;
+  }
+
+  &__drop-user {
     display: flex;
     align-items: center;
-    gap: 1.625rem;
+    gap: 0.625rem;
+    padding: 0.375rem 0.375rem 0.625rem;
+  }
 
-    a {
-      font-size: 0.84375rem;
-      font-weight: 500;
-      color: $text-secondary;
-      text-decoration: none;
+  &__drop-avatar {
+    width: 2.25rem;
+    height: 2.25rem;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: $primary-light;
+    color: $primary;
+    font-family: $font-display;
+    font-size: 0.78125rem;
+    font-weight: 700;
+    display: grid;
+    place-items: center;
+  }
 
-      &:hover {
-        color: $text-primary;
-      }
+  &__drop-info {
+    min-width: 0;
+  }
+
+  &__drop-name {
+    font-size: 0.84375rem;
+    font-weight: 600;
+    color: $text-primary;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  &__drop-role {
+    font-size: 0.71875rem;
+    color: $text-tertiary;
+    margin-top: 0.125rem;
+  }
+
+  &__drop-divider {
+    height: 0.0625rem;
+    background: $border-subtle;
+    margin: 0.125rem 0.375rem 0.5rem;
+  }
+
+  &__drop-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5625rem;
+    width: 100%;
+    padding: 0.5rem 0.625rem;
+    border: none;
+    border-radius: 0.5rem;
+    background: transparent;
+    color: $danger;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.14s ease;
+
+    &:hover {
+      background: $danger-subtle;
     }
   }
 
   @media (max-width: 38.75rem) {
-    &__nav {
-      display: none;
+    &__brand-name {
+      font-size: 0.95rem;
     }
   }
 }
@@ -209,44 +269,79 @@ export default Footer;
 
 //Header.tsx
 import { Link } from 'react-router-dom';
-import type { FC } from 'react';
+import { useEffect, useRef, useState, type FC } from 'react';
+import { Gauge, LogOut } from 'lucide-react';
+import { useAppSelector } from '../../store/hooks';
 import './Header.scss';
 
-interface NavLink {
-  label: string;
-  href: string;
+function getInitials(name: string): string {
+  return name
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase())
+    .join('');
 }
 
-const NAV_LINKS: NavLink[] = [
-  { label: 'Grading', href: '/#grading' },
-  { label: 'How a run works', href: '/#run' },
-  { label: 'What you can test', href: '/#modes' },
-  { label: 'Platform', href: '/#platform' },
-];
-
 const Header: FC = () => {
+  const user = useAppSelector((s) => s.user.user);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const initials = getInitials(user.name);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
   return (
     <header className="app-header">
-      <div className="app-header__inner">
-        <Link className="app-header__brand" to="/">
-          <span className="app-header__brand-mark">S</span>
-          <span className="app-header__brand-name">SemcoEval</span>
-        </Link>
+      <Link className="app-header__brand" to="/">
+        <span className="app-header__brand-mark">
+          <Gauge size={18} strokeWidth={2.25} />
+        </span>
+        <span className="app-header__brand-name">SemcoEval</span>
+      </Link>
 
-        <nav className="app-header__nav">
-          {NAV_LINKS.map((link) => (
-            <a key={link.label} href={link.href}>
-              {link.label}
-            </a>
-          ))}
-        </nav>
+      <div className="app-header__user" ref={menuRef}>
+        <button
+          type="button"
+          className={`app-header__avatar${menuOpen ? ' app-header__avatar--open' : ''}`}
+          onClick={() => setMenuOpen((v) => !v)}
+          aria-label="User menu"
+          aria-expanded={menuOpen}
+          title={user.name}
+        >
+          {initials}
+        </button>
+
+        {menuOpen && (
+          <div className="app-header__dropdown">
+            <div className="app-header__drop-user">
+              <div className="app-header__drop-avatar">{initials}</div>
+              <div className="app-header__drop-info">
+                <div className="app-header__drop-name">{user.name}</div>
+                <div className="app-header__drop-role">{user.role}</div>
+              </div>
+            </div>
+            <div className="app-header__drop-divider" />
+            <button type="button" className="app-header__drop-item">
+              <LogOut size={15} strokeWidth={2} />
+              Log out
+            </button>
+          </div>
+        )}
       </div>
     </header>
   );
 };
 
 export default Header;
-
 
 
 
@@ -312,11 +407,6 @@ export default Header;
 
 
 
-
-
-
-
-
 //PagePlaceholder.tsx
 import type { FC } from 'react';
 import './PagePlaceholder.scss';
@@ -360,64 +450,146 @@ export default PagePlaceholder;
 //Sidebar.scss
 @use '../../styles/variables' as *;
 
+$sidebar-width-collapsed: 4.25rem;
+
 .app-sidebar {
   width: $sidebar-width;
   flex-shrink: 0;
   height: 100%;
   overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
   background: $bg-main;
   border-right: 0.0625rem solid $border-subtle;
-  padding: 0.875rem 0.75rem;
+  padding: 0.75rem 0.875rem 1.125rem;
+  transition: width 0.18s ease;
+
+  &--collapsed {
+    width: $sidebar-width-collapsed;
+    padding-left: 0.625rem;
+    padding-right: 0.625rem;
+  }
 
   &__top {
     flex: 1;
     display: flex;
     flex-direction: column;
+    min-height: 0;
   }
 
-  &__brand {
+  /* ---------- collapse toggle ---------- */
+  &__collapse {
     display: flex;
     align-items: center;
-    gap: 0.625rem;
-    padding: 0.5rem 0.625rem 1.25rem;
+    justify-content: space-between;
+    width: 100%;
+    padding: 0.375rem 0.5rem;
+    margin-bottom: 0.75rem;
+    border: none;
+    border-radius: 0.5rem;
+    background: transparent;
+    color: $text-tertiary;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.14s ease, color 0.14s ease;
+
+    &:hover {
+      background: $bg-subtle;
+      color: $text-secondary;
+    }
   }
 
-  &__brand-logo {
-    width: 1.75rem;
-    height: 1.75rem;
-    border-radius: 0.4375rem;
-    background: $text-primary;
+  &--collapsed &__collapse {
+    justify-content: center;
+  }
+
+  &__collapse-ic {
+    transition: transform 0.18s ease;
+    flex-shrink: 0;
+
+    &--flipped {
+      transform: rotate(180deg);
+    }
+  }
+
+  /* ---------- primary CTA ---------- */
+  &__cta {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.625rem 0.75rem;
+    margin-bottom: 1.375rem;
+    border-radius: 0.5rem;
+    background: $primary;
     color: #fff;
-    display: grid;
-    place-items: center;
-    font-weight: 700;
-    font-size: 0.875rem;
+    font-size: 0.84375rem;
+    font-weight: 600;
+    text-decoration: none;
+    border: 0.0625rem solid $primary;
+    box-shadow: $shadow-xs;
+    transition: background 0.14s ease, border-color 0.14s ease, transform 0.14s ease;
+
+    &:hover {
+      background: $primary-hover;
+      border-color: $primary-hover;
+    }
+
+    &:active {
+      transform: translateY(0.0625rem);
+    }
   }
 
-  &__brand-title {
-    font-family: $font-display;
-    font-weight: 700;
-    font-size: 1rem;
-    color: $text-primary;
+  &--collapsed &__cta {
+    padding: 0.625rem;
   }
 
+  /* ---------- nav sections ---------- */
   &__nav {
-    list-style: none;
     display: flex;
     flex-direction: column;
-    gap: 0.125rem;
+    gap: 1.375rem;
+  }
+
+  &__section {
+    ul {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.125rem;
+    }
+  }
+
+  &__section-label {
+    font-family: $font-mono;
+    font-size: 0.6625rem;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: $text-tertiary;
+    padding: 0 0.625rem;
+    margin-bottom: 0.375rem;
+  }
+
+  /* ---------- nav items ---------- */
+  &__icon {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    color: inherit;
   }
 
   &__item {
     display: flex;
     align-items: center;
     gap: 0.6875rem;
-    padding: 0.5625rem 0.6875rem;
+    padding: 0.5rem 0.625rem;
     border-radius: 0.5rem;
-    font-size: 0.875rem;
+    font-size: 0.84375rem;
     font-weight: 500;
     color: $text-secondary;
     text-decoration: none;
@@ -428,61 +600,51 @@ export default PagePlaceholder;
     transition: background 0.14s ease, color 0.14s ease;
 
     svg {
-      opacity: 0.8;
-      flex-shrink: 0;
+      opacity: 0.75;
+      color: $text-tertiary;
+      transition: color 0.14s ease, opacity 0.14s ease;
     }
 
     &:hover {
       background: $bg-subtle;
       color: $text-primary;
+
+      svg {
+        opacity: 1;
+        color: $text-secondary;
+      }
     }
 
     &--active {
       background: $primary-light;
       color: $primary;
       font-weight: 600;
-      position: relative;
 
       svg {
         opacity: 1;
-      }
-
-      &::before {
-        content: '';
-        position: absolute;
-        left: -0.75rem;
-        top: 50%;
-        transform: translateY(-50%);
-        width: 0.1875rem;
-        height: 1.125rem;
-        border-radius: 0 0.1875rem 0.1875rem 0;
-        background: $primary;
-      }
-    }
-
-    &--highlight {
-      background: $primary;
-      color: #fff;
-      font-weight: 600;
-      margin-bottom: 0.875rem;
-
-      svg {
-        opacity: 1;
+        color: $primary;
       }
 
       &:hover {
-        background: $primary-hover;
-        color: #fff;
+        background: $primary-light;
+        color: $primary;
       }
     }
 
     &--button {
       text-align: left;
     }
+
+    &--collapsed {
+      justify-content: center;
+      padding: 0.5rem;
+    }
   }
 
+  /* ---------- footer ---------- */
   &__footer {
     border-top: 0.0625rem solid $border-subtle;
+    margin-top: 0.875rem;
     padding-top: 0.625rem;
     display: flex;
     flex-direction: column;
@@ -505,14 +667,12 @@ export default PagePlaceholder;
 
 
 
-
-
 //Sidebar.tsx
 import { NavLink } from 'react-router-dom';
-import type { FC } from 'react';
+import type { FC, ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import {
-  Play,
+  Plus,
   LayoutGrid,
   Clock,
   Box,
@@ -521,87 +681,137 @@ import {
   FileBarChart,
   Settings,
   CircleHelp,
+  ChevronsLeft,
 } from 'lucide-react';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import { toggleSidebar } from '../../store/slices/uiSlice';
 import './Sidebar.scss';
 
 interface NavItem {
   to: string;
   label: string;
   icon: LucideIcon;
+  end?: boolean;
 }
 
-const PRIMARY_NAV: NavItem[] = [
-  { to: '/app/history', label: 'History', icon: Clock },
-  { to: '/app/models', label: 'Models', icon: Box },
-  { to: '/app/providers', label: 'Providers', icon: PlugZap },
-  { to: '/app/datasets', label: 'Test Suites', icon: Database },
-  { to: '/app/reports', label: 'Reports', icon: FileBarChart },
+interface NavSection {
+  label: string;
+  items: NavItem[];
+}
+
+const NAV_SECTIONS: NavSection[] = [
+  {
+    label: 'Overview',
+    items: [{ to: '/app', label: 'Dashboard', icon: LayoutGrid, end: true }],
+  },
+  {
+    label: 'Workspace',
+    items: [
+      { to: '/app/history', label: 'History', icon: Clock },
+      { to: '/app/models', label: 'Models', icon: Box },
+      { to: '/app/providers', label: 'Providers', icon: PlugZap },
+      { to: '/app/datasets', label: 'Test Suites', icon: Database },
+      { to: '/app/reports', label: 'Reports', icon: FileBarChart },
+    ],
+  },
 ];
 
-const Sidebar: FC = () => {
-  return (
-    <aside className="app-sidebar">
-      <div className="app-sidebar__top">
-        <div className="app-sidebar__brand">
-          <div className="app-sidebar__brand-logo">S</div>
-          <span className="app-sidebar__brand-title">SemcoEval</span>
-        </div>
+interface RowProps {
+  to?: string;
+  label: string;
+  icon: ReactNode;
+  end?: boolean;
+  collapsed: boolean;
+  onClick?: () => void;
+}
 
-        <ul className="app-sidebar__nav">
-          <li>
-            <NavLink to="/app/run-evaluation" className="app-sidebar__item app-sidebar__item--highlight">
-              <Play size={17} />
-              <span>New Evaluation</span>
-            </NavLink>
-          </li>
-          <li>
-            <NavLink
-              to="/app"
-              end
-              className={({ isActive }) =>
-                `app-sidebar__item${isActive ? ' app-sidebar__item--active' : ''}`
-              }
-            >
-              <LayoutGrid size={17} />
-              <span>Dashboard</span>
-            </NavLink>
-          </li>
-          {PRIMARY_NAV.map(({ to, label, icon: Icon }) => (
-            <li key={to}>
-              <NavLink
-                to={to}
-                className={({ isActive }) =>
-                  `app-sidebar__item${isActive ? ' app-sidebar__item--active' : ''}`
-                }
-              >
-                <Icon size={17} />
-                <span>{label}</span>
-              </NavLink>
-            </li>
+const Row: FC<RowProps> = ({ to, label, icon, end, collapsed, onClick }) => {
+  const className = ({ isActive }: { isActive: boolean }) =>
+    `app-sidebar__item${isActive ? ' app-sidebar__item--active' : ''}${collapsed ? ' app-sidebar__item--collapsed' : ''}`;
+
+  if (to) {
+    return (
+      <NavLink to={to} end={end} title={collapsed ? label : undefined} className={className}>
+        <span className="app-sidebar__icon">{icon}</span>
+        {!collapsed && <span>{label}</span>}
+      </NavLink>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      title={collapsed ? label : undefined}
+      onClick={onClick}
+      className={`app-sidebar__item app-sidebar__item--button${collapsed ? ' app-sidebar__item--collapsed' : ''}`}
+    >
+      <span className="app-sidebar__icon">{icon}</span>
+      {!collapsed && <span>{label}</span>}
+    </button>
+  );
+};
+
+const Sidebar: FC = () => {
+  const dispatch = useAppDispatch();
+  const collapsed = useAppSelector((s) => s.ui.sidebarCollapsed);
+
+  return (
+    <aside className={`app-sidebar${collapsed ? ' app-sidebar--collapsed' : ''}`}>
+      <button
+        type="button"
+        className="app-sidebar__collapse"
+        onClick={() => dispatch(toggleSidebar())}
+        title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+      >
+        {!collapsed && <span>Menu</span>}
+        <ChevronsLeft
+          size={15}
+          strokeWidth={2}
+          className={collapsed ? 'app-sidebar__collapse-ic app-sidebar__collapse-ic--flipped' : 'app-sidebar__collapse-ic'}
+        />
+      </button>
+
+      <div className="app-sidebar__top">
+        <NavLink
+          to="/app/run-evaluation"
+          className="app-sidebar__cta"
+          title={collapsed ? 'New Evaluation' : undefined}
+        >
+          <Plus size={16} strokeWidth={2.5} />
+          {!collapsed && <span>New Evaluation</span>}
+        </NavLink>
+
+        <nav className="app-sidebar__nav">
+          {NAV_SECTIONS.map((section) => (
+            <div className="app-sidebar__section" key={section.label}>
+              {!collapsed && <p className="app-sidebar__section-label">{section.label}</p>}
+              <ul>
+                {section.items.map(({ to, label, icon: Icon, end }) => (
+                  <li key={to}>
+                    <Row to={to} label={label} end={end} collapsed={collapsed} icon={<Icon size={16.5} strokeWidth={2} />} />
+                  </li>
+                ))}
+              </ul>
+            </div>
           ))}
-        </ul>
+        </nav>
       </div>
 
       <div className="app-sidebar__footer">
-        <NavLink
-          to="/app/settings"
-          className={({ isActive }) =>
-            `app-sidebar__item${isActive ? ' app-sidebar__item--active' : ''}`
-          }
-        >
-          <Settings size={17} />
-          <span>Settings</span>
-        </NavLink>
-        <button type="button" className="app-sidebar__item app-sidebar__item--button">
-          <CircleHelp size={17} />
-          <span>Help</span>
-        </button>
+        <Row to="/app/settings" label="Settings" collapsed={collapsed} icon={<Settings size={16.5} strokeWidth={2} />} />
+        <Row label="Help" collapsed={collapsed} icon={<CircleHelp size={16.5} strokeWidth={2} />} />
       </div>
     </aside>
   );
 };
 
 export default Sidebar;
+
+
+
+
+
 
 
 
@@ -747,16 +957,6 @@ export default WorkspaceLayout;
 
 
 
-
-
-
-
-
-
-
-
-
-
 //Landing.scss
 @use '../../styles/variables' as *;
 
@@ -786,6 +986,28 @@ export default WorkspaceLayout;
     max-width: 75rem;
     margin: 0 auto;
     padding: 0 var(--gut);
+  }
+
+  &__hero-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--blue);
+    background: var(--blue-wash);
+    border: 0.0625rem solid $primary-subtle;
+    border-radius: 999px;
+    padding: 0.375rem 0.75rem 0.375rem 0.625rem;
+    margin-bottom: 1.125rem;
+  }
+
+  &__hero-badge-dot {
+    width: 0.375rem;
+    height: 0.375rem;
+    border-radius: 50%;
+    background: var(--jade);
+    box-shadow: 0 0 0 0.1875rem var(--jade-w);
   }
 
   &__eyebrow {
@@ -922,11 +1144,6 @@ export default WorkspaceLayout;
     flex-wrap: wrap;
     gap: 0.75rem;
     align-items: center;
-  }
-
-  &__hero-note {
-    font-size: 0.78125rem;
-    color: var(--ink-3);
   }
 
   /* ================= SCORE PANEL ================= */
@@ -1318,25 +1535,24 @@ export default WorkspaceLayout;
   &__pipeline {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    border-top: 0.0625rem solid var(--rule);
+    gap: 1rem;
   }
 
   &__step {
-    padding: 1.5rem 1.5rem 1.625rem 0;
-    border-right: 0.0625rem solid var(--rule);
+    padding: 1.5rem 1.375rem 1.625rem;
+    border: 0.0625rem solid var(--rule);
+    border-radius: 0.75rem;
+    background: var(--white);
     position: relative;
-
-    &:last-child {
-      border-right: 0;
-    }
 
     &::before {
       content: '';
       position: absolute;
       top: -0.0625rem;
-      left: 0;
+      left: -0.0625rem;
       width: 2.5rem;
       height: 0.1875rem;
+      border-radius: 0.75rem 0 0 0;
       background: var(--blue);
     }
 
@@ -1492,12 +1708,6 @@ export default WorkspaceLayout;
     .landing__pipeline {
       grid-template-columns: 1fr 1fr;
     }
-    .landing__step:nth-child(2) {
-      border-right: 0;
-    }
-    .landing__step:nth-child(-n + 2) {
-      border-bottom: 0.0625rem solid var(--rule);
-    }
     .landing__modes {
       grid-template-columns: 1fr;
     }
@@ -1518,10 +1728,6 @@ export default WorkspaceLayout;
   @media (max-width: 38.75rem) {
     .landing__pipeline {
       grid-template-columns: 1fr;
-    }
-    .landing__step {
-      border-right: 0;
-      border-bottom: 0.0625rem solid var(--rule);
     }
     .landing__rails {
       padding-inline: 1.75rem;
@@ -1571,7 +1777,6 @@ export default WorkspaceLayout;
 
 
 
-
 //Landing.tsx
 import { Link } from 'react-router-dom';
 import type { CSSProperties, FC } from 'react';
@@ -1588,6 +1793,10 @@ const Landing: FC = () => {
       <header className="landing__hero" id="top">
         <div className="landing__shell landing__hero-in">
           <div className="landing__hero-copy">
+            <span className="landing__hero-badge">
+              <span className="landing__hero-badge-dot" />
+              Model Evaluation Platform · v1.0.0
+            </span>
             <p className="landing__eyebrow">Model evaluation for enterprise AI</p>
             <h1>
               Stop choosing models <em>on vibes.</em>
@@ -1604,7 +1813,6 @@ const Landing: FC = () => {
               <a className="landing__btn landing__btn--ghost landing__btn--lg" href="#run">
                 See how it works
               </a>
-              <span className="landing__hero-note">Connect one API key to start</span>
             </div>
           </div>
 
@@ -1625,19 +1833,19 @@ const Landing: FC = () => {
                 <div className="landing__axis">
                   <span className="landing__pip" style={{ '--x': '48.8%', '--d': '.05s' } as PipStyle}>
                     <span className="landing__pip-flag">
-                      Llama 3.3 70B <b className="n">79.5</b>
+                      Model Alpha <b className="n">79.5</b>
                     </span>
                     <span className="landing__pip-dot"></span>
                   </span>
                   <span className="landing__pip landing__pip--low" style={{ '--x': '60.3%', '--d': '.12s' } as PipStyle}>
                     <span className="landing__pip-flag">
-                      Hermes 3 70B <b className="n">84.1</b>
+                      Model Beta <b className="n">84.1</b>
                     </span>
                     <span className="landing__pip-dot"></span>
                   </span>
                   <span className="landing__pip landing__pip--brand" style={{ '--x': '71.8%', '--d': '.19s' } as PipStyle}>
                     <span className="landing__pip-flag">
-                      GPT-4o <b className="n">88.7</b>
+                      Model Gamma <b className="n">88.7</b>
                     </span>
                     <span className="landing__pip-dot"></span>
                   </span>
@@ -1646,7 +1854,7 @@ const Landing: FC = () => {
                     style={{ '--x': '78.0%', '--d': '.26s' } as PipStyle}
                   >
                     <span className="landing__pip-flag">
-                      Claude 3.5 Sonnet <b className="n">91.2</b>
+                      Model Delta <b className="n">91.2</b>
                     </span>
                     <span className="landing__pip-dot"></span>
                   </span>
@@ -1669,25 +1877,25 @@ const Landing: FC = () => {
                 <div className="landing__axis">
                   <span className="landing__pip landing__pip--best" style={{ '--x': '12.5%', '--d': '.10s' } as PipStyle}>
                     <span className="landing__pip-flag">
-                      Llama 3.3 70B <b className="n">0.4</b>
+                      Model Alpha <b className="n">0.4</b>
                     </span>
                     <span className="landing__pip-dot"></span>
                   </span>
                   <span className="landing__pip landing__pip--brand" style={{ '--x': '37.5%', '--d': '.17s' } as PipStyle}>
                     <span className="landing__pip-flag">
-                      GPT-4o <b className="n">1.2</b>
+                      Model Gamma <b className="n">1.2</b>
                     </span>
                     <span className="landing__pip-dot"></span>
                   </span>
                   <span className="landing__pip" style={{ '--x': '65.6%', '--d': '.24s' } as PipStyle}>
                     <span className="landing__pip-flag">
-                      Claude 3.5 Sonnet <b className="n">2.1</b>
+                      Model Delta <b className="n">2.1</b>
                     </span>
                     <span className="landing__pip-dot"></span>
                   </span>
                   <span className="landing__pip landing__pip--low" style={{ '--x': '90.6%', '--d': '.31s' } as PipStyle}>
                     <span className="landing__pip-flag">
-                      Hermes 3 70B <b className="n">2.9</b>
+                      Model Beta <b className="n">2.9</b>
                     </span>
                     <span className="landing__pip-dot"></span>
                   </span>
@@ -1710,25 +1918,25 @@ const Landing: FC = () => {
                 <div className="landing__axis">
                   <span className="landing__pip landing__pip--best" style={{ '--x': '4.8%', '--d': '.15s' } as PipStyle}>
                     <span className="landing__pip-flag">
-                      Llama 3.3 70B <b className="n">$2.40</b>
+                      Model Alpha <b className="n">$2.40</b>
                     </span>
                     <span className="landing__pip-dot"></span>
                   </span>
                   <span className="landing__pip landing__pip--low" style={{ '--x': '13.6%', '--d': '.22s' } as PipStyle}>
                     <span className="landing__pip-flag">
-                      Hermes 3 70B <b className="n">$6.80</b>
+                      Model Beta <b className="n">$6.80</b>
                     </span>
                     <span className="landing__pip-dot"></span>
                   </span>
                   <span className="landing__pip landing__pip--brand" style={{ '--x': '49.0%', '--d': '.29s' } as PipStyle}>
                     <span className="landing__pip-flag">
-                      GPT-4o <b className="n">$24.50</b>
+                      Model Gamma <b className="n">$24.50</b>
                     </span>
                     <span className="landing__pip-dot"></span>
                   </span>
                   <span className="landing__pip" style={{ '--x': '82.4%', '--d': '.36s' } as PipStyle}>
                     <span className="landing__pip-flag">
-                      Claude 3.5 Sonnet <b className="n">$41.20</b>
+                      Model Delta <b className="n">$41.20</b>
                     </span>
                     <span className="landing__pip-dot"></span>
                   </span>
@@ -1746,15 +1954,15 @@ const Landing: FC = () => {
             <div className="landing__panel-foot">
               <span>
                 <span className="landing__k">Most accurate</span>
-                <b>Claude 3.5 Sonnet</b>
+                <b>Model Delta</b>
               </span>
               <span>
                 <span className="landing__k">Fastest</span>
-                <b>Llama 3.3 70B</b>
+                <b>Model Alpha</b>
               </span>
               <span>
                 <span className="landing__k">Cheapest</span>
-                <b>Llama 3.3 70B</b>
+                <b>Model Alpha</b>
               </span>
             </div>
           </section>
@@ -1815,7 +2023,7 @@ const Landing: FC = () => {
             <div className="landing__answers">
               <article className="landing__ans landing__ans--pass">
                 <div className="landing__ans-top">
-                  <span className="landing__ans-name">Claude 3.5 Sonnet</span>
+                  <span className="landing__ans-name">Model Delta</span>
                   <span className="landing__ans-mark">Pass</span>
                 </div>
                 <p>
@@ -1832,7 +2040,7 @@ const Landing: FC = () => {
 
               <article className="landing__ans landing__ans--pass">
                 <div className="landing__ans-top">
-                  <span className="landing__ans-name">GPT-4o</span>
+                  <span className="landing__ans-name">Model Gamma</span>
                   <span className="landing__ans-mark">Pass</span>
                 </div>
                 <p>
@@ -1848,7 +2056,7 @@ const Landing: FC = () => {
 
               <article className="landing__ans landing__ans--pass">
                 <div className="landing__ans-top">
-                  <span className="landing__ans-name">Hermes 3 70B</span>
+                  <span className="landing__ans-name">Model Beta</span>
                   <span className="landing__ans-mark">Pass</span>
                 </div>
                 <p>
@@ -1864,7 +2072,7 @@ const Landing: FC = () => {
 
               <article className="landing__ans landing__ans--fail">
                 <div className="landing__ans-top">
-                  <span className="landing__ans-name">Llama 3.3 70B</span>
+                  <span className="landing__ans-name">Model Alpha</span>
                   <span className="landing__ans-mark">Fail</span>
                 </div>
                 <p>
@@ -2087,13 +2295,490 @@ export default Landing;
 
 
 
-//Dashboard.tsx
+
+
+//DatasetStep.tsx
+import { useMemo, useState, type FC } from 'react';
+import { UploadCloud, Users, Check } from 'lucide-react';
+import { TEST_SUITES } from '../data';
+import type { EvalTypeId } from '../types';
+
+interface Props {
+  evalType: EvalTypeId | null;
+  selected: string | null;
+  onSelect: (id: string) => void;
+}
+
+const CATEGORIES = ['All', 'Agents', 'Coding', 'General', 'RAG', 'Finance', 'Healthcare'];
+
+const DatasetStep: FC<Props> = ({ evalType, selected, onSelect }) => {
+  const [tab, setTab] = useState<'official' | 'community' | 'private'>('official');
+  const [category, setCategory] = useState('All');
+
+  const filtered = useMemo(
+    () => TEST_SUITES.filter((t) => category === 'All' || t.category === category),
+    [category]
+  );
+
+  return (
+    <div className="run-eval__card">
+      <h2 className="run-eval__step-title">Pick a test suite</h2>
+      <p className="run-eval__step-desc">Test suites contain questions that measure AI capabilities.</p>
+
+      <div className="run-eval__tabs">
+        {(['official', 'community', 'private'] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            className={`run-eval__tab${tab === t ? ' run-eval__tab--active' : ''}`}
+            onClick={() => setTab(t)}
+          >
+            {t === 'official' ? 'Benchmarks' : t === 'community' ? 'Community' : 'Upload'}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'official' && (
+        <>
+          <div className="run-eval__category-filters">
+            {CATEGORIES.map((c) => (
+              <button
+                key={c}
+                type="button"
+                className={`run-eval__chip${category === c ? ' run-eval__chip--active' : ''}`}
+                onClick={() => setCategory(c)}
+              >
+                {c}
+              </button>
+            ))}
+          </div>
+
+          <div className="run-eval__dataset-grid">
+            {filtered.map((d) => {
+              const isSelected = selected === d.id;
+              const recommended = evalType ? d.recommendedFor.includes(evalType) : false;
+              return (
+                <button
+                  key={d.id}
+                  type="button"
+                  className={`run-eval__dataset-card${isSelected ? ' run-eval__dataset-card--selected' : ''}`}
+                  onClick={() => onSelect(d.id)}
+                >
+                  <div className="run-eval__dataset-top">
+                    <span className="run-eval__dataset-name">{d.name}</span>
+                    {isSelected && (
+                      <span className="run-eval__type-check">
+                        <Check size={12} strokeWidth={2.75} />
+                      </span>
+                    )}
+                  </div>
+                  <p className="run-eval__dataset-desc">{d.description}</p>
+                  <div className="run-eval__dataset-meta n">
+                    <span>{d.questions} questions</span>
+                    <span>{d.difficulty}</span>
+                    <span>{d.language}</span>
+                  </div>
+                  {recommended && <span className="run-eval__badge run-eval__badge--soft">Recommended</span>}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {tab === 'community' && (
+        <div className="run-eval__empty-state">
+          <Users size={26} />
+          <h3>Community Test Suites</h3>
+          <p>Browse tests created by the community.</p>
+          <button type="button" className="run-eval__btn run-eval__btn--primary">
+            Browse
+          </button>
+        </div>
+      )}
+
+      {tab === 'private' && (
+        <div className="run-eval__upload-zone">
+          <UploadCloud size={26} />
+          <h3>Upload Test Data</h3>
+          <p>Drag &amp; drop or click to browse</p>
+          <div className="run-eval__format-chips">
+            {['CSV', 'JSON', 'JSONL', 'HuggingFace'].map((f) => (
+              <span key={f} className="run-eval__chip run-eval__chip--static">
+                {f}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default DatasetStep;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//MetricsStep.tsx
+import { useMemo, type FC } from 'react';
+import { Check } from 'lucide-react';
+import { METRICS } from '../data';
+import type { EvalTypeId } from '../types';
+
+interface Props {
+  evalType: EvalTypeId | null;
+  selected: string[];
+  onToggle: (id: string) => void;
+}
+
+const MetricsStep: FC<Props> = ({ evalType, selected, onToggle }) => {
+  const typeMetrics = useMemo(() => {
+    if (evalType === 'agent') return METRICS.agent;
+    if (evalType === 'rag') return METRICS.rag;
+    return METRICS.model;
+  }, [evalType]);
+
+  const groups = [
+    { label: 'Universal', items: METRICS.universal },
+    { label: 'Specific to this evaluation type', items: typeMetrics },
+  ];
+
+  return (
+    <div className="run-eval__card run-eval__card--wide">
+      <div className="run-eval__step-header-row">
+        <div>
+          <h2 className="run-eval__step-title">What to measure?</h2>
+          <p className="run-eval__step-desc">
+            Select the metrics that matter for your use case. Metrics are tailored to your evaluation type.
+          </p>
+        </div>
+        <div className="run-eval__metrics-count">
+          <span>{selected.length}</span> selected
+        </div>
+      </div>
+
+      {groups.map((group) => (
+        <div className="run-eval__metric-group" key={group.label}>
+          <p className="run-eval__filter-title">{group.label}</p>
+          <div className="run-eval__metrics-grid">
+            {group.items.map((m) => {
+              const isSelected = selected.includes(m.id);
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  className={`run-eval__metric-card${isSelected ? ' run-eval__metric-card--selected' : ''}`}
+                  onClick={() => onToggle(m.id)}
+                  title={m.tooltip}
+                >
+                  <span className="run-eval__metric-name">{m.name}</span>
+                  <span className="run-eval__metric-tooltip">{m.tooltip}</span>
+                  {isSelected && (
+                    <span className="run-eval__type-check">
+                      <Check size={12} strokeWidth={2.75} />
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+export default MetricsStep;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//ModelsStep.tsx
+import { useMemo, useState, type FC } from 'react';
+import { Search, SlidersHorizontal, Check, X } from 'lucide-react';
+import { MODELS } from '../data';
+import type { ModelInfo } from '../types';
+
+interface Props {
+  providers: string[];
+  selected: string[];
+  onToggle: (id: string) => void;
+  onClear: () => void;
+}
+
+function priceTier(pricing: string): 'free' | 'low' | 'mid' | 'high' {
+  const n = parseFloat(pricing.replace(/[^0-9.]/g, ''));
+  if (n === 0) return 'free';
+  if (n < 1) return 'low';
+  if (n <= 5) return 'mid';
+  return 'high';
+}
+
+const PRICE_LABELS: Record<string, string> = { free: 'FREE', low: '< $1', mid: '$1 – $5', high: '$5+' };
+
+const ModelsStep: FC<Props> = ({ providers, selected, onToggle, onClear }) => {
+  const [query, setQuery] = useState('');
+  const [capFilters, setCapFilters] = useState<string[]>([]);
+  const [priceFilters, setPriceFilters] = useState<string[]>([]);
+  const [showFilters, setShowFilters] = useState(true);
+
+  const pool = useMemo(
+    () => (providers.length ? MODELS.filter((m) => providers.includes(m.providerId)) : MODELS),
+    [providers]
+  );
+
+  const allCapabilities = useMemo(() => {
+    const set = new Set<string>();
+    pool.forEach((m) => m.capabilities.forEach((c) => set.add(c)));
+    return Array.from(set).sort();
+  }, [pool]);
+
+  const filtered = useMemo(() => {
+    return pool.filter((m: ModelInfo) => {
+      if (query && !m.name.toLowerCase().includes(query.toLowerCase()) && !m.provider.toLowerCase().includes(query.toLowerCase())) {
+        return false;
+      }
+      if (capFilters.length && !capFilters.every((c) => m.capabilities.includes(c))) return false;
+      if (priceFilters.length && !priceFilters.includes(priceTier(m.pricing))) return false;
+      return true;
+    });
+  }, [pool, query, capFilters, priceFilters]);
+
+  const toggleCap = (cap: string) =>
+    setCapFilters((prev) => (prev.includes(cap) ? prev.filter((c) => c !== cap) : [...prev, cap]));
+  const togglePrice = (tier: string) =>
+    setPriceFilters((prev) => (prev.includes(tier) ? prev.filter((c) => c !== tier) : [...prev, tier]));
+  const resetFilters = () => {
+    setCapFilters([]);
+    setPriceFilters([]);
+    setQuery('');
+  };
+
+  return (
+    <div className="run-eval__card run-eval__card--wide">
+      <h2 className="run-eval__step-title">Choose models</h2>
+      <p className="run-eval__step-desc">Select the models you want to compare. Use filters to narrow the list.</p>
+
+      <div className="run-eval__models-layout">
+        {showFilters && (
+          <aside className="run-eval__filters">
+            <div className="run-eval__filters-head">
+              <span>Filters</span>
+              <button type="button" className="run-eval__link" onClick={resetFilters}>
+                Reset all
+              </button>
+            </div>
+
+            <div className="run-eval__filter-section">
+              <p className="run-eval__filter-title">Capabilities</p>
+              <div className="run-eval__filter-options">
+                {allCapabilities.map((cap) => (
+                  <label key={cap} className="run-eval__filter-chip">
+                    <input type="checkbox" checked={capFilters.includes(cap)} onChange={() => toggleCap(cap)} />
+                    {cap}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="run-eval__filter-section">
+              <p className="run-eval__filter-title">Pricing (per 1M tokens)</p>
+              <div className="run-eval__filter-options">
+                {Object.entries(PRICE_LABELS).map(([tier, label]) => (
+                  <label key={tier} className="run-eval__filter-chip">
+                    <input type="checkbox" checked={priceFilters.includes(tier)} onChange={() => togglePrice(tier)} />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </div>
+          </aside>
+        )}
+
+        <div className="run-eval__models-main">
+          <div className="run-eval__search-bar">
+            <Search size={15} />
+            <input
+              type="text"
+              placeholder="Search models..."
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            <button type="button" className="run-eval__btn run-eval__btn--sm" onClick={() => setShowFilters((v) => !v)}>
+              <SlidersHorizontal size={14} /> Filters
+            </button>
+          </div>
+
+          {(capFilters.length > 0 || priceFilters.length > 0) && (
+            <div className="run-eval__active-filters">
+              {capFilters.map((c) => (
+                <span key={c} className="run-eval__tag">
+                  {c}
+                  <button type="button" onClick={() => toggleCap(c)}>
+                    <X size={11} />
+                  </button>
+                </span>
+              ))}
+              {priceFilters.map((p) => (
+                <span key={p} className="run-eval__tag">
+                  {PRICE_LABELS[p]}
+                  <button type="button" onClick={() => togglePrice(p)}>
+                    <X size={11} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div className="run-eval__models-grid">
+            {filtered.map((m) => {
+              const isSelected = selected.includes(m.id);
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  className={`run-eval__model-card${isSelected ? ' run-eval__model-card--selected' : ''}`}
+                  onClick={() => onToggle(m.id)}
+                >
+                  <div className="run-eval__model-top">
+                    <span className="run-eval__model-name">{m.name}</span>
+                    {isSelected && (
+                      <span className="run-eval__type-check">
+                        <Check size={12} strokeWidth={2.75} />
+                      </span>
+                    )}
+                  </div>
+                  <span className="run-eval__model-provider">{m.provider}</span>
+                  <div className="run-eval__model-caps">
+                    {m.capabilities.slice(0, 3).map((c) => (
+                      <span key={c} className="run-eval__chip run-eval__chip--static">
+                        {c}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="run-eval__model-meta n">
+                    <span>{m.contextWindow}</span>
+                    <span>{m.speedRating}</span>
+                    <span>{m.pricing}</span>
+                  </div>
+                </button>
+              );
+            })}
+            {filtered.length === 0 && <p className="run-eval__empty">No models match these filters.</p>}
+          </div>
+
+          {selected.length > 0 && (
+            <div className="run-eval__selected-bar">
+              <span>
+                <strong>{selected.length}</strong> models selected
+              </span>
+              <button type="button" className="run-eval__btn run-eval__btn--sm" onClick={onClear}>
+                Clear
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default ModelsStep;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//NameStep.tsx
 import type { FC } from 'react';
-import PagePlaceholder from '../../../components/PagePlaceholder/PagePlaceholder';
+import { SUGGESTED_NAMES } from '../data';
 
-const Dashboard: FC = () => <PagePlaceholder title="Dashboard" subtitle="Compare AI models, run standardized tests, and make data-driven decisions." />;
+interface Props {
+  name: string;
+  onChange: (name: string) => void;
+}
 
-export default Dashboard;
+const NameStep: FC<Props> = ({ name, onChange }) => {
+  return (
+    <div className="run-eval__card">
+      <h2 className="run-eval__step-title">Name your evaluation</h2>
+      <p className="run-eval__step-desc">Give it a memorable name so you can find it later.</p>
+
+      <div className="run-eval__field">
+        <label className="run-eval__label" htmlFor="eval-name">
+          Evaluation Name
+        </label>
+        <input
+          id="eval-name"
+          type="text"
+          className="run-eval__input run-eval__input--lg"
+          placeholder="e.g., Q3 Customer Support Bot Test"
+          value={name}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      </div>
+
+      <div className="run-eval__suggestions">
+        <span className="run-eval__suggestions-label">Try:</span>
+        {SUGGESTED_NAMES.map((s) => (
+          <button key={s} type="button" className="run-eval__chip" onClick={() => onChange(s)}>
+            {s}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export default NameStep;
 
 
 
@@ -2107,15 +2792,84 @@ export default Dashboard;
 
 
 
-//Datasets.tsx
+
+
+
+
+
+
+
+
+
+
+//ProvidersStep.tsx
 import type { FC } from 'react';
-import PagePlaceholder from '../../../components/PagePlaceholder/PagePlaceholder';
+import { CheckCircle2, PlusCircle, Info } from 'lucide-react';
+import { PROVIDERS } from '../data';
 
-const Datasets: FC = () => (
-  <PagePlaceholder title="Test Suites" subtitle="Standard benchmarks and custom datasets" />
-);
+interface Props {
+  selected: string[];
+  onToggle: (id: string) => void;
+  onGoToProviders: () => void;
+}
 
-export default Datasets;
+const ProvidersStep: FC<Props> = ({ selected, onToggle, onGoToProviders }) => {
+  return (
+    <div className="run-eval__card">
+      <h2 className="run-eval__step-title">Select providers</h2>
+      <p className="run-eval__step-desc">
+        Choose which AI providers to include. Only connected providers are available.
+      </p>
+
+      <div className="run-eval__provider-grid">
+        {PROVIDERS.map((p) => {
+          const connected = p.status === 'connected';
+          const isSelected = selected.includes(p.id);
+          return (
+            <button
+              key={p.id}
+              type="button"
+              disabled={!connected}
+              className={`run-eval__provider-card${isSelected ? ' run-eval__provider-card--selected' : ''}${
+                !connected ? ' run-eval__provider-card--disabled' : ''
+              }`}
+              onClick={() => connected && onToggle(p.id)}
+            >
+              <span className="run-eval__provider-logo">{p.logo}</span>
+              <span className="run-eval__provider-info">
+                <span className="run-eval__provider-name">{p.name}</span>
+                <span className="run-eval__provider-desc">
+                  {connected ? `${p.modelCount} models available` : `${p.modelCount}+ models`}
+                </span>
+              </span>
+              <span className={`run-eval__provider-status${connected ? ' run-eval__provider-status--on' : ''}`}>
+                {connected ? <CheckCircle2 size={13} /> : <PlusCircle size={13} />}
+                {connected ? 'Connected' : 'Not connected'}
+              </span>
+              {isSelected && (
+                <span className="run-eval__type-check">
+                  <CheckCircle2 size={13} strokeWidth={2.75} />
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="run-eval__hint">
+        <Info size={14} />
+        <span>
+          Need another provider?{' '}
+          <button type="button" className="run-eval__link" onClick={onGoToProviders}>
+            Add it in Settings
+          </button>
+        </span>
+      </div>
+    </div>
+  );
+};
+
+export default ProvidersStep;
 
 
 
@@ -2132,78 +2886,1244 @@ export default Datasets;
 
 
 
-//History.tsx
 
+
+
+
+
+
+//ReviewStep.tsx
+import { useMemo, type FC } from 'react';
+import { Info } from 'lucide-react';
+import { EVAL_TYPES, MODELS, TEST_SUITES } from '../data';
+import type { EvaluationDraft } from '../types';
+
+interface Props {
+  draft: EvaluationDraft;
+}
+
+const ReviewStep: FC<Props> = ({ draft }) => {
+  const typeInfo = EVAL_TYPES.find((t) => t.id === draft.type);
+  const modelNames = draft.models.map((id) => MODELS.find((m) => m.id === id)?.name).filter(Boolean);
+  const dataset = TEST_SUITES.find((d) => d.id === draft.dataset);
+
+  const { cost, minutes } = useMemo(() => {
+    const questions = dataset?.questions ?? 0;
+    const modelCount = draft.models.length || 1;
+    const estCost = questions * modelCount * 0.0009;
+    const estMinutes = Math.max(1, Math.round((questions * modelCount) / 180));
+    return { cost: estCost, minutes: estMinutes };
+  }, [dataset, draft.models.length]);
+
+  return (
+    <div className="run-eval__card">
+      <h2 className="run-eval__step-title">Review &amp; Run</h2>
+      <p className="run-eval__step-desc">Confirm your settings before starting.</p>
+
+      <div className="run-eval__review">
+        <div className="run-eval__review-row">
+          <span>Name</span>
+          <span>{draft.name || '—'}</span>
+        </div>
+        <div className="run-eval__review-row">
+          <span>Type</span>
+          <span>{typeInfo?.title ?? '—'}</span>
+        </div>
+        <div className="run-eval__review-row">
+          <span>Models</span>
+          <span>{modelNames.length ? modelNames.join(', ') : '—'}</span>
+        </div>
+        <div className="run-eval__review-row">
+          <span>Test Suite</span>
+          <span>{dataset?.name ?? '—'}</span>
+        </div>
+        <div className="run-eval__review-row">
+          <span>Questions</span>
+          <span>{dataset ? dataset.questions : '—'}</span>
+        </div>
+        <div className="run-eval__review-divider" />
+        <div className="run-eval__review-row run-eval__review-row--highlight">
+          <span>Est. Cost</span>
+          <span>~${cost.toFixed(2)}</span>
+        </div>
+        <div className="run-eval__review-row run-eval__review-row--highlight">
+          <span>Est. Time</span>
+          <span>~{minutes} min</span>
+        </div>
+      </div>
+
+      <div className="run-eval__hint">
+        <Info size={14} />
+        <span>Costs are estimates. Actual costs depend on provider pricing.</span>
+      </div>
+    </div>
+  );
+};
+
+export default ReviewStep;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//TypeStep.tsx
 import type { FC } from 'react';
-import PagePlaceholder from '../../../components/PagePlaceholder/PagePlaceholder';
+import { MessageSquare, Bot, Search, Check } from 'lucide-react';
+import { EVAL_TYPES } from '../data';
+import type { EvalTypeId } from '../types';
 
-const History: FC = () => <PagePlaceholder title="History" subtitle="Past evaluation runs" />;
+interface Props {
+  value: EvalTypeId | null;
+  onChange: (id: EvalTypeId) => void;
+}
 
-export default History;
+const ICONS: Record<EvalTypeId, FC<{ size?: number }>> = {
+  model: MessageSquare,
+  agent: Bot,
+  rag: Search,
+};
 
+const TypeStep: FC<Props> = ({ value, onChange }) => {
+  return (
+    <div className="run-eval__card">
+      <h2 className="run-eval__step-title">What are you testing?</h2>
+      <p className="run-eval__step-desc">Different AI types need different evaluation methods.</p>
 
+      <div className="run-eval__type-grid">
+        {EVAL_TYPES.map((t) => {
+          const Icon = ICONS[t.id];
+          const selected = value === t.id;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              className={`run-eval__type-card${selected ? ' run-eval__type-card--selected' : ''}`}
+              onClick={() => onChange(t.id)}
+            >
+              <span className="run-eval__type-icon">
+                <Icon size={20} />
+              </span>
+              <span className="run-eval__type-content">
+                <span className="run-eval__type-title">{t.title}</span>
+                <span className="run-eval__type-desc">{t.desc}</span>
+              </span>
+              <span className="run-eval__badge">{t.badge}</span>
+              {selected && (
+                <span className="run-eval__type-check">
+                  <Check size={13} strokeWidth={2.75} />
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Models.tsx
-import type { FC } from 'react';
-import PagePlaceholder from '../../../components/PagePlaceholder/PagePlaceholder';
-
-const Models: FC = () => <PagePlaceholder title="Models" subtitle="Browse available models across providers" />;
-
-export default Models;
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Providers.tsx
-import type { FC } from 'react';
-import PagePlaceholder from '../../../components/PagePlaceholder/PagePlaceholder';
-
-const Providers: FC = () => <PagePlaceholder title="Providers" subtitle="Manage connected API providers" />;
-
-export default Providers;
-
-
-
-
-
-
-
+export default TypeStep;
 
 
 
 
 
 
-//Reports.tsx
-import type { FC } from 'react';
-import PagePlaceholder from '../../../components/PagePlaceholder/PagePlaceholder';
 
-const Reports: FC = () => <PagePlaceholder title="Reports" subtitle="Generated analysis and recommendations" />;
 
-export default Reports;
+
+
+
+
+
+
+
+
+
+
+
+//data.ts
+import type { EvalType, Metric, ModelInfo, Provider, TestSuite } from './types';
+
+export const EVAL_TYPES: EvalType[] = [
+  {
+    id: 'model',
+    title: 'General Chat & Text (AI Model)',
+    desc: 'Evaluate base model knowledge, summarization quality, and conversation tone across standardized test suites.',
+    badge: 'Fast Evaluation',
+  },
+  {
+    id: 'agent',
+    title: 'Autonomous Workflow (Agent Evaluation)',
+    desc: 'Test autonomous agents on multi-step tool execution, function calling, and programmatic workflow accuracy.',
+    badge: 'Recommended for Automation',
+  },
+  {
+    id: 'rag',
+    title: 'Document Search & Answering (Knowledge / RAG)',
+    desc: 'Measure how accurately AI models retrieve information from documents without generating incorrect answers.',
+    badge: 'High Precision',
+  },
+];
+
+export const PROVIDERS: Provider[] = [
+  { id: 'openai', name: 'OpenAI', status: 'connected', modelCount: 8, logo: 'O', desc: 'Industry benchmark provider offering flagship chat and reasoning models.' },
+  { id: 'anthropic', name: 'Anthropic', status: 'connected', modelCount: 5, logo: 'A', desc: 'Safety-first reasoning models optimized for long context and tool use.' },
+  { id: 'together', name: 'Together AI', status: 'connected', modelCount: 14, logo: 'T', desc: 'High-performance infrastructure hosting open-weight agent models.' },
+  { id: 'groq', name: 'Groq Cloud', status: 'connected', modelCount: 6, logo: 'G', desc: 'Ultra-low response time LPU inference engine for instant generation.' },
+  { id: 'gemini', name: 'Google Gemini', status: 'connected', modelCount: 6, logo: 'G', desc: 'Massive context window models with native multi-modal reasoning.' },
+  { id: 'openrouter', name: 'OpenRouter', status: 'not_connected', modelCount: 45, logo: 'R', desc: 'Unified routing engine with failover access to open and proprietary models.' },
+  { id: 'azure', name: 'Azure OpenAI Service', status: 'not_connected', modelCount: 8, logo: 'Az', desc: 'Enterprise tenant hosting with zero data-retention SLAs.' },
+  { id: 'ollama', name: 'Ollama Local (On-Prem)', status: 'not_connected', modelCount: 12, logo: 'OL', desc: 'Locally running quantized models inside your own network.' },
+];
+
+export const MODELS: ModelInfo[] = [
+  { id: 'm-1', name: 'Model Alpha Agent', provider: 'Together AI', providerId: 'together', capabilities: ['Tool Calling', 'Autonomous Agent', 'JSON Mode'], contextWindow: '128k tokens', pricing: '$0.70 / 1M tokens', speedRating: 'Ultra Fast (85 t/s)', accuracyScore: 94.8, agentScore: 97.5, category: 'agent' },
+  { id: 'm-2', name: 'Model Delta Agent v2', provider: 'Anthropic', providerId: 'anthropic', capabilities: ['Tool Calling', 'Deep Reasoning', 'Vision'], contextWindow: '200k tokens', pricing: '$3.00 / 1M tokens', speedRating: 'Fast (55 t/s)', accuracyScore: 95.4, agentScore: 96.2, category: 'agent' },
+  { id: 'm-3', name: 'Model Gamma Agent', provider: 'OpenAI', providerId: 'openai', capabilities: ['Tool Calling', 'Multimodal Vision', 'Reasoning'], contextWindow: '128k tokens', pricing: '$2.50 / 1M tokens', speedRating: 'Fast (65 t/s)', accuracyScore: 94.2, agentScore: 95.0, category: 'agent' },
+  { id: 'm-4', name: 'Model Epsilon Reasoning', provider: 'Together AI', providerId: 'together', capabilities: ['Deep Math', 'Advanced Logic', 'Code Generation'], contextWindow: '64k tokens', pricing: '$0.55 / 1M tokens', speedRating: 'Medium (42 t/s)', accuracyScore: 96.1, agentScore: 91.8, category: 'model' },
+  { id: 'm-5', name: 'Model Zeta Instruct', provider: 'Groq Cloud', providerId: 'groq', capabilities: ['Instant Response', 'General Chat', 'Tool Calling'], contextWindow: '128k tokens', pricing: '$0.59 / 1M tokens', speedRating: 'Instant (280 t/s)', accuracyScore: 91.5, agentScore: 89.4, category: 'model' },
+  { id: 'm-6', name: 'Model Theta Long-Context', provider: 'Google Gemini', providerId: 'gemini', capabilities: ['2M Tokens', 'Multi-modal Video', 'Document Analysis'], contextWindow: '2,000,000 tokens', pricing: '$2.50 / 1M tokens', speedRating: 'Fast (50 t/s)', accuracyScore: 93.7, agentScore: 91.0, category: 'rag' },
+  { id: 'm-7', name: 'Model Theta Flash', provider: 'Google Gemini', providerId: 'gemini', capabilities: ['Vision', 'Tool Calling', 'Streaming'], contextWindow: '1,000,000 tokens', pricing: '$0.10 / 1M tokens', speedRating: 'Ultra Fast (120 t/s)', accuracyScore: 92.4, agentScore: 94.3, category: 'agent' },
+  { id: 'm-8', name: 'Model Delta Opus', provider: 'Anthropic', providerId: 'anthropic', capabilities: ['Deep Reasoning', 'Long Context', 'Vision'], contextWindow: '200k tokens', pricing: '$15.00 / 1M tokens', speedRating: 'Medium (25 t/s)', accuracyScore: 97.2, agentScore: 94.8, category: 'model' },
+  { id: 'm-9', name: 'Model Eta Instruct', provider: 'Together AI', providerId: 'together', capabilities: ['Coding', 'Math', 'Multilingual'], contextWindow: '128k tokens', pricing: '$0.90 / 1M tokens', speedRating: 'Fast (65 t/s)', accuracyScore: 93.8, agentScore: 92.1, category: 'model' },
+  { id: 'm-10', name: 'Model Gamma Mini', provider: 'OpenAI', providerId: 'openai', capabilities: ['Vision', 'Tool Calling', 'Streaming'], contextWindow: '128k tokens', pricing: '$0.15 / 1M tokens', speedRating: 'Ultra Fast (90 t/s)', accuracyScore: 88.5, agentScore: 87.2, category: 'model' },
+];
+
+export const TEST_SUITES: TestSuite[] = [
+  { id: 'ts-agent', name: 'Autonomous Tool & Workflow Suite', category: 'Agents', questions: 420, language: 'English / JSON', task: 'Multi-step API Execution & Self-Correction', difficulty: 'Expert', version: 'v3.2', maintainer: 'SemcoEval Labs', description: 'Evaluates multi-step tool calling, nested JSON schema generation, error recovery, and workflow execution.', recommendedFor: ['agent'], featured: true },
+  { id: 'ts-swe', name: 'SWE-bench Verified Software Engineer Suite', category: 'Coding', questions: 500, language: 'Python / JS / TS', task: 'Autonomous GitHub Issue Resolution', difficulty: 'Expert', version: '2026.2', maintainer: 'Open Source AI Labs', description: 'Measures ability to independently diagnose bug reports, run local unit tests, and commit working patches.', recommendedFor: ['agent', 'model'], featured: true },
+  { id: 'ts-mmlu', name: 'MMLU-Pro General Knowledge & Reasoning Suite', category: 'General', questions: 1400, language: 'Multilingual (24 Languages)', task: 'Academic & Professional Problem Solving', difficulty: 'High', version: 'Pro-v2', maintainer: 'Stanford CRFM', description: 'Comprehensive multi-domain benchmark covering 57 disciplines including law, physics, and ethics.', recommendedFor: ['model'], featured: false },
+  { id: 'ts-ragas', name: 'Ragas Document Factual Recall & Faithfulness', category: 'RAG', questions: 350, language: 'English', task: 'Context Precision & Hallucination Defense', difficulty: 'Medium', version: '1.4', maintainer: 'Ragas Ecosystem', description: 'Evaluates retrieval accuracy and ensures answers derive strictly from verified documents.', recommendedFor: ['rag'], featured: true },
+  { id: 'ts-finance', name: 'Corporate Finance & Audit Math Suite', category: 'Finance', questions: 280, language: 'English / Numeric', task: 'Exact Mathematical Deduction & Regulation', difficulty: 'Advanced', version: '2026-Q1', maintainer: 'SemcoEval Labs', description: 'Validates exact calculation precision, formula interpretation, and compliance audit reasoning.', recommendedFor: ['model', 'agent'], featured: false },
+  { id: 'ts-health', name: 'Clinical Diagnostic Safety & Care Benchmark', category: 'Healthcare', questions: 310, language: 'English / Medical', task: 'Diagnostic Logic & Patient Guardrails', difficulty: 'Expert', version: 'Med-2.1', maintainer: 'HealthAI Foundation', description: 'Assesses diagnostic recommendation accuracy and safety compliance in health triage.', recommendedFor: ['model'], featured: false },
+];
+
+export const METRICS: { universal: Metric[]; model: Metric[]; agent: Metric[]; rag: Metric[] } = {
+  universal: [
+    { id: 'accuracy', name: 'Accuracy', tooltip: 'Percentage of correct answers or successful task completions.', defaultChecked: true },
+    { id: 'latency', name: 'Response Time', tooltip: 'Average time to generate a complete response (seconds).', defaultChecked: true },
+    { id: 'cost', name: 'Cost Efficiency', tooltip: 'Cost per 1,000 API calls at provider pricing.', defaultChecked: true },
+    { id: 'safety', name: 'Safety Score', tooltip: 'Resistance to jailbreaks, prompt injection, and harmful outputs.', defaultChecked: false },
+  ],
+  model: [
+    { id: 'fluency', name: 'Fluency & Coherence', tooltip: 'How natural and well-structured the generated text is.', defaultChecked: true },
+    { id: 'instruction_following', name: 'Instruction Following', tooltip: 'How well the model adheres to specific instructions and constraints.', defaultChecked: true },
+    { id: 'reasoning', name: 'Reasoning Quality', tooltip: 'Logical consistency, chain-of-thought clarity, and problem decomposition.', defaultChecked: true },
+    { id: 'factuality', name: 'Factual Accuracy', tooltip: 'Correctness of factual claims based on world knowledge.', defaultChecked: false },
+    { id: 'helpfulness', name: 'Helpfulness', tooltip: "How useful and relevant the response is to the user's query.", defaultChecked: false },
+  ],
+  agent: [
+    { id: 'tool_success', name: 'Tool Calling Success', tooltip: 'Percentage of function/API calls with correct syntax and parameters.', defaultChecked: true },
+    { id: 'task_completion', name: 'Task Completion Rate', tooltip: 'Percentage of multi-step tasks completed successfully end-to-end.', defaultChecked: true },
+    { id: 'action_accuracy', name: 'Action Sequencing', tooltip: 'Correct ordering and logic of multi-step action plans.', defaultChecked: true },
+    { id: 'error_recovery', name: 'Error Recovery', tooltip: 'Ability to detect failures and self-correct without human intervention.', defaultChecked: true },
+    { id: 'planning', name: 'Planning Quality', tooltip: 'Quality of task decomposition and strategic planning.', defaultChecked: false },
+  ],
+  rag: [
+    { id: 'faithfulness', name: 'Faithfulness', tooltip: 'Does the answer accurately reflect the retrieved context without adding unsupported claims?', defaultChecked: true },
+    { id: 'answer_relevance', name: 'Answer Relevance', tooltip: 'How well the generated answer addresses the original question.', defaultChecked: true },
+    { id: 'context_precision', name: 'Context Precision', tooltip: 'Are the retrieved documents relevant to the question?', defaultChecked: true },
+    { id: 'groundedness', name: 'Groundedness', tooltip: 'Is every claim in the answer supported by the source documents?', defaultChecked: true },
+    { id: 'hallucination', name: 'Hallucination Rate', tooltip: 'Percentage of fabricated facts not present in retrieved context.', defaultChecked: true },
+  ],
+};
+
+export const SUGGESTED_NAMES = ['Agent Tool Calling Test', 'Support Bot Comparison', 'Code Generation Test'];
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//RunEvaluation.scss
+@use '../../../styles/variables' as *;
+
+.run-eval {
+  max-width: 64rem;
+  margin: 0 auto;
+
+  /* ---------- page header ---------- */
+  &__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+
+  &__title {
+    font-size: 1.6875rem;
+    font-weight: 700;
+    color: $text-primary;
+  }
+
+  &__subtitle {
+    margin-top: 0.375rem;
+    color: $text-secondary;
+    font-size: 0.90625rem;
+  }
+
+  /* ---------- buttons ---------- */
+  &__btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.84375rem;
+    font-weight: 600;
+    padding: 0.5625rem 0.9375rem;
+    border-radius: 0.5rem;
+    border: 0.0625rem solid transparent;
+    cursor: pointer;
+    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+    font-family: $font-body;
+
+    &--primary {
+      background: $primary;
+      color: #fff;
+      border-color: $primary;
+
+      &:hover {
+        background: $primary-hover;
+        border-color: $primary-hover;
+      }
+    }
+
+    &--secondary {
+      background: $bg-main;
+      color: $text-primary;
+      border-color: $border-default;
+
+      &:hover {
+        border-color: $text-primary;
+      }
+    }
+
+    &--lg {
+      padding: 0.75rem 1.375rem;
+      font-size: 0.90625rem;
+    }
+
+    &--sm {
+      padding: 0.375rem 0.6875rem;
+      font-size: 0.78125rem;
+      background: $bg-main;
+      color: $text-secondary;
+      border-color: $border-default;
+
+      &:hover {
+        border-color: $text-primary;
+        color: $text-primary;
+      }
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+
+  /* ---------- wizard shell ---------- */
+  &__wizard {
+    background: $bg-main;
+    border: 0.0625rem solid $border-subtle;
+    border-radius: 0.875rem;
+    box-shadow: $shadow-xs;
+    padding: 1.5rem 1.75rem 1.75rem;
+  }
+
+  &__steps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+    padding-bottom: 1.375rem;
+    margin-bottom: 1.5rem;
+    border-bottom: 0.0625rem solid $border-subtle;
+  }
+
+  &__step-indicator {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.375rem 0.75rem 0.375rem 0.375rem;
+    border-radius: 999px;
+    border: none;
+    background: transparent;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: $text-tertiary;
+    cursor: pointer;
+    transition: background 0.14s ease, color 0.14s ease;
+
+    &:disabled {
+      cursor: default;
+    }
+
+    &--active {
+      background: $primary-light;
+      color: $primary;
+
+      .run-eval__step-num {
+        background: $primary;
+        color: #fff;
+      }
+    }
+
+    &--complete {
+      color: $text-secondary;
+
+      .run-eval__step-num {
+        background: $success-subtle;
+        color: $success;
+      }
+
+      &:hover {
+        background: $bg-subtle;
+      }
+    }
+
+    &--upcoming .run-eval__step-num {
+      background: $bg-inset;
+      color: $text-tertiary;
+    }
+  }
+
+  &__step-num {
+    width: 1.375rem;
+    height: 1.375rem;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font-size: 0.71875rem;
+    font-weight: 700;
+    flex-shrink: 0;
+    transition: background 0.14s ease, color 0.14s ease;
+  }
+
+  /* ---------- step cards ---------- */
+  &__card {
+    &--wide {
+      max-width: none;
+    }
+  }
+
+  &__step-title {
+    font-size: 1.3125rem;
+    font-weight: 700;
+    color: $text-primary;
+  }
+
+  &__step-desc {
+    margin-top: 0.375rem;
+    font-size: 0.875rem;
+    color: $text-secondary;
+    max-width: 38rem;
+  }
+
+  &__step-header-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  &__field {
+    max-width: 30rem;
+    margin-top: 1.75rem;
+  }
+
+  &__label {
+    display: block;
+    font-size: 0.78125rem;
+    font-weight: 600;
+    color: $text-secondary;
+    margin-bottom: 0.4375rem;
+  }
+
+  &__input {
+    width: 100%;
+    border: 0.0625rem solid $border-default;
+    border-radius: 0.5rem;
+    padding: 0.625rem 0.75rem;
+    font-size: 0.875rem;
+    font-family: $font-body;
+    color: $text-primary;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+
+    &::placeholder {
+      color: #a8b1bb;
+    }
+
+    &:focus {
+      outline: none;
+      border-color: $primary;
+      box-shadow: 0 0 0 0.1875rem $primary-light;
+    }
+
+    &--lg {
+      padding: 0.75rem 0.875rem;
+      font-size: 0.9375rem;
+    }
+  }
+
+  /* ---------- suggestion / static chips ---------- */
+  &__suggestions {
+    margin-top: 1.125rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  &__suggestions-label {
+    font-size: 0.78125rem;
+    color: $text-tertiary;
+    margin-right: 0.125rem;
+  }
+
+  &__chip {
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 0.0625rem solid $border-default;
+    border-radius: 999px;
+    padding: 0.3125rem 0.75rem;
+    cursor: pointer;
+    transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+      color: $primary;
+    }
+
+    &--active {
+      background: $primary;
+      border-color: $primary;
+      color: #fff;
+    }
+
+    &--static {
+      cursor: default;
+      font-size: 0.6875rem;
+      padding: 0.1875rem 0.5rem;
+
+      &:hover {
+        border-color: $border-default;
+        color: $text-secondary;
+      }
+    }
+  }
+
+  /* ---------- eval type cards ---------- */
+  &__type-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-top: 1.5rem;
+  }
+
+  &__type-card {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.875rem;
+    text-align: left;
+    width: 100%;
+    padding: 1.125rem 3rem 1.125rem 1.125rem;
+    border: 0.0625rem solid $border-default;
+    border-radius: 0.75rem;
+    background: $bg-main;
+    cursor: pointer;
+    transition: border-color 0.14s ease, background 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+    }
+
+    &--selected {
+      border-color: $primary;
+      background: $primary-light;
+    }
+  }
+
+  &__type-icon {
+    width: 2.375rem;
+    height: 2.375rem;
+    flex-shrink: 0;
+    border-radius: 0.5rem;
+    background: $bg-subtle;
+    color: $primary;
+    display: grid;
+    place-items: center;
+  }
+
+  &__type-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    flex: 1;
+  }
+
+  &__type-title {
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__type-desc {
+    font-size: 0.8125rem;
+    color: $text-secondary;
+    line-height: 1.5;
+  }
+
+  &__type-check {
+    position: absolute;
+    top: 1.125rem;
+    right: 1.125rem;
+    width: 1.25rem;
+    height: 1.25rem;
+    border-radius: 50%;
+    background: $primary;
+    color: #fff;
+    display: grid;
+    place-items: center;
+  }
+
+  &__badge {
+    align-self: flex-start;
+    flex-shrink: 0;
+    font-size: 0.65625rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: $primary;
+    background: $primary-light;
+    border-radius: 0.375rem;
+    padding: 0.25rem 0.5rem;
+
+    &--soft {
+      margin-top: 0.625rem;
+    }
+  }
+
+  /* ---------- providers ---------- */
+  &__provider-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+    margin-top: 1.5rem;
+  }
+
+  &__provider-card {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    text-align: left;
+    padding: 0.875rem 2.5rem 0.875rem 0.875rem;
+    border: 0.0625rem solid $border-default;
+    border-radius: 0.75rem;
+    background: $bg-main;
+    cursor: pointer;
+    transition: border-color 0.14s ease, background 0.14s ease;
+
+    &:hover:not(&--disabled) {
+      border-color: $primary;
+    }
+
+    &--selected {
+      border-color: $primary;
+      background: $primary-light;
+    }
+
+    &--disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+  }
+
+  &__provider-logo {
+    width: 2.125rem;
+    height: 2.125rem;
+    flex-shrink: 0;
+    border-radius: 0.5rem;
+    background: $text-primary;
+    color: #fff;
+    font-weight: 700;
+    font-size: 0.8125rem;
+    display: grid;
+    place-items: center;
+  }
+
+  &__provider-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+    min-width: 0;
+  }
+
+  &__provider-name {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__provider-desc {
+    font-size: 0.75rem;
+    color: $text-tertiary;
+  }
+
+  &__provider-status {
+    display: none;
+
+    &--on {
+      display: inline-flex;
+    }
+  }
+
+  &__hint {
+    margin-top: 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8125rem;
+    color: $text-tertiary;
+
+    svg {
+      flex-shrink: 0;
+    }
+  }
+
+  &__link {
+    background: none;
+    border: none;
+    padding: 0;
+    color: $primary;
+    font-weight: 600;
+    font-size: inherit;
+    cursor: pointer;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  /* ---------- models step ---------- */
+  &__models-layout {
+    display: grid;
+    grid-template-columns: 15rem 1fr;
+    gap: 1.5rem;
+    margin-top: 1.5rem;
+    align-items: start;
+  }
+
+  &__filters {
+    border: 0.0625rem solid $border-subtle;
+    border-radius: 0.75rem;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.125rem;
+  }
+
+  &__filters-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__filter-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  &__filter-title {
+    font-family: $font-mono;
+    font-size: 0.65625rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: $text-tertiary;
+  }
+
+  &__filter-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4375rem;
+  }
+
+  &__filter-chip {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8125rem;
+    color: $text-secondary;
+    cursor: pointer;
+
+    input {
+      accent-color: $primary;
+    }
+  }
+
+  &__models-main {
+    min-width: 0;
+  }
+
+  &__search-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    border: 0.0625rem solid $border-default;
+    border-radius: 0.5rem;
+    padding: 0.5625rem 0.75rem;
+    color: $text-tertiary;
+
+    input {
+      flex: 1;
+      border: none;
+      outline: none;
+      font-size: 0.84375rem;
+      color: $text-primary;
+      background: transparent;
+      font-family: $font-body;
+
+      &::placeholder {
+        color: $text-tertiary;
+      }
+    }
+  }
+
+  &__active-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+    margin-top: 0.75rem;
+  }
+
+  &__tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: 0.71875rem;
+    color: $primary;
+    background: $primary-light;
+    border-radius: 0.375rem;
+    padding: 0.25rem 0.25rem 0.25rem 0.5rem;
+
+    button {
+      display: grid;
+      place-items: center;
+      border: none;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+    }
+  }
+
+  &__models-grid {
+    margin-top: 1rem;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+  }
+
+  &__model-card {
+    position: relative;
+    text-align: left;
+    padding: 0.875rem 1rem;
+    border: 0.0625rem solid $border-default;
+    border-radius: 0.75rem;
+    background: $bg-main;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    transition: border-color 0.14s ease, background 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+    }
+
+    &--selected {
+      border-color: $primary;
+      background: $primary-light;
+    }
+  }
+
+  &__model-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  &__model-name {
+    font-size: 0.84375rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__model-provider {
+    font-size: 0.75rem;
+    color: $text-tertiary;
+    margin-top: -0.25rem;
+  }
+
+  &__model-caps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3125rem;
+  }
+
+  &__model-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.625rem;
+    font-size: 0.71875rem;
+    color: $text-tertiary;
+    margin-top: 0.125rem;
+  }
+
+  &__empty {
+    grid-column: 1 / -1;
+    padding: 2rem;
+    text-align: center;
+    color: $text-tertiary;
+    font-size: 0.84375rem;
+  }
+
+  &__selected-bar {
+    margin-top: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 1rem;
+    background: $primary-light;
+    border-radius: 0.625rem;
+    font-size: 0.84375rem;
+    color: $text-primary;
+
+    strong {
+      color: $primary;
+    }
+  }
+
+  /* ---------- dataset step ---------- */
+  &__tabs {
+    display: flex;
+    gap: 0.375rem;
+    margin-top: 1.5rem;
+    border-bottom: 0.0625rem solid $border-subtle;
+  }
+
+  &__tab {
+    padding: 0.5625rem 0.25rem;
+    margin-right: 1.25rem;
+    border: none;
+    background: transparent;
+    font-size: 0.84375rem;
+    font-weight: 600;
+    color: $text-tertiary;
+    cursor: pointer;
+    border-bottom: 0.125rem solid transparent;
+    transition: color 0.14s ease, border-color 0.14s ease;
+
+    &--active {
+      color: $primary;
+      border-bottom-color: $primary;
+    }
+  }
+
+  &__category-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 1.125rem;
+  }
+
+  &__dataset-grid {
+    margin-top: 1.125rem;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+  }
+
+  &__dataset-card {
+    position: relative;
+    text-align: left;
+    padding: 1rem 1.125rem;
+    border: 0.0625rem solid $border-default;
+    border-radius: 0.75rem;
+    background: $bg-main;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    transition: border-color 0.14s ease, background 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+    }
+
+    &--selected {
+      border-color: $primary;
+      background: $primary-light;
+    }
+  }
+
+  &__dataset-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  &__dataset-name {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__dataset-desc {
+    font-size: 0.8125rem;
+    color: $text-secondary;
+    line-height: 1.5;
+  }
+
+  &__dataset-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.625rem;
+    font-size: 0.71875rem;
+    color: $text-tertiary;
+  }
+
+  &__empty-state,
+  &__upload-zone {
+    margin-top: 1.5rem;
+    border: 0.0938rem dashed $border-strong;
+    border-radius: 0.75rem;
+    padding: 2.75rem 1.5rem;
+    text-align: center;
+    color: $text-tertiary;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+
+    svg {
+      color: $text-tertiary;
+      margin-bottom: 0.25rem;
+    }
+
+    h3 {
+      font-size: 0.9375rem;
+      color: $text-primary;
+    }
+
+    p {
+      font-size: 0.8125rem;
+    }
+  }
+
+  &__upload-zone {
+    cursor: pointer;
+
+    &:hover {
+      border-color: $primary;
+    }
+  }
+
+  &__format-chips {
+    display: flex;
+    gap: 0.375rem;
+    margin-top: 0.375rem;
+  }
+
+  /* ---------- metrics step ---------- */
+  &__metrics-count {
+    flex-shrink: 0;
+    font-size: 0.8125rem;
+    color: $text-secondary;
+
+    span {
+      font-weight: 700;
+      color: $primary;
+    }
+  }
+
+  &__metric-group {
+    margin-top: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  &__metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.625rem;
+  }
+
+  &__metric-card {
+    position: relative;
+    text-align: left;
+    padding: 0.75rem 2rem 0.75rem 0.875rem;
+    border: 0.0625rem solid $border-default;
+    border-radius: 0.625rem;
+    background: $bg-main;
+    cursor: pointer;
+    transition: border-color 0.14s ease, background 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+    }
+
+    &--selected {
+      border-color: $primary;
+      background: $primary-light;
+    }
+  }
+
+  &__metric-name {
+    display: block;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__metric-tooltip {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.71875rem;
+    color: $text-tertiary;
+    line-height: 1.4;
+  }
+
+  /* ---------- review step ---------- */
+  &__review {
+    margin-top: 1.5rem;
+    border: 0.0625rem solid $border-subtle;
+    border-radius: 0.75rem;
+    overflow: hidden;
+  }
+
+  &__review-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    font-size: 0.84375rem;
+    border-bottom: 0.0625rem solid $border-subtle;
+
+    &:last-child {
+      border-bottom: 0;
+    }
+
+    span:first-child {
+      color: $text-tertiary;
+      flex-shrink: 0;
+    }
+
+    span:last-child {
+      color: $text-primary;
+      font-weight: 500;
+      text-align: right;
+    }
+
+    &--highlight span:last-child {
+      color: $primary;
+      font-weight: 700;
+    }
+  }
+
+  &__review-divider {
+    height: 0.0625rem;
+    background: $border-subtle;
+  }
+
+  /* ---------- shared feedback ---------- */
+  &__error {
+    margin-top: 1.25rem;
+    font-size: 0.8125rem;
+    color: $danger;
+    background: $danger-subtle;
+    border-radius: 0.5rem;
+    padding: 0.625rem 0.875rem;
+  }
+
+  &__nav {
+    margin-top: 2rem;
+    padding-top: 1.5rem;
+    border-top: 0.0625rem solid $border-subtle;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  /* ---------- responsive ---------- */
+  @media (max-width: 56rem) {
+    &__provider-grid,
+    &__models-grid,
+    &__dataset-grid,
+    &__metrics-grid {
+      grid-template-columns: 1fr;
+    }
+
+    &__models-layout {
+      grid-template-columns: 1fr;
+    }
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -2218,12 +4138,182 @@ export default Reports;
 
 
 //RunEvaluation.tsx
-import type { FC } from 'react';
-import PagePlaceholder from '../../../components/PagePlaceholder/PagePlaceholder';
+import { useState, type FC } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { X, ArrowLeft, ArrowRight, Play, Check } from 'lucide-react';
+import NameStep from './steps/NameStep';
+import TypeStep from './steps/TypeStep';
+import ProvidersStep from './steps/ProvidersStep';
+import ModelsStep from './steps/ModelsStep';
+import DatasetStep from './steps/DatasetStep';
+import MetricsStep from './steps/MetricsStep';
+import ReviewStep from './steps/ReviewStep';
+import { METRICS } from './data';
+import { WIZARD_STEPS, type EvaluationDraft } from './types';
+import './RunEvaluation.scss';
 
-const RunEvaluation: FC = () => (
-  <PagePlaceholder title="New Evaluation" subtitle="Run a model comparison" />
-);
+const EMPTY_DRAFT: EvaluationDraft = {
+  name: '',
+  type: null,
+  providers: [],
+  models: [],
+  dataset: null,
+  metrics: [],
+};
+
+const RunEvaluation: FC = () => {
+  const navigate = useNavigate();
+  const [step, setStep] = useState(1);
+  const [draft, setDraft] = useState<EvaluationDraft>(EMPTY_DRAFT);
+  const [error, setError] = useState<string | null>(null);
+  const totalSteps = WIZARD_STEPS.length;
+
+  const toggleInArray = (key: 'providers' | 'models' | 'metrics', id: string) => {
+    setDraft((d) => {
+      const arr = d[key];
+      const next = arr.includes(id) ? arr.filter((x) => x !== id) : [...arr, id];
+      return { ...d, [key]: next };
+    });
+  };
+
+  const setType = (id: EvaluationDraft['type']) => {
+    setDraft((d) => {
+      if (d.type === id) return d;
+      const defaults = [
+        ...METRICS.universal.filter((m) => m.defaultChecked).map((m) => m.id),
+        ...(id === 'agent' ? METRICS.agent : id === 'rag' ? METRICS.rag : METRICS.model)
+          .filter((m) => m.defaultChecked)
+          .map((m) => m.id),
+      ];
+      return { ...d, type: id, metrics: defaults };
+    });
+  };
+
+  const validate = (): boolean => {
+    setError(null);
+    if (step === 1 && !draft.name.trim()) {
+      setError('Enter an evaluation name to continue.');
+      return false;
+    }
+    if (step === 2 && !draft.type) {
+      setError('Select an evaluation type to continue.');
+      return false;
+    }
+    if (step === 3 && draft.providers.length === 0) {
+      setError('Select at least one provider to continue.');
+      return false;
+    }
+    if (step === 4 && draft.models.length === 0) {
+      setError('Select at least one model to continue.');
+      return false;
+    }
+    if (step === 5 && !draft.dataset) {
+      setError('Select a test suite to continue.');
+      return false;
+    }
+    if (step === 6 && draft.metrics.length === 0) {
+      setError('Select at least one metric to continue.');
+      return false;
+    }
+    return true;
+  };
+
+  const goNext = () => {
+    if (!validate()) return;
+    setStep((s) => Math.min(totalSteps, s + 1));
+  };
+  const goBack = () => setStep((s) => Math.max(1, s - 1));
+  const goToStep = (target: number) => {
+    if (target < step) setStep(target);
+  };
+
+  const startEvaluation = () => {
+    if (!validate()) return;
+    navigate('/app/history');
+  };
+
+  return (
+    <div className="run-eval">
+      <div className="run-eval__header">
+        <div>
+          <h1 className="run-eval__title">New Evaluation</h1>
+          <p className="run-eval__subtitle">Compare AI models with standardized tests</p>
+        </div>
+        <button type="button" className="run-eval__btn run-eval__btn--secondary" onClick={() => navigate('/app')}>
+          <X size={15} /> Cancel
+        </button>
+      </div>
+
+      <div className="run-eval__wizard">
+        <div className="run-eval__steps">
+          {WIZARD_STEPS.map((label, i) => {
+            const num = i + 1;
+            const state = num === step ? 'active' : num < step ? 'complete' : 'upcoming';
+            return (
+              <button
+                key={label}
+                type="button"
+                className={`run-eval__step-indicator run-eval__step-indicator--${state}`}
+                onClick={() => goToStep(num)}
+                disabled={num > step}
+              >
+                <span className="run-eval__step-num">{state === 'complete' ? <Check size={12} strokeWidth={3} /> : num}</span>
+                {label}
+              </button>
+            );
+          })}
+        </div>
+
+        {step === 1 && <NameStep name={draft.name} onChange={(name) => setDraft((d) => ({ ...d, name }))} />}
+        {step === 2 && <TypeStep value={draft.type} onChange={setType} />}
+        {step === 3 && (
+          <ProvidersStep
+            selected={draft.providers}
+            onToggle={(id) => toggleInArray('providers', id)}
+            onGoToProviders={() => navigate('/app/providers')}
+          />
+        )}
+        {step === 4 && (
+          <ModelsStep
+            providers={draft.providers}
+            selected={draft.models}
+            onToggle={(id) => toggleInArray('models', id)}
+            onClear={() => setDraft((d) => ({ ...d, models: [] }))}
+          />
+        )}
+        {step === 5 && (
+          <DatasetStep evalType={draft.type} selected={draft.dataset} onSelect={(id) => setDraft((d) => ({ ...d, dataset: id }))} />
+        )}
+        {step === 6 && (
+          <MetricsStep evalType={draft.type} selected={draft.metrics} onToggle={(id) => toggleInArray('metrics', id)} />
+        )}
+        {step === 7 && <ReviewStep draft={draft} />}
+
+        {error && <p className="run-eval__error">{error}</p>}
+
+        <div className="run-eval__nav">
+          {step > 1 ? (
+            <button type="button" className="run-eval__btn run-eval__btn--secondary run-eval__btn--lg" onClick={goBack}>
+              <ArrowLeft size={16} /> Back
+            </button>
+          ) : (
+            <span />
+          )}
+
+          {step < totalSteps ? (
+            <button type="button" className="run-eval__btn run-eval__btn--primary run-eval__btn--lg" onClick={goNext}>
+              Continue <ArrowRight size={16} />
+            </button>
+          ) : (
+            <button type="button" className="run-eval__btn run-eval__btn--primary run-eval__btn--lg" onClick={startEvaluation}>
+              <Play size={16} /> Start Evaluation
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export default RunEvaluation;
 
@@ -2242,404 +4332,68 @@ export default RunEvaluation;
 
 
 
-//Settings.tsx
-import type { FC } from 'react';
-import PagePlaceholder from '../../../components/PagePlaceholder/PagePlaceholder';
+//types.ts
+export type EvalTypeId = 'model' | 'agent' | 'rag';
 
-const Settings: FC = () => <PagePlaceholder title="Settings" subtitle="Workspace configuration" />;
-
-export default Settings;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//uiSlice.ts
-import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
-
-export interface UiState {
-  sidebarCollapsed: boolean;
-  activeNavItem: string;
+export interface EvalType {
+  id: EvalTypeId;
+  title: string;
+  desc: string;
+  badge: string;
 }
 
-const initialState: UiState = {
-  sidebarCollapsed: false,
-  activeNavItem: 'dashboard',
-};
-
-const uiSlice = createSlice({
-  name: 'ui',
-  initialState,
-  reducers: {
-    toggleSidebar: (state) => {
-      state.sidebarCollapsed = !state.sidebarCollapsed;
-    },
-    setSidebarCollapsed: (state, action: PayloadAction<boolean>) => {
-      state.sidebarCollapsed = action.payload;
-    },
-    setActiveNavItem: (state, action: PayloadAction<string>) => {
-      state.activeNavItem = action.payload;
-    },
-  },
-});
-
-export const { toggleSidebar, setSidebarCollapsed, setActiveNavItem } = uiSlice.actions;
-export default uiSlice.reducer;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//hooks.ts
-import { useDispatch, useSelector, type TypedUseSelectorHook } from 'react-redux';
-import type { RootState, AppDispatch } from './index';
-
-export const useAppDispatch = () => useDispatch<AppDispatch>();
-export const useAppSelector: TypedUseSelectorHook<RootState> = useSelector;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//index.ts
-import { configureStore } from '@reduxjs/toolkit';
-import uiReducer from './slices/uiSlice';
-
-export const store = configureStore({
-  reducer: {
-    ui: uiReducer,
-  },
-});
-
-export type RootState = ReturnType<typeof store.getState>;
-export type AppDispatch = typeof store.dispatch;
-
-export default store;
-
-
-
-
-
-
-
-
-
-
-
-//_variables.scss
-// ============================================================
-// SemcoEval — design tokens (converted from theme.css / landing.css)
-// Base: 1rem = 16px
-// ============================================================
-
-// ---------- Brand / primary ----------
-$primary: #1428a0;
-$primary-hover: #1d37c9;
-$primary-light: #eef1fe;
-$primary-subtle: #e2e7fc;
-
-// ---------- Surfaces ----------
-$bg-page: #f6f7f9;
-$bg-subtle: #f3f5f8;
-$bg-inset: #edf0f4;
-$bg-main: #ffffff;
-
-// ---------- Borders ----------
-$border-default: #dce0e7;
-$border-subtle: #e9ecf1;
-$border-strong: #c7cdd8;
-
-// ---------- Text ----------
-$text-primary: #0e1526;
-$text-secondary: #46506b;
-$text-tertiary: #7a8399;
-
-// ---------- Status ----------
-$success: #0f7a5a;
-$success-subtle: #e4f4ee;
-$warning: #b7791f;
-$warning-subtle: #fdf3e0;
-$danger: #c0303b;
-$danger-subtle: #fcebec;
-
-// ---------- Shadows ----------
-$shadow-xs: 0 0.0625rem 0.125rem rgba(14, 21, 38, 0.04);
-$shadow-sm: 0 0.0625rem 0.125rem rgba(14, 21, 38, 0.05);
-$shadow-md: 0 0.125rem 0.25rem rgba(14, 21, 38, 0.05), 0 0.5rem 1.25rem -0.75rem rgba(14, 21, 38, 0.16);
-$shadow-lg: 0 0.25rem 0.5rem rgba(14, 21, 38, 0.05), 0 1.125rem 2.75rem -1.375rem rgba(14, 21, 38, 0.24);
-$shadow-xl: 0 1.75rem 4.375rem -1.875rem rgba(14, 21, 38, 0.34);
-
-// ---------- Radius ----------
-$radius-sm: 0.375rem;
-$radius-md: 0.5rem;
-$radius-lg: 0.75rem;
-$radius-xl: 1rem;
-
-// ---------- Typography ----------
-$font-display: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-$font-body: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-$font-mono: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-
-// ---------- Layout ----------
-$header-height: 3.75rem; // 60px
-$footer-height: 3.375rem; // 54px
-$sidebar-width: 15rem; // 240px
-
-// ---------- Z-index ----------
-$z-header: 100;
-$z-footer: 100;
-$z-sidebar: 90;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//global.scss
-@use './variables' as *;
-
-* ,
-*::before,
-*::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
+export interface Provider {
+  id: string;
+  name: string;
+  status: 'connected' | 'not_connected';
+  modelCount: number;
+  logo: string;
+  desc: string;
 }
 
-html {
-  -webkit-font-smoothing: antialiased;
-  scroll-behavior: smooth;
-  font-size: 100%; // 1rem = 16px, respects user browser settings
+export interface ModelInfo {
+  id: string;
+  name: string;
+  provider: string;
+  providerId: string;
+  capabilities: string[];
+  contextWindow: string;
+  pricing: string;
+  speedRating: string;
+  accuracyScore: number;
+  agentScore: number;
+  category: EvalTypeId;
 }
 
-body {
-  font-family: $font-body;
-  background: $bg-main;
-  color: $text-primary;
-  font-size: 1rem;
-  line-height: 1.55;
+export interface TestSuite {
+  id: string;
+  name: string;
+  category: string;
+  questions: number;
+  language: string;
+  task: string;
+  difficulty: string;
+  version: string;
+  maintainer: string;
+  description: string;
+  recommendedFor: EvalTypeId[];
+  featured: boolean;
 }
 
-a {
-  color: inherit;
+export interface Metric {
+  id: string;
+  name: string;
+  tooltip: string;
+  defaultChecked: boolean;
 }
 
-button,
-input,
-select,
-textarea {
-  font-family: inherit;
+export interface EvaluationDraft {
+  name: string;
+  type: EvalTypeId | null;
+  providers: string[];
+  models: string[];
+  dataset: string | null;
+  metrics: string[];
 }
 
-h1,
-h2,
-h3 {
-  font-family: $font-display;
-  letter-spacing: -0.025em;
-  line-height: 1.12;
-  font-weight: 700;
-}
-
-/* numbers hold their columns without a monospaced face */
-.n {
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: 'tnum' 1, 'lnum' 1;
-}
-
-:where(a, button, input, select, textarea, [tabindex]):focus-visible {
-  outline: 0.125rem solid $primary;
-  outline-offset: 0.125rem;
-  border-radius: 0.25rem;
-}
-
-::selection {
-  background: $primary-subtle;
-  color: $text-primary;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
-  }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//App.tsx
-import { Routes, Route } from 'react-router-dom';
-import type { FC } from 'react';
-import MainLayout from './layouts/MainLayout';
-import WorkspaceLayout from './layouts/WorkspaceLayout';
-import Landing from './pages/Landing/Landing';
-import Dashboard from './pages/Workspace/Dashboard/Dashboard';
-import History from './pages/Workspace/History/History';
-import Models from './pages/Workspace/Models/Models';
-import Providers from './pages/Workspace/Providers/Providers';
-import Datasets from './pages/Workspace/Datasets/Datasets';
-import Reports from './pages/Workspace/Reports/Reports';
-import Settings from './pages/Workspace/Settings/Settings';
-import RunEvaluation from './pages/Workspace/RunEvaluation/RunEvaluation';
-
-const App: FC = () => {
-  return (
-    <Routes>
-      <Route element={<MainLayout />}>
-        <Route path="/" element={<Landing />} />
-
-        <Route path="/app" element={<WorkspaceLayout />}>
-          <Route index element={<Dashboard />} />
-          <Route path="run-evaluation" element={<RunEvaluation />} />
-          <Route path="history" element={<History />} />
-          <Route path="models" element={<Models />} />
-          <Route path="providers" element={<Providers />} />
-          <Route path="datasets" element={<Datasets />} />
-          <Route path="reports" element={<Reports />} />
-          <Route path="settings" element={<Settings />} />
-        </Route>
-      </Route>
-    </Routes>
-  );
-};
-
-export default App;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//main.tsx
-import { StrictMode } from 'react';
-import { createRoot } from 'react-dom/client';
-import { BrowserRouter } from 'react-router-dom';
-import { Provider } from 'react-redux';
-import store from './store';
-import App from './App.tsx';
-import './styles/global.scss';
-
-createRoot(document.getElementById('root') as HTMLElement).render(
-  <StrictMode>
-    <Provider store={store}>
-      <BrowserRouter>
-        <App />
-      </BrowserRouter>
-    </Provider>
-  </StrictMode>
-);
-
-
-
-
-
-
-
-
-
-
-
-
-//package.json
-{
-  "name": "semcoeval-app",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "lint": "oxlint",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "@reduxjs/toolkit": "^2.12.0",
-    "lucide-react": "^1.27.0",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "react-redux": "^9.3.0",
-    "react-router-dom": "^7.18.1",
-    "sass": "^1.102.0"
-  },
-  "devDependencies": {
-    "@types/node": "^26.1.2",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.3",
-    "oxlint": "^1.71.0",
-    "typescript": "^7.0.2",
-    "vite": "^8.1.1"
-  }
-}
+export const WIZARD_STEPS = ['Name', 'Type', 'Providers', 'Models', 'Test Suite', 'Metrics', 'Review'] as const;
