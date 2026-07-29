@@ -15,7 +15,7 @@
   gap: 0.75rem;
   padding: 0 1.125rem;
   background: #fff;
-  border-top: 0.0625rem solid $border-subtle;
+  border-top: 1px solid $border-subtle;
 
   &__version,
   &__copyright {
@@ -24,6 +24,16 @@
     white-space: nowrap;
   }
 }
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -55,7 +65,7 @@
   padding: 0 1.125rem;
   background: rgba(255, 255, 255, 0.88);
   backdrop-filter: blur(0.75rem);
-  border-bottom: 0.0625rem solid $border-subtle;
+  border-bottom: 1px solid $border-subtle;
 
   &__brand {
     display: flex;
@@ -94,7 +104,7 @@
     width: 34px;
     height: 34px;
     border-radius: 50%;
-    border: 0.0625rem solid $border-default;
+    border: 1px solid $border-default;
     background: $primary-light;
     color: $primary;
     font-family: $font-display;
@@ -124,7 +134,7 @@
     right: 0;
     width: 232px;
     background: $bg-main;
-    border: 0.0625rem solid $border-subtle;
+    border: 1px solid $border-subtle;
     border-radius: 0.75rem;
     box-shadow: $shadow-lg;
     padding: 0.625rem;
@@ -217,6 +227,11 @@
 
 
 
+
+
+
+
+
 //Pageplaceholder.scss
 @use '../../styles/variables' as *;
 
@@ -235,7 +250,7 @@
 
   &__box {
     margin-top: 1.5rem;
-    border: 0.0938rem dashed $border-strong;
+    border: 1.5008px dashed $border-strong;
     border-radius: 0.75rem;
     padding: 3rem 1.5rem;
     text-align: center;
@@ -257,7 +272,12 @@
 
 
 
-//Sidebar.scss
+
+
+
+
+
+//Sidebar.tsx
 @use '../../styles/variables' as *;
 
 $sidebar-width-collapsed: 68px;
@@ -272,7 +292,7 @@ $sidebar-width-collapsed: 68px;
   flex-direction: column;
   justify-content: space-between;
   background: $bg-main;
-  border-right: 0.0625rem solid $border-subtle;
+  border-right: 1px solid $border-subtle;
   padding: 0.75rem 0.875rem 1.125rem;
   transition: width 0.18s ease;
 
@@ -301,7 +321,7 @@ $sidebar-width-collapsed: 68px;
     border-radius: 0.5rem;
     background: transparent;
     color: $text-tertiary;
-    font-size: 0.8125rem;
+    font-size: 0.75rem;
     font-weight: 600;
     cursor: pointer;
     transition: background 0.14s ease, color 0.14s ease;
@@ -344,7 +364,7 @@ $sidebar-width-collapsed: 68px;
 
   &__section-label {
     font-family: $font-mono;
-    font-size: 0.725rem;
+    font-size: 0.6625rem;
     font-weight: 600;
     letter-spacing: 0.09em;
     text-transform: uppercase;
@@ -367,7 +387,7 @@ $sidebar-width-collapsed: 68px;
     gap: 0.6875rem;
     padding: 0.5rem 0.625rem;
     border-radius: 0.5rem;
-    font-size: 0.90625rem;
+    font-size: 0.8125rem;
     font-weight: 500;
     color: $text-secondary;
     text-decoration: none;
@@ -421,7 +441,7 @@ $sidebar-width-collapsed: 68px;
 
   /* ---------- footer ---------- */
   &__footer {
-    border-top: 0.0625rem solid $border-subtle;
+    border-top: 1px solid $border-subtle;
     margin-top: 0.875rem;
     padding-top: 0.625rem;
     display: flex;
@@ -486,7 +506,7 @@ $sidebar-width-collapsed: 68px;
     font-weight: 600;
     color: var(--blue);
     background: var(--blue-wash);
-    border: 0.0625rem solid $primary-subtle;
+    border: 1px solid $primary-subtle;
     border-radius: 999px;
     padding: 0.375rem 0.75rem 0.375rem 0.625rem;
     margin-bottom: 1.125rem;
@@ -533,7 +553,7 @@ $sidebar-width-collapsed: 68px;
     font-weight: 600;
     padding: 0.625rem 1.125rem;
     border-radius: 0.5rem;
-    border: 0.0625rem solid transparent;
+    border: 1px solid transparent;
     cursor: pointer;
     text-decoration: none;
     display: inline-flex;
@@ -640,7 +660,7 @@ $sidebar-width-collapsed: 68px;
   &__panel {
     margin-top: clamp(2.625rem, 5.5vw, 4.25rem);
     background: var(--white);
-    border: 0.0625rem solid var(--rule);
+    border: 1px solid var(--rule);
     border-radius: 0.875rem;
     box-shadow: 0 0.0625rem 0.125rem rgba(14, 21, 38, 0.04), 0 1.25rem 2.875rem -1.625rem rgba(14, 21, 38, 0.22);
     overflow: hidden;
@@ -652,7 +672,7 @@ $sidebar-width-collapsed: 68px;
     flex-wrap: wrap;
     gap: 0.5rem 0.875rem;
     padding: 0.875rem 1.25rem;
-    border-bottom: 0.0625rem solid var(--rule-2);
+    border-bottom: 1px solid var(--rule-2);
     background: var(--paper);
   }
 
@@ -686,7 +706,7 @@ $sidebar-width-collapsed: 68px;
 
   &__rail {
     padding: 1.25rem 0;
-    border-bottom: 0.0625rem dashed var(--rule);
+    border-bottom: 1px dashed var(--rule);
 
     &:last-child {
       border-bottom: 0;
@@ -757,7 +777,7 @@ $sidebar-width-collapsed: 68px;
     height: 13px;
     border-radius: 50%;
     background: var(--white);
-    border: 0.1875rem solid var(--ink-3);
+    border: 3px solid var(--ink-3);
     transition: transform 0.15s ease;
   }
 
@@ -806,7 +826,7 @@ $sidebar-width-collapsed: 68px;
     flex-wrap: wrap;
     gap: 0.5rem 1.625rem;
     padding: 0.875rem 1.25rem;
-    border-top: 0.0625rem solid var(--rule-2);
+    border-top: 1px solid var(--rule-2);
     background: var(--paper);
     font-size: 0.875rem;
     color: var(--ink-2);
@@ -899,8 +919,8 @@ $sidebar-width-collapsed: 68px;
   /* ================= GRADED TRANSCRIPT ================= */
   &__ask {
     background: var(--white);
-    border: 0.0625rem solid var(--rule);
-    border-left: 0.1875rem solid var(--blue);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--blue);
     border-radius: 0.625rem;
     padding: 1.25rem 1.375rem;
 
@@ -942,8 +962,8 @@ $sidebar-width-collapsed: 68px;
 
   &__ans {
     background: var(--white);
-    border: 0.0625rem solid var(--rule);
-    border-left: 0.1875rem solid var(--rule);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--rule);
     border-radius: 0.625rem;
     padding: 1rem 1.125rem;
     display: flex;
@@ -1030,7 +1050,7 @@ $sidebar-width-collapsed: 68px;
 
   &__step {
     padding: 1.5rem 1.375rem 1.625rem;
-    border: 0.0625rem solid var(--rule);
+    border: 1px solid var(--rule);
     border-radius: 0.75rem;
     background: var(--white);
     position: relative;
@@ -1067,7 +1087,7 @@ $sidebar-width-collapsed: 68px;
   &__step-hint {
     margin-top: 0.875rem;
     padding-top: 0.75rem;
-    border-top: 0.0625rem dashed var(--rule);
+    border-top: 1px dashed var(--rule);
     font-size: 0.8125rem;
     color: var(--ink-3);
   }
@@ -1081,7 +1101,7 @@ $sidebar-width-collapsed: 68px;
 
   &__mode {
     background: var(--white);
-    border: 0.0625rem solid var(--rule);
+    border: 1px solid var(--rule);
     border-radius: 0.75rem;
     padding: 1.5rem 1.375rem;
     display: flex;
@@ -1119,7 +1139,7 @@ $sidebar-width-collapsed: 68px;
   &__chips {
     margin-top: 1.25rem;
     padding-top: 0.875rem;
-    border-top: 0.0625rem solid var(--rule-2);
+    border-top: 1px solid var(--rule-2);
     display: flex;
     flex-wrap: wrap;
     gap: 0.375rem;
@@ -1128,14 +1148,14 @@ $sidebar-width-collapsed: 68px;
   &__chip {
     font-size: 0.78125rem;
     color: var(--ink-2);
-    border: 0.0625rem solid var(--rule);
+    border: 1px solid var(--rule);
     border-radius: 0.3125rem;
     padding: 0.1875rem 0.5rem;
   }
 
   /* ================= LEDGER ================= */
   &__ledger {
-    border-top: 0.0625rem solid var(--rule);
+    border-top: 1px solid var(--rule);
   }
 
   &__row {
@@ -1143,7 +1163,7 @@ $sidebar-width-collapsed: 68px;
     grid-template-columns: 2.5rem 1.05fr 1.45fr;
     gap: 1.5rem;
     padding: 1.625rem 0;
-    border-bottom: 0.0625rem solid var(--rule);
+    border-bottom: 1px solid var(--rule);
     align-items: start;
 
     h3 {
@@ -1267,7 +1287,12 @@ $sidebar-width-collapsed: 68px;
 
 
 
-//RunEvaluation.scss
+
+
+
+
+
+//Runevaluation.tsx
 @use '../../../styles/variables' as *;
 
 .run-eval {
@@ -1314,7 +1339,7 @@ $sidebar-width-collapsed: 68px;
     font-weight: 600;
     padding: 0.5625rem 0.9375rem;
     border-radius: 0.5rem;
-    border: 0.0625rem solid transparent;
+    border: 1px solid transparent;
     cursor: pointer;
     transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
     font-family: $font-body;
@@ -1407,9 +1432,9 @@ $sidebar-width-collapsed: 68px;
 
   &__tracker-bar {
     position: absolute;
-    top: 15px;
-    left: 15px;
-    right: 15px;
+    top: 18px;
+    left: 18px;
+    right: 18px;
     height: 2px;
     background: $border-default;
     border-radius: 2px;
@@ -1446,8 +1471,8 @@ $sidebar-width-collapsed: 68px;
   }
 
   &__node-dot {
-    width: 30px;
-    height: 30px;
+    width: 36px;
+    height: 36px;
     border-radius: 50%;
     display: grid;
     place-items: center;
@@ -1568,7 +1593,7 @@ $sidebar-width-collapsed: 68px;
 
   &__input {
     width: 100%;
-    border: 0.0625rem solid $border-default;
+    border: 1px solid $border-default;
     border-radius: 0.5rem;
     padding: 0.625rem 0.75rem;
     font-size: 0.9375rem;
@@ -1612,7 +1637,7 @@ $sidebar-width-collapsed: 68px;
     font-weight: 500;
     color: $text-secondary;
     background: $bg-subtle;
-    border: 0.0625rem solid $border-default;
+    border: 1px solid $border-default;
     border-radius: 999px;
     padding: 0.3125rem 0.75rem;
     cursor: pointer;
@@ -1657,7 +1682,7 @@ $sidebar-width-collapsed: 68px;
     text-align: left;
     width: 100%;
     padding: 1.125rem 3rem 1.125rem 1.125rem;
-    border: 0.0625rem solid $border-default;
+    border: 1px solid $border-default;
     border-radius: 0.75rem;
     background: $bg-main;
     cursor: pointer;
@@ -1748,7 +1773,7 @@ $sidebar-width-collapsed: 68px;
     gap: 0.75rem;
     text-align: left;
     padding: 0.875rem 2.5rem 0.875rem 0.875rem;
-    border: 0.0625rem solid $border-default;
+    border: 1px solid $border-default;
     border-radius: 0.75rem;
     background: $bg-main;
     cursor: pointer;
@@ -1865,7 +1890,7 @@ $sidebar-width-collapsed: 68px;
   }
 
   &__filters {
-    border: 0.0625rem solid $border-subtle;
+    border: 1px solid $border-subtle;
     border-radius: 0.75rem;
     padding: 1rem;
     display: flex;
@@ -1924,7 +1949,7 @@ $sidebar-width-collapsed: 68px;
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    border: 0.0625rem solid $border-default;
+    border: 1px solid $border-default;
     border-radius: 0.5rem;
     padding: 0.5625rem 0.75rem;
     color: $text-tertiary;
@@ -1982,7 +2007,7 @@ $sidebar-width-collapsed: 68px;
     position: relative;
     text-align: left;
     padding: 0.875rem 1rem;
-    border: 0.0625rem solid $border-default;
+    border: 1px solid $border-default;
     border-radius: 0.75rem;
     background: $bg-main;
     cursor: pointer;
@@ -2064,7 +2089,7 @@ $sidebar-width-collapsed: 68px;
     display: flex;
     gap: 0.375rem;
     margin-top: 1.5rem;
-    border-bottom: 0.0625rem solid $border-subtle;
+    border-bottom: 1px solid $border-subtle;
   }
 
   &__tab {
@@ -2076,7 +2101,7 @@ $sidebar-width-collapsed: 68px;
     font-weight: 600;
     color: $text-tertiary;
     cursor: pointer;
-    border-bottom: 0.125rem solid transparent;
+    border-bottom: 2px solid transparent;
     transition: color 0.14s ease, border-color 0.14s ease;
 
     &--active {
@@ -2103,7 +2128,7 @@ $sidebar-width-collapsed: 68px;
     position: relative;
     text-align: left;
     padding: 1rem 1.125rem;
-    border: 0.0625rem solid $border-default;
+    border: 1px solid $border-default;
     border-radius: 0.75rem;
     background: $bg-main;
     cursor: pointer;
@@ -2152,7 +2177,7 @@ $sidebar-width-collapsed: 68px;
   &__empty-state,
   &__upload-zone {
     margin-top: 1.5rem;
-    border: 0.0938rem dashed $border-strong;
+    border: 1.5008px dashed $border-strong;
     border-radius: 0.75rem;
     padding: 2.75rem 1.5rem;
     text-align: center;
@@ -2220,7 +2245,7 @@ $sidebar-width-collapsed: 68px;
     position: relative;
     text-align: left;
     padding: 0.75rem 2rem 0.75rem 0.875rem;
-    border: 0.0625rem solid $border-default;
+    border: 1px solid $border-default;
     border-radius: 0.625rem;
     background: $bg-main;
     cursor: pointer;
@@ -2254,7 +2279,7 @@ $sidebar-width-collapsed: 68px;
   /* ---------- review step ---------- */
   &__review {
     margin-top: 1.5rem;
-    border: 0.0625rem solid $border-subtle;
+    border: 1px solid $border-subtle;
     border-radius: 0.75rem;
     overflow: hidden;
   }
@@ -2266,7 +2291,7 @@ $sidebar-width-collapsed: 68px;
     gap: 1rem;
     padding: 0.75rem 1rem;
     font-size: 0.90625rem;
-    border-bottom: 0.0625rem solid $border-subtle;
+    border-bottom: 1px solid $border-subtle;
 
     &:last-child {
       border-bottom: 0;
@@ -2308,7 +2333,7 @@ $sidebar-width-collapsed: 68px;
     flex-shrink: 0;
     margin-top: 1.25rem;
     padding-top: 1.25rem;
-    border-top: 0.0625rem solid $border-subtle;
+    border-top: 1px solid $border-subtle;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -2330,90 +2355,5 @@ $sidebar-width-collapsed: 68px;
     &__node-label {
       display: none;
     }
-  }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//global.scss
-@use './variables' as *;
-
-* ,
-*::before,
-*::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
-
-html {
-  -webkit-font-smoothing: antialiased;
-  scroll-behavior: smooth;
-  font-size: 100%; // 1rem = 16px, respects user browser settings
-}
-
-body {
-  font-family: $font-body;
-  background: $bg-main;
-  color: $text-primary;
-  font-size: 1.0625rem;
-  line-height: 1.55;
-}
-
-a {
-  color: inherit;
-}
-
-button,
-input,
-select,
-textarea {
-  font-family: inherit;
-}
-
-h1,
-h2,
-h3 {
-  font-family: $font-display;
-  letter-spacing: -0.025em;
-  line-height: 1.12;
-  font-weight: 700;
-}
-
-/* numbers hold their columns without a monospaced face */
-.n {
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: 'tnum' 1, 'lnum' 1;
-}
-
-:where(a, button, input, select, textarea, [tabindex]):focus-visible {
-  outline: 0.125rem solid $primary;
-  outline-offset: 0.125rem;
-  border-radius: 0.25rem;
-}
-
-::selection {
-  background: $primary-subtle;
-  color: $text-primary;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
   }
 }
