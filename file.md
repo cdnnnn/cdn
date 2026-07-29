@@ -1,171 +1,165 @@
 @use '../../styles/variables' as *;
 
-$sidebar-width-collapsed: 68px;
-
-.app-sidebar {
-  width: $sidebar-width;
+.app-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: $z-header;
+  height: 60px;
   flex-shrink: 0;
-  height: 100%;
-  overflow-y: auto;
-  overflow-x: hidden;
   display: flex;
-  flex-direction: column;
+  align-items: center;
   justify-content: space-between;
-  background: $bg-main;
-  border-right: 1px solid $border-subtle;
-  padding: 0.75rem 0.875rem 1.125rem;
-  transition: width 0.18s ease;
+  gap: 0.75rem;
+  padding: 0 1.125rem;
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(0.75rem);
+  border-bottom: 1px solid $border-subtle;
 
-  &--collapsed {
-    width: $sidebar-width-collapsed;
-    padding-left: 0.625rem;
-    padding-right: 0.625rem;
-  }
-
-  &__top {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-  }
-
-  /* ---------- collapse toggle ---------- */
-  &__collapse {
+  &__brand {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    width: 100%;
-    padding: 0.375rem 0.5rem;
-    margin-bottom: 0.75rem;
-    border: none;
-    border-radius: 0.5rem;
-    background: transparent;
-    color: $text-tertiary;
-    font-size: 0.8125rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background 0.14s ease, color 0.14s ease;
-
-    &:hover {
-      background: $bg-subtle;
-      color: $text-secondary;
-    }
-  }
-
-  &--collapsed &__collapse {
-    justify-content: center;
-  }
-
-  &__collapse-ic {
-    transition: transform 0.18s ease;
+    gap: 0.625rem;
+    text-decoration: none;
+    color: $text-primary;
     flex-shrink: 0;
-
-    &--flipped {
-      transform: rotate(180deg);
-    }
   }
 
-  /* ---------- nav sections ---------- */
-  &__nav {
-    display: flex;
-    flex-direction: column;
-    gap: 1.375rem;
-    margin-top: 0.5rem;
-  }
-
-  &__section {
-    ul {
-      list-style: none;
-      display: flex;
-      flex-direction: column;
-      gap: 0.125rem;
-    }
-  }
-
-  &__section-label {
-    font-family: $font-mono;
-    font-size: 0.71875rem;
-    font-weight: 600;
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-    color: $text-tertiary;
-    padding: 0 0.625rem;
-    margin-bottom: 0.375rem;
-  }
-
-  /* ---------- nav items ---------- */
-  &__icon {
+  &__brand-mark {
+    width: 32px;
+    height: 32px;
+    border-radius: 0.5rem;
+    background: linear-gradient(155deg, $primary 0%, $primary-hover 100%);
+    color: #fff;
     display: grid;
     place-items: center;
-    flex-shrink: 0;
-    color: inherit;
+    box-shadow: 0 0.0625rem 0.125rem rgba(14, 21, 38, 0.06), inset 0 0 0 0.0625rem rgba(255, 255, 255, 0.14);
   }
 
-  &__item {
-    display: flex;
-    align-items: center;
-    gap: 0.6875rem;
-    padding: 0.5rem 0.625rem;
-    border-radius: 0.5rem;
-    font-size: 0.9375rem;
-    font-weight: 500;
-    color: $text-secondary;
-    text-decoration: none;
-    border: none;
-    background: transparent;
-    width: 100%;
-    cursor: pointer;
-    transition: background 0.14s ease, color 0.14s ease;
+  &__brand-name {
+    font-family: $font-display;
+    font-weight: 700;
+    font-size: 1.0925rem;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+  }
 
-    svg {
-      opacity: 0.75;
-      color: $text-tertiary;
-      transition: color 0.14s ease, opacity 0.14s ease;
-    }
+  &__user {
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  &__avatar {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: 1px solid $border-default;
+    background: $primary-light;
+    color: $primary;
+    font-family: $font-display;
+    font-size: 0.8125rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
 
     &:hover {
-      background: $bg-subtle;
-      color: $text-primary;
-
-      svg {
-        opacity: 1;
-        color: $text-secondary;
-      }
+      border-color: $primary;
     }
 
-    &--active {
-      background: $primary-light;
-      color: $primary;
-      font-weight: 600;
-
-      svg {
-        opacity: 1;
-        color: $primary;
-      }
-
-      &:hover {
-        background: $primary-light;
-        color: $primary;
-      }
-    }
-
-    &--button {
-      text-align: left;
-    }
-
-    &--collapsed {
-      justify-content: center;
-      padding: 0.5rem;
+    &--open,
+    &:focus-visible {
+      outline: none;
+      border-color: $primary;
+      box-shadow: 0 0 0 0.1875rem $primary-subtle;
     }
   }
 
-  /* ---------- footer ---------- */
-  &__footer {
-    border-top: 1px solid $border-subtle;
-    margin-top: 0.875rem;
-    padding-top: 0.625rem;
+  &__dropdown {
+    position: absolute;
+    top: calc(100% + 0.625rem);
+    right: 0;
+    width: 232px;
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-radius: 0.75rem;
+    box-shadow: $shadow-lg;
+    padding: 0.625rem;
+    z-index: $z-header;
+  }
+
+  &__drop-user {
     display: flex;
-    flex-direction: column;
-    gap: 0.125rem;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.375rem 0.375rem 0.625rem;
+  }
+
+  &__drop-avatar {
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: $primary-light;
+    color: $primary;
+    font-family: $font-display;
+    font-size: 0.84375rem;
+    font-weight: 700;
+    display: grid;
+    place-items: center;
+  }
+
+  &__drop-info {
+    min-width: 0;
+  }
+
+  &__drop-name {
+    font-size: 0.90625rem;
+    font-weight: 600;
+    color: $text-primary;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  &__drop-role {
+    font-size: 0.78125rem;
+    color: $text-tertiary;
+    margin-top: 0.125rem;
+  }
+
+  &__drop-divider {
+    height: 1px;
+    background: $border-subtle;
+    margin: 0.125rem 0.375rem 0.5rem;
+  }
+
+  &__drop-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5625rem;
+    width: 100%;
+    padding: 0.5rem 0.625rem;
+    border: none;
+    border-radius: 0.5rem;
+    background: transparent;
+    color: $danger;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.14s ease;
+
+    &:hover {
+      background: $danger-subtle;
+    }
+  }
+
+  @media (max-width: 620px) {
+    &__brand-name {
+      font-size: 1.0125rem;
+    }
   }
 }
