@@ -4,7 +4,6 @@ import {
   Upload,
   Database,
   Star,
-  Play,
   LayoutGrid,
   Bot,
   Code2,
@@ -96,24 +95,22 @@ const Datasets: FC = () => {
             const CatIcon = catIcon;
 
             return (
-              <div className={`datasets-page__card${d.featured ? ' datasets-page__card--featured' : ''}`} key={d.id}>
-                <div className="datasets-page__card-top">
-                  <span className={`datasets-page__icon datasets-page__icon--${catTint}`}>
-                    <CatIcon size={18} strokeWidth={2} />
-                  </span>
-                  {d.featured && (
-                    <span className="datasets-page__featured">
-                      <Star size={11} strokeWidth={2.5} />
-                    </span>
-                  )}
-                </div>
-
+              <div className="datasets-page__card" key={d.id}>
                 <h3 className="datasets-page__name">{d.name}</h3>
                 <p className="datasets-page__desc">{d.description}</p>
 
                 <div className="datasets-page__tags">
-                  <span className={`datasets-page__tag datasets-page__tag--${catTint}`}>{d.category}</span>
+                  <span className={`datasets-page__tag datasets-page__tag--${catTint}`}>
+                    <CatIcon size={11} strokeWidth={2.5} />
+                    {d.category}
+                  </span>
                   <span className={`datasets-page__tag datasets-page__tag--${diffTint}`}>{d.difficulty}</span>
+                  {d.featured && (
+                    <span className="datasets-page__tag datasets-page__tag--featured">
+                      <Star size={11} strokeWidth={2.5} />
+                      Featured
+                    </span>
+                  )}
                 </div>
 
                 <div className="datasets-page__stat-row">
@@ -131,10 +128,6 @@ const Datasets: FC = () => {
                     <span className="datasets-page__meta-item n">{d.version}</span>
                   </div>
                 </div>
-
-                <button type="button" className="datasets-page__use-btn" onClick={() => navigate('/app/run-evaluation')}>
-                  <Play size={13} strokeWidth={2.25} /> Use this suite
-                </button>
               </div>
             );
           })}
@@ -152,6 +145,23 @@ const Datasets: FC = () => {
 };
 
 export default Datasets;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -360,62 +370,6 @@ export default Datasets;
       box-shadow: $shadow-sm;
       transform: translateY(-1px);
     }
-
-    &--featured {
-      border-color: $primary-subtle;
-      background: linear-gradient(180deg, $primary-light 0%, $bg-main 30%);
-    }
-  }
-
-  &__card-top {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  &__icon {
-    width: 38px;
-    height: 38px;
-    flex-shrink: 0;
-    border-radius: 11px;
-    display: grid;
-    place-items: center;
-
-    &--blue {
-      background: $primary-light;
-      color: $primary;
-    }
-
-    &--violet {
-      background: #f3e8ff;
-      color: #7c3aed;
-    }
-
-    &--amber {
-      background: $warning-subtle;
-      color: $warning;
-    }
-
-    &--jade {
-      background: $success-subtle;
-      color: $success;
-    }
-
-    &--rose {
-      background: $danger-subtle;
-      color: $danger;
-    }
-  }
-
-  &__featured {
-    display: grid;
-    place-items: center;
-    width: 26px;
-    height: 26px;
-    border-radius: 50%;
-    background: $warning-subtle;
-    color: $warning;
-    flex-shrink: 0;
   }
 
   &__name {
@@ -444,6 +398,9 @@ export default Datasets;
   }
 
   &__tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     font-size: 0.6875rem;
     font-weight: 600;
     border-radius: 999px;
@@ -472,6 +429,11 @@ export default Datasets;
     &--rose {
       color: $danger;
       background: $danger-subtle;
+    }
+
+    &--featured {
+      color: $warning;
+      background: $warning-subtle;
     }
   }
 
@@ -530,30 +492,6 @@ export default Datasets;
     svg {
       flex-shrink: 0;
       color: $text-tertiary;
-    }
-  }
-
-  &__use-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    margin-top: 2px;
-    width: 100%;
-    font-family: $font-body;
-    font-size: 0.8125rem;
-    font-weight: 600;
-    padding: 9px 12px;
-    border-radius: 8px;
-    border: 1px solid $primary;
-    background: $primary;
-    color: #fff;
-    cursor: pointer;
-    transition: background 0.14s ease, border-color 0.14s ease;
-
-    &:hover {
-      background: $primary-hover;
-      border-color: $primary-hover;
     }
   }
 
