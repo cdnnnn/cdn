@@ -1,8 +1,159 @@
+//Evaluations.tx
+export interface EvalResult {
+  rank: number;
+  model: string;
+  provider: string;
+  score: string;
+  accuracy: string;
+  time: string;
+  cost: string;
+}
+
+export interface RecentEvaluation {
+  id: string;
+  name: string;
+  type: string;
+  date: string;
+  daysAgo: number;
+  modelsTested: number;
+  topModel: string;
+  topScore: string;
+  status: 'Completed' | 'Running';
+  results: EvalResult[];
+}
+
+export const RECENT_EVALUATIONS: RecentEvaluation[] = [
+  {
+    id: 'eval-9041',
+    name: 'Agent Tool Calling Duel',
+    type: 'Autonomous Workflow (Agent)',
+    date: '10 mins ago',
+    daysAgo: 0,
+    modelsTested: 3,
+    topModel: 'Model Alpha Agent',
+    topScore: '97.5%',
+    status: 'Completed',
+    results: [
+      { rank: 1, model: 'Model Alpha Agent', provider: 'Together AI', score: '97.5%', accuracy: '96.2%', time: '0.75s', cost: '$0.08' },
+      { rank: 2, model: 'Model Delta Agent v2', provider: 'Anthropic', score: '96.2%', accuracy: '97.0%', time: '1.12s', cost: '$0.42' },
+      { rank: 3, model: 'Model Gamma Agent', provider: 'OpenAI', score: '94.0%', accuracy: '93.8%', time: '0.95s', cost: '$0.35' },
+    ],
+  },
+  {
+    id: 'eval-8820',
+    name: 'Q3 Financial Audit Verification',
+    type: 'General Chat & Text (AI Model)',
+    date: 'Yesterday',
+    daysAgo: 1,
+    modelsTested: 4,
+    topModel: 'Model Epsilon Reasoning',
+    topScore: '96.8%',
+    status: 'Completed',
+    results: [
+      { rank: 1, model: 'Model Epsilon Reasoning', provider: 'Together AI', score: '96.8%', accuracy: '98.2%', time: '1.85s', cost: '$0.09' },
+      { rank: 2, model: 'Model Delta Opus', provider: 'Anthropic', score: '95.1%', accuracy: '96.0%', time: '1.10s', cost: '$0.45' },
+      { rank: 3, model: 'Model Gamma Mini', provider: 'OpenAI', score: '92.4%', accuracy: '91.5%', time: '0.88s', cost: '$0.38' },
+    ],
+  },
+  {
+    id: 'eval-8715',
+    name: 'Support KB Retrieval (RAG)',
+    type: 'Document Search & Answering (RAG)',
+    date: '3 days ago',
+    daysAgo: 3,
+    modelsTested: 2,
+    topModel: 'Model Theta Long-Context',
+    topScore: '95.3%',
+    status: 'Completed',
+    results: [
+      { rank: 1, model: 'Model Theta Long-Context', provider: 'Google Gemini', score: '95.3%', accuracy: '96.5%', time: '1.20s', cost: '$0.31' },
+      { rank: 2, model: 'Model Zeta Instruct', provider: 'Groq Cloud', score: '93.1%', accuracy: '91.2%', time: '0.28s', cost: '$0.07' },
+    ],
+  },
+  {
+    id: 'eval-8590',
+    name: 'Support Bot Tone & Helpfulness',
+    type: 'General Chat & Text (AI Model)',
+    date: '6 days ago',
+    daysAgo: 6,
+    modelsTested: 3,
+    topModel: 'Model Zeta Instruct',
+    topScore: '93.4%',
+    status: 'Completed',
+    results: [
+      { rank: 1, model: 'Model Zeta Instruct', provider: 'Groq Cloud', score: '93.4%', accuracy: '90.8%', time: '0.31s', cost: '$0.06' },
+      { rank: 2, model: 'Model Gamma Mini', provider: 'OpenAI', score: '91.2%', accuracy: '89.4%', time: '0.72s', cost: '$0.11' },
+      { rank: 3, model: 'Model Theta Flash', provider: 'Google Gemini', score: '90.5%', accuracy: '88.9%', time: '0.45s', cost: '$0.05' },
+    ],
+  },
+  {
+    id: 'eval-8402',
+    name: 'SWE-bench Patch Accuracy Check',
+    type: 'Autonomous Workflow (Agent)',
+    date: '12 days ago',
+    daysAgo: 12,
+    modelsTested: 4,
+    topModel: 'Model Delta Agent v2',
+    topScore: '95.9%',
+    status: 'Completed',
+    results: [
+      { rank: 1, model: 'Model Delta Agent v2', provider: 'Anthropic', score: '95.9%', accuracy: '97.5%', time: '2.10s', cost: '$0.51' },
+      { rank: 2, model: 'Model Alpha Agent', provider: 'Together AI', score: '94.1%', accuracy: '95.0%', time: '0.98s', cost: '$0.14' },
+      { rank: 3, model: 'Model Eta Instruct', provider: 'Together AI', score: '90.2%', accuracy: '91.1%', time: '1.30s', cost: '$0.17' },
+      { rank: 4, model: 'Model Gamma Agent', provider: 'OpenAI', score: '88.7%', accuracy: '89.9%', time: '1.05s', cost: '$0.39' },
+    ],
+  },
+  {
+    id: 'eval-8177',
+    name: 'Clinical Triage Safety Baseline',
+    type: 'General Chat & Text (AI Model)',
+    date: '21 days ago',
+    daysAgo: 21,
+    modelsTested: 2,
+    topModel: 'Model Delta Opus',
+    topScore: '97.9%',
+    status: 'Completed',
+    results: [
+      { rank: 1, model: 'Model Delta Opus', provider: 'Anthropic', score: '97.9%', accuracy: '98.6%', time: '2.40s', cost: '$0.63' },
+      { rank: 2, model: 'Model Epsilon Reasoning', provider: 'Together AI', score: '95.0%', accuracy: '96.1%', time: '1.90s', cost: '$0.10' },
+    ],
+  },
+];
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Dashboard.tsx
 import type { FC } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Play, PlugZap, Upload, Search, ChevronRight, Trophy, TrendingUp } from 'lucide-react';
 import { MODELS, PROVIDERS, TEST_SUITES } from '../RunEvaluation/data';
-import { RECENT_EVALUATIONS } from './data';
+import { RECENT_EVALUATIONS } from '../shared/evaluations';
 import './Dashboard.scss';
 
 const QUICK_ACTIONS = [
@@ -67,7 +218,7 @@ const Dashboard: FC = () => {
           </div>
 
           <div className="dash__eval-list">
-            {RECENT_EVALUATIONS.map((ev) => (
+            {RECENT_EVALUATIONS.slice(0, 3).map((ev) => (
               <button
                 type="button"
                 key={ev.id}
@@ -182,263 +333,332 @@ export default Dashboard;
 
 
 
+
+
+
+
+
+//History.tsx
+import { useMemo, useState, type FC, type MouseEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Play, Search, Bot, MessageSquare, FileSearch, Copy, Trash2 } from 'lucide-react';
+import { RECENT_EVALUATIONS, type RecentEvaluation } from '../shared/evaluations';
+import './History.scss';
+
+const TYPE_FILTERS = [
+  { value: 'all', label: 'All Types' },
+  { value: 'AI Model', label: 'AI Model' },
+  { value: 'Agent', label: 'Agent' },
+  { value: 'RAG', label: 'RAG' },
+];
+
+const DATE_FILTERS = [
+  { value: 30, label: 'Last 30 days' },
+  { value: 7, label: 'Last 7 days' },
+  { value: Infinity, label: 'All time' },
+];
+
+function typeIcon(type: string) {
+  if (type.includes('Agent')) return Bot;
+  if (type.includes('RAG')) return FileSearch;
+  return MessageSquare;
+}
+
+function matchesType(evType: string, filter: string) {
+  if (filter === 'all') return true;
+  if (filter === 'Agent') return evType.includes('Agent');
+  if (filter === 'RAG') return evType.includes('RAG');
+  return evType.includes('AI Model');
+}
+
+const History: FC = () => {
+  const navigate = useNavigate();
+  const [items, setItems] = useState<RecentEvaluation[]>(RECENT_EVALUATIONS);
+  const [query, setQuery] = useState('');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [dateFilter, setDateFilter] = useState(30);
+
+  const filtered = useMemo(() => {
+    return items.filter((ev) => {
+      if (query && !ev.name.toLowerCase().includes(query.toLowerCase())) return false;
+      if (!matchesType(ev.type, typeFilter)) return false;
+      if (ev.daysAgo > dateFilter) return false;
+      return true;
+    });
+  }, [items, query, typeFilter, dateFilter]);
+
+  const handleDuplicate = (e: MouseEvent, _id: string) => {
+    e.stopPropagation();
+    navigate('/app/run-evaluation');
+  };
+
+  const handleDelete = (e: MouseEvent, id: string) => {
+    e.stopPropagation();
+    setItems((prev) => prev.filter((ev) => ev.id !== id));
+  };
+
+  return (
+    <div className="history">
+      <div className="history__header">
+        <div>
+          <h1 className="history__title">History</h1>
+          <p className="history__subtitle">Past evaluations</p>
+        </div>
+        <button type="button" className="history__btn history__btn--primary" onClick={() => navigate('/app/run-evaluation')}>
+          <Play size={15} strokeWidth={2.25} /> New Evaluation
+        </button>
+      </div>
+
+      <div className="history__filters">
+        <div className="history__search">
+          <Search size={15} />
+          <input type="text" placeholder="Search evaluations..." value={query} onChange={(e) => setQuery(e.target.value)} />
+        </div>
+        <select className="history__select" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+          {TYPE_FILTERS.map((f) => (
+            <option key={f.value} value={f.value}>
+              {f.label}
+            </option>
+          ))}
+        </select>
+        <select className="history__select" value={dateFilter} onChange={(e) => setDateFilter(Number(e.target.value))}>
+          {DATE_FILTERS.map((f) => (
+            <option key={f.label} value={f.value}>
+              {f.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="history__list">
+        {filtered.map((ev) => {
+          const Icon = typeIcon(ev.type);
+          return (
+            <div className="history__item" key={ev.id}>
+              <span className="history__icon">
+                <Icon size={17} strokeWidth={2} />
+              </span>
+
+              <div className="history__content">
+                <h4 className="history__name">{ev.name}</h4>
+                <div className="history__meta">
+                  <span className="history__type-badge">{ev.type.split('(')[0].trim()}</span>
+                  <span className="history__date">{ev.date}</span>
+                </div>
+              </div>
+
+              <div className="history__results">
+                <div className="history__stat">
+                  <span className="history__stat-label">Winner</span>
+                  <span className="history__stat-value">{ev.topModel}</span>
+                </div>
+                <div className="history__stat">
+                  <span className="history__stat-label">Score</span>
+                  <span className="history__stat-value history__stat-value--highlight n">{ev.topScore}</span>
+                </div>
+                <div className="history__stat">
+                  <span className="history__stat-label">Models</span>
+                  <span className="history__stat-value n">{ev.modelsTested}</span>
+                </div>
+              </div>
+
+              <div className="history__actions">
+                <button type="button" className="history__icon-btn" title="Duplicate" onClick={(e) => handleDuplicate(e, ev.id)}>
+                  <Copy size={14} />
+                </button>
+                <button type="button" className="history__icon-btn history__icon-btn--danger" title="Delete" onClick={(e) => handleDelete(e, ev.id)}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </div>
+          );
+        })}
+
+        {filtered.length === 0 && (
+          <div className="history__empty">
+            <Search size={22} />
+            <p>No evaluations match your filters.</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default History;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//History.scss
 @use '../../../styles/variables' as *;
 
-.dash {
+.history {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 18px;
 
-  /* ---------- hero ---------- */
-  &__hero {
-    position: relative;
-    overflow: hidden;
+  /* ---------- header ---------- */
+  &__header {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: 1.5rem;
-    padding: 28px 30px;
-    border-radius: 18px;
-    border: 1px solid $border-subtle;
-    background: $bg-main;
-    box-shadow: $shadow-xs;
+    gap: 1rem;
   }
 
-  &__hero-grid {
-    position: absolute;
-    inset: 0;
-    background-image: linear-gradient(to right, $border-subtle 1px, transparent 1px),
-      linear-gradient(to bottom, $border-subtle 1px, transparent 1px);
-    background-size: 40px 40px;
-    mask-image: radial-gradient(80% 130% at 100% 0%, #000 5%, transparent 68%);
-    -webkit-mask-image: radial-gradient(80% 130% at 100% 0%, #000 5%, transparent 68%);
-    pointer-events: none;
-  }
-
-  &__hero-content {
-    position: relative;
-  }
-
-  &__hero-eyebrow {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-family: $font-mono;
-    font-size: 0.6875rem;
+  &__title {
+    font-size: 27px;
     font-weight: 700;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: $primary;
-    margin-bottom: 8px;
-
-    &::before {
-      content: '';
-      width: 16px;
-      height: 2px;
-      border-radius: 2px;
-      background: $primary;
-    }
-  }
-
-  &__hero-title {
-    font-size: 24px;
-    font-weight: 800;
-    letter-spacing: -0.02em;
     color: $text-primary;
   }
 
-  &__hero-sub {
-    margin-top: 6px;
-    font-size: 0.875rem;
+  &__subtitle {
+    margin-top: 0.375rem;
     color: $text-secondary;
-    max-width: 34rem;
+    font-size: 0.90625rem;
   }
 
-  &__hero-highlight {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 16px;
-    padding: 7px 14px;
-    border-radius: 999px;
-    background: $success-subtle;
-    color: $text-secondary;
-    font-size: 0.78125rem;
-
-    svg {
-      color: $success;
-      flex-shrink: 0;
-    }
-
-    strong {
-      color: $text-primary;
-      font-weight: 700;
-    }
-  }
-
-  &__hero-highlight-score {
-    font-weight: 700;
-    color: $success;
-  }
-
-  &__hero-btn {
-    position: relative;
-    flex-shrink: 0;
-    margin-top: 2px;
+  &__btn {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    padding: 11px 18px;
-    border: 1px solid $primary;
-    border-radius: 10px;
-    background: $primary;
-    color: #fff;
+    font-family: $font-body;
     font-size: 0.84375rem;
     font-weight: 600;
-    font-family: $font-body;
+    padding: 10px 16px;
+    border-radius: 8px;
+    border: 1px solid transparent;
     cursor: pointer;
+    white-space: nowrap;
     transition: background 0.14s ease, border-color 0.14s ease;
 
-    &:hover {
-      background: $primary-hover;
-      border-color: $primary-hover;
+    &--primary {
+      background: $primary;
+      border-color: $primary;
+      color: #fff;
+
+      &:hover {
+        background: $primary-hover;
+        border-color: $primary-hover;
+      }
     }
   }
 
-  /* ---------- stats ---------- */
-  &__stats {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 14px;
+  /* ---------- filters ---------- */
+  &__filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
   }
 
-  &__stat-card {
+  &__search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 280px;
+    max-width: 100%;
+    border: 1px solid $border-default;
+    border-radius: 8px;
+    padding: 9px 12px;
+    background: $bg-main;
+    color: $text-tertiary;
+
+    input {
+      flex: 1;
+      border: none;
+      outline: none;
+      font-size: 0.84375rem;
+      color: $text-primary;
+      background: transparent;
+      font-family: $font-body;
+
+      &::placeholder {
+        color: $text-tertiary;
+      }
+    }
+  }
+
+  &__select {
+    width: 150px;
+    border: 1px solid $border-default;
+    border-radius: 8px;
+    padding: 9px 12px;
+    font-size: 0.8125rem;
+    font-family: $font-body;
+    color: $text-primary;
+    background: $bg-main;
+    cursor: pointer;
+
+    &:focus {
+      outline: none;
+      border-color: $primary;
+      box-shadow: 0 0 0 3px $primary-light;
+    }
+  }
+
+  /* ---------- list ---------- */
+  &__list {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding: 18px 20px;
+    gap: 10px;
+  }
+
+  &__item {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 16px 18px;
     border: 1px solid $border-subtle;
     border-radius: 14px;
     background: $bg-main;
     box-shadow: $shadow-xs;
-  }
-
-  &__stat-value {
-    font-size: 26px;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    color: $text-primary;
-  }
-
-  &__stat-label {
-    font-family: $font-mono;
-    font-size: 0.65625rem;
-    font-weight: 600;
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-    color: $text-tertiary;
-  }
-
-  /* ---------- two-column row ---------- */
-  &__row {
-    display: grid;
-    grid-template-columns: 1.35fr 1fr;
-    gap: 14px;
-    align-items: start;
-  }
-
-  /* ---------- shared card ---------- */
-  &__card {
-    border: 1px solid $border-subtle;
-    border-radius: 16px;
-    background: $bg-main;
-    box-shadow: $shadow-xs;
-    padding: 20px 22px 22px;
-  }
-
-  &__card-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 14px;
-  }
-
-  &__card-title {
-    font-size: 1rem;
-    font-weight: 700;
-    letter-spacing: -0.01em;
-    color: $text-primary;
-  }
-
-  &__card-subtitle {
-    margin-top: 3px;
-    font-size: 0.78125rem;
-    color: $text-tertiary;
-  }
-
-  &__btn {
-    font-family: $font-body;
-    border-radius: 8px;
-    cursor: pointer;
-    font-weight: 600;
-    transition: border-color 0.14s ease, color 0.14s ease;
-
-    &--sm {
-      padding: 6px 12px;
-      font-size: 0.78125rem;
-      background: $bg-main;
-      color: $text-secondary;
-      border: 1px solid $border-default;
-
-      &:hover {
-        border-color: $text-primary;
-        color: $text-primary;
-      }
-    }
-  }
-
-  /* ---------- recent evaluations ---------- */
-  &__eval-list {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  &__eval-item {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    width: 100%;
-    text-align: left;
-    padding: 12px 12px;
-    border: 1px solid transparent;
-    border-radius: 12px;
-    background: transparent;
-    cursor: pointer;
-    transition: background 0.14s ease, border-color 0.14s ease;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
 
     &:hover {
-      background: $bg-subtle;
-      border-color: $border-subtle;
-
-      .dash__eval-arrow {
-        transform: translateX(2px);
-        color: $primary;
-      }
+      border-color: $border-strong;
+      box-shadow: $shadow-sm;
     }
   }
 
-  &__eval-info {
+  &__icon {
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+    border-radius: 11px;
+    background: $primary-light;
+    color: $primary;
+    display: grid;
+    place-items: center;
+  }
+
+  &__content {
     display: flex;
     flex-direction: column;
     gap: 5px;
     min-width: 0;
-    flex: 1;
+    flex: 1.3;
   }
 
-  &__eval-name {
-    font-size: 0.84375rem;
+  &__name {
+    font-size: 0.90625rem;
     font-weight: 600;
     color: $text-primary;
     white-space: nowrap;
@@ -446,41 +666,44 @@ export default Dashboard;
     text-overflow: ellipsis;
   }
 
-  &__eval-meta {
+  &__meta {
     display: flex;
     align-items: center;
     gap: 8px;
   }
 
-  &__eval-type-badge {
-    font-size: 0.65625rem;
+  &__type-badge {
+    font-size: 0.6875rem;
     font-weight: 600;
-    color: $primary;
-    background: $primary-light;
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
     border-radius: 5px;
     padding: 2px 7px;
   }
 
-  &__eval-date {
-    font-size: 0.71875rem;
+  &__date {
+    font-size: 0.75rem;
     color: $text-tertiary;
   }
 
-  &__eval-stats {
+  &__results {
     display: flex;
     align-items: center;
-    gap: 20px;
-    flex-shrink: 0;
+    gap: 26px;
+    flex: 1;
+    justify-content: flex-end;
   }
 
-  &__eval-stat {
+  &__stat {
     display: flex;
     flex-direction: column;
     align-items: flex-end;
-    gap: 2px;
+    gap: 3px;
+    min-width: 0;
   }
 
-  &__eval-stat-label {
+  &__stat-label {
     font-size: 0.625rem;
     font-weight: 600;
     letter-spacing: 0.05em;
@@ -488,11 +711,14 @@ export default Dashboard;
     color: $text-tertiary;
   }
 
-  &__eval-stat-value {
-    font-size: 0.78125rem;
+  &__stat-value {
+    font-size: 0.8125rem;
     font-weight: 600;
     color: $text-secondary;
     white-space: nowrap;
+    max-width: 11rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
 
     &--highlight {
       color: $success;
@@ -500,189 +726,67 @@ export default Dashboard;
     }
   }
 
-  &__eval-arrow {
+  &__actions {
     flex-shrink: 0;
-    color: $text-tertiary;
-    transition: transform 0.14s ease, color 0.14s ease;
-  }
-
-  /* ---------- quick actions ---------- */
-  &__qa-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-  }
-
-  &__qa-card {
     display: flex;
-    align-items: center;
-    gap: 12px;
-    text-align: left;
-    padding: 14px;
-    border: 1px solid $border-subtle;
-    border-radius: 12px;
+    gap: 6px;
+  }
+
+  &__icon-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    border: 1px solid $border-default;
     background: $bg-main;
+    color: $text-tertiary;
+    display: grid;
+    place-items: center;
     cursor: pointer;
-    transition: border-color 0.14s ease, background 0.14s ease;
+    transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
 
     &:hover {
-      border-color: $border-strong;
-      background: $bg-subtle;
+      border-color: $text-primary;
+      color: $text-primary;
+    }
+
+    &--danger:hover {
+      border-color: $danger;
+      color: $danger;
+      background: $danger-subtle;
     }
   }
 
-  &__qa-icon {
-    width: 36px;
-    height: 36px;
-    flex-shrink: 0;
-    border-radius: 10px;
-    display: grid;
-    place-items: center;
-
-    &--blue {
-      background: $primary-light;
-      color: $primary;
-    }
-
-    &--green {
-      background: $success-subtle;
-      color: $success;
-    }
-
-    &--amber {
-      background: $warning-subtle;
-      color: $warning;
-    }
-
-    &--violet {
-      background: #f3e8ff;
-      color: #7c3aed;
-    }
-  }
-
-  &__qa-title {
-    display: block;
-    font-size: 0.8125rem;
-    font-weight: 600;
-    color: $text-primary;
-  }
-
-  &__qa-desc {
-    display: block;
-    margin-top: 2px;
-    font-size: 0.71875rem;
-    color: $text-tertiary;
-  }
-
-  /* ---------- results table ---------- */
-  &__badge {
-    flex-shrink: 0;
-    display: inline-flex;
+  /* ---------- empty state ---------- */
+  &__empty {
+    display: flex;
+    flex-direction: column;
     align-items: center;
-    gap: 5px;
-    font-size: 0.6875rem;
-    font-weight: 600;
-    color: $success;
-    background: $success-subtle;
-    border-radius: 999px;
-    padding: 5px 10px;
-    white-space: nowrap;
-  }
-
-  &__table-wrap {
-    overflow-x: auto;
-  }
-
-  &__table {
-    width: 100%;
-    border-collapse: separate;
-    border-spacing: 0;
-
-    th {
-      font-family: $font-mono;
-      font-size: 0.625rem;
-      font-weight: 600;
-      letter-spacing: 0.07em;
-      text-transform: uppercase;
-      color: $text-tertiary;
-      background: $bg-subtle;
-      padding: 9px 12px;
-      border-bottom: 1px solid $border-default;
-      text-align: left;
-      white-space: nowrap;
-    }
-
-    td {
-      padding: 11px 12px;
-      border-bottom: 1px solid $border-subtle;
-      font-size: 0.8125rem;
-      color: $text-secondary;
-      white-space: nowrap;
-    }
-
-    tbody tr:last-child td {
-      border-bottom: 0;
-    }
-
-    tbody tr:hover td {
-      background: $bg-subtle;
-    }
-  }
-
-  &__cell-strong {
-    color: $text-primary;
-    font-weight: 600;
-  }
-
-  &__row-winner td {
-    background: $success-subtle;
-  }
-
-  &__rank {
-    display: inline-grid;
-    place-items: center;
-    width: 24px;
-    height: 24px;
-    border-radius: 7px;
-    font-size: 0.71875rem;
-    font-weight: 700;
-    background: $bg-inset;
+    gap: 10px;
+    padding: 52px 20px;
+    border: 1px dashed $border-strong;
+    border-radius: 14px;
     color: $text-tertiary;
+    font-size: 0.875rem;
 
-    &--1 {
-      background: $success;
-      color: #fff;
+    svg {
+      color: $text-tertiary;
     }
-
-    &--2 {
-      background: $border-default;
-      color: $text-secondary;
-    }
-
-    &--3 {
-      background: $warning-subtle;
-      color: $warning;
-    }
-  }
-
-  &__score {
-    font-weight: 700;
-    color: $primary;
   }
 
   /* ---------- responsive ---------- */
-  @media (max-width: 900px) {
-    &__stats {
-      grid-template-columns: repeat(2, 1fr);
+  @media (max-width: 860px) {
+    &__item {
+      flex-wrap: wrap;
     }
 
-    &__row {
-      grid-template-columns: 1fr;
+    &__results {
+      justify-content: flex-start;
+      width: 100%;
+      padding-left: 56px;
     }
 
-    &__hero {
-      flex-direction: column;
-      align-items: flex-start;
+    &__actions {
+      margin-left: auto;
     }
   }
 }
