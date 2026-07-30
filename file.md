@@ -1,10 +1,48 @@
 import { useMemo, useState, type FC } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Upload, Database, Star, Play } from 'lucide-react';
+import {
+  Upload,
+  Database,
+  Star,
+  Play,
+  LayoutGrid,
+  Bot,
+  Code2,
+  BookOpen,
+  Search,
+  DollarSign,
+  HeartPulse,
+  Globe,
+  User,
+} from 'lucide-react';
 import { TEST_SUITES } from '../RunEvaluation/data';
 import './Datasets.scss';
 
-const CATEGORIES = ['All', 'Agents', 'Coding', 'General', 'RAG', 'Finance', 'Healthcare'];
+const CATEGORIES = [
+  { value: 'All', icon: LayoutGrid },
+  { value: 'Agents', icon: Bot },
+  { value: 'Coding', icon: Code2 },
+  { value: 'General', icon: BookOpen },
+  { value: 'RAG', icon: Search },
+  { value: 'Finance', icon: DollarSign },
+  { value: 'Healthcare', icon: HeartPulse },
+] as const;
+
+const CATEGORY_TINTS: Record<string, 'blue' | 'violet' | 'amber' | 'jade' | 'rose'> = {
+  Agents: 'violet',
+  Coding: 'blue',
+  General: 'jade',
+  RAG: 'blue',
+  Finance: 'amber',
+  Healthcare: 'rose',
+};
+
+const DIFFICULTY_TINTS: Record<string, 'blue' | 'violet' | 'amber' | 'jade' | 'rose'> = {
+  Medium: 'jade',
+  High: 'blue',
+  Advanced: 'violet',
+  Expert: 'rose',
+};
 
 const Datasets: FC = () => {
   const navigate = useNavigate();
@@ -35,61 +73,71 @@ const Datasets: FC = () => {
         </div>
       </div>
 
-      <div className="datasets-page__tabs">
+      <div className="datasets-page__seg">
         {CATEGORIES.map((c) => (
           <button
-            key={c}
+            key={c.value}
             type="button"
-            className={`datasets-page__tab${category === c ? ' datasets-page__tab--active' : ''}`}
-            onClick={() => setCategory(c)}
+            className={`datasets-page__seg-item${category === c.value ? ' datasets-page__seg-item--active' : ''}`}
+            onClick={() => setCategory(c.value)}
           >
-            {c}
+            <c.icon size={13} strokeWidth={2.25} />
+            {c.value}
           </button>
         ))}
       </div>
 
       <div className="datasets-page__body">
         <div className="datasets-page__grid">
-          {filtered.map((d) => (
-            <div className="datasets-page__card" key={d.id}>
-              {d.featured && (
-                <span className="datasets-page__featured">
-                  <Star size={11} strokeWidth={2.5} /> Featured
-                </span>
-              )}
+          {filtered.map((d) => {
+            const catIcon = CATEGORIES.find((c) => c.value === d.category)?.icon ?? Database;
+            const catTint = CATEGORY_TINTS[d.category] ?? 'blue';
+            const diffTint = DIFFICULTY_TINTS[d.difficulty] ?? 'blue';
+            const CatIcon = catIcon;
 
-              <span className="datasets-page__category-tag">{d.category}</span>
-              <h3 className="datasets-page__name">{d.name}</h3>
-              <p className="datasets-page__desc">{d.description}</p>
+            return (
+              <div className={`datasets-page__card${d.featured ? ' datasets-page__card--featured' : ''}`} key={d.id}>
+                <div className="datasets-page__card-top">
+                  <span className={`datasets-page__icon datasets-page__icon--${catTint}`}>
+                    <CatIcon size={18} strokeWidth={2} />
+                  </span>
+                  {d.featured && (
+                    <span className="datasets-page__featured">
+                      <Star size={11} strokeWidth={2.5} />
+                    </span>
+                  )}
+                </div>
 
-              <div className="datasets-page__details">
-                <div className="datasets-page__detail-row">
-                  <span className="datasets-page__detail-label">Questions</span>
-                  <span className="datasets-page__detail-value n">{d.questions}</span>
+                <h3 className="datasets-page__name">{d.name}</h3>
+                <p className="datasets-page__desc">{d.description}</p>
+
+                <div className="datasets-page__tags">
+                  <span className={`datasets-page__tag datasets-page__tag--${catTint}`}>{d.category}</span>
+                  <span className={`datasets-page__tag datasets-page__tag--${diffTint}`}>{d.difficulty}</span>
                 </div>
-                <div className="datasets-page__detail-row">
-                  <span className="datasets-page__detail-label">Language</span>
-                  <span className="datasets-page__detail-value">{d.language}</span>
+
+                <div className="datasets-page__stat-row">
+                  <div className="datasets-page__stat">
+                    <span className="datasets-page__stat-value n">{d.questions.toLocaleString()}</span>
+                    <span className="datasets-page__stat-label">Questions</span>
+                  </div>
+                  <div className="datasets-page__meta-list">
+                    <span className="datasets-page__meta-item">
+                      <Globe size={12} /> {d.language}
+                    </span>
+                    <span className="datasets-page__meta-item">
+                      <User size={12} /> {d.maintainer}
+                    </span>
+                    <span className="datasets-page__meta-item n">{d.version}</span>
+                  </div>
                 </div>
-                <div className="datasets-page__detail-row">
-                  <span className="datasets-page__detail-label">Difficulty</span>
-                  <span className="datasets-page__detail-value">{d.difficulty}</span>
-                </div>
-                <div className="datasets-page__detail-row">
-                  <span className="datasets-page__detail-label">Version</span>
-                  <span className="datasets-page__detail-value n">{d.version}</span>
-                </div>
-                <div className="datasets-page__detail-row">
-                  <span className="datasets-page__detail-label">Maintainer</span>
-                  <span className="datasets-page__detail-value">{d.maintainer}</span>
-                </div>
+
+                <button type="button" className="datasets-page__use-btn" onClick={() => navigate('/app/run-evaluation')}>
+                  <Play size={13} strokeWidth={2.25} /> Use this suite
+                </button>
               </div>
-
-              <button type="button" className="datasets-page__use-btn" onClick={() => navigate('/app/run-evaluation')}>
-                <Play size={13} strokeWidth={2.25} /> Use
-              </button>
-            </div>
-          ))}
+            );
+          })}
 
           {filtered.length === 0 && (
             <div className="datasets-page__empty">
@@ -104,6 +152,8 @@ const Datasets: FC = () => {
 };
 
 export default Datasets;
+
+
 
 
 
@@ -229,35 +279,51 @@ export default Datasets;
     }
   }
 
-  /* ---------- category tabs ---------- */
-  &__tabs {
+  /* ---------- segmented category bar ---------- */
+  &__seg {
     flex-shrink: 0;
-    display: flex;
+    display: inline-flex;
     flex-wrap: wrap;
-    gap: 6px;
+    align-items: center;
+    gap: 2px;
+    align-self: flex-start;
+    padding: 3px;
+    border: 1px solid $border-subtle;
+    border-radius: 11px;
+    background: $bg-subtle;
   }
 
-  &__tab {
+  &__seg-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     font-family: $font-body;
-    font-size: 0.78125rem;
-    font-weight: 500;
-    color: $text-secondary;
-    background: $bg-main;
-    border: 1px solid $border-default;
-    border-radius: 999px;
-    padding: 6px 14px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-tertiary;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 7px 12px;
     cursor: pointer;
-    transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+    transition: background 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
+
+    svg {
+      opacity: 0.8;
+    }
 
     &:hover {
-      border-color: $primary;
-      color: $primary;
+      color: $text-primary;
     }
 
     &--active {
-      background: $primary;
-      border-color: $primary;
-      color: #fff;
+      background: $bg-main;
+      color: $primary;
+      box-shadow: $shadow-xs;
+
+      svg {
+        opacity: 1;
+      }
     }
   }
 
@@ -273,7 +339,7 @@ export default Datasets;
   /* ---------- card grid ---------- */
   &__grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
     gap: 14px;
   }
 
@@ -281,44 +347,75 @@ export default Datasets;
     position: relative;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
     padding: 18px 20px;
     border: 1px solid $border-subtle;
     border-radius: 14px;
     background: $bg-main;
     box-shadow: $shadow-xs;
-    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease;
 
     &:hover {
       border-color: $border-strong;
       box-shadow: $shadow-sm;
+      transform: translateY(-1px);
+    }
+
+    &--featured {
+      border-color: $primary-subtle;
+      background: linear-gradient(180deg, $primary-light 0%, $bg-main 30%);
+    }
+  }
+
+  &__card-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  &__icon {
+    width: 38px;
+    height: 38px;
+    flex-shrink: 0;
+    border-radius: 11px;
+    display: grid;
+    place-items: center;
+
+    &--blue {
+      background: $primary-light;
+      color: $primary;
+    }
+
+    &--violet {
+      background: #f3e8ff;
+      color: #7c3aed;
+    }
+
+    &--amber {
+      background: $warning-subtle;
+      color: $warning;
+    }
+
+    &--jade {
+      background: $success-subtle;
+      color: $success;
+    }
+
+    &--rose {
+      background: $danger-subtle;
+      color: $danger;
     }
   }
 
   &__featured {
-    position: absolute;
-    top: -1px;
-    right: 16px;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 0.625rem;
-    font-weight: 700;
-    letter-spacing: 0.03em;
-    color: $warning;
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
     background: $warning-subtle;
-    border-radius: 0 0 6px 6px;
-    padding: 3px 8px;
-  }
-
-  &__category-tag {
-    align-self: flex-start;
-    font-size: 0.6875rem;
-    font-weight: 600;
-    color: $primary;
-    background: $primary-light;
-    border-radius: 999px;
-    padding: 3px 10px;
+    color: $warning;
+    flex-shrink: 0;
   }
 
   &__name {
@@ -334,38 +431,106 @@ export default Datasets;
     font-size: 0.8125rem;
     line-height: 1.5;
     color: $text-secondary;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
 
-  &__details {
+  &__tags {
     display: flex;
-    flex-direction: column;
-    gap: 7px;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  &__tag {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    border-radius: 999px;
+    padding: 3px 10px;
+
+    &--blue {
+      color: $primary;
+      background: $primary-light;
+    }
+
+    &--violet {
+      color: #7c3aed;
+      background: #f3e8ff;
+    }
+
+    &--amber {
+      color: $warning;
+      background: $warning-subtle;
+    }
+
+    &--jade {
+      color: $success;
+      background: $success-subtle;
+    }
+
+    &--rose {
+      color: $danger;
+      background: $danger-subtle;
+    }
+  }
+
+  /* ---------- stat row ---------- */
+  &__stat-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
     margin-top: 4px;
     padding-top: 13px;
     border-top: 1px solid $border-subtle;
   }
 
-  &__detail-row {
+  &__stat {
+    flex-shrink: 0;
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
+    flex-direction: column;
+    gap: 2px;
+    padding-right: 14px;
+    border-right: 1px solid $border-subtle;
   }
 
-  &__detail-label {
-    font-size: 0.71875rem;
+  &__stat-value {
+    font-size: 1.25rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: $text-primary;
+    line-height: 1;
+  }
+
+  &__stat-label {
+    font-size: 0.625rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
     color: $text-tertiary;
   }
 
-  &__detail-value {
-    font-size: 0.75rem;
-    font-weight: 600;
+  &__meta-list {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  &__meta-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.71875rem;
     color: $text-secondary;
-    text-align: right;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 60%;
+
+    svg {
+      flex-shrink: 0;
+      color: $text-tertiary;
+    }
   }
 
   &__use-btn {
@@ -373,7 +538,7 @@ export default Datasets;
     align-items: center;
     justify-content: center;
     gap: 6px;
-    margin-top: 6px;
+    margin-top: 2px;
     width: 100%;
     font-family: $font-body;
     font-size: 0.8125rem;
