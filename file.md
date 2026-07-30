@@ -1,7 +1,6 @@
-//Dashboard.tsx
 import type { FC } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Play, PlugZap, Upload, Search, ChevronRight, Trophy } from 'lucide-react';
+import { Play, PlugZap, Upload, Search, ChevronRight, Trophy, TrendingUp } from 'lucide-react';
 import { MODELS, PROVIDERS, TEST_SUITES } from '../RunEvaluation/data';
 import { RECENT_EVALUATIONS } from './data';
 import './Dashboard.scss';
@@ -31,8 +30,15 @@ const Dashboard: FC = () => {
       <section className="dash__hero">
         <div className="dash__hero-grid" aria-hidden="true" />
         <div className="dash__hero-content">
-          <h1 className="dash__hero-title">Welcome back, Alex</h1>
-          <p className="dash__hero-sub">Compare AI models, run standardized tests, and make data-driven decisions.</p>
+          <p className="dash__hero-eyebrow">Evaluation overview</p>
+          <h1 className="dash__hero-title">Compare models with confidence</h1>
+          <p className="dash__hero-sub">Run standardized tests across providers and let the results guide your next decision.</p>
+
+          <div className="dash__hero-highlight">
+            <TrendingUp size={14} />
+            Top performer this week: <strong>{latest.topModel}</strong>
+            <span className="dash__hero-highlight-score n">{latest.topScore}</span>
+          </div>
         </div>
         <button type="button" className="dash__hero-btn" onClick={() => navigate('/app/run-evaluation')}>
           <Play size={15} strokeWidth={2.25} />
@@ -92,7 +98,9 @@ const Dashboard: FC = () => {
         </div>
 
         <div className="dash__card">
-          <h2 className="dash__card-title">Quick Actions</h2>
+          <div className="dash__card-head">
+            <h2 className="dash__card-title">Quick Actions</h2>
+          </div>
           <div className="dash__qa-grid">
             {QUICK_ACTIONS.map((qa) => (
               <button type="button" key={qa.label} className="dash__qa-card" onClick={() => navigate(qa.to)}>
@@ -174,10 +182,6 @@ export default Dashboard;
 
 
 
-
-
-
-//Dashboard.scss
 @use '../../../styles/variables' as *;
 
 .dash {
@@ -190,7 +194,7 @@ export default Dashboard;
     position: relative;
     overflow: hidden;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
     gap: 1.5rem;
     padding: 28px 30px;
@@ -215,6 +219,27 @@ export default Dashboard;
     position: relative;
   }
 
+  &__hero-eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: $font-mono;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: $primary;
+    margin-bottom: 8px;
+
+    &::before {
+      content: '';
+      width: 16px;
+      height: 2px;
+      border-radius: 2px;
+      background: $primary;
+    }
+  }
+
   &__hero-title {
     font-size: 24px;
     font-weight: 800;
@@ -229,9 +254,37 @@ export default Dashboard;
     max-width: 34rem;
   }
 
+  &__hero-highlight {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 16px;
+    padding: 7px 14px;
+    border-radius: 999px;
+    background: $success-subtle;
+    color: $text-secondary;
+    font-size: 0.78125rem;
+
+    svg {
+      color: $success;
+      flex-shrink: 0;
+    }
+
+    strong {
+      color: $text-primary;
+      font-weight: 700;
+    }
+  }
+
+  &__hero-highlight-score {
+    font-weight: 700;
+    color: $success;
+  }
+
   &__hero-btn {
     position: relative;
     flex-shrink: 0;
+    margin-top: 2px;
     display: inline-flex;
     align-items: center;
     gap: 8px;
@@ -633,86 +686,3 @@ export default Dashboard;
     }
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//data.ts
-export interface EvalResult {
-  rank: number;
-  model: string;
-  provider: string;
-  score: string;
-  accuracy: string;
-  time: string;
-  cost: string;
-}
-
-export interface RecentEvaluation {
-  id: string;
-  name: string;
-  type: string;
-  date: string;
-  modelsTested: number;
-  topModel: string;
-  topScore: string;
-  status: 'Completed' | 'Running';
-  results: EvalResult[];
-}
-
-export const RECENT_EVALUATIONS: RecentEvaluation[] = [
-  {
-    id: 'eval-9041',
-    name: 'Agent Tool Calling Duel',
-    type: 'Autonomous Workflow (Agent)',
-    date: '10 mins ago',
-    modelsTested: 3,
-    topModel: 'Model Alpha Agent',
-    topScore: '97.5%',
-    status: 'Completed',
-    results: [
-      { rank: 1, model: 'Model Alpha Agent', provider: 'Together AI', score: '97.5%', accuracy: '96.2%', time: '0.75s', cost: '$0.08' },
-      { rank: 2, model: 'Model Delta Agent v2', provider: 'Anthropic', score: '96.2%', accuracy: '97.0%', time: '1.12s', cost: '$0.42' },
-      { rank: 3, model: 'Model Gamma Agent', provider: 'OpenAI', score: '94.0%', accuracy: '93.8%', time: '0.95s', cost: '$0.35' },
-    ],
-  },
-  {
-    id: 'eval-8820',
-    name: 'Q3 Financial Audit Verification',
-    type: 'General Chat & Text (AI Model)',
-    date: 'Yesterday',
-    modelsTested: 4,
-    topModel: 'Model Epsilon Reasoning',
-    topScore: '96.8%',
-    status: 'Completed',
-    results: [
-      { rank: 1, model: 'Model Epsilon Reasoning', provider: 'Together AI', score: '96.8%', accuracy: '98.2%', time: '1.85s', cost: '$0.09' },
-      { rank: 2, model: 'Model Delta Opus', provider: 'Anthropic', score: '95.1%', accuracy: '96.0%', time: '1.10s', cost: '$0.45' },
-      { rank: 3, model: 'Model Gamma Mini', provider: 'OpenAI', score: '92.4%', accuracy: '91.5%', time: '0.88s', cost: '$0.38' },
-    ],
-  },
-  {
-    id: 'eval-8715',
-    name: 'Support KB Retrieval (RAG)',
-    type: 'Document Search & Answering (RAG)',
-    date: '3 days ago',
-    modelsTested: 2,
-    topModel: 'Model Theta Long-Context',
-    topScore: '95.3%',
-    status: 'Completed',
-    results: [
-      { rank: 1, model: 'Model Theta Long-Context', provider: 'Google Gemini', score: '95.3%', accuracy: '96.5%', time: '1.20s', cost: '$0.31' },
-      { rank: 2, model: 'Model Zeta Instruct', provider: 'Groq Cloud', score: '93.1%', accuracy: '91.2%', time: '0.28s', cost: '$0.07' },
-    ],
-  },
-];
