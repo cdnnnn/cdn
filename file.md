@@ -13,6 +13,7 @@ import {
   HeartPulse,
   Globe,
   User,
+  X,
 } from 'lucide-react';
 import { TEST_SUITES } from '../RunEvaluation/data';
 import './Datasets.scss';
@@ -45,11 +46,19 @@ const DIFFICULTY_TINTS: Record<string, 'blue' | 'violet' | 'amber' | 'jade' | 'r
 
 const Datasets: FC = () => {
   const navigate = useNavigate();
+  const [query, setQuery] = useState('');
   const [category, setCategory] = useState('All');
 
   const filtered = useMemo(
-    () => TEST_SUITES.filter((d) => category === 'All' || d.category === category),
-    [category]
+    () =>
+      TEST_SUITES.filter((d) => {
+        if (category !== 'All' && d.category !== category) return false;
+        if (query && !d.name.toLowerCase().includes(query.toLowerCase()) && !d.description.toLowerCase().includes(query.toLowerCase())) {
+          return false;
+        }
+        return true;
+      }),
+    [query, category]
   );
 
   return (
@@ -70,6 +79,16 @@ const Datasets: FC = () => {
             <Upload size={14} strokeWidth={2.25} /> Upload
           </button>
         </div>
+      </div>
+
+      <div className="datasets-page__search">
+        <Search size={15} />
+        <input type="text" placeholder="Search test suites..." value={query} onChange={(e) => setQuery(e.target.value)} />
+        {query && (
+          <button type="button" className="datasets-page__search-clear" onClick={() => setQuery('')} aria-label="Clear search">
+            <X size={13} />
+          </button>
+        )}
       </div>
 
       <div className="datasets-page__seg">
@@ -145,25 +164,6 @@ const Datasets: FC = () => {
 };
 
 export default Datasets;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -289,6 +289,61 @@ export default Datasets;
     }
   }
 
+  /* ---------- search ---------- */
+  &__search {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 300px;
+    max-width: 100%;
+    border: 1px solid $border-default;
+    border-radius: 10px;
+    padding: 9px 12px;
+    background: $bg-main;
+    color: $text-tertiary;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+
+    &:focus-within {
+      border-color: $primary;
+      box-shadow: 0 0 0 3px $primary-light;
+    }
+
+    input {
+      flex: 1;
+      border: none;
+      outline: none;
+      font-size: 0.8125rem;
+      color: $text-primary;
+      background: transparent;
+      font-family: $font-body;
+      min-width: 0;
+
+      &::placeholder {
+        color: $text-tertiary;
+      }
+    }
+  }
+
+  &__search-clear {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: none;
+    background: $bg-inset;
+    color: $text-tertiary;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: background 0.14s ease, color 0.14s ease;
+
+    &:hover {
+      background: $border-default;
+      color: $text-primary;
+    }
+  }
+
   /* ---------- segmented category bar ---------- */
   &__seg {
     flex-shrink: 0;
@@ -349,7 +404,7 @@ export default Datasets;
   /* ---------- card grid ---------- */
   &__grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
     gap: 14px;
   }
 
