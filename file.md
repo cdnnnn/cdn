@@ -1,6 +1,6 @@
 import { useMemo, useState, type FC } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, X, Boxes, LayoutGrid, Wrench, Eye, BrainCircuit, Code2 } from 'lucide-react';
+import { Search, X, Boxes, LayoutGrid, Wrench, Eye, BrainCircuit, Code2, Info, Play } from 'lucide-react';
 import { MODELS } from '../RunEvaluation/data';
 import './Models.scss';
 
@@ -11,6 +11,14 @@ const CAPABILITY_FILTERS = [
   { value: 'Reasoning', icon: BrainCircuit },
   { value: 'Coding', icon: Code2 },
 ];
+
+const PILL_TINTS = ['blue', 'violet', 'amber', 'jade', 'rose'] as const;
+
+function pillTint(capability: string) {
+  let hash = 0;
+  for (let i = 0; i < capability.length; i += 1) hash = (hash * 31 + capability.charCodeAt(i)) >>> 0;
+  return PILL_TINTS[hash % PILL_TINTS.length];
+}
 
 const Models: FC = () => {
   const navigate = useNavigate();
@@ -84,7 +92,7 @@ const Models: FC = () => {
 
             <div className="models-page__caps">
               {m.capabilities.map((c) => (
-                <span key={c} className="models-page__cap-pill">
+                <span key={c} className={`models-page__cap-pill models-page__cap-pill--${pillTint(c)}`}>
                   {c}
                 </span>
               ))}
@@ -110,11 +118,17 @@ const Models: FC = () => {
             </div>
 
             <div className="models-page__card-actions">
-              <button type="button" className="models-page__btn models-page__btn--outline">
-                Details
+              <button type="button" className="models-page__btn models-page__btn--outline" title="View details" aria-label="View details">
+                <Info size={14} strokeWidth={2} />
               </button>
-              <button type="button" className="models-page__btn models-page__btn--primary" onClick={() => navigate('/app/run-evaluation')}>
-                Test
+              <button
+                type="button"
+                className="models-page__btn models-page__btn--primary"
+                title="Test this model"
+                aria-label="Test this model"
+                onClick={() => navigate('/app/run-evaluation')}
+              >
+                <Play size={13} strokeWidth={2.25} />
               </button>
             </div>
           </div>
@@ -132,10 +146,6 @@ const Models: FC = () => {
 };
 
 export default Models;
-
-
-
-
 
 
 
@@ -403,11 +413,34 @@ export default Models;
 
   &__cap-pill {
     font-size: 0.71875rem;
-    color: $text-secondary;
-    background: $bg-subtle;
-    border: 1px solid $border-subtle;
-    border-radius: 6px;
-    padding: 3px 8px;
+    font-weight: 600;
+    border-radius: 999px;
+    padding: 3px 10px;
+
+    &--blue {
+      color: $primary;
+      background: $primary-light;
+    }
+
+    &--violet {
+      color: #7c3aed;
+      background: #f3e8ff;
+    }
+
+    &--amber {
+      color: $warning;
+      background: $warning-subtle;
+    }
+
+    &--jade {
+      color: $success;
+      background: $success-subtle;
+    }
+
+    &--rose {
+      color: $danger;
+      background: $danger-subtle;
+    }
   }
 
   &__specs {
@@ -456,12 +489,13 @@ export default Models;
   }
 
   &__btn {
-    text-align: center;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    flex-shrink: 0;
     font-family: $font-body;
-    font-size: 0.71875rem;
-    font-weight: 600;
-    padding: 5px 12px;
-    border-radius: 7px;
+    border-radius: 8px;
     border: 1px solid transparent;
     cursor: pointer;
     transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
@@ -469,10 +503,11 @@ export default Models;
     &--outline {
       background: $bg-main;
       border-color: $border-default;
-      color: $text-primary;
+      color: $text-secondary;
 
       &:hover {
         border-color: $text-primary;
+        color: $text-primary;
       }
     }
 
