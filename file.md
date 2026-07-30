@@ -1,150 +1,210 @@
-import { useMemo, useState, type FC, type MouseEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Play, Search, Copy, Trash2, X, Database } from 'lucide-react';
-import { RECENT_EVALUATIONS, type RecentEvaluation } from '../shared/evaluations';
-import Select from './Select';
-import './History.scss';
+import { useMemo, useState, type FC } from 'react';
+import { Search, X, Boxes, LayoutGrid, Wrench, Eye, BrainCircuit, Code2, Info } from 'lucide-react';
+import { MODELS } from '../RunEvaluation/data';
+import type { ModelInfo } from '../RunEvaluation/types';
+import './Models.scss';
 
-const TYPE_FILTERS = [
-  { value: 'all', label: 'All Types' },
-  { value: 'AI Model', label: 'AI Model' },
-  { value: 'Agent', label: 'Agent' },
-  { value: 'RAG', label: 'RAG' },
+const CAPABILITY_FILTERS = [
+  { value: 'All', icon: LayoutGrid },
+  { value: 'Tool Calling', icon: Wrench },
+  { value: 'Vision', icon: Eye },
+  { value: 'Reasoning', icon: BrainCircuit },
+  { value: 'Coding', icon: Code2 },
 ];
 
-const DATE_FILTERS = [
-  { value: 30, label: 'Last 30 days' },
-  { value: 7, label: 'Last 7 days' },
-  { value: Infinity, label: 'All time' },
-];
+const PILL_TINTS = ['blue', 'violet', 'amber', 'jade', 'rose'] as const;
 
-function typeTint(type: string): 'violet' | 'blue' | 'amber' {
-  if (type.includes('Agent')) return 'violet';
-  if (type.includes('RAG')) return 'blue';
-  return 'amber';
+function pillTint(capability: string) {
+  let hash = 0;
+  for (let i = 0; i < capability.length; i += 1) hash = (hash * 31 + capability.charCodeAt(i)) >>> 0;
+  return PILL_TINTS[hash % PILL_TINTS.length];
 }
 
-function matchesType(evType: string, filter: string) {
-  if (filter === 'all') return true;
-  if (filter === 'Agent') return evType.includes('Agent');
-  if (filter === 'RAG') return evType.includes('RAG');
-  return evType.includes('AI Model');
-}
-
-const History: FC = () => {
-  const navigate = useNavigate();
-  const [items, setItems] = useState<RecentEvaluation[]>(RECENT_EVALUATIONS);
+const Models: FC = () => {
   const [query, setQuery] = useState('');
-  const [typeFilter, setTypeFilter] = useState('all');
-  const [dateFilter, setDateFilter] = useState(30);
+  const [capability, setCapability] = useState('All');
+  const [detailModel, setDetailModel] = useState<ModelInfo | null>(null);
 
   const filtered = useMemo(() => {
-    return items.filter((ev) => {
-      if (query && !ev.name.toLowerCase().includes(query.toLowerCase())) return false;
-      if (!matchesType(ev.type, typeFilter)) return false;
-      if (ev.daysAgo > dateFilter) return false;
+    return MODELS.filter((m) => {
+      if (query && !m.name.toLowerCase().includes(query.toLowerCase()) && !m.provider.toLowerCase().includes(query.toLowerCase())) {
+        return false;
+      }
+      if (capability !== 'All') {
+        const matches = m.capabilities.some((c) => c.toLowerCase().includes(capability.toLowerCase()));
+        if (!matches) return false;
+      }
       return true;
     });
-  }, [items, query, typeFilter, dateFilter]);
-
-  const handleDuplicate = (e: MouseEvent, _id: string) => {
-    e.stopPropagation();
-    navigate('/app/run-evaluation');
-  };
-
-  const handleDelete = (e: MouseEvent, id: string) => {
-    e.stopPropagation();
-    setItems((prev) => prev.filter((ev) => ev.id !== id));
-  };
+  }, [query, capability]);
 
   return (
-    <div className="history">
-      <div className="history__header">
-        <div className="history__header-left">
-          <p className="history__header-eyebrow">Evaluation records</p>
-          <h1 className="history__title">History</h1>
-          <p className="history__subtitle">Past evaluations</p>
+    <div className="models-page">
+      <div className="models-page__header">
+        <div className="models-page__header-left">
+          <p className="models-page__header-eyebrow">Model catalog</p>
+          <h1 className="models-page__title">Models</h1>
+          <p className="models-page__subtitle">Browse available AI models across every connected provider</p>
         </div>
 
-        <div className="history__header-meta">
-          <Database size={13} />
-          {items.length} evaluations logged
+        <div className="models-page__header-meta">
+          <Boxes size={13} />
+          {MODELS.length} models available
         </div>
       </div>
 
-      <div className="history__filters">
-        <div className="history__search">
+      <div className="models-page__filters">
+        <div className="models-page__search">
           <Search size={15} />
-          <input type="text" placeholder="Search evaluations..." value={query} onChange={(e) => setQuery(e.target.value)} />
+          <input type="text" placeholder="Search models..." value={query} onChange={(e) => setQuery(e.target.value)} />
           {query && (
-            <button type="button" className="history__search-clear" onClick={() => setQuery('')} aria-label="Clear search">
+            <button type="button" className="models-page__search-clear" onClick={() => setQuery('')} aria-label="Clear search">
               <X size={13} />
             </button>
           )}
         </div>
-        <Select value={typeFilter} options={TYPE_FILTERS} onChange={setTypeFilter} width={150} />
-        <Select value={dateFilter} options={DATE_FILTERS} onChange={setDateFilter} width={160} />
 
-        <button type="button" className="history__btn history__btn--primary history__btn--push" onClick={() => navigate('/app/run-evaluation')}>
-          <Play size={14} strokeWidth={2.25} /> New Evaluation
-        </button>
+        <div className="models-page__seg">
+          {CAPABILITY_FILTERS.map((c) => (
+            <button
+              key={c.value}
+              type="button"
+              className={`models-page__seg-item${capability === c.value ? ' models-page__seg-item--active' : ''}`}
+              onClick={() => setCapability(c.value)}
+            >
+              <c.icon size={13} strokeWidth={2.25} />
+              {c.value}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <div className="history__grid">
-        {filtered.map((ev) => {
-          const tint = typeTint(ev.type);
-          return (
-            <div className="history__card" key={ev.id}>
-              <div className="history__card-top">
-                <span className={`history__type-badge history__type-badge--${tint}`}>{ev.type.split('(')[0].trim()}</span>
-                <div className="history__actions">
-                  <button type="button" className="history__icon-btn" title="Duplicate" onClick={(e) => handleDuplicate(e, ev.id)}>
-                    <Copy size={12.5} />
-                  </button>
+      <div className="models-page__body">
+        <div className="models-page__grid">
+          {filtered.map((m) => (
+            <div className="models-page__card" key={m.id}>
+              <div className="models-page__card-top">
+                <span className="models-page__provider-badge">{m.provider}</span>
+                <span className="models-page__card-top-right">
+                  <span className="models-page__version">{m.version}</span>
                   <button
                     type="button"
-                    className="history__icon-btn history__icon-btn--danger"
-                    title="Delete"
-                    onClick={(e) => handleDelete(e, ev.id)}
+                    className="models-page__info-btn"
+                    title="View details"
+                    aria-label="View details"
+                    onClick={() => setDetailModel(m)}
                   >
-                    <Trash2 size={12.5} />
+                    <Info size={14} strokeWidth={2} />
                   </button>
-                </div>
+                </span>
               </div>
 
-              <h4 className="history__name">{ev.name}</h4>
-              <span className="history__date">{ev.date}</span>
+              <h3 className="models-page__name">{m.name}</h3>
+              <p className="models-page__desc">{m.description}</p>
 
-              <div className="history__results">
-                <div className="history__stat">
-                  <span className="history__stat-label">Winner</span>
-                  <span className="history__stat-value">{ev.topModel}</span>
+              <div className="models-page__caps">
+                {m.capabilities.map((c) => (
+                  <span key={c} className={`models-page__cap-pill models-page__cap-pill--${pillTint(c)}`}>
+                    {c}
+                  </span>
+                ))}
+              </div>
+
+              <div className="models-page__specs">
+                <div className="models-page__spec">
+                  <span className="models-page__spec-label">Context</span>
+                  <span className="models-page__spec-value n">{m.contextWindow}</span>
                 </div>
-                <div className="history__stat">
-                  <span className="history__stat-label">Score</span>
-                  <span className="history__stat-value history__stat-value--highlight n">{ev.topScore}</span>
+                <div className="models-page__spec">
+                  <span className="models-page__spec-label">Price</span>
+                  <span className="models-page__spec-value n">{m.pricing}</span>
                 </div>
-                <div className="history__stat">
-                  <span className="history__stat-label">Models</span>
-                  <span className="history__stat-value n">{ev.modelsTested}</span>
+                <div className="models-page__spec">
+                  <span className="models-page__spec-label">Speed</span>
+                  <span className="models-page__spec-value n">{m.speedRating}</span>
+                </div>
+                <div className="models-page__spec">
+                  <span className="models-page__spec-label">Accuracy</span>
+                  <span className="models-page__spec-value models-page__spec-value--highlight n">{m.accuracyScore}%</span>
                 </div>
               </div>
             </div>
-          );
-        })}
+          ))}
 
-        {filtered.length === 0 && (
-          <div className="history__empty">
-            <Search size={22} />
-            <p>No evaluations match your filters.</p>
-          </div>
-        )}
+          {filtered.length === 0 && (
+            <div className="models-page__empty">
+              <Search size={22} />
+              <p>No models match your filters.</p>
+            </div>
+          )}
+        </div>
       </div>
+
+      {detailModel && (
+        <div className="models-page__overlay" onClick={() => setDetailModel(null)}>
+          <div className="models-page__modal" onClick={(e) => e.stopPropagation()}>
+            <div className="models-page__modal-head">
+              <div>
+                <span className="models-page__provider-badge">{detailModel.provider}</span>
+                <h2 className="models-page__modal-title">{detailModel.name}</h2>
+              </div>
+              <button type="button" className="models-page__modal-close" onClick={() => setDetailModel(null)} aria-label="Close">
+                <X size={16} />
+              </button>
+            </div>
+
+            <p className="models-page__modal-desc">{detailModel.description}</p>
+
+            <div className="models-page__modal-specs">
+              <div className="models-page__modal-spec">
+                <span className="models-page__spec-label">Version</span>
+                <span className="models-page__spec-value n">{detailModel.version}</span>
+              </div>
+              <div className="models-page__modal-spec">
+                <span className="models-page__spec-label">Context Window</span>
+                <span className="models-page__spec-value n">{detailModel.contextWindow}</span>
+              </div>
+              <div className="models-page__modal-spec">
+                <span className="models-page__spec-label">Pricing</span>
+                <span className="models-page__spec-value n">{detailModel.pricing}</span>
+              </div>
+              <div className="models-page__modal-spec">
+                <span className="models-page__spec-label">Speed</span>
+                <span className="models-page__spec-value n">{detailModel.speedRating}</span>
+              </div>
+              <div className="models-page__modal-spec">
+                <span className="models-page__spec-label">Accuracy Score</span>
+                <span className="models-page__spec-value models-page__spec-value--highlight n">{detailModel.accuracyScore}%</span>
+              </div>
+              <div className="models-page__modal-spec">
+                <span className="models-page__spec-label">Agent Score</span>
+                <span className="models-page__spec-value models-page__spec-value--highlight n">{detailModel.agentScore}%</span>
+              </div>
+            </div>
+
+            <p className="models-page__modal-label">Capabilities</p>
+            <div className="models-page__caps">
+              {detailModel.capabilities.map((c) => (
+                <span key={c} className={`models-page__cap-pill models-page__cap-pill--${pillTint(c)}`}>
+                  {c}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
-export default History;
+export default Models;
+
+
+
+
+
+
+
 
 
 
@@ -169,13 +229,16 @@ export default History;
 
 @use '../../../styles/variables' as *;
 
-.history {
+.models-page {
   display: flex;
   flex-direction: column;
+  height: calc(100vh - 166px);
+  min-height: 0;
   gap: 18px;
 
   /* ---------- header ---------- */
   &__header {
+    flex-shrink: 0;
     display: flex;
     align-items: flex-end;
     justify-content: space-between;
@@ -240,48 +303,28 @@ export default History;
     font-size: 0.84375rem;
   }
 
-  &__btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    font-family: $font-body;
-    font-size: 0.8125rem;
-    font-weight: 600;
-    padding: 9px 14px;
-    border-radius: 8px;
-    border: 1px solid transparent;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: background 0.14s ease, border-color 0.14s ease;
-
-    &--primary {
-      background: $primary;
-      border-color: $primary;
-      color: #fff;
-
-      &:hover {
-        background: $primary-hover;
-        border-color: $primary-hover;
-      }
-    }
-
-    &--push {
-      margin-left: auto;
-    }
-  }
-
   /* ---------- filters ---------- */
   &__filters {
+    flex-shrink: 0;
     display: flex;
     flex-wrap: wrap;
-    gap: 10px;
+    align-items: center;
+    gap: 12px;
+  }
+
+  &__body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 4px;
+    margin-right: -4px;
   }
 
   &__search {
     display: flex;
     align-items: center;
     gap: 9px;
-    width: 280px;
+    width: 300px;
     max-width: 100%;
     border: 1px solid $border-default;
     border-radius: 10px;
@@ -330,93 +373,46 @@ export default History;
     }
   }
 
-  /* ---------- custom dropdown ---------- */
-  &-select {
-    position: relative;
-    flex-shrink: 0;
+  &__seg {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 3px;
+    border: 1px solid $border-subtle;
+    border-radius: 11px;
+    background: $bg-subtle;
+  }
 
-    &__trigger {
-      width: 100%;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      border: 1px solid $border-default;
-      border-radius: 10px;
-      padding: 9px 12px;
-      background: $bg-main;
-      font-size: 0.8125rem;
-      font-weight: 500;
-      font-family: $font-body;
+  &__seg-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: $font-body;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-tertiary;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 7px 12px;
+    cursor: pointer;
+    transition: background 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
+
+    svg {
+      opacity: 0.8;
+    }
+
+    &:hover {
       color: $text-primary;
-      cursor: pointer;
-      transition: border-color 0.14s ease, box-shadow 0.14s ease;
-
-      &:hover {
-        border-color: $border-strong;
-      }
-
-      &--open {
-        border-color: $primary;
-        box-shadow: 0 0 0 3px $primary-light;
-      }
     }
 
-    &__chevron {
-      flex-shrink: 0;
-      color: $text-tertiary;
-      transition: transform 0.16s ease;
-    }
-
-    &__trigger--open &__chevron {
-      transform: rotate(180deg);
-    }
-
-    &__menu {
-      position: absolute;
-      top: calc(100% + 6px);
-      left: 0;
-      right: 0;
-      z-index: 20;
+    &--active {
       background: $bg-main;
-      border: 1px solid $border-subtle;
-      border-radius: 10px;
-      box-shadow: $shadow-lg;
-      padding: 5px;
-      display: flex;
-      flex-direction: column;
-      gap: 1px;
-    }
+      color: $primary;
+      box-shadow: $shadow-xs;
 
-    &__option {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      width: 100%;
-      text-align: left;
-      padding: 8px 10px;
-      border: none;
-      border-radius: 7px;
-      background: transparent;
-      font-size: 0.8125rem;
-      font-family: $font-body;
-      color: $text-secondary;
-      cursor: pointer;
-      transition: background 0.12s ease, color 0.12s ease;
-
-      &:hover {
-        background: $bg-subtle;
-        color: $text-primary;
-      }
-
-      &--active {
-        color: $primary;
-        font-weight: 600;
-
-        svg {
-          color: $primary;
-        }
+      svg {
+        opacity: 1;
       }
     }
   }
@@ -424,7 +420,7 @@ export default History;
   /* ---------- card grid ---------- */
   &__grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
     gap: 14px;
   }
 
@@ -442,10 +438,6 @@ export default History;
     &:hover {
       border-color: $border-strong;
       box-shadow: $shadow-sm;
-
-      .history__actions {
-        opacity: 1;
-      }
     }
   }
 
@@ -453,79 +445,130 @@ export default History;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 10px;
+    gap: 8px;
   }
 
-  &__type-badge {
+  &__card-top-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  &__provider-badge {
     font-size: 0.6875rem;
+    font-weight: 600;
+    color: $primary;
+    background: $primary-light;
+    border-radius: 999px;
+    padding: 3px 10px;
+  }
+
+  &__version {
+    font-family: $font-mono;
+    font-size: 0.6875rem;
+    color: $text-tertiary;
+  }
+
+  &__info-btn {
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+    border-radius: 6px;
+    border: 1px solid $border-default;
+    background: $bg-main;
+    color: $text-tertiary;
+    cursor: pointer;
+    transition: border-color 0.14s ease, color 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+      color: $primary;
+    }
+  }
+
+  &__name {
+    font-size: 0.9375rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: $text-primary;
+  }
+
+  &__desc {
+    margin-top: -6px;
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    color: $text-secondary;
+  }
+
+  &__caps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  &__cap-pill {
+    font-size: 0.71875rem;
     font-weight: 600;
     border-radius: 999px;
     padding: 3px 10px;
-
-    &--violet {
-      color: #7c3aed;
-      background: #f3e8ff;
-    }
 
     &--blue {
       color: $primary;
       background: $primary-light;
     }
 
+    &--violet {
+      color: #7c3aed;
+      background: #f3e8ff;
+    }
+
     &--amber {
       color: $warning;
       background: $warning-subtle;
     }
+
+    &--jade {
+      color: $success;
+      background: $success-subtle;
+    }
+
+    &--rose {
+      color: $danger;
+      background: $danger-subtle;
+    }
   }
 
-  &__name {
-    font-size: 0.90625rem;
-    font-weight: 600;
-    color: $text-primary;
-    line-height: 1.4;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-  }
-
-  &__date {
-    font-size: 0.75rem;
-    color: $text-tertiary;
-    margin-top: -6px;
-  }
-
-  &__results {
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: 10px;
+  &__specs {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
     margin-top: 2px;
     padding-top: 13px;
     border-top: 1px solid $border-subtle;
   }
 
-  &__stat {
+  &__spec {
     display: flex;
     flex-direction: column;
     gap: 4px;
     min-width: 0;
   }
 
-  &__stat-label {
-    font-size: 0.625rem;
+  &__spec-label {
+    font-size: 0.59375rem;
     font-weight: 600;
     letter-spacing: 0.05em;
     text-transform: uppercase;
     color: $text-tertiary;
   }
 
-  &__stat-value {
-    font-size: 0.8125rem;
+  &__spec-value {
+    font-size: 0.71875rem;
     font-weight: 600;
     color: $text-secondary;
     white-space: nowrap;
-    max-width: 7.5rem;
     overflow: hidden;
     text-overflow: ellipsis;
 
@@ -535,37 +578,95 @@ export default History;
     }
   }
 
-  &__actions {
-    flex-shrink: 0;
+  /* ---------- detail modal ---------- */
+  &__overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    background: rgba(14, 21, 38, 0.45);
     display: flex;
-    gap: 5px;
-    margin-left: auto;
-    opacity: 0;
-    transition: opacity 0.14s ease;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
   }
 
-  &__icon-btn {
-    width: 27px;
-    height: 27px;
-    border-radius: 7px;
+  &__modal {
+    width: 100%;
+    max-width: 480px;
+    max-height: 85vh;
+    overflow-y: auto;
+    background: $bg-main;
+    border-radius: 16px;
+    box-shadow: $shadow-xl;
+    padding: 24px 26px;
+  }
+
+  &__modal-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  &__modal-title {
+    margin-top: 8px;
+    font-size: 1.1875rem;
+    font-weight: 800;
+    letter-spacing: -0.015em;
+    color: $text-primary;
+  }
+
+  &__modal-close {
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
     border: 1px solid $border-default;
     background: $bg-main;
     color: $text-tertiary;
-    display: grid;
-    place-items: center;
     cursor: pointer;
-    transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+    transition: border-color 0.14s ease, color 0.14s ease;
 
     &:hover {
       border-color: $text-primary;
       color: $text-primary;
     }
+  }
 
-    &--danger:hover {
-      border-color: $danger;
-      color: $danger;
-      background: $danger-subtle;
-    }
+  &__modal-desc {
+    margin-top: 14px;
+    font-size: 0.84375rem;
+    line-height: 1.6;
+    color: $text-secondary;
+  }
+
+  &__modal-specs {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 14px;
+    margin-top: 18px;
+    padding: 16px;
+    background: $bg-subtle;
+    border-radius: 12px;
+  }
+
+  &__modal-spec {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  &__modal-label {
+    margin-top: 18px;
+    margin-bottom: 8px;
+    font-family: $font-mono;
+    font-size: 0.65625rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: $text-tertiary;
   }
 
   /* ---------- empty state ---------- */
@@ -587,9 +688,9 @@ export default History;
   }
 
   /* ---------- responsive ---------- */
-  @media (max-width: 520px) {
-    &__grid {
-      grid-template-columns: 1fr;
+  @media (max-width: 480px) {
+    &__specs {
+      grid-template-columns: repeat(2, 1fr);
     }
   }
 }
