@@ -1,153 +1,3 @@
-//data.ts
-export interface Report {
-  id: string;
-  title: string;
-  date: string;
-  summary: string;
-  topModel: string;
-  verdict: string;
-  metricsTested: string[];
-  downloadSize: string;
-}
-
-export const REPORTS: Report[] = [
-  {
-    id: 'rep-1',
-    title: 'Executive Recommendation: Autonomous Agent Standardization',
-    date: 'July 26, 2026',
-    summary:
-      'After subjecting 6 candidate models to the Autonomous Tool & Workflow Suite, Model Alpha Agent and Model Delta Agent v2 emerged as top performers. Model Alpha offers a 76% cost reduction and 35% speed gain while matching proprietary tool execution accuracy (99.1%).',
-    topModel: 'Model Alpha Agent',
-    verdict: 'Adopt Model Alpha Agent for high-volume automated tools; preserve Model Delta Agent v2 for highly ambiguous policy edge-cases.',
-    metricsTested: ['Tool Calling Success', 'Response Time', 'Task Accuracy', 'Cost per 1,000 Tasks'],
-    downloadSize: '2.4 MB PDF',
-  },
-  {
-    id: 'rep-2',
-    title: 'Quarterly RAG Factual Accuracy Assessment',
-    date: 'July 22, 2026',
-    summary:
-      'Evaluation of our customer-facing knowledge assistant across 350 ground-truth QA pairs. Model Theta Long-Context demonstrated the lowest incorrect answer rate (0.2%), while Groq-hosted Model Zeta Instruct provided the fastest user interaction speed (280 t/s).',
-    topModel: 'Model Theta Long-Context',
-    verdict: 'Implement Model Zeta Instruct as frontline responder with automated fall-back to Model Theta Long-Context for queries over 30,000 characters.',
-    metricsTested: ['Incorrect Answer Rate', 'Response Time', 'Retrieval Precision'],
-    downloadSize: '1.8 MB PDF',
-  },
-  {
-    id: 'rep-3',
-    title: 'Software Engineering Agent Benchmark Review',
-    date: 'July 14, 2026',
-    summary:
-      'Ran 500 real-world GitHub issue resolutions through SWE-bench Verified. Model Delta Agent v2 independently diagnosed and patched 95.9% of issues with passing unit tests, ahead of every other candidate by a wide margin.',
-    topModel: 'Model Delta Agent v2',
-    verdict: 'Roll out Model Delta Agent v2 for the internal bug-triage pipeline; keep a human reviewer in the loop for security-sensitive patches.',
-    metricsTested: ['Patch Success Rate', 'Test Pass Rate', 'Time to Resolution'],
-    downloadSize: '3.1 MB PDF',
-  },
-];
-
-
-
-
-
-
-
-
-
-
-
-
-//Reports.tsx
-import type { FC } from 'react';
-import { FileBarChart, Download, Share2, Lightbulb } from 'lucide-react';
-import { REPORTS } from './data';
-import './Reports.scss';
-
-const Reports: FC = () => {
-  return (
-    <div className="reports-page">
-      <div className="reports-page__header">
-        <div className="reports-page__header-left">
-          <p className="reports-page__header-eyebrow">Executive summaries</p>
-          <h1 className="reports-page__title">Reports</h1>
-          <p className="reports-page__subtitle">Generated analysis and recommendations</p>
-        </div>
-
-        <div className="reports-page__header-meta">
-          <FileBarChart size={13} />
-          {REPORTS.length} reports generated
-        </div>
-      </div>
-
-      <div className="reports-page__body">
-        <div className="reports-page__list">
-          {REPORTS.map((r) => (
-            <div className="reports-page__card" key={r.id}>
-              <div className="reports-page__card-head">
-                <span className="reports-page__date">{r.date}</span>
-                <div className="reports-page__actions">
-                  <button type="button" className="reports-page__btn">
-                    <Download size={13} /> {r.downloadSize}
-                  </button>
-                  <button type="button" className="reports-page__icon-btn" aria-label="Share report" title="Share report">
-                    <Share2 size={13} />
-                  </button>
-                </div>
-              </div>
-
-              <h3 className="reports-page__title-text">{r.title}</h3>
-              <p className="reports-page__summary">{r.summary}</p>
-
-              <div className="reports-page__verdict">
-                <span className="reports-page__verdict-icon">
-                  <Lightbulb size={15} strokeWidth={2} />
-                </span>
-                <div>
-                  <strong>Recommendation</strong>
-                  <p>{r.verdict}</p>
-                </div>
-              </div>
-
-              <div className="reports-page__footer">
-                <div className="reports-page__top-model">
-                  <span className="reports-page__top-label">Top:</span>
-                  <span className="reports-page__top-value">{r.topModel}</span>
-                </div>
-                <div className="reports-page__metrics">
-                  {r.metricsTested.map((m) => (
-                    <span key={m} className="reports-page__metric-tag">
-                      {m}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-};
-
-export default Reports;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Reports.scss
 @use '../../../styles/variables' as *;
 
 .reports-page {
@@ -234,10 +84,9 @@ export default Reports;
   }
 
   &__list {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
     gap: 14px;
-    max-width: 46rem;
   }
 
   /* ---------- report card ---------- */
@@ -408,5 +257,12 @@ export default Reports;
     border: 1px solid $border-subtle;
     border-radius: 6px;
     padding: 3px 8px;
+  }
+
+  /* ---------- responsive ---------- */
+  @media (max-width: 800px) {
+    &__list {
+      grid-template-columns: 1fr;
+    }
   }
 }
