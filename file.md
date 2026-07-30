@@ -1,6 +1,6 @@
 import { useMemo, useState, type FC, type MouseEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Play, Search, FlaskConical, Copy, Trash2, X } from 'lucide-react';
+import { Play, Search, FlaskConical, Copy, Trash2, X, Database } from 'lucide-react';
 import { RECENT_EVALUATIONS, type RecentEvaluation } from '../shared/evaluations';
 import Select from './Select';
 import './History.scss';
@@ -60,13 +60,16 @@ const History: FC = () => {
   return (
     <div className="history">
       <div className="history__header">
-        <div>
+        <div className="history__header-left">
+          <p className="history__header-eyebrow">Evaluation records</p>
           <h1 className="history__title">History</h1>
           <p className="history__subtitle">Past evaluations</p>
         </div>
-        <button type="button" className="history__btn history__btn--primary" onClick={() => navigate('/app/run-evaluation')}>
-          <Play size={14} strokeWidth={2.25} /> New Evaluation
-        </button>
+
+        <div className="history__header-meta">
+          <Database size={13} />
+          {items.length} evaluations logged
+        </div>
       </div>
 
       <div className="history__filters">
@@ -81,6 +84,10 @@ const History: FC = () => {
         </div>
         <Select value={typeFilter} options={TYPE_FILTERS} onChange={setTypeFilter} width={150} />
         <Select value={dateFilter} options={DATE_FILTERS} onChange={setDateFilter} width={160} />
+
+        <button type="button" className="history__btn history__btn--primary history__btn--push" onClick={() => navigate('/app/run-evaluation')}>
+          <Play size={14} strokeWidth={2.25} /> New Evaluation
+        </button>
       </div>
 
       <div className="history__grid">
@@ -155,8 +162,6 @@ export default History;
 
 
 
-
-
 @use '../../../styles/variables' as *;
 
 .history {
@@ -167,9 +172,54 @@ export default History;
   /* ---------- header ---------- */
   &__header {
     display: flex;
-    align-items: flex-start;
+    align-items: flex-end;
     justify-content: space-between;
     gap: 1rem;
+    padding-bottom: 18px;
+    margin-bottom: 2px;
+    border-bottom: 1px solid $border-subtle;
+  }
+
+  &__header-left {
+    display: flex;
+    flex-direction: column;
+  }
+
+  &__header-eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: $font-mono;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: $primary;
+    margin-bottom: 6px;
+
+    &::before {
+      content: '';
+      width: 16px;
+      height: 2px;
+      border-radius: 2px;
+      background: $primary;
+    }
+  }
+
+  &__header-meta {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
+    border-radius: 999px;
+    padding: 7px 13px;
+    white-space: nowrap;
+    margin-bottom: 3px;
   }
 
   &__title {
@@ -182,7 +232,7 @@ export default History;
   &__subtitle {
     margin-top: 3px;
     color: $text-secondary;
-    font-size: 0.8125rem;
+    font-size: 0.84375rem;
   }
 
   &__btn {
@@ -208,6 +258,10 @@ export default History;
         background: $primary-hover;
         border-color: $primary-hover;
       }
+    }
+
+    &--push {
+      margin-left: auto;
     }
   }
 
@@ -543,78 +597,4 @@ export default History;
       grid-template-columns: 1fr;
     }
   }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-import { useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown } from 'lucide-react';
-
-export interface SelectOption<T extends string | number> {
-  value: T;
-  label: string;
-}
-
-interface SelectProps<T extends string | number> {
-  value: T;
-  options: SelectOption<T>[];
-  onChange: (value: T) => void;
-  width?: number;
-}
-
-export default function Select<T extends string | number>({ value, options, onChange, width = 160 }: SelectProps<T>) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const current = options.find((o) => o.value === value) ?? options[0];
-
-  useEffect(() => {
-    const handler = (e: globalThis.MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-
-  return (
-    <div className="history-select" ref={ref} style={{ width }}>
-      <button type="button" className={`history-select__trigger${open ? ' history-select__trigger--open' : ''}`} onClick={() => setOpen((v) => !v)}>
-        <span>{current?.label}</span>
-        <ChevronDown size={14} className="history-select__chevron" />
-      </button>
-
-      {open && (
-        <div className="history-select__menu">
-          {options.map((o) => (
-            <button
-              key={String(o.value)}
-              type="button"
-              className={`history-select__option${o.value === value ? ' history-select__option--active' : ''}`}
-              onClick={() => {
-                onChange(o.value);
-                setOpen(false);
-              }}
-            >
-              {o.label}
-              {o.value === value && <Check size={13} strokeWidth={2.5} />}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
 }
