@@ -1,226 +1,339 @@
-import { useMemo, useState, type FC } from 'react';
-import { Search, SlidersHorizontal, Check, X } from 'lucide-react';
-import { FILTERS, MODELS } from '../data';
-import type { ModelDifficulty, ModelInfo, EvalTypeId } from '../types';
+//Typestep.tsx
+import type { FC } from 'react';
+import { MessageSquare, Bot, Search, Check, Waypoints, Workflow } from 'lucide-react';
+import { EVAL_TYPES } from '../data';
+import type { AgentFramework, EvalTypeId } from '../types';
 
 interface Props {
-  providers: string[];
-  selected: string[];
-  onToggle: (id: string) => void;
-  onClear: () => void;
+  value: EvalTypeId | null;
+  onChange: (id: EvalTypeId) => void;
+  agentFramework: AgentFramework | null;
+  onAgentFrameworkChange: (framework: AgentFramework) => void;
 }
 
-const DIFFICULTY_LABELS: Record<ModelDifficulty, string> = { easy: 'Easy', medium: 'Medium', hard: 'Hard' };
-const EVAL_TYPE_LABELS: Record<EvalTypeId, string> = { model: 'Model', agent: 'Agent', rag: 'RAG' };
+const ICONS: Record<EvalTypeId, FC<{ size?: number }>> = {
+  model: MessageSquare,
+  agent: Bot,
+  rag: Search,
+};
 
-const ModelsStep: FC<Props> = ({ providers, selected, onToggle, onClear }) => {
-  const [query, setQuery] = useState('');
-  const [categoryFilters, setCategoryFilters] = useState<string[]>([]);
-  const [difficultyFilters, setDifficultyFilters] = useState<ModelDifficulty[]>([]);
-  const [evalTypeFilters, setEvalTypeFilters] = useState<EvalTypeId[]>([]);
-  const [providersOnly, setProvidersOnly] = useState(false);
-  const [showFilters, setShowFilters] = useState(true);
+const AGENT_FRAMEWORKS: { id: AgentFramework; name: string; desc: string; icon: FC<{ size?: number }> }[] = [
+  { id: 'hermes', name: 'Hermes', desc: 'Lightweight single-agent tool-calling runtime.', icon: Waypoints },
+  { id: 'langgraph', name: 'LangGraph', desc: 'Graph-based orchestration for multi-agent workflows.', icon: Workflow },
+];
 
-  // All connected models are shown by default. "Providers only" is an optional,
-  // explicit toggle rather than an implicit hard filter — otherwise models from
-  // providers you haven't yet ticked in Step 3 silently disappear here.
-  const pool = useMemo(
-    () => (providersOnly && providers.length ? MODELS.filter((m) => providers.includes(m.providerId)) : MODELS),
-    [providersOnly, providers]
+const TypeStep: FC<Props> = ({ value, onChange, agentFramework, onAgentFrameworkChange }) => {
+  return (
+    <div className="run-eval__card">
+      <h2 className="run-eval__step-title">What are you testing?</h2>
+      <p className="run-eval__step-desc">Different AI types need different evaluation methods.</p>
+
+      <div className="run-eval__type-grid">
+        {EVAL_TYPES.map((t) => {
+          const Icon = ICONS[t.id];
+          const selected = value === t.id;
+          return (
+            <div key={t.id} className={`run-eval__type-card-wrap${selected ? ' run-eval__type-card-wrap--selected' : ''}`}>
+              <button
+                type="button"
+                className={`run-eval__type-card${selected ? ' run-eval__type-card--selected' : ''}`}
+                onClick={() => onChange(t.id)}
+              >
+                <span className="run-eval__type-icon">
+                  <Icon size={20} />
+                </span>
+                <span className="run-eval__type-content">
+                  <span className="run-eval__type-title">{t.title}</span>
+                  <span className="run-eval__type-desc">{t.desc}</span>
+                </span>
+                <span className="run-eval__badge">{t.badge}</span>
+                {selected && (
+                  <span className="run-eval__type-check">
+                    <Check size={13} strokeWidth={2.75} />
+                  </span>
+                )}
+              </button>
+
+              {selected && t.id === 'agent' && (
+                <div className="run-eval__agent-framework">
+                  <p className="run-eval__agent-framework-label">Choose an agent framework</p>
+                  <div className="run-eval__agent-framework-grid">
+                    {AGENT_FRAMEWORKS.map((fw) => {
+                      const FwIcon = fw.icon;
+                      const fwSelected = agentFramework === fw.id;
+                      return (
+                        <button
+                          key={fw.id}
+                          type="button"
+                          className={`run-eval__agent-framework-card${fwSelected ? ' run-eval__agent-framework-card--selected' : ''}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onAgentFrameworkChange(fw.id);
+                          }}
+                        >
+                          <span className="run-eval__agent-framework-icon">
+                            <FwIcon size={16} />
+                          </span>
+                          <span className="run-eval__agent-framework-info">
+                            <span className="run-eval__agent-framework-name">{fw.name}</span>
+                            <span className="run-eval__agent-framework-desc">{fw.desc}</span>
+                          </span>
+                          {fwSelected && (
+                            <span className="run-eval__type-check">
+                              <Check size={11} strokeWidth={2.75} />
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
+};
 
-  const filtered = useMemo(() => {
-    return pool.filter((m: ModelInfo) => {
-      if (query && !m.name.toLowerCase().includes(query.toLowerCase()) && !m.provider.toLowerCase().includes(query.toLowerCase())) {
-        return false;
-      }
-      if (categoryFilters.length && !categoryFilters.includes(m.category)) return false;
-      if (difficultyFilters.length && !difficultyFilters.includes(m.difficulty)) return false;
-      if (evalTypeFilters.length && !evalTypeFilters.includes(m.eval_type)) return false;
-      return true;
+export default TypeStep;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Runevaluation.tsx
+import { useState, type FC } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { ArrowLeft, ArrowRight, Play, Check, Clock3 } from 'lucide-react';
+import NameStep from './steps/NameStep';
+import TypeStep from './steps/TypeStep';
+import ProvidersStep from './steps/ProvidersStep';
+import ModelsStep from './steps/ModelsStep';
+import DatasetStep from './steps/DatasetStep';
+import MetricsStep from './steps/MetricsStep';
+import ReviewStep from './steps/ReviewStep';
+import { METRICS } from './data';
+import { WIZARD_STEPS, type EvaluationDraft } from './types';
+import './RunEvaluation.scss';
+
+const EMPTY_DRAFT: EvaluationDraft = {
+  name: '',
+  type: null,
+  agentFramework: null,
+  providers: [],
+  models: [],
+  dataset: null,
+  datasetSubgroups: [],
+  metrics: [],
+};
+
+const RunEvaluation: FC = () => {
+  const navigate = useNavigate();
+  const [step, setStep] = useState(1);
+  const [draft, setDraft] = useState<EvaluationDraft>(EMPTY_DRAFT);
+  const [error, setError] = useState<string | null>(null);
+  const totalSteps = WIZARD_STEPS.length;
+
+  const toggleInArray = (key: 'providers' | 'models' | 'metrics', id: string) => {
+    setDraft((d) => {
+      const arr = d[key];
+      const next = arr.includes(id) ? arr.filter((x) => x !== id) : [...arr, id];
+      return { ...d, [key]: next };
     });
-  }, [pool, query, categoryFilters, difficultyFilters, evalTypeFilters]);
-
-  const toggleFrom = <T,>(list: T[], setList: (v: T[]) => void, value: T) => {
-    setList(list.includes(value) ? list.filter((v) => v !== value) : [...list, value]);
   };
 
-  const resetFilters = () => {
-    setCategoryFilters([]);
-    setDifficultyFilters([]);
-    setEvalTypeFilters([]);
-    setQuery('');
+  const setType = (id: EvaluationDraft['type']) => {
+    setDraft((d) => {
+      if (d.type === id) return d;
+      const defaults = [
+        ...METRICS.universal.filter((m) => m.defaultChecked).map((m) => m.id),
+        ...(id === 'agent' ? METRICS.agent : id === 'rag' ? METRICS.rag : METRICS.model)
+          .filter((m) => m.defaultChecked)
+          .map((m) => m.id),
+      ];
+      return {
+        ...d,
+        type: id,
+        metrics: defaults,
+        agentFramework: id === 'agent' ? d.agentFramework ?? 'hermes' : null,
+      };
+    });
   };
 
-  const activeFilterCount = categoryFilters.length + difficultyFilters.length + evalTypeFilters.length;
+  const setAgentFramework = (framework: EvaluationDraft['agentFramework']) => {
+    setDraft((d) => ({ ...d, agentFramework: framework }));
+  };
+
+  const selectDataset = (id: string) => {
+    setDraft((d) => (d.dataset === id ? d : { ...d, dataset: id, datasetSubgroups: [] }));
+  };
+
+  const setDatasetSubgroups = (ids: string[]) => {
+    setDraft((d) => ({ ...d, datasetSubgroups: ids }));
+  };
+
+  const validate = (): boolean => {
+    setError(null);
+    if (step === 1 && !draft.name.trim()) {
+      setError('Enter an evaluation name to continue.');
+      return false;
+    }
+    if (step === 2 && !draft.type) {
+      setError('Select an evaluation type to continue.');
+      return false;
+    }
+    if (step === 3 && draft.providers.length === 0) {
+      setError('Select at least one provider to continue.');
+      return false;
+    }
+    if (step === 4 && draft.models.length === 0) {
+      setError('Select at least one model to continue.');
+      return false;
+    }
+    if (step === 5 && !draft.dataset) {
+      setError('Select a test suite to continue.');
+      return false;
+    }
+    if (step === 6 && draft.metrics.length === 0) {
+      setError('Select at least one metric to continue.');
+      return false;
+    }
+    return true;
+  };
+
+  const goNext = () => {
+    if (!validate()) return;
+    setStep((s) => Math.min(totalSteps, s + 1));
+  };
+  const goBack = () => setStep((s) => Math.max(1, s - 1));
+  const goToStep = (target: number) => {
+    if (target < step) setStep(target);
+  };
+
+  const startEvaluation = () => {
+    if (!validate()) return;
+    navigate('/app/history');
+  };
 
   return (
-    <div className="run-eval__card run-eval__card--wide">
-      <h2 className="run-eval__step-title">Choose models</h2>
-      <p className="run-eval__step-desc">Select the models you want to compare. Use filters to narrow the list.</p>
+    <div className="run-eval">
+      <div className="run-eval__header">
+        <div className="run-eval__header-left">
+          <p className="run-eval__header-eyebrow">Create evaluation</p>
+          <h1 className="run-eval__title">New Evaluation</h1>
+          <p className="run-eval__subtitle">Compare AI models with standardized tests</p>
+        </div>
 
-      <div className="run-eval__models-layout">
-        {showFilters && (
-          <aside className="run-eval__filters">
-            <div className="run-eval__filters-head">
-              <span>Filters</span>
-              <button type="button" className="run-eval__link" onClick={resetFilters}>
-                Reset all
-              </button>
-            </div>
+        <div className="run-eval__header-meta">
+          <Clock3 size={13} />
+          ~5 min guided setup
+        </div>
+      </div>
 
-            {providers.length > 0 && (
-              <label className="run-eval__filter-chip run-eval__filter-chip--toggle">
-                <input
-                  type="checkbox"
-                  checked={providersOnly}
-                  onChange={(e) => setProvidersOnly(e.target.checked)}
-                />
-                Selected providers only
-              </label>
-            )}
-
-            <div className="run-eval__filter-section">
-              <p className="run-eval__filter-title">Category</p>
-              <div className="run-eval__filter-options">
-                {FILTERS.category.map((cat) => (
-                  <label key={cat} className="run-eval__filter-chip">
-                    <input
-                      type="checkbox"
-                      checked={categoryFilters.includes(cat)}
-                      onChange={() => toggleFrom(categoryFilters, setCategoryFilters, cat)}
-                    />
-                    {cat}
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            <div className="run-eval__filter-section">
-              <p className="run-eval__filter-title">Difficulty</p>
-              <div className="run-eval__filter-options">
-                {FILTERS.difficulty.map((d) => (
-                  <label key={d} className="run-eval__filter-chip">
-                    <input
-                      type="checkbox"
-                      checked={difficultyFilters.includes(d)}
-                      onChange={() => toggleFrom(difficultyFilters, setDifficultyFilters, d)}
-                    />
-                    {DIFFICULTY_LABELS[d]}
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            <div className="run-eval__filter-section">
-              <p className="run-eval__filter-title">Evaluation Type</p>
-              <div className="run-eval__filter-options">
-                {FILTERS.eval_type.map((t) => (
-                  <label key={t} className="run-eval__filter-chip">
-                    <input
-                      type="checkbox"
-                      checked={evalTypeFilters.includes(t)}
-                      onChange={() => toggleFrom(evalTypeFilters, setEvalTypeFilters, t)}
-                    />
-                    {EVAL_TYPE_LABELS[t]}
-                  </label>
-                ))}
-              </div>
-            </div>
-          </aside>
-        )}
-
-        <div className="run-eval__models-main">
-          <div className="run-eval__search-bar">
-            <Search size={15} />
-            <input
-              type="text"
-              placeholder="Search models..."
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
+      <div className="run-eval__wizard">
+        <div className="run-eval__tracker">
+          <div className="run-eval__tracker-bar">
+            <div
+              className="run-eval__tracker-fill"
+              style={{ width: `${((step - 1) / (totalSteps - 1)) * 100}%` }}
             />
-            <button type="button" className="run-eval__btn run-eval__btn--sm" onClick={() => setShowFilters((v) => !v)}>
-              <SlidersHorizontal size={14} /> Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
-            </button>
           </div>
-
-          {activeFilterCount > 0 && (
-            <div className="run-eval__active-filters">
-              {categoryFilters.map((c) => (
-                <span key={`cat-${c}`} className="run-eval__tag">
-                  {c}
-                  <button type="button" onClick={() => toggleFrom(categoryFilters, setCategoryFilters, c)}>
-                    <X size={11} />
-                  </button>
-                </span>
-              ))}
-              {difficultyFilters.map((d) => (
-                <span key={`diff-${d}`} className="run-eval__tag">
-                  {DIFFICULTY_LABELS[d]}
-                  <button type="button" onClick={() => toggleFrom(difficultyFilters, setDifficultyFilters, d)}>
-                    <X size={11} />
-                  </button>
-                </span>
-              ))}
-              {evalTypeFilters.map((t) => (
-                <span key={`type-${t}`} className="run-eval__tag">
-                  {EVAL_TYPE_LABELS[t]}
-                  <button type="button" onClick={() => toggleFrom(evalTypeFilters, setEvalTypeFilters, t)}>
-                    <X size={11} />
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-
-          <div className="run-eval__models-grid">
-            {filtered.map((m) => {
-              const isSelected = selected.includes(m.id);
+          <div className="run-eval__tracker-nodes">
+            {WIZARD_STEPS.map((label, i) => {
+              const num = i + 1;
+              const state = num === step ? 'active' : num < step ? 'complete' : 'upcoming';
               return (
                 <button
-                  key={m.id}
+                  key={label}
                   type="button"
-                  className={`run-eval__model-card${isSelected ? ' run-eval__model-card--selected' : ''}`}
-                  onClick={() => onToggle(m.id)}
+                  className={`run-eval__node run-eval__node--${state}`}
+                  onClick={() => goToStep(num)}
+                  disabled={num > step}
                 >
-                  <div className="run-eval__model-top">
-                    <span className="run-eval__model-name">{m.name}</span>
-                    {isSelected && (
-                      <span className="run-eval__type-check">
-                        <Check size={12} strokeWidth={2.75} />
-                      </span>
-                    )}
-                  </div>
-                  <span className="run-eval__model-provider">{m.provider}</span>
-                  <div className="run-eval__model-caps">
-                    <span className="run-eval__chip run-eval__chip--static">{m.category}</span>
-                    <span className="run-eval__chip run-eval__chip--static">{DIFFICULTY_LABELS[m.difficulty]}</span>
-                    {m.capabilities.slice(0, 2).map((c) => (
-                      <span key={c} className="run-eval__chip run-eval__chip--static">
-                        {c}
-                      </span>
-                    ))}
-                  </div>
-                  <div className="run-eval__model-meta n">
-                    <span>{m.contextWindow}</span>
-                    <span>{m.speedRating}</span>
-                    <span>{m.pricing}</span>
-                  </div>
+                  <span className="run-eval__node-dot">
+                    {state === 'complete' ? <Check size={12} strokeWidth={3} /> : num}
+                  </span>
+                  <span className="run-eval__node-label">{label}</span>
                 </button>
               );
             })}
-            {filtered.length === 0 && <p className="run-eval__empty">No models match these filters.</p>}
           </div>
+        </div>
 
-          {selected.length > 0 && (
-            <div className="run-eval__selected-bar">
-              <span>
-                <strong>{selected.length}</strong> models selected
-              </span>
-              <button type="button" className="run-eval__btn run-eval__btn--sm" onClick={onClear}>
-                Clear
-              </button>
-            </div>
+        <p className="run-eval__step-kicker">
+          Step {step} of {totalSteps}
+        </p>
+
+        <div className="run-eval__body">
+          {step === 1 && <NameStep name={draft.name} onChange={(name) => setDraft((d) => ({ ...d, name }))} />}
+          {step === 2 && (
+            <TypeStep
+              value={draft.type}
+              onChange={setType}
+              agentFramework={draft.agentFramework}
+              onAgentFrameworkChange={setAgentFramework}
+            />
+          )}
+          {step === 3 && (
+            <ProvidersStep
+              selected={draft.providers}
+              onToggle={(id) => toggleInArray('providers', id)}
+              onGoToProviders={() => navigate('/app/providers')}
+            />
+          )}
+          {step === 4 && (
+            <ModelsStep
+              providers={draft.providers}
+              selected={draft.models}
+              onToggle={(id) => toggleInArray('models', id)}
+              onClear={() => setDraft((d) => ({ ...d, models: [] }))}
+            />
+          )}
+          {step === 5 && (
+            <DatasetStep
+              evalType={draft.type}
+              selected={draft.dataset}
+              onSelect={selectDataset}
+              subgroupSelections={draft.datasetSubgroups}
+              onSubgroupsChange={setDatasetSubgroups}
+            />
+          )}
+          {step === 6 && (
+            <MetricsStep evalType={draft.type} selected={draft.metrics} onToggle={(id) => toggleInArray('metrics', id)} />
+          )}
+          {step === 7 && <ReviewStep draft={draft} />}
+
+          {error && <p className="run-eval__error">{error}</p>}
+        </div>
+
+        <div className="run-eval__nav">
+          {step > 1 ? (
+            <button type="button" className="run-eval__btn run-eval__btn--secondary run-eval__btn--lg" onClick={goBack}>
+              <ArrowLeft size={16} /> Back
+            </button>
+          ) : (
+            <span />
+          )}
+
+          {step < totalSteps ? (
+            <button type="button" className="run-eval__btn run-eval__btn--primary run-eval__btn--lg" onClick={goNext}>
+              Continue <ArrowRight size={16} />
+            </button>
+          ) : (
+            <button type="button" className="run-eval__btn run-eval__btn--primary run-eval__btn--lg" onClick={startEvaluation}>
+              <Play size={16} /> Start Evaluation
+            </button>
           )}
         </div>
       </div>
@@ -228,7 +341,224 @@ const ModelsStep: FC<Props> = ({ providers, selected, onToggle, onClear }) => {
   );
 };
 
-export default ModelsStep;
+export default RunEvaluation;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Reviewstep.tsx
+import { useMemo, type FC } from 'react';
+import { Info } from 'lucide-react';
+import { EVAL_TYPES, MODELS, TEST_SUITES } from '../data';
+import type { EvaluationDraft } from '../types';
+
+interface Props {
+  draft: EvaluationDraft;
+}
+
+const ReviewStep: FC<Props> = ({ draft }) => {
+  const typeInfo = EVAL_TYPES.find((t) => t.id === draft.type);
+  const agentFrameworkLabel = draft.agentFramework === 'hermes' ? 'Hermes' : draft.agentFramework === 'langgraph' ? 'LangGraph' : null;
+  const modelNames = draft.models.map((id) => MODELS.find((m) => m.id === id)?.name).filter(Boolean);
+  const dataset = TEST_SUITES.find((d) => d.id === draft.dataset);
+
+  const questionCount = useMemo(() => {
+    if (!dataset) return 0;
+    if (draft.datasetSubgroups.length === 0) return dataset.questions;
+    return dataset.subgroups
+      .filter((s) => draft.datasetSubgroups.includes(s.id))
+      .reduce((sum, s) => sum + s.count, 0);
+  }, [dataset, draft.datasetSubgroups]);
+
+  const subgroupNames = useMemo(() => {
+    if (!dataset || draft.datasetSubgroups.length === 0) return null;
+    return dataset.subgroups
+      .filter((s) => draft.datasetSubgroups.includes(s.id))
+      .map((s) => s.name)
+      .join(', ');
+  }, [dataset, draft.datasetSubgroups]);
+
+  const { cost, minutes } = useMemo(() => {
+    const modelCount = draft.models.length || 1;
+    const estCost = questionCount * modelCount * 0.0009;
+    const estMinutes = Math.max(1, Math.round((questionCount * modelCount) / 180));
+    return { cost: estCost, minutes: estMinutes };
+  }, [questionCount, draft.models.length]);
+
+  return (
+    <div className="run-eval__card">
+      <h2 className="run-eval__step-title">Review &amp; Run</h2>
+      <p className="run-eval__step-desc">Confirm your settings before starting.</p>
+
+      <div className="run-eval__review">
+        <div className="run-eval__review-row">
+          <span>Name</span>
+          <span>{draft.name || '—'}</span>
+        </div>
+        <div className="run-eval__review-row">
+          <span>Type</span>
+          <span>{typeInfo?.title ?? '—'}</span>
+        </div>
+        {agentFrameworkLabel && (
+          <div className="run-eval__review-row">
+            <span>Agent Framework</span>
+            <span>{agentFrameworkLabel}</span>
+          </div>
+        )}
+        <div className="run-eval__review-row">
+          <span>Models</span>
+          <span>{modelNames.length ? modelNames.join(', ') : '—'}</span>
+        </div>
+        <div className="run-eval__review-row">
+          <span>Test Suite</span>
+          <span>{dataset?.name ?? '—'}</span>
+        </div>
+        {subgroupNames && (
+          <div className="run-eval__review-row">
+            <span>Subcategories</span>
+            <span>{subgroupNames}</span>
+          </div>
+        )}
+        <div className="run-eval__review-row">
+          <span>Questions</span>
+          <span>{dataset ? questionCount : '—'}</span>
+        </div>
+        <div className="run-eval__review-divider" />
+        <div className="run-eval__review-row run-eval__review-row--highlight">
+          <span>Est. Cost</span>
+          <span>~${cost.toFixed(2)}</span>
+        </div>
+        <div className="run-eval__review-row run-eval__review-row--highlight">
+          <span>Est. Time</span>
+          <span>~{minutes} min</span>
+        </div>
+      </div>
+
+      <div className="run-eval__hint">
+        <Info size={14} />
+        <span>Costs are estimates. Actual costs depend on provider pricing.</span>
+      </div>
+    </div>
+  );
+};
+
+export default ReviewStep;
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Types.ts
+export type EvalTypeId = 'model' | 'agent' | 'rag';
+
+export interface EvalType {
+  id: EvalTypeId;
+  title: string;
+  desc: string;
+  badge: string;
+}
+
+export interface Provider {
+  id: string;
+  name: string;
+  status: 'connected' | 'not_connected';
+  modelCount: number;
+  logo: string;
+  desc: string;
+}
+
+export type ModelDifficulty = 'easy' | 'medium' | 'hard';
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+  provider: string;
+  providerId: string;
+  capabilities: string[];
+  contextWindow: string;
+  pricing: string;
+  speedRating: string;
+  accuracyScore: number;
+  agentScore: number;
+  /** High-level grouping used by the Models filter panel, e.g. "Reasoning", "Coding" */
+  category: string;
+  /** Evaluation type this model is best suited for */
+  eval_type: EvalTypeId;
+  difficulty: ModelDifficulty;
+}
+
+export interface ModelFilters {
+  category: string[];
+  difficulty: ModelDifficulty[];
+  eval_type: EvalTypeId[];
+}
+
+export interface DatasetSubgroup {
+  id: string;
+  name: string;
+  count: number;
+}
+
+export interface TestSuite {
+  id: string;
+  name: string;
+  category: string;
+  questions: number;
+  language: string;
+  task: string;
+  difficulty: string;
+  version: string;
+  maintainer: string;
+  description: string;
+  recommendedFor: EvalTypeId[];
+  featured: boolean;
+  subgroups: DatasetSubgroup[];
+}
+
+export interface Metric {
+  id: string;
+  name: string;
+  tooltip: string;
+  defaultChecked: boolean;
+}
+
+export type AgentFramework = 'hermes' | 'langgraph';
+
+export interface EvaluationDraft {
+  name: string;
+  type: EvalTypeId | null;
+  agentFramework: AgentFramework | null;
+  providers: string[];
+  models: string[];
+  dataset: string | null;
+  /** Selected subgroup ids for the chosen dataset, keyed by dataset id */
+  datasetSubgroups: string[];
+  metrics: string[];
+}
+
+export const WIZARD_STEPS = ['Name', 'Type', 'Providers', 'Models', 'Test Suite', 'Metrics', 'Review'] as const;
+
+
+
 
 
 
@@ -271,6 +601,96 @@ export default ModelsStep;
   input[type='checkbox'] {
     accent-color: $primary;
   }
+}
+
+/* ---------- nested agent framework picker (TypeStep) ---------- */
+&__type-card-wrap {
+  display: flex;
+  flex-direction: column;
+}
+
+&__agent-framework {
+  margin-top: 10px;
+  padding: 14px 16px 16px;
+  border: 1px dashed $border-default;
+  border-radius: $radius-md;
+  background: $bg-subtle;
+}
+
+&__agent-framework-label {
+  margin: 0 0 10px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: $text-tertiary;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+&__agent-framework-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+&__agent-framework-card {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid $border-default;
+  border-radius: $radius-sm;
+  background: $bg-main;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, box-shadow 0.15s;
+
+  &:hover {
+    border-color: $primary-subtle;
+  }
+
+  &--selected {
+    border-color: $primary;
+    box-shadow: 0 0 0 1px $primary;
+    background: $primary-light;
+  }
+
+  .run-eval__type-check {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+  }
+}
+
+&__agent-framework-icon {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: $radius-sm;
+  background: $primary-light;
+  color: $primary;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+&__agent-framework-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-right: 14px;
+}
+
+&__agent-framework-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: $text-primary;
+}
+
+&__agent-framework-desc {
+  font-size: 11px;
+  color: $text-tertiary;
+  line-height: 1.35;
 }
 
 &__dataset-top-actions {
