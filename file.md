@@ -79,67 +79,69 @@ const Models: FC = () => {
         </div>
       </div>
 
-      <div className="models-page__grid">
-        {filtered.map((m) => (
-          <div className="models-page__card" key={m.id}>
-            <div className="models-page__card-top">
-              <span className="models-page__provider-badge">{m.provider}</span>
-              <span className="models-page__version">{m.version}</span>
-            </div>
-
-            <h3 className="models-page__name">{m.name}</h3>
-            <p className="models-page__desc">{m.description}</p>
-
-            <div className="models-page__caps">
-              {m.capabilities.map((c) => (
-                <span key={c} className={`models-page__cap-pill models-page__cap-pill--${pillTint(c)}`}>
-                  {c}
-                </span>
-              ))}
-            </div>
-
-            <div className="models-page__specs">
-              <div className="models-page__spec">
-                <span className="models-page__spec-label">Context</span>
-                <span className="models-page__spec-value n">{m.contextWindow}</span>
+      <div className="models-page__body">
+        <div className="models-page__grid">
+          {filtered.map((m) => (
+            <div className="models-page__card" key={m.id}>
+              <div className="models-page__card-top">
+                <span className="models-page__provider-badge">{m.provider}</span>
+                <span className="models-page__version">{m.version}</span>
               </div>
-              <div className="models-page__spec">
-                <span className="models-page__spec-label">Price</span>
-                <span className="models-page__spec-value n">{m.pricing}</span>
+
+              <h3 className="models-page__name">{m.name}</h3>
+              <p className="models-page__desc">{m.description}</p>
+
+              <div className="models-page__caps">
+                {m.capabilities.map((c) => (
+                  <span key={c} className={`models-page__cap-pill models-page__cap-pill--${pillTint(c)}`}>
+                    {c}
+                  </span>
+                ))}
               </div>
-              <div className="models-page__spec">
-                <span className="models-page__spec-label">Speed</span>
-                <span className="models-page__spec-value n">{m.speedRating}</span>
+
+              <div className="models-page__specs">
+                <div className="models-page__spec">
+                  <span className="models-page__spec-label">Context</span>
+                  <span className="models-page__spec-value n">{m.contextWindow}</span>
+                </div>
+                <div className="models-page__spec">
+                  <span className="models-page__spec-label">Price</span>
+                  <span className="models-page__spec-value n">{m.pricing}</span>
+                </div>
+                <div className="models-page__spec">
+                  <span className="models-page__spec-label">Speed</span>
+                  <span className="models-page__spec-value n">{m.speedRating}</span>
+                </div>
+                <div className="models-page__spec">
+                  <span className="models-page__spec-label">Accuracy</span>
+                  <span className="models-page__spec-value models-page__spec-value--highlight n">{m.accuracyScore}%</span>
+                </div>
               </div>
-              <div className="models-page__spec">
-                <span className="models-page__spec-label">Accuracy</span>
-                <span className="models-page__spec-value models-page__spec-value--highlight n">{m.accuracyScore}%</span>
+
+              <div className="models-page__card-actions">
+                <button type="button" className="models-page__btn models-page__btn--outline" title="View details" aria-label="View details">
+                  <Info size={14} strokeWidth={2} />
+                </button>
+                <button
+                  type="button"
+                  className="models-page__btn models-page__btn--primary"
+                  title="Test this model"
+                  aria-label="Test this model"
+                  onClick={() => navigate('/app/run-evaluation')}
+                >
+                  <Play size={13} strokeWidth={2.25} />
+                </button>
               </div>
             </div>
+          ))}
 
-            <div className="models-page__card-actions">
-              <button type="button" className="models-page__btn models-page__btn--outline" title="View details" aria-label="View details">
-                <Info size={14} strokeWidth={2} />
-              </button>
-              <button
-                type="button"
-                className="models-page__btn models-page__btn--primary"
-                title="Test this model"
-                aria-label="Test this model"
-                onClick={() => navigate('/app/run-evaluation')}
-              >
-                <Play size={13} strokeWidth={2.25} />
-              </button>
+          {filtered.length === 0 && (
+            <div className="models-page__empty">
+              <Search size={22} />
+              <p>No models match your filters.</p>
             </div>
-          </div>
-        ))}
-
-        {filtered.length === 0 && (
-          <div className="models-page__empty">
-            <Search size={22} />
-            <p>No models match your filters.</p>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
@@ -165,17 +167,18 @@ export default Models;
 
 
 
-
-
 @use '../../../styles/variables' as *;
 
 .models-page {
   display: flex;
   flex-direction: column;
+  height: calc(100vh - 166px);
+  min-height: 0;
   gap: 18px;
 
   /* ---------- header ---------- */
   &__header {
+    flex-shrink: 0;
     display: flex;
     align-items: flex-end;
     justify-content: space-between;
@@ -242,10 +245,19 @@ export default Models;
 
   /* ---------- filters ---------- */
   &__filters {
+    flex-shrink: 0;
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 12px;
+  }
+
+  &__body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 4px;
+    margin-right: -4px;
   }
 
   &__search {
