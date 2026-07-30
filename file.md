@@ -96,7 +96,7 @@ const History: FC = () => {
             <div className="history__card" key={ev.id}>
               <div className="history__card-top">
                 <span className="history__icon">
-                  <Icon size={15} strokeWidth={2} />
+                  <Icon size={17} strokeWidth={2} />
                 </span>
                 <span className="history__type-badge">{ev.type.split('(')[0].trim()}</span>
                 <div className="history__actions">
@@ -147,21 +147,6 @@ const History: FC = () => {
 };
 
 export default History;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -286,17 +271,17 @@ export default History;
   /* ---------- card grid ---------- */
   &__grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 14px;
   }
 
   &__card {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    padding: 14px 15px;
+    gap: 12px;
+    padding: 18px 20px;
     border: 1px solid $border-subtle;
-    border-radius: 13px;
+    border-radius: 14px;
     background: $bg-main;
     box-shadow: $shadow-xs;
     transition: border-color 0.14s ease, box-shadow 0.14s ease;
@@ -314,14 +299,14 @@ export default History;
   &__card-top {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
   }
 
   &__icon {
-    width: 28px;
-    height: 28px;
+    width: 34px;
+    height: 34px;
     flex-shrink: 0;
-    border-radius: 8px;
+    border-radius: 10px;
     background: $primary-light;
     color: $primary;
     display: grid;
@@ -329,20 +314,20 @@ export default History;
   }
 
   &__type-badge {
-    font-size: 0.625rem;
+    font-size: 0.6875rem;
     font-weight: 600;
     color: $text-secondary;
     background: $bg-subtle;
     border: 1px solid $border-subtle;
     border-radius: 5px;
-    padding: 2px 6px;
+    padding: 3px 8px;
   }
 
   &__name {
-    font-size: 0.8125rem;
+    font-size: 0.90625rem;
     font-weight: 600;
     color: $text-primary;
-    line-height: 1.35;
+    line-height: 1.4;
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
@@ -350,30 +335,30 @@ export default History;
   }
 
   &__date {
-    font-size: 0.6875rem;
+    font-size: 0.75rem;
     color: $text-tertiary;
-    margin-top: -4px;
+    margin-top: -6px;
   }
 
   &__results {
     display: flex;
     align-items: flex-end;
     justify-content: space-between;
-    gap: 8px;
-    margin-top: 4px;
-    padding-top: 10px;
+    gap: 10px;
+    margin-top: 2px;
+    padding-top: 13px;
     border-top: 1px solid $border-subtle;
   }
 
   &__stat {
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 4px;
     min-width: 0;
   }
 
   &__stat-label {
-    font-size: 0.59375rem;
+    font-size: 0.625rem;
     font-weight: 600;
     letter-spacing: 0.05em;
     text-transform: uppercase;
@@ -381,11 +366,11 @@ export default History;
   }
 
   &__stat-value {
-    font-size: 0.71875rem;
+    font-size: 0.8125rem;
     font-weight: 600;
     color: $text-secondary;
     white-space: nowrap;
-    max-width: 6.5rem;
+    max-width: 7.5rem;
     overflow: hidden;
     text-overflow: ellipsis;
 
@@ -398,16 +383,16 @@ export default History;
   &__actions {
     flex-shrink: 0;
     display: flex;
-    gap: 4px;
+    gap: 5px;
     margin-left: auto;
     opacity: 0;
     transition: opacity 0.14s ease;
   }
 
   &__icon-btn {
-    width: 24px;
-    height: 24px;
-    border-radius: 6px;
+    width: 27px;
+    height: 27px;
+    border-radius: 7px;
     border: 1px solid $border-default;
     background: $bg-main;
     color: $text-tertiary;
