@@ -1,173 +1,135 @@
-import { useMemo, useState, type FC, type FormEvent } from 'react';
-import { PlugZap, CheckCircle2, Boxes, Settings2, Unplug, Search, X, Key } from 'lucide-react';
-import { PROVIDERS } from '../RunEvaluation/data';
-import type { Provider } from '../RunEvaluation/types';
-import './Providers.scss';
+//data.ts
+export interface Report {
+  id: string;
+  title: string;
+  date: string;
+  summary: string;
+  topModel: string;
+  verdict: string;
+  metricsTested: string[];
+  downloadSize: string;
+}
 
-const Providers: FC = () => {
-  const [providers, setProviders] = useState<Provider[]>(PROVIDERS);
-  const [query, setQuery] = useState('');
-  const [activePanel, setActivePanel] = useState<string | null>(null);
-  const [keyInput, setKeyInput] = useState('');
+export const REPORTS: Report[] = [
+  {
+    id: 'rep-1',
+    title: 'Executive Recommendation: Autonomous Agent Standardization',
+    date: 'July 26, 2026',
+    summary:
+      'After subjecting 6 candidate models to the Autonomous Tool & Workflow Suite, Model Alpha Agent and Model Delta Agent v2 emerged as top performers. Model Alpha offers a 76% cost reduction and 35% speed gain while matching proprietary tool execution accuracy (99.1%).',
+    topModel: 'Model Alpha Agent',
+    verdict: 'Adopt Model Alpha Agent for high-volume automated tools; preserve Model Delta Agent v2 for highly ambiguous policy edge-cases.',
+    metricsTested: ['Tool Calling Success', 'Response Time', 'Task Accuracy', 'Cost per 1,000 Tasks'],
+    downloadSize: '2.4 MB PDF',
+  },
+  {
+    id: 'rep-2',
+    title: 'Quarterly RAG Factual Accuracy Assessment',
+    date: 'July 22, 2026',
+    summary:
+      'Evaluation of our customer-facing knowledge assistant across 350 ground-truth QA pairs. Model Theta Long-Context demonstrated the lowest incorrect answer rate (0.2%), while Groq-hosted Model Zeta Instruct provided the fastest user interaction speed (280 t/s).',
+    topModel: 'Model Theta Long-Context',
+    verdict: 'Implement Model Zeta Instruct as frontline responder with automated fall-back to Model Theta Long-Context for queries over 30,000 characters.',
+    metricsTested: ['Incorrect Answer Rate', 'Response Time', 'Retrieval Precision'],
+    downloadSize: '1.8 MB PDF',
+  },
+  {
+    id: 'rep-3',
+    title: 'Software Engineering Agent Benchmark Review',
+    date: 'July 14, 2026',
+    summary:
+      'Ran 500 real-world GitHub issue resolutions through SWE-bench Verified. Model Delta Agent v2 independently diagnosed and patched 95.9% of issues with passing unit tests, ahead of every other candidate by a wide margin.',
+    topModel: 'Model Delta Agent v2',
+    verdict: 'Roll out Model Delta Agent v2 for the internal bug-triage pipeline; keep a human reviewer in the loop for security-sensitive patches.',
+    metricsTested: ['Patch Success Rate', 'Test Pass Rate', 'Time to Resolution'],
+    downloadSize: '3.1 MB PDF',
+  },
+];
 
-  const connectedCount = providers.filter((p) => p.status === 'connected').length;
 
-  const filtered = useMemo(
-    () => providers.filter((p) => !query || p.name.toLowerCase().includes(query.toLowerCase())),
-    [providers, query]
-  );
 
-  const openPanel = (id: string, existingKey?: string) => {
-    setActivePanel((prev) => (prev === id ? null : id));
-    setKeyInput(existingKey ?? '');
-  };
 
-  const handleSubmit = (e: FormEvent, id: string) => {
-    e.preventDefault();
-    if (!keyInput.trim()) return;
-    setProviders((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, status: 'connected', apiKey: `sk-****-${keyInput.slice(-4)}` } : p))
-    );
-    setActivePanel(null);
-  };
 
-  const handleDisconnect = (id: string) => {
-    setProviders((prev) => prev.map((p) => (p.id === id ? { ...p, status: 'not_connected', apiKey: undefined } : p)));
-    setActivePanel(null);
-  };
 
+
+
+
+
+
+
+//Reports.tsx
+import type { FC } from 'react';
+import { FileBarChart, Download, Share2, Lightbulb } from 'lucide-react';
+import { REPORTS } from './data';
+import './Reports.scss';
+
+const Reports: FC = () => {
   return (
-    <div className="providers-page">
-      <div className="providers-page__header">
-        <div className="providers-page__header-left">
-          <p className="providers-page__header-eyebrow">Provider connections</p>
-          <h1 className="providers-page__title">Providers</h1>
-          <p className="providers-page__subtitle">Manage AI service connections and API keys</p>
+    <div className="reports-page">
+      <div className="reports-page__header">
+        <div className="reports-page__header-left">
+          <p className="reports-page__header-eyebrow">Executive summaries</p>
+          <h1 className="reports-page__title">Reports</h1>
+          <p className="reports-page__subtitle">Generated analysis and recommendations</p>
         </div>
 
-        <div className="providers-page__header-meta">
-          <PlugZap size={13} />
-          {connectedCount} of {providers.length} connected
+        <div className="reports-page__header-meta">
+          <FileBarChart size={13} />
+          {REPORTS.length} reports generated
         </div>
       </div>
 
-      <div className="providers-page__search">
-        <Search size={15} />
-        <input type="text" placeholder="Search providers..." value={query} onChange={(e) => setQuery(e.target.value)} />
-        {query && (
-          <button type="button" className="providers-page__search-clear" onClick={() => setQuery('')} aria-label="Clear search">
-            <X size={13} />
-          </button>
-        )}
-      </div>
-
-      <div className="providers-page__body">
-        <div className="providers-page__grid">
-          {filtered.map((p) => {
-            const connected = p.status === 'connected';
-            const panelOpen = activePanel === p.id;
-
-            return (
-              <div className="providers-page__card" key={p.id}>
-                <h3 className="providers-page__name">{p.name}</h3>
-                <p className="providers-page__desc">{p.desc}</p>
-
-                <div className="providers-page__tags">
-                  <span className={`providers-page__tag${connected ? ' providers-page__tag--jade' : ' providers-page__tag--gray'}`}>
-                    {connected && <CheckCircle2 size={11} strokeWidth={2.5} />}
-                    {connected ? 'Connected' : 'Not connected'}
-                  </span>
+      <div className="reports-page__body">
+        <div className="reports-page__list">
+          {REPORTS.map((r) => (
+            <div className="reports-page__card" key={r.id}>
+              <div className="reports-page__card-head">
+                <span className="reports-page__date">{r.date}</span>
+                <div className="reports-page__actions">
+                  <button type="button" className="reports-page__btn">
+                    <Download size={13} /> {r.downloadSize}
+                  </button>
+                  <button type="button" className="reports-page__icon-btn" aria-label="Share report" title="Share report">
+                    <Share2 size={13} />
+                  </button>
                 </div>
-
-                <div className="providers-page__stat-row">
-                  <div className="providers-page__stat">
-                    <span className="providers-page__stat-value n">{p.modelCount}</span>
-                    <span className="providers-page__stat-label">Models</span>
-                  </div>
-                  <div className="providers-page__meta-list">
-                    <span className="providers-page__meta-item">
-                      <Boxes size={12} /> {p.modelCount} models available
-                    </span>
-                    {connected && (
-                      <span className="providers-page__meta-item">
-                        <Key size={12} /> {p.apiKey}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {panelOpen && (
-                  <form className="providers-page__connect-form" onSubmit={(e) => handleSubmit(e, p.id)}>
-                    <label className="providers-page__field-label" htmlFor={`key-${p.id}`}>
-                      API Key
-                    </label>
-                    <input
-                      id={`key-${p.id}`}
-                      type="password"
-                      className="providers-page__input"
-                      placeholder="Enter API key"
-                      value={keyInput}
-                      onChange={(e) => setKeyInput(e.target.value)}
-                      autoFocus
-                    />
-                    <div className="providers-page__form-actions">
-                      <button type="button" className="providers-page__btn providers-page__btn--outline" onClick={() => setActivePanel(null)}>
-                        Cancel
-                      </button>
-                      <button type="submit" className="providers-page__btn providers-page__btn--primary">
-                        Save
-                      </button>
-                    </div>
-                  </form>
-                )}
-
-                {!panelOpen && (
-                  <div className="providers-page__actions">
-                    {connected ? (
-                      <>
-                        <button
-                          type="button"
-                          className="providers-page__btn providers-page__btn--outline"
-                          onClick={() => openPanel(p.id, p.apiKey)}
-                        >
-                          <Settings2 size={13} /> Configure
-                        </button>
-                        <button
-                          type="button"
-                          className="providers-page__btn providers-page__btn--danger-outline"
-                          onClick={() => handleDisconnect(p.id)}
-                        >
-                          <Unplug size={13} /> Disconnect
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        type="button"
-                        className="providers-page__btn providers-page__btn--primary"
-                        onClick={() => openPanel(p.id)}
-                      >
-                        <PlugZap size={13} /> Connect
-                      </button>
-                    )}
-                  </div>
-                )}
               </div>
-            );
-          })}
 
-          {filtered.length === 0 && (
-            <div className="providers-page__empty">
-              <Search size={22} />
-              <p>No providers match your search.</p>
+              <h3 className="reports-page__title-text">{r.title}</h3>
+              <p className="reports-page__summary">{r.summary}</p>
+
+              <div className="reports-page__verdict">
+                <span className="reports-page__verdict-icon">
+                  <Lightbulb size={15} strokeWidth={2} />
+                </span>
+                <div>
+                  <strong>Recommendation</strong>
+                  <p>{r.verdict}</p>
+                </div>
+              </div>
+
+              <div className="reports-page__footer">
+                <div className="reports-page__top-model">
+                  <span className="reports-page__top-label">Top:</span>
+                  <span className="reports-page__top-value">{r.topModel}</span>
+                </div>
+                <div className="reports-page__metrics">
+                  {r.metricsTested.map((m) => (
+                    <span key={m} className="reports-page__metric-tag">
+                      {m}
+                    </span>
+                  ))}
+                </div>
+              </div>
             </div>
-          )}
+          ))}
         </div>
       </div>
     </div>
   );
 };
 
-export default Providers;
+export default Reports;
 
 
 
@@ -185,11 +147,10 @@ export default Providers;
 
 
 
-
-
+//Reports.scss
 @use '../../../styles/variables' as *;
 
-.providers-page {
+.reports-page {
   display: flex;
   flex-direction: column;
   height: calc(100vh - 166px);
@@ -263,61 +224,6 @@ export default Providers;
     font-size: 0.84375rem;
   }
 
-  /* ---------- search ---------- */
-  &__search {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    width: 300px;
-    max-width: 100%;
-    border: 1px solid $border-default;
-    border-radius: 10px;
-    padding: 9px 12px;
-    background: $bg-main;
-    color: $text-tertiary;
-    transition: border-color 0.14s ease, box-shadow 0.14s ease;
-
-    &:focus-within {
-      border-color: $primary;
-      box-shadow: 0 0 0 3px $primary-light;
-    }
-
-    input {
-      flex: 1;
-      border: none;
-      outline: none;
-      font-size: 0.8125rem;
-      color: $text-primary;
-      background: transparent;
-      font-family: $font-body;
-      min-width: 0;
-
-      &::placeholder {
-        color: $text-tertiary;
-      }
-    }
-  }
-
-  &__search-clear {
-    flex-shrink: 0;
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    border: none;
-    background: $bg-inset;
-    color: $text-tertiary;
-    display: grid;
-    place-items: center;
-    cursor: pointer;
-    transition: background 0.14s ease, color 0.14s ease;
-
-    &:hover {
-      background: $border-default;
-      color: $text-primary;
-    }
-  }
-
   /* ---------- scrollable body ---------- */
   &__body {
     flex: 1;
@@ -327,246 +233,180 @@ export default Providers;
     margin-right: -4px;
   }
 
-  /* ---------- card grid ---------- */
-  &__grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  &__list {
+    display: flex;
+    flex-direction: column;
     gap: 14px;
+    max-width: 46rem;
   }
 
+  /* ---------- report card ---------- */
   &__card {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    padding: 18px 20px;
+    gap: 12px;
+    padding: 22px 24px;
     border: 1px solid $border-subtle;
     border-radius: 14px;
     background: $bg-main;
     box-shadow: $shadow-xs;
-    transition: border-color 0.14s ease, box-shadow 0.14s ease, transform 0.14s ease;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
 
     &:hover {
       border-color: $border-strong;
       box-shadow: $shadow-sm;
-      transform: translateY(-1px);
     }
   }
 
-  &__name {
-    font-size: 0.9375rem;
-    font-weight: 700;
-    letter-spacing: -0.01em;
-    color: $text-primary;
-  }
-
-  &__desc {
-    margin-top: -4px;
-    font-size: 0.8125rem;
-    line-height: 1.5;
-    color: $text-secondary;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-  }
-
-  &__tags {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
-  &__tag {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 0.6875rem;
-    font-weight: 600;
-    border-radius: 999px;
-    padding: 3px 10px;
-
-    &--jade {
-      color: $success;
-      background: $success-subtle;
-    }
-
-    &--gray {
-      color: $text-tertiary;
-      background: $bg-inset;
-    }
-  }
-
-  /* ---------- stat row ---------- */
-  &__stat-row {
+  &__card-head {
     display: flex;
     align-items: center;
-    gap: 14px;
-    margin-top: 4px;
-    padding-top: 13px;
-    border-top: 1px solid $border-subtle;
+    justify-content: space-between;
+    gap: 10px;
   }
 
-  &__stat {
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding-right: 14px;
-    border-right: 1px solid $border-subtle;
-  }
-
-  &__stat-value {
-    font-size: 1.25rem;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    color: $text-primary;
-    line-height: 1;
-  }
-
-  &__stat-label {
-    font-size: 0.625rem;
+  &__date {
+    font-family: $font-mono;
+    font-size: 0.71875rem;
     font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
     color: $text-tertiary;
   }
 
-  &__meta-list {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  &__meta-item {
+  &__actions {
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 0.71875rem;
-    color: $text-secondary;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    font-family: $font-body;
-
-    svg {
-      flex-shrink: 0;
-      color: $text-tertiary;
-    }
-  }
-
-  /* ---------- inline connect form ---------- */
-  &__connect-form {
-    margin-top: 2px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  &__field-label {
-    font-size: 0.71875rem;
-    font-weight: 600;
-    color: $text-secondary;
-  }
-
-  &__input {
-    width: 100%;
-    border: 1px solid $border-default;
-    border-radius: 8px;
-    padding: 8px 11px;
-    font-size: 0.8125rem;
-    font-family: $font-body;
-    color: $text-primary;
-    transition: border-color 0.14s ease, box-shadow 0.14s ease;
-
-    &::placeholder {
-      color: #a8b1bb;
-    }
-
-    &:focus {
-      outline: none;
-      border-color: $primary;
-      box-shadow: 0 0 0 3px $primary-light;
-    }
-  }
-
-  &__form-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-  }
-
-  /* ---------- actions ---------- */
-  &__actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 6px;
-    margin-top: 2px;
   }
 
   &__btn {
     display: inline-flex;
     align-items: center;
-    justify-content: center;
-    gap: 5px;
+    gap: 6px;
     font-family: $font-body;
-    font-size: 0.71875rem;
+    font-size: 0.75rem;
     font-weight: 600;
-    padding: 6px 10px;
+    padding: 6px 11px;
     border-radius: 7px;
-    border: 1px solid transparent;
+    border: 1px solid $border-default;
+    background: $bg-main;
+    color: $text-primary;
     cursor: pointer;
-    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+    transition: border-color 0.14s ease;
 
-    &--outline {
-      background: $bg-main;
-      border-color: $border-default;
-      color: $text-primary;
-
-      &:hover {
-        border-color: $text-primary;
-      }
-    }
-
-    &--danger-outline {
-      background: $bg-main;
-      border-color: $border-default;
-      color: $text-tertiary;
-
-      &:hover {
-        border-color: $danger;
-        color: $danger;
-        background: $danger-subtle;
-      }
-    }
-
-    &--primary {
-      background: $primary;
-      border-color: $primary;
-      color: #fff;
-
-      &:hover {
-        background: $primary-hover;
-        border-color: $primary-hover;
-      }
+    &:hover {
+      border-color: $text-primary;
     }
   }
 
-  /* ---------- empty state ---------- */
-  &__empty {
-    grid-column: 1 / -1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 10px;
-    padding: 52px 20px;
-    border: 1px dashed $border-strong;
-    border-radius: 14px;
-    color: $text-tertiary;
-    font-size: 0.84375rem;
+  &__icon-btn {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    border: 1px solid $border-default;
+    background: $bg-main;
+    color: $text-secondary;
+    cursor: pointer;
+    transition: border-color 0.14s ease, color 0.14s ease;
 
-    svg {
-      color: $text-tertiary;
+    &:hover {
+      border-color: $text-primary;
+      color: $text-primary;
     }
+  }
+
+  &__title-text {
+    font-size: 1.0625rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    line-height: 1.35;
+    color: $text-primary;
+  }
+
+  &__summary {
+    margin-top: -6px;
+    font-size: 0.84375rem;
+    line-height: 1.6;
+    color: $text-secondary;
+  }
+
+  /* ---------- verdict box ---------- */
+  &__verdict {
+    display: flex;
+    gap: 11px;
+    padding: 13px 15px;
+    background: $primary-light;
+    border-radius: 10px;
+
+    strong {
+      display: block;
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: $primary;
+      margin-bottom: 3px;
+    }
+
+    p {
+      font-size: 0.8125rem;
+      line-height: 1.5;
+      color: $text-primary;
+    }
+  }
+
+  &__verdict-icon {
+    flex-shrink: 0;
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    background: $bg-main;
+    color: $primary;
+    display: grid;
+    place-items: center;
+  }
+
+  /* ---------- footer ---------- */
+  &__footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 2px;
+    padding-top: 13px;
+    border-top: 1px solid $border-subtle;
+  }
+
+  &__top-model {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+
+  &__top-label {
+    font-size: 0.71875rem;
+    color: $text-tertiary;
+  }
+
+  &__top-value {
+    font-size: 0.8125rem;
+    font-weight: 700;
+    color: $text-primary;
+  }
+
+  &__metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  &__metric-tag {
+    font-size: 0.6875rem;
+    font-weight: 500;
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
+    border-radius: 6px;
+    padding: 3px 8px;
   }
 }
