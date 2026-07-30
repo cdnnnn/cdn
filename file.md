@@ -1,160 +1,164 @@
-import { useMemo, useState, type FC } from 'react';
-import { useNavigate } from 'react-router-dom';
-import {
-  Upload,
-  Database,
-  Star,
-  LayoutGrid,
-  Bot,
-  Code2,
-  BookOpen,
-  Search,
-  DollarSign,
-  HeartPulse,
-  Globe,
-  User,
-  X,
-} from 'lucide-react';
-import { TEST_SUITES } from '../RunEvaluation/data';
-import './Datasets.scss';
+import { useMemo, useState, type FC, type FormEvent } from 'react';
+import { PlugZap, CheckCircle2, Boxes, Settings2, Unplug, Search, X, Key } from 'lucide-react';
+import { PROVIDERS } from '../RunEvaluation/data';
+import type { Provider } from '../RunEvaluation/types';
+import './Providers.scss';
 
-const CATEGORIES = [
-  { value: 'All', icon: LayoutGrid },
-  { value: 'Agents', icon: Bot },
-  { value: 'Coding', icon: Code2 },
-  { value: 'General', icon: BookOpen },
-  { value: 'RAG', icon: Search },
-  { value: 'Finance', icon: DollarSign },
-  { value: 'Healthcare', icon: HeartPulse },
-] as const;
-
-const CATEGORY_TINTS: Record<string, 'blue' | 'violet' | 'amber' | 'jade' | 'rose'> = {
-  Agents: 'violet',
-  Coding: 'blue',
-  General: 'jade',
-  RAG: 'blue',
-  Finance: 'amber',
-  Healthcare: 'rose',
-};
-
-const DIFFICULTY_TINTS: Record<string, 'blue' | 'violet' | 'amber' | 'jade' | 'rose'> = {
-  Medium: 'jade',
-  High: 'blue',
-  Advanced: 'violet',
-  Expert: 'rose',
-};
-
-const Datasets: FC = () => {
-  const navigate = useNavigate();
+const Providers: FC = () => {
+  const [providers, setProviders] = useState<Provider[]>(PROVIDERS);
   const [query, setQuery] = useState('');
-  const [category, setCategory] = useState('All');
+  const [activePanel, setActivePanel] = useState<string | null>(null);
+  const [keyInput, setKeyInput] = useState('');
+
+  const connectedCount = providers.filter((p) => p.status === 'connected').length;
 
   const filtered = useMemo(
-    () =>
-      TEST_SUITES.filter((d) => {
-        if (category !== 'All' && d.category !== category) return false;
-        if (query && !d.name.toLowerCase().includes(query.toLowerCase()) && !d.description.toLowerCase().includes(query.toLowerCase())) {
-          return false;
-        }
-        return true;
-      }),
-    [query, category]
+    () => providers.filter((p) => !query || p.name.toLowerCase().includes(query.toLowerCase())),
+    [providers, query]
   );
 
+  const openPanel = (id: string, existingKey?: string) => {
+    setActivePanel((prev) => (prev === id ? null : id));
+    setKeyInput(existingKey ?? '');
+  };
+
+  const handleSubmit = (e: FormEvent, id: string) => {
+    e.preventDefault();
+    if (!keyInput.trim()) return;
+    setProviders((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, status: 'connected', apiKey: `sk-****-${keyInput.slice(-4)}` } : p))
+    );
+    setActivePanel(null);
+  };
+
+  const handleDisconnect = (id: string) => {
+    setProviders((prev) => prev.map((p) => (p.id === id ? { ...p, status: 'not_connected', apiKey: undefined } : p)));
+    setActivePanel(null);
+  };
+
   return (
-    <div className="datasets-page">
-      <div className="datasets-page__header">
-        <div className="datasets-page__header-left">
-          <p className="datasets-page__header-eyebrow">Test suite library</p>
-          <h1 className="datasets-page__title">Test Suites</h1>
-          <p className="datasets-page__subtitle">Benchmark datasets and custom tests</p>
+    <div className="providers-page">
+      <div className="providers-page__header">
+        <div className="providers-page__header-left">
+          <p className="providers-page__header-eyebrow">Provider connections</p>
+          <h1 className="providers-page__title">Providers</h1>
+          <p className="providers-page__subtitle">Manage AI service connections and API keys</p>
         </div>
 
-        <div className="datasets-page__header-right">
-          <div className="datasets-page__header-meta">
-            <Database size={13} />
-            {TEST_SUITES.length} suites available
-          </div>
-          <button type="button" className="datasets-page__btn datasets-page__btn--primary" onClick={() => navigate('/app/run-evaluation')}>
-            <Upload size={14} strokeWidth={2.25} /> Upload
-          </button>
+        <div className="providers-page__header-meta">
+          <PlugZap size={13} />
+          {connectedCount} of {providers.length} connected
         </div>
       </div>
 
-      <div className="datasets-page__search">
+      <div className="providers-page__search">
         <Search size={15} />
-        <input type="text" placeholder="Search test suites..." value={query} onChange={(e) => setQuery(e.target.value)} />
+        <input type="text" placeholder="Search providers..." value={query} onChange={(e) => setQuery(e.target.value)} />
         {query && (
-          <button type="button" className="datasets-page__search-clear" onClick={() => setQuery('')} aria-label="Clear search">
+          <button type="button" className="providers-page__search-clear" onClick={() => setQuery('')} aria-label="Clear search">
             <X size={13} />
           </button>
         )}
       </div>
 
-      <div className="datasets-page__seg">
-        {CATEGORIES.map((c) => (
-          <button
-            key={c.value}
-            type="button"
-            className={`datasets-page__seg-item${category === c.value ? ' datasets-page__seg-item--active' : ''}`}
-            onClick={() => setCategory(c.value)}
-          >
-            <c.icon size={13} strokeWidth={2.25} />
-            {c.value}
-          </button>
-        ))}
-      </div>
-
-      <div className="datasets-page__body">
-        <div className="datasets-page__grid">
-          {filtered.map((d) => {
-            const catIcon = CATEGORIES.find((c) => c.value === d.category)?.icon ?? Database;
-            const catTint = CATEGORY_TINTS[d.category] ?? 'blue';
-            const diffTint = DIFFICULTY_TINTS[d.difficulty] ?? 'blue';
-            const CatIcon = catIcon;
+      <div className="providers-page__body">
+        <div className="providers-page__grid">
+          {filtered.map((p) => {
+            const connected = p.status === 'connected';
+            const panelOpen = activePanel === p.id;
 
             return (
-              <div className="datasets-page__card" key={d.id}>
-                <h3 className="datasets-page__name">{d.name}</h3>
-                <p className="datasets-page__desc">{d.description}</p>
+              <div className="providers-page__card" key={p.id}>
+                <h3 className="providers-page__name">{p.name}</h3>
+                <p className="providers-page__desc">{p.desc}</p>
 
-                <div className="datasets-page__tags">
-                  <span className={`datasets-page__tag datasets-page__tag--${catTint}`}>
-                    <CatIcon size={11} strokeWidth={2.5} />
-                    {d.category}
+                <div className="providers-page__tags">
+                  <span className={`providers-page__tag${connected ? ' providers-page__tag--jade' : ' providers-page__tag--gray'}`}>
+                    {connected && <CheckCircle2 size={11} strokeWidth={2.5} />}
+                    {connected ? 'Connected' : 'Not connected'}
                   </span>
-                  <span className={`datasets-page__tag datasets-page__tag--${diffTint}`}>{d.difficulty}</span>
-                  {d.featured && (
-                    <span className="datasets-page__tag datasets-page__tag--featured">
-                      <Star size={11} strokeWidth={2.5} />
-                      Featured
-                    </span>
-                  )}
                 </div>
 
-                <div className="datasets-page__stat-row">
-                  <div className="datasets-page__stat">
-                    <span className="datasets-page__stat-value n">{d.questions.toLocaleString()}</span>
-                    <span className="datasets-page__stat-label">Questions</span>
+                <div className="providers-page__stat-row">
+                  <div className="providers-page__stat">
+                    <span className="providers-page__stat-value n">{p.modelCount}</span>
+                    <span className="providers-page__stat-label">Models</span>
                   </div>
-                  <div className="datasets-page__meta-list">
-                    <span className="datasets-page__meta-item">
-                      <Globe size={12} /> {d.language}
+                  <div className="providers-page__meta-list">
+                    <span className="providers-page__meta-item">
+                      <Boxes size={12} /> {p.modelCount} models available
                     </span>
-                    <span className="datasets-page__meta-item">
-                      <User size={12} /> {d.maintainer}
-                    </span>
-                    <span className="datasets-page__meta-item n">{d.version}</span>
+                    {connected && (
+                      <span className="providers-page__meta-item">
+                        <Key size={12} /> {p.apiKey}
+                      </span>
+                    )}
                   </div>
                 </div>
+
+                {panelOpen && (
+                  <form className="providers-page__connect-form" onSubmit={(e) => handleSubmit(e, p.id)}>
+                    <label className="providers-page__field-label" htmlFor={`key-${p.id}`}>
+                      API Key
+                    </label>
+                    <input
+                      id={`key-${p.id}`}
+                      type="password"
+                      className="providers-page__input"
+                      placeholder="Enter API key"
+                      value={keyInput}
+                      onChange={(e) => setKeyInput(e.target.value)}
+                      autoFocus
+                    />
+                    <div className="providers-page__form-actions">
+                      <button type="button" className="providers-page__btn providers-page__btn--outline" onClick={() => setActivePanel(null)}>
+                        Cancel
+                      </button>
+                      <button type="submit" className="providers-page__btn providers-page__btn--primary">
+                        Save
+                      </button>
+                    </div>
+                  </form>
+                )}
+
+                {!panelOpen && (
+                  <div className="providers-page__actions">
+                    {connected ? (
+                      <>
+                        <button
+                          type="button"
+                          className="providers-page__btn providers-page__btn--outline"
+                          onClick={() => openPanel(p.id, p.apiKey)}
+                        >
+                          <Settings2 size={13} /> Configure
+                        </button>
+                        <button
+                          type="button"
+                          className="providers-page__btn providers-page__btn--danger-outline"
+                          onClick={() => handleDisconnect(p.id)}
+                        >
+                          <Unplug size={13} /> Disconnect
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="providers-page__btn providers-page__btn--primary providers-page__btn--full"
+                        onClick={() => openPanel(p.id)}
+                      >
+                        <PlugZap size={13} /> Connect
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
 
           {filtered.length === 0 && (
-            <div className="datasets-page__empty">
-              <Database size={22} />
-              <p>No test suites in this category.</p>
+            <div className="providers-page__empty">
+              <Search size={22} />
+              <p>No providers match your search.</p>
             </div>
           )}
         </div>
@@ -163,7 +167,8 @@ const Datasets: FC = () => {
   );
 };
 
-export default Datasets;
+export default Providers;
+
 
 
 
@@ -184,7 +189,7 @@ export default Datasets;
 
 @use '../../../styles/variables' as *;
 
-.datasets-page {
+.providers-page {
   display: flex;
   flex-direction: column;
   height: calc(100vh - 166px);
@@ -206,13 +211,6 @@ export default Datasets;
   &__header-left {
     display: flex;
     flex-direction: column;
-  }
-
-  &__header-right {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    gap: 10px;
   }
 
   &__header-eyebrow {
@@ -237,6 +235,7 @@ export default Datasets;
   }
 
   &__header-meta {
+    flex-shrink: 0;
     display: inline-flex;
     align-items: center;
     gap: 6px;
@@ -248,6 +247,7 @@ export default Datasets;
     border-radius: 999px;
     padding: 7px 13px;
     white-space: nowrap;
+    margin-bottom: 3px;
   }
 
   &__title {
@@ -261,32 +261,6 @@ export default Datasets;
     margin-top: 3px;
     color: $text-secondary;
     font-size: 0.84375rem;
-  }
-
-  &__btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    font-family: $font-body;
-    font-size: 0.8125rem;
-    font-weight: 600;
-    padding: 9px 14px;
-    border-radius: 8px;
-    border: 1px solid transparent;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: background 0.14s ease, border-color 0.14s ease;
-
-    &--primary {
-      background: $primary;
-      border-color: $primary;
-      color: #fff;
-
-      &:hover {
-        background: $primary-hover;
-        border-color: $primary-hover;
-      }
-    }
   }
 
   /* ---------- search ---------- */
@@ -344,54 +318,6 @@ export default Datasets;
     }
   }
 
-  /* ---------- segmented category bar ---------- */
-  &__seg {
-    flex-shrink: 0;
-    display: inline-flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 2px;
-    align-self: flex-start;
-    padding: 3px;
-    border: 1px solid $border-subtle;
-    border-radius: 11px;
-    background: $bg-subtle;
-  }
-
-  &__seg-item {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-family: $font-body;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: $text-tertiary;
-    background: transparent;
-    border: none;
-    border-radius: 8px;
-    padding: 7px 12px;
-    cursor: pointer;
-    transition: background 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
-
-    svg {
-      opacity: 0.8;
-    }
-
-    &:hover {
-      color: $text-primary;
-    }
-
-    &--active {
-      background: $bg-main;
-      color: $primary;
-      box-shadow: $shadow-xs;
-
-      svg {
-        opacity: 1;
-      }
-    }
-  }
-
   /* ---------- scrollable body ---------- */
   &__body {
     flex: 1;
@@ -409,7 +335,6 @@ export default Datasets;
   }
 
   &__card {
-    position: relative;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -431,7 +356,6 @@ export default Datasets;
     font-size: 0.9375rem;
     font-weight: 700;
     letter-spacing: -0.01em;
-    line-height: 1.35;
     color: $text-primary;
   }
 
@@ -461,34 +385,14 @@ export default Datasets;
     border-radius: 999px;
     padding: 3px 10px;
 
-    &--blue {
-      color: $primary;
-      background: $primary-light;
-    }
-
-    &--violet {
-      color: #7c3aed;
-      background: #f3e8ff;
-    }
-
-    &--amber {
-      color: $warning;
-      background: $warning-subtle;
-    }
-
     &--jade {
       color: $success;
       background: $success-subtle;
     }
 
-    &--rose {
-      color: $danger;
-      background: $danger-subtle;
-    }
-
-    &--featured {
-      color: $warning;
-      background: $warning-subtle;
+    &--gray {
+      color: $text-tertiary;
+      background: $bg-inset;
     }
   }
 
@@ -543,10 +447,112 @@ export default Datasets;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    font-family: $font-body;
 
     svg {
       flex-shrink: 0;
       color: $text-tertiary;
+    }
+  }
+
+  /* ---------- inline connect form ---------- */
+  &__connect-form {
+    margin-top: 2px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  &__field-label {
+    font-size: 0.71875rem;
+    font-weight: 600;
+    color: $text-secondary;
+  }
+
+  &__input {
+    width: 100%;
+    border: 1px solid $border-default;
+    border-radius: 8px;
+    padding: 8px 11px;
+    font-size: 0.8125rem;
+    font-family: $font-body;
+    color: $text-primary;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+
+    &::placeholder {
+      color: #a8b1bb;
+    }
+
+    &:focus {
+      outline: none;
+      border-color: $primary;
+      box-shadow: 0 0 0 3px $primary-light;
+    }
+  }
+
+  &__form-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  /* ---------- actions ---------- */
+  &__actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 2px;
+  }
+
+  &__btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-family: $font-body;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 7px 12px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+    flex: 1;
+
+    &--outline {
+      background: $bg-main;
+      border-color: $border-default;
+      color: $text-primary;
+
+      &:hover {
+        border-color: $text-primary;
+      }
+    }
+
+    &--danger-outline {
+      background: $bg-main;
+      border-color: $border-default;
+      color: $text-tertiary;
+
+      &:hover {
+        border-color: $danger;
+        color: $danger;
+        background: $danger-subtle;
+      }
+    }
+
+    &--primary {
+      background: $primary;
+      border-color: $primary;
+      color: #fff;
+
+      &:hover {
+        background: $primary-hover;
+        border-color: $primary-hover;
+      }
+    }
+
+    &--full {
+      flex: 1;
     }
   }
 
