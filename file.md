@@ -1,344 +1,3 @@
-//Evaluations.tx
-export interface EvalResult {
-  rank: number;
-  model: string;
-  provider: string;
-  score: string;
-  accuracy: string;
-  time: string;
-  cost: string;
-}
-
-export interface RecentEvaluation {
-  id: string;
-  name: string;
-  type: string;
-  date: string;
-  daysAgo: number;
-  modelsTested: number;
-  topModel: string;
-  topScore: string;
-  status: 'Completed' | 'Running';
-  results: EvalResult[];
-}
-
-export const RECENT_EVALUATIONS: RecentEvaluation[] = [
-  {
-    id: 'eval-9041',
-    name: 'Agent Tool Calling Duel',
-    type: 'Autonomous Workflow (Agent)',
-    date: '10 mins ago',
-    daysAgo: 0,
-    modelsTested: 3,
-    topModel: 'Model Alpha Agent',
-    topScore: '97.5%',
-    status: 'Completed',
-    results: [
-      { rank: 1, model: 'Model Alpha Agent', provider: 'Together AI', score: '97.5%', accuracy: '96.2%', time: '0.75s', cost: '$0.08' },
-      { rank: 2, model: 'Model Delta Agent v2', provider: 'Anthropic', score: '96.2%', accuracy: '97.0%', time: '1.12s', cost: '$0.42' },
-      { rank: 3, model: 'Model Gamma Agent', provider: 'OpenAI', score: '94.0%', accuracy: '93.8%', time: '0.95s', cost: '$0.35' },
-    ],
-  },
-  {
-    id: 'eval-8820',
-    name: 'Q3 Financial Audit Verification',
-    type: 'General Chat & Text (AI Model)',
-    date: 'Yesterday',
-    daysAgo: 1,
-    modelsTested: 4,
-    topModel: 'Model Epsilon Reasoning',
-    topScore: '96.8%',
-    status: 'Completed',
-    results: [
-      { rank: 1, model: 'Model Epsilon Reasoning', provider: 'Together AI', score: '96.8%', accuracy: '98.2%', time: '1.85s', cost: '$0.09' },
-      { rank: 2, model: 'Model Delta Opus', provider: 'Anthropic', score: '95.1%', accuracy: '96.0%', time: '1.10s', cost: '$0.45' },
-      { rank: 3, model: 'Model Gamma Mini', provider: 'OpenAI', score: '92.4%', accuracy: '91.5%', time: '0.88s', cost: '$0.38' },
-    ],
-  },
-  {
-    id: 'eval-8715',
-    name: 'Support KB Retrieval (RAG)',
-    type: 'Document Search & Answering (RAG)',
-    date: '3 days ago',
-    daysAgo: 3,
-    modelsTested: 2,
-    topModel: 'Model Theta Long-Context',
-    topScore: '95.3%',
-    status: 'Completed',
-    results: [
-      { rank: 1, model: 'Model Theta Long-Context', provider: 'Google Gemini', score: '95.3%', accuracy: '96.5%', time: '1.20s', cost: '$0.31' },
-      { rank: 2, model: 'Model Zeta Instruct', provider: 'Groq Cloud', score: '93.1%', accuracy: '91.2%', time: '0.28s', cost: '$0.07' },
-    ],
-  },
-  {
-    id: 'eval-8590',
-    name: 'Support Bot Tone & Helpfulness',
-    type: 'General Chat & Text (AI Model)',
-    date: '6 days ago',
-    daysAgo: 6,
-    modelsTested: 3,
-    topModel: 'Model Zeta Instruct',
-    topScore: '93.4%',
-    status: 'Completed',
-    results: [
-      { rank: 1, model: 'Model Zeta Instruct', provider: 'Groq Cloud', score: '93.4%', accuracy: '90.8%', time: '0.31s', cost: '$0.06' },
-      { rank: 2, model: 'Model Gamma Mini', provider: 'OpenAI', score: '91.2%', accuracy: '89.4%', time: '0.72s', cost: '$0.11' },
-      { rank: 3, model: 'Model Theta Flash', provider: 'Google Gemini', score: '90.5%', accuracy: '88.9%', time: '0.45s', cost: '$0.05' },
-    ],
-  },
-  {
-    id: 'eval-8402',
-    name: 'SWE-bench Patch Accuracy Check',
-    type: 'Autonomous Workflow (Agent)',
-    date: '12 days ago',
-    daysAgo: 12,
-    modelsTested: 4,
-    topModel: 'Model Delta Agent v2',
-    topScore: '95.9%',
-    status: 'Completed',
-    results: [
-      { rank: 1, model: 'Model Delta Agent v2', provider: 'Anthropic', score: '95.9%', accuracy: '97.5%', time: '2.10s', cost: '$0.51' },
-      { rank: 2, model: 'Model Alpha Agent', provider: 'Together AI', score: '94.1%', accuracy: '95.0%', time: '0.98s', cost: '$0.14' },
-      { rank: 3, model: 'Model Eta Instruct', provider: 'Together AI', score: '90.2%', accuracy: '91.1%', time: '1.30s', cost: '$0.17' },
-      { rank: 4, model: 'Model Gamma Agent', provider: 'OpenAI', score: '88.7%', accuracy: '89.9%', time: '1.05s', cost: '$0.39' },
-    ],
-  },
-  {
-    id: 'eval-8177',
-    name: 'Clinical Triage Safety Baseline',
-    type: 'General Chat & Text (AI Model)',
-    date: '21 days ago',
-    daysAgo: 21,
-    modelsTested: 2,
-    topModel: 'Model Delta Opus',
-    topScore: '97.9%',
-    status: 'Completed',
-    results: [
-      { rank: 1, model: 'Model Delta Opus', provider: 'Anthropic', score: '97.9%', accuracy: '98.6%', time: '2.40s', cost: '$0.63' },
-      { rank: 2, model: 'Model Epsilon Reasoning', provider: 'Together AI', score: '95.0%', accuracy: '96.1%', time: '1.90s', cost: '$0.10' },
-    ],
-  },
-];
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Dashboard.tsx
-import type { FC } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Play, PlugZap, Upload, Search, ChevronRight, Trophy, TrendingUp } from 'lucide-react';
-import { MODELS, PROVIDERS, TEST_SUITES } from '../RunEvaluation/data';
-import { RECENT_EVALUATIONS } from '../shared/evaluations';
-import './Dashboard.scss';
-
-const QUICK_ACTIONS = [
-  { icon: Play, label: 'Run Evaluation', desc: 'Test models on benchmarks', to: '/app/run-evaluation', tint: 'blue' },
-  { icon: PlugZap, label: 'Add Provider', desc: 'Connect API keys', to: '/app/providers', tint: 'green' },
-  { icon: Upload, label: 'Upload Dataset', desc: 'Custom test questions', to: '/app/datasets', tint: 'amber' },
-  { icon: Search, label: 'Browse Models', desc: 'Explore 100+ models', to: '/app/models', tint: 'violet' },
-] as const;
-
-const Dashboard: FC = () => {
-  const navigate = useNavigate();
-  const connectedProviders = PROVIDERS.filter((p) => p.status === 'connected').length;
-  const latest = RECENT_EVALUATIONS[0];
-
-  const stats = [
-    { value: MODELS.length, label: 'Models' },
-    { value: connectedProviders, label: 'Providers' },
-    { value: TEST_SUITES.length, label: 'Test Suites' },
-    { value: RECENT_EVALUATIONS.length, label: 'Evaluations' },
-  ];
-
-  return (
-    <div className="dash">
-      {/* ---------- hero ---------- */}
-      <section className="dash__hero">
-        <div className="dash__hero-grid" aria-hidden="true" />
-        <div className="dash__hero-content">
-          <p className="dash__hero-eyebrow">Evaluation overview</p>
-          <h1 className="dash__hero-title">Compare models with confidence</h1>
-          <p className="dash__hero-sub">Run standardized tests across providers and let the results guide your next decision.</p>
-
-          <div className="dash__hero-highlight">
-            <TrendingUp size={14} />
-            Top performer this week: <strong>{latest.topModel}</strong>
-            <span className="dash__hero-highlight-score n">{latest.topScore}</span>
-          </div>
-        </div>
-        <button type="button" className="dash__hero-btn" onClick={() => navigate('/app/run-evaluation')}>
-          <Play size={15} strokeWidth={2.25} />
-          New Evaluation
-        </button>
-      </section>
-
-      {/* ---------- stats ---------- */}
-      <section className="dash__stats">
-        {stats.map((s) => (
-          <div className="dash__stat-card" key={s.label}>
-            <span className="dash__stat-value n">{s.value}</span>
-            <span className="dash__stat-label">{s.label}</span>
-          </div>
-        ))}
-      </section>
-
-      {/* ---------- recent + quick actions ---------- */}
-      <section className="dash__row">
-        <div className="dash__card">
-          <div className="dash__card-head">
-            <h2 className="dash__card-title">Recent Evaluations</h2>
-            <button type="button" className="dash__btn dash__btn--sm" onClick={() => navigate('/app/history')}>
-              View All
-            </button>
-          </div>
-
-          <div className="dash__eval-list">
-            {RECENT_EVALUATIONS.slice(0, 3).map((ev) => (
-              <button
-                type="button"
-                key={ev.id}
-                className="dash__eval-item"
-                onClick={() => navigate('/app/history')}
-              >
-                <div className="dash__eval-info">
-                  <span className="dash__eval-name">{ev.name}</span>
-                  <span className="dash__eval-meta">
-                    <span className="dash__eval-type-badge">{ev.type.split('(')[0].trim()}</span>
-                    <span className="dash__eval-date">{ev.date}</span>
-                  </span>
-                </div>
-                <div className="dash__eval-stats">
-                  <span className="dash__eval-stat">
-                    <span className="dash__eval-stat-label">Top</span>
-                    <span className="dash__eval-stat-value">{ev.topModel}</span>
-                  </span>
-                  <span className="dash__eval-stat">
-                    <span className="dash__eval-stat-label">Score</span>
-                    <span className="dash__eval-stat-value dash__eval-stat-value--highlight n">{ev.topScore}</span>
-                  </span>
-                </div>
-                <ChevronRight size={16} className="dash__eval-arrow" />
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="dash__card">
-          <div className="dash__card-head">
-            <h2 className="dash__card-title">Quick Actions</h2>
-          </div>
-          <div className="dash__qa-grid">
-            {QUICK_ACTIONS.map((qa) => (
-              <button type="button" key={qa.label} className="dash__qa-card" onClick={() => navigate(qa.to)}>
-                <span className={`dash__qa-icon dash__qa-icon--${qa.tint}`}>
-                  <qa.icon size={17} strokeWidth={2} />
-                </span>
-                <span>
-                  <span className="dash__qa-title">{qa.label}</span>
-                  <span className="dash__qa-desc">{qa.desc}</span>
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* ---------- latest results ---------- */}
-      <section className="dash__card">
-        <div className="dash__card-head">
-          <div>
-            <h2 className="dash__card-title">Latest Results</h2>
-            <p className="dash__card-subtitle">From your most recent evaluation &middot; {latest.name}</p>
-          </div>
-          <span className="dash__badge">
-            <Trophy size={12} /> {latest.status}
-          </span>
-        </div>
-
-        <div className="dash__table-wrap">
-          <table className="dash__table">
-            <thead>
-              <tr>
-                <th style={{ width: 56 }}>Rank</th>
-                <th>Model</th>
-                <th>Provider</th>
-                <th>Score</th>
-                <th>Accuracy</th>
-                <th>Speed</th>
-                <th>Cost</th>
-              </tr>
-            </thead>
-            <tbody>
-              {latest.results.map((r) => (
-                <tr key={r.rank} className={r.rank === 1 ? 'dash__row-winner' : undefined}>
-                  <td>
-                    <span className={`dash__rank dash__rank--${r.rank}`}>{r.rank}</span>
-                  </td>
-                  <td className="dash__cell-strong">{r.model}</td>
-                  <td>{r.provider}</td>
-                  <td>
-                    <span className="dash__score n">{r.score}</span>
-                  </td>
-                  <td className="n">{r.accuracy}</td>
-                  <td className="n">{r.time}</td>
-                  <td className="n">{r.cost}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-    </div>
-  );
-};
-
-export default Dashboard;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//History.tsx
 import { useMemo, useState, type FC, type MouseEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Play, Search, Bot, MessageSquare, FileSearch, Copy, Trash2 } from 'lucide-react';
@@ -405,7 +64,7 @@ const History: FC = () => {
           <p className="history__subtitle">Past evaluations</p>
         </div>
         <button type="button" className="history__btn history__btn--primary" onClick={() => navigate('/app/run-evaluation')}>
-          <Play size={15} strokeWidth={2.25} /> New Evaluation
+          <Play size={14} strokeWidth={2.25} /> New Evaluation
         </button>
       </div>
 
@@ -430,22 +89,33 @@ const History: FC = () => {
         </select>
       </div>
 
-      <div className="history__list">
+      <div className="history__grid">
         {filtered.map((ev) => {
           const Icon = typeIcon(ev.type);
           return (
-            <div className="history__item" key={ev.id}>
-              <span className="history__icon">
-                <Icon size={17} strokeWidth={2} />
-              </span>
-
-              <div className="history__content">
-                <h4 className="history__name">{ev.name}</h4>
-                <div className="history__meta">
-                  <span className="history__type-badge">{ev.type.split('(')[0].trim()}</span>
-                  <span className="history__date">{ev.date}</span>
+            <div className="history__card" key={ev.id}>
+              <div className="history__card-top">
+                <span className="history__icon">
+                  <Icon size={15} strokeWidth={2} />
+                </span>
+                <span className="history__type-badge">{ev.type.split('(')[0].trim()}</span>
+                <div className="history__actions">
+                  <button type="button" className="history__icon-btn" title="Duplicate" onClick={(e) => handleDuplicate(e, ev.id)}>
+                    <Copy size={12.5} />
+                  </button>
+                  <button
+                    type="button"
+                    className="history__icon-btn history__icon-btn--danger"
+                    title="Delete"
+                    onClick={(e) => handleDelete(e, ev.id)}
+                  >
+                    <Trash2 size={12.5} />
+                  </button>
                 </div>
               </div>
+
+              <h4 className="history__name">{ev.name}</h4>
+              <span className="history__date">{ev.date}</span>
 
               <div className="history__results">
                 <div className="history__stat">
@@ -460,15 +130,6 @@ const History: FC = () => {
                   <span className="history__stat-label">Models</span>
                   <span className="history__stat-value n">{ev.modelsTested}</span>
                 </div>
-              </div>
-
-              <div className="history__actions">
-                <button type="button" className="history__icon-btn" title="Duplicate" onClick={(e) => handleDuplicate(e, ev.id)}>
-                  <Copy size={14} />
-                </button>
-                <button type="button" className="history__icon-btn history__icon-btn--danger" title="Delete" onClick={(e) => handleDelete(e, ev.id)}>
-                  <Trash2 size={14} />
-                </button>
               </div>
             </div>
           );
@@ -508,7 +169,14 @@ export default History;
 
 
 
-//History.scss
+
+
+
+
+
+
+
+
 @use '../../../styles/variables' as *;
 
 .history {
@@ -525,25 +193,26 @@ export default History;
   }
 
   &__title {
-    font-size: 27px;
-    font-weight: 700;
+    font-size: 21px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
     color: $text-primary;
   }
 
   &__subtitle {
-    margin-top: 0.375rem;
+    margin-top: 3px;
     color: $text-secondary;
-    font-size: 0.90625rem;
+    font-size: 0.8125rem;
   }
 
   &__btn {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 7px;
     font-family: $font-body;
-    font-size: 0.84375rem;
+    font-size: 0.8125rem;
     font-weight: 600;
-    padding: 10px 16px;
+    padding: 9px 14px;
     border-radius: 8px;
     border: 1px solid transparent;
     cursor: pointer;
@@ -573,11 +242,11 @@ export default History;
     display: flex;
     align-items: center;
     gap: 8px;
-    width: 280px;
+    width: 260px;
     max-width: 100%;
     border: 1px solid $border-default;
     border-radius: 8px;
-    padding: 9px 12px;
+    padding: 8px 12px;
     background: $bg-main;
     color: $text-tertiary;
 
@@ -585,7 +254,7 @@ export default History;
       flex: 1;
       border: none;
       outline: none;
-      font-size: 0.84375rem;
+      font-size: 0.8125rem;
       color: $text-primary;
       background: transparent;
       font-family: $font-body;
@@ -597,11 +266,11 @@ export default History;
   }
 
   &__select {
-    width: 150px;
+    width: 140px;
     border: 1px solid $border-default;
     border-radius: 8px;
-    padding: 9px 12px;
-    font-size: 0.8125rem;
+    padding: 8px 12px;
+    font-size: 0.78125rem;
     font-family: $font-body;
     color: $text-primary;
     background: $bg-main;
@@ -614,20 +283,20 @@ export default History;
     }
   }
 
-  /* ---------- list ---------- */
-  &__list {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
+  /* ---------- card grid ---------- */
+  &__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
   }
 
-  &__item {
+  &__card {
     display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 16px 18px;
+    flex-direction: column;
+    gap: 8px;
+    padding: 14px 15px;
     border: 1px solid $border-subtle;
-    border-radius: 14px;
+    border-radius: 13px;
     background: $bg-main;
     box-shadow: $shadow-xs;
     transition: border-color 0.14s ease, box-shadow 0.14s ease;
@@ -635,76 +304,76 @@ export default History;
     &:hover {
       border-color: $border-strong;
       box-shadow: $shadow-sm;
+
+      .history__actions {
+        opacity: 1;
+      }
     }
   }
 
+  &__card-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
   &__icon {
-    width: 40px;
-    height: 40px;
+    width: 28px;
+    height: 28px;
     flex-shrink: 0;
-    border-radius: 11px;
+    border-radius: 8px;
     background: $primary-light;
     color: $primary;
     display: grid;
     place-items: center;
   }
 
-  &__content {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-    min-width: 0;
-    flex: 1.3;
-  }
-
-  &__name {
-    font-size: 0.90625rem;
-    font-weight: 600;
-    color: $text-primary;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  &__meta {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
   &__type-badge {
-    font-size: 0.6875rem;
+    font-size: 0.625rem;
     font-weight: 600;
     color: $text-secondary;
     background: $bg-subtle;
     border: 1px solid $border-subtle;
     border-radius: 5px;
-    padding: 2px 7px;
+    padding: 2px 6px;
+  }
+
+  &__name {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: $text-primary;
+    line-height: 1.35;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
 
   &__date {
-    font-size: 0.75rem;
+    font-size: 0.6875rem;
     color: $text-tertiary;
+    margin-top: -4px;
   }
 
   &__results {
     display: flex;
-    align-items: center;
-    gap: 26px;
-    flex: 1;
-    justify-content: flex-end;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 4px;
+    padding-top: 10px;
+    border-top: 1px solid $border-subtle;
   }
 
   &__stat {
     display: flex;
     flex-direction: column;
-    align-items: flex-end;
     gap: 3px;
     min-width: 0;
   }
 
   &__stat-label {
-    font-size: 0.625rem;
+    font-size: 0.59375rem;
     font-weight: 600;
     letter-spacing: 0.05em;
     text-transform: uppercase;
@@ -712,11 +381,11 @@ export default History;
   }
 
   &__stat-value {
-    font-size: 0.8125rem;
+    font-size: 0.71875rem;
     font-weight: 600;
     color: $text-secondary;
     white-space: nowrap;
-    max-width: 11rem;
+    max-width: 6.5rem;
     overflow: hidden;
     text-overflow: ellipsis;
 
@@ -729,13 +398,16 @@ export default History;
   &__actions {
     flex-shrink: 0;
     display: flex;
-    gap: 6px;
+    gap: 4px;
+    margin-left: auto;
+    opacity: 0;
+    transition: opacity 0.14s ease;
   }
 
   &__icon-btn {
-    width: 32px;
-    height: 32px;
-    border-radius: 8px;
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
     border: 1px solid $border-default;
     background: $bg-main;
     color: $text-tertiary;
@@ -758,6 +430,7 @@ export default History;
 
   /* ---------- empty state ---------- */
   &__empty {
+    grid-column: 1 / -1;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -766,7 +439,7 @@ export default History;
     border: 1px dashed $border-strong;
     border-radius: 14px;
     color: $text-tertiary;
-    font-size: 0.875rem;
+    font-size: 0.84375rem;
 
     svg {
       color: $text-tertiary;
@@ -774,19 +447,9 @@ export default History;
   }
 
   /* ---------- responsive ---------- */
-  @media (max-width: 860px) {
-    &__item {
-      flex-wrap: wrap;
-    }
-
-    &__results {
-      justify-content: flex-start;
-      width: 100%;
-      padding-left: 56px;
-    }
-
-    &__actions {
-      margin-left: auto;
+  @media (max-width: 520px) {
+    &__grid {
+      grid-template-columns: 1fr;
     }
   }
 }
