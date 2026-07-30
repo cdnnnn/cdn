@@ -1,70 +1,53 @@
 import { Link } from 'react-router-dom';
 import type { FC } from 'react';
-import {
-  ArrowRight,
-  BarChart3,
-  FileText,
-  Gauge,
-  Database,
-  PlugZap,
-  FileBarChart,
-  Check,
-  Sparkles,
-} from 'lucide-react';
+import { ArrowUpRight } from 'lucide-react';
 import './Landing.scss';
 
-const STATS = [
-  { value: '9', label: 'Providers' },
-  { value: '100+', label: 'Models' },
-  { value: '14', label: 'Test suites' },
-  { value: '3', label: 'Evaluation types' },
+const LEDGER = [
+  { k: 'Setup time', v: '~5 min' },
+  { k: 'Providers', v: '9' },
+  { k: 'Models', v: '100+' },
+  { k: 'Test suites', v: '14' },
 ];
 
-const FEATURES = [
+const INDEX_ITEMS = [
   {
-    icon: BarChart3,
-    title: 'Side-by-side scoring',
-    desc: 'Every model runs the same prompts under the same conditions, so the leaderboard reflects the models — not the setup.',
+    n: '01',
+    title: 'Identical conditions, every model',
+    desc: 'Same prompts, same grader, same test suite for every candidate — so the leaderboard measures the models, not the setup.',
   },
   {
-    icon: FileText,
-    title: 'Full response transcripts',
-    desc: 'Open any score to see the exact prompt, response, and grading reason. Nothing is a black box.',
+    n: '02',
+    title: 'Nothing hidden behind a score',
+    desc: 'Open any result to read the exact prompt, the full response, and the reason it was marked right or wrong.',
   },
   {
-    icon: Gauge,
-    title: 'Cost & latency at scale',
-    desc: 'Enter your expected monthly volume and see what each model would actually cost you — not per-token pricing.',
+    n: '03',
+    title: 'Cost at your actual volume',
+    desc: 'Enter your expected monthly request count and see what each model would cost you — not a per-token rate card.',
   },
   {
-    icon: Database,
-    title: 'Standard or custom suites',
-    desc: 'Start from a benchmark suite or upload your own prompts and expected answers in CSV, JSON, or JSONL.',
+    n: '04',
+    title: 'Bring your own questions',
+    desc: 'Start from a standard benchmark, or upload your own prompts and expected answers as CSV, JSON, or JSONL.',
   },
   {
-    icon: PlugZap,
-    title: 'Every major provider',
-    desc: 'Connect OpenAI, Anthropic, Google, Groq, Together, and more from one workspace — no per-model setup.',
+    n: '05',
+    title: 'One workspace, every provider',
+    desc: 'OpenAI, Anthropic, Google, Groq, Together, and more — connected once, compared together.',
   },
   {
-    icon: FileBarChart,
-    title: 'Reports that get read',
-    desc: 'Turn a run into a shareable report with the recommendation, trade-offs, and raw data attached.',
+    n: '06',
+    title: 'A report someone will read',
+    desc: 'Every run can become a shareable summary with the recommendation, the trade-offs, and the raw table attached.',
   },
 ];
 
-const STEPS = [
-  { n: '01', title: 'Connect a provider', desc: 'Paste an API key and your model catalogue fills in automatically.' },
-  { n: '02', title: 'Pick your models', desc: 'Filter by price, speed, context window, or benchmark score.' },
-  { n: '03', title: 'Choose a test suite', desc: 'Use a standard benchmark or bring your own test questions.' },
-  { n: '04', title: 'Read the results', desc: 'Scores, cost, and latency land in one leaderboard — instantly.' },
-];
-
-const COMPARISON = [
-  { model: 'Model Alpha', accuracy: 79.5, cost: '$2.40', time: '0.4s', best: false },
-  { model: 'Model Beta', accuracy: 84.1, cost: '$6.80', time: '2.9s', best: false },
-  { model: 'Model Gamma', accuracy: 88.7, cost: '$24.50', time: '1.2s', best: false },
-  { model: 'Model Delta', accuracy: 91.2, cost: '$41.20', time: '2.1s', best: true },
+const METHOD = [
+  { n: '01', label: 'Connect', desc: 'Paste an API key' },
+  { n: '02', label: 'Select', desc: 'Choose your models' },
+  { n: '03', label: 'Test', desc: 'Pick a question set' },
+  { n: '04', label: 'Read', desc: 'One ranked table' },
 ];
 
 const Landing: FC = () => {
@@ -72,173 +55,119 @@ const Landing: FC = () => {
     <div className="land">
       {/* ==================== HERO ==================== */}
       <section className="land__hero">
-        <div className="land__hero-glow" aria-hidden="true" />
-        <div className="land__shell land__hero-grid">
-          <div className="land__hero-copy">
-            <span className="land__pill">
-              <Sparkles size={13} strokeWidth={2.25} />
-              Model Evaluation Platform
-            </span>
+        <div className="land__shell">
+          <span className="land__tag">Model evaluation, in-house</span>
 
-            <h1 className="land__h1">
-              Pick your next AI model with <span className="land__accent">evidence</span>, not guesswork
-            </h1>
+          <h1 className="land__h1">
+            Choose the model
+            <br />
+            the evidence supports.
+          </h1>
 
-            <p className="land__lede">
-              SemcoEval runs identical test suites across every model you're considering, then puts
-              accuracy, latency, and cost side by side — so the model you ship is the one the data
-              actually picked.
-            </p>
+          <p className="land__lede">
+            SemcoEval runs the same test suite across every model on your shortlist and lines up
+            accuracy, latency, and cost in one table — before you commit to anything in production.
+          </p>
 
-            <div className="land__cta-row">
-              <Link className="land__btn land__btn--primary" to="/app">
-                Start an evaluation <ArrowRight size={16} strokeWidth={2.25} />
-              </Link>
-              <a className="land__btn land__btn--ghost" href="#how">
-                See how it works
-              </a>
-            </div>
+          <div className="land__cta-row">
+            <Link className="land__btn" to="/app">
+              Start an evaluation
+            </Link>
+            <a className="land__text-link" href="#index">
+              What it measures <ArrowUpRight size={14} strokeWidth={2.25} />
+            </a>
+          </div>
+        </div>
 
-            <div className="land__stats">
-              {STATS.map((s) => (
-                <div className="land__stat" key={s.label}>
-                  <span className="land__stat-value n">{s.value}</span>
-                  <span className="land__stat-label">{s.label}</span>
+        <div className="land__ledger">
+          <div className="land__shell land__ledger-row">
+            {LEDGER.map((l) => (
+              <div className="land__ledger-cell" key={l.k}>
+                <span className="land__ledger-v n">{l.v}</span>
+                <span className="land__ledger-k">{l.k}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ==================== INDEX ==================== */}
+      <section className="land__section" id="index">
+        <div className="land__shell">
+          <p className="land__eyebrow">01 — What it measures</p>
+
+          <div className="land__index">
+            {INDEX_ITEMS.map((item) => (
+              <div className="land__index-row" key={item.n}>
+                <span className="land__index-n n">{item.n}</span>
+                <div className="land__index-body">
+                  <h3 className="land__index-title">{item.title}</h3>
+                  <p className="land__index-desc">{item.desc}</p>
                 </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="land__hero-visual">
-            <div className="land__panel">
-              <div className="land__panel-head">
-                <span className="land__panel-dot" />
-                Enterprise QA suite &middot; 240 prompts
-              </div>
-              <div className="land__bars">
-                {COMPARISON.map((c) => (
-                  <div className="land__bar-row" key={c.model}>
-                    <span className="land__bar-label">{c.model}</span>
-                    <div className="land__bar-track">
-                      <div
-                        className={`land__bar-fill${c.best ? ' land__bar-fill--best' : ''}`}
-                        style={{ width: `${c.accuracy}%` }}
-                      />
-                    </div>
-                    <span className="land__bar-value n">{c.accuracy}%</span>
-                  </div>
-                ))}
-              </div>
-              <div className="land__panel-foot">
-                <span>
-                  <b>Winner</b> Model Delta
-                </span>
-                <span className="n">$41.20 / 1K runs</span>
-                <span className="n">2.1s avg</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ==================== FEATURES ==================== */}
-      <section className="land__section">
-        <div className="land__shell">
-          <div className="land__section-head">
-            <p className="land__kicker">What you get</p>
-            <h2 className="land__h2">Everything you need to compare models with confidence</h2>
-          </div>
-
-          <div className="land__feature-grid">
-            {FEATURES.map((f) => (
-              <div className="land__feature" key={f.title}>
-                <span className="land__feature-icon">
-                  <f.icon size={19} strokeWidth={2} />
-                </span>
-                <h3 className="land__feature-title">{f.title}</h3>
-                <p className="land__feature-desc">{f.desc}</p>
+                <ArrowUpRight size={16} className="land__index-arrow" strokeWidth={2} />
               </div>
             ))}
           </div>
         </div>
       </section>
 
-      {/* ==================== HOW IT WORKS ==================== */}
-      <section className="land__section land__section--tint" id="how">
+      {/* ==================== METHOD ==================== */}
+      <section className="land__section land__section--ink">
         <div className="land__shell">
-          <div className="land__section-head">
-            <p className="land__kicker">How it works</p>
-            <h2 className="land__h2">Four steps, and the answer is a table — not an opinion</h2>
-          </div>
+          <p className="land__eyebrow land__eyebrow--light">02 — The method</p>
+          <h2 className="land__h2 land__h2--light">Four steps. The output is a table, not an opinion.</h2>
 
-          <div className="land__steps">
-            <div className="land__steps-line" aria-hidden="true" />
-            {STEPS.map((s) => (
-              <div className="land__step" key={s.n}>
-                <span className="land__step-num">{s.n}</span>
-                <h3 className="land__step-title">{s.title}</h3>
-                <p className="land__step-desc">{s.desc}</p>
+          <div className="land__axis">
+            <div className="land__axis-line" aria-hidden="true" />
+            {METHOD.map((m) => (
+              <div className="land__tick" key={m.n}>
+                <span className="land__tick-mark" aria-hidden="true" />
+                <span className="land__tick-n n">{m.n}</span>
+                <span className="land__tick-label">{m.label}</span>
+                <span className="land__tick-desc">{m.desc}</span>
               </div>
             ))}
           </div>
         </div>
       </section>
 
-      {/* ==================== TRUST / GROUNDING ==================== */}
+      {/* ==================== TRANSCRIPT ==================== */}
       <section className="land__section">
-        <div className="land__shell land__grounded">
-          <div className="land__grounded-copy">
-            <p className="land__kicker">Every score, checked</p>
-            <h2 className="land__h2">A score you can't audit is just a rumour</h2>
+        <div className="land__shell land__transcript-wrap">
+          <div>
+            <p className="land__eyebrow">03 — Graded, not guessed</p>
+            <h2 className="land__h2">A score you can't open isn't a score you can trust.</h2>
             <p className="land__lede land__lede--tight">
-              Open any cell in the leaderboard and see the exact prompt, the model's full response,
-              and the reason it was marked right or wrong — graded against a source you control.
+              Every answer in every run is kept in full, next to the reason it passed or failed — so
+              the leaderboard is something you can defend, not just cite.
             </p>
-            <ul className="land__check-list">
-              <li>
-                <Check size={15} strokeWidth={2.5} /> Full prompt and response kept for every run
-              </li>
-              <li>
-                <Check size={15} strokeWidth={2.5} /> Grading reason attached to every score
-              </li>
-              <li>
-                <Check size={15} strokeWidth={2.5} /> Re-run against a pinned baseline anytime
-              </li>
-            </ul>
           </div>
 
-          <div className="land__ask">
-            <p className="land__ask-kicker">Prompt 112 &middot; Billing policy</p>
-            <p className="land__ask-q">
-              A customer downgrades their plan mid-cycle. What happens to their unused credits?
-            </p>
-            <div className="land__ask-a land__ask-a--pass">
-              <span className="land__ask-tag land__ask-tag--pass">Pass</span>
+          <div className="land__log">
+            <div className="land__log-line land__log-line--q">
+              <span className="land__log-tag">PROMPT 112</span>
+              A customer downgrades their plan mid-cycle. What happens to unused credits?
+            </div>
+            <div className="land__log-line land__log-line--pass">
+              <span className="land__log-tag land__log-tag--pass">[PASS]</span>
               Unused credits carry over as account balance; no refund is issued.
             </div>
-            <div className="land__ask-a land__ask-a--fail">
-              <span className="land__ask-tag land__ask-tag--fail">Fail</span>
+            <div className="land__log-line land__log-line--fail">
+              <span className="land__log-tag land__log-tag--fail">[FAIL]</span>
               Customer receives a prorated refund within 5–7 business days.
             </div>
           </div>
         </div>
       </section>
 
-      {/* ==================== FINAL CTA ==================== */}
-      <section className="land__section">
-        <div className="land__shell">
-          <div className="land__cta-banner">
-            <div className="land__cta-glow" aria-hidden="true" />
-            <p className="land__kicker land__kicker--light">Get started</p>
-            <h2 className="land__cta-title">Your next model decision, with the receipts</h2>
-            <p className="land__cta-sub">
-              Connect one provider, pick a standard suite, and have a defensible answer before your
-              next architecture review.
-            </p>
-            <Link className="land__btn land__btn--white" to="/app">
-              Start an evaluation <ArrowRight size={16} strokeWidth={2.25} />
-            </Link>
-          </div>
+      {/* ==================== CLOSE ==================== */}
+      <section className="land__close">
+        <div className="land__shell land__close-in">
+          <p className="land__eyebrow land__eyebrow--light">Get started</p>
+          <h2 className="land__close-title">Your next model decision, with the receipts.</h2>
+          <Link className="land__btn land__btn--outline-light" to="/app">
+            Start an evaluation
+          </Link>
         </div>
       </section>
     </div>
@@ -267,6 +196,17 @@ export default Landing;
 
 
 
+
+
+
+
+
+
+
+
+
+
+
 @use '../../styles/variables' as *;
 
 .land {
@@ -274,62 +214,50 @@ export default Landing;
   color: $text-primary;
 
   &__shell {
-    max-width: 1180px;
+    max-width: 980px;
     margin: 0 auto;
-    padding: 0 clamp(20px, 5vw, 60px);
+    padding: 0 clamp(20px, 5vw, 48px);
   }
 
-  &__kicker {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
+  &__eyebrow {
     font-family: $font-mono;
-    font-size: 0.6875rem;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: $primary;
-    margin-bottom: 10px;
-
-    &::before {
-      content: '';
-      width: 16px;
-      height: 2px;
-      border-radius: 2px;
-      background: $primary;
-    }
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    color: $text-tertiary;
+    padding-bottom: 14px;
+    margin-bottom: 30px;
+    border-bottom: 1px solid $border-default;
 
     &--light {
-      color: rgba(255, 255, 255, 0.85);
-
-      &::before {
-        background: rgba(255, 255, 255, 0.85);
-      }
+      color: rgba(255, 255, 255, 0.55);
+      border-bottom-color: rgba(255, 255, 255, 0.16);
     }
   }
 
   &__h1 {
-    font-size: clamp(2.25rem, 4.4vw, 3.4rem);
+    font-size: clamp(2.375rem, 5.4vw, 4rem);
     font-weight: 800;
-    letter-spacing: -0.03em;
-    line-height: 1.08;
-    margin-top: 16px;
-  }
-
-  &__accent {
-    color: $primary;
+    letter-spacing: -0.035em;
+    line-height: 1.03;
+    margin-top: 22px;
+    max-width: 22ch;
   }
 
   &__h2 {
-    font-size: clamp(1.625rem, 2.7vw, 2.25rem);
+    font-size: clamp(1.5rem, 2.6vw, 2.125rem);
     font-weight: 800;
     letter-spacing: -0.025em;
-    line-height: 1.15;
-    max-width: 34rem;
+    line-height: 1.2;
+    max-width: 30rem;
+
+    &--light {
+      color: #fff;
+    }
   }
 
   &__lede {
-    margin-top: 18px;
+    margin-top: 20px;
     font-size: 1.0625rem;
     line-height: 1.65;
     color: $text-secondary;
@@ -337,528 +265,345 @@ export default Landing;
 
     &--tight {
       margin-top: 14px;
-      max-width: 30rem;
+      max-width: 28rem;
     }
   }
 
-  /* ---------- buttons ---------- */
+  /* ---------- buttons / links ---------- */
   &__btn {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
     font-family: $font-body;
-    font-size: 0.9375rem;
-    font-weight: 600;
-    padding: 13px 22px;
-    border-radius: 11px;
-    border: 1px solid transparent;
-    cursor: pointer;
+    font-size: 0.90625rem;
+    font-weight: 700;
+    padding: 14px 26px;
+    border-radius: 3px;
+    background: $text-primary;
+    color: #fff;
     text-decoration: none;
-    transition: background 0.14s ease, border-color 0.14s ease, transform 0.14s ease;
+    border: 1px solid $text-primary;
+    transition: background 0.14s ease, color 0.14s ease;
 
-    &--primary {
+    &:hover {
       background: $primary;
-      color: #fff;
       border-color: $primary;
-      box-shadow: 0 10px 24px -10px rgba(20, 40, 160, 0.45);
-
-      &:hover {
-        background: $primary-hover;
-        border-color: $primary-hover;
-        transform: translateY(-1px);
-      }
     }
 
-    &--ghost {
-      background: #fff;
-      color: $text-primary;
-      border-color: $border-default;
+    &--outline-light {
+      background: transparent;
+      color: #fff;
+      border-color: rgba(255, 255, 255, 0.4);
 
       &:hover {
-        border-color: $text-primary;
-      }
-    }
-
-    &--white {
-      background: #fff;
-      color: $primary;
-      border-color: #fff;
-
-      &:hover {
-        transform: translateY(-1px);
+        background: #fff;
+        color: $text-primary;
+        border-color: #fff;
       }
     }
   }
 
-  /* ==================== HERO ==================== */
-  &__hero {
-    position: relative;
-    overflow: hidden;
-    padding: clamp(56px, 8vw, 96px) 0 clamp(64px, 7vw, 92px);
-  }
-
-  &__hero-glow {
-    position: absolute;
-    top: -220px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 900px;
-    height: 560px;
-    border-radius: 50%;
-    background: radial-gradient(circle, rgba(20, 40, 160, 0.1) 0%, rgba(20, 40, 160, 0) 70%);
-    pointer-events: none;
-  }
-
-  &__hero-grid {
-    position: relative;
-    display: grid;
-    grid-template-columns: 1.05fr 0.95fr;
-    gap: 48px;
-    align-items: center;
-  }
-
-  &__pill {
+  &__text-link {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
-    font-size: 0.78125rem;
+    gap: 5px;
+    font-size: 0.90625rem;
     font-weight: 600;
-    color: $primary;
-    background: $primary-light;
-    border: 1px solid $primary-subtle;
-    border-radius: 999px;
-    padding: 7px 14px;
+    color: $text-primary;
+    text-decoration: none;
+    border-bottom: 1px solid $border-strong;
+    padding-bottom: 2px;
+
+    &:hover {
+      border-color: $text-primary;
+    }
   }
 
   &__cta-row {
     display: flex;
     flex-wrap: wrap;
-    gap: 12px;
-    margin-top: 30px;
+    align-items: center;
+    gap: 28px;
+    margin-top: 34px;
   }
 
-  &__stats {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 30px;
-    margin-top: 44px;
-    padding-top: 26px;
-    border-top: 1px solid $border-subtle;
+  /* ==================== HERO ==================== */
+  &__hero {
+    padding-top: clamp(64px, 9vw, 108px);
   }
 
-  &__stat {
+  &__tag {
+    display: inline-block;
+    font-family: $font-mono;
+    font-size: 0.71875rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: $primary;
+    padding-bottom: 8px;
+    border-bottom: 2px solid $primary;
+  }
+
+  &__ledger {
+    margin-top: clamp(56px, 7vw, 84px);
+    border-top: 1px solid $border-default;
+    border-bottom: 1px solid $border-default;
+    background: $bg-subtle;
+  }
+
+  &__ledger-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+  }
+
+  &__ledger-cell {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 4px;
+    padding: 22px 0;
+    border-right: 1px solid $border-default;
+
+    &:last-child {
+      border-right: 0;
+    }
   }
 
-  &__stat-value {
+  &__ledger-v {
     font-size: 1.375rem;
     font-weight: 800;
     letter-spacing: -0.02em;
     color: $text-primary;
   }
 
-  &__stat-label {
-    font-size: 0.75rem;
+  &__ledger-k {
+    font-family: $font-mono;
+    font-size: 0.6875rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
     color: $text-tertiary;
-  }
-
-  /* ---------- hero visual panel ---------- */
-  &__hero-visual {
-    position: relative;
-  }
-
-  &__panel {
-    position: relative;
-    background: #fff;
-    border: 1px solid $border-subtle;
-    border-radius: 20px;
-    box-shadow: 0 24px 60px -30px rgba(14, 21, 38, 0.28);
-    padding: 22px 24px 20px;
-    overflow: hidden;
-
-    &::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 3px;
-      background: linear-gradient(90deg, $primary, $primary-hover 60%, $success);
-    }
-  }
-
-  &__panel-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 0.78125rem;
-    font-weight: 600;
-    color: $text-secondary;
-    padding-bottom: 16px;
-    border-bottom: 1px solid $border-subtle;
-    margin-bottom: 18px;
-  }
-
-  &__panel-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: $success;
-    box-shadow: 0 0 0 3px $success-subtle;
-    flex-shrink: 0;
-  }
-
-  &__bars {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-  }
-
-  &__bar-row {
-    display: grid;
-    grid-template-columns: 84px 1fr 46px;
-    align-items: center;
-    gap: 12px;
-  }
-
-  &__bar-label {
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: $text-secondary;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  &__bar-track {
-    position: relative;
-    height: 8px;
-    background: $bg-inset;
-    border-radius: 4px;
-    overflow: hidden;
-  }
-
-  &__bar-fill {
-    height: 100%;
-    border-radius: 4px;
-    background: $text-tertiary;
-
-    &--best {
-      background: linear-gradient(90deg, $primary, $primary-hover);
-    }
-  }
-
-  &__bar-value {
-    font-size: 0.75rem;
-    font-weight: 700;
-    color: $text-primary;
-    text-align: right;
-  }
-
-  &__panel-foot {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px 18px;
-    margin-top: 18px;
-    padding-top: 16px;
-    border-top: 1px solid $border-subtle;
-    font-size: 0.75rem;
-    color: $text-secondary;
-
-    b {
-      color: $success;
-      font-weight: 700;
-      margin-right: 4px;
-    }
   }
 
   /* ==================== SECTIONS ==================== */
   &__section {
-    padding: clamp(56px, 7vw, 88px) 0;
+    padding: clamp(64px, 8vw, 96px) 0;
 
-    &--tint {
-      background: $bg-subtle;
-      border-block: 1px solid $border-subtle;
+    &--ink {
+      background: $text-primary;
+      color: #fff;
     }
   }
 
-  &__section-head {
-    margin-bottom: clamp(32px, 4vw, 48px);
-  }
-
-  /* ---------- feature grid ---------- */
-  &__feature-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 20px;
-  }
-
-  &__feature {
-    padding: 26px 24px;
-    border: 1px solid $border-subtle;
-    border-radius: 16px;
-    background: #fff;
-    transition: border-color 0.14s ease, transform 0.14s ease, box-shadow 0.14s ease;
-
-    &:hover {
-      border-color: $border-strong;
-      transform: translateY(-2px);
-      box-shadow: $shadow-md;
-    }
-  }
-
-  &__feature-icon {
-    width: 42px;
-    height: 42px;
-    display: grid;
-    place-items: center;
-    border-radius: 12px;
-    background: $primary-light;
-    color: $primary;
-    margin-bottom: 16px;
-  }
-
-  &__feature-title {
-    font-size: 1.03125rem;
-    font-weight: 700;
-    letter-spacing: -0.01em;
-  }
-
-  &__feature-desc {
-    margin-top: 8px;
-    font-size: 0.875rem;
-    line-height: 1.55;
-    color: $text-secondary;
-  }
-
-  /* ---------- steps ---------- */
-  &__steps {
-    position: relative;
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 24px;
-  }
-
-  &__steps-line {
-    position: absolute;
-    top: 19px;
-    left: calc(12.5% - 20px);
-    right: calc(12.5% - 20px);
-    height: 2px;
-    background: $border-default;
-    z-index: 0;
-  }
-
-  &__step {
-    position: relative;
-    z-index: 1;
-  }
-
-  &__step-num {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    background: #fff;
-    border: 2px solid $primary;
-    color: $primary;
-    font-weight: 800;
-    font-size: 0.8125rem;
-    margin-bottom: 18px;
-  }
-
-  &__step-title {
-    font-size: 1.0625rem;
-    font-weight: 700;
-    letter-spacing: -0.01em;
-  }
-
-  &__step-desc {
-    margin-top: 8px;
-    font-size: 0.875rem;
-    line-height: 1.55;
-    color: $text-secondary;
-  }
-
-  /* ---------- grounded / trust ---------- */
-  &__grounded {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 56px;
-    align-items: center;
-  }
-
-  &__check-list {
-    list-style: none;
-    margin-top: 22px;
+  /* ---------- index list ---------- */
+  &__index {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+  }
 
-    li {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-size: 0.90625rem;
-      color: $text-secondary;
+  &__index-row {
+    display: grid;
+    grid-template-columns: 56px 1fr 20px;
+    align-items: flex-start;
+    gap: 20px;
+    padding: 26px 0;
+    border-bottom: 1px solid $border-default;
+    transition: padding-left 0.16s ease;
 
-      svg {
-        flex-shrink: 0;
-        color: $success;
+    &:first-child {
+      border-top: 1px solid $border-default;
+    }
+
+    &:hover {
+      padding-left: 10px;
+
+      .land__index-arrow {
+        opacity: 1;
+        transform: translate(2px, -2px);
       }
     }
   }
 
-  &__ask {
-    background: #fff;
-    border: 1px solid $border-subtle;
-    border-radius: 18px;
-    box-shadow: $shadow-md;
-    padding: 24px 26px;
-  }
-
-  &__ask-kicker {
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: $text-tertiary;
-  }
-
-  &__ask-q {
-    margin-top: 10px;
-    font-size: 1.09375rem;
-    font-weight: 600;
-    line-height: 1.45;
-    color: $text-primary;
-  }
-
-  &__ask-a {
-    margin-top: 14px;
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    padding: 13px 15px;
-    border-radius: 12px;
-    font-size: 0.84375rem;
-    line-height: 1.5;
-
-    &--pass {
-      background: $success-subtle;
-      color: $text-primary;
-    }
-
-    &--fail {
-      background: $danger-subtle;
-      color: $text-primary;
-    }
-  }
-
-  &__ask-tag {
-    flex-shrink: 0;
-    font-size: 0.625rem;
+  &__index-n {
+    font-size: 0.90625rem;
     font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    border-radius: 6px;
-    padding: 3px 8px;
-
-    &--pass {
-      background: $success;
-      color: #fff;
-    }
-
-    &--fail {
-      background: $danger;
-      color: #fff;
-    }
+    color: $text-tertiary;
+    padding-top: 3px;
   }
 
-  /* ---------- final CTA ---------- */
-  &__cta-banner {
+  &__index-title {
+    font-size: 1.15625rem;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+  }
+
+  &__index-desc {
+    margin-top: 8px;
+    font-size: 0.90625rem;
+    line-height: 1.6;
+    color: $text-secondary;
+    max-width: 38rem;
+  }
+
+  &__index-arrow {
+    margin-top: 4px;
+    color: $text-tertiary;
+    opacity: 0;
+    transition: opacity 0.16s ease, transform 0.16s ease;
+  }
+
+  /* ---------- method axis ---------- */
+  &__axis {
     position: relative;
-    overflow: hidden;
-    border-radius: 24px;
-    background: linear-gradient(135deg, $primary 0%, $primary-hover 60%, #101d6b 100%);
-    padding: clamp(44px, 6vw, 64px) clamp(28px, 6vw, 64px);
-    text-align: center;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    margin-top: clamp(40px, 5vw, 60px);
+    padding-top: 26px;
+  }
+
+  &__axis-line {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: rgba(255, 255, 255, 0.18);
+  }
+
+  &__tick {
+    position: relative;
     display: flex;
     flex-direction: column;
-    align-items: center;
+    padding-right: 20px;
   }
 
-  &__cta-glow {
+  &__tick-mark {
     position: absolute;
-    top: -140px;
-    right: -80px;
-    width: 420px;
-    height: 420px;
-    border-radius: 50%;
-    background: radial-gradient(circle, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0) 70%);
-    pointer-events: none;
+    top: -26px;
+    left: 0;
+    width: 1px;
+    height: 12px;
+    background: $primary-hover;
   }
 
-  &__cta-title {
-    position: relative;
-    font-size: clamp(1.625rem, 3vw, 2.25rem);
-    font-weight: 800;
-    letter-spacing: -0.025em;
+  &__tick-n {
+    font-size: 0.71875rem;
+    color: rgba(255, 255, 255, 0.4);
+    margin-bottom: 10px;
+  }
+
+  &__tick-label {
+    font-size: 1.03125rem;
+    font-weight: 700;
     color: #fff;
-    max-width: 32rem;
   }
 
-  &__cta-sub {
-    position: relative;
-    margin-top: 14px;
-    font-size: 1rem;
+  &__tick-desc {
+    margin-top: 8px;
+    font-size: 0.8125rem;
+    line-height: 1.55;
+    color: rgba(255, 255, 255, 0.6);
+  }
+
+  /* ---------- transcript ---------- */
+  &__transcript-wrap {
+    display: grid;
+    grid-template-columns: 0.9fr 1.1fr;
+    gap: 56px;
+    align-items: start;
+  }
+
+  &__log {
+    font-family: $font-mono;
+    border: 1px solid $border-default;
+  }
+
+  &__log-line {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 16px 18px;
+    font-size: 0.8125rem;
     line-height: 1.6;
-    color: rgba(255, 255, 255, 0.85);
-    max-width: 30rem;
+    border-bottom: 1px solid $border-default;
+    color: $text-secondary;
+
+    &:last-child {
+      border-bottom: 0;
+    }
+
+    &--q {
+      color: $text-primary;
+      font-weight: 600;
+      background: $bg-subtle;
+    }
   }
 
-  &__cta-banner .land__btn {
-    position: relative;
-    margin-top: 26px;
+  &__log-tag {
+    flex-shrink: 0;
+    font-weight: 700;
+    font-size: 0.6875rem;
+    letter-spacing: 0.03em;
+    color: $text-tertiary;
+
+    &--pass {
+      color: $success;
+    }
+
+    &--fail {
+      color: $danger;
+    }
+  }
+
+  /* ==================== CLOSE ==================== */
+  &__close {
+    background: $text-primary;
+    padding: clamp(72px, 9vw, 108px) 0;
+  }
+
+  &__close-in {
+    max-width: 640px;
+  }
+
+  &__close-title {
+    margin-top: 10px;
+    font-size: clamp(1.75rem, 3.4vw, 2.5rem);
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1.15;
+    color: #fff;
+  }
+
+  &__close .land__btn {
+    margin-top: 32px;
   }
 
   /* ==================== RESPONSIVE ==================== */
-  @media (max-width: 960px) {
-    &__hero-grid {
-      grid-template-columns: 1fr;
-    }
-
-    &__feature-grid {
+  @media (max-width: 760px) {
+    &__ledger-row {
       grid-template-columns: repeat(2, 1fr);
     }
 
-    &__steps {
-      grid-template-columns: repeat(2, 1fr);
+    &__ledger-cell:nth-child(2) {
+      border-right: 0;
     }
 
-    &__steps-line {
+    &__index-row {
+      grid-template-columns: 40px 1fr;
+    }
+
+    &__index-arrow {
       display: none;
     }
 
-    &__grounded {
+    &__axis {
+      grid-template-columns: 1fr;
+      row-gap: 32px;
+    }
+
+    &__axis-line {
+      display: none;
+    }
+
+    &__transcript-wrap {
       grid-template-columns: 1fr;
       gap: 32px;
-    }
-  }
-
-  @media (max-width: 620px) {
-    &__feature-grid {
-      grid-template-columns: 1fr;
-    }
-
-    &__steps {
-      grid-template-columns: 1fr;
-    }
-
-    &__cta-row {
-      flex-direction: column;
-      align-items: stretch;
     }
   }
 }
