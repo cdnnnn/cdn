@@ -143,7 +143,7 @@ const Providers: FC = () => {
                     ) : (
                       <button
                         type="button"
-                        className="providers-page__btn providers-page__btn--primary providers-page__btn--full"
+                        className="providers-page__btn providers-page__btn--primary"
                         onClick={() => openPanel(p.id)}
                       >
                         <PlugZap size={13} /> Connect
@@ -499,7 +499,8 @@ export default Providers;
   /* ---------- actions ---------- */
   &__actions {
     display: flex;
-    gap: 8px;
+    justify-content: flex-end;
+    gap: 6px;
     margin-top: 2px;
   }
 
@@ -507,16 +508,15 @@ export default Providers;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: 5px;
     font-family: $font-body;
-    font-size: 0.75rem;
+    font-size: 0.71875rem;
     font-weight: 600;
-    padding: 7px 12px;
-    border-radius: 8px;
+    padding: 6px 10px;
+    border-radius: 7px;
     border: 1px solid transparent;
     cursor: pointer;
     transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
-    flex: 1;
 
     &--outline {
       background: $bg-main;
@@ -549,10 +549,6 @@ export default Providers;
         background: $primary-hover;
         border-color: $primary-hover;
       }
-    }
-
-    &--full {
-      flex: 1;
     }
   }
 
