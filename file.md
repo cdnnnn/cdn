@@ -1,147 +1,95 @@
 import { useMemo, useState, type FC } from 'react';
-import { CheckCircle2, PlusCircle, Trash2 } from 'lucide-react';
-import { PROVIDERS, MODELS } from '../RunEvaluation/data';
-import './Providers.scss';
+import { FileBarChart, Download, Share2, Lightbulb, Trophy } from 'lucide-react';
+import { REPORTS } from './data';
+import './Reports.scss';
 
-const Providers: FC = () => {
-  const [activeId, setActiveId] = useState(PROVIDERS[0]?.id ?? null);
+const Reports: FC = () => {
+  const [activeId, setActiveId] = useState(REPORTS[0]?.id ?? null);
 
-  const active = useMemo(() => PROVIDERS.find((p) => p.id === activeId) ?? null, [activeId]);
-  const activeModels = useMemo(
-    () => (active ? MODELS.filter((m) => m.providerId === active.id) : []),
-    [active]
-  );
-  const usedInEvals = useMemo(
-    () => (active ? MODELS.filter((m) => m.providerId === active.id).length : 0),
-    [active]
-  );
+  const active = useMemo(() => REPORTS.find((r) => r.id === activeId) ?? REPORTS[0] ?? null, [activeId]);
 
   return (
-    <div className="providers">
-      <div className="providers__header">
-        <div>
-          <p className="providers__eyebrow">Workspace</p>
-          <h1 className="providers__title">Providers</h1>
-          <p className="providers__subtitle">Connect API keys and manage the model catalog for each provider.</p>
+    <div className="reports-page">
+      <div className="reports-page__header">
+        <div className="reports-page__header-left">
+          <p className="reports-page__header-eyebrow">Executive summaries</p>
+          <h1 className="reports-page__title">Reports</h1>
+          <p className="reports-page__subtitle">Generated analysis and recommendations</p>
+        </div>
+
+        <div className="reports-page__header-meta">
+          <FileBarChart size={13} />
+          {REPORTS.length} reports generated
         </div>
       </div>
 
-      <div className="providers__split">
-        <aside className="providers__list">
-          {PROVIDERS.map((p) => {
-            const connected = p.status === 'connected';
+      <div className="reports-page__split">
+        <aside className="reports-page__list">
+          {REPORTS.map((r) => {
+            const isActive = active?.id === r.id;
             return (
               <button
+                key={r.id}
                 type="button"
-                key={p.id}
-                className={`providers__row${active?.id === p.id ? ' providers__row--active' : ''}`}
-                onClick={() => setActiveId(p.id)}
+                className={`reports-page__row${isActive ? ' reports-page__row--active' : ''}`}
+                onClick={() => setActiveId(r.id)}
               >
-                <span className="providers__row-logo">{p.logo}</span>
-                <span className="providers__row-info">
-                  <span className="providers__row-name">{p.name}</span>
-                  <span className="providers__row-sub">
-                    {connected ? `${p.modelCount} models` : `${p.modelCount}+ models`}
-                  </span>
+                <span className="reports-page__row-date">{r.date}</span>
+                <span className="reports-page__row-title">{r.title}</span>
+                <span className="reports-page__row-model">
+                  <Trophy size={11} /> {r.topModel}
                 </span>
-                <span className={`providers__dot${connected ? ' providers__dot--on' : ''}`} />
               </button>
             );
           })}
         </aside>
 
-        <section className="providers__detail">
+        <section className="reports-page__detail">
           {active ? (
             <>
-              <div className="providers__detail-head">
-                <span className="providers__detail-logo">{active.logo}</span>
+              <div className="reports-page__detail-head">
+                <div className="reports-page__detail-head-info">
+                  <span className="reports-page__date">{active.date}</span>
+                  <h2 className="reports-page__title-text">{active.title}</h2>
+                </div>
+                <div className="reports-page__actions">
+                  <button type="button" className="reports-page__btn">
+                    <Download size={13} /> {active.downloadSize}
+                  </button>
+                  <button type="button" className="reports-page__icon-btn" aria-label="Share report" title="Share report">
+                    <Share2 size={13} />
+                  </button>
+                </div>
+              </div>
+
+              <p className="reports-page__summary">{active.summary}</p>
+
+              <div className="reports-page__verdict">
+                <span className="reports-page__verdict-icon">
+                  <Lightbulb size={15} strokeWidth={2} />
+                </span>
                 <div>
-                  <h2 className="providers__detail-title">{active.name}</h2>
-                  <p className="providers__detail-desc">{active.desc}</p>
+                  <strong>Recommendation</strong>
+                  <p>{active.verdict}</p>
                 </div>
               </div>
 
-              <div className="providers__stats">
-                <div className="providers__stat">
-                  <span className="providers__stat-value n">
-                    {active.status === 'connected' ? active.modelCount : `${active.modelCount}+`}
-                  </span>
-                  <span className="providers__stat-label">Models available</span>
+              <div className="reports-page__footer">
+                <div className="reports-page__top-model">
+                  <span className="reports-page__top-label">Top model:</span>
+                  <span className="reports-page__top-value">{active.topModel}</span>
                 </div>
-                <div className="providers__stat">
-                  <span className="providers__stat-value">
-                    {active.status === 'connected' ? 'Connected' : 'Not connected'}
-                  </span>
-                  <span className="providers__stat-label">Status</span>
-                </div>
-                <div className="providers__stat">
-                  <span className="providers__stat-value n">{usedInEvals}</span>
-                  <span className="providers__stat-label">Used in evaluations</span>
+                <div className="reports-page__metrics">
+                  {active.metricsTested.map((m) => (
+                    <span key={m} className="reports-page__metric-tag">
+                      {m}
+                    </span>
+                  ))}
                 </div>
               </div>
-
-              {active.status === 'connected' ? (
-                <div className="providers__field">
-                  <label htmlFor="api-key">API Key</label>
-                  <div className="providers__field-row">
-                    <input id="api-key" type="text" value="sk-••••••••••••••••wX2q" readOnly />
-                    <button type="button" className="providers__btn providers__btn--danger">
-                      <Trash2 size={13} /> Remove
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="providers__field">
-                  <label htmlFor="api-key">API Key</label>
-                  <div className="providers__field-row">
-                    <input id="api-key" type="text" placeholder="Paste API key…" />
-                    <button type="button" className="providers__btn providers__btn--primary">
-                      <PlusCircle size={13} /> Connect
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {active.status === 'connected' && activeModels.length > 0 && (
-                <>
-                  <div className="providers__group-head">
-                    <h3>Models from this provider</h3>
-                    <div className="providers__group-line" />
-                  </div>
-                  <div className="providers__table-wrap">
-                    <table className="providers__table">
-                      <thead>
-                        <tr>
-                          <th>Model</th>
-                          <th>Context</th>
-                          <th>Pricing</th>
-                          <th>Speed</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {activeModels.map((m) => (
-                          <tr key={m.id}>
-                            <td className="providers__cell-strong">
-                              {m.name}
-                              {m.id === activeModels[0]?.id && (
-                                <span className="providers__badge">
-                                  <CheckCircle2 size={11} /> Top pick
-                                </span>
-                              )}
-                            </td>
-                            <td className="n">{m.contextWindow}</td>
-                            <td className="n">{m.pricing}</td>
-                            <td className="n">{m.speedRating}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </>
-              )}
             </>
           ) : (
-            <p className="providers__empty">Select a provider to manage its connection.</p>
+            <p className="reports-page__empty">Select a report to read it.</p>
           )}
         </section>
       </div>
@@ -149,15 +97,7 @@ const Providers: FC = () => {
   );
 };
 
-export default Providers;
-
-
-
-
-
-
-
-
+export default Reports;
 
 
 
@@ -179,12 +119,16 @@ export default Providers;
 
 @use '../../../styles/variables' as *;
 
-.providers {
+.reports-page {
   display: flex;
   flex-direction: column;
+  height: calc(100vh - 166px);
+  min-height: 0;
   gap: 16px;
 
+  /* ---------- header ---------- */
   &__header {
+    flex-shrink: 0;
     display: flex;
     align-items: flex-end;
     justify-content: space-between;
@@ -194,7 +138,12 @@ export default Providers;
     border-bottom: 1px solid $border-subtle;
   }
 
-  &__eyebrow {
+  &__header-left {
+    display: flex;
+    flex-direction: column;
+  }
+
+  &__header-eyebrow {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -204,7 +153,7 @@ export default Providers;
     letter-spacing: 0.12em;
     text-transform: uppercase;
     color: $primary;
-    margin: 0 0 6px;
+    margin-bottom: 6px;
 
     &::before {
       content: '';
@@ -215,8 +164,23 @@ export default Providers;
     }
   }
 
+  &__header-meta {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
+    border-radius: 999px;
+    padding: 7px 13px;
+    white-space: nowrap;
+    margin-bottom: 3px;
+  }
+
   &__title {
-    margin: 0;
     font-size: 21px;
     font-weight: 800;
     letter-spacing: -0.02em;
@@ -224,19 +188,21 @@ export default Providers;
   }
 
   &__subtitle {
-    margin: 3px 0 0;
-    font-size: 0.84375rem;
+    margin-top: 3px;
     color: $text-secondary;
+    font-size: 0.84375rem;
   }
 
+  /* ---------- master-detail split ---------- */
   &__split {
+    flex: 1;
+    min-height: 0;
     display: grid;
-    grid-template-columns: 300px 1fr;
+    grid-template-columns: 340px 1fr;
     border: 1px solid $border-default;
     border-radius: 14px;
     overflow: hidden;
     background: $bg-main;
-    min-height: 560px;
   }
 
   /* ---------- left list ---------- */
@@ -249,14 +215,15 @@ export default Providers;
   &__row {
     width: 100%;
     display: flex;
-    align-items: center;
-    gap: 12px;
+    flex-direction: column;
+    gap: 4px;
     text-align: left;
-    padding: 13px 16px;
+    padding: 14px 18px;
     border: none;
     border-bottom: 1px solid $border-subtle;
     background: transparent;
     cursor: pointer;
+    transition: background 0.14s ease;
 
     &:hover {
       background: $bg-inset;
@@ -265,7 +232,7 @@ export default Providers;
     &--active {
       background: $bg-main;
       border-left: 3px solid $primary;
-      padding-left: 13px;
+      padding-left: 15px;
 
       &:hover {
         background: $bg-main;
@@ -273,294 +240,225 @@ export default Providers;
     }
   }
 
-  &__row-logo {
-    width: 30px;
-    height: 30px;
-    flex-shrink: 0;
-    border-radius: 8px;
-    background: $bg-inset;
-    color: $text-secondary;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.71875rem;
-    font-weight: 700;
-  }
-
-  &__row-info {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-  }
-
-  &__row-name {
-    font-size: 0.8125rem;
-    font-weight: 700;
-    letter-spacing: -0.01em;
-    color: $text-primary;
-  }
-
-  &__row-sub {
+  &__row-date {
+    font-family: $font-mono;
     font-size: 0.6875rem;
+    font-weight: 600;
     color: $text-tertiary;
   }
 
-  &__dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: $border-strong;
-    flex-shrink: 0;
+  &__row-title {
+    font-size: 0.8125rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    line-height: 1.4;
+    color: $text-primary;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
 
-    &--on {
-      background: $success;
+  &__row-model {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.71875rem;
+    font-weight: 600;
+    color: $primary;
+
+    svg {
+      color: $warning;
     }
   }
 
-  /* ---------- right detail ---------- */
+  /* ---------- right detail (reading pane) ---------- */
   &__detail {
-    padding: 26px 30px;
     overflow-y: auto;
-    min-height: 0;
+    padding: 28px 32px;
+    max-width: 720px;
   }
 
   &__detail-head {
     display: flex;
     align-items: flex-start;
+    justify-content: space-between;
     gap: 16px;
-    margin-bottom: 20px;
+    margin-bottom: 18px;
   }
 
-  &__detail-logo {
-    width: 48px;
-    height: 48px;
-    flex-shrink: 0;
-    border-radius: 12px;
-    background: $bg-inset;
-    color: $text-secondary;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.1875rem;
-    font-weight: 800;
-  }
-
-  &__detail-title {
-    margin: 0 0 4px;
-    font-size: 0.9375rem;
-    font-weight: 700;
-    letter-spacing: -0.01em;
-    color: $text-primary;
-  }
-
-  &__detail-desc {
-    margin: 0;
-    font-size: 0.8125rem;
-    color: $text-tertiary;
-    max-width: 440px;
-  }
-
-  &__stats {
-    display: flex;
-    border: 1px solid $border-default;
-    border-radius: 10px;
-    overflow: hidden;
-    margin-bottom: 22px;
-  }
-
-  &__stat {
-    flex: 1;
-    padding: 12px 16px;
-    border-right: 1px solid $border-subtle;
+  &__detail-head-info {
     display: flex;
     flex-direction: column;
-    gap: 2px;
-
-    &:last-child {
-      border-right: none;
-    }
+    gap: 6px;
+    min-width: 0;
   }
 
-  &__stat-value {
-    font-size: 1.25rem;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    color: $text-primary;
-    line-height: 1;
-  }
-
-  &__stat-label {
-    font-size: 0.625rem;
+  &__date {
+    font-family: $font-mono;
+    font-size: 0.71875rem;
     font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
     color: $text-tertiary;
-    margin-top: 2px;
   }
 
-  /* ---------- api key field ---------- */
-  &__field {
-    margin-bottom: 20px;
-
-    label {
-      display: block;
-      font-size: 0.75rem;
-      font-weight: 600;
-      color: $text-secondary;
-      margin-bottom: 6px;
-    }
-  }
-
-  &__field-row {
+  &__actions {
     display: flex;
-    gap: 8px;
-
-    input {
-      flex: 1;
-      border: 1px solid $border-default;
-      border-radius: 8px;
-      padding: 9px 12px;
-      font-family: $font-mono;
-      font-size: 0.8125rem;
-      color: $text-tertiary;
-      background: $bg-subtle;
-
-      &::placeholder {
-        color: $text-tertiary;
-        font-family: $font-body;
-      }
-
-      &:focus {
-        outline: none;
-        border-color: $primary;
-      }
-    }
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
   }
 
   &__btn {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
+    gap: 6px;
     font-family: $font-body;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 7px 12px;
+    border-radius: 7px;
+    border: 1px solid $border-default;
+    background: $bg-main;
+    color: $text-primary;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color 0.14s ease;
+
+    &:hover {
+      border-color: $text-primary;
+    }
+  }
+
+  &__icon-btn {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    flex-shrink: 0;
+    border-radius: 7px;
     border: 1px solid $border-default;
     background: $bg-main;
     color: $text-secondary;
-    padding: 9px 14px;
-    border-radius: 8px;
-    font-size: 0.8125rem;
-    font-weight: 600;
     cursor: pointer;
-    white-space: nowrap;
-    transition: background 0.14s ease, border-color 0.14s ease;
+    transition: border-color 0.14s ease, color 0.14s ease;
 
     &:hover {
-      background: $bg-inset;
-    }
-
-    &--primary {
-      background: $primary;
-      border-color: $primary;
-      color: #fff;
-
-      &:hover {
-        background: $primary-hover;
-        border-color: $primary-hover;
-      }
-    }
-
-    &--danger {
-      color: $danger;
-      border-color: $border-default;
-
-      &:hover {
-        background: $danger-subtle;
-        border-color: $danger;
-      }
+      border-color: $text-primary;
+      color: $text-primary;
     }
   }
 
-  /* ---------- model catalog ---------- */
-  &__group-head {
+  &__title-text {
+    margin: 0;
+    font-size: 1.1875rem;
+    font-weight: 800;
+    letter-spacing: -0.015em;
+    line-height: 1.35;
+    color: $text-primary;
+  }
+
+  &__summary {
+    font-size: 0.875rem;
+    line-height: 1.65;
+    color: $text-secondary;
+    margin-bottom: 20px;
+  }
+
+  /* ---------- verdict box ---------- */
+  &__verdict {
     display: flex;
-    align-items: center;
-    gap: 10px;
-    margin: 26px 0 12px;
+    gap: 12px;
+    padding: 16px 18px;
+    background: $primary-light;
+    border-radius: 12px;
+    margin-bottom: 24px;
 
-    h3 {
+    strong {
+      display: block;
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: $primary;
+      margin-bottom: 4px;
+    }
+
+    p {
+      font-size: 0.8125rem;
+      line-height: 1.55;
+      color: $text-primary;
       margin: 0;
-      font-family: $font-mono;
-      font-size: 0.6875rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: $text-tertiary;
-      white-space: nowrap;
     }
   }
 
-  &__group-line {
-    flex: 1;
-    height: 1px;
-    background: $border-default;
+  &__verdict-icon {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+    background: $bg-main;
+    color: $primary;
+    display: grid;
+    place-items: center;
   }
 
-  &__table-wrap {
-    overflow-x: auto;
+  /* ---------- footer ---------- */
+  &__footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding-top: 18px;
+    border-top: 1px solid $border-subtle;
   }
 
-  &__table {
-    width: 100%;
-    border-collapse: collapse;
+  &__top-model {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+
+  &__top-label {
+    font-size: 0.71875rem;
+    color: $text-tertiary;
+  }
+
+  &__top-value {
     font-size: 0.8125rem;
-
-    th {
-      text-align: left;
-      padding: 9px 12px;
-      color: $text-tertiary;
-      font-size: 0.6875rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      border-bottom: 1px solid $border-default;
-    }
-
-    td {
-      padding: 10px 12px;
-      border-bottom: 1px solid $border-subtle;
-      color: $text-secondary;
-    }
-
-    tr:last-child td {
-      border-bottom: none;
-    }
-  }
-
-  &__cell-strong {
     font-weight: 700;
     color: $text-primary;
-    display: flex;
-    align-items: center;
-    gap: 8px;
   }
 
-  &__badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    background: $primary-light;
-    color: $primary;
-    font-size: 0.65625rem;
-    font-weight: 600;
-    padding: 2px 8px;
-    border-radius: 999px;
+  &__metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  &__metric-tag {
+    font-size: 0.6875rem;
+    font-weight: 500;
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
+    border-radius: 6px;
+    padding: 3px 8px;
   }
 
   &__empty {
-    padding: 24px;
+    padding: 40px 24px;
     text-align: center;
     color: $text-tertiary;
-    font-size: 0.8125rem;
+    font-size: 0.84375rem;
+  }
+
+  /* ---------- responsive ---------- */
+  @media (max-width: 800px) {
+    &__split {
+      grid-template-columns: 1fr;
+    }
+
+    &__list {
+      display: none;
+    }
   }
 }
