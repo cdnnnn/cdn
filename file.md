@@ -1,122 +1,3 @@
-import { useMemo, useState, type FC } from 'react';
-import { FileBarChart, Download, Share2, Lightbulb, Trophy } from 'lucide-react';
-import { REPORTS } from './data';
-import './Reports.scss';
-
-const Reports: FC = () => {
-  const [activeId, setActiveId] = useState(REPORTS[0]?.id ?? null);
-
-  const active = useMemo(() => REPORTS.find((r) => r.id === activeId) ?? REPORTS[0] ?? null, [activeId]);
-
-  return (
-    <div className="reports-page">
-      <div className="reports-page__header">
-        <div className="reports-page__header-left">
-          <p className="reports-page__header-eyebrow">Executive summaries</p>
-          <h1 className="reports-page__title">Reports</h1>
-          <p className="reports-page__subtitle">Generated analysis and recommendations</p>
-        </div>
-
-        <div className="reports-page__header-meta">
-          <FileBarChart size={13} />
-          {REPORTS.length} reports generated
-        </div>
-      </div>
-
-      <div className="reports-page__split">
-        <aside className="reports-page__list">
-          {REPORTS.map((r) => {
-            const isActive = active?.id === r.id;
-            return (
-              <button
-                key={r.id}
-                type="button"
-                className={`reports-page__row${isActive ? ' reports-page__row--active' : ''}`}
-                onClick={() => setActiveId(r.id)}
-              >
-                <span className="reports-page__row-date">{r.date}</span>
-                <span className="reports-page__row-title">{r.title}</span>
-                <span className="reports-page__row-model">
-                  <Trophy size={11} /> {r.topModel}
-                </span>
-              </button>
-            );
-          })}
-        </aside>
-
-        <section className="reports-page__detail">
-          {active ? (
-            <>
-              <div className="reports-page__detail-head">
-                <div className="reports-page__detail-head-info">
-                  <span className="reports-page__date">{active.date}</span>
-                  <h2 className="reports-page__title-text">{active.title}</h2>
-                </div>
-                <div className="reports-page__actions">
-                  <button type="button" className="reports-page__btn">
-                    <Download size={13} /> {active.downloadSize}
-                  </button>
-                  <button type="button" className="reports-page__icon-btn" aria-label="Share report" title="Share report">
-                    <Share2 size={13} />
-                  </button>
-                </div>
-              </div>
-
-              <p className="reports-page__summary">{active.summary}</p>
-
-              <div className="reports-page__verdict">
-                <span className="reports-page__verdict-icon">
-                  <Lightbulb size={15} strokeWidth={2} />
-                </span>
-                <div>
-                  <strong>Recommendation</strong>
-                  <p>{active.verdict}</p>
-                </div>
-              </div>
-
-              <div className="reports-page__footer">
-                <div className="reports-page__top-model">
-                  <span className="reports-page__top-label">Top model:</span>
-                  <span className="reports-page__top-value">{active.topModel}</span>
-                </div>
-                <div className="reports-page__metrics">
-                  {active.metricsTested.map((m) => (
-                    <span key={m} className="reports-page__metric-tag">
-                      {m}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </>
-          ) : (
-            <p className="reports-page__empty">Select a report to read it.</p>
-          )}
-        </section>
-      </div>
-    </div>
-  );
-};
-
-export default Reports;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 @use '../../../styles/variables' as *;
 
 .reports-page {
@@ -275,8 +156,7 @@ export default Reports;
   /* ---------- right detail (reading pane) ---------- */
   &__detail {
     overflow-y: auto;
-    padding: 28px 32px;
-    max-width: 720px;
+    padding: 32px 40px;
   }
 
   &__detail-head {
@@ -313,9 +193,9 @@ export default Reports;
     align-items: center;
     gap: 6px;
     font-family: $font-body;
-    font-size: 0.75rem;
+    font-size: 0.8125rem;
     font-weight: 600;
-    padding: 7px 12px;
+    padding: 8px 13px;
     border-radius: 7px;
     border: 1px solid $border-default;
     background: $bg-main;
@@ -350,40 +230,42 @@ export default Reports;
 
   &__title-text {
     margin: 0;
-    font-size: 1.1875rem;
+    font-size: 1.5rem;
     font-weight: 800;
-    letter-spacing: -0.015em;
-    line-height: 1.35;
+    letter-spacing: -0.02em;
+    line-height: 1.3;
     color: $text-primary;
   }
 
   &__summary {
-    font-size: 0.875rem;
-    line-height: 1.65;
+    font-size: 0.9375rem;
+    line-height: 1.7;
     color: $text-secondary;
-    margin-bottom: 20px;
+    margin-bottom: 24px;
+    max-width: 760px;
   }
 
   /* ---------- verdict box ---------- */
   &__verdict {
     display: flex;
-    gap: 12px;
-    padding: 16px 18px;
+    gap: 14px;
+    padding: 18px 20px;
     background: $primary-light;
     border-radius: 12px;
-    margin-bottom: 24px;
+    margin-bottom: 28px;
+    max-width: 760px;
 
     strong {
       display: block;
-      font-size: 0.75rem;
+      font-size: 0.8125rem;
       font-weight: 700;
       color: $primary;
-      margin-bottom: 4px;
+      margin-bottom: 5px;
     }
 
     p {
-      font-size: 0.8125rem;
-      line-height: 1.55;
+      font-size: 0.875rem;
+      line-height: 1.6;
       color: $text-primary;
       margin: 0;
     }
@@ -418,12 +300,12 @@ export default Reports;
   }
 
   &__top-label {
-    font-size: 0.71875rem;
+    font-size: 0.8125rem;
     color: $text-tertiary;
   }
 
   &__top-value {
-    font-size: 0.8125rem;
+    font-size: 0.9375rem;
     font-weight: 700;
     color: $text-primary;
   }
@@ -431,17 +313,17 @@ export default Reports;
   &__metrics {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 7px;
   }
 
   &__metric-tag {
-    font-size: 0.6875rem;
+    font-size: 0.75rem;
     font-weight: 500;
     color: $text-secondary;
     background: $bg-subtle;
     border: 1px solid $border-subtle;
     border-radius: 6px;
-    padding: 3px 8px;
+    padding: 4px 10px;
   }
 
   &__empty {
