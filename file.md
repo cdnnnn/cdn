@@ -241,12 +241,16 @@ const Datasets: FC = () => {
                   <div className="datasets-page__task-grid">
                     {selected.tasks.map((t, i) => {
                       const tint = TASK_TINTS[i % TASK_TINTS.length];
-                      const num = String(i + 1).padStart(2, '0');
                       return (
                         <div className={`datasets-page__task-card datasets-page__task-card--${tint}`} key={t.name}>
-                          <span className="datasets-page__task-card-ghost">{num}</span>
-                          <p className="datasets-page__task-card-name">{t.name}</p>
+                          <div className="datasets-page__task-card-top">
+                            <span className="datasets-page__task-card-dot" />
+                            <span className="datasets-page__task-card-name">{t.name}</span>
+                          </div>
                           <p className="datasets-page__task-card-value">{t.value}</p>
+                          <span className="datasets-page__task-card-foot">
+                            Task {String(i + 1).padStart(2, '0')} of {selected.tasks.length}
+                          </span>
                         </div>
                       );
                     })}
@@ -272,10 +276,6 @@ const Datasets: FC = () => {
 };
 
 export default Datasets;
-
-
-
-
 
 
 
@@ -886,7 +886,7 @@ export default Datasets;
     animation: datasets-page-spin 0.9s linear infinite;
   }
 
-  /* ---------- task list — top accent bar + ghost number ---------- */
+  /* ---------- task list — dot-leader + footer meta ---------- */
   &__task-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
@@ -895,17 +895,18 @@ export default Datasets;
   }
 
   &__task-card {
-    position: relative;
     min-height: 138px;
-    background: $bg-main;
+    background: $bg-subtle;
     border: 1px solid $border-subtle;
-    border-top: 3px solid var(--task-tint, #{$primary});
     border-radius: 12px;
-    padding: 18px 16px 16px;
-    overflow: hidden;
-    transition: box-shadow 0.15s ease, transform 0.15s ease;
+    padding: 15px 16px;
+    display: flex;
+    flex-direction: column;
+    transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 
     &:hover {
+      background: $bg-main;
+      border-color: $border-strong;
       box-shadow: $shadow-md;
       transform: translateY(-2px);
     }
@@ -927,31 +928,32 @@ export default Datasets;
     }
   }
 
-  &__task-card-ghost {
-    position: absolute;
-    right: 8px;
-    top: -6px;
-    font-size: 3.5rem;
-    font-weight: 800;
-    color: var(--task-tint, #{$primary});
-    opacity: 0.08;
-    line-height: 1;
-    pointer-events: none;
+  &__task-card-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 9px;
+  }
+
+  &__task-card-dot {
+    flex-shrink: 0;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--task-tint, #{$primary});
   }
 
   &__task-card-name {
-    position: relative;
     font-size: 0.84375rem;
     font-weight: 700;
     color: $text-primary;
-    margin-bottom: 8px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   &__task-card-value {
-    position: relative;
+    flex: 1;
     font-size: 0.78125rem;
     color: $text-secondary;
     line-height: 1.55;
@@ -959,6 +961,17 @@ export default Datasets;
     -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
+  }
+
+  &__task-card-foot {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid $border-subtle;
+    font-size: 0.65625rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: $text-tertiary;
   }
 
   /* ---------- responsive ---------- */
