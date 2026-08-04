@@ -3,10 +3,10 @@
 :root {
   color-scheme: light;
 
-  --primary: #a01451;
-  --primary-hover: #c11a62;
-  --primary-light: #fbeef3;
-  --primary-subtle: #f6d9e5;
+  --primary: #1428a0;
+  --primary-hover: #1d37c9;
+  --primary-light: #eef1fe;
+  --primary-subtle: #e2e7fc;
 
   --violet: #7c3aed;
   --violet-light: #f3e8ff;
