@@ -1,379 +1,957 @@
-//Authslice.ts
-import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+//Datasets.tsx
+import { useEffect, useMemo, useState, type FC } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Database, Search, X, LayoutGrid, Tag, RefreshCw, AlertCircle, ExternalLink } from 'lucide-react';
+import { fetchBenchmarks } from './api';
+import type { Benchmark } from './types';
+import './Datasets.scss';
 
-export type AuthStatus = 'idle' | 'authenticating' | 'authenticated' | 'error' | 'logged_out';
+const CAPABILITY_TINTS = ['blue', 'violet', 'amber', 'jade', 'rose'] as const;
 
-export type AuthLanguage = 'en' | 'ko';
-
-export interface AuthUser {
-  username: string;
-  email: string;
-  language: AuthLanguage;
-  profileName: string;
+function capabilityTint(capability: string) {
+  let hash = 0;
+  for (let i = 0; i < capability.length; i += 1) hash = (hash * 31 + capability.charCodeAt(i)) >>> 0;
+  return CAPABILITY_TINTS[hash % CAPABILITY_TINTS.length];
 }
 
-export interface AuthState {
-  status: AuthStatus;
-  error: string | null;
-  token: string | null;
-  user: AuthUser | null;
-}
+const Datasets: FC = () => {
+  const navigate = useNavigate();
+  const [benchmarks, setBenchmarks] = useState<Benchmark[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-const initialState: AuthState = {
-  status: 'idle',
-  error: null,
-  token: null,
-  user: null,
-};
+  const [query, setQuery] = useState('');
+  const [type, setType] = useState('All');
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
-const authSlice = createSlice({
-  name: 'auth',
-  initialState,
-  reducers: {
-    // SSO flow has kicked off (WebSocket opened, waiting on the identity provider)
-    authStart: (state) => {
-      state.status = 'authenticating';
-      state.error = null;
-    },
-    // SSO (or the /sso_login exchange) confirmed the session
-    authSuccess: (state, action: PayloadAction<{ token: string; user: AuthUser }>) => {
-      state.status = 'authenticated';
-      state.error = null;
-      state.token = action.payload.token;
-      state.user = action.payload.user;
-    },
-    // SSO failed, the WebSocket dropped, or /sso_login rejected the exchange
-    authError: (state, action: PayloadAction<string>) => {
-      state.status = 'error';
-      state.error = action.payload;
-      state.token = null;
-      state.user = null;
-    },
-    // User explicitly signed out
-    logout: (state) => {
-      state.status = 'logged_out';
-      state.error = null;
-      state.token = null;
-      state.user = null;
-    },
-    // Back to 'idle' — useSsoAuth() picks this up and re-runs the flow
-    resetAuth: (state) => {
-      state.status = 'idle';
-      state.error = null;
-    },
-  },
-});
-
-export const { authStart, authSuccess, authError, logout, resetAuth } = authSlice.actions;
-export default authSlice.reducer;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Usessoauth.ts
-// ═══════════════════════════════════════════════
-// hooks/useSsoAuth.ts
-// SemcoEval · SSO authentication hook
-//
-// Two modes controlled by environment.MOCK_AUTH:
-//
-//   MOCK_AUTH=false (production default)
-//     1. status === 'idle'  → dispatch authStart
-//     2. Open WebSocket to SSO endpoint
-//     3. onopen  → send { rqtype, token:'', data }
-//     4. onmessage → rpcode === 'RETURN_SUCCESS'
-//                      → POST /sso_login
-//                      → response.status === 'success'
-//                          → dispatch authSuccess
-//                      → else dispatch authError
-//     5. onerror / abnormal close → dispatch authError
-//
-//   MOCK_AUTH=true  (local dev / demo)
-//     Skips WebSocket and REST call entirely.
-//     After a short simulated delay, dispatches authSuccess
-//     with a hard-coded mock user and token.
-//
-// To enable mock mode add this line to .env.local:
-//   REACT_APP_MOCK_AUTH=true
-// ═══════════════════════════════════════════════
-import { useEffect, useRef } from 'react';
-import { useAppDispatch, useAppSelector } from '../store/hooks';
-import { authStart, authSuccess, authError } from '../store/slices/authSlice';
-import api from '../services/api';
-import environment from '../environment';
-
-// ── Mock user (only used when MOCK_AUTH=true) ──
-const MOCK_USER = {
-  token: 'mock-token-dev-only',
-  username: 'kim.jiyeon',
-  email: 'kim.jiyeon@example.com',
-  language: 'en' as const,
-  profileName: 'Prof. Kim Jiyeon',
-};
-
-interface SsoPayload {
-  userInfo: unknown;
-  key: string;
-}
-
-interface WsMessage {
-  rpcode: string;
-  data: string;
-}
-
-// Shape returned by POST /sso_login
-interface SsoLoginResponse {
-  status: 'success' | string;
-  message: string | null;
-  result?: {
-    token: string;
-    username: string;
-    email: string;
-    language: 'en' | 'ko';
-    profile_name: string;
+  const load = () => {
+    setLoading(true);
+    setError(null);
+    fetchBenchmarks()
+      .then((res) => {
+        setBenchmarks(res.benchmarks);
+        setTotal(res.total);
+        setSelectedKey((prev) => prev ?? (res.benchmarks[0] ? res.benchmarks[0].name : null));
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : 'Failed to load benchmarks.');
+      })
+      .finally(() => setLoading(false));
   };
-}
-
-export function useSsoAuth() {
-  const dispatch = useAppDispatch();
-  const status = useAppSelector(s => s.auth.status);
-  const resolvedRef = useRef(false);
 
   useEffect(() => {
-    if (status !== 'idle') return;
-
-    resolvedRef.current = false;
-    dispatch(authStart());
-
-    // ════════════════════════════════════════════
-    // MOCK MODE — instant login, no network calls
-    // ════════════════════════════════════════════
-    if (environment.MOCK_AUTH) {
-      // const timer = setTimeout(() => {
-      resolvedRef.current = true;
-      dispatch(authSuccess({
-        token: MOCK_USER.token,
-        user: {
-          username: MOCK_USER.username,
-          email: MOCK_USER.email,
-          language: MOCK_USER.language,
-          profileName: MOCK_USER.profileName,
-        },
-      }));
-      // }, 800); // short delay so the spinner is visible
-
-      // return () => clearTimeout(timer);
-    }
-
-    // ════════════════════════════════════════════
-    // PRODUCTION MODE — real Knox SSO WebSocket
-    // ════════════════════════════════════════════
-    const ws = new WebSocket(environment.SSO.WS_URL);
-
-    // ── Step 1: Send handshake ───────────────────────
-    ws.onopen = () => {
-      ws.send(JSON.stringify({
-        rqtype: environment.SSO.RQTYPE,
-        token: '',
-        data: environment.SSO.DATA,
-      }));
-    };
-
-    // ── Step 2: Handle SSO response ─────────────────
-    ws.onmessage = async (event: MessageEvent) => {
-      try {
-        const message: WsMessage = JSON.parse(event.data as string);
-
-        if (message?.rpcode !== 'RETURN_SUCCESS') {
-          resolvedRef.current = true;
-          dispatch(authError(
-            `SSO returned unexpected code: ${message?.rpcode ?? 'unknown'}`
-          ));
-          ws.close();
-          return;
-        }
-
-        const ssoInfo: SsoPayload = JSON.parse(message.data);
-
-        const res = await api.post<SsoLoginResponse>('/sso_login', {
-          userInfo: ssoInfo?.userInfo,
-          aesKey: ssoInfo?.key,
-        });
-
-        const { status: loginStatus, message: loginMessage, result } = res.data;
-
-        if (loginStatus !== 'success' || !result?.token) {
-          resolvedRef.current = true;
-          dispatch(authError(loginMessage ?? 'SSO login succeeded but no token was returned.'));
-          return;
-        }
-
-        const { token, username, email, language, profile_name } = result;
-
-        resolvedRef.current = true;
-        dispatch(authSuccess({
-          token,
-          user: {
-            username,
-            email,
-            language,
-            profileName: profile_name,
-          },
-        }));
-      } catch (err) {
-        resolvedRef.current = true;
-        dispatch(authError(
-          err instanceof Error ? err.message : 'SSO authentication failed.'
-        ));
-      } finally {
-        ws.close();
-      }
-    };
-
-    // ── Step 3: WebSocket error ──────────────────────
-    ws.onerror = () => {
-      if (!resolvedRef.current) {
-        resolvedRef.current = true;
-        dispatch(authError('Could not connect to the SSO server. Please try again.'));
-      }
-    };
-
-    // ── Step 4: Abnormal close before resolution ─────
-    ws.onclose = (event: CloseEvent) => {
-      if (!resolvedRef.current && !event.wasClean) {
-        resolvedRef.current = true;
-        dispatch(authError(
-          `SSO connection closed unexpectedly (code ${event.code}).`
-        ));
-      }
-    };
-
-    return () => {
-      if (
-        ws.readyState === WebSocket.OPEN ||
-        ws.readyState === WebSocket.CONNECTING
-      ) {
-        ws.close();
-      }
-    };
+    load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status]);
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Header.tsx
-import { Link } from 'react-router-dom';
-import { useEffect, useRef, useState, type FC } from 'react';
-import { Gauge, LogOut, Sun, Moon } from 'lucide-react';
-import { useAppDispatch, useAppSelector } from '../../store/hooks';
-import { toggleTheme } from '../../store/slices/uiSlice';
-import { logout } from '../../store/slices/authSlice';
-import './Header.scss';
-
-const Header: FC = () => {
-  const dispatch = useAppDispatch();
-  const user = useAppSelector((s) => s.auth.user);
-  const theme = useAppSelector((s) => s.ui.theme);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const isDark = theme === 'dark';
-
-  // Avatar shows just the first letter of the profile name (e.g. "Prof. Kim Jiyeon" → "P")
-  const initial = user?.profileName?.trim().charAt(0).toUpperCase() || '?';
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
   }, []);
 
+  const types = useMemo(() => {
+    const set = new Set(benchmarks.map((b) => b.type));
+    return ['All', ...Array.from(set).sort()];
+  }, [benchmarks]);
+
+  const filtered = useMemo(
+    () =>
+      benchmarks.filter((b) => {
+        if (type !== 'All' && b.type !== type) return false;
+        if (query && !b.name.toLowerCase().includes(query.toLowerCase()) && !b.description.toLowerCase().includes(query.toLowerCase())) {
+          return false;
+        }
+        return true;
+      }),
+    [benchmarks, query, type]
+  );
+
+  const selected = useMemo(
+    () => filtered.find((b) => b.name === selectedKey) ?? filtered[0] ?? null,
+    [filtered, selectedKey]
+  );
+
   return (
-    <header className="app-header">
-      <Link className="app-header__brand" to="/">
-        <span className="app-header__brand-mark">
-          <Gauge size={18} strokeWidth={2.25} />
-        </span>
-        <span className="app-header__brand-name">SemcoEval</span>
-      </Link>
+    <div className="datasets-page">
+      <div className="datasets-page__header">
+        <div className="datasets-page__header-left">
+          <p className="datasets-page__header-eyebrow">Test suite library</p>
+          <h1 className="datasets-page__title">Test Suites</h1>
+          <p className="datasets-page__subtitle">Benchmark datasets and custom tests</p>
+        </div>
 
-      <div className="app-header__right">
-        <button
-          type="button"
-          className="app-header__theme-toggle"
-          onClick={() => dispatch(toggleTheme())}
-          aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-          title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-        >
-          <Sun size={12} strokeWidth={2.25} className="app-header__theme-static app-header__theme-static--sun" />
-          <Moon size={12} strokeWidth={2.25} className="app-header__theme-static app-header__theme-static--moon" />
-
-          <span className={`app-header__theme-knob${isDark ? ' app-header__theme-knob--dark' : ' app-header__theme-knob--light'}`}>
-            {isDark ? <Moon size={13} strokeWidth={2.5} /> : <Sun size={13} strokeWidth={2.5} />}
-          </span>
-        </button>
-
-        <div className="app-header__user" ref={menuRef}>
-          <button
-            type="button"
-            className={`app-header__avatar${menuOpen ? ' app-header__avatar--open' : ''}`}
-            onClick={() => setMenuOpen((v) => !v)}
-            aria-label="User menu"
-            aria-expanded={menuOpen}
-            title={user?.profileName ?? 'Account'}
-          >
-            {initial}
+        <div className="datasets-page__header-right">
+          <div className="datasets-page__header-meta">
+            <Database size={13} />
+            {total} suites available
+          </div>
+          <button type="button" className="datasets-page__btn datasets-page__btn--outline" onClick={load} disabled={loading}>
+            <RefreshCw size={14} strokeWidth={2.25} className={loading ? 'datasets-page__spin' : undefined} /> Refresh
           </button>
+        </div>
+      </div>
 
-          {menuOpen && (
-            <div className="app-header__dropdown">
-              <div className="app-header__drop-user">
-                <div className="app-header__drop-avatar">{initial}</div>
-                <div className="app-header__drop-info">
-                  <div className="app-header__drop-name">{user?.profileName ?? 'Unknown user'}</div>
-                  <div className="app-header__drop-role">{user?.email ?? '—'}</div>
+      <div className="datasets-page__filters">
+        <div className="datasets-page__search">
+          <Search size={15} />
+          <input type="text" placeholder="Search test suites..." value={query} onChange={(e) => setQuery(e.target.value)} />
+          {query && (
+            <button type="button" className="datasets-page__search-clear" onClick={() => setQuery('')} aria-label="Clear search">
+              <X size={13} />
+            </button>
+          )}
+        </div>
+
+        <div className="datasets-page__seg">
+          {types.map((t) => (
+            <button
+              key={t}
+              type="button"
+              className={`datasets-page__seg-item${type === t ? ' datasets-page__seg-item--active' : ''}`}
+              onClick={() => setType(t)}
+            >
+              {t === 'All' ? <LayoutGrid size={13} strokeWidth={2.25} /> : <Tag size={13} strokeWidth={2.25} />}
+              {t}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {loading && (
+        <div className="datasets-page__empty">
+          <RefreshCw size={22} className="datasets-page__spin" />
+          <p>Loading test suites…</p>
+        </div>
+      )}
+
+      {!loading && error && (
+        <div className="datasets-page__empty datasets-page__empty--error">
+          <AlertCircle size={22} />
+          <p>{error}</p>
+          <button type="button" className="datasets-page__btn datasets-page__btn--outline" onClick={load}>
+            <RefreshCw size={14} strokeWidth={2.25} /> Try again
+          </button>
+        </div>
+      )}
+
+      {!loading && !error && filtered.length === 0 && (
+        <div className="datasets-page__empty">
+          <Database size={22} />
+          <p>No test suites match your filters.</p>
+        </div>
+      )}
+
+      {!loading && !error && filtered.length > 0 && (
+        <div className="datasets-page__layout">
+          <div className="datasets-page__sidebar">
+            <div className="datasets-page__sidebar-list">
+              {filtered.map((b) => {
+                const isActive = selected?.name === b.name;
+                return (
+                  <button
+                    type="button"
+                    key={b.name}
+                    className={`datasets-page__item${isActive ? ' datasets-page__item--active' : ''}`}
+                    onClick={() => setSelectedKey(b.name)}
+                  >
+                    <div className="datasets-page__item-top">
+                      <span className="datasets-page__item-name">{b.name}</span>
+                      <span className="datasets-page__tag datasets-page__tag--blue">{b.type}</span>
+                    </div>
+                    <div className="datasets-page__item-meta">
+                      <span>{b.required_capabilities.length} capabilities</span>
+                      <span className="datasets-page__item-questions n">{b.task_count} tasks</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {selected && (
+            <div className="datasets-page__detail">
+              <div className="datasets-page__detail-head">
+                <div className="datasets-page__detail-head-left">
+                  <div className="datasets-page__detail-tags">
+                    <span className="datasets-page__tag datasets-page__tag--blue">
+                      <Tag size={11} strokeWidth={2.5} />
+                      {selected.type}
+                    </span>
+                  </div>
+                  <h2 className="datasets-page__detail-name">{selected.name}</h2>
+                </div>
+
+                <button type="button" className="datasets-page__btn datasets-page__btn--primary" onClick={() => navigate('/app/run-evaluation')}>
+                  Use in Evaluation
+                </button>
+              </div>
+
+              <p className="datasets-page__detail-desc">{selected.description}</p>
+
+              <div className="datasets-page__stat-row">
+                <div className="datasets-page__stat-card">
+                  <span className="datasets-page__stat-card-label">Tasks</span>
+                  <span className="datasets-page__stat-card-value n">{selected.task_count}</span>
+                </div>
+                <div className="datasets-page__stat-card">
+                  <span className="datasets-page__stat-card-label">Capabilities</span>
+                  <span className="datasets-page__stat-card-value n">{selected.required_capabilities.length}</span>
+                </div>
+                <div className="datasets-page__stat-card">
+                  <span className="datasets-page__stat-card-label">HuggingFace Dataset</span>
+                  <span className="datasets-page__stat-card-value datasets-page__stat-card-value--sm">{selected.huggingface_dataset}</span>
                 </div>
               </div>
-              <div className="app-header__drop-divider" />
-              <button type="button" className="app-header__drop-item" onClick={() => dispatch(logout())}>
-                <LogOut size={15} strokeWidth={2} />
-                Log out
-              </button>
+
+              {selected.required_capabilities.length > 0 && (
+                <>
+                  <p className="datasets-page__section-title">Required capabilities</p>
+                  <div className="datasets-page__caps">
+                    {selected.required_capabilities.map((c) => (
+                      <span key={c} className={`datasets-page__cap-pill datasets-page__cap-pill--${capabilityTint(c)}`}>
+                        {c}
+                      </span>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {selected.tasks.length > 0 && (
+                <>
+                  <p className="datasets-page__section-title">Sample tasks</p>
+                  <div className="datasets-page__task-list">
+                    {selected.tasks.map((t) => (
+                      <div className="datasets-page__task-row" key={t.name}>
+                        <span className="datasets-page__task-name">{t.name}</span>
+                        <span className="datasets-page__task-value">{t.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              <p className="datasets-page__section-title">Source</p>
+              <div className="datasets-page__meta-list">
+                <span className="datasets-page__meta-item">
+                  <ExternalLink size={13} /> {selected.huggingface_dataset}
+                </span>
+              </div>
             </div>
           )}
         </div>
-      </div>
-    </header>
+      )}
+    </div>
   );
 };
 
-export default Header;
+export default Datasets;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Datasets.scss
+@use '../../../styles/variables' as *;
+
+.datasets-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  // Caps the page at a comfortable working width and centers it, so on very
+  // wide viewports (1800px+) the sidebar/detail columns don't stretch into an
+  // unusably wide layout — the extra space becomes gutters instead.
+  max-width: 1680px;
+  margin-left: auto;
+  margin-right: auto;
+  // Same flex chain as History/Models/Providers: main-layout__body / workspace-layout /
+  // workspace-layout__content already resolve to the exact viewport height,
+  // so height: 100% fills it precisely. workspace-layout__content also carries
+  // a 3rem bottom padding, which would leave a gap below this page — pull most
+  // of that back in, keeping a small 0.75rem breathing-room strip at the bottom.
+  height: calc(100% + 3rem - 0.75rem);
+  margin-bottom: calc(-3rem + 0.75rem);
+  min-height: 0;
+
+  /* ---------- header ---------- */
+  &__header {
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1rem;
+    padding-bottom: 18px;
+    margin-bottom: 2px;
+    border-bottom: 1px solid $border-subtle;
+  }
+
+  &__header-left {
+    display: flex;
+    flex-direction: column;
+  }
+
+  &__header-right {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  &__header-eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: $font-mono;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: $primary;
+    margin-bottom: 6px;
+
+    &::before {
+      content: '';
+      width: 16px;
+      height: 2px;
+      border-radius: 2px;
+      background: $primary;
+    }
+  }
+
+  &__header-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
+    border-radius: 999px;
+    padding: 7px 13px;
+    white-space: nowrap;
+  }
+
+  &__title {
+    font-size: 21px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: $text-primary;
+  }
+
+  &__subtitle {
+    margin-top: 3px;
+    color: $text-secondary;
+    font-size: 0.84375rem;
+  }
+
+  &__btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-family: $font-body;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    padding: 9px 14px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease, opacity 0.14s ease;
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    &--outline {
+      background: $bg-main;
+      border-color: $border-default;
+      color: $text-secondary;
+
+      &:hover:not(:disabled) {
+        border-color: $text-primary;
+        color: $text-primary;
+      }
+    }
+
+    &--primary {
+      background: $primary;
+      border-color: $primary;
+      color: #fff;
+
+      &:hover {
+        background: $primary-hover;
+        border-color: $primary-hover;
+      }
+    }
+  }
+
+  /* ---------- filters ---------- */
+  &__filters {
+    flex-shrink: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+  }
+
+  &__search {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 280px;
+    max-width: 100%;
+    border: 1px solid $border-default;
+    border-radius: 10px;
+    padding: 9px 12px;
+    background: $bg-main;
+    color: $text-tertiary;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+
+    &:focus-within {
+      border-color: $primary;
+      box-shadow: 0 0 0 3px $primary-light;
+    }
+
+    input {
+      flex: 1;
+      border: none;
+      outline: none;
+      font-size: 0.8125rem;
+      color: $text-primary;
+      background: transparent;
+      font-family: $font-body;
+      min-width: 0;
+
+      &::placeholder {
+        color: $text-tertiary;
+      }
+    }
+  }
+
+  &__search-clear {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: none;
+    background: $bg-inset;
+    color: $text-tertiary;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: background 0.14s ease, color 0.14s ease;
+
+    &:hover {
+      background: $border-default;
+      color: $text-primary;
+    }
+  }
+
+  /* ---------- segmented category bar ---------- */
+  &__seg {
+    flex-shrink: 0;
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px;
+    padding: 3px;
+    border: 1px solid $border-subtle;
+    border-radius: 11px;
+    background: $bg-subtle;
+  }
+
+  &__seg-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: $font-body;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-tertiary;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 7px 12px;
+    cursor: pointer;
+    transition: background 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
+
+    svg {
+      opacity: 0.8;
+    }
+
+    &:hover {
+      color: $text-primary;
+    }
+
+    &--active {
+      background: $bg-main;
+      color: $primary;
+      box-shadow: $shadow-xs;
+
+      svg {
+        opacity: 1;
+      }
+    }
+  }
+
+  /* ---------- master-detail layout ---------- */
+  &__layout {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    gap: 16px;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* ---------- sidebar list ---------- */
+  &__sidebar {
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-radius: 16px;
+    box-shadow: $shadow-xs;
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  &__sidebar-list {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  &__item {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 14px 16px;
+    text-align: left;
+    border: none;
+    border-bottom: 1px solid $border-subtle;
+    border-left: 3px solid transparent;
+    background: $bg-main;
+    width: 100%;
+    cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease;
+
+    &:last-child {
+      border-bottom: none;
+    }
+
+    &:hover {
+      background: $bg-subtle;
+    }
+
+    &--active {
+      background: $primary-light;
+      border-left-color: $primary;
+
+      .datasets-page__item-name {
+        color: $primary;
+      }
+    }
+  }
+
+  &__item-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  &__item-name {
+    font-size: 0.84375rem;
+    font-weight: 600;
+    color: $text-primary;
+    line-height: 1.35;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__item-featured {
+    flex-shrink: 0;
+    display: inline-flex;
+    color: $warning;
+  }
+
+  &__item-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 0.75rem;
+    color: $text-tertiary;
+  }
+
+  &__item-questions {
+    flex-shrink: 0;
+  }
+
+  /* ---------- tags (shared by sidebar + detail) ---------- */
+  &__tag {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.625rem;
+    font-weight: 600;
+    border-radius: 999px;
+    padding: 2px 8px;
+
+    &--blue {
+      color: $primary;
+      background: $primary-light;
+    }
+
+    &--violet {
+      color: $violet;
+      background: $violet-light;
+    }
+
+    &--amber {
+      color: $warning;
+      background: $warning-subtle;
+    }
+
+    &--jade {
+      color: $success;
+      background: $success-subtle;
+    }
+
+    &--rose {
+      color: $danger;
+      background: $danger-subtle;
+    }
+
+    &--featured {
+      color: $warning;
+      background: $warning-subtle;
+    }
+  }
+
+  /* ---------- detail panel ---------- */
+  &__detail {
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-radius: 16px;
+    box-shadow: $shadow-xs;
+    padding: 26px 28px;
+    height: 100%;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  &__detail-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding-bottom: 18px;
+    margin-bottom: 16px;
+    border-bottom: 1px solid $border-subtle;
+    position: sticky;
+    top: -26px;
+    padding-top: 26px;
+    margin-top: -26px;
+    background: $bg-main;
+    z-index: 1;
+  }
+
+  &__detail-head-left {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  &__detail-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+
+    .datasets-page__tag {
+      font-size: 0.6875rem;
+      padding: 3px 10px;
+    }
+  }
+
+  &__detail-name {
+    font-size: 1.25rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    line-height: 1.3;
+    color: $text-primary;
+  }
+
+  &__detail-desc {
+    font-size: 0.84375rem;
+    line-height: 1.6;
+    color: $text-secondary;
+    margin-bottom: 24px;
+  }
+
+  /* ---------- stat cards ---------- */
+  &__section-title {
+    font-size: 0.8125rem;
+    font-weight: 700;
+    color: $text-primary;
+    margin-bottom: 12px;
+  }
+
+  &__stat-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+
+  &__stat-card {
+    background: $bg-subtle;
+    border-radius: 12px;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  &__stat-card-label {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: $text-tertiary;
+  }
+
+  &__stat-card-value {
+    font-size: 1.25rem;
+    font-weight: 800;
+    color: $text-primary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    &--sm {
+      font-size: 1rem;
+      font-weight: 700;
+    }
+  }
+
+  /* ---------- meta list ---------- */
+  &__meta-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  &__meta-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.8125rem;
+    color: $text-secondary;
+
+    svg {
+      flex-shrink: 0;
+      color: $text-tertiary;
+    }
+  }
+
+  /* ---------- empty state ---------- */
+  &__empty {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 52px 20px;
+    border: 1px dashed $border-strong;
+    border-radius: 14px;
+    color: $text-tertiary;
+    font-size: 0.84375rem;
+
+    svg {
+      color: $text-tertiary;
+    }
+
+    &--error {
+      border-style: solid;
+      border-color: $danger-subtle;
+      background: $danger-subtle;
+      color: $danger;
+
+      svg {
+        color: $danger;
+      }
+    }
+  }
+
+  &__spin {
+    animation: datasets-page-spin 0.9s linear infinite;
+  }
+
+  /* ---------- task list ---------- */
+  &__task-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    border: 1px solid $border-subtle;
+    border-radius: 12px;
+    overflow: hidden;
+    margin-bottom: 24px;
+  }
+
+  &__task-row {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 12px 14px;
+    background: $bg-main;
+    border-bottom: 1px solid $border-subtle;
+
+    &:last-child {
+      border-bottom: none;
+    }
+
+    &:hover {
+      background: $bg-subtle;
+    }
+  }
+
+  &__task-name {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__task-value {
+    font-size: 0.8125rem;
+    color: $text-secondary;
+    line-height: 1.5;
+  }
+
+  /* ---------- responsive ---------- */
+  @media (max-width: 900px) {
+    &__layout {
+      grid-template-columns: 1fr;
+      grid-template-rows: 16rem 1fr;
+      overflow: visible;
+    }
+
+    &__sidebar,
+    &__detail {
+      height: auto;
+      max-height: 22rem;
+    }
+
+    &__stat-row {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+
+  @media (max-width: 520px) {
+    &__detail {
+      padding: 18px 16px;
+    }
+
+    &__detail-head {
+      flex-direction: column;
+    }
+
+    &__stat-row {
+      grid-template-columns: 1fr;
+    }
+  }
+}
+
+@keyframes datasets-page-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Types.ts
+export interface BenchmarkTask {
+  name: string;
+  value: string;
+}
+
+export interface Benchmark {
+  name: string;
+  description: string;
+  tasks: BenchmarkTask[];
+  task_count: number;
+  required_capabilities: string[];
+  huggingface_dataset: string;
+  type: string;
+}
+
+export interface BenchmarksResponse {
+  benchmarks: Benchmark[];
+  total: number;
+}
+
+
+
+
+
+
+
+
+
+
+//api.ts
+import api from '../../../services/api';
+import type { BenchmarksResponse } from './types';
+
+export async function fetchBenchmarks(): Promise<BenchmarksResponse> {
+  const res = await api.get<BenchmarksResponse>('/v1/benchmarks');
+  return res.data;
+}
