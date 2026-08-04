@@ -1,3 +1,293 @@
+//Datasets.tsx
+import { useEffect, useMemo, useState, type FC } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Database, Search, X, LayoutGrid, Tag, RefreshCw, AlertCircle, ExternalLink, ListChecks, Sparkles } from 'lucide-react';
+import { fetchBenchmarks } from './api';
+import type { Benchmark } from './types';
+import Spinner from '../../../components/Spinner/Spinner';
+import './Datasets.scss';
+
+const CAPABILITY_TINTS = ['blue', 'violet', 'amber', 'jade', 'rose'] as const;
+
+function capabilityTint(capability: string) {
+  let hash = 0;
+  for (let i = 0; i < capability.length; i += 1) hash = (hash * 31 + capability.charCodeAt(i)) >>> 0;
+  return CAPABILITY_TINTS[hash % CAPABILITY_TINTS.length];
+}
+
+const Datasets: FC = () => {
+  const navigate = useNavigate();
+  const [benchmarks, setBenchmarks] = useState<Benchmark[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [query, setQuery] = useState('');
+  const [type, setType] = useState('All');
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+
+  const load = () => {
+    setLoading(true);
+    setError(null);
+    fetchBenchmarks()
+      .then((res) => {
+        setBenchmarks(res.benchmarks);
+        setTotal(res.total);
+        setSelectedKey((prev) => prev ?? (res.benchmarks[0] ? res.benchmarks[0].name : null));
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : 'Failed to load benchmarks.');
+      })
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const types = useMemo(() => {
+    const set = new Set(benchmarks.map((b) => b.type));
+    return ['All', ...Array.from(set).sort()];
+  }, [benchmarks]);
+
+  const filtered = useMemo(
+    () =>
+      benchmarks.filter((b) => {
+        if (type !== 'All' && b.type !== type) return false;
+        if (query && !b.name.toLowerCase().includes(query.toLowerCase()) && !b.description.toLowerCase().includes(query.toLowerCase())) {
+          return false;
+        }
+        return true;
+      }),
+    [benchmarks, query, type]
+  );
+
+  const selected = useMemo(
+    () => filtered.find((b) => b.name === selectedKey) ?? filtered[0] ?? null,
+    [filtered, selectedKey]
+  );
+
+  return (
+    <div className="datasets-page">
+      <div className="datasets-page__header">
+        <div className="datasets-page__header-left">
+          <p className="datasets-page__header-eyebrow">Test suite library</p>
+          <h1 className="datasets-page__title">Test Suites</h1>
+          <p className="datasets-page__subtitle">Benchmark datasets and custom tests</p>
+        </div>
+
+        <div className="datasets-page__header-right">
+          <div className="datasets-page__header-meta">
+            <Database size={13} />
+            {total} suites available
+          </div>
+          <button type="button" className="datasets-page__btn datasets-page__btn--outline" onClick={load} disabled={loading}>
+            <RefreshCw size={14} strokeWidth={2.25} className={loading ? 'datasets-page__spin' : undefined} /> Refresh
+          </button>
+        </div>
+      </div>
+
+      <div className="datasets-page__filters">
+        <div className="datasets-page__search">
+          <Search size={15} />
+          <input type="text" placeholder="Search test suites..." value={query} onChange={(e) => setQuery(e.target.value)} />
+          {query && (
+            <button type="button" className="datasets-page__search-clear" onClick={() => setQuery('')} aria-label="Clear search">
+              <X size={13} />
+            </button>
+          )}
+        </div>
+
+        <div className="datasets-page__seg">
+          {types.map((t) => (
+            <button
+              key={t}
+              type="button"
+              className={`datasets-page__seg-item${type === t ? ' datasets-page__seg-item--active' : ''}`}
+              onClick={() => setType(t)}
+            >
+              {t === 'All' ? <LayoutGrid size={13} strokeWidth={2.25} /> : <Tag size={13} strokeWidth={2.25} />}
+              {t}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {loading && (
+        <div className="datasets-page__loading">
+          <Spinner label="Loading test suites…" />
+        </div>
+      )}
+
+      {!loading && error && (
+        <div className="datasets-page__empty datasets-page__empty--error">
+          <AlertCircle size={22} />
+          <p>{error}</p>
+          <button type="button" className="datasets-page__btn datasets-page__btn--outline" onClick={load}>
+            <RefreshCw size={14} strokeWidth={2.25} /> Try again
+          </button>
+        </div>
+      )}
+
+      {!loading && !error && filtered.length === 0 && (
+        <div className="datasets-page__empty">
+          <Database size={22} />
+          <p>No test suites match your filters.</p>
+        </div>
+      )}
+
+      {!loading && !error && filtered.length > 0 && (
+        <div className="datasets-page__layout">
+          <div className="datasets-page__sidebar">
+            <div className="datasets-page__sidebar-list">
+              {filtered.map((b) => {
+                const isActive = selected?.name === b.name;
+                return (
+                  <button
+                    type="button"
+                    key={b.name}
+                    className={`datasets-page__item${isActive ? ' datasets-page__item--active' : ''}`}
+                    onClick={() => setSelectedKey(b.name)}
+                  >
+                    <div className="datasets-page__item-top">
+                      <span className="datasets-page__item-name">{b.name}</span>
+                      <span className="datasets-page__tag datasets-page__tag--blue">{b.type}</span>
+                    </div>
+                    <div className="datasets-page__item-meta">
+                      <span>{b.required_capabilities.length} capabilities</span>
+                      <span className="datasets-page__item-questions n">{b.task_count} tasks</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {selected && (
+            <div className="datasets-page__detail">
+              <div className="datasets-page__detail-head">
+                <div className="datasets-page__detail-head-left">
+                  <div className="datasets-page__detail-tags">
+                    <span className="datasets-page__tag datasets-page__tag--blue">
+                      <Tag size={11} strokeWidth={2.5} />
+                      {selected.type}
+                    </span>
+                  </div>
+                  <h2 className="datasets-page__detail-name">{selected.name}</h2>
+                </div>
+
+                <button type="button" className="datasets-page__btn datasets-page__btn--primary" onClick={() => navigate('/app/run-evaluation')}>
+                  Use in Evaluation
+                </button>
+              </div>
+
+              <p className="datasets-page__detail-desc">{selected.description}</p>
+
+              <div className="datasets-page__stat-row">
+                <div className="datasets-page__stat-card">
+                  <span className="datasets-page__stat-icon">
+                    <ListChecks size={16} strokeWidth={2} />
+                  </span>
+                  <span className="datasets-page__stat-body">
+                    <span className="datasets-page__stat-card-label">Tasks</span>
+                    <span className="datasets-page__stat-card-value n">{selected.task_count}</span>
+                  </span>
+                </div>
+                <div className="datasets-page__stat-card">
+                  <span className="datasets-page__stat-icon">
+                    <Sparkles size={16} strokeWidth={2} />
+                  </span>
+                  <span className="datasets-page__stat-body">
+                    <span className="datasets-page__stat-card-label">Capabilities</span>
+                    <span className="datasets-page__stat-card-value n">{selected.required_capabilities.length}</span>
+                  </span>
+                </div>
+                <div className="datasets-page__stat-card">
+                  <span className="datasets-page__stat-icon">
+                    <Database size={16} strokeWidth={2} />
+                  </span>
+                  <span className="datasets-page__stat-body">
+                    <span className="datasets-page__stat-card-label">HuggingFace Dataset</span>
+                    <span className="datasets-page__stat-card-value datasets-page__stat-card-value--sm">{selected.huggingface_dataset}</span>
+                  </span>
+                </div>
+              </div>
+
+              {selected.required_capabilities.length > 0 && (
+                <>
+                  <p className="datasets-page__section-title">
+                    <Sparkles size={15} strokeWidth={2.25} />
+                    <span>Required capabilities</span>
+                  </p>
+                  <div className="datasets-page__caps">
+                    {selected.required_capabilities.map((c) => (
+                      <span key={c} className={`datasets-page__cap-pill datasets-page__cap-pill--${capabilityTint(c)}`}>
+                        {c}
+                      </span>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {selected.tasks.length > 0 && (
+                <>
+                  <p className="datasets-page__section-title">
+                    <ListChecks size={15} strokeWidth={2.25} />
+                    <span>Sample tasks</span>
+                  </p>
+                  <div className="datasets-page__task-grid">
+                    {selected.tasks.map((t, i) => (
+                      <div className="datasets-page__task-card" key={t.name}>
+                        <div className="datasets-page__task-card-top">
+                          <span className="datasets-page__task-card-name">{t.name}</span>
+                          <span className="datasets-page__task-card-idx">{String(i + 1).padStart(2, '0')}</span>
+                        </div>
+                        <span className="datasets-page__task-card-value">{t.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              <p className="datasets-page__section-title">
+                <ExternalLink size={15} strokeWidth={2.25} />
+                <span>Source</span>
+              </p>
+              <div className="datasets-page__meta-list">
+                <span className="datasets-page__meta-item">
+                  <ExternalLink size={13} /> {selected.huggingface_dataset}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Datasets;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Datasets.scss
 @use '../../../styles/variables' as *;
 
 .datasets-page {
@@ -586,60 +876,62 @@
     animation: datasets-page-spin 0.9s linear infinite;
   }
 
-  /* ---------- task list — flows to fill available width ---------- */
-  &__task-flow {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
+  /* ---------- task list — uniform grid cards ---------- */
+  &__task-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 12px;
     margin-bottom: 24px;
   }
 
-  &__task-chip {
-    flex: 1 1 220px;
-    max-width: 340px;
-    background: $bg-main;
+  &__task-card {
+    height: 128px;
+    background: $bg-subtle;
     border: 1px solid $border-subtle;
-    border-radius: 10px;
-    padding: 10px 13px;
+    border-radius: 12px;
+    padding: 14px 16px;
     display: flex;
     flex-direction: column;
-    gap: 3px;
-    transition: border-color 0.12s ease, box-shadow 0.12s ease;
+    gap: 8px;
+    transition: transform 0.13s ease, border-color 0.13s ease, box-shadow 0.13s ease, background 0.13s ease;
 
     &:hover {
+      transform: translateY(-2px);
       border-color: $border-strong;
-      box-shadow: $shadow-xs;
+      box-shadow: $shadow-md;
+      background: $bg-main;
     }
   }
 
-  &__task-chip-name {
+  &__task-card-top {
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-size: 0.78125rem;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  &__task-card-name {
+    font-size: 0.8125rem;
     font-weight: 700;
     color: $text-primary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  &__task-chip-index {
+  &__task-card-idx {
     flex-shrink: 0;
-    width: 16px;
-    height: 16px;
-    border-radius: 5px;
-    background: $primary-light;
-    color: $primary;
-    font-size: 0.59375rem;
+    font-size: 0.65625rem;
     font-weight: 800;
-    display: grid;
-    place-items: center;
+    color: $text-tertiary;
   }
 
-  &__task-chip-value {
-    font-size: 0.75rem;
+  &__task-card-value {
+    font-size: 0.78125rem;
     color: $text-secondary;
     line-height: 1.5;
     display: -webkit-box;
-    -webkit-line-clamp: 2;
+    -webkit-line-clamp: 4;
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
