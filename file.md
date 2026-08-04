@@ -101,6 +101,13 @@ html {
   -webkit-font-smoothing: antialiased;
   scroll-behavior: smooth;
   font-size: 100%; // 1rem = 16px, respects user browser settings
+
+  // On very wide viewports, nudge the base size up a bit. Nearly all text
+  // and spacing across the app is defined in rem, so this scales everything
+  // proportionally without touching individual component styles.
+  @media (min-width: 1800px) {
+    font-size: 106.25%; // 1rem = 17px
+  }
 }
 
 body {
