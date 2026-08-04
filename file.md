@@ -1,99 +1,52 @@
-//Header.tsx
-import { Link } from 'react-router-dom';
-import { useEffect, useRef, useState, type FC } from 'react';
-import { Gauge, LogOut, Sun, Moon } from 'lucide-react';
-import { useAppDispatch, useAppSelector } from '../../store/hooks';
-import { toggleTheme } from '../../store/slices/uiSlice';
-import './Header.scss';
+//Authslice.ts
+import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 
-function getInitials(name: string): string {
-  return name
-    .split(' ')
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => w[0]?.toUpperCase())
-    .join('');
+export type AuthStatus = 'idle' | 'authenticating' | 'authenticated' | 'error' | 'logged_out';
+
+export interface AuthState {
+  status: AuthStatus;
+  error: string | null;
 }
 
-const Header: FC = () => {
-  const dispatch = useAppDispatch();
-  const user = useAppSelector((s) => s.user.user);
-  const theme = useAppSelector((s) => s.ui.theme);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const initials = getInitials(user.name);
-  const isDark = theme === 'dark';
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-
-  return (
-    <header className="app-header">
-      <Link className="app-header__brand" to="/">
-        <span className="app-header__brand-mark">
-          <Gauge size={18} strokeWidth={2.25} />
-        </span>
-        <span className="app-header__brand-name">SemcoEval</span>
-      </Link>
-
-      <div className="app-header__right">
-        <button
-          type="button"
-          className="app-header__theme-toggle"
-          onClick={() => dispatch(toggleTheme())}
-          aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-          title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-        >
-          <Sun size={12} strokeWidth={2.25} className="app-header__theme-static app-header__theme-static--sun" />
-          <Moon size={12} strokeWidth={2.25} className="app-header__theme-static app-header__theme-static--moon" />
-
-          <span className={`app-header__theme-knob${isDark ? ' app-header__theme-knob--dark' : ' app-header__theme-knob--light'}`}>
-            {isDark ? <Moon size={13} strokeWidth={2.5} /> : <Sun size={13} strokeWidth={2.5} />}
-          </span>
-        </button>
-
-        <div className="app-header__user" ref={menuRef}>
-          <button
-            type="button"
-            className={`app-header__avatar${menuOpen ? ' app-header__avatar--open' : ''}`}
-            onClick={() => setMenuOpen((v) => !v)}
-            aria-label="User menu"
-            aria-expanded={menuOpen}
-            title={user.name}
-          >
-            {initials}
-          </button>
-
-          {menuOpen && (
-            <div className="app-header__dropdown">
-              <div className="app-header__drop-user">
-                <div className="app-header__drop-avatar">{initials}</div>
-                <div className="app-header__drop-info">
-                  <div className="app-header__drop-name">{user.name}</div>
-                  <div className="app-header__drop-role">{user.role}</div>
-                </div>
-              </div>
-              <div className="app-header__drop-divider" />
-              <button type="button" className="app-header__drop-item">
-                <LogOut size={15} strokeWidth={2} />
-                Log out
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-    </header>
-  );
+const initialState: AuthState = {
+  status: 'idle',
+  error: null,
 };
 
-export default Header;
+const authSlice = createSlice({
+  name: 'auth',
+  initialState,
+  reducers: {
+    // SSO flow has kicked off (WebSocket opened, waiting on the identity provider)
+    authStart: (state) => {
+      state.status = 'authenticating';
+      state.error = null;
+    },
+    // SSO confirmed the session
+    authSuccess: (state) => {
+      state.status = 'authenticated';
+      state.error = null;
+    },
+    // SSO failed, or the WebSocket dropped before confirming
+    authError: (state, action: PayloadAction<string>) => {
+      state.status = 'error';
+      state.error = action.payload;
+    },
+    // User explicitly signed out
+    logout: (state) => {
+      state.status = 'logged_out';
+      state.error = null;
+    },
+    // Back to 'idle' — useSsoAuth() picks this up and re-runs the flow
+    resetAuth: (state) => {
+      state.status = 'idle';
+      state.error = null;
+    },
+  },
+});
+
+export const { authStart, authSuccess, authError, logout, resetAuth } = authSlice.actions;
+export default authSlice.reducer;
 
 
 
@@ -107,1129 +60,646 @@ export default Header;
 
 
 
-//Header.scss
+
+
+
+
+
+
+
+//index.ts
+import { configureStore } from '@reduxjs/toolkit';
+import uiReducer from './slices/uiSlice';
+import userReducer from './slices/userSlice';
+import authReducer from './slices/authSlice';
+
+export const store = configureStore({
+  reducer: {
+    ui: uiReducer,
+    user: userReducer,
+    auth: authReducer,
+  },
+});
+
+export type RootState = ReturnType<typeof store.getState>;
+export type AppDispatch = typeof store.dispatch;
+
+export default store;
+
+
+
+
+
+
+
+
+
+
+
+
+//usessoauth.ts
+import { useEffect, useRef } from 'react';
+import { useAppDispatch, useAppSelector } from '../store/hooks';
+import { authStart, authSuccess, authError } from '../store/slices/authSlice';
+
+// TODO: point this at the real Knox/SSO WebSocket gateway. Falls back to a
+// placeholder so the app doesn't crash on missing env config during setup.
+const SSO_WS_URL = import.meta.env.VITE_SSO_WS_URL ?? 'wss://sso.example.com/auth/ws';
+
+/**
+ * Drives the SSO handshake. Whenever auth.status is 'idle' (fresh load, or
+ * after resetAuth() from the sign-in button), opens a WebSocket to the SSO
+ * gateway and waits for it to confirm or reject the session.
+ *
+ * Expected server messages (adjust to match your gateway's actual contract):
+ *   { "type": "authenticated" }
+ *   { "type": "error", "message": "..." }
+ */
+export function useSsoAuth(): void {
+  const dispatch = useAppDispatch();
+  const status = useAppSelector((s) => s.auth.status);
+  const socketRef = useRef<WebSocket | null>(null);
+
+  useEffect(() => {
+    if (status !== 'idle') return;
+
+    dispatch(authStart());
+
+    let socket: WebSocket;
+    try {
+      socket = new WebSocket(SSO_WS_URL);
+    } catch {
+      dispatch(authError('Unable to reach the SSO service.'));
+      return;
+    }
+    socketRef.current = socket;
+
+    socket.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload.type === 'authenticated') {
+          dispatch(authSuccess());
+        } else if (payload.type === 'error') {
+          dispatch(authError(payload.message ?? 'Authentication failed.'));
+        }
+      } catch {
+        dispatch(authError('Received an invalid response from the SSO service.'));
+      }
+    };
+
+    socket.onerror = () => {
+      dispatch(authError('Could not connect to the SSO service.'));
+    };
+
+    return () => {
+      socket.close();
+      socketRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
+}
+
+
+
+
+
+
+
+
+
+//Authguard.tsx
+// ═══════════════════════════════════════════════
+// components/AuthGuard/AuthGuard.tsx
+// SemcoEval · Global auth gate
+//
+// Used as a layout route in App.tsx — wraps every route except
+// /sso-login, so the whole app requires SSO auth.
+//
+// Renders:
+//   idle / authenticating → <AuthSpinner>  (SSO WebSocket running)
+//   error / logged_out    → <Navigate to="/sso-login">
+//   authenticated         → <Outlet />     (render the matched child route)
+// ═══════════════════════════════════════════════
+import type { FC } from 'react';
+import { Navigate, Outlet, useLocation } from 'react-router-dom';
+import { useAppSelector } from '../../store/hooks';
+import { useSsoAuth } from '../../hooks/useSsoAuth';
+import AuthSpinner from '../AuthSpinner/AuthSpinner';
+
+const AuthGuard: FC = () => {
+  // Triggers the SSO WebSocket flow whenever status === 'idle'
+  useSsoAuth();
+
+  const status = useAppSelector((s) => s.auth.status);
+  const error = useAppSelector((s) => s.auth.error);
+  const location = useLocation();
+
+  switch (status) {
+    // SSO in progress (or very first render before authStart fires)
+    case 'idle':
+    case 'authenticating':
+      return <AuthSpinner />;
+
+    // Auth failed or user logged out → go to the SSO login page
+    case 'error':
+    case 'logged_out':
+      return <Navigate to="/sso-login" replace state={{ from: location, errorMessage: error }} />;
+
+    // All good — render whichever child route matched
+    case 'authenticated':
+      return <Outlet />;
+
+    default:
+      return <AuthSpinner />;
+  }
+};
+
+export default AuthGuard;
+
+
+
+
+
+
+
+
+
+
+
+
+//Authspinner.tsx
+// ═══════════════════════════════════════════════
+// components/AuthSpinner/AuthSpinner.tsx
+// SemcoEval · Full-screen auth overlay
+// ═══════════════════════════════════════════════
+import type { FC } from 'react';
+import { Gauge } from 'lucide-react';
+import './AuthSpinner.scss';
+
+const AuthSpinner: FC = () => (
+  <div className="auth-spinner" role="status" aria-live="polite">
+    <div className="auth-spinner__card">
+      <div className="auth-spinner__mark">
+        <Gauge size={22} strokeWidth={2.25} />
+      </div>
+
+      <div className="auth-spinner__ring">
+        <div className="auth-spinner__arc" />
+      </div>
+
+      <div className="auth-spinner__label">Authenticating…</div>
+      <div className="auth-spinner__sub">Connecting to Knox SSO</div>
+    </div>
+  </div>
+);
+
+export default AuthSpinner;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Authspinner.scss
 @use '../../styles/variables' as *;
 
-.app-header {
+.auth-spinner {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: $z-header;
-  height: 60px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0 1.125rem;
-  background: $bg-header-glass;
-  backdrop-filter: blur(0.75rem);
-  border-bottom: 1px solid $border-subtle;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  background: $bg-page;
 
-  &__brand {
+  &__card {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    gap: 0.625rem;
-    text-decoration: none;
-    color: $text-primary;
-    flex-shrink: 0;
-  }
-
-  &__brand-mark {
-    width: 32px;
-    height: 32px;
-    border-radius: 0.5rem;
-    background: linear-gradient(155deg, $primary 0%, $primary-hover 100%);
-    color: $on-primary;
-    display: grid;
-    place-items: center;
-    box-shadow: $shadow-xs, inset 0 0 0 0.0625rem rgba(255, 255, 255, 0.14);
-  }
-
-  &__brand-name {
-    font-family: $font-display;
-    font-weight: 700;
-    font-size: 1.0925rem;
-    letter-spacing: -0.02em;
-    white-space: nowrap;
-  }
-
-  &__right {
-    display: flex;
-    align-items: center;
-    gap: 0.625rem;
-    flex-shrink: 0;
-  }
-
-  /* ---------- theme toggle ---------- */
-  &__theme-toggle {
-    position: relative;
-    flex-shrink: 0;
-    width: 52px;
-    height: 28px;
-    border-radius: 999px;
-    border: 1px solid $border-default;
-    background: $bg-subtle;
-    cursor: pointer;
-    display: block;
-    padding: 0;
-    transition: border-color 0.14s ease;
-
-    &:hover {
-      border-color: $border-strong;
-    }
-
-    &:focus-visible {
-      outline: none;
-      border-color: $primary;
-      box-shadow: 0 0 0 0.1875rem $primary-subtle;
-    }
-  }
-
-  &__theme-static {
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    color: $text-tertiary;
-    opacity: 0.7;
-    pointer-events: none;
-
-    &--sun {
-      left: 7px;
-    }
-
-    &--moon {
-      right: 7px;
-    }
-  }
-
-  &__theme-knob {
-    position: absolute;
-    top: 3px;
-    left: 3px;
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: $on-primary;
-    box-shadow: $shadow-sm;
-    transition: transform 0.18s ease, background 0.14s ease;
-
-    &--light {
-      background: $warning;
-    }
-
-    &--dark {
-      background: $primary;
-      transform: translateX(24px);
-    }
-  }
-
-  &__user {
-    position: relative;
-    flex-shrink: 0;
-  }
-
-  &__avatar {
-    width: 34px;
-    height: 34px;
-    border-radius: 50%;
-    border: 1px solid $border-default;
-    background: $primary-light;
-    color: $primary;
-    font-family: $font-display;
-    font-size: 0.8125rem;
-    font-weight: 700;
-    letter-spacing: 0.01em;
-    display: grid;
-    place-items: center;
-    cursor: pointer;
-    transition: border-color 0.14s ease, box-shadow 0.14s ease;
-
-    &:hover {
-      border-color: $primary;
-    }
-
-    &--open,
-    &:focus-visible {
-      outline: none;
-      border-color: $primary;
-      box-shadow: 0 0 0 0.1875rem $primary-subtle;
-    }
-  }
-
-  &__dropdown {
-    position: absolute;
-    top: calc(100% + 0.625rem);
-    right: 0;
-    width: 232px;
+    gap: 1.125rem;
+    padding: 2.5rem 3rem;
     background: $bg-main;
     border: 1px solid $border-subtle;
-    border-radius: 0.75rem;
+    border-radius: 1.25rem;
     box-shadow: $shadow-lg;
-    padding: 0.625rem;
-    z-index: $z-header;
   }
 
-  &__drop-user {
-    display: flex;
-    align-items: center;
-    gap: 0.625rem;
-    padding: 0.375rem 0.375rem 0.625rem;
-  }
-
-  &__drop-avatar {
-    width: 36px;
-    height: 36px;
-    flex-shrink: 0;
-    border-radius: 50%;
-    background: $primary-light;
-    color: $primary;
-    font-family: $font-display;
-    font-size: 0.84375rem;
-    font-weight: 700;
+  &__mark {
+    width: 52px;
+    height: 52px;
+    border-radius: 1rem;
     display: grid;
     place-items: center;
+    color: $on-primary;
+    background: linear-gradient(155deg, $primary 0%, $primary-hover 100%);
+    box-shadow: $shadow-md, inset 0 0 0 0.0625rem rgba(255, 255, 255, 0.14);
+    animation: auth-spinner-pulse 2.2s ease-in-out infinite;
   }
 
-  &__drop-info {
-    min-width: 0;
+  &__ring {
+    position: relative;
+    width: 32px;
+    height: 32px;
   }
 
-  &__drop-name {
-    font-size: 0.90625rem;
-    font-weight: 600;
-    color: $text-primary;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  &__drop-role {
-    font-size: 0.78125rem;
-    color: $text-tertiary;
-    margin-top: 0.125rem;
-  }
-
-  &__drop-divider {
-    height: 1px;
-    background: $border-subtle;
-    margin: 0.125rem 0.375rem 0.5rem;
-  }
-
-  &__drop-item {
-    display: flex;
-    align-items: center;
-    gap: 0.5625rem;
-    width: 100%;
-    padding: 0.5rem 0.625rem;
-    border: none;
-    border-radius: 0.5rem;
-    background: transparent;
-    color: $danger;
-    font-size: 0.875rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: background 0.14s ease;
-
-    &:hover {
-      background: $danger-subtle;
-    }
-  }
-
-  @media (max-width: 620px) {
-    &__brand-name {
-      font-size: 1.0125rem;
-    }
-  }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Footer.scss
-@use '../../styles/variables' as *;
-
-.app-footer {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  z-index: $z-footer;
-  height: $footer-height;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0 1.125rem;
-  background: $bg-main;
-  border-top: 1px solid $border-subtle;
-
-  &__version,
-  &__copyright {
-    font-size: 0.71875rem;
-    color: $text-tertiary;
-    white-space: nowrap;
-  }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Landing.scss
-@use '../../styles/variables' as *;
-
-.landing {
-  --blue: #{$primary};
-  --blue-2: #{$primary-hover};
-  --blue-wash: #{$primary-light};
-  --jade: #{$success};
-  --jade-w: #{$success-subtle};
-  --red: #{$danger};
-  --red-w: #{$danger-subtle};
-  --amber-w: #{$warning-subtle};
-  --ink: #{$text-primary};
-  --ink-2: #{$text-secondary};
-  --ink-3: #{$text-tertiary};
-  // Theme-aware surface color for cards/panels/buttons on this page —
-  // was hardcoded to #fff, which showed white cards floating on a dark page.
-  --white: #{$bg-main};
-  // Primary button text needs to stay constant white against the blue fill
-  // in both themes, unlike --white above which now follows the theme.
-  --on-brand: #{$on-primary};
-  --paper: #{$bg-subtle};
-  --rule: #{$border-default};
-  --rule-2: #{$border-subtle};
-  --gut: clamp(1.25rem, 5vw, 3.75rem);
-  --band: clamp(4.5rem, 8.5vw, 7.75rem);
-
-  background: var(--white);
-  color: var(--ink);
-
-  &__shell {
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 0 var(--gut);
-  }
-
-  &__hero-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.8125rem;
-    font-weight: 600;
-    color: var(--blue);
-    background: var(--blue-wash);
-    border: 1px solid $primary-subtle;
-    border-radius: 999px;
-    padding: 0.375rem 0.75rem 0.375rem 0.625rem;
-    margin-bottom: 1.125rem;
-  }
-
-  &__hero-badge-dot {
-    width: 6px;
-    height: 6px;
+  &__arc {
+    position: absolute;
+    inset: 0;
     border-radius: 50%;
-    background: var(--jade);
-    box-shadow: 0 0 0 0.1875rem var(--jade-w);
+    border: 3px solid $border-default;
+    border-top-color: $primary;
+    animation: auth-spinner-spin 0.8s linear infinite;
   }
 
-  &__eyebrow {
-    font-size: 0.7185rem;
-    font-weight: 600;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    color: var(--ink-3);
-    display: flex;
-    align-items: center;
-    gap: 0.625rem;
-
-    &::before {
-      content: '';
-      width: 20px;
-      height: 1px;
-      background: var(--blue);
-    }
-  }
-
-  h1,
-  h2,
-  h3 {
-    letter-spacing: -0.032em;
-    line-height: 1.06;
-    font-weight: 700;
-  }
-
-  /* ================= BUTTONS ================= */
-  &__btn {
-    font-family: $font-body;
-    font-size: 0.9375rem;
-    font-weight: 600;
-    padding: 0.625rem 1.125rem;
-    border-radius: 0.5rem;
-    border: 1px solid transparent;
-    cursor: pointer;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-
-    &--lg {
-      padding: 0.875rem 1.5rem;
-      font-size: 1rem;
-    }
-
-    &--primary {
-      background: var(--blue);
-      color: var(--on-brand);
-
-      &:hover {
-        background: var(--blue-2);
-      }
-    }
-
-    &--ghost {
-      background: var(--white);
-      color: var(--ink);
-      border-color: var(--rule);
-
-      &:hover {
-        border-color: var(--ink);
-      }
-    }
-
-    &:focus-visible {
-      outline: 0.125rem solid var(--blue);
-      outline-offset: 0.1875rem;
-    }
-  }
-
-  /* ================= HERO ================= */
-  &__hero {
-    position: relative;
-    overflow: hidden;
-    padding: clamp(3.125rem, 6.5vw, 5.5rem) 0 var(--band);
-
-    &::before {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background-image: linear-gradient(to right, var(--rule-2) 0.0625rem, transparent 0.0625rem),
-        linear-gradient(to bottom, var(--rule-2) 0.0625rem, transparent 0.0625rem);
-      background-size: 3.375rem 3.375rem;
-      mask-image: radial-gradient(115% 80% at 45% 0%, #000 22%, transparent 72%);
-      -webkit-mask-image: radial-gradient(115% 80% at 45% 0%, #000 22%, transparent 72%);
-      pointer-events: none;
-    }
-  }
-
-  &__hero-in {
-    position: relative;
-  }
-
-  &__hero-copy {
-    max-width: 720px;
-  }
-
-  &__hero h1 {
-    font-size: clamp(2.5rem, 6.2vw, 4.625rem);
-    margin: 1.25rem 0 0;
-
-    em {
-      font-style: normal;
-      color: var(--blue);
-      position: relative;
-      white-space: nowrap;
-
-      &::after {
-        content: '';
-        position: absolute;
-        left: 0;
-        right: 0;
-        bottom: -0.13em;
-        height: 6px;
-        background: repeating-linear-gradient(to right, var(--blue) 0 0.09375rem, transparent 0.09375rem 0.4375rem);
-        opacity: 0.45;
-      }
-    }
-  }
-
-  &__hero-sub {
-    margin-top: 1.375rem;
-    max-width: 560px;
-    font-size: clamp(1rem, 1.5vw, 1.156rem);
-    color: var(--ink-2);
-  }
-
-  &__hero-cta {
-    margin-top: 2rem;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.75rem;
-    align-items: center;
-  }
-
-  /* ================= LEADERBOARD CARD (hero signature) ================= */
-  &__board {
-    margin-top: clamp(2.625rem, 5.5vw, 4.25rem);
-    background: var(--white);
-    border: 1px solid var(--rule);
-    border-radius: 1rem;
-    // Was hardcoded to light-mode-only rgba(14,21,38,...) values; $shadow-lg
-    // resolves correctly in both themes (and now carries the glossy inset
-    // highlight in dark mode too).
-    box-shadow: $shadow-lg;
-    overflow: hidden;
-  }
-
-  &__board-head {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.5rem 0.875rem;
-    padding: 1.125rem 1.375rem;
-    border-bottom: 1px solid var(--rule-2);
-  }
-
-  &__board-title {
+  &__label {
+    font-family: $font-display;
     font-size: 0.9375rem;
     font-weight: 700;
+    color: $text-primary;
     letter-spacing: -0.01em;
   }
 
-  &__board-meta {
-    margin-left: auto;
+  &__sub {
+    margin-top: -0.75rem;
     font-size: 0.8125rem;
-    color: var(--ink-3);
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4375rem;
-
-    &::before {
-      content: '';
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--jade);
-      box-shadow: 0 0 0 0.1875rem var(--jade-w);
-    }
-  }
-
-  &__board-cols {
-    display: grid;
-    grid-template-columns: 2.5rem 1.5fr 1fr 1fr 1fr;
-    padding: 0 1.375rem;
-    font-size: 0.71875rem;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--ink-3);
-    gap: 0.75rem;
-
-    span {
-      padding: 0.75rem 0;
-    }
-
-    .num {
-      text-align: right;
-    }
-  }
-
-  &__board-rows {
-    padding: 0 1.375rem 0.5rem;
-  }
-
-  &__board-row {
-    display: grid;
-    grid-template-columns: 2.5rem 1.5fr 1fr 1fr 1fr;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.875rem 0;
-    border-top: 1px solid var(--rule-2);
-
-    &--best &__board-rank,
-    &--best .landing__board-rank {
-      background: var(--jade-w);
-      border-color: var(--jade);
-      color: var(--jade);
-    }
-  }
-
-  &__board-rank {
-    width: 26px;
-    height: 26px;
-    border-radius: 50%;
-    background: var(--paper);
-    border: 1px solid var(--rule);
-    display: grid;
-    place-items: center;
-    font-size: 0.75rem;
-    font-weight: 700;
-    color: var(--ink-2);
-  }
-
-  &__board-model {
-    display: flex;
-    align-items: center;
-    gap: 0.625rem;
-    min-width: 0;
-  }
-
-  &__board-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
-
-    &--jade {
-      background: var(--jade);
-    }
-
-    &--blue {
-      background: var(--blue);
-    }
-
-    &--muted {
-      background: var(--ink-3);
-    }
-  }
-
-  &__board-name {
-    font-size: 0.9375rem;
-    font-weight: 600;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-
-    small {
-      display: block;
-      font-size: 0.75rem;
-      font-weight: 400;
-      color: var(--ink-3);
-    }
-  }
-
-  &__board-metric {
-    text-align: right;
-  }
-
-  &__board-bar {
-    margin-top: 5px;
-    height: 4px;
-    border-radius: 2px;
-    background: var(--rule-2);
-    overflow: hidden;
-
-    i {
-      display: block;
-      height: 100%;
-      border-radius: 2px;
-      background: var(--blue);
-
-      &.landing__board-bar-fill--best {
-        background: var(--jade);
-      }
-    }
-  }
-
-  &__val {
-    font-size: 0.9375rem;
-    font-weight: 700;
-
-    &--best {
-      color: var(--jade);
-    }
-  }
-
-  &__board-foot {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem 1.625rem;
-    padding: 1rem 1.375rem;
-    border-top: 1px solid var(--rule-2);
-    background: var(--paper);
-    font-size: 0.84375rem;
-    color: var(--ink-2);
-
-    b {
-      color: var(--ink);
-      font-weight: 600;
-    }
-  }
-
-  &__k {
-    font-size: 0.6875rem;
-    font-weight: 600;
-    letter-spacing: 0.13em;
-    text-transform: uppercase;
-    color: var(--ink-3);
-    margin-right: 0.4375rem;
-  }
-
-  /* ================= STATS ================= */
-  &__stats {
-    background: var(--paper);
-    border-block: 0.0625rem solid var(--rule-2);
-  }
-
-  &__stats-in {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-  }
-
-  &__stat-card {
-    padding: 1.75rem var(--gut);
-    text-align: left;
-    border-left: 1px solid var(--rule-2);
-
-    &:first-child {
-      border-left: 0;
-    }
-  }
-
-  &__stat-n {
-    display: block;
-    font-size: 2rem;
-    font-weight: 700;
-    letter-spacing: -0.03em;
-    color: var(--ink);
-  }
-
-  &__stat-l {
-    display: block;
-    margin-top: 2px;
-    font-size: 0.875rem;
-    color: var(--ink-2);
-  }
-
-  &__stats-note {
-    padding: 0.875rem var(--gut);
-    border-top: 1px solid var(--rule-2);
-    font-size: 0.8125rem;
-    color: var(--ink-3);
-    text-align: center;
-  }
-
-  /* ================= BANDS ================= */
-  &__band {
-    padding: var(--band) 0;
-
-    &--paper {
-      background: var(--paper);
-      border-block: 0.0625rem solid var(--rule-2);
-    }
-  }
-
-  &__band-head {
-    max-width: 660px;
-
-    .landing__eyebrow {
-      color: var(--blue);
-    }
-
-    h2 {
-      font-size: clamp(1.75rem, 3.7vw, 2.75rem);
-      margin: 1rem 0 0;
-    }
-
-    p {
-      margin-top: 1rem;
-      color: var(--ink-2);
-      font-size: 1.125rem;
-    }
-  }
-
-  &__band-body {
-    margin-top: clamp(2.125rem, 4.5vw, 3.375rem);
-  }
-
-  /* ================= GRADED TRANSCRIPT ================= */
-  &__ask {
-    background: var(--white);
-    border: 1px solid var(--rule);
-    border-left: 3px solid var(--blue);
-    border-radius: 0.625rem;
-    padding: 1.25rem 1.375rem;
-
-    .landing__eyebrow {
-      color: var(--ink-3);
-
-      &::before {
-        background: var(--ink-3);
-      }
-    }
-  }
-
-  &__ask-q {
-    margin-top: 0.75rem;
-    font-size: 1.15625rem;
-    line-height: 1.45;
-  }
-
-  &__ask-src {
-    margin-top: 1rem;
-    padding: 0.6875rem 0.8125rem;
-    background: var(--paper);
-    border-radius: 0.4375rem;
-    font-size: 0.875rem;
-    color: var(--ink-2);
-
-    b {
-      color: var(--ink);
-      font-weight: 600;
-    }
-  }
-
-  &__answers {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 0.875rem;
-    margin-top: 0.875rem;
-  }
-
-  &__ans {
-    background: var(--white);
-    border: 1px solid var(--rule);
-    border-left: 3px solid var(--rule);
-    border-radius: 0.625rem;
-    padding: 1rem 1.125rem;
-    display: flex;
-    flex-direction: column;
-
-    &--pass {
-      border-left-color: var(--jade);
-
-      .landing__ans-mark {
-        background: var(--jade-w);
-        color: var(--jade);
-      }
-    }
-
-    &--fail {
-      border-left-color: var(--red);
-
-      .landing__ans-mark {
-        background: var(--red-w);
-        color: var(--red);
-      }
-    }
-
-    p {
-      font-size: 0.96875rem;
-      color: var(--ink-2);
-    }
-  }
-
-  &__ans-top {
-    display: flex;
-    align-items: center;
-    gap: 0.625rem;
-    margin-bottom: 0.6875rem;
-  }
-
-  &__ans-name {
-    font-size: 0.90625rem;
-    font-weight: 600;
-  }
-
-  &__ans-mark {
-    margin-left: auto;
-    font-size: 0.6875rem;
-    font-weight: 700;
-    letter-spacing: 0.11em;
-    text-transform: uppercase;
-    padding: 0.1875rem 0.5rem;
-    border-radius: 0.3125rem;
-  }
-
-  &__ans-foot {
-    margin-top: auto;
-    padding-top: 0.8125rem;
-    font-size: 0.84375rem;
-    display: flex;
-    gap: 1rem;
-    color: var(--ink-3);
-  }
-
-  &__ans-note {
-    margin-top: 0.75rem;
-    background: var(--red-w);
-    color: var(--red);
-    border-radius: 0.4375rem;
-    padding: 0.5625rem 0.6875rem;
-    font-size: 0.84375rem;
-    line-height: 1.45;
-  }
-
-  &__hl {
-    background: var(--amber-w);
-    padding: 0 0.1875rem;
-    border-radius: 0.1875rem;
-    color: var(--ink);
-  }
-
-  /* ================= PIPELINE ================= */
-  &__pipeline {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 1rem;
-  }
-
-  &__step {
-    padding: 1.5rem 1.375rem 1.625rem;
-    border: 1px solid var(--rule);
-    border-radius: 0.75rem;
-    background: var(--white);
-    position: relative;
-
-    &::before {
-      content: '';
-      position: absolute;
-      top: -0.0625rem;
-      left: -0.0625rem;
-      width: 40px;
-      height: 3px;
-      border-radius: 0.75rem 0 0 0;
-      background: var(--blue);
-    }
-
-    h3 {
-      font-size: 1.21875rem;
-      margin: 0.75rem 0 0.5625rem;
-    }
-
-    p {
-      font-size: 0.96875rem;
-      color: var(--ink-2);
-    }
-  }
-
-  &__step-k {
-    font-size: 0.75rem;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    color: var(--blue);
-  }
-
-  &__step-hint {
-    margin-top: 0.875rem;
-    padding-top: 0.75rem;
-    border-top: 1px dashed var(--rule);
-    font-size: 0.8125rem;
-    color: var(--ink-3);
-  }
-
-  /* ================= MODES ================= */
-  &__modes {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 1rem;
-  }
-
-  &__mode {
-    background: var(--white);
-    border: 1px solid var(--rule);
-    border-radius: 0.75rem;
-    padding: 1.5rem 1.375rem;
-    display: flex;
-    flex-direction: column;
-    transition: border-color 0.15s ease, transform 0.15s ease;
-
-    &:hover {
-      border-color: var(--ink);
-      transform: translateY(-0.125rem);
-    }
-
-    h3 {
-      font-size: 1.25rem;
-      margin: 1rem 0 0.625rem;
-    }
-
-    p {
-      font-size: 0.96875rem;
-      color: var(--ink-2);
-    }
-  }
-
-  &__mode-tag {
-    align-self: flex-start;
-    font-size: 0.6875rem;
-    font-weight: 600;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--blue);
-    background: var(--blue-wash);
-    padding: 0.3125rem 0.5625rem;
-    border-radius: 0.3125rem;
-  }
-
-  &__chips {
-    margin-top: 1.25rem;
-    padding-top: 0.875rem;
-    border-top: 1px solid var(--rule-2);
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.375rem;
-  }
-
-  &__chip {
-    font-size: 0.78125rem;
-    color: var(--ink-2);
-    border: 1px solid var(--rule);
-    border-radius: 0.3125rem;
-    padding: 0.1875rem 0.5rem;
-  }
-
-  /* ================= LEDGER ================= */
-  &__ledger {
-    border-top: 1px solid var(--rule);
-  }
-
-  &__row {
-    display: grid;
-    grid-template-columns: 2.5rem 1.05fr 1.45fr;
-    gap: 1.5rem;
-    padding: 1.625rem 0;
-    border-bottom: 1px solid var(--rule);
-    align-items: start;
-
-    h3 {
-      font-size: 1.28125rem;
-    }
-
-    p {
-      font-size: 1rem;
-      color: var(--ink-2);
-    }
-  }
-
-  &__row-k {
-    font-size: 0.8125rem;
-    color: var(--ink-3);
-    padding-top: 0.3125rem;
-  }
-
-  /* ================= CLOSE ================= */
-  &__close {
-    padding: var(--band) 0;
-  }
-
-  &__close-in {
-    max-width: 700px;
-
-    .landing__eyebrow {
-      color: var(--blue);
-    }
-
-    h2 {
-      font-size: clamp(1.875rem, 4.4vw, 3.125rem);
-      margin: 1rem 0 0;
-    }
-
-    p {
-      margin-top: 1.125rem;
-      color: var(--ink-2);
-      font-size: 1.125rem;
-    }
-  }
-
-  &__close-cta {
-    margin-top: 1.875rem;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.75rem;
-  }
-
-  /* ================= RESPONSIVE ================= */
-  @media (max-width: 1000px) {
-    .landing__pipeline {
-      grid-template-columns: 1fr 1fr;
-    }
-    .landing__modes {
-      grid-template-columns: 1fr;
-    }
-    .landing__stats-in {
-      grid-template-columns: 1fr 1fr;
-    }
-    .landing__stat-card:nth-child(3) {
-      border-left: 0;
-    }
-  }
-
-  @media (max-width: 860px) {
-    .landing__answers {
-      grid-template-columns: 1fr;
-    }
-    .landing__row {
-      grid-template-columns: 1.875rem 1fr;
-    }
-    .landing__row p {
-      grid-column: 2;
-    }
-    .landing__board-cols,
-    .landing__board-row {
-      grid-template-columns: 2.25rem 1.4fr 1fr 1fr;
-    }
-    .landing__lat {
-      display: none;
-    }
-  }
-
-  @media (max-width: 620px) {
-    .landing__pipeline {
-      grid-template-columns: 1fr;
-    }
-    .landing__stats-in {
-      grid-template-columns: 1fr 1fr;
-    }
-    .landing__stat-card {
-      border-left: 0;
-      border-top: 1px solid var(--rule-2);
-      padding: 1.25rem var(--gut);
-
-      &:nth-child(1),
-      &:nth-child(2) {
-        border-top: 0;
-      }
-    }
-    .landing__board-cols,
-    .landing__board-row {
-      grid-template-columns: 2rem 1.3fr 1fr;
-    }
-    .landing__cost {
-      display: none;
-    }
+    color: $text-tertiary;
   }
 }
+
+@keyframes auth-spinner-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes auth-spinner-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: $shadow-md, inset 0 0 0 0.0625rem rgba(255, 255, 255, 0.14);
+  }
+  50% {
+    transform: scale(1.05);
+    box-shadow: $shadow-lg, inset 0 0 0 0.0625rem rgba(255, 255, 255, 0.18);
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//ssologin.tsx
+// ═══════════════════════════════════════════════
+// pages/SsoLogin/SsoLogin.tsx
+// SemcoEval · SSO Login / re-auth page
+//
+// Shown when:
+//   • User explicitly logs out   (status === 'logged_out')
+//   • SSO authentication fails   (status === 'error')
+//
+// "Sign in" button calls resetAuth(), which sets status back to
+// 'idle', causing useSsoAuth() to re-run the WebSocket flow.
+// ═══════════════════════════════════════════════
+import type { FC } from 'react';
+import { Navigate, useLocation } from 'react-router-dom';
+import { Gauge, AlertCircle, CheckCircle2, ShieldCheck } from 'lucide-react';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import { resetAuth } from '../../store/slices/authSlice';
+import { useSsoAuth } from '../../hooks/useSsoAuth';
+import AuthSpinner from '../../components/AuthSpinner/AuthSpinner';
+import './SsoLogin.scss';
+
+interface LocationState {
+  from?: { pathname: string };
+  errorMessage?: string;
+}
+
+const SsoLogin: FC = () => {
+  const dispatch = useAppDispatch();
+  const status = useAppSelector((s) => s.auth.status);
+  const location = useLocation();
+  const state = (location.state ?? {}) as LocationState;
+
+  // Runs the SSO hook — fires the WebSocket flow once status becomes 'idle'
+  useSsoAuth();
+
+  // Already authenticated → go to the page the user originally wanted
+  if (status === 'authenticated') {
+    return <Navigate to={state.from?.pathname ?? '/'} replace />;
+  }
+
+  // SSO in progress → show the same full-screen spinner as the guard
+  if (status === 'authenticating') {
+    return <AuthSpinner />;
+  }
+
+  const isError = status === 'error';
+  const isLoggedOut = status === 'logged_out';
+  const errorMessage = state.errorMessage ?? 'Authentication failed. Please try again.';
+
+  const handleSignIn = () => {
+    dispatch(resetAuth());
+  };
+
+  return (
+    <div className="sso-login">
+      <div className="sso-login__grid" aria-hidden="true" />
+
+      <div className="sso-login__card">
+        <div className="sso-login__mark">
+          <Gauge size={22} strokeWidth={2.25} />
+        </div>
+
+        <h1 className="sso-login__title">
+          Semco<span>Eval</span>
+        </h1>
+        <p className="sso-login__sub">Model Evaluation Platform</p>
+
+        {isError && (
+          <div className="sso-login__banner sso-login__banner--error" role="alert">
+            <AlertCircle size={15} strokeWidth={2} />
+            {errorMessage}
+          </div>
+        )}
+
+        {isLoggedOut && !isError && (
+          <div className="sso-login__banner sso-login__banner--info">
+            <CheckCircle2 size={15} strokeWidth={2} />
+            You've been signed out successfully.
+          </div>
+        )}
+
+        <button type="button" className="sso-login__signin-btn" onClick={handleSignIn}>
+          <ShieldCheck size={16} strokeWidth={2} />
+          Sign in with Knox SSO
+        </button>
+
+        <p className="sso-login__hint">
+          Authentication is handled automatically via your institution's Knox SSO service.
+        </p>
+      </div>
+    </div>
+  );
+};
+
+export default SsoLogin;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//ssologin.scss
+@use '../../styles/variables' as *;
+
+.sso-login {
+  position: relative;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 2rem;
+  background: $bg-page;
+  overflow: hidden;
+
+  &__grid {
+    position: absolute;
+    inset: 0;
+    background-image: linear-gradient(to right, $border-subtle 0.0625rem, transparent 0.0625rem),
+      linear-gradient(to bottom, $border-subtle 0.0625rem, transparent 0.0625rem);
+    background-size: 3.375rem 3.375rem;
+    mask-image: radial-gradient(60% 55% at 50% 40%, #000 22%, transparent 72%);
+    -webkit-mask-image: radial-gradient(60% 55% at 50% 40%, #000 22%, transparent 72%);
+    pointer-events: none;
+  }
+
+  &__card {
+    position: relative;
+    width: 100%;
+    max-width: 380px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 0.25rem;
+    padding: 2.75rem 2.25rem 2.25rem;
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-radius: 1.25rem;
+    box-shadow: $shadow-lg;
+  }
+
+  &__mark {
+    width: 52px;
+    height: 52px;
+    border-radius: 1rem;
+    display: grid;
+    place-items: center;
+    color: $on-primary;
+    background: linear-gradient(155deg, $primary 0%, $primary-hover 100%);
+    box-shadow: $shadow-md, inset 0 0 0 0.0625rem rgba(255, 255, 255, 0.14);
+    margin-bottom: 1.25rem;
+  }
+
+  &__title {
+    font-family: $font-display;
+    font-size: 1.375rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: $text-primary;
+
+    span {
+      color: $primary;
+    }
+  }
+
+  &__sub {
+    margin-top: 0.25rem;
+    font-size: 0.84375rem;
+    color: $text-tertiary;
+  }
+
+  &__banner {
+    width: 100%;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin-top: 1.5rem;
+    padding: 0.6875rem 0.8125rem;
+    border-radius: 0.625rem;
+    font-size: 0.8125rem;
+    line-height: 1.45;
+    text-align: left;
+
+    svg {
+      flex-shrink: 0;
+      margin-top: 0.0625rem;
+    }
+
+    &--error {
+      background: $danger-subtle;
+      color: $danger;
+    }
+
+    &--info {
+      background: $success-subtle;
+      color: $success;
+    }
+  }
+
+  &__signin-btn {
+    width: 100%;
+    margin-top: 1.75rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5625rem;
+    font-family: $font-body;
+    font-size: 0.90625rem;
+    font-weight: 600;
+    color: $on-primary;
+    background: $primary;
+    border: 1px solid $primary;
+    border-radius: 0.625rem;
+    padding: 0.75rem 1rem;
+    cursor: pointer;
+    transition: background 0.14s ease, border-color 0.14s ease;
+
+    &:hover {
+      background: $primary-hover;
+      border-color: $primary-hover;
+    }
+
+    &:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 0.1875rem $primary-subtle;
+    }
+  }
+
+  &__hint {
+    margin-top: 1.25rem;
+    font-size: 0.75rem;
+    line-height: 1.5;
+    color: $text-tertiary;
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//app.tsx
+import { useEffect } from 'react';
+import { Routes, Route } from 'react-router-dom';
+import type { FC } from 'react';
+import MainLayout from './layouts/MainLayout';
+import WorkspaceLayout from './layouts/WorkspaceLayout';
+import Landing from './pages/Landing/Landing';
+import SsoLogin from './pages/SsoLogin/SsoLogin';
+import Dashboard from './pages/Workspace/Dashboard/Dashboard';
+import History from './pages/Workspace/History/History';
+import Models from './pages/Workspace/Models/Models';
+import Providers from './pages/Workspace/Providers/Providers';
+import Datasets from './pages/Workspace/Datasets/Datasets';
+import Reports from './pages/Workspace/Reports/Reports';
+import Settings from './pages/Workspace/Settings/Settings';
+import RunEvaluation from './pages/Workspace/RunEvaluation/RunEvaluation';
+import AuthGuard from './components/AuthGuard/AuthGuard';
+import { useAppSelector } from './store/hooks';
+
+const THEME_STORAGE_KEY = 'semcoeval-theme';
+
+const App: FC = () => {
+  const theme = useAppSelector((s) => s.ui.theme);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+  }, [theme]);
+
+  return (
+    <Routes>
+      {/* Public — SSO login/re-auth page, outside the auth gate */}
+      <Route path="/sso-login" element={<SsoLogin />} />
+
+      {/* Everything else requires an authenticated session */}
+      <Route element={<AuthGuard />}>
+        <Route element={<MainLayout />}>
+          <Route path="/" element={<Landing />} />
+
+          <Route path="/app" element={<WorkspaceLayout />}>
+            <Route index element={<Dashboard />} />
+            <Route path="run-evaluation" element={<RunEvaluation />} />
+            <Route path="history" element={<History />} />
+            <Route path="models" element={<Models />} />
+            <Route path="providers" element={<Providers />} />
+            <Route path="datasets" element={<Datasets />} />
+            <Route path="reports" element={<Reports />} />
+            <Route path="settings" element={<Settings />} />
+          </Route>
+        </Route>
+      </Route>
+    </Routes>
+  );
+};
+
+export default App;
