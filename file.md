@@ -1,8 +1,9 @@
 //Header.tsx
 import { Link } from 'react-router-dom';
 import { useEffect, useRef, useState, type FC } from 'react';
-import { Gauge, LogOut } from 'lucide-react';
-import { useAppSelector } from '../../store/hooks';
+import { Gauge, LogOut, Sun, Moon } from 'lucide-react';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import { toggleTheme } from '../../store/slices/uiSlice';
 import './Header.scss';
 
 function getInitials(name: string): string {
@@ -15,10 +16,13 @@ function getInitials(name: string): string {
 }
 
 const Header: FC = () => {
+  const dispatch = useAppDispatch();
   const user = useAppSelector((s) => s.user.user);
+  const theme = useAppSelector((s) => s.ui.theme);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const initials = getInitials(user.name);
+  const isDark = theme === 'dark';
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -39,46 +43,57 @@ const Header: FC = () => {
         <span className="app-header__brand-name">SemcoEval</span>
       </Link>
 
-      <div className="app-header__user" ref={menuRef}>
+      <div className="app-header__right">
         <button
           type="button"
-          className={`app-header__avatar${menuOpen ? ' app-header__avatar--open' : ''}`}
-          onClick={() => setMenuOpen((v) => !v)}
-          aria-label="User menu"
-          aria-expanded={menuOpen}
-          title={user.name}
+          className="app-header__theme-toggle"
+          onClick={() => dispatch(toggleTheme())}
+          aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+          title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
         >
-          {initials}
+          <Sun size={12} strokeWidth={2.25} className="app-header__theme-static app-header__theme-static--sun" />
+          <Moon size={12} strokeWidth={2.25} className="app-header__theme-static app-header__theme-static--moon" />
+
+          <span className={`app-header__theme-knob${isDark ? ' app-header__theme-knob--dark' : ' app-header__theme-knob--light'}`}>
+            {isDark ? <Moon size={13} strokeWidth={2.5} /> : <Sun size={13} strokeWidth={2.5} />}
+          </span>
         </button>
 
-        {menuOpen && (
-          <div className="app-header__dropdown">
-            <div className="app-header__drop-user">
-              <div className="app-header__drop-avatar">{initials}</div>
-              <div className="app-header__drop-info">
-                <div className="app-header__drop-name">{user.name}</div>
-                <div className="app-header__drop-role">{user.role}</div>
+        <div className="app-header__user" ref={menuRef}>
+          <button
+            type="button"
+            className={`app-header__avatar${menuOpen ? ' app-header__avatar--open' : ''}`}
+            onClick={() => setMenuOpen((v) => !v)}
+            aria-label="User menu"
+            aria-expanded={menuOpen}
+            title={user.name}
+          >
+            {initials}
+          </button>
+
+          {menuOpen && (
+            <div className="app-header__dropdown">
+              <div className="app-header__drop-user">
+                <div className="app-header__drop-avatar">{initials}</div>
+                <div className="app-header__drop-info">
+                  <div className="app-header__drop-name">{user.name}</div>
+                  <div className="app-header__drop-role">{user.role}</div>
+                </div>
               </div>
+              <div className="app-header__drop-divider" />
+              <button type="button" className="app-header__drop-item">
+                <LogOut size={15} strokeWidth={2} />
+                Log out
+              </button>
             </div>
-            <div className="app-header__drop-divider" />
-            <button type="button" className="app-header__drop-item">
-              <LogOut size={15} strokeWidth={2} />
-              Log out
-            </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </header>
   );
 };
 
 export default Header;
-
-
-
-
-
-
 
 
 
@@ -108,7 +123,7 @@ export default Header;
   justify-content: space-between;
   gap: 0.75rem;
   padding: 0 1.125rem;
-  background: rgba(255, 255, 255, 0.88);
+  background: $bg-header-glass;
   backdrop-filter: blur(0.75rem);
   border-bottom: 1px solid $border-subtle;
 
@@ -126,10 +141,10 @@ export default Header;
     height: 32px;
     border-radius: 0.5rem;
     background: linear-gradient(155deg, $primary 0%, $primary-hover 100%);
-    color: #fff;
+    color: $on-primary;
     display: grid;
     place-items: center;
-    box-shadow: 0 0.0625rem 0.125rem rgba(14, 21, 38, 0.06), inset 0 0 0 0.0625rem rgba(255, 255, 255, 0.14);
+    box-shadow: $shadow-xs, inset 0 0 0 0.0625rem rgba(255, 255, 255, 0.14);
   }
 
   &__brand-name {
@@ -138,6 +153,79 @@ export default Header;
     font-size: 1.0925rem;
     letter-spacing: -0.02em;
     white-space: nowrap;
+  }
+
+  &__right {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    flex-shrink: 0;
+  }
+
+  /* ---------- theme toggle ---------- */
+  &__theme-toggle {
+    position: relative;
+    flex-shrink: 0;
+    width: 52px;
+    height: 28px;
+    border-radius: 999px;
+    border: 1px solid $border-default;
+    background: $bg-subtle;
+    cursor: pointer;
+    display: block;
+    padding: 0;
+    transition: border-color 0.14s ease;
+
+    &:hover {
+      border-color: $border-strong;
+    }
+
+    &:focus-visible {
+      outline: none;
+      border-color: $primary;
+      box-shadow: 0 0 0 0.1875rem $primary-subtle;
+    }
+  }
+
+  &__theme-static {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    color: $text-tertiary;
+    opacity: 0.7;
+    pointer-events: none;
+
+    &--sun {
+      left: 7px;
+    }
+
+    &--moon {
+      right: 7px;
+    }
+  }
+
+  &__theme-knob {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: $on-primary;
+    box-shadow: $shadow-sm;
+    transition: transform 0.18s ease, background 0.14s ease;
+
+    &--light {
+      background: $warning;
+    }
+
+    &--dark {
+      background: $primary;
+      transform: translateX(24px);
+    }
   }
 
   &__user {
@@ -274,39 +362,6 @@ export default Header;
 
 
 
-
-
-
-//Footer.tsx
-import type { FC } from 'react';
-import './Footer.scss';
-
-const APP_VERSION = 'v1.0.0';
-
-const Footer: FC = () => {
-  const year = new Date().getFullYear();
-
-  return (
-    <footer className="app-footer">
-      <span className="app-footer__version">{APP_VERSION}</span>
-      <span className="app-footer__copyright">&copy; {year} SemcoEval</span>
-    </footer>
-  );
-};
-
-export default Footer;
-
-
-
-
-
-
-
-
-
-
-
-
 //Footer.scss
 @use '../../styles/variables' as *;
 
@@ -323,7 +378,7 @@ export default Footer;
   justify-content: space-between;
   gap: 0.75rem;
   padding: 0 1.125rem;
-  background: #fff;
+  background: $bg-main;
   border-top: 1px solid $border-subtle;
 
   &__version,
@@ -341,441 +396,6 @@ export default Footer;
 
 
 
-
-
-
-
-
-
-//Landing.tsx
-import { Link } from 'react-router-dom';
-import type { FC } from 'react';
-import './Landing.scss';
-
-type LeaderboardRow = {
-  rank: number;
-  name: string;
-  descriptor: string;
-  dotColor: 'jade' | 'blue' | 'muted';
-  accuracy: number;
-  latency: string;
-  cost: string;
-  best?: boolean;
-};
-
-const LEADERBOARD: LeaderboardRow[] = [
-  { rank: 1, name: 'Model Delta', descriptor: 'Best overall', dotColor: 'jade', accuracy: 91.2, latency: '2.1s', cost: '$41.20', best: true },
-  { rank: 2, name: 'Model Gamma', descriptor: 'Balanced', dotColor: 'blue', accuracy: 88.7, latency: '1.2s', cost: '$24.50' },
-  { rank: 3, name: 'Model Beta', descriptor: 'General purpose', dotColor: 'muted', accuracy: 84.1, latency: '2.9s', cost: '$6.80' },
-  { rank: 4, name: 'Model Alpha', descriptor: 'Fastest & cheapest', dotColor: 'muted', accuracy: 79.5, latency: '0.4s', cost: '$2.40' },
-];
-
-const STATS = [
-  { n: '9', l: 'providers connected' },
-  { n: '100+', l: 'models available' },
-  { n: '14', l: 'benchmark suites' },
-  { n: '3', l: 'evaluation types' },
-];
-
-const Landing: FC = () => {
-  return (
-    <div className="landing">
-      {/* ==================== HERO ==================== */}
-      <section className="landing__hero" id="top">
-        <div className="landing__shell landing__hero-in">
-          <div className="landing__hero-copy">
-            <span className="landing__hero-badge">
-              <span className="landing__hero-badge-dot" />
-              Model Evaluation Platform · v1.0.0
-            </span>
-            <p className="landing__eyebrow">Model evaluation for enterprise AI</p>
-            <h1>
-              Stop choosing models <em>on vibes.</em>
-            </h1>
-            <p className="landing__hero-sub">
-              SemcoEval runs the same test suite across every model you're considering and puts
-              accuracy, latency and cost on one page — so the model you ship is the one the
-              evidence picked.
-            </p>
-            <div className="landing__hero-cta">
-              <Link className="landing__btn landing__btn--primary landing__btn--lg" to="/app">
-                Run an evaluation
-              </Link>
-              <a className="landing__btn landing__btn--ghost landing__btn--lg" href="#run">
-                See how it works
-              </a>
-            </div>
-          </div>
-
-          {/* SIGNATURE: the leaderboard card */}
-          <section className="landing__board" aria-label="Sample evaluation result">
-            <div className="landing__board-head">
-              <span className="landing__board-title">Run 4127 — Enterprise QA suite</span>
-              <span className="landing__board-meta">240 prompts · 4 models · complete</span>
-            </div>
-
-            <div className="landing__board-cols">
-              <span />
-              <span>Model</span>
-              <span className="num">Accuracy</span>
-              <span className="num landing__lat">Latency</span>
-              <span className="num landing__cost">Cost /1k</span>
-            </div>
-
-            <div className="landing__board-rows">
-              {LEADERBOARD.map((row) => (
-                <div
-                  key={row.rank}
-                  className={`landing__board-row${row.best ? ' landing__board-row--best' : ''}`}
-                >
-                  <span className="landing__board-rank">{row.rank}</span>
-                  <div className="landing__board-model">
-                    <span className={`landing__board-dot landing__board-dot--${row.dotColor}`} />
-                    <span className="landing__board-name">
-                      {row.name}
-                      <small>{row.descriptor}</small>
-                    </span>
-                  </div>
-                  <div className="landing__board-metric">
-                    <span className={`n landing__val${row.best ? ' landing__val--best' : ''}`}>
-                      {row.accuracy}
-                    </span>
-                    <div className="landing__board-bar">
-                      <i
-                        className={row.best ? 'landing__board-bar-fill--best' : ''}
-                        style={{ width: `${row.accuracy}%` }}
-                      />
-                    </div>
-                  </div>
-                  <div className="landing__board-metric landing__lat">
-                    <span className="n landing__val">{row.latency}</span>
-                  </div>
-                  <div className="landing__board-metric landing__cost">
-                    <span className="n landing__val">{row.cost}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="landing__board-foot">
-              <span>
-                <span className="landing__k">Most accurate</span>
-                <b>Model Delta</b>
-              </span>
-              <span>
-                <span className="landing__k">Fastest</span>
-                <b>Model Alpha</b>
-              </span>
-              <span>
-                <span className="landing__k">Cheapest</span>
-                <b>Model Alpha</b>
-              </span>
-            </div>
-          </section>
-        </div>
-      </section>
-
-      {/* ==================== STATS ==================== */}
-      <section className="landing__stats">
-        <div className="landing__shell">
-          <div className="landing__stats-in">
-            {STATS.map((s) => (
-              <div className="landing__stat-card" key={s.l}>
-                <span className="n landing__stat-n">{s.n}</span>
-                <span className="landing__stat-l">{s.l}</span>
-              </div>
-            ))}
-          </div>
-          <div className="landing__stats-note">
-            OpenAI · Anthropic · Google · Groq · Together · OpenRouter · Azure · Fireworks · Ollama
-          </div>
-        </div>
-      </section>
-
-      {/* ==================== GRADING ==================== */}
-      <section className="landing__band" id="grading">
-        <div className="landing__shell">
-          <div className="landing__band-head">
-            <p className="landing__eyebrow">Grading</p>
-            <h2>A score you can't audit is just a rumour.</h2>
-            <p>
-              Open any cell in the leaderboard and you get the prompt, the full response, and the
-              reason it was marked. Here's prompt 112 from the run above.
-            </p>
-          </div>
-
-          <div className="landing__band-body">
-            <div className="landing__ask">
-              <p className="landing__eyebrow">Prompt 112 · Billing policy</p>
-              <p className="landing__ask-q">
-                A customer on the Growth plan downgrades halfway through their billing cycle. What
-                happens to the credits they've already paid for?
-              </p>
-              <p className="landing__ask-src">
-                <b>Grading source — Billing Policy v4.2 §4.2:</b> unused credits carry over as
-                account balance, no refund is issued, and the plan change applies from the next
-                billing date.
-              </p>
-            </div>
-
-            <div className="landing__answers">
-              <article className="landing__ans landing__ans--pass">
-                <div className="landing__ans-top">
-                  <span className="landing__ans-name">Model Delta</span>
-                  <span className="landing__ans-mark">Pass</span>
-                </div>
-                <p>
-                  Their unused credits stay on the account as a balance and roll into the next
-                  cycle. No refund is issued, and the downgrade takes effect on their next billing
-                  date.
-                </p>
-                <div className="landing__ans-foot n">
-                  <span>1.9s</span>
-                  <span>412 tokens</span>
-                  <span>3/3 facts matched</span>
-                </div>
-              </article>
-
-              <article className="landing__ans landing__ans--pass">
-                <div className="landing__ans-top">
-                  <span className="landing__ans-name">Model Gamma</span>
-                  <span className="landing__ans-mark">Pass</span>
-                </div>
-                <p>
-                  Credits already purchased remain available as account balance. The downgrade
-                  applies from the start of the next billing period rather than immediately.
-                </p>
-                <div className="landing__ans-foot n">
-                  <span>1.1s</span>
-                  <span>288 tokens</span>
-                  <span>3/3 facts matched</span>
-                </div>
-              </article>
-
-              <article className="landing__ans landing__ans--pass">
-                <div className="landing__ans-top">
-                  <span className="landing__ans-name">Model Beta</span>
-                  <span className="landing__ans-mark">Pass</span>
-                </div>
-                <p>
-                  The remaining credits carry over to the account. The plan downgrade is scheduled
-                  for the next billing date.
-                </p>
-                <div className="landing__ans-foot n">
-                  <span>2.7s</span>
-                  <span>196 tokens</span>
-                  <span>2/3 facts matched</span>
-                </div>
-              </article>
-
-              <article className="landing__ans landing__ans--fail">
-                <div className="landing__ans-top">
-                  <span className="landing__ans-name">Model Alpha</span>
-                  <span className="landing__ans-mark">Fail</span>
-                </div>
-                <p>
-                  The customer receives a <span className="landing__hl">prorated refund</span> for
-                  the unused portion of their Growth plan, processed back to their original
-                  payment method within 5–7 business days.
-                </p>
-                <div className="landing__ans-note">
-                  <b>Contradicts source.</b> §4.2 states no refund is issued. The refund window and
-                  payment-method detail appear nowhere in the grading source.
-                </div>
-                <div className="landing__ans-foot n">
-                  <span>0.4s</span>
-                  <span>241 tokens</span>
-                  <span>0/3 facts matched</span>
-                </div>
-              </article>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ==================== HOW A RUN WORKS ==================== */}
-      <section className="landing__band landing__band--paper" id="run">
-        <div className="landing__shell">
-          <div className="landing__band-head">
-            <p className="landing__eyebrow">How a run works</p>
-            <h2>Four steps, and the answer is a table — not an opinion.</h2>
-            <p>
-              Same prompts, same grader, same conditions for every model in the run. Otherwise
-              you're comparing two different experiments.
-            </p>
-          </div>
-
-          <div className="landing__band-body landing__pipeline">
-            <div className="landing__step">
-              <p className="landing__step-k">STEP 01</p>
-              <h3>Connect a provider</h3>
-              <p>
-                Paste an API key. SemcoEval reads the provider's model list and fills in context
-                length, vision and tool-calling support for you.
-              </p>
-              <p className="landing__step-hint">No per-model setup</p>
-            </div>
-            <div className="landing__step">
-              <p className="landing__step-k">STEP 02</p>
-              <h3>Pick the shortlist</h3>
-              <p>
-                Filter every connected provider at once by price, speed, context window, modality
-                or benchmark score, then select the models to compare.
-              </p>
-              <p className="landing__step-hint">One catalogue, all providers</p>
-            </div>
-            <div className="landing__step">
-              <p className="landing__step-k">STEP 03</p>
-              <h3>Choose the tests</h3>
-              <p>Start from a standard benchmark suite, or upload your own prompts and expected answers.</p>
-              <p className="landing__step-hint">CSV · JSON · JSONL</p>
-            </div>
-            <div className="landing__step">
-              <p className="landing__step-k">STEP 04</p>
-              <h3>Read the results</h3>
-              <p>
-                Scores, response times and cost land in one leaderboard, with every response kept
-                so you can check the grading yourself.
-              </p>
-              <p className="landing__step-hint">Export as PDF or CSV</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ==================== MODES ==================== */}
-      <section className="landing__band" id="modes">
-        <div className="landing__shell">
-          <div className="landing__band-head">
-            <p className="landing__eyebrow">What you can test</p>
-            <h2>Three kinds of system, three different scorecards.</h2>
-            <p>
-              A chat model and a tool-using agent fail in completely different ways, so they
-              aren't graded the same way.
-            </p>
-          </div>
-
-          <div className="landing__band-body landing__modes">
-            <article className="landing__mode">
-              <span className="landing__mode-tag">Fast evaluation</span>
-              <h3>Chat &amp; text models</h3>
-              <p>Grade base knowledge, summarisation quality and conversational tone against standardised suites.</p>
-              <div className="landing__chips">
-                <span className="landing__chip">accuracy</span>
-                <span className="landing__chip">coherence</span>
-                <span className="landing__chip">tone match</span>
-                <span className="landing__chip">p95 latency</span>
-              </div>
-            </article>
-            <article className="landing__mode">
-              <span className="landing__mode-tag">For automation</span>
-              <h3>Autonomous agents</h3>
-              <p>
-                Test multi-step tool execution — whether the agent picked the right tool, with the
-                right arguments, in the right order.
-              </p>
-              <div className="landing__chips">
-                <span className="landing__chip">task completion</span>
-                <span className="landing__chip">tool accuracy</span>
-                <span className="landing__chip">step count</span>
-                <span className="landing__chip">cost per task</span>
-              </div>
-            </article>
-            <article className="landing__mode">
-              <span className="landing__mode-tag">High precision</span>
-              <h3>Document search &amp; RAG</h3>
-              <p>
-                Measure how much of an answer is actually supported by the retrieved documents,
-                and catch the answers that aren't.
-              </p>
-              <div className="landing__chips">
-                <span className="landing__chip">groundedness</span>
-                <span className="landing__chip">retrieval recall</span>
-                <span className="landing__chip">citation match</span>
-                <span className="landing__chip">refusal rate</span>
-              </div>
-            </article>
-          </div>
-        </div>
-      </section>
-
-      {/* ==================== PLATFORM ==================== */}
-      <section className="landing__band landing__band--paper" id="platform">
-        <div className="landing__shell">
-          <div className="landing__band-head">
-            <p className="landing__eyebrow">Platform</p>
-            <h2>Built for the part after the demo.</h2>
-          </div>
-
-          <div className="landing__band-body landing__ledger">
-            <div className="landing__row">
-              <p className="landing__row-k n">01</p>
-              <h3>Every response is kept</h3>
-              <p>
-                Scores are only as good as the grading behind them. Open any cell to read the
-                exact prompt, the model's full response, and why it was marked right or wrong.
-              </p>
-            </div>
-            <div className="landing__row">
-              <p className="landing__row-k n">02</p>
-              <h3>Re-run against a saved baseline</h3>
-              <p>
-                Pin a run as your baseline. When a provider ships a new version, re-run the same
-                suite and see exactly which tests moved, and in which direction.
-              </p>
-            </div>
-            <div className="landing__row">
-              <p className="landing__row-k n">03</p>
-              <h3>Cost projected to your real volume</h3>
-              <p>
-                Enter your expected monthly request count and each model's score sits next to what
-                it would actually cost you at that scale — not per million tokens.
-              </p>
-            </div>
-            <div className="landing__row">
-              <p className="landing__row-k n">04</p>
-              <h3>Keys stay in your workspace</h3>
-              <p>
-                Provider keys are stored per workspace with scoped team access. On-prem models
-                running through Ollama never leave your network.
-              </p>
-            </div>
-            <div className="landing__row">
-              <p className="landing__row-k n">05</p>
-              <h3>Reports your stakeholders will read</h3>
-              <p>
-                Turn a run into a shareable report with the recommendation, the trade-offs and the
-                raw table — the thing you take into the architecture review.
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ==================== CLOSE ==================== */}
-      <section className="landing__close">
-        <div className="landing__shell landing__close-in">
-          <p className="landing__eyebrow">Get started</p>
-          <h2>Your next model decision, with the receipts.</h2>
-          <p>
-            Connect one provider, pick a standard suite, and have a defensible answer before your
-            next architecture review.
-          </p>
-          <div className="landing__close-cta">
-            <Link className="landing__btn landing__btn--primary landing__btn--lg" to="/app">
-              Run an evaluation
-            </Link>
-            <a className="landing__btn landing__btn--ghost landing__btn--lg" href="#grading">
-              See a sample report
-            </a>
-          </div>
-        </div>
-      </section>
-    </div>
-  );
-};
-
-export default Landing;
 
 
 
@@ -802,7 +422,12 @@ export default Landing;
   --ink: #{$text-primary};
   --ink-2: #{$text-secondary};
   --ink-3: #{$text-tertiary};
-  --white: #fff;
+  // Theme-aware surface color for cards/panels/buttons on this page —
+  // was hardcoded to #fff, which showed white cards floating on a dark page.
+  --white: #{$bg-main};
+  // Primary button text needs to stay constant white against the blue fill
+  // in both themes, unlike --white above which now follows the theme.
+  --on-brand: #{$on-primary};
   --paper: #{$bg-subtle};
   --rule: #{$border-default};
   --rule-2: #{$border-subtle};
@@ -888,7 +513,7 @@ export default Landing;
 
     &--primary {
       background: var(--blue);
-      color: var(--white);
+      color: var(--on-brand);
 
       &:hover {
         background: var(--blue-2);
@@ -982,7 +607,10 @@ export default Landing;
     background: var(--white);
     border: 1px solid var(--rule);
     border-radius: 1rem;
-    box-shadow: 0 0.0625rem 0.125rem rgba(14, 21, 38, 0.04), 0 1.5rem 3.375rem -1.75rem rgba(14, 21, 38, 0.22);
+    // Was hardcoded to light-mode-only rgba(14,21,38,...) values; $shadow-lg
+    // resolves correctly in both themes (and now carries the glossy inset
+    // highlight in dark mode too).
+    box-shadow: $shadow-lg;
     overflow: hidden;
   }
 
