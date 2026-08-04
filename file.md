@@ -1,9 +1,84 @@
+//Spinner.tsx
+import type { FC } from 'react';
+import './Spinner.scss';
+
+interface SpinnerProps {
+  /** Optional caption shown under the ring, e.g. "Loading test suites…" */
+  label?: string;
+  /** Ring diameter in px. Defaults to 34. */
+  size?: number;
+}
+
+const Spinner: FC<SpinnerProps> = ({ label, size = 34 }) => (
+  <div className="spinner" role="status" aria-live="polite">
+    <div className="spinner__ring" style={{ width: size, height: size }} />
+    {label && <span className="spinner__label">{label}</span>}
+  </div>
+);
+
+export default Spinner;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Spinner.scss
+@use '../../styles/variables' as *;
+
+.spinner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+
+  &__ring {
+    border-radius: 50%;
+    border: 3px solid $border-default;
+    border-top-color: $primary;
+    animation: spinner-rotate 0.8s linear infinite;
+  }
+
+  &__label {
+    font-size: 0.8125rem;
+    color: $text-tertiary;
+    font-weight: 500;
+  }
+}
+
+@keyframes spinner-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
 //Datasets.tsx
 import { useEffect, useMemo, useState, type FC } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Database, Search, X, LayoutGrid, Tag, RefreshCw, AlertCircle, ExternalLink } from 'lucide-react';
+import { Database, Search, X, LayoutGrid, Tag, RefreshCw, AlertCircle, ExternalLink, ListChecks, Sparkles } from 'lucide-react';
 import { fetchBenchmarks } from './api';
 import type { Benchmark } from './types';
+import Spinner from '../../../components/Spinner/Spinner';
 import './Datasets.scss';
 
 const CAPABILITY_TINTS = ['blue', 'violet', 'amber', 'jade', 'rose'] as const;
@@ -115,8 +190,7 @@ const Datasets: FC = () => {
 
       {loading && (
         <div className="datasets-page__empty">
-          <RefreshCw size={22} className="datasets-page__spin" />
-          <p>Loading test suites…</p>
+          <Spinner label="Loading test suites…" />
         </div>
       )}
 
@@ -186,22 +260,41 @@ const Datasets: FC = () => {
 
               <div className="datasets-page__stat-row">
                 <div className="datasets-page__stat-card">
-                  <span className="datasets-page__stat-card-label">Tasks</span>
-                  <span className="datasets-page__stat-card-value n">{selected.task_count}</span>
+                  <span className="datasets-page__stat-icon">
+                    <ListChecks size={16} strokeWidth={2} />
+                  </span>
+                  <span className="datasets-page__stat-body">
+                    <span className="datasets-page__stat-card-label">Tasks</span>
+                    <span className="datasets-page__stat-card-value n">{selected.task_count}</span>
+                  </span>
                 </div>
                 <div className="datasets-page__stat-card">
-                  <span className="datasets-page__stat-card-label">Capabilities</span>
-                  <span className="datasets-page__stat-card-value n">{selected.required_capabilities.length}</span>
+                  <span className="datasets-page__stat-icon">
+                    <Sparkles size={16} strokeWidth={2} />
+                  </span>
+                  <span className="datasets-page__stat-body">
+                    <span className="datasets-page__stat-card-label">Capabilities</span>
+                    <span className="datasets-page__stat-card-value n">{selected.required_capabilities.length}</span>
+                  </span>
                 </div>
                 <div className="datasets-page__stat-card">
-                  <span className="datasets-page__stat-card-label">HuggingFace Dataset</span>
-                  <span className="datasets-page__stat-card-value datasets-page__stat-card-value--sm">{selected.huggingface_dataset}</span>
+                  <span className="datasets-page__stat-icon">
+                    <Database size={16} strokeWidth={2} />
+                  </span>
+                  <span className="datasets-page__stat-body">
+                    <span className="datasets-page__stat-card-label">HuggingFace Dataset</span>
+                    <span className="datasets-page__stat-card-value datasets-page__stat-card-value--sm">{selected.huggingface_dataset}</span>
+                  </span>
                 </div>
               </div>
 
               {selected.required_capabilities.length > 0 && (
                 <>
-                  <p className="datasets-page__section-title">Required capabilities</p>
+                  <p className="datasets-page__section-title">
+                    <span className="datasets-page__section-title-dash" />
+                    <span className="datasets-page__section-title-text">Required capabilities</span>
+                    <span className="datasets-page__section-title-count">{selected.required_capabilities.length}</span>
+                  </p>
                   <div className="datasets-page__caps">
                     {selected.required_capabilities.map((c) => (
                       <span key={c} className={`datasets-page__cap-pill datasets-page__cap-pill--${capabilityTint(c)}`}>
@@ -214,19 +307,29 @@ const Datasets: FC = () => {
 
               {selected.tasks.length > 0 && (
                 <>
-                  <p className="datasets-page__section-title">Sample tasks</p>
-                  <div className="datasets-page__task-list">
-                    {selected.tasks.map((t) => (
-                      <div className="datasets-page__task-row" key={t.name}>
-                        <span className="datasets-page__task-name">{t.name}</span>
-                        <span className="datasets-page__task-value">{t.value}</span>
+                  <p className="datasets-page__section-title">
+                    <span className="datasets-page__section-title-dash" />
+                    <span className="datasets-page__section-title-text">Sample tasks</span>
+                    <span className="datasets-page__section-title-count">{selected.tasks.length}</span>
+                  </p>
+                  <div className="datasets-page__task-flow">
+                    {selected.tasks.map((t, i) => (
+                      <div className="datasets-page__task-chip" key={t.name}>
+                        <span className="datasets-page__task-chip-name">
+                          <span className="datasets-page__task-chip-index">{i + 1}</span>
+                          {t.name}
+                        </span>
+                        <span className="datasets-page__task-chip-value">{t.value}</span>
                       </div>
                     ))}
                   </div>
                 </>
               )}
 
-              <p className="datasets-page__section-title">Source</p>
+              <p className="datasets-page__section-title">
+                <span className="datasets-page__section-title-dash" />
+                <span className="datasets-page__section-title-text">Source</span>
+              </p>
               <div className="datasets-page__meta-list">
                 <span className="datasets-page__meta-item">
                   <ExternalLink size={13} /> {selected.huggingface_dataset}
@@ -241,19 +344,6 @@ const Datasets: FC = () => {
 };
 
 export default Datasets;
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -714,14 +804,44 @@ export default Datasets;
     margin-bottom: 24px;
   }
 
-  /* ---------- stat cards ---------- */
+  /* ---------- section titles ---------- */
   &__section-title {
-    font-size: 0.8125rem;
-    font-weight: 700;
-    color: $text-primary;
-    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 12px;
+
+    &:not(:first-of-type) {
+      margin-top: 24px;
+    }
   }
 
+  &__section-title-dash {
+    width: 14px;
+    height: 3px;
+    border-radius: 3px;
+    background: $primary;
+    flex-shrink: 0;
+  }
+
+  &__section-title-text {
+    font-size: 0.8125rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: $text-primary;
+  }
+
+  &__section-title-count {
+    margin-left: auto;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    color: $text-tertiary;
+    background: $bg-inset;
+    padding: 2px 8px;
+    border-radius: 999px;
+  }
+
+  /* ---------- stat cards ---------- */
   &__stat-row {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -730,12 +850,32 @@ export default Datasets;
   }
 
   &__stat-card {
-    background: $bg-subtle;
-    border-radius: 12px;
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-left: 3px solid $primary;
+    border-radius: 10px;
     padding: 14px 16px;
     display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  &__stat-icon {
+    flex-shrink: 0;
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    background: $primary-light;
+    color: $primary;
+    display: grid;
+    place-items: center;
+  }
+
+  &__stat-body {
+    display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
     min-width: 0;
   }
 
@@ -748,7 +888,7 @@ export default Datasets;
   }
 
   &__stat-card-value {
-    font-size: 1.25rem;
+    font-size: 1.125rem;
     font-weight: 800;
     color: $text-primary;
     overflow: hidden;
@@ -756,7 +896,7 @@ export default Datasets;
     white-space: nowrap;
 
     &--sm {
-      font-size: 1rem;
+      font-size: 0.9375rem;
       font-weight: 700;
     }
   }
@@ -814,44 +954,62 @@ export default Datasets;
     animation: datasets-page-spin 0.9s linear infinite;
   }
 
-  /* ---------- task list ---------- */
-  &__task-list {
+  /* ---------- task list — flows to fill available width ---------- */
+  &__task-flow {
     display: flex;
-    flex-direction: column;
-    gap: 1px;
-    border: 1px solid $border-subtle;
-    border-radius: 12px;
-    overflow: hidden;
+    flex-wrap: wrap;
+    gap: 10px;
     margin-bottom: 24px;
   }
 
-  &__task-row {
+  &__task-chip {
+    flex: 1 1 220px;
+    max-width: 340px;
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-radius: 10px;
+    padding: 10px 13px;
     display: flex;
     flex-direction: column;
     gap: 3px;
-    padding: 12px 14px;
-    background: $bg-main;
-    border-bottom: 1px solid $border-subtle;
-
-    &:last-child {
-      border-bottom: none;
-    }
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
 
     &:hover {
-      background: $bg-subtle;
+      border-color: $border-strong;
+      box-shadow: $shadow-xs;
     }
   }
 
-  &__task-name {
-    font-size: 0.8125rem;
-    font-weight: 600;
+  &__task-chip-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.78125rem;
+    font-weight: 700;
     color: $text-primary;
   }
 
-  &__task-value {
-    font-size: 0.8125rem;
+  &__task-chip-index {
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    border-radius: 5px;
+    background: $primary-light;
+    color: $primary;
+    font-size: 0.59375rem;
+    font-weight: 800;
+    display: grid;
+    place-items: center;
+  }
+
+  &__task-chip-value {
+    font-size: 0.75rem;
     color: $text-secondary;
     line-height: 1.5;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
 
   /* ---------- responsive ---------- */
@@ -892,66 +1050,4 @@ export default Datasets;
   to {
     transform: rotate(360deg);
   }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Types.ts
-export interface BenchmarkTask {
-  name: string;
-  value: string;
-}
-
-export interface Benchmark {
-  name: string;
-  description: string;
-  tasks: BenchmarkTask[];
-  task_count: number;
-  required_capabilities: string[];
-  huggingface_dataset: string;
-  type: string;
-}
-
-export interface BenchmarksResponse {
-  benchmarks: Benchmark[];
-  total: number;
-}
-
-
-
-
-
-
-
-
-
-
-//api.ts
-import api from '../../../services/api';
-import type { BenchmarksResponse } from './types';
-
-export async function fetchBenchmarks(): Promise<BenchmarksResponse> {
-  const res = await api.get<BenchmarksResponse>('/v1/benchmarks');
-  return res.data;
 }
