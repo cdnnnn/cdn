@@ -1,77 +1,3 @@
-//Spinner.tsx
-import type { FC } from 'react';
-import './Spinner.scss';
-
-interface SpinnerProps {
-  /** Optional caption shown under the ring, e.g. "Loading test suites…" */
-  label?: string;
-  /** Ring diameter in px. Defaults to 34. */
-  size?: number;
-}
-
-const Spinner: FC<SpinnerProps> = ({ label, size = 34 }) => (
-  <div className="spinner" role="status" aria-live="polite">
-    <div className="spinner__ring" style={{ width: size, height: size }} />
-    {label && <span className="spinner__label">{label}</span>}
-  </div>
-);
-
-export default Spinner;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Spinner.scss
-@use '../../styles/variables' as *;
-
-.spinner {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-
-  &__ring {
-    border-radius: 50%;
-    border: 3px solid $border-default;
-    border-top-color: $primary;
-    animation: spinner-rotate 0.8s linear infinite;
-  }
-
-  &__label {
-    font-size: 0.8125rem;
-    color: $text-tertiary;
-    font-weight: 500;
-  }
-}
-
-@keyframes spinner-rotate {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-
-
-
-
-
-
-
-
-
-
-
 //Datasets.tsx
 import { useEffect, useMemo, useState, type FC } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -189,7 +115,7 @@ const Datasets: FC = () => {
       </div>
 
       {loading && (
-        <div className="datasets-page__empty">
+        <div className="datasets-page__loading">
           <Spinner label="Loading test suites…" />
         </div>
       )}
@@ -291,9 +217,8 @@ const Datasets: FC = () => {
               {selected.required_capabilities.length > 0 && (
                 <>
                   <p className="datasets-page__section-title">
-                    <span className="datasets-page__section-title-dash" />
-                    <span className="datasets-page__section-title-text">Required capabilities</span>
-                    <span className="datasets-page__section-title-count">{selected.required_capabilities.length}</span>
+                    <Sparkles size={15} strokeWidth={2.25} />
+                    <span>Required capabilities</span>
                   </p>
                   <div className="datasets-page__caps">
                     {selected.required_capabilities.map((c) => (
@@ -308,9 +233,8 @@ const Datasets: FC = () => {
               {selected.tasks.length > 0 && (
                 <>
                   <p className="datasets-page__section-title">
-                    <span className="datasets-page__section-title-dash" />
-                    <span className="datasets-page__section-title-text">Sample tasks</span>
-                    <span className="datasets-page__section-title-count">{selected.tasks.length}</span>
+                    <ListChecks size={15} strokeWidth={2.25} />
+                    <span>Sample tasks</span>
                   </p>
                   <div className="datasets-page__task-flow">
                     {selected.tasks.map((t, i) => (
@@ -327,8 +251,8 @@ const Datasets: FC = () => {
               )}
 
               <p className="datasets-page__section-title">
-                <span className="datasets-page__section-title-dash" />
-                <span className="datasets-page__section-title-text">Source</span>
+                <ExternalLink size={15} strokeWidth={2.25} />
+                <span>Source</span>
               </p>
               <div className="datasets-page__meta-list">
                 <span className="datasets-page__meta-item">
@@ -344,6 +268,12 @@ const Datasets: FC = () => {
 };
 
 export default Datasets;
+
+
+
+
+
+
 
 
 
@@ -808,37 +738,20 @@ export default Datasets;
   &__section-title {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
+    font-size: 0.8125rem;
+    font-weight: 700;
+    color: $text-primary;
     margin: 0 0 12px;
+
+    svg {
+      color: $primary;
+      flex-shrink: 0;
+    }
 
     &:not(:first-of-type) {
       margin-top: 24px;
     }
-  }
-
-  &__section-title-dash {
-    width: 14px;
-    height: 3px;
-    border-radius: 3px;
-    background: $primary;
-    flex-shrink: 0;
-  }
-
-  &__section-title-text {
-    font-size: 0.8125rem;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-    color: $text-primary;
-  }
-
-  &__section-title-count {
-    margin-left: auto;
-    font-size: 0.6875rem;
-    font-weight: 700;
-    color: $text-tertiary;
-    background: $bg-inset;
-    padding: 2px 8px;
-    border-radius: 999px;
   }
 
   /* ---------- stat cards ---------- */
@@ -922,6 +835,15 @@ export default Datasets;
   }
 
   /* ---------- empty state ---------- */
+  /* ---------- loading — plain, no border, just centers the spinner ---------- */
+  &__loading {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 64px 20px;
+  }
+
   &__empty {
     flex-shrink: 0;
     display: flex;
@@ -1010,6 +932,31 @@ export default Datasets;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
+  }
+
+  /* ---------- ultra-wide: bigger, roomier task chips ---------- */
+  @media (min-width: 1800px) {
+    &__task-chip {
+      flex-basis: 280px;
+      max-width: 420px;
+      padding: 14px 17px;
+      gap: 5px;
+    }
+
+    &__task-chip-name {
+      font-size: 0.90625rem;
+    }
+
+    &__task-chip-index {
+      width: 19px;
+      height: 19px;
+      font-size: 0.6875rem;
+    }
+
+    &__task-chip-value {
+      font-size: 0.875rem;
+      -webkit-line-clamp: 3;
+    }
   }
 
   /* ---------- responsive ---------- */
