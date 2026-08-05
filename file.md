@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState, type FC } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Database, Search, X, LayoutGrid, Tag, RefreshCw, AlertCircle, ExternalLink, Play } from 'lucide-react';
+import { Database, Search, X, LayoutGrid, Tag, RefreshCw, AlertCircle, ExternalLink } from 'lucide-react';
 import { fetchBenchmarks } from './api';
 import type { Benchmark } from './types';
 import Spinner from '../../../components/Spinner/Spinner';
@@ -15,7 +14,6 @@ function capabilityTint(capability: string) {
 }
 
 const Datasets: FC = () => {
-  const navigate = useNavigate();
   const [benchmarks, setBenchmarks] = useState<Benchmark[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -191,9 +189,6 @@ const Datasets: FC = () => {
                 <span className="datasets-page__card-foot-source">
                   <ExternalLink size={12} /> {b.huggingface_dataset}
                 </span>
-                <button type="button" className="datasets-page__card-use" onClick={() => navigate('/app/run-evaluation')}>
-                  <Play size={12} strokeWidth={2.25} /> Use in Evaluation
-                </button>
               </div>
             </div>
           ))}
@@ -229,11 +224,6 @@ const Datasets: FC = () => {
 };
 
 export default Datasets;
-
-
-
-
-
 
 
 
@@ -546,7 +536,7 @@ export default Datasets;
   /* ---------- full-info card grid ---------- */
   &__grid {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     gap: 16px;
   }
 
@@ -692,10 +682,6 @@ export default Datasets;
   }
 
   &__card-foot {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
     padding-top: 12px;
     border-top: 1px solid $border-subtle;
   }
@@ -712,28 +698,6 @@ export default Datasets;
 
     svg {
       flex-shrink: 0;
-    }
-  }
-
-  &__card-use {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-family: $font-body;
-    font-size: 0.71875rem;
-    font-weight: 700;
-    color: $primary;
-    background: $primary-light;
-    border: 1px solid transparent;
-    border-radius: 999px;
-    padding: 5px 11px;
-    cursor: pointer;
-    transition: background 0.14s ease, color 0.14s ease;
-
-    &:hover {
-      background: $primary;
-      color: $on-primary;
     }
   }
 
@@ -861,7 +825,13 @@ export default Datasets;
   }
 
   /* ---------- responsive ---------- */
-  @media (max-width: 1100px) {
+  @media (max-width: 1500px) {
+    &__grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+
+  @media (max-width: 1000px) {
     &__grid {
       grid-template-columns: 1fr;
     }
