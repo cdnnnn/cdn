@@ -292,6 +292,8 @@
   }
 
   &__card {
+    display: flex;
+    flex-direction: column;
     background: $bg-main;
     border: 1px solid $border-subtle;
     border-left: 3px solid $card-accent;
@@ -432,6 +434,7 @@
   }
 
   &__card-foot {
+    margin-top: auto;
     padding-top: 10px;
     border-top: 1px solid $border-subtle;
   }
