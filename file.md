@@ -1,362 +1,211 @@
-//Providers.tsx
-import { useEffect, useMemo, useState, type FC, type FormEvent } from 'react';
-import { PlugZap, CheckCircle2, Boxes, Settings2, Unplug, Search, X, Key, Link2, RefreshCw, AlertCircle, ChevronRight } from 'lucide-react';
-import { fetchProviders, connectProvider, disconnectProvider } from './api';
-import type { ProviderApi } from './types';
-import { fetchModels } from '../Models/api';
-import type { ModelApi } from '../Models/types';
+//Datasets.tsx
+import { useEffect, useMemo, useState, type FC } from 'react';
+import { Database, Search, X, LayoutGrid, Tag, RefreshCw, AlertCircle, ExternalLink, ListChecks } from 'lucide-react';
+import { fetchBenchmarks } from './api';
+import type { Benchmark } from './types';
 import Spinner from '../../../components/Spinner/Spinner';
-import './Providers.scss';
+import './Datasets.scss';
 
-const TINTS = ['blue', 'violet', 'amber', 'jade', 'rose'] as const;
+const CAPABILITY_TINTS = ['blue', 'violet', 'amber', 'jade', 'rose'] as const;
 
-function tintFor(id: string) {
+function capabilityTint(capability: string) {
   let hash = 0;
-  for (let i = 0; i < id.length; i += 1) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
-  return TINTS[hash % TINTS.length];
+  for (let i = 0; i < capability.length; i += 1) hash = (hash * 31 + capability.charCodeAt(i)) >>> 0;
+  return CAPABILITY_TINTS[hash % CAPABILITY_TINTS.length];
 }
 
-const Providers: FC = () => {
-  const [providers, setProviders] = useState<ProviderApi[]>([]);
+const Datasets: FC = () => {
+  const [benchmarks, setBenchmarks] = useState<Benchmark[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [query, setQuery] = useState('');
-  const [connectModalFor, setConnectModalFor] = useState<ProviderApi | null>(null);
-  const [keyInput, setKeyInput] = useState('');
-  const [connectSubmitting, setConnectSubmitting] = useState(false);
-  const [connectError, setConnectError] = useState<string | null>(null);
-
-  const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
-  const [disconnectErrorId, setDisconnectErrorId] = useState<{ id: string; message: string } | null>(null);
-
-  // /models is fetched lazily — only once the user clicks into a provider's
-  // model list — and cached here so clicking into a second/third provider
-  // reuses the same fetch instead of calling the endpoint again.
-  const [modelsModalFor, setModelsModalFor] = useState<ProviderApi | null>(null);
-  const [allModels, setAllModels] = useState<ModelApi[] | null>(null);
-  const [modelsLoading, setModelsLoading] = useState(false);
-  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [type, setType] = useState('All');
+  const [tasksModalFor, setTasksModalFor] = useState<Benchmark | null>(null);
 
   const load = () => {
     setLoading(true);
     setError(null);
-    fetchProviders()
-      .then((res) => setProviders(res.providers))
-      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load providers.'))
+    fetchBenchmarks()
+      .then((res) => {
+        setBenchmarks(res.benchmarks);
+        setTotal(res.total);
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : 'Failed to load benchmarks.');
+      })
       .finally(() => setLoading(false));
   };
 
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const connectedCount = providers.filter((p) => p.status === 'connected').length;
+  const types = useMemo(() => {
+    const set = new Set(benchmarks.map((b) => b.type));
+    return ['All', ...Array.from(set).sort()];
+  }, [benchmarks]);
 
   const filtered = useMemo(
-    () => providers.filter((p) => !query || p.name.toLowerCase().includes(query.toLowerCase())),
-    [providers, query]
+    () =>
+      benchmarks.filter((b) => {
+        if (type !== 'All' && b.type !== type) return false;
+        if (query && !b.name.toLowerCase().includes(query.toLowerCase()) && !b.description.toLowerCase().includes(query.toLowerCase())) {
+          return false;
+        }
+        return true;
+      }),
+    [benchmarks, query, type]
   );
-
-  const openModelsModal = (p: ProviderApi) => {
-    setModelsModalFor(p);
-    if (allModels !== null || modelsLoading) return;
-    setModelsLoading(true);
-    setModelsError(null);
-    fetchModels()
-      .then((res) => setAllModels(res.models))
-      .catch((err) => setModelsError(err instanceof Error ? err.message : 'Failed to load models.'))
-      .finally(() => setModelsLoading(false));
-  };
-
-  const modelsForActiveModal = useMemo(
-    () => (modelsModalFor && allModels ? allModels.filter((m) => m.provider_id === modelsModalFor.id) : []),
-    [modelsModalFor, allModels]
-  );
-
-  const openConnect = (p: ProviderApi) => {
-    setKeyInput('');
-    setConnectError(null);
-    setConnectModalFor(p);
-  };
-
-  const handleSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    if (!connectModalFor || !keyInput.trim() || connectSubmitting) return;
-
-    setConnectSubmitting(true);
-    setConnectError(null);
-
-    connectProvider(connectModalFor.id, keyInput.trim())
-      .then(() => {
-        setProviders((prev) => prev.map((p) => (p.id === connectModalFor.id ? { ...p, status: 'connected' } : p)));
-        setConnectModalFor(null);
-      })
-      .catch((err) => {
-        setConnectError(err instanceof Error ? err.message : 'Failed to connect provider.');
-      })
-      .finally(() => setConnectSubmitting(false));
-  };
-
-  const handleDisconnect = (id: string) => {
-    if (disconnectingId) return;
-
-    setDisconnectingId(id);
-    setDisconnectErrorId(null);
-
-    disconnectProvider(id)
-      .then(() => {
-        setProviders((prev) => prev.map((p) => (p.id === id ? { ...p, status: 'not_connected' } : p)));
-      })
-      .catch((err) => {
-        setDisconnectErrorId({ id, message: err instanceof Error ? err.message : 'Failed to disconnect provider.' });
-      })
-      .finally(() => setDisconnectingId(null));
-  };
 
   return (
-    <div className="providers-page">
-      <div className="providers-page__header">
-        <div className="providers-page__header-left">
-          <p className="providers-page__header-eyebrow">Provider connections</p>
-          <h1 className="providers-page__title">Providers</h1>
-          <p className="providers-page__subtitle">Manage AI service connections and API keys</p>
+    <div className="datasets-page">
+      <div className="datasets-page__header">
+        <div className="datasets-page__header-left">
+          <p className="datasets-page__header-eyebrow">Test suite library</p>
+          <h1 className="datasets-page__title">Test Suites</h1>
+          <p className="datasets-page__subtitle">Benchmark datasets and custom tests</p>
         </div>
 
-        <div className="providers-page__header-right">
-          <div className="providers-page__header-meta">
-            <PlugZap size={13} />
-            {connectedCount} of {providers.length} connected
+        <div className="datasets-page__header-right">
+          <div className="datasets-page__header-meta">
+            <Database size={13} />
+            {total} suites available
           </div>
-          <button type="button" className="providers-page__btn providers-page__btn--outline" onClick={load} disabled={loading}>
-            <RefreshCw size={14} strokeWidth={2.25} className={loading ? 'providers-page__spin' : undefined} /> Refresh
+          <button type="button" className="datasets-page__btn datasets-page__btn--outline" onClick={load} disabled={loading}>
+            <RefreshCw size={14} strokeWidth={2.25} className={loading ? 'datasets-page__spin' : undefined} /> Refresh
           </button>
         </div>
       </div>
 
-      <div className="providers-page__filters">
-        <div className="providers-page__search">
+      <div className="datasets-page__filters">
+        <div className="datasets-page__search">
           <Search size={15} />
-          <input type="text" placeholder="Search providers..." value={query} onChange={(e) => setQuery(e.target.value)} />
+          <input type="text" placeholder="Search test suites..." value={query} onChange={(e) => setQuery(e.target.value)} />
           {query && (
-            <button type="button" className="providers-page__search-clear" onClick={() => setQuery('')} aria-label="Clear search">
+            <button type="button" className="datasets-page__search-clear" onClick={() => setQuery('')} aria-label="Clear search">
               <X size={13} />
             </button>
           )}
         </div>
+
+        <div className="datasets-page__seg">
+          {types.map((t) => (
+            <button
+              key={t}
+              type="button"
+              className={`datasets-page__seg-item${type === t ? ' datasets-page__seg-item--active' : ''}`}
+              onClick={() => setType(t)}
+            >
+              {t === 'All' ? <LayoutGrid size={13} strokeWidth={2.25} /> : <Tag size={13} strokeWidth={2.25} />}
+              {t}
+            </button>
+          ))}
+        </div>
       </div>
 
       {loading && (
-        <div className="providers-page__loading">
-          <Spinner label="Loading providers…" />
+        <div className="datasets-page__loading">
+          <Spinner label="Loading test suites…" />
         </div>
       )}
 
       {!loading && error && (
-        <div className="providers-page__empty providers-page__empty--error">
+        <div className="datasets-page__empty datasets-page__empty--error">
           <AlertCircle size={22} />
           <p>{error}</p>
-          <button type="button" className="providers-page__btn providers-page__btn--outline" onClick={load}>
+          <button type="button" className="datasets-page__btn datasets-page__btn--outline" onClick={load}>
             <RefreshCw size={14} strokeWidth={2.25} /> Try again
           </button>
         </div>
       )}
 
       {!loading && !error && filtered.length === 0 && (
-        <div className="providers-page__empty">
-          <Search size={22} />
-          <p>No providers match your search.</p>
+        <div className="datasets-page__empty">
+          <Database size={22} />
+          <p>No test suites match your filters.</p>
         </div>
       )}
 
       {!loading && !error && filtered.length > 0 && (
-        <div className="providers-page__grid">
-          {filtered.map((p) => {
-            const connected = p.status === 'connected';
-            const tint = tintFor(p.id);
-            const initial = p.name.trim().charAt(0).toUpperCase() || '?';
+        <div className="datasets-page__grid">
+          {filtered.map((b) => (
+            <div className="datasets-page__card" key={b.name}>
+              <div className="datasets-page__card-top">
+                <span className="datasets-page__card-name">{b.name}</span>
+                <span className="datasets-page__tag datasets-page__tag--blue">{b.type}</span>
+              </div>
 
-            return (
-              <div className="providers-page__card" key={p.id}>
-                <div className="providers-page__card-top">
-                  <div className="providers-page__card-top-left">
-                    <span className={`providers-page__avatar providers-page__avatar--${tint}`}>
-                      {p.logo_url ? <img src={p.logo_url} alt="" /> : initial}
-                    </span>
-                    <span className="providers-page__card-name">{p.name}</span>
-                  </div>
-                  <span className={`providers-page__tag${connected ? ' providers-page__tag--jade' : ' providers-page__tag--gray'}`}>
-                    {connected && <CheckCircle2 size={11} strokeWidth={2.5} />}
-                    {connected ? 'Connected' : 'Not connected'}
-                  </span>
+              <p className="datasets-page__card-desc">{b.description}</p>
+
+              <div className="datasets-page__card-stats">
+                <div className="datasets-page__card-stat">
+                  <span className="datasets-page__card-stat-label">Tasks</span>
+                  <span className="datasets-page__card-stat-value n">{b.task_count}</span>
                 </div>
+                <div className="datasets-page__card-stat">
+                  <span className="datasets-page__card-stat-label">Capabilities</span>
+                  <span className="datasets-page__card-stat-value n">{b.required_capabilities.length}</span>
+                </div>
+                <div className="datasets-page__card-stat">
+                  <span className="datasets-page__card-stat-label">Dataset</span>
+                  <span className="datasets-page__card-stat-value datasets-page__card-stat-value--sm">{b.huggingface_dataset}</span>
+                </div>
+              </div>
 
-                <p className="providers-page__card-desc">{p.description}</p>
-
-                <div className="providers-page__card-stats">
-                  <button type="button" className="providers-page__card-stat providers-page__card-stat--clickable" onClick={() => openModelsModal(p)}>
-                    <span className="providers-page__card-stat-icon">
-                      <Boxes size={15} strokeWidth={2} />
-                    </span>
-                    <span className="providers-page__card-stat-body">
-                      <span className="providers-page__card-stat-label">Models</span>
-                      <span className="providers-page__card-stat-value providers-page__card-stat-value--link n">
-                        {p.model_count}
-                        <ChevronRight size={13} strokeWidth={2.5} />
+              {b.required_capabilities.length > 0 && (
+                <>
+                  <span className="datasets-page__card-section-label">Required capabilities</span>
+                  <div className="datasets-page__caps">
+                    {b.required_capabilities.map((c) => (
+                      <span key={c} className={`datasets-page__cap-pill datasets-page__cap-pill--${capabilityTint(c)}`}>
+                        {c}
                       </span>
-                    </span>
-                  </button>
-                  <div className="providers-page__card-stat">
-                    <span className="providers-page__card-stat-icon">
-                      <Link2 size={15} strokeWidth={2} />
-                    </span>
-                    <span className="providers-page__card-stat-body">
-                      <span className="providers-page__card-stat-label">Base URL</span>
-                      <span className="providers-page__card-stat-value providers-page__card-stat-value--sm">{p.base_url ?? 'Default'}</span>
-                    </span>
+                    ))}
                   </div>
-                </div>
+                </>
+              )}
 
-                <div className="providers-page__card-foot">
-                  {connected ? (
-                    <>
-                      <button type="button" className="providers-page__btn providers-page__btn--outline" onClick={() => openConnect(p)}>
-                        <Settings2 size={13} /> Configure
-                      </button>
-                      <button
-                        type="button"
-                        className="providers-page__btn providers-page__btn--danger-outline"
-                        onClick={() => handleDisconnect(p.id)}
-                        disabled={disconnectingId === p.id}
-                      >
-                        <Unplug size={13} className={disconnectingId === p.id ? 'providers-page__spin' : undefined} />
-                        {disconnectingId === p.id ? 'Disconnecting…' : 'Disconnect'}
-                      </button>
-                    </>
-                  ) : (
-                    <button type="button" className="providers-page__btn providers-page__btn--primary" onClick={() => openConnect(p)}>
-                      <PlugZap size={13} /> Connect
-                    </button>
-                  )}
-                </div>
+              {b.tasks.length > 0 && (
+                <button type="button" className="datasets-page__card-tasks-toggle" onClick={() => setTasksModalFor(b)}>
+                  <ListChecks size={14} strokeWidth={2.25} />
+                  {b.tasks.length} {b.tasks.length === 1 ? 'task' : 'tasks'}
+                </button>
+              )}
 
-                {disconnectErrorId?.id === p.id && <p className="providers-page__card-inline-error">{disconnectErrorId.message}</p>}
+              <div className="datasets-page__card-foot">
+                <span className="datasets-page__card-foot-source">
+                  <ExternalLink size={12} /> {b.huggingface_dataset}
+                </span>
               </div>
-            );
-          })}
+            </div>
+          ))}
         </div>
       )}
 
-      {modelsModalFor && (
-        <div className="providers-page__overlay" onClick={() => setModelsModalFor(null)}>
-          <div className="providers-page__modal" onClick={(e) => e.stopPropagation()}>
-            <div className="providers-page__modal-head">
+      {tasksModalFor && (
+        <div className="datasets-page__overlay" onClick={() => setTasksModalFor(null)}>
+          <div className="datasets-page__modal" onClick={(e) => e.stopPropagation()}>
+            <div className="datasets-page__modal-head">
               <div>
-                <span className={`providers-page__avatar providers-page__avatar--${tintFor(modelsModalFor.id)}`}>
-                  {modelsModalFor.logo_url ? <img src={modelsModalFor.logo_url} alt="" /> : modelsModalFor.name.trim().charAt(0).toUpperCase()}
-                </span>
-                <h2 className="providers-page__modal-title">{modelsModalFor.name}</h2>
-                <p className="providers-page__modal-sub">{modelsModalFor.model_count} models</p>
+                <span className="datasets-page__tag datasets-page__tag--blue">{tasksModalFor.type}</span>
+                <h2 className="datasets-page__modal-title">{tasksModalFor.name}</h2>
+                <p className="datasets-page__modal-sub">All {tasksModalFor.tasks.length} tasks</p>
               </div>
-              <button type="button" className="providers-page__modal-close" onClick={() => setModelsModalFor(null)} aria-label="Close">
+              <button type="button" className="datasets-page__modal-close" onClick={() => setTasksModalFor(null)} aria-label="Close">
                 <X size={16} />
               </button>
             </div>
 
-            <div className="providers-page__modal-body">
-              {modelsLoading && (
-                <div className="providers-page__modal-loading">
-                  <Spinner label="Loading models…" />
-                </div>
-              )}
-
-              {!modelsLoading && modelsError && (
-                <div className="providers-page__empty providers-page__empty--error">
-                  <AlertCircle size={22} />
-                  <p>{modelsError}</p>
-                  <button type="button" className="providers-page__btn providers-page__btn--outline" onClick={() => openModelsModal(modelsModalFor)}>
-                    <RefreshCw size={14} strokeWidth={2.25} /> Try again
-                  </button>
-                </div>
-              )}
-
-              {!modelsLoading &&
-                !modelsError &&
-                modelsForActiveModal.map((m) => (
-                  <div className="providers-page__card-model-row" key={m.id}>
-                    <span className="providers-page__card-model-name">
-                      {m.name} <span className="providers-page__card-model-version">{m.category}</span>
-                    </span>
-                    <span className="providers-page__card-model-accuracy n">{m.accuracy_score === null ? '—' : `${m.accuracy_score}%`}</span>
-                  </div>
-                ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {connectModalFor && (
-        <div className="providers-page__overlay" onClick={() => setConnectModalFor(null)}>
-          <div className="providers-page__modal providers-page__modal--sm" onClick={(e) => e.stopPropagation()}>
-            <div className="providers-page__modal-head">
-              <div>
-                <span className={`providers-page__avatar providers-page__avatar--${tintFor(connectModalFor.id)}`}>
-                  {connectModalFor.logo_url ? (
-                    <img src={connectModalFor.logo_url} alt="" />
-                  ) : (
-                    connectModalFor.name.trim().charAt(0).toUpperCase()
-                  )}
-                </span>
-                <h2 className="providers-page__modal-title">{connectModalFor.name}</h2>
-                <p className="providers-page__modal-sub">
-                  {connectModalFor.status === 'connected' ? 'Update API key' : 'Connect provider'}
+            <div className="datasets-page__modal-body">
+              {tasksModalFor.tasks.map((t) => (
+                <p className="datasets-page__card-task" key={t.name}>
+                  <b>{t.name}:</b> <span>{t.value}</span>
                 </p>
-              </div>
-              <button type="button" className="providers-page__modal-close" onClick={() => setConnectModalFor(null)} aria-label="Close">
-                <X size={16} />
-              </button>
+              ))}
             </div>
-
-            <form className="providers-page__connect-form" onSubmit={handleSubmit}>
-              <label className="providers-page__field-label" htmlFor="provider-key">
-                API Key
-              </label>
-              <div className="providers-page__input-wrap">
-                <Key size={14} />
-                <input
-                  id="provider-key"
-                  type="password"
-                  className="providers-page__input"
-                  placeholder="Enter API key"
-                  value={keyInput}
-                  onChange={(e) => setKeyInput(e.target.value)}
-                  disabled={connectSubmitting}
-                  autoFocus
-                />
-              </div>
-
-              {connectError && <p className="providers-page__form-error">{connectError}</p>}
-
-              <div className="providers-page__form-actions">
-                <button
-                  type="button"
-                  className="providers-page__btn providers-page__btn--outline"
-                  onClick={() => setConnectModalFor(null)}
-                  disabled={connectSubmitting}
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="providers-page__btn providers-page__btn--primary" disabled={connectSubmitting}>
-                  {connectSubmitting ? (
-                    <>
-                      <RefreshCw size={13} strokeWidth={2.25} className="providers-page__spin" /> Connecting…
-                    </>
-                  ) : (
-                    'Save'
-                  )}
-                </button>
-              </div>
-            </form>
           </div>
         </div>
       )}
@@ -364,7 +213,7 @@ const Providers: FC = () => {
   );
 };
 
-export default Providers;
+export default Datasets;
 
 
 
@@ -382,10 +231,11 @@ export default Providers;
 
 
 
-//Providers.scss
+
+//Datasets.scss
 @use '../../../styles/variables' as *;
 
-.providers-page {
+.datasets-page {
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -436,7 +286,6 @@ export default Providers;
   }
 
   &__header-meta {
-    flex-shrink: 0;
     display: inline-flex;
     align-items: center;
     gap: 6px;
@@ -463,17 +312,62 @@ export default Providers;
     font-size: 0.84375rem;
   }
 
+  &__btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-family: $font-body;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    padding: 9px 14px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease, opacity 0.14s ease;
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    &--outline {
+      background: $bg-main;
+      border-color: $border-default;
+      color: $text-secondary;
+
+      &:hover:not(:disabled) {
+        border-color: $text-primary;
+        color: $text-primary;
+      }
+    }
+
+    &--primary {
+      background: $primary;
+      border-color: $primary;
+      color: $on-primary;
+
+      &:hover {
+        background: $primary-hover;
+        border-color: $primary-hover;
+      }
+    }
+  }
+
   /* ---------- filters ---------- */
   &__filters {
     flex-shrink: 0;
     display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
   }
 
   &__search {
     display: flex;
     align-items: center;
     gap: 9px;
-    width: 300px;
+    width: 280px;
     max-width: 100%;
     border: 1px solid $border-default;
     border-radius: 10px;
@@ -522,25 +416,82 @@ export default Providers;
     }
   }
 
-  /* ---------- avatar ---------- */
-  &__avatar {
+  &__seg {
     flex-shrink: 0;
-    width: 34px;
-    height: 34px;
-    border-radius: 10px;
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px;
+    padding: 3px;
+    border: 1px solid $border-subtle;
+    border-radius: 11px;
+    background: $bg-subtle;
+  }
+
+  &__seg-item {
     display: inline-flex;
     align-items: center;
-    justify-content: center;
+    gap: 6px;
+    font-family: $font-body;
     font-size: 0.75rem;
-    font-weight: 700;
-    letter-spacing: -0.01em;
-    overflow: hidden;
+    font-weight: 600;
+    color: $text-tertiary;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 7px 12px;
+    cursor: pointer;
+    transition: background 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
 
-    img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
+    svg {
+      opacity: 0.8;
     }
+
+    &:hover {
+      color: $text-primary;
+    }
+
+    &--active {
+      background: $bg-main;
+      color: $primary;
+      box-shadow: $shadow-xs;
+
+      svg {
+        opacity: 1;
+      }
+    }
+  }
+
+  /* ---------- tags ---------- */
+  &__tag {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    border-radius: 999px;
+    padding: 3px 10px;
+
+    &--blue {
+      color: $primary;
+      background: $primary-light;
+    }
+  }
+
+  /* ---------- capability pills (shared) ---------- */
+  &__caps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+
+  &__cap-pill {
+    font-size: 0.71875rem;
+    font-weight: 600;
+    border-radius: 999px;
+    padding: 3px 10px;
 
     &--blue {
       color: $primary;
@@ -565,28 +516,6 @@ export default Providers;
     &--rose {
       color: $danger;
       background: $danger-subtle;
-    }
-  }
-
-  /* ---------- status tag ---------- */
-  &__tag {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 0.6875rem;
-    font-weight: 600;
-    border-radius: 999px;
-    padding: 3px 10px;
-
-    &--jade {
-      color: $success;
-      background: $success-subtle;
-    }
-
-    &--gray {
-      color: $text-tertiary;
-      background: $bg-inset;
     }
   }
 
@@ -615,17 +544,10 @@ export default Providers;
 
   &__card-top {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
     gap: 10px;
-    margin-bottom: 10px;
-  }
-
-  &__card-top-left {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
+    margin-bottom: 6px;
   }
 
   &__card-name {
@@ -633,9 +555,6 @@ export default Providers;
     font-weight: 800;
     letter-spacing: -0.01em;
     color: $text-primary;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   &__card-desc {
@@ -646,64 +565,11 @@ export default Providers;
   }
 
   &__card-stats {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 10px;
-    margin-bottom: 12px;
-  }
-
-  &__card-stat {
-    // Plain stats are <div>s; the clickable "Models" stat is a <button> that
-    // needs its native button chrome reset to look identical to the others.
     display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-    background: $bg-subtle;
-    border: 1px solid transparent;
-    border-radius: 10px;
-    padding: 9px 11px;
-    text-align: left;
-    font-family: inherit;
-    cursor: default;
-    transition: background 0.14s ease, border-color 0.14s ease;
-
-    &--clickable {
-      cursor: pointer;
-
-      &:hover {
-        background: $primary-light;
-        border-color: $primary-subtle;
-      }
-
-      &:hover .providers-page__card-stat-icon {
-        background: $bg-main;
-        color: $primary;
-      }
-
-      &:hover .providers-page__card-stat-value--link {
-        color: $primary-hover;
-      }
-    }
-  }
-
-  &__card-stat-icon {
-    flex-shrink: 0;
-    width: 30px;
-    height: 30px;
-    border-radius: 8px;
-    background: $bg-main;
-    color: $text-tertiary;
-    display: grid;
-    place-items: center;
-    transition: background 0.14s ease, color 0.14s ease;
-  }
-
-  &__card-stat-body {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-    min-width: 0;
+    gap: 20px;
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid $border-subtle;
   }
 
   &__card-stat-label {
@@ -715,32 +581,18 @@ export default Providers;
   }
 
   &__card-stat-value {
-    font-size: 0.875rem;
+    font-size: 0.9375rem;
     font-weight: 800;
     color: $text-primary;
+    display: block;
+    margin-top: 2px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 
     &--sm {
-      font-size: 0.75rem;
+      font-size: 0.78125rem;
       font-weight: 700;
-    }
-
-    &--link {
-      display: inline-flex;
-      align-items: center;
-      gap: 1px;
-      color: $primary;
-      transition: color 0.14s ease;
-
-      svg {
-        opacity: 0.7;
-      }
-    }
-
-    &--accent {
-      color: $success;
     }
   }
 
@@ -754,135 +606,69 @@ export default Providers;
     display: block;
   }
 
-  /* ---------- models list (card preview + modal) ---------- */
-  &__card-models {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    margin-bottom: 6px;
-  }
-
-  &__card-model-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 5px 0;
+  &__card-task {
     font-size: 0.75rem;
-  }
+    line-height: 1.45;
+    margin-bottom: 4px;
 
-  &__card-model-name {
-    color: $text-primary;
-    font-weight: 600;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+    b {
+      color: $text-primary;
+      font-weight: 700;
+    }
 
-  &__card-model-version {
-    font-family: $font-mono;
-    font-size: 0.6875rem;
-    font-weight: 400;
-    color: $text-tertiary;
-  }
-
-  &__card-model-accuracy {
-    flex-shrink: 0;
-    font-weight: 700;
-    color: $success;
-  }
-
-  &__card-view-all {
-    display: inline-flex;
-    align-items: center;
-    font-family: $font-body;
-    font-size: 0.71875rem;
-    font-weight: 700;
-    color: $primary;
-    background: transparent;
-    border: none;
-    padding: 0;
-    margin-bottom: 10px;
-    cursor: pointer;
-
-    &:hover {
-      text-decoration: underline;
+    span {
+      color: $text-secondary;
     }
   }
 
-  /* ---------- card footer / actions ---------- */
+  &__card-tasks-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    align-self: flex-start;
+    font-family: $font-body;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
+    border-radius: 999px;
+    padding: 5px 11px 5px 9px;
+    margin-bottom: 10px;
+    cursor: pointer;
+    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+
+    svg {
+      color: $primary;
+    }
+
+    &:hover {
+      background: $primary-light;
+      border-color: $primary-subtle;
+      color: $primary;
+    }
+  }
+  }
+
   &__card-foot {
     margin-top: auto;
     padding-top: 10px;
     border-top: 1px solid $border-subtle;
-    display: flex;
-    gap: 8px;
   }
 
-  &__btn {
+  &__card-foot-source {
     display: inline-flex;
     align-items: center;
-    justify-content: center;
-    gap: 6px;
-    font-family: $font-body;
-    font-size: 0.78125rem;
-    font-weight: 700;
-    padding: 7px 13px;
-    border-radius: 999px;
-    border: 1px solid transparent;
-    cursor: pointer;
+    gap: 5px;
+    font-size: 0.6875rem;
+    color: $text-tertiary;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
-    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease, opacity 0.14s ease, transform 0.14s ease, box-shadow 0.14s ease;
 
-    &:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-      transform: none !important;
-      box-shadow: none !important;
+    svg {
+      flex-shrink: 0;
     }
-
-    &--outline {
-      background: $bg-subtle;
-      border-color: transparent;
-      color: $text-secondary;
-
-      &:hover:not(:disabled) {
-        background: $bg-inset;
-        color: $text-primary;
-        transform: translateY(-1px);
-      }
-    }
-
-    &--danger-outline {
-      background: $bg-subtle;
-      border-color: transparent;
-      color: $text-tertiary;
-
-      &:hover:not(:disabled) {
-        color: $danger;
-        background: $danger-subtle;
-        transform: translateY(-1px);
-      }
-    }
-
-    &--primary {
-      background: $primary;
-      border-color: $primary;
-      color: $on-primary;
-      box-shadow: $shadow-xs;
-
-      &:hover:not(:disabled) {
-        background: $primary-hover;
-        border-color: $primary-hover;
-        transform: translateY(-1px);
-        box-shadow: $shadow-sm;
-      }
-    }
-  }
-
-  /* ---------- empty state ---------- */
-  &__spin {
-    animation: providers-page-spin 0.9s linear infinite;
   }
 
   /* ---------- loading — plain, no border, just centers the spinner ---------- */
@@ -922,7 +708,11 @@ export default Providers;
     }
   }
 
-  /* ---------- modals (view-all-models + connect form) ---------- */
+  &__spin {
+    animation: datasets-page-spin 0.9s linear infinite;
+  }
+
+  /* ---------- tasks modal ---------- */
   &__overlay {
     position: fixed;
     inset: 0;
@@ -946,11 +736,6 @@ export default Providers;
     display: flex;
     flex-direction: column;
     overflow: hidden;
-
-    &--sm {
-      max-width: 24rem;
-      max-height: none;
-    }
   }
 
   &__modal-head {
@@ -962,7 +747,7 @@ export default Providers;
     padding: 20px 22px 16px;
     border-bottom: 1px solid $border-subtle;
 
-    .providers-page__avatar {
+    .datasets-page__tag {
       margin-bottom: 8px;
     }
   }
@@ -1003,89 +788,10 @@ export default Providers;
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 8px 22px 22px;
+    padding: 18px 22px 22px;
     display: flex;
     flex-direction: column;
-  }
-
-  &__modal-loading {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 32px 0;
-  }
-
-  /* ---------- connect form (inside its own modal) ---------- */
-  &__connect-form {
-    padding: 20px 22px 22px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  &__field-label {
-    font-size: 0.71875rem;
-    font-weight: 600;
-    color: $text-secondary;
-  }
-
-  &__input-wrap {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    border: 1px solid $border-default;
-    border-radius: 8px;
-    padding: 0 11px;
-    background: $bg-main;
-    color: $text-tertiary;
-    transition: border-color 0.14s ease;
-
-    &:focus-within {
-      border-color: $primary;
-    }
-  }
-
-  &__input {
-    flex: 1;
-    width: 100%;
-    border: none;
-    outline: none;
-    padding: 8px 0;
-    font-size: 0.8125rem;
-    font-family: $font-body;
-    color: $text-primary;
-    background: transparent;
-
-    &:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-    }
-
-    &::placeholder {
-      color: $text-tertiary;
-    }
-  }
-
-  &__form-error {
-    font-size: 0.75rem;
-    color: $danger;
-    background: $danger-subtle;
-    border-radius: 6px;
-    padding: 7px 10px;
-    line-height: 1.4;
-  }
-
-  &__form-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 6px;
-  }
-
-  &__card-inline-error {
-    font-size: 0.71875rem;
-    color: $danger;
-    padding-top: 6px;
+    gap: 10px;
   }
 
   /* ---------- responsive ---------- */
@@ -1098,6 +804,13 @@ export default Providers;
   @media (max-width: 1000px) {
     &__grid {
       grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 640px) {
+    &__card-stats {
+      flex-wrap: wrap;
+      gap: 14px;
     }
   }
 
@@ -1127,6 +840,14 @@ export default Providers;
       font-size: 0.84375rem;
     }
 
+    &__card-task {
+      font-size: 0.8125rem;
+    }
+
+    &__cap-pill {
+      font-size: 0.78125rem;
+    }
+
     &__card-stat-label {
       font-size: 0.6875rem;
     }
@@ -1135,54 +856,14 @@ export default Providers;
       font-size: 0.71875rem;
     }
 
-    &__card-model-name {
+    &__card-tasks-toggle {
       font-size: 0.8125rem;
     }
   }
 }
 
-@keyframes providers-page-spin {
+@keyframes datasets-page-spin {
   to {
     transform: rotate(360deg);
   }
-}
-
-
-
-
-
-
-
-
-
-
-
-//api.ts
-import api from '../../../services/api';
-import type { ProvidersResponse } from './types';
-
-export async function fetchProviders(): Promise<ProvidersResponse> {
-  const res = await api.get<ProvidersResponse>('/providers');
-  return res.data;
-}
-
-export interface ConnectProviderResponse {
-  status: string;
-  provider_id: string;
-  models_synced: number;
-}
-
-export async function connectProvider(providerId: string, apiKey: string): Promise<ConnectProviderResponse> {
-  const res = await api.post<ConnectProviderResponse>(`/providers/${providerId}/connect`, { api_key: apiKey });
-  return res.data;
-}
-
-export interface DisconnectProviderResponse {
-  status: string;
-  provider_id: string;
-}
-
-export async function disconnectProvider(providerId: string): Promise<DisconnectProviderResponse> {
-  const res = await api.delete<DisconnectProviderResponse>(`/providers/${providerId}/disconnect`);
-  return res.data;
 }
