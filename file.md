@@ -1,7 +1,7 @@
 //Providers.tsx
 import { useEffect, useMemo, useState, type FC, type FormEvent } from 'react';
 import { PlugZap, CheckCircle2, Boxes, Settings2, Unplug, Search, X, Key, Link2, RefreshCw, AlertCircle, ChevronRight } from 'lucide-react';
-import { fetchProviders } from './api';
+import { fetchProviders, connectProvider, disconnectProvider } from './api';
 import type { ProviderApi } from './types';
 import { fetchModels } from '../Models/api';
 import type { ModelApi } from '../Models/types';
@@ -24,6 +24,11 @@ const Providers: FC = () => {
   const [query, setQuery] = useState('');
   const [connectModalFor, setConnectModalFor] = useState<ProviderApi | null>(null);
   const [keyInput, setKeyInput] = useState('');
+  const [connectSubmitting, setConnectSubmitting] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
+
+  const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
+  const [disconnectErrorId, setDisconnectErrorId] = useState<{ id: string; message: string } | null>(null);
 
   // /models is fetched lazily — only once the user clicks into a provider's
   // model list — and cached here so clicking into a second/third provider
@@ -71,18 +76,42 @@ const Providers: FC = () => {
 
   const openConnect = (p: ProviderApi) => {
     setKeyInput('');
+    setConnectError(null);
     setConnectModalFor(p);
   };
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (!connectModalFor || !keyInput.trim()) return;
-    setProviders((prev) => prev.map((p) => (p.id === connectModalFor.id ? { ...p, status: 'connected' } : p)));
-    setConnectModalFor(null);
+    if (!connectModalFor || !keyInput.trim() || connectSubmitting) return;
+
+    setConnectSubmitting(true);
+    setConnectError(null);
+
+    connectProvider(connectModalFor.id, keyInput.trim())
+      .then(() => {
+        setProviders((prev) => prev.map((p) => (p.id === connectModalFor.id ? { ...p, status: 'connected' } : p)));
+        setConnectModalFor(null);
+      })
+      .catch((err) => {
+        setConnectError(err instanceof Error ? err.message : 'Failed to connect provider.');
+      })
+      .finally(() => setConnectSubmitting(false));
   };
 
   const handleDisconnect = (id: string) => {
-    setProviders((prev) => prev.map((p) => (p.id === id ? { ...p, status: 'not_connected' } : p)));
+    if (disconnectingId) return;
+
+    setDisconnectingId(id);
+    setDisconnectErrorId(null);
+
+    disconnectProvider(id)
+      .then(() => {
+        setProviders((prev) => prev.map((p) => (p.id === id ? { ...p, status: 'not_connected' } : p)));
+      })
+      .catch((err) => {
+        setDisconnectErrorId({ id, message: err instanceof Error ? err.message : 'Failed to disconnect provider.' });
+      })
+      .finally(() => setDisconnectingId(null));
   };
 
   return (
@@ -198,8 +227,10 @@ const Providers: FC = () => {
                         type="button"
                         className="providers-page__btn providers-page__btn--danger-outline"
                         onClick={() => handleDisconnect(p.id)}
+                        disabled={disconnectingId === p.id}
                       >
-                        <Unplug size={13} /> Disconnect
+                        <Unplug size={13} className={disconnectingId === p.id ? 'providers-page__spin' : undefined} />
+                        {disconnectingId === p.id ? 'Disconnecting…' : 'Disconnect'}
                       </button>
                     </>
                   ) : (
@@ -208,6 +239,8 @@ const Providers: FC = () => {
                     </button>
                   )}
                 </div>
+
+                {disconnectErrorId?.id === p.id && <p className="providers-page__card-inline-error">{disconnectErrorId.message}</p>}
               </div>
             );
           })}
@@ -297,15 +330,30 @@ const Providers: FC = () => {
                   placeholder="Enter API key"
                   value={keyInput}
                   onChange={(e) => setKeyInput(e.target.value)}
+                  disabled={connectSubmitting}
                   autoFocus
                 />
               </div>
+
+              {connectError && <p className="providers-page__form-error">{connectError}</p>}
+
               <div className="providers-page__form-actions">
-                <button type="button" className="providers-page__btn providers-page__btn--outline" onClick={() => setConnectModalFor(null)}>
+                <button
+                  type="button"
+                  className="providers-page__btn providers-page__btn--outline"
+                  onClick={() => setConnectModalFor(null)}
+                  disabled={connectSubmitting}
+                >
                   Cancel
                 </button>
-                <button type="submit" className="providers-page__btn providers-page__btn--primary">
-                  Save
+                <button type="submit" className="providers-page__btn providers-page__btn--primary" disabled={connectSubmitting}>
+                  {connectSubmitting ? (
+                    <>
+                      <RefreshCw size={13} strokeWidth={2.25} className="providers-page__spin" /> Connecting…
+                    </>
+                  ) : (
+                    'Save'
+                  )}
                 </button>
               </div>
             </form>
@@ -317,6 +365,8 @@ const Providers: FC = () => {
 };
 
 export default Providers;
+
+
 
 
 
@@ -988,11 +1038,10 @@ export default Providers;
     padding: 0 11px;
     background: $bg-main;
     color: $text-tertiary;
-    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+    transition: border-color 0.14s ease;
 
     &:focus-within {
       border-color: $primary;
-      box-shadow: 0 0 0 3px $primary-light;
     }
   }
 
@@ -1007,9 +1056,23 @@ export default Providers;
     color: $text-primary;
     background: transparent;
 
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
     &::placeholder {
       color: $text-tertiary;
     }
+  }
+
+  &__form-error {
+    font-size: 0.75rem;
+    color: $danger;
+    background: $danger-subtle;
+    border-radius: 6px;
+    padding: 7px 10px;
+    line-height: 1.4;
   }
 
   &__form-actions {
@@ -1017,6 +1080,12 @@ export default Providers;
     justify-content: flex-end;
     gap: 8px;
     margin-top: 6px;
+  }
+
+  &__card-inline-error {
+    font-size: 0.71875rem;
+    color: $danger;
+    padding-top: 6px;
   }
 
   /* ---------- responsive ---------- */
@@ -1076,4 +1145,44 @@ export default Providers;
   to {
     transform: rotate(360deg);
   }
+}
+
+
+
+
+
+
+
+
+
+
+
+//api.ts
+import api from '../../../services/api';
+import type { ProvidersResponse } from './types';
+
+export async function fetchProviders(): Promise<ProvidersResponse> {
+  const res = await api.get<ProvidersResponse>('/providers');
+  return res.data;
+}
+
+export interface ConnectProviderResponse {
+  status: string;
+  provider_id: string;
+  models_synced: number;
+}
+
+export async function connectProvider(providerId: string, apiKey: string): Promise<ConnectProviderResponse> {
+  const res = await api.post<ConnectProviderResponse>(`/providers/${providerId}/connect`, { api_key: apiKey });
+  return res.data;
+}
+
+export interface DisconnectProviderResponse {
+  status: string;
+  provider_id: string;
+}
+
+export async function disconnectProvider(providerId: string): Promise<DisconnectProviderResponse> {
+  const res = await api.delete<DisconnectProviderResponse>(`/providers/${providerId}/disconnect`);
+  return res.data;
 }
