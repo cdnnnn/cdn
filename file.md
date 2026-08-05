@@ -1,6 +1,6 @@
 //Providers.tsx
 import { useEffect, useMemo, useState, type FC, type FormEvent } from 'react';
-import { PlugZap, CheckCircle2, Boxes, Settings2, Unplug, Search, X, Key, Gauge, Link2, RefreshCw, AlertCircle } from 'lucide-react';
+import { PlugZap, CheckCircle2, Boxes, Settings2, Unplug, Search, X, Key, Link2, RefreshCw, AlertCircle, ChevronRight } from 'lucide-react';
 import { fetchProviders } from './api';
 import type { ProviderApi } from './types';
 import { fetchModels } from '../Models/api';
@@ -16,34 +16,34 @@ function tintFor(id: string) {
   return TINTS[hash % TINTS.length];
 }
 
-const MODEL_PREVIEW_LIMIT = 5;
-
 const Providers: FC = () => {
   const [providers, setProviders] = useState<ProviderApi[]>([]);
-  const [models, setModels] = useState<ModelApi[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [query, setQuery] = useState('');
-  const [modelsModalFor, setModelsModalFor] = useState<ProviderApi | null>(null);
   const [connectModalFor, setConnectModalFor] = useState<ProviderApi | null>(null);
   const [keyInput, setKeyInput] = useState('');
+
+  // /models is fetched lazily — only once the user clicks into a provider's
+  // model list — and cached here so clicking into a second/third provider
+  // reuses the same fetch instead of calling the endpoint again.
+  const [modelsModalFor, setModelsModalFor] = useState<ProviderApi | null>(null);
+  const [allModels, setAllModels] = useState<ModelApi[] | null>(null);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
 
   const load = () => {
     setLoading(true);
     setError(null);
-    Promise.all([fetchProviders(), fetchModels()])
-      .then(([providersRes, modelsRes]) => {
-        setProviders(providersRes.providers);
-        setModels(modelsRes.models);
-      })
+    fetchProviders()
+      .then((res) => setProviders(res.providers))
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load providers.'))
       .finally(() => setLoading(false));
   };
 
   useEffect(() => {
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const connectedCount = providers.filter((p) => p.status === 'connected').length;
@@ -53,15 +53,21 @@ const Providers: FC = () => {
     [providers, query]
   );
 
-  const modelsFor = (providerId: string) => models.filter((m) => m.provider_id === providerId);
-
-  const avgAccuracyFor = (providerId: string) => {
-    const scored = modelsFor(providerId)
-      .map((m) => m.accuracy_score)
-      .filter((s): s is number => s !== null);
-    if (scored.length === 0) return null;
-    return (scored.reduce((a, b) => a + b, 0) / scored.length).toFixed(1);
+  const openModelsModal = (p: ProviderApi) => {
+    setModelsModalFor(p);
+    if (allModels !== null || modelsLoading) return;
+    setModelsLoading(true);
+    setModelsError(null);
+    fetchModels()
+      .then((res) => setAllModels(res.models))
+      .catch((err) => setModelsError(err instanceof Error ? err.message : 'Failed to load models.'))
+      .finally(() => setModelsLoading(false));
   };
+
+  const modelsForActiveModal = useMemo(
+    () => (modelsModalFor && allModels ? allModels.filter((m) => m.provider_id === modelsModalFor.id) : []),
+    [modelsModalFor, allModels]
+  );
 
   const openConnect = (p: ProviderApi) => {
     setKeyInput('');
@@ -139,8 +145,6 @@ const Providers: FC = () => {
           {filtered.map((p) => {
             const connected = p.status === 'connected';
             const tint = tintFor(p.id);
-            const providerModels = modelsFor(p.id);
-            const avgAccuracy = avgAccuracyFor(p.id);
             const initial = p.name.trim().charAt(0).toUpperCase() || '?';
 
             return (
@@ -161,20 +165,15 @@ const Providers: FC = () => {
                 <p className="providers-page__card-desc">{p.description}</p>
 
                 <div className="providers-page__card-stats">
-                  <div className="providers-page__card-stat">
+                  <button type="button" className="providers-page__card-stat providers-page__card-stat--clickable" onClick={() => openModelsModal(p)}>
                     <span className="providers-page__card-stat-label">
                       <Boxes size={10} /> Models
                     </span>
-                    <span className="providers-page__card-stat-value n">{p.model_count}</span>
-                  </div>
-                  <div className="providers-page__card-stat">
-                    <span className="providers-page__card-stat-label">
-                      <Gauge size={10} /> Avg. Accuracy
+                    <span className="providers-page__card-stat-value providers-page__card-stat-value--link n">
+                      {p.model_count}
+                      <ChevronRight size={13} strokeWidth={2.5} />
                     </span>
-                    <span className="providers-page__card-stat-value providers-page__card-stat-value--accent n">
-                      {avgAccuracy ? `${avgAccuracy}%` : '—'}
-                    </span>
-                  </div>
+                  </button>
                   <div className="providers-page__card-stat">
                     <span className="providers-page__card-stat-label">
                       <Link2 size={10} /> Base URL
@@ -182,27 +181,6 @@ const Providers: FC = () => {
                     <span className="providers-page__card-stat-value providers-page__card-stat-value--sm">{p.base_url ?? 'Default'}</span>
                   </div>
                 </div>
-
-                {providerModels.length > 0 && (
-                  <>
-                    <span className="providers-page__card-section-label">Models</span>
-                    <div className="providers-page__card-models">
-                      {providerModels.slice(0, MODEL_PREVIEW_LIMIT).map((m) => (
-                        <div className="providers-page__card-model-row" key={m.id}>
-                          <span className="providers-page__card-model-name">{m.name}</span>
-                          <span className="providers-page__card-model-accuracy n">
-                            {m.accuracy_score === null ? '—' : `${m.accuracy_score}%`}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                    {providerModels.length > MODEL_PREVIEW_LIMIT && (
-                      <button type="button" className="providers-page__card-view-all" onClick={() => setModelsModalFor(p)}>
-                        View all {providerModels.length} models
-                      </button>
-                    )}
-                  </>
-                )}
 
                 <div className="providers-page__card-foot">
                   {connected ? (
@@ -239,7 +217,7 @@ const Providers: FC = () => {
                   {modelsModalFor.logo_url ? <img src={modelsModalFor.logo_url} alt="" /> : modelsModalFor.name.trim().charAt(0).toUpperCase()}
                 </span>
                 <h2 className="providers-page__modal-title">{modelsModalFor.name}</h2>
-                <p className="providers-page__modal-sub">{modelsFor(modelsModalFor.id).length} models</p>
+                <p className="providers-page__modal-sub">{modelsModalFor.model_count} models</p>
               </div>
               <button type="button" className="providers-page__modal-close" onClick={() => setModelsModalFor(null)} aria-label="Close">
                 <X size={16} />
@@ -247,14 +225,32 @@ const Providers: FC = () => {
             </div>
 
             <div className="providers-page__modal-body">
-              {modelsFor(modelsModalFor.id).map((m) => (
-                <div className="providers-page__card-model-row" key={m.id}>
-                  <span className="providers-page__card-model-name">
-                    {m.name} <span className="providers-page__card-model-version">{m.category}</span>
-                  </span>
-                  <span className="providers-page__card-model-accuracy n">{m.accuracy_score === null ? '—' : `${m.accuracy_score}%`}</span>
+              {modelsLoading && (
+                <div className="providers-page__modal-loading">
+                  <Spinner label="Loading models…" />
                 </div>
-              ))}
+              )}
+
+              {!modelsLoading && modelsError && (
+                <div className="providers-page__empty providers-page__empty--error">
+                  <AlertCircle size={22} />
+                  <p>{modelsError}</p>
+                  <button type="button" className="providers-page__btn providers-page__btn--outline" onClick={() => openModelsModal(modelsModalFor)}>
+                    <RefreshCw size={14} strokeWidth={2.25} /> Try again
+                  </button>
+                </div>
+              )}
+
+              {!modelsLoading &&
+                !modelsError &&
+                modelsForActiveModal.map((m) => (
+                  <div className="providers-page__card-model-row" key={m.id}>
+                    <span className="providers-page__card-model-name">
+                      {m.name} <span className="providers-page__card-model-version">{m.category}</span>
+                    </span>
+                    <span className="providers-page__card-model-accuracy n">{m.accuracy_score === null ? '—' : `${m.accuracy_score}%`}</span>
+                  </div>
+                ))}
             </div>
           </div>
         </div>
@@ -315,7 +311,6 @@ const Providers: FC = () => {
 };
 
 export default Providers;
-
 
 
 
@@ -604,6 +599,26 @@ export default Providers;
     border-bottom: 1px solid $border-subtle;
   }
 
+  &__card-stat {
+    // Plain stats are <div>s; the clickable "Models" stat is a <button> that
+    // needs its native button chrome reset to look identical to the others.
+    background: transparent;
+    border: none;
+    padding: 0;
+    text-align: left;
+    font-family: inherit;
+    cursor: default;
+
+    &--clickable {
+      cursor: pointer;
+
+      &:hover .providers-page__card-stat-value--link {
+        color: $primary-hover;
+        text-decoration: underline;
+      }
+    }
+  }
+
   &__card-stat-label {
     display: flex;
     align-items: center;
@@ -632,6 +647,18 @@ export default Providers;
     &--sm {
       font-size: 0.78125rem;
       font-weight: 700;
+    }
+
+    &--link {
+      display: inline-flex;
+      align-items: center;
+      gap: 1px;
+      color: $primary;
+      transition: color 0.14s ease;
+
+      svg {
+        opacity: 0.7;
+      }
     }
 
     &--accent {
@@ -896,6 +923,13 @@ export default Providers;
     flex-direction: column;
   }
 
+  &__modal-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 0;
+  }
+
   /* ---------- connect form (inside its own modal) ---------- */
   &__connect-form {
     padding: 20px 22px 22px;
@@ -1007,56 +1041,4 @@ export default Providers;
   to {
     transform: rotate(360deg);
   }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//types.ts
-export type ProviderStatus = 'connected' | 'not_connected' | string;
-
-export interface ProviderApi {
-  id: string;
-  name: string;
-  description: string;
-  logo_url: string | null;
-  base_url: string | null;
-  url_template: string | null;
-  model_count: number;
-  status: ProviderStatus;
-}
-
-export interface ProvidersResponse {
-  providers: ProviderApi[];
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-//api.ts
-import api from '../../../services/api';
-import type { ProvidersResponse } from './types';
-
-export async function fetchProviders(): Promise<ProvidersResponse> {
-  const res = await api.get<ProvidersResponse>('/providers');
-  return res.data;
 }
