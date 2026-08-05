@@ -1,8 +1,11 @@
 //ModelComparator.tsx
-import { useMemo, useState, type FC } from 'react';
-import { Search, X, CheckCircle2, GitCompareArrows, ArrowLeft, Trophy } from 'lucide-react';
+import { useEffect, useMemo, useState, type FC } from 'react';
+import { Search, X, CheckCircle2, GitCompareArrows, ArrowLeft, Trophy, Database, AlertCircle } from 'lucide-react';
 import { MODELS } from '../RunEvaluation/data';
 import type { ModelInfo } from '../RunEvaluation/types';
+import { fetchBenchmarks } from '../Datasets/api';
+import type { Benchmark } from '../Datasets/types';
+import Spinner from '../../../components/Spinner/Spinner';
 import './ModelComparator.scss';
 
 const MAX_SELECTION = 4;
@@ -24,6 +27,25 @@ function parseContextWindow(contextWindow: string): number {
   if (kMatch) return parseFloat(kMatch[1]) * 1_000;
   const numMatch = cleaned.match(/([\d.]+)/);
   return numMatch ? parseFloat(numMatch[1]) : 0;
+}
+
+// There's no real "which models were evaluated on this dataset" data yet, so
+// this connects the two heuristically: a model counts as evaluated on a
+// dataset if it shares at least one capability keyword with the dataset's
+// required_capabilities (normalized + substring-matched, since the two data
+// sources use different naming conventions — e.g. "tool_calling" vs "Tool Calling").
+function normalizeCapability(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function isModelEvaluatedOn(model: ModelInfo, benchmark: Benchmark): boolean {
+  return benchmark.required_capabilities.some((bc) => {
+    const a = normalizeCapability(bc);
+    return model.capabilities.some((mc) => {
+      const b = normalizeCapability(mc);
+      return a.includes(b) || b.includes(a);
+    });
+  });
 }
 
 type MetricRow = {
@@ -156,15 +178,48 @@ const ModelComparator: FC = () => {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [comparing, setComparing] = useState(false);
 
+  // ---------- dataset filter (optional) ----------
+  const [benchmarks, setBenchmarks] = useState<Benchmark[]>([]);
+  const [benchmarksLoading, setBenchmarksLoading] = useState(true);
+  const [benchmarksError, setBenchmarksError] = useState<string | null>(null);
+  const [selectedDatasetNames, setSelectedDatasetNames] = useState<string[]>([]);
+
+  useEffect(() => {
+    fetchBenchmarks()
+      .then((res) => setBenchmarks(res.benchmarks))
+      .catch((err) => setBenchmarksError(err instanceof Error ? err.message : 'Failed to load test suites.'))
+      .finally(() => setBenchmarksLoading(false));
+  }, []);
+
+  const toggleDataset = (name: string) => {
+    setSelectedDatasetNames((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]));
+  };
+
+  // Models eligible for comparison: if no dataset is selected, every model is
+  // fair game. Once one or more datasets are picked, only models sharing a
+  // capability with at least one of them are shown.
+  const eligibleModels = useMemo(() => {
+    if (selectedDatasetNames.length === 0) return MODELS;
+    const selectedBenchmarks = benchmarks.filter((b) => selectedDatasetNames.includes(b.name));
+    return MODELS.filter((m) => selectedBenchmarks.some((b) => isModelEvaluatedOn(m, b)));
+  }, [selectedDatasetNames, benchmarks]);
+
+  // If narrowing the dataset filter drops a model that was already selected
+  // for comparison, drop it from the selection too rather than leaving a
+  // "selected but no longer eligible" model silently in the comparison.
+  useEffect(() => {
+    setSelectedIds((prev) => prev.filter((id) => eligibleModels.some((m) => m.id === id)));
+  }, [eligibleModels]);
+
   const filtered = useMemo(
     () =>
-      MODELS.filter(
+      eligibleModels.filter(
         (m) =>
           !query ||
           m.name.toLowerCase().includes(query.toLowerCase()) ||
           m.provider.toLowerCase().includes(query.toLowerCase())
       ),
-    [query]
+    [eligibleModels, query]
   );
 
   const selectedModels = useMemo(() => MODELS.filter((m) => selectedIds.includes(m.id)), [selectedIds]);
@@ -224,6 +279,58 @@ const ModelComparator: FC = () => {
 
       {!comparing && (
         <>
+          <div className="model-comparator__datasets-panel">
+            <div className="model-comparator__panel-row">
+              <p className="model-comparator__panel-title">
+                <Database size={12} strokeWidth={2.25} /> Filter by test suite
+              </p>
+              {selectedDatasetNames.length > 0 && (
+                <button type="button" className="model-comparator__link-btn" onClick={() => setSelectedDatasetNames([])}>
+                  Clear filter
+                </button>
+              )}
+            </div>
+
+            {benchmarksLoading && (
+              <div className="model-comparator__datasets-loading">
+                <Spinner size={16} />
+                Loading test suites…
+              </div>
+            )}
+
+            {!benchmarksLoading && benchmarksError && (
+              <div className="model-comparator__datasets-error">
+                <AlertCircle size={14} />
+                {benchmarksError}
+              </div>
+            )}
+
+            {!benchmarksLoading && !benchmarksError && (
+              <div className="model-comparator__dataset-chips">
+                {benchmarks.map((b) => {
+                  const active = selectedDatasetNames.includes(b.name);
+                  return (
+                    <button
+                      type="button"
+                      key={b.name}
+                      className={`model-comparator__dataset-chip${active ? ' model-comparator__dataset-chip--active' : ''}`}
+                      onClick={() => toggleDataset(b.name)}
+                    >
+                      {b.name} <span className="n">· {b.task_count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {selectedDatasetNames.length > 0 && (
+              <p className="model-comparator__filter-hint">
+                Showing <b>{eligibleModels.length}</b> model{eligibleModels.length === 1 ? '' : 's'} evaluated on{' '}
+                {selectedDatasetNames.length === 1 ? 'this test suite' : `${selectedDatasetNames.length} selected test suites`}.
+              </p>
+            )}
+          </div>
+
           <div className="model-comparator__search">
             <Search size={15} />
             <input type="text" placeholder="Search models..." value={query} onChange={(e) => setQuery(e.target.value)} />
@@ -277,7 +384,7 @@ const ModelComparator: FC = () => {
             {filtered.length === 0 && (
               <div className="model-comparator__empty">
                 <Search size={22} />
-                <p>No models match your search.</p>
+                <p>No models match your search or test suite filter.</p>
               </div>
             )}
           </div>
@@ -407,6 +514,9 @@ export default ModelComparator;
 
 
 
+
+
+
 //ModelComparator.scss
 @use '../../../styles/variables' as *;
 
@@ -517,6 +627,103 @@ export default ModelComparator;
     &:hover {
       background: $border-default;
       color: $text-primary;
+    }
+  }
+
+  /* ---------- dataset filter panel ---------- */
+  &__datasets-panel {
+    flex-shrink: 0;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
+    border-radius: 12px;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  &__panel-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  &__datasets-loading,
+  &__datasets-error {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.78125rem;
+    color: $text-tertiary;
+  }
+
+  &__datasets-error {
+    color: $danger;
+  }
+
+  &__dataset-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+  }
+
+  &__dataset-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: $font-body;
+    font-size: 0.78125rem;
+    font-weight: 600;
+    color: $text-secondary;
+    background: $bg-main;
+    border: 1px solid $border-default;
+    border-radius: 999px;
+    padding: 6px 12px 6px 10px;
+    cursor: pointer;
+    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+
+    .n {
+      color: $text-tertiary;
+      font-weight: 500;
+    }
+
+    &:hover {
+      border-color: $border-strong;
+    }
+
+    &--active {
+      background: $primary;
+      border-color: $primary;
+      color: $on-primary;
+
+      .n {
+        color: rgba(255, 255, 255, 0.75);
+      }
+    }
+  }
+
+  &__filter-hint {
+    font-size: 0.75rem;
+    color: $text-tertiary;
+
+    b {
+      color: $text-primary;
+    }
+  }
+
+  &__link-btn {
+    font-family: $font-body;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: $primary;
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+
+    &:hover {
+      text-decoration: underline;
     }
   }
 
@@ -750,7 +957,7 @@ export default ModelComparator;
   /* ---------- comparison view: chart + table side by side ---------- */
   &__compare-grid {
     display: grid;
-    grid-template-columns: 320px 1fr;
+    grid-template-columns: 1fr 1fr;
     gap: 16px;
     align-items: start;
   }
@@ -777,7 +984,7 @@ export default ModelComparator;
 
   &__radar-svg {
     width: 100%;
-    max-width: 280px;
+    max-width: 340px;
     height: auto;
     overflow: visible;
   }
