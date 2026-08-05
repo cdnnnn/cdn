@@ -1,7 +1,7 @@
 //History.tsx
 import { useMemo, useState, type FC, type MouseEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Play, Search, Copy, Trash2, X, Bot, MessageSquare, FileBarChart } from 'lucide-react';
+import { Play, Search, Copy, Trash2, X, Bot, MessageSquare, Trophy, Zap, Wallet, FileBarChart } from 'lucide-react';
 import { RECENT_EVALUATIONS, type RecentEvaluation } from '../shared/evaluations';
 import Select from './Select';
 import './History.scss';
@@ -46,7 +46,7 @@ const History: FC = () => {
   const [query, setQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState(30);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(RECENT_EVALUATIONS[0]?.id ?? null);
 
   const filtered = useMemo(() => {
     return items.filter((ev) => {
@@ -57,15 +57,10 @@ const History: FC = () => {
     });
   }, [items, query, typeFilter, dateFilter]);
 
-  const selected = useMemo(() => filtered.find((ev) => ev.id === selectedId) ?? null, [filtered, selectedId]);
-
-  // Mirrors viewEvaluationResult(id), but instead of navigating away, opens
-  // the results in a panel that slides in from the right.
-  const handleOpen = (ev: RecentEvaluation) => {
-    setSelectedId(ev.id);
-  };
-
-  const handleClose = () => setSelectedId(null);
+  const selected = useMemo(
+    () => filtered.find((ev) => ev.id === selectedId) ?? filtered[0] ?? null,
+    [filtered, selectedId]
+  );
 
   // Mirrors duplicateEval(id): send the user into a fresh Run Evaluation flow.
   const handleDuplicate = (e: MouseEvent, _id: string) => {
@@ -114,7 +109,7 @@ const History: FC = () => {
           <p>No evaluations match your filters.</p>
         </div>
       ) : (
-        <div className={`history__body${selected ? ' history__body--split' : ''}`}>
+        <div className="history__body">
           <div className="history__list-panel">
             <div className="history__list">
               {filtered.map((ev) => {
@@ -123,7 +118,7 @@ const History: FC = () => {
                   <div
                     key={ev.id}
                     className={`history__item${isActive ? ' history__item--active' : ''}`}
-                    onClick={() => handleOpen(ev)}
+                    onClick={() => setSelectedId(ev.id)}
                   >
                     <div className="history__icon">
                       <HistoryIcon type={ev.type} />
@@ -167,7 +162,7 @@ const History: FC = () => {
           </div>
 
           {selected && (
-            <div className="history__detail-panel" key={selected.id}>
+            <div className="history__detail-panel">
               <div className="history__detail-head">
                 <div className="history__detail-head-left">
                   <span className={`history__type-badge history__type-badge--${typeTint(selected.type)}`}>
@@ -180,44 +175,53 @@ const History: FC = () => {
                 </div>
 
                 <div className="history__detail-actions">
-                  <button type="button" className="history__btn history__btn--sm" onClick={(e) => handleDuplicate(e, selected.id)} aria-label="Duplicate evaluation">
-                    <Copy size={15} />
+                  <button type="button" className="history__btn" onClick={(e) => handleDuplicate(e, selected.id)}>
+                    <Copy size={13} /> Duplicate
                   </button>
-                  <button type="button" className="history__btn history__btn--sm" onClick={(e) => handleDelete(e, selected.id)} aria-label="Delete evaluation">
-                    <Trash2 size={15} />
+                  <button type="button" className="history__btn history__btn--danger" onClick={(e) => handleDelete(e, selected.id)}>
+                    <Trash2 size={13} /> Delete
                   </button>
-                  <button type="button" className="history__btn history__btn--sm" onClick={handleClose} aria-label="Close panel">
-                    <X size={15} />
+                  <button type="button" className="history__btn history__btn--primary" onClick={() => navigate('/app/reports')}>
+                    <FileBarChart size={13} /> View Report
                   </button>
                 </div>
               </div>
 
-              <div className="history__stat-row">
-                <div className="history__stat-card">
-                  <span className="history__stat-card-label">Models Tested</span>
-                  <span className="history__stat-card-value n">{selected.modelsTested}</span>
+              {/* Summary cards — matches the reference .results-summary-cards / .summary-card design */}
+              <div className="history__summary-cards">
+                <div className="history__summary-card history__summary-card--winner">
+                  <div className="history__summary-icon">
+                    <Trophy />
+                  </div>
+                  <div className="history__summary-content">
+                    <div className="history__summary-label">Winner</div>
+                    <div className="history__summary-value">{selected.topModel}</div>
+                    <div className="history__summary-score">{selected.topScore}</div>
+                  </div>
                 </div>
-                <div className="history__stat-card">
-                  <span className="history__stat-card-label">Top Model</span>
-                  <span className="history__stat-card-value history__stat-card-value--sm">{selected.topModel}</span>
+                <div className="history__summary-card">
+                  <div className="history__summary-icon">
+                    <Zap />
+                  </div>
+                  <div className="history__summary-content">
+                    <div className="history__summary-label">Avg Response Time</div>
+                    <div className="history__summary-value">{selected.avgResponseTime}</div>
+                    <div className="history__summary-score">{selected.modelsTested} models tested</div>
+                  </div>
                 </div>
-                <div className="history__stat-card">
-                  <span className="history__stat-card-label">Top Score</span>
-                  <span className="history__stat-card-value history__stat-card-value--accent n">{selected.topScore}</span>
-                </div>
-                <div className="history__stat-card">
-                  <span className="history__stat-card-label">Status</span>
-                  <span className="history__stat-card-value history__stat-card-value--sm">{selected.status}</span>
+                <div className="history__summary-card">
+                  <div className="history__summary-icon">
+                    <Wallet />
+                  </div>
+                  <div className="history__summary-content">
+                    <div className="history__summary-label">Total Cost</div>
+                    <div className="history__summary-value">{selected.costSpent}</div>
+                    <div className="history__summary-score">{selected.status}</div>
+                  </div>
                 </div>
               </div>
 
-              <div className="history__section-title-row">
-                <p className="history__section-title">Full results</p>
-                <button type="button" className="history__btn history__btn--sm" onClick={() => navigate('/app/reports')}>
-                  <FileBarChart size={13} /> View Report
-                </button>
-              </div>
-
+              <p className="history__section-title">Full results</p>
               <div className="history__table-wrap">
                 <table className="history__table">
                   <thead>
@@ -273,18 +277,23 @@ export default History;
 
 
 
-
-
-
-
 //History.scss
 @use '../../../styles/variables' as *;
 
 .history {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 18px;
   min-height: 0;
+  // .main-layout__body / .workspace-layout / .workspace-layout__content form an
+  // unbroken flex chain sized to the viewport (header/footer are fixed and offset
+  // via margin), so height: 100% here resolves to the visible content area.
+  // workspace-layout__content also has a 3rem bottom padding, which would
+  // otherwise leave a large gap below .history — pull most of that back in,
+  // keeping just a small 0.75rem breathing-room strip at the true bottom edge,
+  // and giving the two scrollable panels below a real height to scroll within.
+  height: calc(100% + 3rem - 0.75rem);
+  margin-bottom: calc(-3rem + 0.75rem);
 
   /* ---------- header ---------- */
   &__header {
@@ -341,6 +350,12 @@ export default History;
         border-color: $primary-hover;
         color: #fff;
       }
+    }
+
+    &--danger:hover {
+      border-color: $danger;
+      color: $danger;
+      background: $danger-subtle;
     }
 
     &--sm {
@@ -505,7 +520,7 @@ export default History;
     }
   }
 
-  /* ---------- split body: list panel + sliding detail panel ---------- */
+  /* ---------- default two-column layout: 400px list + detail, each independently scrollable ---------- */
   &__body {
     flex: 1;
     display: flex;
@@ -514,18 +529,10 @@ export default History;
   }
 
   &__list-panel {
-    flex: 1;
-    min-width: 0;
-    overflow-y: auto;
-    // Animates the handoff between "full width list" and "400px list + detail
-    // panel" so the collapse itself reads as part of the same motion as the
-    // panel sliding in, rather than a hard cut.
-    transition: flex-basis 0.3s cubic-bezier(0.4, 0, 0.2, 1), max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-
-  &__body--split &__list-panel {
     flex: 0 0 400px;
     max-width: 400px;
+    min-height: 0;
+    overflow-y: auto;
   }
 
   /* ---------- list ---------- */
@@ -537,14 +544,15 @@ export default History;
 
   &__item {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 16px;
-    padding: 18px 20px;
+    gap: 10px;
+    padding: 14px 16px;
     background: $bg-main;
     border: 1px solid $border-subtle;
     border-radius: $radius-lg;
     cursor: pointer;
-    transition: border-color 0.12s ease, box-shadow 0.12s ease, padding 0.2s ease;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
 
     &:hover {
       border-color: $primary;
@@ -559,8 +567,8 @@ export default History;
   }
 
   &__icon {
-    width: 44px;
-    height: 44px;
+    width: 36px;
+    height: 36px;
     background: $primary-light;
     border-radius: $radius-md;
     display: flex;
@@ -569,8 +577,8 @@ export default History;
     flex-shrink: 0;
 
     svg {
-      width: 22px;
-      height: 22px;
+      width: 18px;
+      height: 18px;
       color: $primary;
       stroke-width: 1.5;
     }
@@ -581,7 +589,8 @@ export default History;
   }
 
   &__content {
-    flex: 1;
+    flex-basis: calc(100% - 46px);
+    flex-grow: 1;
     min-width: 0;
 
     h4 {
@@ -625,7 +634,7 @@ export default History;
 
   &__results {
     display: flex;
-    gap: 28px;
+    gap: 16px;
     flex-shrink: 0;
   }
 
@@ -649,7 +658,7 @@ export default History;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 120px;
+    max-width: 84px;
 
     &--highlight {
       color: $primary;
@@ -660,67 +669,20 @@ export default History;
     display: flex;
     gap: 6px;
     flex-shrink: 0;
-  }
-
-  // Once the list panel is squeezed to 400px there isn't room for icon +
-  // content + three stats + actions on one row, so the card reflows: name
-  // row stays on top full-width, then stats and actions share a second row.
-  &__body--split &__item {
-    flex-wrap: wrap;
-    padding: 14px 16px;
-    gap: 10px;
-  }
-
-  &__body--split &__icon {
-    width: 36px;
-    height: 36px;
-
-    svg {
-      width: 18px;
-      height: 18px;
-    }
-  }
-
-  &__body--split &__content {
-    flex-basis: 100%;
-  }
-
-  &__body--split &__results {
-    gap: 16px;
-    order: 3;
-  }
-
-  &__body--split &__stat-value {
-    max-width: 84px;
-  }
-
-  &__body--split &__actions {
-    order: 4;
     margin-left: auto;
   }
 
-  /* ---------- detail panel (slides in from the right) ---------- */
+  /* ---------- detail panel ---------- */
   &__detail-panel {
     flex: 1;
     min-width: 0;
+    min-height: 0;
     background: $bg-main;
     border: 1px solid $border-subtle;
     border-radius: 16px;
-    box-shadow: $shadow-md;
-    padding: 24px 26px;
+    box-shadow: $shadow-xs;
+    padding: 26px 28px;
     overflow-y: auto;
-    animation: history-panel-in 0.32s cubic-bezier(0.16, 1, 0.3, 1);
-  }
-
-  @keyframes history-panel-in {
-    from {
-      transform: translateX(48px);
-      opacity: 0;
-    }
-    to {
-      transform: translateX(0);
-      opacity: 1;
-    }
   }
 
   &__detail-head {
@@ -729,7 +691,7 @@ export default History;
     justify-content: space-between;
     gap: 16px;
     padding-bottom: 18px;
-    margin-bottom: 20px;
+    margin-bottom: 22px;
     border-bottom: 1px solid $border-subtle;
   }
 
@@ -741,7 +703,7 @@ export default History;
   }
 
   &__detail-name {
-    font-size: 1.15rem;
+    font-size: 1.25rem;
     font-weight: 800;
     letter-spacing: -0.01em;
     color: $text-primary;
@@ -754,8 +716,9 @@ export default History;
 
   &__detail-actions {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     flex-shrink: 0;
+    flex-wrap: wrap;
   }
 
   /* ---------- type badge (sidebar + detail) ---------- */
@@ -783,62 +746,91 @@ export default History;
     }
   }
 
-  /* ---------- stat cards ---------- */
-  &__stat-row {
+  /* ---------- summary cards — matches reference .results-summary-cards / .summary-card ---------- */
+  &__summary-cards {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 12px;
-    margin-bottom: 22px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
   }
 
-  &__stat-card {
-    background: $bg-subtle;
-    border-radius: 12px;
-    padding: 14px 16px;
+  &__summary-card {
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-radius: $radius-lg;
+    padding: 20px;
     display: flex;
-    flex-direction: column;
-    gap: 4px;
+    gap: 14px;
+    min-width: 0;
+
+    &--winner {
+      // Reference uses a fixed warm amber gradient/border for the winner
+      // card in both themes (it's a celebratory accent, not a surface
+      // token), so this intentionally does not switch with dark mode.
+      background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+      border-color: #fde68a;
+    }
+  }
+
+  &__summary-icon {
+    width: 44px;
+    height: 44px;
+    background: $bg-subtle;
+    border-radius: $radius-md;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+
+    svg {
+      width: 22px;
+      height: 22px;
+      color: $text-secondary;
+      stroke-width: 1.5;
+    }
+  }
+
+  &__summary-card--winner &__summary-icon {
+    background: rgba(180, 83, 9, 0.12);
+
+    svg {
+      color: #b45309;
+    }
+  }
+
+  &__summary-content {
     min-width: 0;
   }
 
-  &__stat-card-label {
-    font-size: 0.6875rem;
-    font-weight: 600;
-    letter-spacing: 0.04em;
+  &__summary-label {
+    font-size: 11px;
     text-transform: uppercase;
+    letter-spacing: 0.5px;
     color: $text-tertiary;
+    margin-bottom: 4px;
   }
 
-  &__stat-card-value {
-    font-size: 1.125rem;
-    font-weight: 800;
+  &__summary-value {
+    font-size: 16px;
+    font-weight: 600;
     color: $text-primary;
+    margin-bottom: 2px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
 
-    &--sm {
-      font-size: 0.9375rem;
-      font-weight: 700;
-    }
-
-    &--accent {
-      color: $success;
-    }
+  &__summary-score {
+    font-size: 13px;
+    color: $text-secondary;
   }
 
   /* ---------- results table ---------- */
-  &__section-title-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 12px;
-  }
-
   &__section-title {
     font-size: 0.8125rem;
     font-weight: 700;
     color: $text-primary;
+    margin-bottom: 12px;
   }
 
   &__table-wrap {
@@ -856,7 +848,7 @@ export default History;
       letter-spacing: 0.05em;
       text-transform: uppercase;
       color: $text-tertiary;
-      padding: 10px 12px;
+      padding: 10px 14px;
       background: $bg-subtle;
       white-space: nowrap;
 
@@ -870,8 +862,8 @@ export default History;
     }
 
     tbody td {
-      padding: 11px 12px;
-      font-size: 0.8125rem;
+      padding: 12px 14px;
+      font-size: 0.84375rem;
       color: $text-secondary;
       border-bottom: 1px solid $border-subtle;
       white-space: nowrap;
@@ -930,22 +922,25 @@ export default History;
 
   /* ---------- responsive ---------- */
   @media (max-width: 900px) {
-    &__body--split {
+    height: auto;
+    margin-bottom: 0;
+
+    &__body {
       flex-direction: column;
     }
 
-    &__body--split &__list-panel {
+    &__list-panel {
       flex: 0 0 auto;
       max-width: none;
-      max-height: 14rem;
+      max-height: 16rem;
     }
 
     &__detail-panel {
-      max-height: 26rem;
+      max-height: none;
     }
 
-    &__stat-row {
-      grid-template-columns: repeat(2, 1fr);
+    &__summary-cards {
+      grid-template-columns: 1fr;
     }
   }
 
@@ -956,10 +951,6 @@ export default History;
 
     &__detail-head {
       flex-direction: column;
-    }
-
-    &__stat-row {
-      grid-template-columns: 1fr;
     }
   }
 }
