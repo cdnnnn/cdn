@@ -1,266 +1,201 @@
-//History.tsx
-import { useMemo, useState, type FC, type MouseEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Play, Search, Copy, Trash2, X, Bot, MessageSquare, Trophy, Zap, Wallet, FileBarChart } from 'lucide-react';
-import { RECENT_EVALUATIONS, type RecentEvaluation } from '../shared/evaluations';
-import Select from './Select';
-import './History.scss';
+//Models.tsx
+import { useEffect, useMemo, useState, type FC } from 'react';
+import { Search, X, LayoutGrid, Tag, RefreshCw, AlertCircle, Boxes, CheckCircle2, ExternalLink } from 'lucide-react';
+import { fetchModels } from './api';
+import type { ModelApi } from './types';
+import Spinner from '../../../components/Spinner/Spinner';
+import './Models.scss';
 
-const TYPE_FILTERS = [
-  { value: 'all', label: 'All Types' },
-  { value: 'AI Model', label: 'AI Model' },
-  { value: 'Agent', label: 'Agent' },
-  { value: 'RAG', label: 'RAG' },
-];
+const PILL_TINTS = ['blue', 'violet', 'amber', 'jade', 'rose'] as const;
 
-const DATE_FILTERS = [
-  { value: 30, label: 'Last 30 days' },
-  { value: 7, label: 'Last 7 days' },
-  { value: Infinity, label: 'All time' },
-];
-
-function matchesType(evType: string, filter: string) {
-  if (filter === 'all') return true;
-  if (filter === 'Agent') return evType.includes('Agent');
-  if (filter === 'RAG') return evType.includes('RAG');
-  return evType.includes('AI Model');
+function pillTint(value: string) {
+  let hash = 0;
+  for (let i = 0; i < value.length; i += 1) hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
+  return PILL_TINTS[hash % PILL_TINTS.length];
 }
 
-// Mirrors the icon logic from renderHistory() in the original app.js:
-// Agent -> bot, RAG -> search, everything else -> message-square
-function HistoryIcon({ type }: { type: string }) {
-  if (type.includes('Agent')) return <Bot />;
-  if (type.includes('RAG')) return <Search />;
-  return <MessageSquare />;
+function formatPrice(value: number | null): string {
+  return value === null ? '—' : `$${value}`;
 }
 
-function typeTint(type: string): 'violet' | 'blue' | 'amber' {
-  if (type.includes('Agent')) return 'violet';
-  if (type.includes('RAG')) return 'blue';
-  return 'amber';
-}
+const Models: FC = () => {
+  const [models, setModels] = useState<ModelApi[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-const History: FC = () => {
-  const navigate = useNavigate();
-  const [items, setItems] = useState<RecentEvaluation[]>(RECENT_EVALUATIONS);
   const [query, setQuery] = useState('');
-  const [typeFilter, setTypeFilter] = useState('all');
-  const [dateFilter, setDateFilter] = useState(30);
-  const [selectedId, setSelectedId] = useState<string | null>(RECENT_EVALUATIONS[0]?.id ?? null);
+  const [capability, setCapability] = useState('All');
+
+  const load = () => {
+    setLoading(true);
+    setError(null);
+    fetchModels()
+      .then((res) => setModels(res.models))
+      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load models.'))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const capabilities = useMemo(() => {
+    const set = new Set<string>();
+    models.forEach((m) => m.capabilities.forEach((c) => set.add(c)));
+    return ['All', ...Array.from(set).sort()];
+  }, [models]);
 
   const filtered = useMemo(() => {
-    return items.filter((ev) => {
-      if (query && !ev.name.toLowerCase().includes(query.toLowerCase())) return false;
-      if (!matchesType(ev.type, typeFilter)) return false;
-      if (ev.daysAgo > dateFilter) return false;
+    return models.filter((m) => {
+      if (query && !m.name.toLowerCase().includes(query.toLowerCase()) && !m.provider_id.toLowerCase().includes(query.toLowerCase())) {
+        return false;
+      }
+      if (capability !== 'All' && !m.capabilities.includes(capability)) return false;
       return true;
     });
-  }, [items, query, typeFilter, dateFilter]);
-
-  const selected = useMemo(
-    () => filtered.find((ev) => ev.id === selectedId) ?? filtered[0] ?? null,
-    [filtered, selectedId]
-  );
-
-  // Mirrors duplicateEval(id): send the user into a fresh Run Evaluation flow.
-  const handleDuplicate = (e: MouseEvent, _id: string) => {
-    e.stopPropagation();
-    navigate('/app/run-evaluation');
-  };
-
-  // Mirrors deleteEval(id): confirm, then remove from the list.
-  const handleDelete = (e: MouseEvent, id: string) => {
-    e.stopPropagation();
-    if (window.confirm('Delete this evaluation?')) {
-      setItems((prev) => prev.filter((ev) => ev.id !== id));
-      if (selectedId === id) setSelectedId(null);
-    }
-  };
+  }, [models, query, capability]);
 
   return (
-    <div className="history">
-      <div className="history__header">
-        <div>
-          <h1 className="history__title">History</h1>
-          <p className="history__subtitle">Past evaluations</p>
+    <div className="models-page">
+      <div className="models-page__header">
+        <div className="models-page__header-left">
+          <p className="models-page__header-eyebrow">Model catalog</p>
+          <h1 className="models-page__title">Models</h1>
+          <p className="models-page__subtitle">Browse available AI models across every connected provider</p>
         </div>
-        <button type="button" className="history__btn history__btn--primary" onClick={() => navigate('/app/run-evaluation')}>
-          <Play size={14} strokeWidth={2.25} /> New Evaluation
-        </button>
+
+        <div className="models-page__header-right">
+          <div className="models-page__header-meta">
+            <Boxes size={13} />
+            {models.length} models available
+          </div>
+          <button type="button" className="models-page__btn models-page__btn--outline" onClick={load} disabled={loading}>
+            <RefreshCw size={14} strokeWidth={2.25} className={loading ? 'models-page__spin' : undefined} /> Refresh
+          </button>
+        </div>
       </div>
 
-      <div className="history__filters">
-        <div className="history__search">
+      <div className="models-page__filters">
+        <div className="models-page__search">
           <Search size={15} />
-          <input type="text" placeholder="Search..." value={query} onChange={(e) => setQuery(e.target.value)} />
+          <input type="text" placeholder="Search models..." value={query} onChange={(e) => setQuery(e.target.value)} />
           {query && (
-            <button type="button" className="history__search-clear" onClick={() => setQuery('')} aria-label="Clear search">
+            <button type="button" className="models-page__search-clear" onClick={() => setQuery('')} aria-label="Clear search">
               <X size={13} />
             </button>
           )}
         </div>
-        <Select value={typeFilter} options={TYPE_FILTERS} onChange={setTypeFilter} width={140} />
-        <Select value={dateFilter} options={DATE_FILTERS} onChange={setDateFilter} width={140} />
+
+        <div className="models-page__seg">
+          {capabilities.map((c) => (
+            <button
+              key={c}
+              type="button"
+              className={`models-page__seg-item${capability === c ? ' models-page__seg-item--active' : ''}`}
+              onClick={() => setCapability(c)}
+            >
+              {c === 'All' ? <LayoutGrid size={13} strokeWidth={2.25} /> : <Tag size={13} strokeWidth={2.25} />}
+              {c}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {filtered.length === 0 ? (
-        <div className="history__empty">
-          <Search size={22} />
-          <p>No evaluations match your filters.</p>
+      {loading && (
+        <div className="models-page__loading">
+          <Spinner label="Loading models…" />
         </div>
-      ) : (
-        <div className="history__body">
-          <div className="history__list-panel">
-            <div className="history__list">
-              {filtered.map((ev) => {
-                const isActive = selected?.id === ev.id;
-                return (
-                  <div
-                    key={ev.id}
-                    className={`history__item${isActive ? ' history__item--active' : ''}`}
-                    onClick={() => setSelectedId(ev.id)}
-                  >
-                    <div className="history__icon">
-                      <HistoryIcon type={ev.type} />
-                    </div>
+      )}
 
-                    <div className="history__content">
-                      <h4>{ev.name}</h4>
-                      <div className="history__meta">
-                        <span className="history__type">{ev.type.split('(')[0].trim()}</span>
-                        <span>{ev.date}</span>
-                      </div>
-                    </div>
+      {!loading && error && (
+        <div className="models-page__empty models-page__empty--error">
+          <AlertCircle size={22} />
+          <p>{error}</p>
+          <button type="button" className="models-page__btn models-page__btn--outline" onClick={load}>
+            <RefreshCw size={14} strokeWidth={2.25} /> Try again
+          </button>
+        </div>
+      )}
 
-                    <div className="history__results">
-                      <div className="history__stat">
-                        <span className="history__stat-label">Winner</span>
-                        <span className="history__stat-value">{ev.topModel.split(' - ')[0]}</span>
-                      </div>
-                      <div className="history__stat">
-                        <span className="history__stat-label">Score</span>
-                        <span className="history__stat-value history__stat-value--highlight n">{ev.topScore}</span>
-                      </div>
-                      <div className="history__stat">
-                        <span className="history__stat-label">Models</span>
-                        <span className="history__stat-value n">{ev.modelsTested}</span>
-                      </div>
-                    </div>
+      {!loading && !error && filtered.length === 0 && (
+        <div className="models-page__empty">
+          <Search size={22} />
+          <p>No models match your filters.</p>
+        </div>
+      )}
 
-                    <div className="history__actions">
-                      <button type="button" className="history__btn history__btn--sm" onClick={(e) => handleDuplicate(e, ev.id)} aria-label="Duplicate evaluation">
-                        <Copy size={16} />
-                      </button>
-                      <button type="button" className="history__btn history__btn--sm" onClick={(e) => handleDelete(e, ev.id)} aria-label="Delete evaluation">
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+      {!loading && !error && filtered.length > 0 && (
+        <div className="models-page__grid">
+          {filtered.map((m) => (
+            <div className="models-page__card" key={m.id}>
+              <div className="models-page__card-top">
+                <span className="models-page__card-name">{m.name}</span>
+                <span className={`models-page__tag${m.is_active ? ' models-page__tag--jade' : ' models-page__tag--gray'}`}>
+                  {m.is_active && <CheckCircle2 size={11} strokeWidth={2.5} />}
+                  {m.is_active ? 'Active' : 'Inactive'}
+                </span>
+              </div>
 
-          {selected && (
-            <div className="history__detail-panel">
-              <div className="history__detail-head">
-                <div className="history__detail-head-left">
-                  <span className={`history__type-badge history__type-badge--${typeTint(selected.type)}`}>
-                    {selected.type.split('(')[0].trim()}
-                  </span>
-                  <h2 className="history__detail-name">{selected.name}</h2>
-                  <span className="history__detail-date">
-                    {selected.status === 'Running' ? 'Running' : 'Completed'} &middot; {selected.date}
+              <div className="models-page__card-meta">
+                <span className="models-page__tag models-page__tag--blue">{m.provider_id}</span>
+                <span className="models-page__tag models-page__tag--outline">{m.category}</span>
+              </div>
+
+              <div className="models-page__card-stats">
+                <div className="models-page__card-stat">
+                  <span className="models-page__card-stat-label">Accuracy</span>
+                  <span className="models-page__card-stat-value models-page__card-stat-value--accent n">
+                    {m.accuracy_score === null ? '—' : `${m.accuracy_score}%`}
                   </span>
                 </div>
-
-                <div className="history__detail-actions">
-                  <button type="button" className="history__btn" onClick={(e) => handleDuplicate(e, selected.id)}>
-                    <Copy size={13} /> Duplicate
-                  </button>
-                  <button type="button" className="history__btn history__btn--danger" onClick={(e) => handleDelete(e, selected.id)}>
-                    <Trash2 size={13} /> Delete
-                  </button>
-                  <button type="button" className="history__btn history__btn--primary" onClick={() => navigate('/app/reports')}>
-                    <FileBarChart size={13} /> View Report
-                  </button>
+                <div className="models-page__card-stat">
+                  <span className="models-page__card-stat-label">Agent Score</span>
+                  <span className="models-page__card-stat-value n">{m.agent_score === null ? '—' : `${m.agent_score}%`}</span>
+                </div>
+                <div className="models-page__card-stat">
+                  <span className="models-page__card-stat-label">Context</span>
+                  <span className="models-page__card-stat-value n">{m.context_window.toLocaleString()}</span>
+                </div>
+                <div className="models-page__card-stat">
+                  <span className="models-page__card-stat-label">Price (in / out)</span>
+                  <span className="models-page__card-stat-value models-page__card-stat-value--sm n">
+                    {formatPrice(m.input_price)} / {formatPrice(m.output_price)}
+                  </span>
                 </div>
               </div>
 
-              {/* Summary cards — matches the reference .results-summary-cards / .summary-card design */}
-              <div className="history__summary-cards">
-                <div className="history__summary-card history__summary-card--winner">
-                  <div className="history__summary-icon">
-                    <Trophy />
-                  </div>
-                  <div className="history__summary-content">
-                    <div className="history__summary-label">Winner</div>
-                    <div className="history__summary-value">{selected.topModel}</div>
-                    <div className="history__summary-score">{selected.topScore}</div>
-                  </div>
-                </div>
-                <div className="history__summary-card">
-                  <div className="history__summary-icon">
-                    <Zap />
-                  </div>
-                  <div className="history__summary-content">
-                    <div className="history__summary-label">Avg Response Time</div>
-                    <div className="history__summary-value">{selected.avgResponseTime}</div>
-                    <div className="history__summary-score">{selected.modelsTested} models tested</div>
-                  </div>
-                </div>
-                <div className="history__summary-card">
-                  <div className="history__summary-icon">
-                    <Wallet />
-                  </div>
-                  <div className="history__summary-content">
-                    <div className="history__summary-label">Total Cost</div>
-                    <div className="history__summary-value">{selected.costSpent}</div>
-                    <div className="history__summary-score">{selected.status}</div>
-                  </div>
-                </div>
-              </div>
-
-              <p className="history__section-title">Full results</p>
-              <div className="history__table-wrap">
-                <table className="history__table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: 48 }}>Rank</th>
-                      <th>Model</th>
-                      <th>Provider</th>
-                      <th>Score</th>
-                      <th>Accuracy</th>
-                      <th>Speed</th>
-                      <th>Cost</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {selected.results.map((r) => (
-                      <tr key={r.rank}>
-                        <td>
-                          <span className={`history__rank-pill${r.rank === 1 ? ' history__rank-pill--1' : ''}`}>{r.rank}</span>
-                        </td>
-                        <td className="history__cell-strong">{r.model}</td>
-                        <td>{r.provider}</td>
-                        <td className={`n${r.rank === 1 ? ' history__score-cell' : ''}`}>{r.score}</td>
-                        <td className="n">{r.accuracy}</td>
-                        <td className="n">{r.time}</td>
-                        <td className="n">{r.cost}</td>
-                      </tr>
+              {m.capabilities.length > 0 && (
+                <>
+                  <span className="models-page__card-section-label">Capabilities</span>
+                  <div className="models-page__caps">
+                    {m.capabilities.map((c) => (
+                      <span key={c} className={`models-page__cap-pill models-page__cap-pill--${pillTint(c)}`}>
+                        {c}
+                      </span>
                     ))}
-                  </tbody>
-                </table>
+                  </div>
+                </>
+              )}
+
+              <div className="models-page__card-foot">
+                {m.base_url ? (
+                  <span className="models-page__card-foot-source">
+                    <ExternalLink size={12} /> {m.base_url}
+                  </span>
+                ) : (
+                  <span className="models-page__card-foot-source">Default endpoint</span>
+                )}
               </div>
             </div>
-          )}
+          ))}
         </div>
       )}
     </div>
   );
 };
 
-export default History;
+export default Models;
 
 
 
@@ -277,31 +212,72 @@ export default History;
 
 
 
-//History.scss
+//Models.scss
 @use '../../../styles/variables' as *;
 
-.history {
+.models-page {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  min-height: 0;
-  // .main-layout__body / .workspace-layout / .workspace-layout__content form an
-  // unbroken flex chain sized to the viewport (header/footer are fixed and offset
-  // via margin), so height: 100% here resolves to the visible content area.
-  // workspace-layout__content also has a 3rem bottom padding, which would
-  // otherwise leave a large gap below .history — pull most of that back in,
-  // keeping just a small 0.75rem breathing-room strip at the true bottom edge,
-  // and giving the two scrollable panels below a real height to scroll within.
-  height: calc(100% + 3rem - 0.75rem);
-  margin-bottom: calc(-3rem + 0.75rem);
+  gap: 16px;
 
   /* ---------- header ---------- */
   &__header {
     flex-shrink: 0;
     display: flex;
-    align-items: flex-start;
+    align-items: flex-end;
     justify-content: space-between;
     gap: 1rem;
+    padding-bottom: 18px;
+    margin-bottom: 2px;
+    border-bottom: 1px solid $border-subtle;
+  }
+
+  &__header-left {
+    display: flex;
+    flex-direction: column;
+  }
+
+  &__header-right {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  &__header-eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: $font-mono;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: $primary;
+    margin-bottom: 6px;
+
+    &::before {
+      content: '';
+      width: 16px;
+      height: 2px;
+      border-radius: 2px;
+      background: $primary;
+    }
+  }
+
+  &__header-meta {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
+    border-radius: 999px;
+    padding: 7px 13px;
+    white-space: nowrap;
   }
 
   &__title {
@@ -317,55 +293,39 @@ export default History;
     font-size: 0.84375rem;
   }
 
-  /* ---------- generic buttons ---------- */
   &__btn {
     display: inline-flex;
     align-items: center;
-    justify-content: center;
     gap: 7px;
     font-family: $font-body;
     font-size: 0.8125rem;
     font-weight: 600;
     padding: 9px 14px;
     border-radius: 8px;
-    border: 1px solid $border-default;
-    background: $bg-main;
-    color: $text-secondary;
+    border: 1px solid transparent;
     cursor: pointer;
     white-space: nowrap;
-    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
+    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease, opacity 0.14s ease;
 
-    &:hover {
-      border-color: $primary;
-      box-shadow: $shadow-sm;
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
     }
 
-    &--primary {
-      background: $primary;
-      border-color: $primary;
-      color: #fff;
+    &--outline {
+      background: $bg-main;
+      border-color: $border-default;
+      color: $text-secondary;
 
-      &:hover {
-        background: $primary-hover;
-        border-color: $primary-hover;
-        color: #fff;
+      &:hover:not(:disabled) {
+        border-color: $text-primary;
+        color: $text-primary;
       }
     }
+  }
 
-    &--danger:hover {
-      border-color: $danger;
-      color: $danger;
-      background: $danger-subtle;
-    }
-
-    &--sm {
-      padding: 6px;
-
-      svg {
-        width: 15px;
-        height: 15px;
-      }
-    }
+  &__spin {
+    animation: models-page-spin 0.9s linear infinite;
   }
 
   /* ---------- filters ---------- */
@@ -373,7 +333,8 @@ export default History;
     flex-shrink: 0;
     display: flex;
     flex-wrap: wrap;
-    gap: 10px;
+    align-items: center;
+    gap: 12px;
   }
 
   &__search {
@@ -429,480 +390,253 @@ export default History;
     }
   }
 
-  /* ---------- custom dropdown (used by <Select />) ---------- */
-  &-select {
-    position: relative;
+  &__seg {
     flex-shrink: 0;
-
-    &__trigger {
-      width: 100%;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      border: 1px solid $border-default;
-      border-radius: 10px;
-      padding: 9px 12px;
-      background: $bg-main;
-      font-size: 0.8125rem;
-      font-weight: 500;
-      font-family: $font-body;
-      color: $text-primary;
-      cursor: pointer;
-      transition: border-color 0.14s ease, box-shadow 0.14s ease;
-
-      &:hover {
-        border-color: $border-strong;
-      }
-
-      &--open {
-        border-color: $primary;
-        box-shadow: 0 0 0 3px $primary-light;
-      }
-    }
-
-    &__chevron {
-      flex-shrink: 0;
-      color: $text-tertiary;
-      transition: transform 0.16s ease;
-    }
-
-    &__trigger--open &__chevron {
-      transform: rotate(180deg);
-    }
-
-    &__menu {
-      position: absolute;
-      top: calc(100% + 6px);
-      left: 0;
-      right: 0;
-      z-index: 20;
-      background: $bg-main;
-      border: 1px solid $border-subtle;
-      border-radius: 10px;
-      box-shadow: $shadow-lg;
-      padding: 5px;
-      display: flex;
-      flex-direction: column;
-      gap: 1px;
-    }
-
-    &__option {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      width: 100%;
-      text-align: left;
-      padding: 8px 10px;
-      border: none;
-      border-radius: 7px;
-      background: transparent;
-      font-size: 0.8125rem;
-      font-family: $font-body;
-      color: $text-secondary;
-      cursor: pointer;
-      transition: background 0.12s ease, color 0.12s ease;
-
-      &:hover {
-        background: $bg-subtle;
-        color: $text-primary;
-      }
-
-      &--active {
-        color: $primary;
-        font-weight: 600;
-
-        svg {
-          color: $primary;
-        }
-      }
-    }
-  }
-
-  /* ---------- default two-column layout: 400px list + detail, each independently scrollable ---------- */
-  &__body {
-    flex: 1;
-    display: flex;
-    gap: 16px;
-    min-height: 0;
-  }
-
-  &__list-panel {
-    flex: 0 0 400px;
-    max-width: 400px;
-    min-height: 0;
-    overflow-y: auto;
-  }
-
-  /* ---------- list ---------- */
-  &__list {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  &__item {
-    display: flex;
+    display: inline-flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 10px;
-    padding: 14px 16px;
-    background: $bg-main;
+    gap: 2px;
+    padding: 3px;
     border: 1px solid $border-subtle;
-    border-radius: $radius-lg;
+    border-radius: 11px;
+    background: $bg-subtle;
+  }
+
+  &__seg-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: $font-body;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-tertiary;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 7px 12px;
     cursor: pointer;
-    transition: border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+    transition: background 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
+
+    svg {
+      opacity: 0.8;
+    }
 
     &:hover {
-      border-color: $primary;
-      box-shadow: $shadow-sm;
+      color: $text-primary;
     }
 
     &--active {
-      border-color: $primary;
-      background: $primary-light;
-      box-shadow: $shadow-sm;
-    }
-  }
-
-  &__icon {
-    width: 36px;
-    height: 36px;
-    background: $primary-light;
-    border-radius: $radius-md;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-
-    svg {
-      width: 18px;
-      height: 18px;
+      background: $bg-main;
       color: $primary;
-      stroke-width: 1.5;
+      box-shadow: $shadow-xs;
+
+      svg {
+        opacity: 1;
+      }
     }
   }
 
-  &__item--active &__icon {
-    background: $bg-main;
-  }
-
-  &__content {
-    flex-basis: calc(100% - 46px);
-    flex-grow: 1;
-    min-width: 0;
-
-    h4 {
-      font-size: 14px;
-      font-weight: 500;
-      margin-bottom: 4px;
-      color: $text-primary;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-  }
-
-  &__meta {
-    display: flex;
+  /* ---------- tags ---------- */
+  &__tag {
+    flex-shrink: 0;
+    display: inline-flex;
     align-items: center;
-    gap: 10px;
-    font-size: 12px;
-    color: $text-tertiary;
-    overflow: hidden;
-
-    span:last-child {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-  }
-
-  &__type {
-    flex-shrink: 0;
-    padding: 2px 8px;
-    background: $primary-light;
-    color: $primary;
-    border-radius: 4px;
-    font-weight: 500;
-  }
-
-  &__item--active &__type {
-    background: $bg-main;
-  }
-
-  &__results {
-    display: flex;
-    gap: 16px;
-    flex-shrink: 0;
-  }
-
-  &__stat {
-    display: flex;
-    flex-direction: column;
-  }
-
-  &__stat-label {
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.4px;
-    color: $text-tertiary;
-    margin-bottom: 2px;
-  }
-
-  &__stat-value {
-    font-size: 13px;
-    font-weight: 500;
-    color: $text-primary;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 84px;
-
-    &--highlight {
-      color: $primary;
-    }
-  }
-
-  &__actions {
-    display: flex;
-    gap: 6px;
-    flex-shrink: 0;
-    margin-left: auto;
-  }
-
-  /* ---------- detail panel ---------- */
-  &__detail-panel {
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-    background: $bg-main;
-    border: 1px solid $border-subtle;
-    border-radius: 16px;
-    box-shadow: $shadow-xs;
-    padding: 26px 28px;
-    overflow-y: auto;
-  }
-
-  &__detail-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-    padding-bottom: 18px;
-    margin-bottom: 22px;
-    border-bottom: 1px solid $border-subtle;
-  }
-
-  &__detail-head-left {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    min-width: 0;
-  }
-
-  &__detail-name {
-    font-size: 1.25rem;
-    font-weight: 800;
-    letter-spacing: -0.01em;
-    color: $text-primary;
-  }
-
-  &__detail-date {
-    font-size: 0.8125rem;
-    color: $text-tertiary;
-  }
-
-  &__detail-actions {
-    display: flex;
-    gap: 8px;
-    flex-shrink: 0;
-    flex-wrap: wrap;
-  }
-
-  /* ---------- type badge (sidebar + detail) ---------- */
-  &__type-badge {
-    width: fit-content;
-    flex-shrink: 0;
-    font-size: 0.625rem;
+    gap: 4px;
+    font-size: 0.6875rem;
     font-weight: 700;
     border-radius: 999px;
-    padding: 2px 8px;
-
-    &--violet {
-      color: $violet;
-      background: $violet-light;
-    }
+    padding: 3px 10px;
 
     &--blue {
       color: $primary;
       background: $primary-light;
     }
 
+    &--jade {
+      color: $success;
+      background: $success-subtle;
+    }
+
+    &--gray {
+      color: $text-tertiary;
+      background: $bg-inset;
+    }
+
+    &--outline {
+      color: $text-secondary;
+      background: transparent;
+      border: 1px solid $border-default;
+    }
+  }
+
+  /* ---------- capability pills ---------- */
+  &__caps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+
+  &__cap-pill {
+    font-size: 0.71875rem;
+    font-weight: 600;
+    border-radius: 999px;
+    padding: 3px 10px;
+
+    &--blue {
+      color: $primary;
+      background: $primary-light;
+    }
+
+    &--violet {
+      color: $violet;
+      background: $violet-light;
+    }
+
     &--amber {
       color: $warning;
       background: $warning-subtle;
     }
+
+    &--jade {
+      color: $success;
+      background: $success-subtle;
+    }
+
+    &--rose {
+      color: $danger;
+      background: $danger-subtle;
+    }
   }
 
-  /* ---------- summary cards — matches reference .results-summary-cards / .summary-card ---------- */
-  &__summary-cards {
+  /* ---------- full-info card grid ---------- */
+  &__grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 16px;
-    margin-bottom: 24px;
   }
 
-  &__summary-card {
+  &__card {
+    display: flex;
+    flex-direction: column;
     background: $bg-main;
     border: 1px solid $border-subtle;
-    border-radius: $radius-lg;
-    padding: 20px;
-    display: flex;
-    gap: 14px;
-    min-width: 0;
+    border-left: 3px solid $card-accent;
+    padding: 15px 18px;
+    box-shadow: $shadow-xs;
+    transition: box-shadow 0.15s ease, transform 0.15s ease;
 
-    &--winner {
-      // Reference uses a fixed warm amber gradient/border for the winner
-      // card in both themes (it's a celebratory accent, not a surface
-      // token), so this intentionally does not switch with dark mode.
-      background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
-      border-color: #fde68a;
+    &:hover {
+      box-shadow: $shadow-md;
+      transform: translateY(-2px);
     }
   }
 
-  &__summary-icon {
-    width: 44px;
-    height: 44px;
-    background: $bg-subtle;
-    border-radius: $radius-md;
+  &__card-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 6px;
+  }
+
+  &__card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+
+  &__card-name {
+    font-size: 0.9375rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: $text-primary;
+  }
+
+  &__card-desc {
+    font-size: 0.78125rem;
+    color: $text-secondary;
+    line-height: 1.5;
+    margin-bottom: 10px;
+  }
+
+  &__card-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px 20px;
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid $border-subtle;
+  }
+
+  &__card-stat-label {
+    font-size: 0.625rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: $text-tertiary;
+  }
+
+  &__card-stat-value {
+    font-size: 0.9375rem;
+    font-weight: 800;
+    color: $text-primary;
+    display: block;
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    &--sm {
+      font-size: 0.78125rem;
+      font-weight: 700;
+    }
+
+    &--accent {
+      color: $success;
+    }
+  }
+
+  &__card-section-label {
+    font-size: 0.65625rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: $text-tertiary;
+    margin-bottom: 6px;
+    display: block;
+  }
+
+  &__card-foot {
+    margin-top: auto;
+    padding-top: 10px;
+    border-top: 1px solid $border-subtle;
     display: flex;
     align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-
-    svg {
-      width: 22px;
-      height: 22px;
-      color: $text-secondary;
-      stroke-width: 1.5;
-    }
+    justify-content: space-between;
+    gap: 10px;
   }
 
-  &__summary-card--winner &__summary-icon {
-    background: rgba(180, 83, 9, 0.12);
-
-    svg {
-      color: #b45309;
-    }
-  }
-
-  &__summary-content {
-    min-width: 0;
-  }
-
-  &__summary-label {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+  &__card-foot-source {
+    font-family: $font-mono;
+    font-size: 0.6875rem;
     color: $text-tertiary;
-    margin-bottom: 4px;
-  }
-
-  &__summary-value {
-    font-size: 16px;
-    font-weight: 600;
-    color: $text-primary;
-    margin-bottom: 2px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  &__summary-score {
-    font-size: 13px;
-    color: $text-secondary;
-  }
-
-  /* ---------- results table ---------- */
-  &__section-title {
-    font-size: 0.8125rem;
-    font-weight: 700;
-    color: $text-primary;
-    margin-bottom: 12px;
-  }
-
-  &__table-wrap {
-    overflow-x: auto;
-  }
-
-  &__table {
-    width: 100%;
-    border-collapse: collapse;
-
-    thead th {
-      text-align: left;
-      font-size: 0.6875rem;
-      font-weight: 700;
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-      color: $text-tertiary;
-      padding: 10px 14px;
-      background: $bg-subtle;
-      white-space: nowrap;
-
-      &:first-child {
-        border-radius: 8px 0 0 8px;
-      }
-
-      &:last-child {
-        border-radius: 0 8px 8px 0;
-      }
-    }
-
-    tbody td {
-      padding: 12px 14px;
-      font-size: 0.84375rem;
-      color: $text-secondary;
-      border-bottom: 1px solid $border-subtle;
-      white-space: nowrap;
-    }
-
-    tbody tr:last-child td {
-      border-bottom: none;
-    }
-  }
-
-  &__cell-strong {
-    font-weight: 600;
-    color: $text-primary;
-  }
-
-  &__rank-pill {
-    display: inline-flex;
+  /* ---------- empty state ---------- */
+  /* ---------- loading — plain, no border, just centers the spinner ---------- */
+  &__loading {
+    flex-shrink: 0;
+    display: flex;
     align-items: center;
     justify-content: center;
-    width: 22px;
-    height: 22px;
-    border-radius: 6px;
-    background: $bg-inset;
-    color: $text-tertiary;
-    font-size: 0.6875rem;
-    font-weight: 700;
-
-    &--1 {
-      background: $primary-light;
-      color: $primary;
-    }
+    padding: 64px 20px;
   }
 
-  &__score-cell {
-    color: $success;
-    font-weight: 700;
-  }
-
-  /* ---------- empty state ---------- */
   &__empty {
     flex-shrink: 0;
     display: flex;
@@ -918,39 +652,141 @@ export default History;
     svg {
       color: $text-tertiary;
     }
+
+    &--error {
+      border-style: solid;
+      border-color: $danger-subtle;
+      background: $danger-subtle;
+      color: $danger;
+
+      svg {
+        color: $danger;
+      }
+    }
   }
 
   /* ---------- responsive ---------- */
-  @media (max-width: 900px) {
-    height: auto;
-    margin-bottom: 0;
-
-    &__body {
-      flex-direction: column;
+  @media (max-width: 1500px) {
+    &__grid {
+      grid-template-columns: repeat(2, 1fr);
     }
+  }
 
-    &__list-panel {
-      flex: 0 0 auto;
-      max-width: none;
-      max-height: 16rem;
-    }
-
-    &__detail-panel {
-      max-height: none;
-    }
-
-    &__summary-cards {
+  @media (max-width: 1000px) {
+    &__grid {
       grid-template-columns: 1fr;
     }
   }
 
-  @media (max-width: 520px) {
-    &__detail-panel {
-      padding: 18px 16px;
-    }
-
-    &__detail-head {
-      flex-direction: column;
+  @media (max-width: 640px) {
+    &__card-stats {
+      flex-wrap: wrap;
+      gap: 14px;
     }
   }
+
+  /* ---------- ultra-wide: nudge key text sizes up a touch ---------- */
+  @media (min-width: 1800px) {
+    &__title {
+      font-size: 23px;
+    }
+
+    &__subtitle {
+      font-size: 0.90625rem;
+    }
+
+    &__card-name {
+      font-size: 1.03125rem;
+    }
+
+    &__card-desc {
+      font-size: 0.84375rem;
+    }
+
+    &__card-stat-value {
+      font-size: 1.03125rem;
+    }
+
+    &__card-stat-value--sm {
+      font-size: 0.84375rem;
+    }
+
+    &__cap-pill {
+      font-size: 0.78125rem;
+    }
+
+    &__card-stat-label {
+      font-size: 0.6875rem;
+    }
+
+    &__card-section-label {
+      font-size: 0.71875rem;
+    }
+  }
+}
+
+@keyframes models-page-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Types.ts
+export interface ModelApi {
+  id: string;
+  name: string;
+  provider_id: string;
+  category: string;
+  capabilities: string[];
+  context_window: number;
+  input_price: number | null;
+  output_price: number | null;
+  accuracy_score: number | null;
+  agent_score: number | null;
+  is_active: boolean;
+  base_url: string | null;
+}
+
+export interface ModelsResponse {
+  models: ModelApi[];
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//api.ts
+import api from '../../../services/api';
+import type { ModelsResponse } from './types';
+
+export async function fetchModels(): Promise<ModelsResponse> {
+  const res = await api.get<ModelsResponse>('/models');
+  return res.data;
 }
