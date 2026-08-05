@@ -1,6 +1,161 @@
+//Models.tsx
+import { useMemo, useState, type FC } from 'react';
+import { Search, X, Boxes, LayoutGrid, Wrench, Eye, BrainCircuit, Code2 } from 'lucide-react';
+import { MODELS } from '../RunEvaluation/data';
+import './Models.scss';
+
+const CAPABILITY_FILTERS = [
+  { value: 'All', icon: LayoutGrid },
+  { value: 'Tool Calling', icon: Wrench },
+  { value: 'Vision', icon: Eye },
+  { value: 'Reasoning', icon: BrainCircuit },
+  { value: 'Coding', icon: Code2 },
+];
+
+const PILL_TINTS = ['blue', 'violet', 'amber', 'jade', 'rose'] as const;
+
+function pillTint(capability: string) {
+  let hash = 0;
+  for (let i = 0; i < capability.length; i += 1) hash = (hash * 31 + capability.charCodeAt(i)) >>> 0;
+  return PILL_TINTS[hash % PILL_TINTS.length];
+}
+
+const Models: FC = () => {
+  const [query, setQuery] = useState('');
+  const [capability, setCapability] = useState('All');
+
+  const filtered = useMemo(() => {
+    return MODELS.filter((m) => {
+      if (query && !m.name.toLowerCase().includes(query.toLowerCase()) && !m.provider.toLowerCase().includes(query.toLowerCase())) {
+        return false;
+      }
+      if (capability !== 'All') {
+        const matches = m.capabilities.some((c) => c.toLowerCase().includes(capability.toLowerCase()));
+        if (!matches) return false;
+      }
+      return true;
+    });
+  }, [query, capability]);
+
+  return (
+    <div className="models-page">
+      <div className="models-page__header">
+        <div className="models-page__header-left">
+          <p className="models-page__header-eyebrow">Model catalog</p>
+          <h1 className="models-page__title">Models</h1>
+          <p className="models-page__subtitle">Browse available AI models across every connected provider</p>
+        </div>
+
+        <div className="models-page__header-meta">
+          <Boxes size={13} />
+          {MODELS.length} models available
+        </div>
+      </div>
+
+      <div className="models-page__filters">
+        <div className="models-page__search">
+          <Search size={15} />
+          <input type="text" placeholder="Search models..." value={query} onChange={(e) => setQuery(e.target.value)} />
+          {query && (
+            <button type="button" className="models-page__search-clear" onClick={() => setQuery('')} aria-label="Clear search">
+              <X size={13} />
+            </button>
+          )}
+        </div>
+
+        <div className="models-page__seg">
+          {CAPABILITY_FILTERS.map((c) => (
+            <button
+              key={c.value}
+              type="button"
+              className={`models-page__seg-item${capability === c.value ? ' models-page__seg-item--active' : ''}`}
+              onClick={() => setCapability(c.value)}
+            >
+              <c.icon size={13} strokeWidth={2.25} />
+              {c.value}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="models-page__empty">
+          <Search size={22} />
+          <p>No models match your filters.</p>
+        </div>
+      ) : (
+        <div className="models-page__grid">
+          {filtered.map((m) => (
+            <div className="models-page__card" key={m.id}>
+              <div className="models-page__card-top">
+                <span className="models-page__card-name">{m.name}</span>
+                <span className="models-page__tag models-page__tag--blue">{m.provider}</span>
+              </div>
+
+              <p className="models-page__card-desc">{m.description}</p>
+
+              <div className="models-page__card-stats">
+                <div className="models-page__card-stat">
+                  <span className="models-page__card-stat-label">Accuracy</span>
+                  <span className="models-page__card-stat-value models-page__card-stat-value--accent n">{m.accuracyScore}%</span>
+                </div>
+                <div className="models-page__card-stat">
+                  <span className="models-page__card-stat-label">Agent Score</span>
+                  <span className="models-page__card-stat-value n">{m.agentScore}%</span>
+                </div>
+                <div className="models-page__card-stat">
+                  <span className="models-page__card-stat-label">Speed</span>
+                  <span className="models-page__card-stat-value models-page__card-stat-value--sm">{m.speedRating}</span>
+                </div>
+                <div className="models-page__card-stat">
+                  <span className="models-page__card-stat-label">Pricing</span>
+                  <span className="models-page__card-stat-value models-page__card-stat-value--sm">{m.pricing}</span>
+                </div>
+              </div>
+
+              <span className="models-page__card-section-label">Capabilities</span>
+              <div className="models-page__caps">
+                {m.capabilities.map((c) => (
+                  <span key={c} className={`models-page__cap-pill models-page__cap-pill--${pillTint(c)}`}>
+                    {c}
+                  </span>
+                ))}
+              </div>
+
+              <div className="models-page__card-foot">
+                <span className="models-page__card-foot-source">{m.version}</span>
+                <span className="models-page__card-foot-source">{m.contextWindow}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Models;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Models.scss
 @use '../../../styles/variables' as *;
 
-.datasets-page {
+.models-page {
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -20,13 +175,6 @@
   &__header-left {
     display: flex;
     flex-direction: column;
-  }
-
-  &__header-right {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    gap: 10px;
   }
 
   &__header-eyebrow {
@@ -51,6 +199,7 @@
   }
 
   &__header-meta {
+    flex-shrink: 0;
     display: inline-flex;
     align-items: center;
     gap: 6px;
@@ -75,48 +224,6 @@
     margin-top: 3px;
     color: $text-secondary;
     font-size: 0.84375rem;
-  }
-
-  &__btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    font-family: $font-body;
-    font-size: 0.8125rem;
-    font-weight: 600;
-    padding: 9px 14px;
-    border-radius: 8px;
-    border: 1px solid transparent;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease, opacity 0.14s ease;
-
-    &:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-    }
-
-    &--outline {
-      background: $bg-main;
-      border-color: $border-default;
-      color: $text-secondary;
-
-      &:hover:not(:disabled) {
-        border-color: $text-primary;
-        color: $text-primary;
-      }
-    }
-
-    &--primary {
-      background: $primary;
-      border-color: $primary;
-      color: $on-primary;
-
-      &:hover {
-        background: $primary-hover;
-        border-color: $primary-hover;
-      }
-    }
   }
 
   /* ---------- filters ---------- */
@@ -244,7 +351,7 @@
     }
   }
 
-  /* ---------- capability pills (shared) ---------- */
+  /* ---------- capability pills ---------- */
   &__caps {
     display: flex;
     flex-wrap: wrap;
@@ -331,7 +438,8 @@
 
   &__card-stats {
     display: flex;
-    gap: 20px;
+    flex-wrap: wrap;
+    gap: 16px 20px;
     margin-bottom: 10px;
     padding-bottom: 10px;
     border-bottom: 1px solid $border-subtle;
@@ -359,6 +467,10 @@
       font-size: 0.78125rem;
       font-weight: 700;
     }
+
+    &--accent {
+      color: $success;
+    }
   }
 
   &__card-section-label {
@@ -371,98 +483,26 @@
     display: block;
   }
 
-  &__card-tasks {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    margin-bottom: 8px;
-
-    &--inline {
-      flex-direction: row;
-      flex-wrap: wrap;
-      align-items: baseline;
-      gap: 0 6px;
-    }
-  }
-
-  &__card-task {
-    font-size: 0.75rem;
-    line-height: 1.45;
-
-    b {
-      color: $text-primary;
-      font-weight: 700;
-    }
-
-    span {
-      color: $text-secondary;
-    }
-
-    .datasets-page__card-tasks--inline & {
-      display: inline;
-      line-height: 1.65;
-
-      &:not(:first-child)::before {
-        content: '';
-        display: inline-block;
-        width: 4px;
-        height: 4px;
-        border-radius: 50%;
-        background: $primary;
-        margin-right: 6px;
-        vertical-align: middle;
-      }
-    }
-  }
-
-  &__card-view-all {
-    display: inline-flex;
-    align-items: center;
-    font-family: $font-body;
-    font-size: 0.71875rem;
-    font-weight: 700;
-    color: $primary;
-    background: transparent;
-    border: none;
-    padding: 0;
-    margin-bottom: 10px;
-    cursor: pointer;
-
-    &:hover {
-      text-decoration: underline;
-    }
-  }
-
   &__card-foot {
     margin-top: auto;
     padding-top: 10px;
     border-top: 1px solid $border-subtle;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
   }
 
   &__card-foot-source {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
+    font-family: $font-mono;
     font-size: 0.6875rem;
     color: $text-tertiary;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-
-    svg {
-      flex-shrink: 0;
-    }
   }
 
-  /* ---------- loading — plain, no border, just centers the spinner ---------- */
-  &__loading {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 64px 20px;
-  }
-
+  /* ---------- empty state ---------- */
   &__empty {
     flex-shrink: 0;
     display: flex;
@@ -478,103 +518,6 @@
     svg {
       color: $text-tertiary;
     }
-
-    &--error {
-      border-style: solid;
-      border-color: $danger-subtle;
-      background: $danger-subtle;
-      color: $danger;
-
-      svg {
-        color: $danger;
-      }
-    }
-  }
-
-  &__spin {
-    animation: datasets-page-spin 0.9s linear infinite;
-  }
-
-  /* ---------- tasks modal ---------- */
-  &__overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 200;
-    background: rgba(0, 0, 0, 0.45);
-    backdrop-filter: blur(2px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-  }
-
-  &__modal {
-    width: 100%;
-    max-width: 32rem;
-    max-height: min(80vh, 40rem);
-    background: $bg-main;
-    border: 1px solid $border-subtle;
-    border-radius: 14px;
-    box-shadow: $shadow-lg;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  &__modal-head {
-    flex-shrink: 0;
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 20px 22px 16px;
-    border-bottom: 1px solid $border-subtle;
-
-    .datasets-page__tag {
-      margin-bottom: 8px;
-    }
-  }
-
-  &__modal-title {
-    font-size: 1.0625rem;
-    font-weight: 800;
-    letter-spacing: -0.01em;
-    color: $text-primary;
-  }
-
-  &__modal-sub {
-    margin-top: 3px;
-    font-size: 0.75rem;
-    color: $text-tertiary;
-  }
-
-  &__modal-close {
-    flex-shrink: 0;
-    width: 30px;
-    height: 30px;
-    border-radius: 8px;
-    border: 1px solid $border-default;
-    background: $bg-main;
-    color: $text-tertiary;
-    display: grid;
-    place-items: center;
-    cursor: pointer;
-    transition: border-color 0.14s ease, color 0.14s ease;
-
-    &:hover {
-      border-color: $text-primary;
-      color: $text-primary;
-    }
-  }
-
-  &__modal-body {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 18px 22px 22px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
   }
 
   /* ---------- responsive ---------- */
@@ -623,10 +566,6 @@
       font-size: 0.84375rem;
     }
 
-    &__card-task {
-      font-size: 0.8125rem;
-    }
-
     &__cap-pill {
       font-size: 0.78125rem;
     }
@@ -638,15 +577,5 @@
     &__card-section-label {
       font-size: 0.71875rem;
     }
-
-    &__card-view-all {
-      font-size: 0.78125rem;
-    }
-  }
-}
-
-@keyframes datasets-page-spin {
-  to {
-    transform: rotate(360deg);
   }
 }
