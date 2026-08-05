@@ -1,61 +1,186 @@
+//History.tsx
+import { useMemo, useState, type FC, type MouseEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Play, Search, Copy, Trash2, X, Bot, MessageSquare } from 'lucide-react';
+import { RECENT_EVALUATIONS, type RecentEvaluation } from '../shared/evaluations';
+import Select from './Select';
+import './History.scss';
+
+const TYPE_FILTERS = [
+  { value: 'all', label: 'All Types' },
+  { value: 'AI Model', label: 'AI Model' },
+  { value: 'Agent', label: 'Agent' },
+  { value: 'RAG', label: 'RAG' },
+];
+
+const DATE_FILTERS = [
+  { value: 30, label: 'Last 30 days' },
+  { value: 7, label: 'Last 7 days' },
+  { value: Infinity, label: 'All time' },
+];
+
+function matchesType(evType: string, filter: string) {
+  if (filter === 'all') return true;
+  if (filter === 'Agent') return evType.includes('Agent');
+  if (filter === 'RAG') return evType.includes('RAG');
+  return evType.includes('AI Model');
+}
+
+// Mirrors the icon logic from renderHistory() in the original app.js:
+// Agent -> bot, RAG -> search, everything else -> message-square
+function HistoryIcon({ type }: { type: string }) {
+  if (type.includes('Agent')) return <Bot />;
+  if (type.includes('RAG')) return <Search />;
+  return <MessageSquare />;
+}
+
+const History: FC = () => {
+  const navigate = useNavigate();
+  const [items, setItems] = useState<RecentEvaluation[]>(RECENT_EVALUATIONS);
+  const [query, setQuery] = useState('');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [dateFilter, setDateFilter] = useState(30);
+
+  const filtered = useMemo(() => {
+    return items.filter((ev) => {
+      if (query && !ev.name.toLowerCase().includes(query.toLowerCase())) return false;
+      if (!matchesType(ev.type, typeFilter)) return false;
+      if (ev.daysAgo > dateFilter) return false;
+      return true;
+    });
+  }, [items, query, typeFilter, dateFilter]);
+
+  // Mirrors viewEvaluationResult(id): populate the results view and navigate there.
+  const handleOpen = (ev: RecentEvaluation) => {
+    navigate('/app/results', { state: { evaluation: ev } });
+  };
+
+  // Mirrors duplicateEval(id): send the user into a fresh Run Evaluation flow.
+  const handleDuplicate = (e: MouseEvent, _id: string) => {
+    e.stopPropagation();
+    navigate('/app/run-evaluation');
+  };
+
+  // Mirrors deleteEval(id): confirm, then remove from the list.
+  const handleDelete = (e: MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (window.confirm('Delete this evaluation?')) {
+      setItems((prev) => prev.filter((ev) => ev.id !== id));
+    }
+  };
+
+  return (
+    <div className="history">
+      <div className="history__header">
+        <div>
+          <h1 className="history__title">History</h1>
+          <p className="history__subtitle">Past evaluations</p>
+        </div>
+        <button type="button" className="history__btn history__btn--primary" onClick={() => navigate('/app/run-evaluation')}>
+          <Play size={14} strokeWidth={2.25} /> New Evaluation
+        </button>
+      </div>
+
+      <div className="history__filters">
+        <div className="history__search">
+          <Search size={15} />
+          <input type="text" placeholder="Search..." value={query} onChange={(e) => setQuery(e.target.value)} />
+          {query && (
+            <button type="button" className="history__search-clear" onClick={() => setQuery('')} aria-label="Clear search">
+              <X size={13} />
+            </button>
+          )}
+        </div>
+        <Select value={typeFilter} options={TYPE_FILTERS} onChange={setTypeFilter} width={140} />
+        <Select value={dateFilter} options={DATE_FILTERS} onChange={setDateFilter} width={140} />
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="history__empty">
+          <Search size={22} />
+          <p>No evaluations match your filters.</p>
+        </div>
+      ) : (
+        <div className="history__list">
+          {filtered.map((ev) => (
+            <div key={ev.id} className="history__item" onClick={() => handleOpen(ev)}>
+              <div className="history__icon">
+                <HistoryIcon type={ev.type} />
+              </div>
+
+              <div className="history__content">
+                <h4>{ev.name}</h4>
+                <div className="history__meta">
+                  <span className="history__type">{ev.type.split('(')[0].trim()}</span>
+                  <span>{ev.date}</span>
+                </div>
+              </div>
+
+              <div className="history__results">
+                <div className="history__stat">
+                  <span className="history__stat-label">Winner</span>
+                  <span className="history__stat-value">{ev.topModel.split(' - ')[0]}</span>
+                </div>
+                <div className="history__stat">
+                  <span className="history__stat-label">Score</span>
+                  <span className="history__stat-value history__stat-value--highlight n">{ev.topScore}</span>
+                </div>
+                <div className="history__stat">
+                  <span className="history__stat-label">Models</span>
+                  <span className="history__stat-value n">{ev.modelsTested}</span>
+                </div>
+              </div>
+
+              <div className="history__actions">
+                <button type="button" className="history__btn history__btn--sm" onClick={(e) => handleDuplicate(e, ev.id)} aria-label="Duplicate evaluation">
+                  <Copy size={16} />
+                </button>
+                <button type="button" className="history__btn history__btn--sm" onClick={(e) => handleDelete(e, ev.id)} aria-label="Delete evaluation">
+                  <Trash2 size={16} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default History;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//History.scss
 @use '../../../styles/variables' as *;
 
-.providers-page {
+.history {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
 
   /* ---------- header ---------- */
   &__header {
-    flex-shrink: 0;
     display: flex;
-    align-items: flex-end;
+    align-items: flex-start;
     justify-content: space-between;
     gap: 1rem;
-    padding-bottom: 18px;
-    margin-bottom: 2px;
-    border-bottom: 1px solid $border-subtle;
-  }
-
-  &__header-left {
-    display: flex;
-    flex-direction: column;
-  }
-
-  &__header-eyebrow {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-family: $font-mono;
-    font-size: 0.6875rem;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: $primary;
-    margin-bottom: 6px;
-
-    &::before {
-      content: '';
-      width: 16px;
-      height: 2px;
-      border-radius: 2px;
-      background: $primary;
-    }
-  }
-
-  &__header-meta {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: $text-secondary;
-    background: $bg-subtle;
-    border: 1px solid $border-subtle;
-    border-radius: 999px;
-    padding: 7px 13px;
-    white-space: nowrap;
   }
 
   &__title {
@@ -71,17 +196,63 @@
     font-size: 0.84375rem;
   }
 
+  /* ---------- generic buttons ---------- */
+  &__btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    font-family: $font-body;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    padding: 9px 14px;
+    border-radius: 8px;
+    border: 1px solid $border-default;
+    background: $bg-main;
+    color: $text-secondary;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
+
+    &:hover {
+      border-color: $primary;
+      box-shadow: $shadow-sm;
+    }
+
+    &--primary {
+      background: $primary;
+      border-color: $primary;
+      color: #fff;
+
+      &:hover {
+        background: $primary-hover;
+        border-color: $primary-hover;
+        color: #fff;
+      }
+    }
+
+    &--sm {
+      padding: 6px;
+
+      svg {
+        width: 16px;
+        height: 16px;
+      }
+    }
+  }
+
   /* ---------- filters ---------- */
   &__filters {
-    flex-shrink: 0;
     display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
   }
 
   &__search {
     display: flex;
     align-items: center;
     gap: 9px;
-    width: 300px;
+    width: 280px;
     max-width: 100%;
     border: 1px solid $border-default;
     border-radius: 10px;
@@ -130,293 +301,207 @@
     }
   }
 
-  /* ---------- avatar ---------- */
-  &__avatar {
+  /* ---------- custom dropdown (used by <Select />) ---------- */
+  &-select {
+    position: relative;
     flex-shrink: 0;
-    width: 34px;
-    height: 34px;
-    border-radius: 10px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 0.75rem;
-    font-weight: 700;
-    letter-spacing: -0.01em;
 
-    &--blue {
-      color: $primary;
-      background: $primary-light;
+    &__trigger {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      border: 1px solid $border-default;
+      border-radius: 10px;
+      padding: 9px 12px;
+      background: $bg-main;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      font-family: $font-body;
+      color: $text-primary;
+      cursor: pointer;
+      transition: border-color 0.14s ease, box-shadow 0.14s ease;
+
+      &:hover {
+        border-color: $border-strong;
+      }
+
+      &--open {
+        border-color: $primary;
+        box-shadow: 0 0 0 3px $primary-light;
+      }
     }
 
-    &--violet {
-      color: $violet;
-      background: $violet-light;
-    }
-
-    &--amber {
-      color: $warning;
-      background: $warning-subtle;
-    }
-
-    &--jade {
-      color: $success;
-      background: $success-subtle;
-    }
-
-    &--rose {
-      color: $danger;
-      background: $danger-subtle;
-    }
-  }
-
-  /* ---------- status tag ---------- */
-  &__tag {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 0.6875rem;
-    font-weight: 600;
-    border-radius: 999px;
-    padding: 3px 10px;
-
-    &--jade {
-      color: $success;
-      background: $success-subtle;
-    }
-
-    &--gray {
+    &__chevron {
+      flex-shrink: 0;
       color: $text-tertiary;
-      background: $bg-inset;
+      transition: transform 0.16s ease;
+    }
+
+    &__trigger--open &__chevron {
+      transform: rotate(180deg);
+    }
+
+    &__menu {
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 0;
+      right: 0;
+      z-index: 20;
+      background: $bg-main;
+      border: 1px solid $border-subtle;
+      border-radius: 10px;
+      box-shadow: $shadow-lg;
+      padding: 5px;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+
+    &__option {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      width: 100%;
+      text-align: left;
+      padding: 8px 10px;
+      border: none;
+      border-radius: 7px;
+      background: transparent;
+      font-size: 0.8125rem;
+      font-family: $font-body;
+      color: $text-secondary;
+      cursor: pointer;
+      transition: background 0.12s ease, color 0.12s ease;
+
+      &:hover {
+        background: $bg-subtle;
+        color: $text-primary;
+      }
+
+      &--active {
+        color: $primary;
+        font-weight: 600;
+
+        svg {
+          color: $primary;
+        }
+      }
     }
   }
 
-  /* ---------- full-info card grid ---------- */
-  &__grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 16px;
-  }
-
-  &__card {
+  /* ---------- list ---------- */
+  &__list {
     display: flex;
     flex-direction: column;
+    gap: 10px;
+  }
+
+  &__item {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 18px 20px;
     background: $bg-main;
     border: 1px solid $border-subtle;
-    border-left: 3px solid $card-accent;
-    padding: 15px 18px;
-    box-shadow: $shadow-xs;
-    transition: box-shadow 0.15s ease, transform 0.15s ease;
-
-    &:hover {
-      box-shadow: $shadow-md;
-      transform: translateY(-2px);
-    }
-  }
-
-  &__card-top {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    margin-bottom: 10px;
-  }
-
-  &__card-top-left {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-  }
-
-  &__card-name {
-    font-size: 0.9375rem;
-    font-weight: 800;
-    letter-spacing: -0.01em;
-    color: $text-primary;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__card-desc {
-    font-size: 0.78125rem;
-    color: $text-secondary;
-    line-height: 1.5;
-    margin-bottom: 10px;
-  }
-
-  &__card-stats {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 16px 20px;
-    margin-bottom: 10px;
-    padding-bottom: 10px;
-    border-bottom: 1px solid $border-subtle;
-  }
-
-  &__card-stat-label {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 0.625rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: $text-tertiary;
-
-    svg {
-      opacity: 0.8;
-    }
-  }
-
-  &__card-stat-value {
-    font-size: 0.9375rem;
-    font-weight: 800;
-    color: $text-primary;
-    display: block;
-    margin-top: 2px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-
-    &--sm {
-      font-size: 0.78125rem;
-      font-weight: 700;
-    }
-
-    &--accent {
-      color: $success;
-    }
-  }
-
-  &__card-section-label {
-    font-size: 0.65625rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: $text-tertiary;
-    margin-bottom: 6px;
-    display: block;
-  }
-
-  /* ---------- models list (card preview + modal) ---------- */
-  &__card-models {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    margin-bottom: 6px;
-  }
-
-  &__card-model-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 5px 0;
-    font-size: 0.75rem;
-  }
-
-  &__card-model-name {
-    color: $text-primary;
-    font-weight: 600;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__card-model-version {
-    font-family: $font-mono;
-    font-size: 0.6875rem;
-    font-weight: 400;
-    color: $text-tertiary;
-  }
-
-  &__card-model-accuracy {
-    flex-shrink: 0;
-    font-weight: 700;
-    color: $success;
-  }
-
-  &__card-view-all {
-    display: inline-flex;
-    align-items: center;
-    font-family: $font-body;
-    font-size: 0.71875rem;
-    font-weight: 700;
-    color: $primary;
-    background: transparent;
-    border: none;
-    padding: 0;
-    margin-bottom: 10px;
+    border-radius: $radius-lg;
     cursor: pointer;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
 
     &:hover {
-      text-decoration: underline;
+      border-color: $primary;
+      box-shadow: $shadow-sm;
     }
   }
 
-  /* ---------- card footer / actions ---------- */
-  &__card-foot {
-    margin-top: auto;
-    padding-top: 10px;
-    border-top: 1px solid $border-subtle;
+  &__icon {
+    width: 44px;
+    height: 44px;
+    background: $primary-light;
+    border-radius: $radius-md;
     display: flex;
-    gap: 8px;
-  }
-
-  &__btn {
-    display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
-    font-family: $font-body;
-    font-size: 0.78125rem;
-    font-weight: 600;
-    padding: 6px 12px;
-    border-radius: 8px;
-    border: 1px solid transparent;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+    flex-shrink: 0;
 
-    &--outline {
-      background: $bg-main;
-      border-color: $border-default;
+    svg {
+      width: 22px;
+      height: 22px;
+      color: $primary;
+      stroke-width: 1.5;
+    }
+  }
+
+  &__content {
+    flex: 1;
+    min-width: 0;
+
+    h4 {
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 4px;
       color: $text-primary;
-
-      &:hover {
-        border-color: $text-primary;
-      }
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
+  }
 
-    &--danger-outline {
-      background: $bg-main;
-      border-color: $border-default;
-      color: $text-tertiary;
+  &__meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: $text-tertiary;
+  }
 
-      &:hover {
-        border-color: $danger;
-        color: $danger;
-        background: $danger-subtle;
-      }
+  &__type {
+    padding: 2px 8px;
+    background: $primary-light;
+    color: $primary;
+    border-radius: 4px;
+    font-weight: 500;
+  }
+
+  &__results {
+    display: flex;
+    gap: 28px;
+    flex-shrink: 0;
+  }
+
+  &__stat {
+    display: flex;
+    flex-direction: column;
+  }
+
+  &__stat-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: $text-tertiary;
+    margin-bottom: 2px;
+  }
+
+  &__stat-value {
+    font-size: 13px;
+    font-weight: 500;
+    color: $text-primary;
+
+    &--highlight {
+      color: $primary;
     }
+  }
 
-    &--primary {
-      background: $primary;
-      border-color: $primary;
-      color: $on-primary;
-
-      &:hover {
-        background: $primary-hover;
-        border-color: $primary-hover;
-      }
-    }
+  &__actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
   }
 
   /* ---------- empty state ---------- */
   &__empty {
-    flex-shrink: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -432,195 +517,21 @@
     }
   }
 
-  /* ---------- modals (view-all-models + connect form) ---------- */
-  &__overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 200;
-    background: rgba(0, 0, 0, 0.45);
-    backdrop-filter: blur(2px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-  }
-
-  &__modal {
-    width: 100%;
-    max-width: 32rem;
-    max-height: min(80vh, 40rem);
-    background: $bg-main;
-    border: 1px solid $border-subtle;
-    border-radius: 14px;
-    box-shadow: $shadow-lg;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-
-    &--sm {
-      max-width: 24rem;
-      max-height: none;
-    }
-  }
-
-  &__modal-head {
-    flex-shrink: 0;
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 20px 22px 16px;
-    border-bottom: 1px solid $border-subtle;
-
-    .providers-page__avatar {
-      margin-bottom: 8px;
-    }
-  }
-
-  &__modal-title {
-    font-size: 1.0625rem;
-    font-weight: 800;
-    letter-spacing: -0.01em;
-    color: $text-primary;
-  }
-
-  &__modal-sub {
-    margin-top: 3px;
-    font-size: 0.75rem;
-    color: $text-tertiary;
-  }
-
-  &__modal-close {
-    flex-shrink: 0;
-    width: 30px;
-    height: 30px;
-    border-radius: 8px;
-    border: 1px solid $border-default;
-    background: $bg-main;
-    color: $text-tertiary;
-    display: grid;
-    place-items: center;
-    cursor: pointer;
-    transition: border-color 0.14s ease, color 0.14s ease;
-
-    &:hover {
-      border-color: $text-primary;
-      color: $text-primary;
-    }
-  }
-
-  &__modal-body {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 8px 22px 22px;
-    display: flex;
-    flex-direction: column;
-  }
-
-  /* ---------- connect form (inside its own modal) ---------- */
-  &__connect-form {
-    padding: 20px 22px 22px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  &__field-label {
-    font-size: 0.71875rem;
-    font-weight: 600;
-    color: $text-secondary;
-  }
-
-  &__input-wrap {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    border: 1px solid $border-default;
-    border-radius: 8px;
-    padding: 0 11px;
-    background: $bg-main;
-    color: $text-tertiary;
-    transition: border-color 0.14s ease, box-shadow 0.14s ease;
-
-    &:focus-within {
-      border-color: $primary;
-      box-shadow: 0 0 0 3px $primary-light;
-    }
-  }
-
-  &__input {
-    flex: 1;
-    width: 100%;
-    border: none;
-    outline: none;
-    padding: 8px 0;
-    font-size: 0.8125rem;
-    font-family: $font-body;
-    color: $text-primary;
-    background: transparent;
-
-    &::placeholder {
-      color: $text-tertiary;
-    }
-  }
-
-  &__form-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 6px;
-  }
-
   /* ---------- responsive ---------- */
-  @media (max-width: 1500px) {
-    &__grid {
-      grid-template-columns: repeat(2, 1fr);
-    }
-  }
-
-  @media (max-width: 1000px) {
-    &__grid {
-      grid-template-columns: 1fr;
-    }
-  }
-
-  /* ---------- ultra-wide: nudge key text sizes up a touch ---------- */
-  @media (min-width: 1800px) {
-    &__title {
-      font-size: 23px;
+  @media (max-width: 640px) {
+    &__item {
+      flex-wrap: wrap;
     }
 
-    &__subtitle {
-      font-size: 0.90625rem;
+    &__results {
+      width: 100%;
+      justify-content: space-between;
+      gap: 12px;
     }
 
-    &__card-name {
-      font-size: 1.03125rem;
-    }
-
-    &__card-desc {
-      font-size: 0.84375rem;
-    }
-
-    &__card-stat-value {
-      font-size: 1.03125rem;
-    }
-
-    &__card-stat-value--sm {
-      font-size: 0.84375rem;
-    }
-
-    &__card-stat-label {
-      font-size: 0.6875rem;
-    }
-
-    &__card-section-label {
-      font-size: 0.71875rem;
-    }
-
-    &__card-model-name {
-      font-size: 0.8125rem;
+    &__actions {
+      width: 100%;
+      justify-content: flex-end;
     }
   }
 }
