@@ -1,3 +1,413 @@
+//ModelComparator.tsx
+import { useMemo, useState, type FC } from 'react';
+import { Search, X, CheckCircle2, GitCompareArrows, ArrowLeft, Trophy } from 'lucide-react';
+import { MODELS } from '../RunEvaluation/data';
+import type { ModelInfo } from '../RunEvaluation/types';
+import './ModelComparator.scss';
+
+const MAX_SELECTION = 4;
+
+// ---------- helpers to pull comparable numbers out of display strings ----------
+function parsePrice(pricing: string): number | null {
+  const match = pricing.match(/([\d.]+)/);
+  return match ? parseFloat(match[1]) : null;
+}
+
+function parseSpeed(speedRating: string): number | null {
+  const match = speedRating.match(/\(([\d.]+)/);
+  return match ? parseFloat(match[1]) : null;
+}
+
+function parseContextWindow(contextWindow: string): number {
+  const cleaned = contextWindow.replace(/,/g, '');
+  const kMatch = cleaned.match(/([\d.]+)\s*k/i);
+  if (kMatch) return parseFloat(kMatch[1]) * 1_000;
+  const numMatch = cleaned.match(/([\d.]+)/);
+  return numMatch ? parseFloat(numMatch[1]) : 0;
+}
+
+type MetricRow = {
+  key: string;
+  label: string;
+  getValue: (m: ModelInfo) => string;
+  getSortValue?: (m: ModelInfo) => number | null;
+  betterIsHigher?: boolean;
+};
+
+const METRIC_ROWS: MetricRow[] = [
+  { key: 'provider', label: 'Provider', getValue: (m) => m.provider },
+  { key: 'version', label: 'Version', getValue: (m) => m.version },
+  { key: 'context', label: 'Context Window', getValue: (m) => m.contextWindow },
+  {
+    key: 'accuracy',
+    label: 'Accuracy',
+    getValue: (m) => `${m.accuracyScore}%`,
+    getSortValue: (m) => m.accuracyScore,
+    betterIsHigher: true,
+  },
+  {
+    key: 'agent',
+    label: 'Agent Score',
+    getValue: (m) => `${m.agentScore}%`,
+    getSortValue: (m) => m.agentScore,
+    betterIsHigher: true,
+  },
+  {
+    key: 'speed',
+    label: 'Speed',
+    getValue: (m) => m.speedRating,
+    getSortValue: (m) => parseSpeed(m.speedRating),
+    betterIsHigher: true,
+  },
+  {
+    key: 'price',
+    label: 'Pricing',
+    getValue: (m) => m.pricing,
+    getSortValue: (m) => parsePrice(m.pricing),
+    betterIsHigher: false,
+  },
+];
+
+const MODEL_COLORS = ['var(--primary)', 'var(--violet)', 'var(--warning)', 'var(--success)'];
+
+type RadarAxis = {
+  key: string;
+  label: string;
+  get: (m: ModelInfo) => number;
+  higherIsBetter: boolean;
+};
+
+const RADAR_AXES: RadarAxis[] = [
+  { key: 'accuracy', label: 'Accuracy', get: (m) => m.accuracyScore, higherIsBetter: true },
+  { key: 'agent', label: 'Agent Score', get: (m) => m.agentScore, higherIsBetter: true },
+  { key: 'speed', label: 'Speed', get: (m) => parseSpeed(m.speedRating) ?? 0, higherIsBetter: true },
+  { key: 'price', label: 'Affordability', get: (m) => parsePrice(m.pricing) ?? 0, higherIsBetter: false },
+  { key: 'context', label: 'Context', get: (m) => parseContextWindow(m.contextWindow), higherIsBetter: true },
+];
+
+const RadarChart: FC<{ models: ModelInfo[] }> = ({ models }) => {
+  const size = 280;
+  const center = size / 2;
+  const maxRadius = 96;
+  const angleStep = (2 * Math.PI) / RADAR_AXES.length;
+  const angleFor = (i: number) => -Math.PI / 2 + i * angleStep;
+
+  // Normalize each axis 0–100 across just the selected models, so the chart
+  // always uses the full space regardless of the underlying units.
+  const scoreFor = (axis: RadarAxis, m: ModelInfo) => {
+    const values = models.map((mm) => axis.get(mm));
+    const max = Math.max(...values);
+    const min = Math.min(...values);
+    const v = axis.get(m);
+    if (axis.higherIsBetter) {
+      return max === 0 ? 0 : (v / max) * 100;
+    }
+    // lower-is-better (price): cheapest gets 100, scale the rest down
+    if (v === 0) return 100;
+    const cheapest = min === 0 ? v : min;
+    return (cheapest / v) * 100;
+  };
+
+  const pointFor = (i: number, valuePct: number) => {
+    const angle = angleFor(i);
+    const r = (valuePct / 100) * maxRadius;
+    return [center + r * Math.cos(angle), center + r * Math.sin(angle)] as const;
+  };
+
+  const ringLevels = [0.25, 0.5, 0.75, 1];
+
+  return (
+    <svg viewBox={`0 0 ${size} ${size}`} className="model-comparator__radar-svg">
+      {/* grid rings */}
+      {ringLevels.map((level) => {
+        const pts = RADAR_AXES.map((_, i) => pointFor(i, level * 100).join(',')).join(' ');
+        return <polygon key={level} points={pts} className="model-comparator__radar-ring" />;
+      })}
+
+      {/* axis lines + labels */}
+      {RADAR_AXES.map((axis, i) => {
+        const [x, y] = pointFor(i, 100);
+        const [lx, ly] = pointFor(i, 118);
+        const anchor = Math.abs(Math.cos(angleFor(i))) < 0.15 ? 'middle' : Math.cos(angleFor(i)) > 0 ? 'start' : 'end';
+        return (
+          <g key={axis.key}>
+            <line x1={center} y1={center} x2={x} y2={y} className="model-comparator__radar-axis" />
+            <text x={lx} y={ly} textAnchor={anchor} dominantBaseline="middle" className="model-comparator__radar-label">
+              {axis.label}
+            </text>
+          </g>
+        );
+      })}
+
+      {/* one polygon per selected model */}
+      {models.map((m, mi) => {
+        const pts = RADAR_AXES.map((axis, i) => pointFor(i, scoreFor(axis, m)).join(',')).join(' ');
+        const color = MODEL_COLORS[mi % MODEL_COLORS.length];
+        return (
+          <polygon key={m.id} points={pts} fill={color} fillOpacity={0.14} stroke={color} strokeWidth={2} strokeLinejoin="round" />
+        );
+      })}
+    </svg>
+  );
+};
+
+const ModelComparator: FC = () => {
+  const [query, setQuery] = useState('');
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [comparing, setComparing] = useState(false);
+
+  const filtered = useMemo(
+    () =>
+      MODELS.filter(
+        (m) =>
+          !query ||
+          m.name.toLowerCase().includes(query.toLowerCase()) ||
+          m.provider.toLowerCase().includes(query.toLowerCase())
+      ),
+    [query]
+  );
+
+  const selectedModels = useMemo(() => MODELS.filter((m) => selectedIds.includes(m.id)), [selectedIds]);
+
+  const toggle = (id: string) => {
+    setSelectedIds((prev) => {
+      if (prev.includes(id)) return prev.filter((x) => x !== id);
+      if (prev.length >= MAX_SELECTION) return prev;
+      return [...prev, id];
+    });
+  };
+
+  const clearSelection = () => {
+    setSelectedIds([]);
+    setComparing(false);
+  };
+
+  // For each metric row, figure out which of the selected models has the
+  // "best" value, so the comparison table can highlight it.
+  const bestByMetric = useMemo(() => {
+    const map = new Map<string, string>(); // metricKey -> modelId
+    METRIC_ROWS.forEach((row) => {
+      if (!row.getSortValue) return;
+      let bestId: string | null = null;
+      let bestValue: number | null = null;
+      selectedModels.forEach((m) => {
+        const v = row.getSortValue!(m);
+        if (v === null) return;
+        const isBetter = bestValue === null || (row.betterIsHigher ? v > bestValue : v < bestValue);
+        if (isBetter) {
+          bestValue = v;
+          bestId = m.id;
+        }
+      });
+      if (bestId) map.set(row.key, bestId);
+    });
+    return map;
+  }, [selectedModels]);
+
+  return (
+    <div className="model-comparator">
+      <div className="model-comparator__header">
+        <div className="model-comparator__header-left">
+          <p className="model-comparator__header-eyebrow">Side-by-side evaluation</p>
+          <h1 className="model-comparator__title">Model Comparator</h1>
+          <p className="model-comparator__subtitle">
+            {comparing ? 'Comparing selected models' : `Select up to ${MAX_SELECTION} models to compare`}
+          </p>
+        </div>
+
+        {comparing && (
+          <button type="button" className="model-comparator__btn model-comparator__btn--outline" onClick={() => setComparing(false)}>
+            <ArrowLeft size={14} strokeWidth={2.25} /> Edit selection
+          </button>
+        )}
+      </div>
+
+      {!comparing && (
+        <>
+          <div className="model-comparator__search">
+            <Search size={15} />
+            <input type="text" placeholder="Search models..." value={query} onChange={(e) => setQuery(e.target.value)} />
+            {query && (
+              <button type="button" className="model-comparator__search-clear" onClick={() => setQuery('')} aria-label="Clear search">
+                <X size={13} />
+              </button>
+            )}
+          </div>
+
+          <div className="model-comparator__grid">
+            {filtered.map((m) => {
+              const selected = selectedIds.includes(m.id);
+              const disabled = !selected && selectedIds.length >= MAX_SELECTION;
+              return (
+                <button
+                  type="button"
+                  key={m.id}
+                  className={`model-comparator__card${selected ? ' model-comparator__card--selected' : ''}${
+                    disabled ? ' model-comparator__card--disabled' : ''
+                  }`}
+                  onClick={() => !disabled && toggle(m.id)}
+                  disabled={disabled}
+                >
+                  <span className={`model-comparator__checkbox${selected ? ' model-comparator__checkbox--checked' : ''}`}>
+                    {selected && <CheckCircle2 size={14} strokeWidth={2.5} />}
+                  </span>
+
+                  <span className="model-comparator__card-body">
+                    <span className="model-comparator__card-top">
+                      <span className="model-comparator__card-name">{m.name}</span>
+                      <span className="model-comparator__tag">{m.provider}</span>
+                    </span>
+                    <span className="model-comparator__card-desc">{m.description}</span>
+                    <span className="model-comparator__card-meta">
+                      <span>
+                        Accuracy <b className="n">{m.accuracyScore}%</b>
+                      </span>
+                      <span>
+                        Speed <b>{m.speedRating}</b>
+                      </span>
+                      <span>
+                        Price <b>{m.pricing}</b>
+                      </span>
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+
+            {filtered.length === 0 && (
+              <div className="model-comparator__empty">
+                <Search size={22} />
+                <p>No models match your search.</p>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {comparing && selectedModels.length > 0 && (
+        <div className="model-comparator__compare-grid">
+          <div className="model-comparator__chart-panel">
+            <p className="model-comparator__panel-title">Overall shape</p>
+            <RadarChart models={selectedModels} />
+            <div className="model-comparator__legend">
+              {selectedModels.map((m, i) => (
+                <div className="model-comparator__legend-item" key={m.id}>
+                  <span className="model-comparator__legend-dot" style={{ background: MODEL_COLORS[i % MODEL_COLORS.length] }} />
+                  <span className="model-comparator__legend-name">{m.name}</span>
+                </div>
+              ))}
+            </div>
+            <p className="model-comparator__panel-hint">
+              Each axis is normalized 0–100 across just the models you selected, so the shape shows relative strengths, not
+              absolute scores.
+            </p>
+          </div>
+
+          <div className="model-comparator__table-wrap">
+          <table className="model-comparator__table">
+            <thead>
+              <tr>
+                <th className="model-comparator__row-label-col">Metric</th>
+                {selectedModels.map((m) => (
+                  <th key={m.id}>
+                    <div className="model-comparator__col-head">
+                      <span className="model-comparator__col-name">{m.name}</span>
+                      <button
+                        type="button"
+                        className="model-comparator__col-remove"
+                        onClick={() => setSelectedIds((prev) => prev.filter((id) => id !== m.id))}
+                        aria-label={`Remove ${m.name} from comparison`}
+                      >
+                        <X size={12} strokeWidth={2.5} />
+                      </button>
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {METRIC_ROWS.map((row) => (
+                <tr key={row.key}>
+                  <td className="model-comparator__row-label-col model-comparator__row-label">{row.label}</td>
+                  {selectedModels.map((m) => {
+                    const isBest = bestByMetric.get(row.key) === m.id;
+                    return (
+                      <td key={m.id} className={isBest ? 'model-comparator__cell--best' : undefined}>
+                        <span className="model-comparator__cell-value n">{row.getValue(m)}</span>
+                        {isBest && (
+                          <span className="model-comparator__cell-best-badge">
+                            <Trophy size={11} strokeWidth={2.5} /> Best
+                          </span>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+              <tr>
+                <td className="model-comparator__row-label-col model-comparator__row-label">Capabilities</td>
+                {selectedModels.map((m) => (
+                  <td key={m.id}>
+                    <div className="model-comparator__cap-list">
+                      {m.capabilities.map((c) => (
+                        <span key={c} className="model-comparator__cap-pill">
+                          {c}
+                        </span>
+                      ))}
+                    </div>
+                  </td>
+                ))}
+              </tr>
+            </tbody>
+          </table>
+          </div>
+        </div>
+      )}
+
+      {selectedIds.length > 0 && (
+        <div className="model-comparator__bar">
+          <div className="model-comparator__bar-left">
+            <GitCompareArrows size={15} strokeWidth={2.25} />
+            <span>
+              <b className="n">{selectedIds.length}</b> of {MAX_SELECTION} models selected
+            </span>
+          </div>
+          <div className="model-comparator__bar-actions">
+            <button type="button" className="model-comparator__btn model-comparator__btn--outline" onClick={clearSelection}>
+              Clear
+            </button>
+            <button
+              type="button"
+              className="model-comparator__btn model-comparator__btn--primary"
+              onClick={() => setComparing(true)}
+              disabled={selectedIds.length < 2}
+            >
+              <GitCompareArrows size={14} strokeWidth={2.25} /> Compare Selected
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default ModelComparator;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//ModelComparator.scss
 @use '../../../styles/variables' as *;
 
 .model-comparator {
@@ -337,6 +747,98 @@
   }
 
   /* ---------- comparison table ---------- */
+  /* ---------- comparison view: chart + table side by side ---------- */
+  &__compare-grid {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: 16px;
+    align-items: start;
+  }
+
+  &__chart-panel {
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-radius: 14px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+  }
+
+  &__panel-title {
+    align-self: flex-start;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: $text-tertiary;
+  }
+
+  &__radar-svg {
+    width: 100%;
+    max-width: 280px;
+    height: auto;
+    overflow: visible;
+  }
+
+  &__radar-ring {
+    fill: none;
+    stroke: $border-subtle;
+    stroke-width: 1;
+  }
+
+  &__radar-axis {
+    stroke: $border-default;
+    stroke-width: 1;
+  }
+
+  &__radar-label {
+    font-size: 8.5px;
+    font-weight: 700;
+    fill: $text-tertiary;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+
+  &__legend {
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 6px;
+    border-top: 1px solid $border-subtle;
+  }
+
+  &__legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  &__legend-dot {
+    flex-shrink: 0;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+  }
+
+  &__legend-name {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: $text-primary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__panel-hint {
+    align-self: stretch;
+    font-size: 0.6875rem;
+    line-height: 1.5;
+    color: $text-tertiary;
+  }
+
   &__table-wrap {
     overflow-x: auto;
     border: 1px solid $border-subtle;
@@ -467,6 +969,16 @@
   @media (max-width: 1400px) {
     &__grid {
       grid-template-columns: repeat(2, 1fr);
+    }
+  }
+
+  @media (max-width: 1100px) {
+    &__compare-grid {
+      grid-template-columns: 1fr;
+    }
+
+    &__chart-panel {
+      align-items: center;
     }
   }
 
