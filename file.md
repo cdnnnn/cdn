@@ -166,19 +166,25 @@ const Providers: FC = () => {
 
                 <div className="providers-page__card-stats">
                   <button type="button" className="providers-page__card-stat providers-page__card-stat--clickable" onClick={() => openModelsModal(p)}>
-                    <span className="providers-page__card-stat-label">
-                      <Boxes size={10} /> Models
+                    <span className="providers-page__card-stat-icon">
+                      <Boxes size={15} strokeWidth={2} />
                     </span>
-                    <span className="providers-page__card-stat-value providers-page__card-stat-value--link n">
-                      {p.model_count}
-                      <ChevronRight size={13} strokeWidth={2.5} />
+                    <span className="providers-page__card-stat-body">
+                      <span className="providers-page__card-stat-label">Models</span>
+                      <span className="providers-page__card-stat-value providers-page__card-stat-value--link n">
+                        {p.model_count}
+                        <ChevronRight size={13} strokeWidth={2.5} />
+                      </span>
                     </span>
                   </button>
                   <div className="providers-page__card-stat">
-                    <span className="providers-page__card-stat-label">
-                      <Link2 size={10} /> Base URL
+                    <span className="providers-page__card-stat-icon">
+                      <Link2 size={15} strokeWidth={2} />
                     </span>
-                    <span className="providers-page__card-stat-value providers-page__card-stat-value--sm">{p.base_url ?? 'Default'}</span>
+                    <span className="providers-page__card-stat-body">
+                      <span className="providers-page__card-stat-label">Base URL</span>
+                      <span className="providers-page__card-stat-value providers-page__card-stat-value--sm">{p.base_url ?? 'Default'}</span>
+                    </span>
                   </div>
                 </div>
 
@@ -311,7 +317,6 @@ const Providers: FC = () => {
 };
 
 export default Providers;
-
 
 
 
@@ -591,61 +596,84 @@ export default Providers;
   }
 
   &__card-stats {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 16px 20px;
-    margin-bottom: 10px;
-    padding-bottom: 10px;
-    border-bottom: 1px solid $border-subtle;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    margin-bottom: 12px;
   }
 
   &__card-stat {
     // Plain stats are <div>s; the clickable "Models" stat is a <button> that
     // needs its native button chrome reset to look identical to the others.
-    background: transparent;
-    border: none;
-    padding: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    background: $bg-subtle;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 9px 11px;
     text-align: left;
     font-family: inherit;
     cursor: default;
+    transition: background 0.14s ease, border-color 0.14s ease;
 
     &--clickable {
       cursor: pointer;
 
+      &:hover {
+        background: $primary-light;
+        border-color: $primary-subtle;
+      }
+
+      &:hover .providers-page__card-stat-icon {
+        background: $bg-main;
+        color: $primary;
+      }
+
       &:hover .providers-page__card-stat-value--link {
         color: $primary-hover;
-        text-decoration: underline;
       }
     }
   }
 
-  &__card-stat-label {
+  &__card-stat-icon {
+    flex-shrink: 0;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    background: $bg-main;
+    color: $text-tertiary;
+    display: grid;
+    place-items: center;
+    transition: background 0.14s ease, color 0.14s ease;
+  }
+
+  &__card-stat-body {
     display: flex;
-    align-items: center;
-    gap: 4px;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+
+  &__card-stat-label {
     font-size: 0.625rem;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: $text-tertiary;
-
-    svg {
-      opacity: 0.8;
-    }
   }
 
   &__card-stat-value {
-    font-size: 0.9375rem;
+    font-size: 0.875rem;
     font-weight: 800;
     color: $text-primary;
-    display: block;
-    margin-top: 2px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 
     &--sm {
-      font-size: 0.78125rem;
+      font-size: 0.75rem;
       font-weight: 700;
     }
 
@@ -748,38 +776,42 @@ export default Providers;
     gap: 6px;
     font-family: $font-body;
     font-size: 0.78125rem;
-    font-weight: 600;
-    padding: 6px 12px;
-    border-radius: 8px;
+    font-weight: 700;
+    padding: 7px 13px;
+    border-radius: 999px;
     border: 1px solid transparent;
     cursor: pointer;
     white-space: nowrap;
-    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease, opacity 0.14s ease;
+    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease, opacity 0.14s ease, transform 0.14s ease, box-shadow 0.14s ease;
 
     &:disabled {
       opacity: 0.6;
       cursor: not-allowed;
+      transform: none !important;
+      box-shadow: none !important;
     }
 
     &--outline {
-      background: $bg-main;
-      border-color: $border-default;
-      color: $text-primary;
+      background: $bg-subtle;
+      border-color: transparent;
+      color: $text-secondary;
 
-      &:hover {
-        border-color: $text-primary;
+      &:hover:not(:disabled) {
+        background: $bg-inset;
+        color: $text-primary;
+        transform: translateY(-1px);
       }
     }
 
     &--danger-outline {
-      background: $bg-main;
-      border-color: $border-default;
+      background: $bg-subtle;
+      border-color: transparent;
       color: $text-tertiary;
 
-      &:hover {
-        border-color: $danger;
+      &:hover:not(:disabled) {
         color: $danger;
         background: $danger-subtle;
+        transform: translateY(-1px);
       }
     }
 
@@ -787,10 +819,13 @@ export default Providers;
       background: $primary;
       border-color: $primary;
       color: $on-primary;
+      box-shadow: $shadow-xs;
 
-      &:hover {
+      &:hover:not(:disabled) {
         background: $primary-hover;
         border-color: $primary-hover;
+        transform: translateY(-1px);
+        box-shadow: $shadow-sm;
       }
     }
   }
