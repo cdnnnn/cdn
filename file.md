@@ -1,190 +1,763 @@
-@use './variables' as *;
+import { useEffect, useMemo, useState, type FC } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Database, Search, X, LayoutGrid, Tag, RefreshCw, AlertCircle, ExternalLink, Play } from 'lucide-react';
+import { fetchBenchmarks } from './api';
+import type { Benchmark } from './types';
+import Spinner from '../../../components/Spinner/Spinner';
+import './Datasets.scss';
 
-:root {
-  color-scheme: light;
+const CAPABILITY_TINTS = ['blue', 'violet', 'amber', 'jade', 'rose'] as const;
 
-  --primary: #1428a0;
-  --primary-hover: #1d37c9;
-  --primary-light: #eef1fe;
-  --primary-subtle: #e2e7fc;
-
-  --violet: #7c3aed;
-  --violet-light: #f3e8ff;
-
-  --bg-page: #f6f7f9;
-  --bg-subtle: #f3f5f8;
-  --bg-inset: #edf0f4;
-  --bg-main: #ffffff;
-  --bg-header-glass: rgba(255, 255, 255, 0.88);
-
-  --border-default: #dce0e7;
-  --border-subtle: #e9ecf1;
-  --border-strong: #c7cdd8;
-
-  --text-primary: #0e1526;
-  --text-secondary: #46506b;
-  --text-tertiary: #7a8399;
-
-  --success: #0f7a5a;
-  --success-subtle: #e4f4ee;
-  --warning: #b7791f;
-  --warning-subtle: #fdf3e0;
-  --danger: #c0303b;
-  --danger-subtle: #fcebec;
-
-  --shadow-xs: 0 0.0625rem 0.125rem rgba(14, 21, 38, 0.04);
-  --shadow-sm: 0 0.0625rem 0.125rem rgba(14, 21, 38, 0.05);
-  --shadow-md: 0 0.125rem 0.25rem rgba(14, 21, 38, 0.05), 0 0.5rem 1.25rem -0.75rem rgba(14, 21, 38, 0.16);
-  --shadow-lg: 0 0.25rem 0.5rem rgba(14, 21, 38, 0.05), 0 1.125rem 2.75rem -1.375rem rgba(14, 21, 38, 0.24);
-  --shadow-xl: 0 1.75rem 4.375rem -1.875rem rgba(14, 21, 38, 0.34);
+function capabilityTint(capability: string) {
+  let hash = 0;
+  for (let i = 0; i < capability.length; i += 1) hash = (hash * 31 + capability.charCodeAt(i)) >>> 0;
+  return CAPABILITY_TINTS[hash % CAPABILITY_TINTS.length];
 }
 
-[data-theme='dark'] {
-  color-scheme: dark;
+const Datasets: FC = () => {
+  const navigate = useNavigate();
+  const [benchmarks, setBenchmarks] = useState<Benchmark[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  --primary: #6c8cff;
-  --primary-hover: #85a3ff;
-  --primary-light: #141c38;
-  --primary-subtle: #1d2748;
+  const [query, setQuery] = useState('');
+  const [type, setType] = useState('All');
 
-  --violet: #c4a6ff;
-  --violet-light: #1c1733;
+  const load = () => {
+    setLoading(true);
+    setError(null);
+    fetchBenchmarks()
+      .then((res) => {
+        setBenchmarks(res.benchmarks);
+        setTotal(res.total);
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : 'Failed to load benchmarks.');
+      })
+      .finally(() => setLoading(false));
+  };
 
-  // True-black page with near-black cards sitting just barely above it —
-  // bg-subtle/bg-inset step up in small, even increments so table headers,
-  // input wells, and hover states stay readable without the elevation
-  // jumps feeling abrupt against a pure-black base.
-  --bg-page: #000000;
-  --bg-main: #0d0d0d;
-  --bg-subtle: #131313;
-  --bg-inset: #1a1a1a;
-  --bg-header-glass: rgba(0, 0, 0, 0.75);
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Borders carry more of the depth signal here than shadows do, since a
-  // black shadow is invisible against a black page — so these are a touch
-  // brighter/more frequent than a typical dark theme would need.
-  --border-default: #292929;
-  --border-subtle: #1c1c1c;
-  --border-strong: #3d3d3d;
+  const types = useMemo(() => {
+    const set = new Set(benchmarks.map((b) => b.type));
+    return ['All', ...Array.from(set).sort()];
+  }, [benchmarks]);
 
-  --text-primary: #f5f5f5;
-  --text-secondary: #a8a8a8;
-  --text-tertiary: #767676;
+  const filtered = useMemo(
+    () =>
+      benchmarks.filter((b) => {
+        if (type !== 'All' && b.type !== type) return false;
+        if (query && !b.name.toLowerCase().includes(query.toLowerCase()) && !b.description.toLowerCase().includes(query.toLowerCase())) {
+          return false;
+        }
+        return true;
+      }),
+    [benchmarks, query, type]
+  );
 
-  --success: #34d399;
-  --success-subtle: #0c1f18;
-  --warning: #fbbf4a;
-  --warning-subtle: #241c0c;
-  --danger: #fb7185;
-  --danger-subtle: #2a1014;
+  return (
+    <div className="datasets-page">
+      <div className="datasets-page__header">
+        <div className="datasets-page__header-left">
+          <p className="datasets-page__header-eyebrow">Test suite library</p>
+          <h1 className="datasets-page__title">Test Suites</h1>
+          <p className="datasets-page__subtitle">Benchmark datasets and custom tests</p>
+        </div>
 
-  // Drop shadows barely register on true black, so depth here leans on the
-  // inset top highlight (a hairline of light catching each card's top edge)
-  // more than usual — bumped up from the previous dark palette so cards and
-  // dropdowns still read as "lifted" rather than flat against the page.
-  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  --shadow-md: 0 0.5rem 1.75rem -0.75rem rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  --shadow-lg: 0 1.125rem 3rem -1.25rem rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.07);
-  --shadow-xl: 0 1.75rem 5rem -1.5rem rgba(0, 0, 0, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-}
+        <div className="datasets-page__header-right">
+          <div className="datasets-page__header-meta">
+            <Database size={13} />
+            {total} suites available
+          </div>
+          <button type="button" className="datasets-page__btn datasets-page__btn--outline" onClick={load} disabled={loading}>
+            <RefreshCw size={14} strokeWidth={2.25} className={loading ? 'datasets-page__spin' : undefined} /> Refresh
+          </button>
+        </div>
+      </div>
 
-* ,
-*::before,
-*::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
+      <div className="datasets-page__filters">
+        <div className="datasets-page__search">
+          <Search size={15} />
+          <input type="text" placeholder="Search test suites..." value={query} onChange={(e) => setQuery(e.target.value)} />
+          {query && (
+            <button type="button" className="datasets-page__search-clear" onClick={() => setQuery('')} aria-label="Clear search">
+              <X size={13} />
+            </button>
+          )}
+        </div>
 
-// Slim scrollbars everywhere — applies to every scrollable element in the
-// app (sidebars, detail panels, tables, dropdowns) automatically, since
-// nothing needs to opt in individually. Firefox via scrollbar-width/-color,
-// Chromium/Safari/Edge via the ::-webkit-scrollbar pseudo-elements. Colors
-// use tokens, so this follows light/dark mode with no extra work.
-* {
-  scrollbar-width: thin;
-  scrollbar-color: $border-strong transparent;
-}
+        <div className="datasets-page__seg">
+          {types.map((t) => (
+            <button
+              key={t}
+              type="button"
+              className={`datasets-page__seg-item${type === t ? ' datasets-page__seg-item--active' : ''}`}
+              onClick={() => setType(t)}
+            >
+              {t === 'All' ? <LayoutGrid size={13} strokeWidth={2.25} /> : <Tag size={13} strokeWidth={2.25} />}
+              {t}
+            </button>
+          ))}
+        </div>
+      </div>
 
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
+      {loading && (
+        <div className="datasets-page__loading">
+          <Spinner label="Loading test suites…" />
+        </div>
+      )}
 
-::-webkit-scrollbar-track {
-  background: transparent;
-}
+      {!loading && error && (
+        <div className="datasets-page__empty datasets-page__empty--error">
+          <AlertCircle size={22} />
+          <p>{error}</p>
+          <button type="button" className="datasets-page__btn datasets-page__btn--outline" onClick={load}>
+            <RefreshCw size={14} strokeWidth={2.25} /> Try again
+          </button>
+        </div>
+      )}
 
-::-webkit-scrollbar-thumb {
-  background: $border-strong;
-  border-radius: 999px;
-  border: 2px solid transparent;
-  background-clip: padding-box;
+      {!loading && !error && filtered.length === 0 && (
+        <div className="datasets-page__empty">
+          <Database size={22} />
+          <p>No test suites match your filters.</p>
+        </div>
+      )}
 
-  &:hover {
-    background: $text-tertiary;
-    background-clip: padding-box;
+      {!loading && !error && filtered.length > 0 && (
+        <div className="datasets-page__grid">
+          {filtered.map((b) => (
+            <div className="datasets-page__card" key={b.name}>
+              <div className="datasets-page__card-top">
+                <span className="datasets-page__card-name">{b.name}</span>
+                <span className="datasets-page__tag datasets-page__tag--blue">{b.type}</span>
+              </div>
+
+              <p className="datasets-page__card-desc">{b.description}</p>
+
+              <div className="datasets-page__card-stats">
+                <div className="datasets-page__card-stat">
+                  <span className="datasets-page__card-stat-label">Tasks</span>
+                  <span className="datasets-page__card-stat-value n">{b.task_count}</span>
+                </div>
+                <div className="datasets-page__card-stat">
+                  <span className="datasets-page__card-stat-label">Capabilities</span>
+                  <span className="datasets-page__card-stat-value n">{b.required_capabilities.length}</span>
+                </div>
+                <div className="datasets-page__card-stat">
+                  <span className="datasets-page__card-stat-label">Dataset</span>
+                  <span className="datasets-page__card-stat-value datasets-page__card-stat-value--sm">{b.huggingface_dataset}</span>
+                </div>
+              </div>
+
+              {b.required_capabilities.length > 0 && (
+                <>
+                  <span className="datasets-page__card-section-label">Required capabilities</span>
+                  <div className="datasets-page__caps">
+                    {b.required_capabilities.map((c) => (
+                      <span key={c} className={`datasets-page__cap-pill datasets-page__cap-pill--${capabilityTint(c)}`}>
+                        {c}
+                      </span>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {b.tasks.length > 0 && (
+                <>
+                  <span className="datasets-page__card-section-label">Sample tasks</span>
+                  <div className="datasets-page__card-tasks">
+                    {b.tasks.map((t) => (
+                      <p className="datasets-page__card-task" key={t.name}>
+                        <b>{t.name}:</b> <span>{t.value}</span>
+                      </p>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              <div className="datasets-page__card-foot">
+                <span className="datasets-page__card-foot-source">
+                  <ExternalLink size={12} /> {b.huggingface_dataset}
+                </span>
+                <button type="button" className="datasets-page__card-use" onClick={() => navigate('/app/run-evaluation')}>
+                  <Play size={12} strokeWidth={2.25} /> Use in Evaluation
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Datasets;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+@use '../../../styles/variables' as *;
+
+.datasets-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+
+  /* ---------- header ---------- */
+  &__header {
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1rem;
+    padding-bottom: 18px;
+    margin-bottom: 2px;
+    border-bottom: 1px solid $border-subtle;
+  }
+
+  &__header-left {
+    display: flex;
+    flex-direction: column;
+  }
+
+  &__header-right {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  &__header-eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: $font-mono;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: $primary;
+    margin-bottom: 6px;
+
+    &::before {
+      content: '';
+      width: 16px;
+      height: 2px;
+      border-radius: 2px;
+      background: $primary;
+    }
+  }
+
+  &__header-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
+    border-radius: 999px;
+    padding: 7px 13px;
+    white-space: nowrap;
+  }
+
+  &__title {
+    font-size: 21px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: $text-primary;
+  }
+
+  &__subtitle {
+    margin-top: 3px;
+    color: $text-secondary;
+    font-size: 0.84375rem;
+  }
+
+  &__btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-family: $font-body;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    padding: 9px 14px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease, opacity 0.14s ease;
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    &--outline {
+      background: $bg-main;
+      border-color: $border-default;
+      color: $text-secondary;
+
+      &:hover:not(:disabled) {
+        border-color: $text-primary;
+        color: $text-primary;
+      }
+    }
+
+    &--primary {
+      background: $primary;
+      border-color: $primary;
+      color: $on-primary;
+
+      &:hover {
+        background: $primary-hover;
+        border-color: $primary-hover;
+      }
+    }
+  }
+
+  /* ---------- filters ---------- */
+  &__filters {
+    flex-shrink: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+  }
+
+  &__search {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 280px;
+    max-width: 100%;
+    border: 1px solid $border-default;
+    border-radius: 10px;
+    padding: 9px 12px;
+    background: $bg-main;
+    color: $text-tertiary;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+
+    &:focus-within {
+      border-color: $primary;
+      box-shadow: 0 0 0 3px $primary-light;
+    }
+
+    input {
+      flex: 1;
+      border: none;
+      outline: none;
+      font-size: 0.8125rem;
+      color: $text-primary;
+      background: transparent;
+      font-family: $font-body;
+      min-width: 0;
+
+      &::placeholder {
+        color: $text-tertiary;
+      }
+    }
+  }
+
+  &__search-clear {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: none;
+    background: $bg-inset;
+    color: $text-tertiary;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: background 0.14s ease, color 0.14s ease;
+
+    &:hover {
+      background: $border-default;
+      color: $text-primary;
+    }
+  }
+
+  &__seg {
+    flex-shrink: 0;
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px;
+    padding: 3px;
+    border: 1px solid $border-subtle;
+    border-radius: 11px;
+    background: $bg-subtle;
+  }
+
+  &__seg-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: $font-body;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-tertiary;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 7px 12px;
+    cursor: pointer;
+    transition: background 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
+
+    svg {
+      opacity: 0.8;
+    }
+
+    &:hover {
+      color: $text-primary;
+    }
+
+    &--active {
+      background: $bg-main;
+      color: $primary;
+      box-shadow: $shadow-xs;
+
+      svg {
+        opacity: 1;
+      }
+    }
+  }
+
+  /* ---------- tags ---------- */
+  &__tag {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    border-radius: 999px;
+    padding: 3px 10px;
+
+    &--blue {
+      color: $primary;
+      background: $primary-light;
+    }
+  }
+
+  /* ---------- capability pills (shared) ---------- */
+  &__caps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 16px;
+  }
+
+  &__cap-pill {
+    font-size: 0.71875rem;
+    font-weight: 600;
+    border-radius: 999px;
+    padding: 3px 10px;
+
+    &--blue {
+      color: $primary;
+      background: $primary-light;
+    }
+
+    &--violet {
+      color: $violet;
+      background: $violet-light;
+    }
+
+    &--amber {
+      color: $warning;
+      background: $warning-subtle;
+    }
+
+    &--jade {
+      color: $success;
+      background: $success-subtle;
+    }
+
+    &--rose {
+      color: $danger;
+      background: $danger-subtle;
+    }
+  }
+
+  /* ---------- full-info card grid ---------- */
+  &__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: 16px;
+  }
+
+  &__card {
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-left: 3px solid $primary;
+    border-radius: 12px;
+    padding: 18px 20px;
+    box-shadow: $shadow-xs;
+    transition: box-shadow 0.15s ease, transform 0.15s ease;
+
+    &:hover {
+      box-shadow: $shadow-md;
+      transform: translateY(-2px);
+    }
+  }
+
+  &__card-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+
+  &__card-name {
+    font-size: 0.9375rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: $text-primary;
+  }
+
+  &__card-desc {
+    font-size: 0.78125rem;
+    color: $text-secondary;
+    line-height: 1.55;
+    margin-bottom: 14px;
+  }
+
+  &__card-stats {
+    display: flex;
+    gap: 20px;
+    margin-bottom: 14px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid $border-subtle;
+  }
+
+  &__card-stat-label {
+    font-size: 0.625rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: $text-tertiary;
+  }
+
+  &__card-stat-value {
+    font-size: 0.9375rem;
+    font-weight: 800;
+    color: $text-primary;
+    display: block;
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    &--sm {
+      font-size: 0.78125rem;
+      font-weight: 700;
+    }
+  }
+
+  &__card-section-label {
+    font-size: 0.65625rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: $text-tertiary;
+    margin-bottom: 8px;
+    display: block;
+  }
+
+  &__card-tasks {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 14px;
+  }
+
+  &__card-task {
+    font-size: 0.75rem;
+    line-height: 1.55;
+
+    b {
+      color: $text-primary;
+      font-weight: 700;
+    }
+
+    span {
+      color: $text-secondary;
+    }
+  }
+
+  &__card-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding-top: 12px;
+    border-top: 1px solid $border-subtle;
+  }
+
+  &__card-foot-source {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.6875rem;
+    color: $text-tertiary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    svg {
+      flex-shrink: 0;
+    }
+  }
+
+  &__card-use {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: $font-body;
+    font-size: 0.71875rem;
+    font-weight: 700;
+    color: $primary;
+    background: $primary-light;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    padding: 5px 11px;
+    cursor: pointer;
+    transition: background 0.14s ease, color 0.14s ease;
+
+    &:hover {
+      background: $primary;
+      color: $on-primary;
+    }
+  }
+
+  /* ---------- loading — plain, no border, just centers the spinner ---------- */
+  &__loading {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 64px 20px;
+  }
+
+  &__empty {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 52px 20px;
+    border: 1px dashed $border-strong;
+    border-radius: 14px;
+    color: $text-tertiary;
+    font-size: 0.84375rem;
+
+    svg {
+      color: $text-tertiary;
+    }
+
+    &--error {
+      border-style: solid;
+      border-color: $danger-subtle;
+      background: $danger-subtle;
+      color: $danger;
+
+      svg {
+        color: $danger;
+      }
+    }
+  }
+
+  &__spin {
+    animation: datasets-page-spin 0.9s linear infinite;
+  }
+
+  /* ---------- responsive ---------- */
+  @media (max-width: 640px) {
+    &__grid {
+      grid-template-columns: 1fr;
+    }
+
+    &__card-stats {
+      flex-wrap: wrap;
+      gap: 14px;
+    }
+  }
+
+  /* ---------- ultra-wide: nudge key text sizes up a touch ---------- */
+  @media (min-width: 1800px) {
+    &__title {
+      font-size: 23px;
+    }
+
+    &__subtitle {
+      font-size: 0.90625rem;
+    }
+
+    &__card-name {
+      font-size: 1.03125rem;
+    }
+
+    &__card-desc {
+      font-size: 0.84375rem;
+    }
+
+    &__card-stat-value {
+      font-size: 1.03125rem;
+    }
+
+    &__card-stat-value--sm {
+      font-size: 0.84375rem;
+    }
+
+    &__card-task {
+      font-size: 0.8125rem;
+    }
   }
 }
 
-html {
-  -webkit-font-smoothing: antialiased;
-  scroll-behavior: smooth;
-  font-size: 100%; // 1rem = 16px, respects user browser settings
-}
-
-body {
-  font-family: $font-body;
-  background: $bg-main;
-  color: $text-primary;
-  font-size: 1.0625rem;
-  line-height: 1.55;
-  transition: background-color 0.16s ease, color 0.16s ease;
-}
-
-a {
-  color: inherit;
-}
-
-button,
-input,
-select,
-textarea {
-  font-family: inherit;
-}
-
-h1,
-h2,
-h3 {
-  font-family: $font-display;
-  letter-spacing: -0.025em;
-  line-height: 1.12;
-  font-weight: 700;
-}
-
-/* numbers hold their columns without a monospaced face */
-.n {
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: 'tnum' 1, 'lnum' 1;
-}
-
-:where(a, button, input, select, textarea, [tabindex]):focus-visible {
-  outline: 0.125rem solid $primary;
-  outline-offset: 0.125rem;
-  border-radius: 0.25rem;
-}
-
-::selection {
-  background: $primary-subtle;
-  color: $text-primary;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
+@keyframes datasets-page-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
