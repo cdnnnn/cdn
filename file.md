@@ -249,7 +249,7 @@
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
   }
 
   &__cap-pill {
@@ -297,7 +297,7 @@
     background: $bg-main;
     border: 1px solid $border-subtle;
     border-left: 3px solid $card-accent;
-    padding: 15px 18px;
+    padding: 13px 16px;
     box-shadow: $shadow-xs;
     transition: box-shadow 0.15s ease, transform 0.15s ease;
 
@@ -312,7 +312,7 @@
     align-items: flex-start;
     justify-content: space-between;
     gap: 10px;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
   }
 
   &__card-name {
@@ -325,15 +325,15 @@
   &__card-desc {
     font-size: 0.78125rem;
     color: $text-secondary;
-    line-height: 1.5;
-    margin-bottom: 10px;
+    line-height: 1.45;
+    margin-bottom: 8px;
   }
 
   &__card-stats {
     display: flex;
     gap: 20px;
-    margin-bottom: 10px;
-    padding-bottom: 10px;
+    margin-bottom: 8px;
+    padding-bottom: 8px;
     border-bottom: 1px solid $border-subtle;
   }
 
@@ -367,7 +367,7 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: $text-tertiary;
-    margin-bottom: 6px;
+    margin-bottom: 5px;
     display: block;
   }
 
@@ -398,8 +398,8 @@
     background: $bg-subtle;
     border: 1px solid $border-subtle;
     border-radius: 999px;
-    padding: 5px 11px 5px 9px;
-    margin-bottom: 10px;
+    padding: 4px 10px 4px 8px;
+    margin-bottom: 4px;
     cursor: pointer;
     transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
 
@@ -416,7 +416,7 @@
 
   &__card-foot {
     margin-top: auto;
-    padding-top: 10px;
+    padding-top: 8px;
     border-top: 1px solid $border-subtle;
   }
 
