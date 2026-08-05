@@ -1,12 +1,70 @@
 //ModelComparator.tsx
-import { useEffect, useMemo, useState, type FC } from 'react';
-import { Search, X, CheckCircle2, GitCompareArrows, ArrowLeft, Trophy, Database, AlertCircle } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type FC } from 'react';
+import { Search, X, CheckCircle2, GitCompareArrows, ArrowLeft, Trophy, Database, AlertCircle, Check, ChevronDown } from 'lucide-react';
 import { MODELS } from '../RunEvaluation/data';
 import type { ModelInfo } from '../RunEvaluation/types';
 import { fetchBenchmarks } from '../Datasets/api';
 import type { Benchmark } from '../Datasets/types';
 import Spinner from '../../../components/Spinner/Spinner';
 import './ModelComparator.scss';
+
+// ---------- dropdown, structurally the same as History's <Select /> (trigger
+// + chevron + menu with a check mark on the active option), scoped to this
+// page's own "model-comparator__select" class names ----------
+interface SelectOption {
+  value: string;
+  label: string;
+}
+
+const DatasetSelect: FC<{ value: string; options: SelectOption[]; onChange: (value: string) => void }> = ({
+  value,
+  options,
+  onChange,
+}) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const current = options.find((o) => o.value === value) ?? options[0];
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  return (
+    <div className="model-comparator__select" ref={ref}>
+      <button
+        type="button"
+        className={`model-comparator__select-trigger${open ? ' model-comparator__select-trigger--open' : ''}`}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span>{current?.label}</span>
+        <ChevronDown size={14} className="model-comparator__select-chevron" />
+      </button>
+
+      {open && (
+        <div className="model-comparator__select-menu">
+          {options.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              className={`model-comparator__select-option${o.value === value ? ' model-comparator__select-option--active' : ''}`}
+              onClick={() => {
+                onChange(o.value);
+                setOpen(false);
+              }}
+            >
+              {o.label}
+              {o.value === value && <Check size={13} strokeWidth={2.5} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 const MAX_SELECTION = 4;
 
@@ -182,7 +240,7 @@ const ModelComparator: FC = () => {
   const [benchmarks, setBenchmarks] = useState<Benchmark[]>([]);
   const [benchmarksLoading, setBenchmarksLoading] = useState(true);
   const [benchmarksError, setBenchmarksError] = useState<string | null>(null);
-  const [selectedDatasetNames, setSelectedDatasetNames] = useState<string[]>([]);
+  const [selectedDatasetName, setSelectedDatasetName] = useState<string>('');
 
   useEffect(() => {
     fetchBenchmarks()
@@ -191,18 +249,23 @@ const ModelComparator: FC = () => {
       .finally(() => setBenchmarksLoading(false));
   }, []);
 
-  const toggleDataset = (name: string) => {
-    setSelectedDatasetNames((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]));
-  };
+  const datasetOptions: SelectOption[] = useMemo(
+    () => [
+      { value: '', label: 'Select a test suite…' },
+      ...benchmarks.map((b) => ({ value: b.name, label: `${b.name} (${b.task_count} tasks)` })),
+    ],
+    [benchmarks]
+  );
 
-  // Models only appear once at least one dataset is selected — there's no
-  // "show everything" default here, since the whole point is that model
-  // choice is driven by which test suite(s) you're comparing against.
+  // Models only appear once a dataset is selected — there's no "show
+  // everything" default here, since the whole point is that model choice is
+  // driven by which test suite you're comparing against.
   const eligibleModels = useMemo(() => {
-    if (selectedDatasetNames.length === 0) return [];
-    const selectedBenchmarks = benchmarks.filter((b) => selectedDatasetNames.includes(b.name));
-    return MODELS.filter((m) => selectedBenchmarks.some((b) => isModelEvaluatedOn(m, b)));
-  }, [selectedDatasetNames, benchmarks]);
+    if (!selectedDatasetName) return [];
+    const benchmark = benchmarks.find((b) => b.name === selectedDatasetName);
+    if (!benchmark) return [];
+    return MODELS.filter((m) => isModelEvaluatedOn(m, benchmark));
+  }, [selectedDatasetName, benchmarks]);
 
   // If narrowing the dataset filter drops a model that was already selected
   // for comparison, drop it from the selection too rather than leaving a
@@ -283,11 +346,11 @@ const ModelComparator: FC = () => {
             <div className="model-comparator__step-head">
               <span className="model-comparator__step-num">1</span>
               <div>
-                <p className="model-comparator__step-title">Select test suite(s)</p>
-                <p className="model-comparator__step-sub">Choose one or more test suites — models evaluated on them will appear below.</p>
+                <p className="model-comparator__step-title">Select a test suite</p>
+                <p className="model-comparator__step-sub">Models evaluated on the chosen test suite will appear below.</p>
               </div>
-              {selectedDatasetNames.length > 0 && (
-                <button type="button" className="model-comparator__link-btn" onClick={() => setSelectedDatasetNames([])}>
+              {selectedDatasetName && (
+                <button type="button" className="model-comparator__link-btn" onClick={() => setSelectedDatasetName('')}>
                   Clear
                 </button>
               )}
@@ -308,29 +371,8 @@ const ModelComparator: FC = () => {
             )}
 
             {!benchmarksLoading && !benchmarksError && (
-              <div className="model-comparator__dataset-grid">
-                {benchmarks.map((b) => {
-                  const active = selectedDatasetNames.includes(b.name);
-                  return (
-                    <button
-                      type="button"
-                      key={b.name}
-                      className={`model-comparator__dataset-card${active ? ' model-comparator__dataset-card--selected' : ''}`}
-                      onClick={() => toggleDataset(b.name)}
-                    >
-                      <span className={`model-comparator__checkbox${active ? ' model-comparator__checkbox--checked' : ''}`}>
-                        {active && <CheckCircle2 size={13} strokeWidth={2.5} />}
-                      </span>
-                      <span className="model-comparator__dataset-card-body">
-                        <span className="model-comparator__dataset-card-name">{b.name}</span>
-                        <span className="model-comparator__dataset-card-meta">
-                          <span className="model-comparator__tag">{b.type}</span>
-                          <span className="n">{b.task_count} tasks</span>
-                        </span>
-                      </span>
-                    </button>
-                  );
-                })}
+              <div className="model-comparator__select-wrap">
+                <DatasetSelect value={selectedDatasetName} options={datasetOptions} onChange={setSelectedDatasetName} />
               </div>
             )}
           </div>
@@ -341,16 +383,14 @@ const ModelComparator: FC = () => {
               <div>
                 <p className="model-comparator__step-title">Select models to compare</p>
                 <p className="model-comparator__step-sub">
-                  {selectedDatasetNames.length > 0
-                    ? `${eligibleModels.length} model${eligibleModels.length === 1 ? '' : 's'} evaluated on the selected test suite${
-                        selectedDatasetNames.length === 1 ? '' : 's'
-                      }`
+                  {selectedDatasetName
+                    ? `${eligibleModels.length} model${eligibleModels.length === 1 ? '' : 's'} evaluated on the selected test suite`
                     : 'Pick a test suite above to see the models evaluated on it'}
                 </p>
               </div>
             </div>
 
-            {selectedDatasetNames.length === 0 ? (
+            {!selectedDatasetName ? (
               <div className="model-comparator__empty">
                 <Database size={22} />
                 <p>Select a test suite to see the models evaluated on it.</p>
@@ -542,6 +582,11 @@ export default ModelComparator;
 
 
 
+
+
+
+
+
 //ModelComparator.scss
 @use '../../../styles/variables' as *;
 
@@ -707,59 +752,102 @@ export default ModelComparator;
     color: $danger;
   }
 
-  /* ---------- dataset selection grid ---------- */
-  &__dataset-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 10px;
+  /* ---------- dataset dropdown (structurally mirrors History's <Select />) ---------- */
+  &__select-wrap {
     margin-left: 36px;
   }
 
-  &__dataset-card {
+  &__select {
+    position: relative;
+    width: 320px;
+    max-width: 100%;
+  }
+
+  &__select-trigger {
+    width: 100%;
     display: flex;
     align-items: center;
-    gap: 10px;
-    text-align: left;
-    background: $bg-main;
-    border: 1px solid $border-subtle;
+    justify-content: space-between;
+    gap: 8px;
+    border: 1px solid $border-default;
     border-radius: 10px;
-    padding: 11px 13px;
+    padding: 10px 13px;
+    background: $bg-main;
+    font-size: 0.84375rem;
+    font-weight: 500;
+    font-family: $font-body;
+    color: $text-primary;
     cursor: pointer;
-    font-family: inherit;
-    transition: border-color 0.14s ease, background 0.14s ease;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
 
     &:hover {
       border-color: $border-strong;
     }
 
-    &--selected {
+    &--open {
       border-color: $primary;
-      background: $primary-light;
+      box-shadow: 0 0 0 3px $primary-light;
     }
   }
 
-  &__dataset-card-body {
+  &__select-chevron {
+    flex-shrink: 0;
+    color: $text-tertiary;
+    transition: transform 0.16s ease;
+  }
+
+  &__select-trigger--open &__select-chevron {
+    transform: rotate(180deg);
+  }
+
+  &__select-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    right: 0;
+    z-index: 20;
+    max-height: 18rem;
+    overflow-y: auto;
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-radius: 10px;
+    box-shadow: $shadow-lg;
+    padding: 5px;
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    min-width: 0;
+    gap: 1px;
   }
 
-  &__dataset-card-name {
-    font-size: 0.8125rem;
-    font-weight: 700;
-    color: $text-primary;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__dataset-card-meta {
+  &__select-option {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 8px;
-    font-size: 0.71875rem;
-    color: $text-tertiary;
+    width: 100%;
+    text-align: left;
+    padding: 9px 11px;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    font-size: 0.8125rem;
+    font-family: $font-body;
+    color: $text-secondary;
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease;
+
+    &:hover {
+      background: $bg-subtle;
+      color: $text-primary;
+    }
+
+    &--active {
+      color: $primary;
+      font-weight: 600;
+
+      svg {
+        color: $primary;
+      }
+    }
   }
 
   &__link-btn {
@@ -1229,21 +1317,17 @@ export default ModelComparator;
     &__grid {
       grid-template-columns: repeat(2, 1fr);
     }
-
-    &__dataset-grid {
-      grid-template-columns: repeat(2, 1fr);
-    }
   }
 
   @media (max-width: 700px) {
-    &__dataset-grid,
+    &__select-wrap,
     &__datasets-loading,
     &__datasets-error {
       margin-left: 0;
     }
 
-    &__dataset-grid {
-      grid-template-columns: 1fr;
+    &__select {
+      width: 100%;
     }
   }
 
