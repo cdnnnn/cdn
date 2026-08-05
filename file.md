@@ -172,7 +172,7 @@ const Datasets: FC = () => {
               {b.tasks.length > 0 && (
                 <>
                   <span className="datasets-page__card-section-label">Sample tasks</span>
-                  <div className="datasets-page__card-tasks">
+                  <div className="datasets-page__card-tasks datasets-page__card-tasks--inline">
                     {b.tasks.slice(0, 5).map((t) => (
                       <p className="datasets-page__card-task" key={t.name}>
                         <b>{t.name}:</b> <span>{t.value}</span>
@@ -546,7 +546,7 @@ export default Datasets;
   /* ---------- full-info card grid ---------- */
   &__grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    grid-template-columns: repeat(2, 1fr);
     gap: 16px;
   }
 
@@ -634,6 +634,13 @@ export default Datasets;
     flex-direction: column;
     gap: 6px;
     margin-bottom: 10px;
+
+    &--inline {
+      flex-direction: row;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 0 6px;
+    }
   }
 
   &__card-task {
@@ -647,6 +654,22 @@ export default Datasets;
 
     span {
       color: $text-secondary;
+    }
+
+    .datasets-page__card-tasks--inline & {
+      display: inline;
+      line-height: 1.7;
+
+      &:not(:first-child)::before {
+        content: '';
+        display: inline-block;
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: $primary;
+        margin-right: 6px;
+        vertical-align: middle;
+      }
     }
   }
 
@@ -838,11 +861,13 @@ export default Datasets;
   }
 
   /* ---------- responsive ---------- */
-  @media (max-width: 640px) {
+  @media (max-width: 1100px) {
     &__grid {
       grid-template-columns: 1fr;
     }
+  }
 
+  @media (max-width: 640px) {
     &__card-stats {
       flex-wrap: wrap;
       gap: 14px;
