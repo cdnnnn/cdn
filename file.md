@@ -195,11 +195,11 @@ const ModelComparator: FC = () => {
     setSelectedDatasetNames((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]));
   };
 
-  // Models eligible for comparison: if no dataset is selected, every model is
-  // fair game. Once one or more datasets are picked, only models sharing a
-  // capability with at least one of them are shown.
+  // Models only appear once at least one dataset is selected — there's no
+  // "show everything" default here, since the whole point is that model
+  // choice is driven by which test suite(s) you're comparing against.
   const eligibleModels = useMemo(() => {
-    if (selectedDatasetNames.length === 0) return MODELS;
+    if (selectedDatasetNames.length === 0) return [];
     const selectedBenchmarks = benchmarks.filter((b) => selectedDatasetNames.includes(b.name));
     return MODELS.filter((m) => selectedBenchmarks.some((b) => isModelEvaluatedOn(m, b)));
   }, [selectedDatasetNames, benchmarks]);
@@ -279,14 +279,16 @@ const ModelComparator: FC = () => {
 
       {!comparing && (
         <>
-          <div className="model-comparator__datasets-panel">
-            <div className="model-comparator__panel-row">
-              <p className="model-comparator__panel-title">
-                <Database size={12} strokeWidth={2.25} /> Filter by test suite
-              </p>
+          <div className="model-comparator__step">
+            <div className="model-comparator__step-head">
+              <span className="model-comparator__step-num">1</span>
+              <div>
+                <p className="model-comparator__step-title">Select test suite(s)</p>
+                <p className="model-comparator__step-sub">Choose one or more test suites — models evaluated on them will appear below.</p>
+              </div>
               {selectedDatasetNames.length > 0 && (
                 <button type="button" className="model-comparator__link-btn" onClick={() => setSelectedDatasetNames([])}>
-                  Clear filter
+                  Clear
                 </button>
               )}
             </div>
@@ -306,86 +308,113 @@ const ModelComparator: FC = () => {
             )}
 
             {!benchmarksLoading && !benchmarksError && (
-              <div className="model-comparator__dataset-chips">
+              <div className="model-comparator__dataset-grid">
                 {benchmarks.map((b) => {
                   const active = selectedDatasetNames.includes(b.name);
                   return (
                     <button
                       type="button"
                       key={b.name}
-                      className={`model-comparator__dataset-chip${active ? ' model-comparator__dataset-chip--active' : ''}`}
+                      className={`model-comparator__dataset-card${active ? ' model-comparator__dataset-card--selected' : ''}`}
                       onClick={() => toggleDataset(b.name)}
                     >
-                      {b.name} <span className="n">· {b.task_count}</span>
+                      <span className={`model-comparator__checkbox${active ? ' model-comparator__checkbox--checked' : ''}`}>
+                        {active && <CheckCircle2 size={13} strokeWidth={2.5} />}
+                      </span>
+                      <span className="model-comparator__dataset-card-body">
+                        <span className="model-comparator__dataset-card-name">{b.name}</span>
+                        <span className="model-comparator__dataset-card-meta">
+                          <span className="model-comparator__tag">{b.type}</span>
+                          <span className="n">{b.task_count} tasks</span>
+                        </span>
+                      </span>
                     </button>
                   );
                 })}
               </div>
             )}
-
-            {selectedDatasetNames.length > 0 && (
-              <p className="model-comparator__filter-hint">
-                Showing <b>{eligibleModels.length}</b> model{eligibleModels.length === 1 ? '' : 's'} evaluated on{' '}
-                {selectedDatasetNames.length === 1 ? 'this test suite' : `${selectedDatasetNames.length} selected test suites`}.
-              </p>
-            )}
           </div>
 
-          <div className="model-comparator__search">
-            <Search size={15} />
-            <input type="text" placeholder="Search models..." value={query} onChange={(e) => setQuery(e.target.value)} />
-            {query && (
-              <button type="button" className="model-comparator__search-clear" onClick={() => setQuery('')} aria-label="Clear search">
-                <X size={13} />
-              </button>
-            )}
-          </div>
-
-          <div className="model-comparator__grid">
-            {filtered.map((m) => {
-              const selected = selectedIds.includes(m.id);
-              const disabled = !selected && selectedIds.length >= MAX_SELECTION;
-              return (
-                <button
-                  type="button"
-                  key={m.id}
-                  className={`model-comparator__card${selected ? ' model-comparator__card--selected' : ''}${
-                    disabled ? ' model-comparator__card--disabled' : ''
-                  }`}
-                  onClick={() => !disabled && toggle(m.id)}
-                  disabled={disabled}
-                >
-                  <span className={`model-comparator__checkbox${selected ? ' model-comparator__checkbox--checked' : ''}`}>
-                    {selected && <CheckCircle2 size={14} strokeWidth={2.5} />}
-                  </span>
-
-                  <span className="model-comparator__card-body">
-                    <span className="model-comparator__card-top">
-                      <span className="model-comparator__card-name">{m.name}</span>
-                      <span className="model-comparator__tag">{m.provider}</span>
-                    </span>
-                    <span className="model-comparator__card-desc">{m.description}</span>
-                    <span className="model-comparator__card-meta">
-                      <span>
-                        Accuracy <b className="n">{m.accuracyScore}%</b>
-                      </span>
-                      <span>
-                        Speed <b>{m.speedRating}</b>
-                      </span>
-                      <span>
-                        Price <b>{m.pricing}</b>
-                      </span>
-                    </span>
-                  </span>
-                </button>
-              );
-            })}
-
-            {filtered.length === 0 && (
-              <div className="model-comparator__empty">
-                <Search size={22} />
-                <p>No models match your search or test suite filter.</p>
+          <div className="model-comparator__step">
+            <div className="model-comparator__step-head">
+              <span className="model-comparator__step-num">2</span>
+              <div>
+                <p className="model-comparator__step-title">Select models to compare</p>
+                <p className="model-comparator__step-sub">
+                  {selectedDatasetNames.length > 0
+                    ? `${eligibleModels.length} model${eligibleModels.length === 1 ? '' : 's'} evaluated on the selected test suite${
+                        selectedDatasetNames.length === 1 ? '' : 's'
+                      }`
+                    : 'Pick a test suite above to see the models evaluated on it'}
+                </p>
               </div>
+            </div>
+
+            {selectedDatasetNames.length === 0 ? (
+              <div className="model-comparator__empty">
+                <Database size={22} />
+                <p>Select a test suite to see the models evaluated on it.</p>
+              </div>
+            ) : (
+              <>
+                <div className="model-comparator__search">
+                  <Search size={15} />
+                  <input type="text" placeholder="Search models..." value={query} onChange={(e) => setQuery(e.target.value)} />
+                  {query && (
+                    <button type="button" className="model-comparator__search-clear" onClick={() => setQuery('')} aria-label="Clear search">
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+
+                <div className="model-comparator__grid">
+                  {filtered.map((m) => {
+                    const selected = selectedIds.includes(m.id);
+                    const disabled = !selected && selectedIds.length >= MAX_SELECTION;
+                    return (
+                      <button
+                        type="button"
+                        key={m.id}
+                        className={`model-comparator__card${selected ? ' model-comparator__card--selected' : ''}${
+                          disabled ? ' model-comparator__card--disabled' : ''
+                        }`}
+                        onClick={() => !disabled && toggle(m.id)}
+                        disabled={disabled}
+                      >
+                        <span className={`model-comparator__checkbox${selected ? ' model-comparator__checkbox--checked' : ''}`}>
+                          {selected && <CheckCircle2 size={14} strokeWidth={2.5} />}
+                        </span>
+
+                        <span className="model-comparator__card-body">
+                          <span className="model-comparator__card-top">
+                            <span className="model-comparator__card-name">{m.name}</span>
+                            <span className="model-comparator__tag">{m.provider}</span>
+                          </span>
+                          <span className="model-comparator__card-desc">{m.description}</span>
+                          <span className="model-comparator__card-meta">
+                            <span>
+                              Accuracy <b className="n">{m.accuracyScore}%</b>
+                            </span>
+                            <span>
+                              Speed <b>{m.speedRating}</b>
+                            </span>
+                            <span>
+                              Price <b>{m.pricing}</b>
+                            </span>
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
+
+                  {filtered.length === 0 && (
+                    <div className="model-comparator__empty">
+                      <Search size={22} />
+                      <p>No models match your search.</p>
+                    </div>
+                  )}
+                </div>
+              </>
             )}
           </div>
         </>
@@ -513,10 +542,6 @@ export default ModelComparator;
 
 
 
-
-
-
-
 //ModelComparator.scss
 @use '../../../styles/variables' as *;
 
@@ -630,23 +655,42 @@ export default ModelComparator;
     }
   }
 
-  /* ---------- dataset filter panel ---------- */
-  &__datasets-panel {
-    flex-shrink: 0;
-    background: $bg-subtle;
-    border: 1px solid $border-subtle;
-    border-radius: 12px;
-    padding: 14px 16px;
+  /* ---------- step wrapper (shared by dataset step + model step) ---------- */
+  &__step {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 14px;
   }
 
-  &__panel-row {
+  &__step-head {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  &__step-num {
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: $primary;
+    color: $on-primary;
+    font-size: 0.75rem;
+    font-weight: 800;
+    display: grid;
+    place-items: center;
+  }
+
+  &__step-title {
+    font-size: 0.9375rem;
+    font-weight: 800;
+    color: $text-primary;
+  }
+
+  &__step-sub {
+    margin-top: 2px;
+    font-size: 0.78125rem;
+    color: $text-tertiary;
   }
 
   &__datasets-loading,
@@ -656,63 +700,71 @@ export default ModelComparator;
     gap: 8px;
     font-size: 0.78125rem;
     color: $text-tertiary;
+    margin-left: 36px;
   }
 
   &__datasets-error {
     color: $danger;
   }
 
-  &__dataset-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 7px;
+  /* ---------- dataset selection grid ---------- */
+  &__dataset-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-left: 36px;
   }
 
-  &__dataset-chip {
-    display: inline-flex;
+  &__dataset-card {
+    display: flex;
     align-items: center;
-    gap: 6px;
-    font-family: $font-body;
-    font-size: 0.78125rem;
-    font-weight: 600;
-    color: $text-secondary;
+    gap: 10px;
+    text-align: left;
     background: $bg-main;
-    border: 1px solid $border-default;
-    border-radius: 999px;
-    padding: 6px 12px 6px 10px;
+    border: 1px solid $border-subtle;
+    border-radius: 10px;
+    padding: 11px 13px;
     cursor: pointer;
-    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
-
-    .n {
-      color: $text-tertiary;
-      font-weight: 500;
-    }
+    font-family: inherit;
+    transition: border-color 0.14s ease, background 0.14s ease;
 
     &:hover {
       border-color: $border-strong;
     }
 
-    &--active {
-      background: $primary;
+    &--selected {
       border-color: $primary;
-      color: $on-primary;
-
-      .n {
-        color: rgba(255, 255, 255, 0.75);
-      }
+      background: $primary-light;
     }
   }
 
-  &__filter-hint {
-    font-size: 0.75rem;
-    color: $text-tertiary;
+  &__dataset-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
 
-    b {
-      color: $text-primary;
-    }
+  &__dataset-card-name {
+    font-size: 0.8125rem;
+    font-weight: 700;
+    color: $text-primary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__dataset-card-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.71875rem;
+    color: $text-tertiary;
   }
 
   &__link-btn {
+    margin-left: auto;
+    flex-shrink: 0;
     font-family: $font-body;
     font-size: 0.75rem;
     font-weight: 700;
@@ -1176,6 +1228,22 @@ export default ModelComparator;
   @media (max-width: 1400px) {
     &__grid {
       grid-template-columns: repeat(2, 1fr);
+    }
+
+    &__dataset-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+
+  @media (max-width: 700px) {
+    &__dataset-grid,
+    &__datasets-loading,
+    &__datasets-error {
+      margin-left: 0;
+    }
+
+    &__dataset-grid {
+      grid-template-columns: 1fr;
     }
   }
 
