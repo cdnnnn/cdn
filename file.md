@@ -23,6 +23,7 @@ const Datasets: FC = () => {
 
   const [query, setQuery] = useState('');
   const [type, setType] = useState('All');
+  const [tasksModalFor, setTasksModalFor] = useState<Benchmark | null>(null);
 
   const load = () => {
     setLoading(true);
@@ -172,12 +173,17 @@ const Datasets: FC = () => {
                 <>
                   <span className="datasets-page__card-section-label">Sample tasks</span>
                   <div className="datasets-page__card-tasks">
-                    {b.tasks.map((t) => (
+                    {b.tasks.slice(0, 5).map((t) => (
                       <p className="datasets-page__card-task" key={t.name}>
                         <b>{t.name}:</b> <span>{t.value}</span>
                       </p>
                     ))}
                   </div>
+                  {b.tasks.length > 5 && (
+                    <button type="button" className="datasets-page__card-view-all" onClick={() => setTasksModalFor(b)}>
+                      View all {b.tasks.length} tasks
+                    </button>
+                  )}
                 </>
               )}
 
@@ -193,17 +199,36 @@ const Datasets: FC = () => {
           ))}
         </div>
       )}
+
+      {tasksModalFor && (
+        <div className="datasets-page__overlay" onClick={() => setTasksModalFor(null)}>
+          <div className="datasets-page__modal" onClick={(e) => e.stopPropagation()}>
+            <div className="datasets-page__modal-head">
+              <div>
+                <span className="datasets-page__tag datasets-page__tag--blue">{tasksModalFor.type}</span>
+                <h2 className="datasets-page__modal-title">{tasksModalFor.name}</h2>
+                <p className="datasets-page__modal-sub">All {tasksModalFor.tasks.length} tasks</p>
+              </div>
+              <button type="button" className="datasets-page__modal-close" onClick={() => setTasksModalFor(null)} aria-label="Close">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="datasets-page__modal-body">
+              {tasksModalFor.tasks.map((t) => (
+                <p className="datasets-page__card-task" key={t.name}>
+                  <b>{t.name}:</b> <span>{t.value}</span>
+                </p>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
 export default Datasets;
-
-
-
-
-
-
 
 
 
@@ -608,7 +633,7 @@ export default Datasets;
     display: flex;
     flex-direction: column;
     gap: 6px;
-    margin-bottom: 14px;
+    margin-bottom: 10px;
   }
 
   &__card-task {
@@ -622,6 +647,24 @@ export default Datasets;
 
     span {
       color: $text-secondary;
+    }
+  }
+
+  &__card-view-all {
+    display: inline-flex;
+    align-items: center;
+    font-family: $font-body;
+    font-size: 0.71875rem;
+    font-weight: 700;
+    color: $primary;
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin-bottom: 14px;
+    cursor: pointer;
+
+    &:hover {
+      text-decoration: underline;
     }
   }
 
@@ -710,6 +753,88 @@ export default Datasets;
 
   &__spin {
     animation: datasets-page-spin 0.9s linear infinite;
+  }
+
+  /* ---------- tasks modal ---------- */
+  &__overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(2px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+
+  &__modal {
+    width: 100%;
+    max-width: 32rem;
+    max-height: min(80vh, 40rem);
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-radius: 14px;
+    box-shadow: $shadow-lg;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  &__modal-head {
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 20px 22px 16px;
+    border-bottom: 1px solid $border-subtle;
+
+    .datasets-page__tag {
+      margin-bottom: 8px;
+    }
+  }
+
+  &__modal-title {
+    font-size: 1.0625rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: $text-primary;
+  }
+
+  &__modal-sub {
+    margin-top: 3px;
+    font-size: 0.75rem;
+    color: $text-tertiary;
+  }
+
+  &__modal-close {
+    flex-shrink: 0;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    border: 1px solid $border-default;
+    background: $bg-main;
+    color: $text-tertiary;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: border-color 0.14s ease, color 0.14s ease;
+
+    &:hover {
+      border-color: $text-primary;
+      color: $text-primary;
+    }
+  }
+
+  &__modal-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 18px 22px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
   }
 
   /* ---------- responsive ---------- */
