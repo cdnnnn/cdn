@@ -1,173 +1,4 @@
-//types.ts
-export type EvalTypeId = 'model' | 'agent' | 'rag';
-
-export interface EvalType {
-  id: EvalTypeId;
-  title: string;
-  desc: string;
-  badge: string;
-}
-
-/* ---------- API: models ---------- */
-
-export interface ModelApi {
-  id: string;
-  name: string;
-  provider_id: string;
-  category: string;
-  capabilities: string[];
-  context_window: number;
-  input_price: number | null;
-  output_price: number | null;
-  accuracy_score: number | null;
-  agent_score: number | null;
-  is_active: boolean;
-  base_url: string | null;
-}
-
-export interface ModelApiResponse {
-  models: ModelApi[];
-}
-
-/* ---------- API: providers ---------- */
-
-export type ProviderStatus = 'connected' | 'not_connected' | string;
-
-export interface ProviderApi {
-  id: string;
-  name: string;
-  description: string;
-  logo_url: string | null;
-  base_url: string | null;
-  url_template: string | null;
-  model_count: number;
-  status: ProviderStatus;
-}
-
-export interface ProvidersResponse {
-  providers: ProviderApi[];
-}
-
-/* ---------- API: benchmarks ---------- */
-
-export interface BenchmarkTask {
-  name: string;
-  value: string;
-}
-
-export interface Benchmark {
-  name: string;
-  description: string;
-  tasks: BenchmarkTask[];
-  task_count: number;
-  required_capabilities: string[];
-  huggingface_dataset: string;
-  type: string;
-}
-
-export interface BenchmarksResponse {
-  benchmarks: Benchmark[];
-  total: number;
-}
-
-export interface EvaluationDraft {
-  name: string;
-  type: EvalTypeId | null;
-  providers: string[];
-  models: string[];
-  dataset: string | null;
-  subgroup: string[];
-  metrics: string[];
-  judgeModelId: string | null;
-  judgeApiKey: string;
-}
-
-export interface WizardStepMeta {
-  key: string;
-  label: string;
-  description: string;
-}
-
-export const WIZARD_STEPS: WizardStepMeta[] = [
-  { key: 'name', label: 'Name', description: 'Give your evaluation a name' },
-  { key: 'type', label: 'Type', description: 'What kind of AI are you testing' },
-  { key: 'providers', label: 'Providers', description: 'Choose connected providers' },
-  { key: 'models', label: 'Models', description: 'Pick models to compare' },
-  { key: 'dataset', label: 'Test Suite', description: 'Select a benchmark or dataset' },
-  { key: 'metrics', label: 'Metrics', description: 'Choose what to measure' },
-  { key: 'review', label: 'Review', description: 'Confirm and start the run' },
-];
-
-/* ---------- API: evaluations ---------- */
-
-export interface JudgeConfig {
-  model_id: string;
-  base_url: string;
-  api_key: string;
-}
-
-export interface CreateEvaluationRequest {
-  name: string;
-  description?: string;
-  eval_type: string;
-  dataset_id: string;
-  benchmark?: string;
-  model_ids: string[];
-  metrics_config?: Record<string, unknown>;
-  selected_metrics: string[];
-  dataset_limit?: number;
-  selected_category?: string[];
-  judge_config?: JudgeConfig;
-}
-
-export interface CreateEvaluationResponse {
-  id?: string;
-  evaluation_id?: string;
-  [key: string]: unknown;
-}
-
-/* ---------- API: metrics ---------- */
-
-export interface MetricsResponse {
-  all_metrics: string[];
-  custom_agent_metrics: string[];
-}
-
-export type EvaluationStatusValue = 'pending' | 'running' | 'completed' | 'failed' | 'canceled';
-export type CeleryState = 'STARTED' | 'SUCCESS' | 'FAILURE' | 'REVOKED' | null;
-
-export interface EvaluationStatusResponse {
-  status: EvaluationStatusValue;
-  progress: number;
-  total: number;
-  celery_state: CeleryState;
-  error_message: string | null;
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Runevaluation.tsx
+//RunEvaluation.tsx
 import { useEffect, useState, type FC, type ComponentType } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -280,20 +111,6 @@ const RunEvaluation: FC = () => {
     };
   }, []);
 
-  // Default all metrics to selected once they're available — the user opts
-  // out rather than opting in. Only runs once, right after the catalog
-  // finishes loading; toggling metrics afterward never re-triggers this.
-  useEffect(() => {
-    if (catalogLoading) return;
-    if (allMetrics.length === 0 && customAgentMetrics.length === 0) return;
-    setDraft((d) => {
-      if (d.metrics.length > 0) return d;
-      const defaults = [...allMetrics, ...(d.type === 'agent' ? customAgentMetrics : [])];
-      return { ...d, metrics: defaults };
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [catalogLoading, allMetrics, customAgentMetrics]);
-
   const toggleInArray = (key: 'providers' | 'models' | 'metrics' | 'subgroup', id: string) => {
     setDraft((d) => {
       const arr = d[key];
@@ -303,11 +120,7 @@ const RunEvaluation: FC = () => {
   };
 
   const setType = (id: EvaluationDraft['type']) => {
-    setDraft((d) => {
-      if (d.type === id) return d;
-      const defaults = [...allMetrics, ...(id === 'agent' ? customAgentMetrics : [])];
-      return { ...d, type: id, metrics: defaults };
-    });
+    setDraft((d) => (d.type === id ? d : { ...d, type: id, metrics: [] }));
   };
 
   const setJudgeModel = (id: string | null) => {
@@ -316,6 +129,14 @@ const RunEvaluation: FC = () => {
 
   const setJudgeApiKey = (value: string) => {
     setDraft((d) => ({ ...d, judgeApiKey: value }));
+  };
+
+  const selectAllMetrics = (ids: string[]) => {
+    setDraft((d) => ({ ...d, metrics: Array.from(new Set([...d.metrics, ...ids])) }));
+  };
+
+  const clearAllMetrics = () => {
+    setDraft((d) => ({ ...d, metrics: [] }));
   };
 
   const validate = (): boolean => {
@@ -485,6 +306,8 @@ const RunEvaluation: FC = () => {
                 customAgentMetrics={customAgentMetrics}
                 selected={draft.metrics}
                 onToggle={(id) => toggleInArray('metrics', id)}
+                onSelectAll={selectAllMetrics}
+                onClearAll={clearAllMetrics}
                 loading={catalogLoading}
                 error={catalogError}
                 models={models}
@@ -564,9 +387,6 @@ export default RunEvaluation;
 
 
 
-
-
-
 //Metricsstep.tsx
 import { useMemo, type FC } from 'react';
 import { Check, Loader2, AlertTriangle, Gavel, Key } from 'lucide-react';
@@ -578,6 +398,8 @@ interface Props {
   customAgentMetrics: string[];
   selected: string[];
   onToggle: (id: string) => void;
+  onSelectAll: (ids: string[]) => void;
+  onClearAll: () => void;
   loading: boolean;
   error: string | null;
   models: ModelApi[];
@@ -594,6 +416,8 @@ const MetricsStep: FC<Props> = ({
   customAgentMetrics,
   selected,
   onToggle,
+  onSelectAll,
+  onClearAll,
   loading,
   error,
   models,
@@ -611,6 +435,9 @@ const MetricsStep: FC<Props> = ({
     return list;
   }, [allMetrics, customAgentMetrics, evalType]);
 
+  const allApplicableMetrics = useMemo(() => groups.flatMap((g) => g.items), [groups]);
+  const allSelected = allApplicableMetrics.length > 0 && allApplicableMetrics.every((m) => selected.includes(m));
+
   const eligibleJudgeModels = useMemo(
     () => models.filter((m) => selectedModelIds.includes(m.id)),
     [models, selectedModelIds]
@@ -622,11 +449,32 @@ const MetricsStep: FC<Props> = ({
         <div>
           <h2 className="run-eval__step-title">What to measure?</h2>
           <p className="run-eval__step-desc">
-            All metrics are selected by default — deselect anything you don't need.
+            Select the metrics that matter for your use case. Nothing is selected by default.
           </p>
         </div>
         <div className="run-eval__metrics-count">
-          <span>{selected.length}</span> selected
+          <span className="run-eval__metrics-count-num">{selected.length}</span> selected
+          {allApplicableMetrics.length > 0 && (
+            <span className="run-eval__metrics-bulk-actions">
+              <button
+                type="button"
+                className="run-eval__metrics-toggle-all"
+                onClick={() => onSelectAll(allApplicableMetrics)}
+                disabled={allSelected}
+              >
+                Select all
+              </button>
+              <span className="run-eval__metrics-bulk-divider" />
+              <button
+                type="button"
+                className="run-eval__metrics-toggle-all"
+                onClick={onClearAll}
+                disabled={selected.length === 0}
+              >
+                Unselect all
+              </button>
+            </span>
+          )}
         </div>
       </div>
 
@@ -754,10 +602,7 @@ export default MetricsStep;
 
 
 
-
-
-
-//Runevaluation.scss
+//RunEvaluation.scss
 @use '../../../styles/variables' as *;
 
 .run-eval {
@@ -1830,12 +1675,48 @@ export default MetricsStep;
   /* ---------- metrics step ---------- */
   &__metrics-count {
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
     font-size: 0.875rem;
     color: $text-secondary;
+  }
 
-    span {
-      font-weight: 700;
-      color: $primary;
+  &__metrics-count-num {
+    font-weight: 700;
+    color: $primary;
+  }
+
+  &__metrics-bulk-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-left: 0.25rem;
+  }
+
+  &__metrics-bulk-divider {
+    width: 1px;
+    height: 12px;
+    background: $border-strong;
+  }
+
+  &__metrics-toggle-all {
+    font-family: $font-body;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: $primary;
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+
+    &:hover:not(:disabled) {
+      text-decoration: underline;
+    }
+
+    &:disabled {
+      color: $text-tertiary;
+      cursor: not-allowed;
     }
   }
 
