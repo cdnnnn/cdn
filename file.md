@@ -292,11 +292,6 @@ export default History;
 
 
 
-
-
-
-
-
 //api.ts
 import api from '../../../services/api';
 import type { ApiErrorBody, EvaluationResultsResponse, EvaluationsListResponse } from './types';
@@ -327,11 +322,6 @@ export async function fetchEvaluationResults(evaluationId: string): Promise<Eval
     throw err;
   }
 }
-
-
-
-
-
 
 
 
