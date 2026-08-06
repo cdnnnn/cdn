@@ -275,3 +275,148 @@ const History: FC = () => {
 };
 
 export default History;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//api.ts
+import api from '../../../services/api';
+import type { ApiErrorBody, EvaluationResultsResponse, EvaluationsListResponse } from './types';
+
+export async function fetchEvaluations(): Promise<EvaluationsListResponse> {
+  const res = await api.get<EvaluationsListResponse>('/evaluations');
+  return res.data;
+}
+
+// Thrown when the run hasn't finished yet (backend returns 400 with a `detail` message
+// rather than a results payload). Callers can check `notCompleted` to show a friendlier
+// message instead of a generic error.
+export class EvaluationNotCompletedError extends Error {
+  notCompleted = true;
+}
+
+export async function fetchEvaluationResults(evaluationId: string): Promise<EvaluationResultsResponse> {
+  try {
+    const res = await api.get<EvaluationResultsResponse>(`/evaluations/${evaluationId}/results`);
+    return res.data;
+  } catch (err: unknown) {
+    // Adjust this check to however your `api` client (axios?) surfaces status + body.
+    const status = (err as { response?: { status?: number } })?.response?.status;
+    const body = (err as { response?: { data?: ApiErrorBody } })?.response?.data;
+    if (status === 400) {
+      throw new EvaluationNotCompletedError(body?.detail ?? 'Execution not completed.');
+    }
+    throw err;
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//types.ts
+/* Add these to your shared types.ts (or a local History-scoped types file) */
+
+export type EvaluationStatus = 'pending' | 'running' | 'completed' | 'failed' | 'canceled';
+
+export interface DatasetConfig {
+  dataset_id: string;
+}
+
+export interface EvaluationApi {
+  id: string;
+  name: string;
+  description: string;
+  eval_type: string; // 'model' | 'agent' | 'rag' — confirm exact values with backend
+  dataset_id: string;
+  datasets_config: DatasetConfig[];
+  benchmark: string;
+  model_ids: string[];
+  selected_metrics: string[];
+  run_samples: number;
+  selected_category: string[];
+  status: EvaluationStatus;
+  progress: number;
+  total_questions: number;
+  top_model: string | null;
+  top_score: number | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface EvaluationsListResponse {
+  evaluations: EvaluationApi[];
+}
+
+/* ---------- API: GET /evaluations/{id}/results ---------- */
+
+export interface ResultDetail {
+  test_id: string;
+  input: string;
+  output: string;
+  expected: string;
+  latency_seconds: number;
+  passed: boolean;
+  score: number;
+  metric_scores: Record<string, number>;
+}
+
+export interface ModelResult {
+  model_id: string;
+  provider: string;
+  rank: number;
+  score: number;
+  accuracy: number;
+  passed_tests: number;
+  failed_tests: number;
+  total_tests: number;
+  metric_scores: Record<string, number>;
+  details: ResultDetail[];
+}
+
+export interface EvaluationResultsResponse {
+  evaluation_id: string;
+  status: EvaluationStatus;
+  top_model: string;
+  top_score: number;
+  results: ModelResult[];
+}
+
+// Shape of the 400 { detail: "Execution not completed." } error body
+export interface ApiErrorBody {
+  detail: string;
+}
