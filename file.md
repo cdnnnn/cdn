@@ -1,7 +1,7 @@
 //Models.tsx
-import { useEffect, useMemo, useRef, useState, type FC } from 'react';
-import { Search, X, RefreshCw, AlertCircle, Boxes, CheckCircle2, ExternalLink, Check, ChevronDown } from 'lucide-react';
-import { fetchModels } from './api';
+import { useEffect, useMemo, useRef, useState, type FC, type FormEvent } from 'react';
+import { Search, X, RefreshCw, AlertCircle, Boxes, CheckCircle2, ExternalLink, Check, ChevronDown, Plus, Key } from 'lucide-react';
+import { fetchModels, addCustomModel, type AddCustomModelPayload } from './api';
 import type { ModelApi } from './types';
 import Spinner from '../../../components/Spinner/Spinner';
 import './Models.scss';
@@ -74,6 +74,16 @@ const CapabilitySelect: FC<{ value: string; options: SelectOption[]; onChange: (
   );
 };
 
+const EMPTY_FORM: AddCustomModelPayload = {
+  base_url: '',
+  category: '',
+  api_key: '',
+  model_id: '',
+  name: '',
+  context_window: 0,
+  description: '',
+};
+
 const Models: FC = () => {
   const [models, setModels] = useState<ModelApi[]>([]);
   const [loading, setLoading] = useState(true);
@@ -81,6 +91,12 @@ const Models: FC = () => {
 
   const [query, setQuery] = useState('');
   const [capability, setCapability] = useState('All');
+
+  // ---------- add custom model modal ----------
+  const [addModalOpen, setAddModalOpen] = useState(false);
+  const [form, setForm] = useState<AddCustomModelPayload>(EMPTY_FORM);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const load = () => {
     setLoading(true);
@@ -117,6 +133,36 @@ const Models: FC = () => {
     });
   }, [models, query, capability]);
 
+  const openAddModal = () => {
+    setForm(EMPTY_FORM);
+    setSubmitError(null);
+    setAddModalOpen(true);
+  };
+
+  const updateForm = <K extends keyof AddCustomModelPayload>(key: K, value: AddCustomModelPayload[K]) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const isFormValid = form.model_id.trim() && form.name.trim() && form.category.trim() && form.base_url.trim() && form.api_key.trim();
+
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    if (!isFormValid || submitting) return;
+
+    setSubmitting(true);
+    setSubmitError(null);
+
+    addCustomModel(form)
+      .then(() => {
+        setAddModalOpen(false);
+        load();
+      })
+      .catch((err) => {
+        setSubmitError(err instanceof Error ? err.message : 'Failed to add model.');
+      })
+      .finally(() => setSubmitting(false));
+  };
+
   return (
     <div className="models-page">
       <div className="models-page__header">
@@ -133,6 +179,9 @@ const Models: FC = () => {
           </div>
           <button type="button" className="models-page__btn models-page__btn--outline" onClick={load} disabled={loading}>
             <RefreshCw size={14} strokeWidth={2.25} className={loading ? 'models-page__spin' : undefined} /> Refresh
+          </button>
+          <button type="button" className="models-page__btn models-page__btn--primary" onClick={openAddModal}>
+            <Plus size={14} strokeWidth={2.5} /> Add Model
           </button>
         </div>
       </div>
@@ -239,11 +288,172 @@ const Models: FC = () => {
           ))}
         </div>
       )}
+
+      {addModalOpen && (
+        <div className="models-page__overlay" onClick={() => !submitting && setAddModalOpen(false)}>
+          <div className="models-page__modal" onClick={(e) => e.stopPropagation()}>
+            <div className="models-page__modal-head">
+              <div>
+                <h2 className="models-page__modal-title">Add Custom Model</h2>
+                <p className="models-page__modal-sub">Register a model hosted on your own endpoint.</p>
+              </div>
+              <button
+                type="button"
+                className="models-page__modal-close"
+                onClick={() => setAddModalOpen(false)}
+                disabled={submitting}
+                aria-label="Close"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form className="models-page__form" onSubmit={handleSubmit}>
+              <div className="models-page__form-row">
+                <div className="models-page__field">
+                  <label className="models-page__field-label" htmlFor="model-name">
+                    Name
+                  </label>
+                  <input
+                    id="model-name"
+                    type="text"
+                    className="models-page__input"
+                    placeholder="e.g. My Custom Model"
+                    value={form.name}
+                    onChange={(e) => updateForm('name', e.target.value)}
+                    disabled={submitting}
+                  />
+                </div>
+                <div className="models-page__field">
+                  <label className="models-page__field-label" htmlFor="model-id">
+                    Model ID
+                  </label>
+                  <input
+                    id="model-id"
+                    type="text"
+                    className="models-page__input"
+                    placeholder="e.g. my-custom-model"
+                    value={form.model_id}
+                    onChange={(e) => updateForm('model_id', e.target.value)}
+                    disabled={submitting}
+                  />
+                </div>
+              </div>
+
+              <div className="models-page__form-row">
+                <div className="models-page__field">
+                  <label className="models-page__field-label" htmlFor="model-category">
+                    Category
+                  </label>
+                  <input
+                    id="model-category"
+                    type="text"
+                    className="models-page__input"
+                    placeholder="e.g. chat, embedding"
+                    value={form.category}
+                    onChange={(e) => updateForm('category', e.target.value)}
+                    disabled={submitting}
+                  />
+                </div>
+                <div className="models-page__field">
+                  <label className="models-page__field-label" htmlFor="model-context">
+                    Context Window
+                  </label>
+                  <input
+                    id="model-context"
+                    type="number"
+                    min={0}
+                    className="models-page__input"
+                    placeholder="e.g. 128000"
+                    value={form.context_window || ''}
+                    onChange={(e) => updateForm('context_window', Number(e.target.value) || 0)}
+                    disabled={submitting}
+                  />
+                </div>
+              </div>
+
+              <div className="models-page__field">
+                <label className="models-page__field-label" htmlFor="model-base-url">
+                  Base URL
+                </label>
+                <input
+                  id="model-base-url"
+                  type="text"
+                  className="models-page__input"
+                  placeholder="https://your-endpoint.example.com"
+                  value={form.base_url}
+                  onChange={(e) => updateForm('base_url', e.target.value)}
+                  disabled={submitting}
+                />
+              </div>
+
+              <div className="models-page__field">
+                <label className="models-page__field-label" htmlFor="model-api-key">
+                  API Key
+                </label>
+                <div className="models-page__input-wrap">
+                  <Key size={14} />
+                  <input
+                    id="model-api-key"
+                    type="password"
+                    className="models-page__input models-page__input--inset"
+                    placeholder="Enter API key"
+                    value={form.api_key}
+                    onChange={(e) => updateForm('api_key', e.target.value)}
+                    disabled={submitting}
+                  />
+                </div>
+              </div>
+
+              <div className="models-page__field">
+                <label className="models-page__field-label" htmlFor="model-description">
+                  Description
+                </label>
+                <textarea
+                  id="model-description"
+                  className="models-page__textarea"
+                  placeholder="What is this model good at?"
+                  rows={3}
+                  value={form.description}
+                  onChange={(e) => updateForm('description', e.target.value)}
+                  disabled={submitting}
+                />
+              </div>
+
+              {submitError && <p className="models-page__form-error">{submitError}</p>}
+
+              <div className="models-page__form-actions">
+                <button
+                  type="button"
+                  className="models-page__btn models-page__btn--outline"
+                  onClick={() => setAddModalOpen(false)}
+                  disabled={submitting}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="models-page__btn models-page__btn--primary" disabled={!isFormValid || submitting}>
+                  {submitting ? (
+                    <>
+                      <RefreshCw size={13} strokeWidth={2.25} className="models-page__spin" /> Adding…
+                    </>
+                  ) : (
+                    <>
+                      <Plus size={13} strokeWidth={2.5} /> Add Model
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
 export default Models;
+
+
 
 
 
@@ -370,6 +580,17 @@ export default Models;
       &:hover:not(:disabled) {
         border-color: $text-primary;
         color: $text-primary;
+      }
+    }
+
+    &--primary {
+      background: $primary;
+      border-color: $primary;
+      color: $on-primary;
+
+      &:hover:not(:disabled) {
+        background: $primary-hover;
+        border-color: $primary-hover;
       }
     }
   }
@@ -755,6 +976,179 @@ export default Models;
     }
   }
 
+  /* ---------- add-model modal ---------- */
+  &__overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(2px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+
+  &__modal {
+    width: 100%;
+    max-width: 30rem;
+    max-height: min(88vh, 42rem);
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-radius: 14px;
+    box-shadow: $shadow-lg;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  &__modal-head {
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 20px 22px 16px;
+    border-bottom: 1px solid $border-subtle;
+  }
+
+  &__modal-title {
+    font-size: 1.0625rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: $text-primary;
+  }
+
+  &__modal-sub {
+    margin-top: 3px;
+    font-size: 0.75rem;
+    color: $text-tertiary;
+  }
+
+  &__modal-close {
+    flex-shrink: 0;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    border: 1px solid $border-default;
+    background: $bg-main;
+    color: $text-tertiary;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: border-color 0.14s ease, color 0.14s ease, opacity 0.14s ease;
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    &:hover:not(:disabled) {
+      border-color: $text-primary;
+      color: $text-primary;
+    }
+  }
+
+  /* ---------- form ---------- */
+  &__form {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 18px 22px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  &__form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+
+  &__field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  &__field-label {
+    font-size: 0.71875rem;
+    font-weight: 600;
+    color: $text-secondary;
+  }
+
+  &__input,
+  &__textarea {
+    width: 100%;
+    border: 1px solid $border-default;
+    border-radius: 8px;
+    padding: 8px 11px;
+    font-size: 0.8125rem;
+    font-family: $font-body;
+    color: $text-primary;
+    background: $bg-main;
+    transition: border-color 0.14s ease;
+
+    &:focus {
+      outline: none;
+      border-color: $primary;
+    }
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    &::placeholder {
+      color: $text-tertiary;
+    }
+  }
+
+  &__textarea {
+    resize: vertical;
+    min-height: 4.5rem;
+    line-height: 1.5;
+  }
+
+  &__input-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid $border-default;
+    border-radius: 8px;
+    padding: 0 11px;
+    background: $bg-main;
+    color: $text-tertiary;
+    transition: border-color 0.14s ease;
+
+    &:focus-within {
+      border-color: $primary;
+    }
+  }
+
+  &__input--inset {
+    border: none;
+    padding: 8px 0;
+  }
+
+  &__form-error {
+    font-size: 0.75rem;
+    color: $danger;
+    background: $danger-subtle;
+    border-radius: 6px;
+    padding: 7px 10px;
+    line-height: 1.4;
+  }
+
+  &__form-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
   /* ---------- responsive ---------- */
   @media (max-width: 1500px) {
     &__grid {
@@ -772,6 +1166,10 @@ export default Models;
     &__card-stats-row {
       flex-wrap: wrap;
       gap: 14px;
+    }
+
+    &__form-row {
+      grid-template-columns: 1fr;
     }
   }
 
@@ -815,4 +1213,44 @@ export default Models;
   to {
     transform: rotate(360deg);
   }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//api.ts
+import api from '../../../services/api';
+import type { ModelsResponse } from './types';
+
+export async function fetchModels(): Promise<ModelsResponse> {
+  const res = await api.get<ModelsResponse>('/models');
+  return res.data;
+}
+
+export interface AddCustomModelPayload {
+  base_url: string;
+  category: string;
+  api_key: string;
+  model_id: string;
+  name: string;
+  context_window: number;
+  description: string;
+}
+
+export async function addCustomModel(payload: AddCustomModelPayload): Promise<void> {
+  await api.post('/models/custom', payload);
 }
