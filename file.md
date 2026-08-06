@@ -33,6 +33,44 @@ export interface EvaluationsListResponse {
   evaluations: EvaluationApi[];
 }
 
+/* ---------- API: GET /evaluations/{id}/results ---------- */
+
+export interface ResultDetail {
+  test_id: string;
+  input: string;
+  output: string;
+  expected: string;
+  latency_seconds: number;
+  passed: boolean;
+  score: number;
+  metric_scores: Record<string, number>;
+}
+
+export interface ModelResult {
+  model_id: string;
+  provider: string;
+  rank: number;
+  score: number;
+  accuracy: number;
+  passed_tests: number;
+  failed_tests: number;
+  total_tests: number;
+  metric_scores: Record<string, number>;
+  details: ResultDetail[];
+}
+
+export interface EvaluationResultsResponse {
+  evaluation_id: string;
+  status: EvaluationStatus;
+  top_model: string;
+  top_score: number;
+  results: ModelResult[];
+}
+
+// Shape of the 400 { detail: "Execution not completed." } error body
+export interface ApiErrorBody {
+  detail: string;
+}
 
 
 
@@ -47,14 +85,41 @@ export interface EvaluationsListResponse {
 
 
 
-//history api.ts
+
+
+//api.ts
 import api from '../../../services/api';
-import type { EvaluationsListResponse } from './types';
+import type { ApiErrorBody, EvaluationResultsResponse, EvaluationsListResponse } from './types';
 
 export async function fetchEvaluations(): Promise<EvaluationsListResponse> {
   const res = await api.get<EvaluationsListResponse>('/evaluations');
   return res.data;
 }
+
+// Thrown when the run hasn't finished yet (backend returns 400 with a `detail` message
+// rather than a results payload). Callers can check `notCompleted` to show a friendlier
+// message instead of a generic error.
+export class EvaluationNotCompletedError extends Error {
+  notCompleted = true;
+}
+
+export async function fetchEvaluationResults(evaluationId: string): Promise<EvaluationResultsResponse> {
+  try {
+    const res = await api.get<EvaluationResultsResponse>(`/evaluations/${evaluationId}/results`);
+    return res.data;
+  } catch (err: unknown) {
+    // Adjust this check to however your `api` client (axios?) surfaces status + body.
+    const status = (err as { response?: { status?: number } })?.response?.status;
+    const body = (err as { response?: { data?: ApiErrorBody } })?.response?.data;
+    if (status === 400) {
+      throw new EvaluationNotCompletedError(body?.detail ?? 'Execution not completed.');
+    }
+    throw err;
+  }
+}
+
+
+
 
 
 
@@ -70,9 +135,9 @@ export async function fetchEvaluations(): Promise<EvaluationsListResponse> {
 //History.tsx
 import { useEffect, useMemo, useState, type FC, type MouseEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Play, Search, Copy, Trash2, X, Database, FileBarChart, AlertCircle, RefreshCw } from 'lucide-react';
-import { fetchEvaluations } from './historyApi';
-import type { EvaluationApi } from './types';
+import { Play, Search, Copy, Trash2, X, Database, FileBarChart, AlertCircle, RefreshCw, Clock3 } from 'lucide-react';
+import { fetchEvaluations, fetchEvaluationResults, EvaluationNotCompletedError } from './historyApi';
+import type { EvaluationApi, ModelResult } from './types';
 import Spinner from '../../../components/Spinner/Spinner';
 import Select from './Select';
 import './History.scss';
@@ -128,9 +193,10 @@ function formatDate(dateStr: string | null): string {
   return new Date(dateStr).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
-function formatScore(score: number | null): string {
-  if (score === null || Number.isNaN(score)) return '—';
-  // Assumes top_score is a 0–1 fraction; adjust if the API sends 0–100 already.
+// Assumes fractional scores (0–1), matching the 0.95 / 0.345 examples in the API docs.
+// Flip this to a plain toFixed if the backend ever sends 0–100 instead.
+function formatScore(score: number | null | undefined): string {
+  if (score === null || score === undefined || Number.isNaN(score)) return '—';
   return `${(score * 100).toFixed(1)}%`;
 }
 
@@ -144,6 +210,13 @@ const History: FC = () => {
   const [typeFilter, setTypeFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState(30);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Results for whichever evaluation is currently selected — fetched lazily per-selection
+  // rather than for every row up front.
+  const [results, setResults] = useState<ModelResult[] | null>(null);
+  const [resultsLoading, setResultsLoading] = useState(false);
+  const [resultsError, setResultsError] = useState<string | null>(null);
+  const [resultsNotCompleted, setResultsNotCompleted] = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -178,6 +251,51 @@ const History: FC = () => {
     () => filtered.find((ev) => ev.id === selectedId) ?? filtered[0] ?? null,
     [filtered, selectedId]
   );
+
+  // Fetch the results table whenever the selected evaluation changes.
+  useEffect(() => {
+    if (!selected) {
+      setResults(null);
+      return;
+    }
+
+    // No point calling the results endpoint for a run that hasn't finished —
+    // the API will just 400 anyway.
+    if (selected.status !== 'completed') {
+      setResults(null);
+      setResultsError(null);
+      setResultsNotCompleted(selected.status !== 'failed' && selected.status !== 'canceled');
+      return;
+    }
+
+    let cancelled = false;
+    setResultsLoading(true);
+    setResultsError(null);
+    setResultsNotCompleted(false);
+
+    fetchEvaluationResults(selected.id)
+      .then((res) => {
+        if (cancelled) return;
+        setResults(res.results);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        if (err instanceof EvaluationNotCompletedError) {
+          setResultsNotCompleted(true);
+          setResults(null);
+        } else {
+          setResultsError(err instanceof Error ? err.message : 'Failed to load results.');
+          setResults(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setResultsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selected]);
 
   const handleDuplicate = (e: MouseEvent, _id: string) => {
     e.stopPropagation();
@@ -328,23 +446,72 @@ const History: FC = () => {
                 </div>
               </div>
 
-              {/*
-                The /evaluations list response doesn't include a per-model results
-                breakdown (rank/model/provider/score/accuracy/speed/cost) — only
-                top_model/top_score. If there's a GET /evaluations/{id} or
-                /evaluations/{id}/results endpoint that returns that table, fetch
-                it here (e.g. on selection change) and render the table like before.
-                Until then, point people at the full report instead of showing an
-                empty or fabricated table.
-              */}
               <p className="history__section-title">Full results</p>
-              <div className="history__empty">
-                <FileBarChart size={20} />
-                <p>Open the full report to see the per-model breakdown for this run.</p>
-                <button type="button" className="history__btn history__btn--primary" onClick={() => navigate('/app/reports')}>
-                  <FileBarChart size={13} /> View Report
-                </button>
-              </div>
+
+              {resultsLoading && (
+                <div className="history__empty">
+                  <Spinner label="Loading results…" />
+                </div>
+              )}
+
+              {!resultsLoading && resultsNotCompleted && (
+                <div className="history__empty">
+                  <Clock3 size={20} />
+                  <p>This evaluation hasn't finished running yet — results will appear here once it completes.</p>
+                </div>
+              )}
+
+              {!resultsLoading && resultsError && (
+                <div className="history__empty history__empty--error">
+                  <AlertCircle size={20} />
+                  <p>{resultsError}</p>
+                </div>
+              )}
+
+              {!resultsLoading && !resultsError && !resultsNotCompleted && results && results.length === 0 && (
+                <div className="history__empty">
+                  <FileBarChart size={20} />
+                  <p>No per-model results were returned for this run.</p>
+                </div>
+              )}
+
+              {!resultsLoading && !resultsError && !resultsNotCompleted && results && results.length > 0 && (
+                <div className="history__table-wrap">
+                  <table className="history__table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: 56 }}>Rank</th>
+                        <th>Model</th>
+                        <th>Provider</th>
+                        <th>Score</th>
+                        <th>Accuracy</th>
+                        <th>Tests Passed</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {results
+                        .slice()
+                        .sort((a, b) => a.rank - b.rank)
+                        .map((r) => (
+                          <tr key={r.model_id}>
+                            <td>
+                              <span className={`history__rank-pill${r.rank === 1 ? ' history__rank-pill--1' : ''}`}>{r.rank}</span>
+                            </td>
+                            {/* Only model_id is available here, not a display name — swap in
+                                a models lookup (e.g. fetchModels) if you want the friendly name. */}
+                            <td className="history__cell-strong">{r.model_id}</td>
+                            <td>{r.provider}</td>
+                            <td className={`n${r.rank === 1 ? ' history__score-cell' : ''}`}>{formatScore(r.score)}</td>
+                            <td className="n">{formatScore(r.accuracy)}</td>
+                            <td className="n">
+                              {r.passed_tests}/{r.total_tests}
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
         </div>
