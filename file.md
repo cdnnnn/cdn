@@ -1,11 +1,298 @@
+//RunEvaluations.tsx
+import { useState, type FC, type ComponentType } from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  ArrowLeft,
+  ArrowRight,
+  Play,
+  Check,
+  Clock3,
+  Tag,
+  LayoutGrid,
+  Plug,
+  Cpu,
+  Database,
+  Gauge,
+  ClipboardCheck,
+  Loader2,
+} from 'lucide-react';
+import NameStep from './steps/NameStep';
+import TypeStep from './steps/TypeStep';
+import ProvidersStep from './steps/ProvidersStep';
+import ModelsStep from './steps/ModelsStep';
+import DatasetStep from './steps/DatasetStep';
+import MetricsStep from './steps/MetricsStep';
+import ReviewStep from './steps/ReviewStep';
+import { METRICS } from './data';
+import { createEvaluation, startEvaluation as startEvaluationRequest } from './evaluationsApi';
+import { WIZARD_STEPS, type CreateEvaluationRequest, type EvaluationDraft } from './types';
+import './RunEvaluation.scss';
+
+const EMPTY_DRAFT: EvaluationDraft = {
+  name: '',
+  type: null,
+  providers: [],
+  models: [],
+  dataset: null,
+  metrics: [],
+};
+
+const STEP_ICONS: ComponentType<{ size?: number }>[] = [
+  Tag,
+  LayoutGrid,
+  Plug,
+  Cpu,
+  Database,
+  Gauge,
+  ClipboardCheck,
+];
+
+const RunEvaluation: FC = () => {
+  const navigate = useNavigate();
+  const [step, setStep] = useState(1);
+  const [draft, setDraft] = useState<EvaluationDraft>(EMPTY_DRAFT);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const totalSteps = WIZARD_STEPS.length;
+
+  const toggleInArray = (key: 'providers' | 'models' | 'metrics', id: string) => {
+    setDraft((d) => {
+      const arr = d[key];
+      const next = arr.includes(id) ? arr.filter((x) => x !== id) : [...arr, id];
+      return { ...d, [key]: next };
+    });
+  };
+
+  const setType = (id: EvaluationDraft['type']) => {
+    setDraft((d) => {
+      if (d.type === id) return d;
+      const defaults = [
+        ...METRICS.universal.filter((m) => m.defaultChecked).map((m) => m.id),
+        ...(id === 'agent' ? METRICS.agent : id === 'rag' ? METRICS.rag : METRICS.model)
+          .filter((m) => m.defaultChecked)
+          .map((m) => m.id),
+      ];
+      return { ...d, type: id, metrics: defaults };
+    });
+  };
+
+  const validate = (): boolean => {
+    setError(null);
+    if (step === 1 && !draft.name.trim()) {
+      setError('Enter an evaluation name to continue.');
+      return false;
+    }
+    if (step === 2 && !draft.type) {
+      setError('Select an evaluation type to continue.');
+      return false;
+    }
+    if (step === 3 && draft.providers.length === 0) {
+      setError('Select at least one provider to continue.');
+      return false;
+    }
+    if (step === 4 && draft.models.length === 0) {
+      setError('Select at least one model to continue.');
+      return false;
+    }
+    if (step === 5 && !draft.dataset) {
+      setError('Select a test suite to continue.');
+      return false;
+    }
+    if (step === 6 && draft.metrics.length === 0) {
+      setError('Select at least one metric to continue.');
+      return false;
+    }
+    return true;
+  };
+
+  const goNext = () => {
+    if (!validate()) return;
+    setStep((s) => Math.min(totalSteps, s + 1));
+  };
+  const goBack = () => setStep((s) => Math.max(1, s - 1));
+  const goToStep = (target: number) => {
+    if (target < step) setStep(target);
+  };
+
+  const buildPayload = (): CreateEvaluationRequest => ({
+    name: draft.name.trim(),
+    eval_type: draft.type ?? '',
+    dataset_id: draft.dataset ?? '',
+    model_id: draft.models,
+    selected_metrics: draft.metrics,
+    dataset_limit: 0,
+  });
+
+  const startEvaluation = async () => {
+    if (!validate()) return;
+    setError(null);
+    setSubmitting(true);
+    try {
+      const created = await createEvaluation(buildPayload());
+      const evaluationId = created.id ?? created.evaluation_id;
+      if (!evaluationId) {
+        throw new Error('The server did not return an evaluation id.');
+      }
+      await startEvaluationRequest(evaluationId);
+      navigate('/app/history', { state: { evaluationId } });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start the evaluation. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="run-eval">
+      <div className="run-eval__header">
+        <div className="run-eval__header-left">
+          <p className="run-eval__header-eyebrow">Create evaluation</p>
+          <h1 className="run-eval__title">New Evaluation</h1>
+          <p className="run-eval__subtitle">Compare AI models with standardized tests</p>
+        </div>
+
+        <div className="run-eval__header-meta">
+          <Clock3 size={13} />
+          ~5 min guided setup
+        </div>
+      </div>
+
+      <div className="run-eval__wizard">
+        <aside className="run-eval__sidebar">
+          {WIZARD_STEPS.map((s, i) => {
+            const num = i + 1;
+            const state = num === step ? 'active' : num < step ? 'complete' : 'upcoming';
+            const Icon = STEP_ICONS[i];
+            return (
+              <button
+                key={s.key}
+                type="button"
+                className={`run-eval__step run-eval__step--${state}`}
+                onClick={() => goToStep(num)}
+                disabled={num > step}
+              >
+                <span className="run-eval__step-marker">
+                  {state === 'complete' ? <Check size={14} strokeWidth={3} /> : <Icon size={15} />}
+                </span>
+                <span className="run-eval__step-text">
+                  <span className="run-eval__step-label">{s.label}</span>
+                  <span className="run-eval__step-desc">{s.description}</span>
+                </span>
+              </button>
+            );
+          })}
+        </aside>
+
+        <div className="run-eval__content">
+          <p className="run-eval__step-kicker">
+            Step {step} of {totalSteps}
+          </p>
+
+          <div className="run-eval__body">
+            {step === 1 && <NameStep name={draft.name} onChange={(name) => setDraft((d) => ({ ...d, name }))} />}
+            {step === 2 && <TypeStep value={draft.type} onChange={setType} />}
+            {step === 3 && (
+              <ProvidersStep
+                selected={draft.providers}
+                onToggle={(id) => toggleInArray('providers', id)}
+                onGoToProviders={() => navigate('/app/providers')}
+              />
+            )}
+            {step === 4 && (
+              <ModelsStep
+                providers={draft.providers}
+                selected={draft.models}
+                onToggle={(id) => toggleInArray('models', id)}
+                onClear={() => setDraft((d) => ({ ...d, models: [] }))}
+              />
+            )}
+            {step === 5 && (
+              <DatasetStep
+                evalType={draft.type}
+                selected={draft.dataset}
+                onSelect={(id) => setDraft((d) => ({ ...d, dataset: id }))}
+              />
+            )}
+            {step === 6 && (
+              <MetricsStep evalType={draft.type} selected={draft.metrics} onToggle={(id) => toggleInArray('metrics', id)} />
+            )}
+            {step === 7 && <ReviewStep draft={draft} />}
+
+            {error && <p className="run-eval__error">{error}</p>}
+          </div>
+
+          <div className="run-eval__nav">
+            {step > 1 ? (
+              <button
+                type="button"
+                className="run-eval__btn run-eval__btn--secondary run-eval__btn--lg"
+                onClick={goBack}
+                disabled={submitting}
+              >
+                <ArrowLeft size={16} /> Back
+              </button>
+            ) : (
+              <span />
+            )}
+
+            {step < totalSteps ? (
+              <button type="button" className="run-eval__btn run-eval__btn--primary run-eval__btn--lg" onClick={goNext}>
+                Continue <ArrowRight size={16} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="run-eval__btn run-eval__btn--primary run-eval__btn--lg"
+                onClick={startEvaluation}
+                disabled={submitting}
+              >
+                {submitting ? (
+                  <>
+                    <Loader2 size={16} className="run-eval__spin" /> Starting…
+                  </>
+                ) : (
+                  <>
+                    <Play size={16} /> Start Evaluation
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default RunEvaluation;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//RunEvaluations.scss
 @use '../../../styles/variables' as *;
 
-.models-page {
+.run-eval {
+  width: 100%;
+  height: calc(100vh - 166px);
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  min-height: 0;
 
-  /* ---------- header ---------- */
+  /* ---------- page header ---------- */
   &__header {
     flex-shrink: 0;
     display: flex;
@@ -13,20 +300,13 @@
     justify-content: space-between;
     gap: 1rem;
     padding-bottom: 18px;
-    margin-bottom: 2px;
+    margin-bottom: 20px;
     border-bottom: 1px solid $border-subtle;
   }
 
   &__header-left {
     display: flex;
     flex-direction: column;
-  }
-
-  &__header-right {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    gap: 10px;
   }
 
   &__header-eyebrow {
@@ -63,13 +343,15 @@
     border-radius: 999px;
     padding: 7px 13px;
     white-space: nowrap;
+    margin-bottom: 3px;
   }
 
   &__title {
     font-size: 21px;
     font-weight: 800;
-    letter-spacing: -0.02em;
+    letter-spacing: -0.03em;
     color: $text-primary;
+    line-height: 1.15;
   }
 
   &__subtitle {
@@ -78,88 +360,670 @@
     font-size: 0.84375rem;
   }
 
+  /* ---------- buttons ---------- */
   &__btn {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
-    font-family: $font-body;
-    font-size: 0.8125rem;
+    gap: 0.5rem;
+    font-size: 0.90625rem;
     font-weight: 600;
-    padding: 9px 14px;
-    border-radius: 8px;
+    padding: 0.5625rem 0.9375rem;
+    border-radius: 0.5rem;
     border: 1px solid transparent;
     cursor: pointer;
-    white-space: nowrap;
-    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease, opacity 0.14s ease;
+    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+    font-family: $font-body;
 
-    &:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
+    &--primary {
+      background: $primary;
+      color: #fff;
+      border-color: $primary;
+
+      &:hover {
+        background: $primary-hover;
+        border-color: $primary-hover;
+      }
     }
 
-    &--outline {
+    &--secondary {
       background: $bg-main;
+      color: $text-primary;
       border-color: $border-default;
-      color: $text-secondary;
 
-      &:hover:not(:disabled) {
+      &:hover {
+        border-color: $text-primary;
+      }
+    }
+
+    &--lg {
+      padding: 0.625rem 1.125rem;
+      font-size: 0.90625rem;
+    }
+
+    &--sm {
+      padding: 0.375rem 0.6875rem;
+      font-size: 0.84375rem;
+      background: $bg-main;
+      color: $text-secondary;
+      border-color: $border-default;
+
+      &:hover {
         border-color: $text-primary;
         color: $text-primary;
       }
     }
 
-    &--primary {
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+
+  /* ---------- wizard shell ---------- */
+  &__wizard {
+    position: relative;
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-radius: 20px;
+    box-shadow: $shadow-md;
+    overflow: hidden;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+  }
+
+  /* ---------- sidebar / vertical stepper ---------- */
+  &__sidebar {
+    flex-shrink: 0;
+    width: 268px;
+    background: $bg-subtle;
+    border-right: 1px solid $border-subtle;
+    padding: 28px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    overflow-y: auto;
+  }
+
+  &__step {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    text-align: left;
+    width: 100%;
+    border: none;
+    background: transparent;
+    border-radius: 0.625rem;
+    padding: 10px 12px 22px 12px;
+    cursor: pointer;
+    transition: background 0.14s ease;
+
+    &::before {
+      content: '';
+      position: absolute;
+      top: 42px;
+      left: 29px;
+      width: 2px;
+      height: calc(100% - 34px);
+      background: $border-default;
+      transition: background 0.16s ease;
+    }
+
+    &:last-child {
+      padding-bottom: 10px;
+
+      &::before {
+        display: none;
+      }
+    }
+
+    &:disabled {
+      cursor: default;
+    }
+
+    &:not(:disabled):hover {
+      background: $bg-inset;
+    }
+  }
+
+  &__step-marker {
+    position: relative;
+    z-index: 1;
+    flex-shrink: 0;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: $bg-main;
+    border: 1.5px solid $border-default;
+    color: $text-tertiary;
+    transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
+  }
+
+  &__step-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-top: 5px;
+    min-width: 0;
+  }
+
+  &__step-label {
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: $text-primary;
+    transition: color 0.16s ease;
+  }
+
+  &__step-desc {
+    font-size: 0.75rem;
+    color: $text-tertiary;
+    line-height: 1.35;
+  }
+
+  &__step--active {
+    background: $bg-main;
+    box-shadow: $shadow-sm;
+
+    .run-eval__step-marker {
       background: $primary;
       border-color: $primary;
-      color: $on-primary;
+      color: #fff;
+      box-shadow: 0 0 0 4px $primary-light;
+    }
 
-      &:hover:not(:disabled) {
-        background: $primary-hover;
-        border-color: $primary-hover;
+    .run-eval__step-label {
+      color: $primary;
+    }
+  }
+
+  &__step--complete {
+    &::before {
+      background: $primary;
+    }
+
+    .run-eval__step-marker {
+      background: $primary-light;
+      border-color: $primary;
+      color: $primary;
+    }
+  }
+
+  &__step--upcoming {
+    .run-eval__step-label {
+      color: $text-secondary;
+    }
+
+    .run-eval__step-desc {
+      color: #a8b1bb;
+    }
+  }
+
+  /* ---------- content pane ---------- */
+  &__content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 28px 36px 24px;
+  }
+
+  &__body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 4px;
+    margin-right: -4px;
+  }
+
+  &__spin {
+    animation: run-eval-spin 0.8s linear infinite;
+  }
+
+  @keyframes run-eval-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* ---------- step kicker + heading ---------- */
+  &__step-kicker {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: $font-mono;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: $primary;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+
+    &::before {
+      content: '';
+      width: 16px;
+      height: 2px;
+      border-radius: 2px;
+      background: $primary;
+    }
+  }
+
+  /* ---------- step cards ---------- */
+  &__card {
+    &--wide {
+      max-width: none;
+    }
+  }
+
+  &__step-title {
+    font-size: 19px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+    color: $text-primary;
+  }
+
+  &__step-desc {
+    margin-top: 6px;
+    font-size: 0.9375rem;
+    color: $text-secondary;
+    max-width: 608px;
+  }
+
+  &__step-header-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  &__field {
+    max-width: 480px;
+    margin-top: 1.75rem;
+  }
+
+  &__label {
+    display: block;
+    font-size: 0.84375rem;
+    font-weight: 600;
+    color: $text-secondary;
+    margin-bottom: 0.4375rem;
+  }
+
+  &__input {
+    width: 100%;
+    border: 1px solid $border-default;
+    border-radius: 0.5rem;
+    padding: 0.625rem 0.75rem;
+    font-size: 0.9375rem;
+    font-family: $font-body;
+    color: $text-primary;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+
+    &::placeholder {
+      color: #a8b1bb;
+    }
+
+    &:focus {
+      outline: none;
+      border-color: $primary;
+      box-shadow: 0 0 0 0.1875rem $primary-light;
+    }
+
+    &--lg {
+      padding: 0.75rem 0.875rem;
+      font-size: 1rem;
+    }
+  }
+
+  /* ---------- suggestion / static chips ---------- */
+  &__suggestions {
+    margin-top: 1.125rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  &__suggestions-label {
+    font-size: 0.84375rem;
+    color: $text-tertiary;
+    margin-right: 0.125rem;
+  }
+
+  &__chip {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-default;
+    border-radius: 999px;
+    padding: 0.3125rem 0.75rem;
+    cursor: pointer;
+    transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+      color: $primary;
+    }
+
+    &--active {
+      background: $primary;
+      border-color: $primary;
+      color: #fff;
+    }
+
+    &--static {
+      cursor: default;
+      font-size: 0.75rem;
+      padding: 0.1875rem 0.5rem;
+
+      &:hover {
+        border-color: $border-default;
+        color: $text-secondary;
       }
     }
   }
 
-  &__spin {
-    animation: models-page-spin 0.9s linear infinite;
+  /* ---------- eval type cards ---------- */
+  &__type-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-top: 1.5rem;
   }
 
-  /* ---------- filters ---------- */
-  &__filters {
-    flex-shrink: 0;
+  &__type-card {
+    position: relative;
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 12px;
-  }
-
-  &__search {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    width: 280px;
-    max-width: 100%;
+    align-items: flex-start;
+    gap: 0.875rem;
+    text-align: left;
+    width: 100%;
+    padding: 1.125rem 3rem 1.125rem 1.125rem;
     border: 1px solid $border-default;
-    border-radius: 10px;
-    padding: 9px 12px;
+    border-radius: 0.75rem;
     background: $bg-main;
-    color: $text-tertiary;
-    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+    cursor: pointer;
+    transition: border-color 0.14s ease, background 0.14s ease;
 
-    &:focus-within {
+    &:hover {
       border-color: $primary;
-      box-shadow: 0 0 0 3px $primary-light;
     }
+
+    &--selected {
+      border-color: $primary;
+      background: $primary-light;
+    }
+  }
+
+  &__type-icon {
+    width: 38px;
+    height: 38px;
+    flex-shrink: 0;
+    border-radius: 0.5rem;
+    background: $bg-subtle;
+    color: $primary;
+    display: grid;
+    place-items: center;
+  }
+
+  &__type-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    flex: 1;
+  }
+
+  &__type-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__type-desc {
+    font-size: 0.875rem;
+    color: $text-secondary;
+    line-height: 1.5;
+  }
+
+  &__type-check {
+    position: absolute;
+    top: 1.125rem;
+    right: 1.125rem;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: $primary;
+    color: #fff;
+    display: grid;
+    place-items: center;
+  }
+
+  &__badge {
+    align-self: flex-start;
+    flex-shrink: 0;
+    font-size: 0.71875rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: $primary;
+    background: $primary-light;
+    border-radius: 0.375rem;
+    padding: 0.25rem 0.5rem;
+
+    &--soft {
+      margin-top: 0.625rem;
+    }
+  }
+
+  /* ---------- providers ---------- */
+  &__provider-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+    margin-top: 1.5rem;
+  }
+
+  &__provider-card {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    text-align: left;
+    padding: 0.875rem 2.5rem 0.875rem 0.875rem;
+    border: 1px solid $border-default;
+    border-radius: 0.75rem;
+    background: $bg-main;
+    cursor: pointer;
+    transition: border-color 0.14s ease, background 0.14s ease;
+
+    &:hover:not(&--disabled) {
+      border-color: $primary;
+    }
+
+    &--selected {
+      border-color: $primary;
+      background: $primary-light;
+    }
+
+    &--disabled {
+      cursor: not-allowed;
+      opacity: 0.7;
+    }
+  }
+
+  &__provider-logo {
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    border-radius: 0.5rem;
+    background: $text-primary;
+    color: #fff;
+    font-weight: 700;
+    font-size: 0.875rem;
+    display: grid;
+    place-items: center;
+    margin-top: 0.0625rem;
+  }
+
+  &__provider-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3125rem;
+    min-width: 0;
+    flex: 1;
+  }
+
+  &__provider-name-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  &__provider-name {
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__provider-desc {
+    font-size: 0.8125rem;
+    color: $text-tertiary;
+  }
+
+  &__status-badge {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3125rem;
+    font-size: 0.71875rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: $text-tertiary;
+    background: $bg-inset;
+    border-radius: 999px;
+    padding: 0.1875rem 0.5rem;
+
+    &--on {
+      color: $success;
+      background: $success-subtle;
+    }
+  }
+
+  &__hint {
+    margin-top: 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    color: $text-tertiary;
+
+    svg {
+      flex-shrink: 0;
+    }
+  }
+
+  &__link {
+    background: none;
+    border: none;
+    padding: 0;
+    color: $primary;
+    font-weight: 600;
+    font-size: inherit;
+    cursor: pointer;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  /* ---------- models step ---------- */
+  &__models-layout {
+    display: grid;
+    grid-template-columns: 15rem 1fr;
+    gap: 1.5rem;
+    margin-top: 1.5rem;
+    align-items: start;
+  }
+
+  &__filters {
+    border: 1px solid $border-subtle;
+    border-radius: 0.75rem;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.125rem;
+  }
+
+  &__filters-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__filter-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  &__filter-title {
+    font-family: $font-mono;
+    font-size: 0.71875rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: $text-tertiary;
+  }
+
+  &__filter-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4375rem;
+  }
+
+  &__filter-chip {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    color: $text-secondary;
+    cursor: pointer;
+
+    input {
+      accent-color: $primary;
+    }
+  }
+
+  &__models-main {
+    min-width: 0;
+  }
+
+  &__search-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    border: 1px solid $border-default;
+    border-radius: 0.5rem;
+    padding: 0.5625rem 0.75rem;
+    color: $text-tertiary;
 
     input {
       flex: 1;
       border: none;
       outline: none;
-      font-size: 0.8125rem;
+      font-size: 0.90625rem;
       color: $text-primary;
       background: transparent;
       font-family: $font-body;
-      min-width: 0;
 
       &::placeholder {
         color: $text-tertiary;
@@ -167,646 +1031,647 @@
     }
   }
 
-  &__search-clear {
-    flex-shrink: 0;
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    border: none;
-    background: $bg-inset;
-    color: $text-tertiary;
-    display: grid;
-    place-items: center;
-    cursor: pointer;
-    transition: background 0.14s ease, color 0.14s ease;
-
-    &:hover {
-      background: $border-default;
-      color: $text-primary;
-    }
-  }
-
-  /* ---------- capability dropdown (structurally mirrors History's <Select />) ---------- */
-  &__select {
-    position: relative;
-    flex-shrink: 0;
-    width: 200px;
-  }
-
-  &__select-trigger {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    border: 1px solid $border-default;
-    border-radius: 10px;
-    padding: 9px 12px;
-    background: $bg-main;
-    font-size: 0.8125rem;
-    font-weight: 500;
-    font-family: $font-body;
-    color: $text-primary;
-    cursor: pointer;
-    transition: border-color 0.14s ease, box-shadow 0.14s ease;
-
-    &:hover {
-      border-color: $border-strong;
-    }
-
-    &--open {
-      border-color: $primary;
-      box-shadow: 0 0 0 3px $primary-light;
-    }
-  }
-
-  &__select-chevron {
-    flex-shrink: 0;
-    color: $text-tertiary;
-    transition: transform 0.16s ease;
-  }
-
-  &__select-trigger--open &__select-chevron {
-    transform: rotate(180deg);
-  }
-
-  &__select-menu {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    right: 0;
-    z-index: 20;
-    max-height: 16rem;
-    overflow-y: auto;
-    background: $bg-main;
-    border: 1px solid $border-subtle;
-    border-radius: 10px;
-    box-shadow: $shadow-lg;
-    padding: 5px;
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-  }
-
-  &__select-option {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    width: 100%;
-    text-align: left;
-    padding: 8px 10px;
-    border: none;
-    border-radius: 7px;
-    background: transparent;
-    font-size: 0.8125rem;
-    font-family: $font-body;
-    color: $text-secondary;
-    cursor: pointer;
-    transition: background 0.12s ease, color 0.12s ease;
-
-    &:hover {
-      background: $bg-subtle;
-      color: $text-primary;
-    }
-
-    &--active {
-      color: $primary;
-      font-weight: 600;
-
-      svg {
-        color: $primary;
-      }
-    }
-  }
-
-  /* ---------- tags ---------- */
-  &__tag {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 0.6875rem;
-    font-weight: 700;
-    border-radius: 999px;
-    padding: 3px 10px;
-
-    &--blue {
-      color: $primary;
-      background: $primary-light;
-    }
-
-    &--jade {
-      color: $success;
-      background: $success-subtle;
-    }
-
-    &--gray {
-      color: $text-tertiary;
-      background: $bg-inset;
-    }
-
-    &--outline {
-      color: $text-secondary;
-      background: transparent;
-      border: 1px solid $border-default;
-    }
-  }
-
-  /* ---------- capability pills ---------- */
-  &__caps {
+  &__active-filters {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 0.375rem;
+    margin-top: 0.75rem;
   }
 
-  &__cap-pill {
-    font-size: 0.71875rem;
-    font-weight: 600;
-    border-radius: 999px;
-    padding: 3px 10px;
+  &__tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: 0.78125rem;
+    color: $primary;
+    background: $primary-light;
+    border-radius: 0.375rem;
+    padding: 0.25rem 0.25rem 0.25rem 0.5rem;
 
-    &--blue {
-      color: $primary;
-      background: $primary-light;
-    }
-
-    &--violet {
-      color: $violet;
-      background: $violet-light;
-    }
-
-    &--amber {
-      color: $warning;
-      background: $warning-subtle;
-    }
-
-    &--jade {
-      color: $success;
-      background: $success-subtle;
-    }
-
-    &--rose {
-      color: $danger;
-      background: $danger-subtle;
+    button {
+      display: grid;
+      place-items: center;
+      border: none;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
     }
   }
 
-  /* ---------- full-info card grid ---------- */
-  &__grid {
+  &__models-grid {
+    margin-top: 1rem;
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 16px;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
   }
 
-  &__card {
+  &__model-card {
+    position: relative;
+    text-align: left;
+    padding: 0.875rem 1rem;
+    border: 1px solid $border-default;
+    border-radius: 0.75rem;
+    background: $bg-main;
+    cursor: pointer;
     display: flex;
     flex-direction: column;
-    background: $bg-main;
-    border: 1px solid $border-subtle;
-    border-left: 3px solid $card-accent;
-    border-radius: 0.75rem;
-    padding: 15px 18px;
-    box-shadow: $shadow-xs;
-    transition: box-shadow 0.15s ease, transform 0.15s ease;
+    gap: 0.5rem;
+    transition: border-color 0.14s ease, background 0.14s ease;
 
     &:hover {
-      box-shadow: $shadow-md;
-      transform: translateY(-2px);
+      border-color: $primary;
+    }
+
+    &--selected {
+      border-color: $primary;
+      background: $primary-light;
     }
   }
 
-  &__card-top {
+  &__model-top {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: 10px;
-    margin-bottom: 6px;
+    gap: 0.5rem;
   }
 
-  &__card-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-bottom: 10px;
-  }
-
-  &__card-name {
+  &__model-name {
     font-size: 0.9375rem;
-    font-weight: 700;
-    letter-spacing: -0.01em;
+    font-weight: 600;
     color: $text-primary;
   }
 
-  &__card-desc {
+  &__model-provider {
+    font-size: 0.84375rem;
+    color: $text-tertiary;
+    margin-top: -0.25rem;
+  }
+
+  &__model-caps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3125rem;
+  }
+
+  &__model-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.625rem;
     font-size: 0.78125rem;
-    color: $text-secondary;
-    line-height: 1.5;
-    margin-bottom: 10px;
-  }
-
-  &__card-stats {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin-bottom: 10px;
-  }
-
-  &__card-stats-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 16px 20px;
-  }
-
-  &__card-stat-label {
-    font-size: 0.625rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
     color: $text-tertiary;
-  }
-
-  &__card-stat-value {
-    font-size: 0.9375rem;
-    font-weight: 800;
-    color: $text-primary;
-    display: block;
-    margin-top: 2px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-
-    &--sm {
-      font-size: 0.78125rem;
-      font-weight: 700;
-    }
-
-    &--accent {
-      color: $success;
-    }
-  }
-
-  &__card-foot {
-    margin-top: auto;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-  }
-
-  &__card-foot-source {
-    font-family: $font-mono;
-    font-size: 0.6875rem;
-    color: $text-tertiary;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  /* ---------- empty state ---------- */
-  /* ---------- loading — plain, no border, just centers the spinner ---------- */
-  &__loading {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 64px 20px;
+    margin-top: 0.125rem;
   }
 
   &__empty {
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 10px;
-    padding: 52px 20px;
-    border: 1px dashed $border-strong;
-    border-radius: 14px;
+    grid-column: 1 / -1;
+    padding: 2rem;
+    text-align: center;
     color: $text-tertiary;
-    font-size: 0.84375rem;
-
-    svg {
-      color: $text-tertiary;
-    }
-
-    &--error {
-      border-style: solid;
-      border-color: $danger-subtle;
-      background: $danger-subtle;
-      color: $danger;
-
-      svg {
-        color: $danger;
-      }
-    }
+    font-size: 0.90625rem;
   }
 
-  /* ---------- add-model modal ---------- */
-  &__overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 200;
-    background: rgba(0, 0, 0, 0.5);
-  }
-
-  &__modal {
-    position: fixed;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 500px;
-    max-width: 90vw;
-    background: $bg-main;
-    border-left: 1px solid $border-subtle;
-    box-shadow: $shadow-lg;
+  &__selected-bar {
+    margin-top: 1rem;
     display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    animation: models-page-slide-in 0.24s cubic-bezier(0.16, 1, 0.3, 1);
-  }
-
-  &__modal-head {
-    flex-shrink: 0;
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-    padding: 20px 22px 16px;
-    border-bottom: 1px solid $border-subtle;
-  }
-
-  &__modal-icon {
-    flex-shrink: 0;
-    width: 36px;
-    height: 36px;
-    border-radius: 10px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 1rem;
     background: $primary-light;
-    color: $primary;
-    display: grid;
-    place-items: center;
-  }
-
-  &__modal-head-text {
-    flex: 1;
-    min-width: 0;
-  }
-
-  &__modal-title {
-    font-size: 1.0625rem;
-    font-weight: 800;
-    letter-spacing: -0.01em;
+    border-radius: 0.625rem;
+    font-size: 0.90625rem;
     color: $text-primary;
-  }
 
-  &__modal-sub {
-    margin-top: 3px;
-    font-size: 0.75rem;
-    color: $text-tertiary;
-  }
-
-  &__modal-close {
-    flex-shrink: 0;
-    width: 30px;
-    height: 30px;
-    border-radius: 8px;
-    border: 1px solid $border-default;
-    background: $bg-main;
-    color: $text-tertiary;
-    display: grid;
-    place-items: center;
-    cursor: pointer;
-    transition: border-color 0.14s ease, color 0.14s ease, opacity 0.14s ease;
-
-    &:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-
-    &:hover:not(:disabled) {
-      border-color: $text-primary;
-      color: $text-primary;
-    }
-  }
-
-  /* ---------- form ---------- */
-  &__form {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 22px 24px 24px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  &__form-section-label {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.6875rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: $primary;
-    margin-top: 6px;
-
-    &:first-child {
-      margin-top: 0;
-    }
-
-    svg {
-      opacity: 0.85;
-    }
-  }
-
-  &__form-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-  }
-
-  &__field {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    min-width: 0;
-  }
-
-  &__field-label {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 0.71875rem;
-    font-weight: 600;
-    color: $text-secondary;
-  }
-
-  &__input,
-  &__textarea {
-    width: 100%;
-    border: 1px solid $border-default;
-    border-radius: 8px;
-    padding: 8px 11px;
-    font-size: 0.8125rem;
-    font-family: $font-body;
-    color: $text-primary;
-    background: $bg-main;
-    transition: border-color 0.14s ease;
-
-    &:focus {
-      outline: none;
-      border-color: $primary;
-    }
-
-    &:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-    }
-
-    &::placeholder {
-      color: $text-tertiary;
-    }
-  }
-
-  &__textarea {
-    resize: vertical;
-    min-height: 4.5rem;
-    line-height: 1.5;
-    background: $bg-subtle;
-    border-color: transparent;
-
-    &:focus {
-      background: $bg-main;
-    }
-  }
-
-  &__input-wrap {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    border: 1px solid transparent;
-    border-radius: 8px;
-    padding: 0 11px;
-    background: $bg-subtle;
-    color: $text-tertiary;
-    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
-
-    &:focus-within {
-      background: $bg-main;
-      border-color: $primary;
+    strong {
       color: $primary;
     }
   }
 
-  &__input--inset {
-    border: none;
-    padding: 9px 0;
-    background: transparent;
+  /* ---------- dataset step ---------- */
+  &__tabs {
+    display: flex;
+    gap: 0.375rem;
+    margin-top: 1.5rem;
+    border-bottom: 1px solid $border-subtle;
   }
 
-  &__form-error {
+  &__tab {
+    padding: 0.5625rem 0.25rem;
+    margin-right: 1.25rem;
+    border: none;
+    background: transparent;
+    font-size: 0.90625rem;
+    font-weight: 600;
+    color: $text-tertiary;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: color 0.14s ease, border-color 0.14s ease;
+
+    &--active {
+      color: $primary;
+      border-bottom-color: $primary;
+    }
+  }
+
+  &__category-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 1.125rem;
+  }
+
+  &__dataset-grid {
+    margin-top: 1.125rem;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+  }
+
+  &__dataset-card {
+    position: relative;
+    text-align: left;
+    padding: 1rem 1.125rem;
+    border: 1px solid $border-default;
+    border-radius: 0.75rem;
+    background: $bg-main;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    transition: border-color 0.14s ease, background 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+    }
+
+    &--selected {
+      border-color: $primary;
+      background: $primary-light;
+    }
+  }
+
+  &__dataset-top {
     display: flex;
     align-items: flex-start;
-    gap: 6px;
-    font-size: 0.75rem;
-    color: $danger;
-    background: $danger-subtle;
-    border-radius: 8px;
-    padding: 9px 11px;
-    line-height: 1.45;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  &__dataset-name {
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__dataset-desc {
+    font-size: 0.875rem;
+    color: $text-secondary;
+    line-height: 1.5;
+  }
+
+  &__dataset-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.625rem;
+    font-size: 0.78125rem;
+    color: $text-tertiary;
+  }
+
+  &__empty-state,
+  &__upload-zone {
+    margin-top: 1.5rem;
+    border: 1.5008px dashed $border-strong;
+    border-radius: 0.75rem;
+    padding: 2.75rem 1.5rem;
+    text-align: center;
+    color: $text-tertiary;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
 
     svg {
-      flex-shrink: 0;
-      margin-top: 1px;
+      color: $text-tertiary;
+      margin-bottom: 0.25rem;
+    }
+
+    h3 {
+      font-size: 1rem;
+      color: $text-primary;
+    }
+
+    p {
+      font-size: 0.875rem;
     }
   }
 
-  &__form-actions {
-    position: sticky;
-    bottom: 0;
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin: 8px -24px -24px;
-    padding: 16px 24px;
-    background: $bg-main;
-    border-top: 1px solid $border-subtle;
+  &__upload-zone {
+    cursor: pointer;
 
-    .models-page__btn {
-      min-width: 6.5rem;
+    &:hover {
+      border-color: $primary;
     }
+  }
+
+  &__format-chips {
+    display: flex;
+    gap: 0.375rem;
+    margin-top: 0.375rem;
+  }
+
+  /* ---------- metrics step ---------- */
+  &__metrics-count {
+    flex-shrink: 0;
+    font-size: 0.875rem;
+    color: $text-secondary;
+
+    span {
+      font-weight: 700;
+      color: $primary;
+    }
+  }
+
+  &__metric-group {
+    margin-top: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  &__metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.625rem;
+  }
+
+  &__metric-card {
+    position: relative;
+    text-align: left;
+    padding: 0.75rem 2rem 0.75rem 0.875rem;
+    border: 1px solid $border-default;
+    border-radius: 0.625rem;
+    background: $bg-main;
+    cursor: pointer;
+    transition: border-color 0.14s ease, background 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+    }
+
+    &--selected {
+      border-color: $primary;
+      background: $primary-light;
+    }
+  }
+
+  &__metric-name {
+    display: block;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__metric-tooltip {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.78125rem;
+    color: $text-tertiary;
+    line-height: 1.4;
+  }
+
+  /* ---------- review step ---------- */
+  &__review {
+    margin-top: 1.5rem;
+    border: 1px solid $border-subtle;
+    border-radius: 0.75rem;
+    overflow: hidden;
+  }
+
+  &__review-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    font-size: 0.90625rem;
+    border-bottom: 1px solid $border-subtle;
+
+    &:last-child {
+      border-bottom: 0;
+    }
+
+    span:first-child {
+      color: $text-tertiary;
+      flex-shrink: 0;
+    }
+
+    span:last-child {
+      color: $text-primary;
+      font-weight: 500;
+      text-align: right;
+    }
+
+    &--highlight span:last-child {
+      color: $primary;
+      font-weight: 700;
+    }
+  }
+
+  &__review-divider {
+    height: 1px;
+    background: $border-subtle;
+  }
+
+  /* ---------- shared feedback ---------- */
+  &__error {
+    margin-top: 1.25rem;
+    font-size: 0.875rem;
+    color: $danger;
+    background: $danger-subtle;
+    border-radius: 0.5rem;
+    padding: 0.625rem 0.875rem;
+  }
+
+  &__nav {
+    flex-shrink: 0;
+    margin-top: 1.25rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid $border-subtle;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
   }
 
   /* ---------- responsive ---------- */
-  @media (max-width: 1500px) {
-    &__grid {
-      grid-template-columns: repeat(2, 1fr);
+  @media (max-width: 896px) {
+    &__provider-grid,
+    &__models-grid,
+    &__dataset-grid,
+    &__metrics-grid {
+      grid-template-columns: 1fr;
     }
-  }
 
-  @media (max-width: 1000px) {
-    &__grid {
+    &__models-layout {
       grid-template-columns: 1fr;
     }
   }
 
-  @media (max-width: 640px) {
-    &__card-stats-row {
-      flex-wrap: wrap;
-      gap: 14px;
+  @media (max-width: 720px) {
+    &__wizard {
+      flex-direction: column;
     }
 
-    &__form-row {
-      grid-template-columns: 1fr;
-    }
-  }
-
-  /* ---------- ultra-wide: nudge key text sizes up a touch ---------- */
-  @media (min-width: 1800px) {
-    &__title {
-      font-size: 22px;
-    }
-
-    &__subtitle {
-      font-size: 0.875rem;
+    &__sidebar {
+      width: 100%;
+      flex-direction: row;
+      overflow-x: auto;
+      border-right: none;
+      border-bottom: 1px solid $border-subtle;
+      padding: 14px;
+      gap: 6px;
     }
 
-    &__card-name {
-      font-size: 0.96875rem;
+    &__step {
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      padding: 8px 10px;
+      flex-shrink: 0;
+      width: 96px;
+
+      &::before {
+        display: none;
+      }
     }
 
-    &__card-desc {
-      font-size: 0.8125rem;
+    &__step-text {
+      align-items: center;
+      padding-top: 2px;
     }
 
-    &__card-stat-value {
-      font-size: 0.96875rem;
+    &__step-desc {
+      display: none;
     }
 
-    &__card-stat-value--sm {
-      font-size: 0.8125rem;
-    }
-
-    &__cap-pill {
-      font-size: 0.75rem;
-    }
-
-    &__card-stat-label {
-      font-size: 0.65625rem;
+    &__content {
+      padding: 24px 20px;
     }
   }
 }
 
-@keyframes models-page-spin {
-  to {
-    transform: rotate(360deg);
-  }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//types.ts
+export type EvalTypeId = 'model' | 'agent' | 'rag';
+
+export interface EvalType {
+  id: EvalTypeId;
+  title: string;
+  desc: string;
+  badge: string;
 }
 
-@keyframes models-page-slide-in {
-  from {
-    transform: translateX(100%);
-  }
-  to {
-    transform: translateX(0);
-  }
+export interface Provider {
+  id: string;
+  name: string;
+  status: 'connected' | 'not_connected';
+  modelCount: number;
+  logo: string;
+  desc: string;
+  apiKey?: string;
+}
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+  provider: string;
+  providerId: string;
+  description: string;
+  version: string;
+  capabilities: string[];
+  contextWindow: string;
+  pricing: string;
+  speedRating: string;
+  accuracyScore: number;
+  agentScore: number;
+  category: EvalTypeId;
+}
+
+export interface TestSuite {
+  id: string;
+  name: string;
+  category: string;
+  questions: number;
+  language: string;
+  task: string;
+  difficulty: string;
+  version: string;
+  maintainer: string;
+  description: string;
+  recommendedFor: EvalTypeId[];
+  featured: boolean;
+}
+
+export interface Metric {
+  id: string;
+  name: string;
+  tooltip: string;
+  defaultChecked: boolean;
+}
+
+export interface EvaluationDraft {
+  name: string;
+  type: EvalTypeId | null;
+  providers: string[];
+  models: string[];
+  dataset: string | null;
+  metrics: string[];
+}
+
+export interface WizardStepMeta {
+  key: string;
+  label: string;
+  description: string;
+}
+
+export const WIZARD_STEPS: WizardStepMeta[] = [
+  { key: 'name', label: 'Name', description: 'Give your evaluation a name' },
+  { key: 'type', label: 'Type', description: 'What kind of AI are you testing' },
+  { key: 'providers', label: 'Providers', description: 'Choose connected providers' },
+  { key: 'models', label: 'Models', description: 'Pick models to compare' },
+  { key: 'dataset', label: 'Test Suite', description: 'Select a benchmark or dataset' },
+  { key: 'metrics', label: 'Metrics', description: 'Choose what to measure' },
+  { key: 'review', label: 'Review', description: 'Confirm and start the run' },
+];
+
+/* ---------- API: evaluations ---------- */
+
+export interface JudgeConfig {
+  model_id: string;
+  base_url: string;
+  api_key: string;
+}
+
+export interface CreateEvaluationRequest {
+  name: string;
+  description?: string;
+  eval_type: string;
+  dataset_id: string;
+  benchmark?: string;
+  model_id: string[];
+  subgroup?: string;
+  metrics_config?: Record<string, unknown>;
+  selected_metrics: string[];
+  dataset_limit?: number;
+  selected_category?: string;
+  judge_config?: JudgeConfig;
+}
+
+export interface CreateEvaluationResponse {
+  id?: string;
+  evaluation_id?: string;
+  [key: string]: unknown;
+}
+
+export type EvaluationStatusValue = 'pending' | 'running' | 'completed' | 'failed' | 'canceled';
+export type CeleryState = 'STARTED' | 'SUCCESS' | 'FAILURE' | 'REVOKED' | null;
+
+export interface EvaluationStatusResponse {
+  status: EvaluationStatusValue;
+  progress: number;
+  total: number;
+  celery_state: CeleryState;
+  error_message: string | null;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//api.ts
+
+import api from '../../../services/api';
+import type {
+  CreateEvaluationRequest,
+  CreateEvaluationResponse,
+  EvaluationStatusResponse,
+} from './types';
+
+/** POST /evaluations — create a new evaluation. */
+export async function createEvaluation(payload: CreateEvaluationRequest): Promise<CreateEvaluationResponse> {
+  const res = await api.post<CreateEvaluationResponse>('/evaluations', payload);
+  return res.data;
+}
+
+/** POST /evaluations/{evaluationId}/start — kick off a created evaluation. */
+export async function startEvaluation(evaluationId: string): Promise<void> {
+  await api.post(`/evaluations/${evaluationId}/start`);
+}
+
+/** GET /evaluations/{evaluationId}/status — poll run status. */
+export async function getEvaluationStatus(evaluationId: string): Promise<EvaluationStatusResponse> {
+  const res = await api.get<EvaluationStatusResponse>(`/evaluations/${evaluationId}/status`);
+  return res.data;
+}
+
+/**
+ * Polls status until the evaluation reaches a terminal state
+ * (completed / failed / canceled), calling onUpdate after every poll.
+ */
+export function pollEvaluationStatus(
+  evaluationId: string,
+  onUpdate: (status: EvaluationStatusResponse) => void,
+  intervalMs = 2000
+): () => void {
+  let cancelled = false;
+
+  const tick = async () => {
+    if (cancelled) return;
+    try {
+      const status = await getEvaluationStatus(evaluationId);
+      if (cancelled) return;
+      onUpdate(status);
+      if (status.status === 'completed' || status.status === 'failed' || status.status === 'canceled') {
+        return;
+      }
+    } catch {
+      // transient network errors are ignored; polling continues
+    }
+    if (!cancelled) setTimeout(tick, intervalMs);
+  };
+
+  tick();
+
+  return () => {
+    cancelled = true;
+  };
 }
