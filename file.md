@@ -1,17 +1,17 @@
-//History.tsx
 import { useEffect, useMemo, useState, type FC, type MouseEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Play, Search, Copy, Trash2, X, Database, FileBarChart } from 'lucide-react';
-import { fetchEvaluations, fetchEvaluationResults, EvaluationNotCompletedError } from './historyApi';
-import type { EvaluationApi, ModelResult } from './types';
+import { Play, Search, Copy, Trash2, X, Database, FileBarChart, AlertCircle, RefreshCw } from 'lucide-react';
+import { fetchEvaluations, fetchEvaluationResults } from '../RunEvaluation/evaluationsApi';
+import type { EvaluationListItem, EvaluationResultsResponse, EvaluationResultsErrorResponse } from '../RunEvaluation/types';
+import Spinner from '../../../components/Spinner/Spinner';
 import Select from './Select';
 import './History.scss';
 
 const TYPE_FILTERS = [
   { value: 'all', label: 'All Types' },
-  { value: 'AI Model', label: 'AI Model' },
-  { value: 'Agent', label: 'Agent' },
-  { value: 'RAG', label: 'RAG' },
+  { value: 'model', label: 'AI Model' },
+  { value: 'agent', label: 'Agent' },
+  { value: 'rag', label: 'RAG' },
 ];
 
 const DATE_FILTERS = [
@@ -20,66 +20,86 @@ const DATE_FILTERS = [
   { value: Infinity, label: 'All time' },
 ];
 
-// Maps the backend's `eval_type` values to the display labels used by the filters/badges.
-// Confirm these keys match what the API actually sends.
-const TYPE_LABELS: Record<string, string> = {
-  model: 'AI Model',
-  agent: 'Agent',
-  rag: 'RAG',
-};
-
 function typeTint(type: string): 'violet' | 'blue' | 'amber' {
-  if (type.includes('Agent')) return 'violet';
-  if (type.includes('RAG')) return 'blue';
+  if (type === 'agent') return 'violet';
+  if (type === 'rag') return 'blue';
   return 'amber';
 }
 
-function matchesType(evType: string, filter: string) {
-  if (filter === 'all') return true;
-  if (filter === 'Agent') return evType.includes('Agent');
-  if (filter === 'RAG') return evType.includes('RAG');
-  return evType.includes('AI Model');
+function typeLabel(type: string): string {
+  if (type === 'agent') return 'Agent';
+  if (type === 'rag') return 'RAG';
+  return 'AI Model';
 }
 
-function daysAgo(dateStr: string | null): number {
-  if (!dateStr) return Infinity;
-  return Math.floor((Date.now() - new Date(dateStr).getTime()) / (1000 * 60 * 60 * 24));
+function statusLabel(status: string): string {
+  switch (status) {
+    case 'completed':
+      return 'Completed';
+    case 'running':
+      return 'Running';
+    case 'pending':
+      return 'Pending';
+    case 'failed':
+      return 'Failed';
+    case 'canceled':
+      return 'Canceled';
+    default:
+      return status;
+  }
 }
 
-function formatDate(dateStr: string | null): string {
-  if (!dateStr) return '—';
-  return new Date(dateStr).toLocaleDateString();
+function daysAgo(dateStr: string): number {
+  const then = new Date(dateStr).getTime();
+  if (Number.isNaN(then)) return Infinity;
+  return Math.floor((Date.now() - then) / (1000 * 60 * 60 * 24));
 }
 
-// Assumes fractional scores (0–1), matching the 0.95 / 0.345 examples in the API docs.
-function formatScore(score: number | null | undefined): string {
-  if (score === null || score === undefined || Number.isNaN(score)) return '—';
-  return `${(score * 100).toFixed(1)}%`;
+function formatDate(dateStr: string): string {
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 const History: FC = () => {
   const navigate = useNavigate();
-  const [items, setItems] = useState<EvaluationApi[]>([]);
+
+  const [items, setItems] = useState<EvaluationListItem[]>([]);
+  const [listLoading, setListLoading] = useState(true);
+  const [listError, setListError] = useState<string | null>(null);
+
   const [query, setQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState(30);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  // Per-model results table for whichever evaluation is currently selected.
-  const [results, setResults] = useState<ModelResult[]>([]);
+  const [results, setResults] = useState<EvaluationResultsResponse | null>(null);
+  const [resultsLoading, setResultsLoading] = useState(false);
+  const [resultsError, setResultsError] = useState<string | null>(null);
+
+  const loadList = () => {
+    setListLoading(true);
+    setListError(null);
+    fetchEvaluations()
+      .then((res) => {
+        setItems(res.evaluations);
+        setSelectedId((prev) => prev ?? res.evaluations[0]?.id ?? null);
+      })
+      .catch((err) => {
+        setListError(err instanceof Error ? err.message : 'Failed to load evaluation history.');
+      })
+      .finally(() => setListLoading(false));
+  };
 
   useEffect(() => {
-    fetchEvaluations().then((res) => {
-      setItems(res.evaluations);
-      setSelectedId(res.evaluations[0]?.id ?? null);
-    });
+    loadList();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const filtered = useMemo(() => {
     return items.filter((ev) => {
-      const type = TYPE_LABELS[ev.eval_type] ?? ev.eval_type;
       if (query && !ev.name.toLowerCase().includes(query.toLowerCase())) return false;
-      if (!matchesType(type, typeFilter)) return false;
+      if (typeFilter !== 'all' && ev.eval_type !== typeFilter) return false;
       if (daysAgo(ev.created_at) > dateFilter) return false;
       return true;
     });
@@ -90,17 +110,41 @@ const History: FC = () => {
     [filtered, selectedId]
   );
 
+  // Lazy-fetch results whenever the selected evaluation changes
   useEffect(() => {
-    if (!selected || selected.status !== 'completed') {
-      setResults([]);
+    if (!selected) {
+      setResults(null);
+      setResultsError(null);
       return;
     }
+
+    let cancelled = false;
+    setResults(null);
+    setResultsError(null);
+
+    if (selected.status !== 'completed') {
+      // Nothing to fetch — show a friendly status message instead
+      return;
+    }
+
+    setResultsLoading(true);
     fetchEvaluationResults(selected.id)
-      .then((res) => setResults(res.results))
+      .then((res) => {
+        if (cancelled) return;
+        setResults(res);
+      })
       .catch((err) => {
-        if (!(err instanceof EvaluationNotCompletedError)) console.error(err);
-        setResults([]);
+        if (cancelled) return;
+        const detail = (err?.response?.data as EvaluationResultsErrorResponse | undefined)?.detail;
+        setResultsError(detail ?? (err instanceof Error ? err.message : 'Failed to load results.'));
+      })
+      .finally(() => {
+        if (!cancelled) setResultsLoading(false);
       });
+
+    return () => {
+      cancelled = true;
+    };
   }, [selected]);
 
   const handleDuplicate = (e: MouseEvent, _id: string) => {
@@ -147,18 +191,35 @@ const History: FC = () => {
         </button>
       </div>
 
-      {filtered.length === 0 ? (
+      {listLoading && (
+        <div className="history__empty">
+          <Spinner label="Loading history…" />
+        </div>
+      )}
+
+      {!listLoading && listError && (
+        <div className="history__empty">
+          <AlertCircle size={22} />
+          <p>{listError}</p>
+          <button type="button" className="history__btn" onClick={loadList}>
+            <RefreshCw size={14} strokeWidth={2.25} /> Try again
+          </button>
+        </div>
+      )}
+
+      {!listLoading && !listError && filtered.length === 0 && (
         <div className="history__empty">
           <Search size={22} />
           <p>No evaluations match your filters.</p>
         </div>
-      ) : (
+      )}
+
+      {!listLoading && !listError && filtered.length > 0 && (
         <div className="history__layout">
           <div className="history__sidebar">
             <div className="history__sidebar-list">
               {filtered.map((ev) => {
-                const type = TYPE_LABELS[ev.eval_type] ?? ev.eval_type;
-                const tint = typeTint(type);
+                const tint = typeTint(ev.eval_type);
                 const isActive = selected?.id === ev.id;
                 return (
                   <button
@@ -169,13 +230,11 @@ const History: FC = () => {
                   >
                     <div className="history__item-top">
                       <span className="history__item-name">{ev.name}</span>
-                      <span className={`history__type-badge history__type-badge--${tint}`}>
-                        {type.split('(')[0].trim()}
-                      </span>
+                      <span className={`history__type-badge history__type-badge--${tint}`}>{typeLabel(ev.eval_type)}</span>
                     </div>
                     <div className="history__item-meta">
                       <span>{formatDate(ev.created_at)}</span>
-                      <span className="history__item-score n">{formatScore(ev.top_score)}</span>
+                      <span className="history__item-score n">{ev.top_score != null ? ev.top_score.toFixed(3) : '—'}</span>
                     </div>
                   </button>
                 );
@@ -187,12 +246,12 @@ const History: FC = () => {
             <div className="history__detail">
               <div className="history__detail-head">
                 <div className="history__detail-head-left">
-                  <span className={`history__type-badge history__type-badge--${typeTint(TYPE_LABELS[selected.eval_type] ?? selected.eval_type)}`}>
-                    {(TYPE_LABELS[selected.eval_type] ?? selected.eval_type).split('(')[0].trim()}
+                  <span className={`history__type-badge history__type-badge--${typeTint(selected.eval_type)}`}>
+                    {typeLabel(selected.eval_type)}
                   </span>
                   <h2 className="history__detail-name">{selected.name}</h2>
                   <span className="history__detail-date">
-                    {selected.status === 'running' ? 'Running' : 'Completed'} &middot; {formatDate(selected.created_at)}
+                    {statusLabel(selected.status)} &middot; {formatDate(selected.created_at)}
                   </span>
                 </div>
 
@@ -207,7 +266,12 @@ const History: FC = () => {
                   >
                     <Trash2 size={13} /> Delete
                   </button>
-                  <button type="button" className="history__btn history__btn--primary" onClick={() => navigate('/app/reports')}>
+                  <button
+                    type="button"
+                    className="history__btn history__btn--primary"
+                    onClick={() => navigate('/app/reports', { state: { evaluationId: selected.id } })}
+                    disabled={selected.status !== 'completed'}
+                  >
                     <FileBarChart size={13} /> View Report
                   </button>
                 </div>
@@ -224,48 +288,81 @@ const History: FC = () => {
                 </div>
                 <div className="history__stat-card">
                   <span className="history__stat-card-label">Top Score</span>
-                  <span className="history__stat-card-value history__stat-card-value--accent n">{formatScore(selected.top_score)}</span>
+                  <span className="history__stat-card-value history__stat-card-value--accent n">
+                    {selected.top_score != null ? selected.top_score.toFixed(3) : '—'}
+                  </span>
                 </div>
                 <div className="history__stat-card">
                   <span className="history__stat-card-label">Status</span>
-                  <span className="history__stat-card-value history__stat-card-value--sm">{selected.status}</span>
+                  <span className="history__stat-card-value history__stat-card-value--sm">{statusLabel(selected.status)}</span>
                 </div>
               </div>
 
               <p className="history__section-title">Full results</p>
-              <div className="history__table-wrap">
-                <table className="history__table">
-                  <thead>
-                    <tr>
-                      <th style={{ width: 56 }}>Rank</th>
-                      <th>Model</th>
-                      <th>Provider</th>
-                      <th>Score</th>
-                      <th>Accuracy</th>
-                      <th>Speed</th>
-                      <th>Cost</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {results.map((r) => (
-                      <tr key={r.model_id}>
-                        <td>
-                          <span className={`history__rank-pill${r.rank === 1 ? ' history__rank-pill--1' : ''}`}>{r.rank}</span>
-                        </td>
-                        {/* API only returns model_id, not a display name — swap in a
-                            models lookup (fetchModels) here if you want the friendly name. */}
-                        <td className="history__cell-strong">{r.model_id}</td>
-                        <td>{r.provider}</td>
-                        <td className={`n${r.rank === 1 ? ' history__score-cell' : ''}`}>{formatScore(r.score)}</td>
-                        <td className="n">{formatScore(r.accuracy)}</td>
-                        {/* Not returned by GET /evaluations/{id}/results */}
-                        <td className="n">—</td>
-                        <td className="n">—</td>
+
+              {selected.status !== 'completed' && (
+                <div className="history__empty history__empty--inline">
+                  <AlertCircle size={18} />
+                  <p>
+                    {selected.status === 'running' || selected.status === 'pending'
+                      ? 'This evaluation is still running. Results will appear once it completes.'
+                      : selected.status === 'failed'
+                      ? 'This evaluation failed, so no results are available.'
+                      : 'This evaluation was canceled, so no results are available.'}
+                  </p>
+                </div>
+              )}
+
+              {selected.status === 'completed' && resultsLoading && (
+                <div className="history__empty history__empty--inline">
+                  <Spinner label="Loading results…" />
+                </div>
+              )}
+
+              {selected.status === 'completed' && !resultsLoading && resultsError && (
+                <div className="history__empty history__empty--inline">
+                  <AlertCircle size={18} />
+                  <p>{resultsError}</p>
+                </div>
+              )}
+
+              {selected.status === 'completed' && !resultsLoading && !resultsError && results && (
+                <div className="history__table-wrap">
+                  <table className="history__table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: 56 }}>Rank</th>
+                        <th>Model</th>
+                        <th>Provider</th>
+                        <th>Score</th>
+                        <th>Accuracy</th>
+                        <th>Passed</th>
+                        <th>Failed</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {results.results
+                        .slice()
+                        .sort((a, b) => a.rank - b.rank)
+                        .map((r) => (
+                          <tr key={r.model_id}>
+                            <td>
+                              <span className={`history__rank-pill${r.rank === 1 ? ' history__rank-pill--1' : ''}`}>{r.rank}</span>
+                            </td>
+                            <td className="history__cell-strong">{r.model_id}</td>
+                            <td>{r.provider}</td>
+                            <td className={`n${r.rank === 1 ? ' history__score-cell' : ''}`}>{r.score.toFixed(3)}</td>
+                            <td className="n">{r.accuracy.toFixed(3)}</td>
+                            <td className="n">
+                              {r.passed_tests}/{r.total_tests}
+                            </td>
+                            <td className="n">{r.failed_tests}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -275,138 +372,3 @@ const History: FC = () => {
 };
 
 export default History;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//api.ts
-import api from '../../../services/api';
-import type { ApiErrorBody, EvaluationResultsResponse, EvaluationsListResponse } from './types';
-
-export async function fetchEvaluations(): Promise<EvaluationsListResponse> {
-  const res = await api.get<EvaluationsListResponse>('/evaluations');
-  return res.data;
-}
-
-// Thrown when the run hasn't finished yet (backend returns 400 with a `detail` message
-// rather than a results payload). Callers can check `notCompleted` to show a friendlier
-// message instead of a generic error.
-export class EvaluationNotCompletedError extends Error {
-  notCompleted = true;
-}
-
-export async function fetchEvaluationResults(evaluationId: string): Promise<EvaluationResultsResponse> {
-  try {
-    const res = await api.get<EvaluationResultsResponse>(`/evaluations/${evaluationId}/results`);
-    return res.data;
-  } catch (err: unknown) {
-    // Adjust this check to however your `api` client (axios?) surfaces status + body.
-    const status = (err as { response?: { status?: number } })?.response?.status;
-    const body = (err as { response?: { data?: ApiErrorBody } })?.response?.data;
-    if (status === 400) {
-      throw new EvaluationNotCompletedError(body?.detail ?? 'Execution not completed.');
-    }
-    throw err;
-  }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//types.ts
-/* Add these to your shared types.ts (or a local History-scoped types file) */
-
-export type EvaluationStatus = 'pending' | 'running' | 'completed' | 'failed' | 'canceled';
-
-export interface DatasetConfig {
-  dataset_id: string;
-}
-
-export interface EvaluationApi {
-  id: string;
-  name: string;
-  description: string;
-  eval_type: string; // 'model' | 'agent' | 'rag' — confirm exact values with backend
-  dataset_id: string;
-  datasets_config: DatasetConfig[];
-  benchmark: string;
-  model_ids: string[];
-  selected_metrics: string[];
-  run_samples: number;
-  selected_category: string[];
-  status: EvaluationStatus;
-  progress: number;
-  total_questions: number;
-  top_model: string | null;
-  top_score: number | null;
-  created_at: string;
-  started_at: string | null;
-  completed_at: string | null;
-}
-
-export interface EvaluationsListResponse {
-  evaluations: EvaluationApi[];
-}
-
-/* ---------- API: GET /evaluations/{id}/results ---------- */
-
-export interface ResultDetail {
-  test_id: string;
-  input: string;
-  output: string;
-  expected: string;
-  latency_seconds: number;
-  passed: boolean;
-  score: number;
-  metric_scores: Record<string, number>;
-}
-
-export interface ModelResult {
-  model_id: string;
-  provider: string;
-  rank: number;
-  score: number;
-  accuracy: number;
-  passed_tests: number;
-  failed_tests: number;
-  total_tests: number;
-  metric_scores: Record<string, number>;
-  details: ResultDetail[];
-}
-
-export interface EvaluationResultsResponse {
-  evaluation_id: string;
-  status: EvaluationStatus;
-  top_model: string;
-  top_score: number;
-  results: ModelResult[];
-}
-
-// Shape of the 400 { detail: "Execution not completed." } error body
-export interface ApiErrorBody {
-  detail: string;
-}
