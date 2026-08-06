@@ -1,600 +1,10 @@
-//ModelComparator.tsx
-import { useEffect, useMemo, useRef, useState, type FC } from 'react';
-import { Search, X, CheckCircle2, GitCompareArrows, ArrowLeft, Trophy, Database, AlertCircle, Check, ChevronDown } from 'lucide-react';
-import { MODELS } from '../RunEvaluation/data';
-import type { ModelInfo } from '../RunEvaluation/types';
-import { fetchBenchmarks } from '../Datasets/api';
-import type { Benchmark } from '../Datasets/types';
-import Spinner from '../../../components/Spinner/Spinner';
-import './ModelComparator.scss';
-
-// ---------- dropdown, structurally the same as History's <Select /> (trigger
-// + chevron + menu with a check mark on the active option), scoped to this
-// page's own "model-comparator__select" class names ----------
-interface SelectOption {
-  value: string;
-  label: string;
-}
-
-const DatasetSelect: FC<{ value: string; options: SelectOption[]; onChange: (value: string) => void }> = ({
-  value,
-  options,
-  onChange,
-}) => {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const current = options.find((o) => o.value === value) ?? options[0];
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
-
-  return (
-    <div className="model-comparator__select" ref={ref}>
-      <button
-        type="button"
-        className={`model-comparator__select-trigger${open ? ' model-comparator__select-trigger--open' : ''}`}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <span>{current?.label}</span>
-        <ChevronDown size={14} className="model-comparator__select-chevron" />
-      </button>
-
-      {open && (
-        <div className="model-comparator__select-menu">
-          {options.map((o) => (
-            <button
-              key={o.value}
-              type="button"
-              className={`model-comparator__select-option${o.value === value ? ' model-comparator__select-option--active' : ''}`}
-              onClick={() => {
-                onChange(o.value);
-                setOpen(false);
-              }}
-            >
-              {o.label}
-              {o.value === value && <Check size={13} strokeWidth={2.5} />}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-};
-
-const MAX_SELECTION = 4;
-
-// ---------- helpers to pull comparable numbers out of display strings ----------
-function parsePrice(pricing: string): number | null {
-  const match = pricing.match(/([\d.]+)/);
-  return match ? parseFloat(match[1]) : null;
-}
-
-function parseSpeed(speedRating: string): number | null {
-  const match = speedRating.match(/\(([\d.]+)/);
-  return match ? parseFloat(match[1]) : null;
-}
-
-function parseContextWindow(contextWindow: string): number {
-  const cleaned = contextWindow.replace(/,/g, '');
-  const kMatch = cleaned.match(/([\d.]+)\s*k/i);
-  if (kMatch) return parseFloat(kMatch[1]) * 1_000;
-  const numMatch = cleaned.match(/([\d.]+)/);
-  return numMatch ? parseFloat(numMatch[1]) : 0;
-}
-
-// There's no real "which models were evaluated on this dataset" data yet, so
-// this connects the two heuristically: a model counts as evaluated on a
-// dataset if it shares at least one capability keyword with the dataset's
-// required_capabilities (normalized + substring-matched, since the two data
-// sources use different naming conventions — e.g. "tool_calling" vs "Tool Calling").
-function normalizeCapability(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
-}
-
-function isModelEvaluatedOn(model: ModelInfo, benchmark: Benchmark): boolean {
-  return benchmark.required_capabilities.some((bc) => {
-    const a = normalizeCapability(bc);
-    return model.capabilities.some((mc) => {
-      const b = normalizeCapability(mc);
-      return a.includes(b) || b.includes(a);
-    });
-  });
-}
-
-type MetricRow = {
-  key: string;
-  label: string;
-  getValue: (m: ModelInfo) => string;
-  getSortValue?: (m: ModelInfo) => number | null;
-  betterIsHigher?: boolean;
-};
-
-const METRIC_ROWS: MetricRow[] = [
-  { key: 'provider', label: 'Provider', getValue: (m) => m.provider },
-  { key: 'version', label: 'Version', getValue: (m) => m.version },
-  { key: 'context', label: 'Context Window', getValue: (m) => m.contextWindow },
-  {
-    key: 'accuracy',
-    label: 'Accuracy',
-    getValue: (m) => `${m.accuracyScore}%`,
-    getSortValue: (m) => m.accuracyScore,
-    betterIsHigher: true,
-  },
-  {
-    key: 'agent',
-    label: 'Agent Score',
-    getValue: (m) => `${m.agentScore}%`,
-    getSortValue: (m) => m.agentScore,
-    betterIsHigher: true,
-  },
-  {
-    key: 'speed',
-    label: 'Speed',
-    getValue: (m) => m.speedRating,
-    getSortValue: (m) => parseSpeed(m.speedRating),
-    betterIsHigher: true,
-  },
-  {
-    key: 'price',
-    label: 'Pricing',
-    getValue: (m) => m.pricing,
-    getSortValue: (m) => parsePrice(m.pricing),
-    betterIsHigher: false,
-  },
-];
-
-const MODEL_COLORS = ['var(--primary)', 'var(--violet)', 'var(--warning)', 'var(--success)'];
-
-type RadarAxis = {
-  key: string;
-  label: string;
-  get: (m: ModelInfo) => number;
-  higherIsBetter: boolean;
-};
-
-const RADAR_AXES: RadarAxis[] = [
-  { key: 'accuracy', label: 'Accuracy', get: (m) => m.accuracyScore, higherIsBetter: true },
-  { key: 'agent', label: 'Agent Score', get: (m) => m.agentScore, higherIsBetter: true },
-  { key: 'speed', label: 'Speed', get: (m) => parseSpeed(m.speedRating) ?? 0, higherIsBetter: true },
-  { key: 'price', label: 'Affordability', get: (m) => parsePrice(m.pricing) ?? 0, higherIsBetter: false },
-  { key: 'context', label: 'Context', get: (m) => parseContextWindow(m.contextWindow), higherIsBetter: true },
-];
-
-const RadarChart: FC<{ models: ModelInfo[] }> = ({ models }) => {
-  const size = 280;
-  const center = size / 2;
-  const maxRadius = 96;
-  const angleStep = (2 * Math.PI) / RADAR_AXES.length;
-  const angleFor = (i: number) => -Math.PI / 2 + i * angleStep;
-
-  // Normalize each axis 0–100 across just the selected models, so the chart
-  // always uses the full space regardless of the underlying units.
-  const scoreFor = (axis: RadarAxis, m: ModelInfo) => {
-    const values = models.map((mm) => axis.get(mm));
-    const max = Math.max(...values);
-    const min = Math.min(...values);
-    const v = axis.get(m);
-    if (axis.higherIsBetter) {
-      return max === 0 ? 0 : (v / max) * 100;
-    }
-    // lower-is-better (price): cheapest gets 100, scale the rest down
-    if (v === 0) return 100;
-    const cheapest = min === 0 ? v : min;
-    return (cheapest / v) * 100;
-  };
-
-  const pointFor = (i: number, valuePct: number) => {
-    const angle = angleFor(i);
-    const r = (valuePct / 100) * maxRadius;
-    return [center + r * Math.cos(angle), center + r * Math.sin(angle)] as const;
-  };
-
-  const ringLevels = [0.25, 0.5, 0.75, 1];
-
-  return (
-    <svg viewBox={`0 0 ${size} ${size}`} className="model-comparator__radar-svg">
-      {/* grid rings */}
-      {ringLevels.map((level) => {
-        const pts = RADAR_AXES.map((_, i) => pointFor(i, level * 100).join(',')).join(' ');
-        return <polygon key={level} points={pts} className="model-comparator__radar-ring" />;
-      })}
-
-      {/* axis lines + labels */}
-      {RADAR_AXES.map((axis, i) => {
-        const [x, y] = pointFor(i, 100);
-        const [lx, ly] = pointFor(i, 118);
-        const anchor = Math.abs(Math.cos(angleFor(i))) < 0.15 ? 'middle' : Math.cos(angleFor(i)) > 0 ? 'start' : 'end';
-        return (
-          <g key={axis.key}>
-            <line x1={center} y1={center} x2={x} y2={y} className="model-comparator__radar-axis" />
-            <text x={lx} y={ly} textAnchor={anchor} dominantBaseline="middle" className="model-comparator__radar-label">
-              {axis.label}
-            </text>
-          </g>
-        );
-      })}
-
-      {/* one polygon per selected model */}
-      {models.map((m, mi) => {
-        const pts = RADAR_AXES.map((axis, i) => pointFor(i, scoreFor(axis, m)).join(',')).join(' ');
-        const color = MODEL_COLORS[mi % MODEL_COLORS.length];
-        return (
-          <polygon key={m.id} points={pts} fill={color} fillOpacity={0.14} stroke={color} strokeWidth={2} strokeLinejoin="round" />
-        );
-      })}
-    </svg>
-  );
-};
-
-const ModelComparator: FC = () => {
-  const [query, setQuery] = useState('');
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [comparing, setComparing] = useState(false);
-
-  // ---------- dataset filter (optional) ----------
-  const [benchmarks, setBenchmarks] = useState<Benchmark[]>([]);
-  const [benchmarksLoading, setBenchmarksLoading] = useState(true);
-  const [benchmarksError, setBenchmarksError] = useState<string | null>(null);
-  const [selectedDatasetName, setSelectedDatasetName] = useState<string>('');
-
-  useEffect(() => {
-    fetchBenchmarks()
-      .then((res) => setBenchmarks(res.benchmarks))
-      .catch((err) => setBenchmarksError(err instanceof Error ? err.message : 'Failed to load test suites.'))
-      .finally(() => setBenchmarksLoading(false));
-  }, []);
-
-  const datasetOptions: SelectOption[] = useMemo(
-    () => [
-      { value: '', label: 'Select a test suite…' },
-      ...benchmarks.map((b) => ({ value: b.name, label: `${b.name} (${b.task_count} tasks)` })),
-    ],
-    [benchmarks]
-  );
-
-  // Models only appear once a dataset is selected — there's no "show
-  // everything" default here, since the whole point is that model choice is
-  // driven by which test suite you're comparing against.
-  const eligibleModels = useMemo(() => {
-    if (!selectedDatasetName) return [];
-    const benchmark = benchmarks.find((b) => b.name === selectedDatasetName);
-    if (!benchmark) return [];
-    return MODELS.filter((m) => isModelEvaluatedOn(m, benchmark));
-  }, [selectedDatasetName, benchmarks]);
-
-  // If narrowing the dataset filter drops a model that was already selected
-  // for comparison, drop it from the selection too rather than leaving a
-  // "selected but no longer eligible" model silently in the comparison.
-  useEffect(() => {
-    setSelectedIds((prev) => prev.filter((id) => eligibleModels.some((m) => m.id === id)));
-  }, [eligibleModels]);
-
-  const filtered = useMemo(
-    () =>
-      eligibleModels.filter(
-        (m) =>
-          !query ||
-          m.name.toLowerCase().includes(query.toLowerCase()) ||
-          m.provider.toLowerCase().includes(query.toLowerCase())
-      ),
-    [eligibleModels, query]
-  );
-
-  const selectedModels = useMemo(() => MODELS.filter((m) => selectedIds.includes(m.id)), [selectedIds]);
-
-  const toggle = (id: string) => {
-    setSelectedIds((prev) => {
-      if (prev.includes(id)) return prev.filter((x) => x !== id);
-      if (prev.length >= MAX_SELECTION) return prev;
-      return [...prev, id];
-    });
-  };
-
-  const clearSelection = () => {
-    setSelectedIds([]);
-    setComparing(false);
-  };
-
-  // For each metric row, figure out which of the selected models has the
-  // "best" value, so the comparison table can highlight it.
-  const bestByMetric = useMemo(() => {
-    const map = new Map<string, string>(); // metricKey -> modelId
-    METRIC_ROWS.forEach((row) => {
-      if (!row.getSortValue) return;
-      let bestId: string | null = null;
-      let bestValue: number | null = null;
-      selectedModels.forEach((m) => {
-        const v = row.getSortValue!(m);
-        if (v === null) return;
-        const isBetter = bestValue === null || (row.betterIsHigher ? v > bestValue : v < bestValue);
-        if (isBetter) {
-          bestValue = v;
-          bestId = m.id;
-        }
-      });
-      if (bestId) map.set(row.key, bestId);
-    });
-    return map;
-  }, [selectedModels]);
-
-  return (
-    <div className="model-comparator">
-      <div className="model-comparator__header">
-        <div className="model-comparator__header-left">
-          <p className="model-comparator__header-eyebrow">Side-by-side evaluation</p>
-          <h1 className="model-comparator__title">Model Comparator</h1>
-          <p className="model-comparator__subtitle">
-            {comparing ? 'Comparing selected models' : `Select up to ${MAX_SELECTION} models to compare`}
-          </p>
-        </div>
-
-        {comparing && (
-          <button type="button" className="model-comparator__btn model-comparator__btn--outline" onClick={() => setComparing(false)}>
-            <ArrowLeft size={14} strokeWidth={2.25} /> Edit selection
-          </button>
-        )}
-      </div>
-
-      {!comparing && (
-        <>
-          <div className="model-comparator__step">
-            <div className="model-comparator__step-head">
-              <span className="model-comparator__step-num">1</span>
-              <div>
-                <p className="model-comparator__step-title">Select a test suite</p>
-                <p className="model-comparator__step-sub">Models evaluated on the chosen test suite will appear below.</p>
-              </div>
-              {selectedDatasetName && (
-                <button type="button" className="model-comparator__link-btn" onClick={() => setSelectedDatasetName('')}>
-                  Clear
-                </button>
-              )}
-            </div>
-
-            {benchmarksLoading && (
-              <div className="model-comparator__datasets-loading">
-                <Spinner size={16} />
-                Loading test suites…
-              </div>
-            )}
-
-            {!benchmarksLoading && benchmarksError && (
-              <div className="model-comparator__datasets-error">
-                <AlertCircle size={14} />
-                {benchmarksError}
-              </div>
-            )}
-
-            {!benchmarksLoading && !benchmarksError && (
-              <div className="model-comparator__select-wrap">
-                <DatasetSelect value={selectedDatasetName} options={datasetOptions} onChange={setSelectedDatasetName} />
-              </div>
-            )}
-          </div>
-
-          <div className="model-comparator__step">
-            <div className="model-comparator__step-head">
-              <span className="model-comparator__step-num">2</span>
-              <div>
-                <p className="model-comparator__step-title">Select models to compare</p>
-                <p className="model-comparator__step-sub">
-                  {selectedDatasetName
-                    ? `${eligibleModels.length} model${eligibleModels.length === 1 ? '' : 's'} evaluated on the selected test suite`
-                    : 'Pick a test suite above to see the models evaluated on it'}
-                </p>
-              </div>
-            </div>
-
-            {!selectedDatasetName ? (
-              <div className="model-comparator__empty">
-                <Database size={22} />
-                <p>Select a test suite to see the models evaluated on it.</p>
-              </div>
-            ) : (
-              <>
-                <div className="model-comparator__search">
-                  <Search size={15} />
-                  <input type="text" placeholder="Search models..." value={query} onChange={(e) => setQuery(e.target.value)} />
-                  {query && (
-                    <button type="button" className="model-comparator__search-clear" onClick={() => setQuery('')} aria-label="Clear search">
-                      <X size={13} />
-                    </button>
-                  )}
-                </div>
-
-                <div className="model-comparator__grid">
-                  {filtered.map((m) => {
-                    const selected = selectedIds.includes(m.id);
-                    const disabled = !selected && selectedIds.length >= MAX_SELECTION;
-                    return (
-                      <button
-                        type="button"
-                        key={m.id}
-                        className={`model-comparator__card${selected ? ' model-comparator__card--selected' : ''}${
-                          disabled ? ' model-comparator__card--disabled' : ''
-                        }`}
-                        onClick={() => !disabled && toggle(m.id)}
-                        disabled={disabled}
-                      >
-                        <span className={`model-comparator__checkbox${selected ? ' model-comparator__checkbox--checked' : ''}`}>
-                          {selected && <CheckCircle2 size={14} strokeWidth={2.5} />}
-                        </span>
-
-                        <span className="model-comparator__card-body">
-                          <span className="model-comparator__card-top">
-                            <span className="model-comparator__card-name">{m.name}</span>
-                            <span className="model-comparator__tag">{m.provider}</span>
-                          </span>
-                          <span className="model-comparator__card-desc">{m.description}</span>
-                          <span className="model-comparator__card-meta">
-                            <span>
-                              Accuracy <b className="n">{m.accuracyScore}%</b>
-                            </span>
-                            <span>
-                              Speed <b>{m.speedRating}</b>
-                            </span>
-                            <span>
-                              Price <b>{m.pricing}</b>
-                            </span>
-                          </span>
-                        </span>
-                      </button>
-                    );
-                  })}
-
-                  {filtered.length === 0 && (
-                    <div className="model-comparator__empty">
-                      <Search size={22} />
-                      <p>No models match your search.</p>
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
-        </>
-      )}
-
-      {comparing && selectedModels.length > 0 && (
-        <div className="model-comparator__compare-grid">
-          <div className="model-comparator__chart-panel">
-            <p className="model-comparator__panel-title">Overall shape</p>
-            <RadarChart models={selectedModels} />
-            <div className="model-comparator__legend">
-              {selectedModels.map((m, i) => (
-                <div className="model-comparator__legend-item" key={m.id}>
-                  <span className="model-comparator__legend-dot" style={{ background: MODEL_COLORS[i % MODEL_COLORS.length] }} />
-                  <span className="model-comparator__legend-name">{m.name}</span>
-                </div>
-              ))}
-            </div>
-            <p className="model-comparator__panel-hint">
-              Each axis is normalized 0–100 across just the models you selected, so the shape shows relative strengths, not
-              absolute scores.
-            </p>
-          </div>
-
-          <div className="model-comparator__table-wrap">
-          <table className="model-comparator__table">
-            <thead>
-              <tr>
-                <th className="model-comparator__row-label-col">Metric</th>
-                {selectedModels.map((m) => (
-                  <th key={m.id}>
-                    <div className="model-comparator__col-head">
-                      <span className="model-comparator__col-name">{m.name}</span>
-                      <button
-                        type="button"
-                        className="model-comparator__col-remove"
-                        onClick={() => setSelectedIds((prev) => prev.filter((id) => id !== m.id))}
-                        aria-label={`Remove ${m.name} from comparison`}
-                      >
-                        <X size={12} strokeWidth={2.5} />
-                      </button>
-                    </div>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {METRIC_ROWS.map((row) => (
-                <tr key={row.key}>
-                  <td className="model-comparator__row-label-col model-comparator__row-label">{row.label}</td>
-                  {selectedModels.map((m) => {
-                    const isBest = bestByMetric.get(row.key) === m.id;
-                    return (
-                      <td key={m.id} className={isBest ? 'model-comparator__cell--best' : undefined}>
-                        <span className="model-comparator__cell-value n">{row.getValue(m)}</span>
-                        {isBest && (
-                          <span className="model-comparator__cell-best-badge">
-                            <Trophy size={11} strokeWidth={2.5} /> Best
-                          </span>
-                        )}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-              <tr>
-                <td className="model-comparator__row-label-col model-comparator__row-label">Capabilities</td>
-                {selectedModels.map((m) => (
-                  <td key={m.id}>
-                    <div className="model-comparator__cap-list">
-                      {m.capabilities.map((c) => (
-                        <span key={c} className="model-comparator__cap-pill">
-                          {c}
-                        </span>
-                      ))}
-                    </div>
-                  </td>
-                ))}
-              </tr>
-            </tbody>
-          </table>
-          </div>
-        </div>
-      )}
-
-      {selectedIds.length > 0 && (
-        <div className="model-comparator__bar">
-          <div className="model-comparator__bar-left">
-            <GitCompareArrows size={15} strokeWidth={2.25} />
-            <span>
-              <b className="n">{selectedIds.length}</b> of {MAX_SELECTION} models selected
-            </span>
-          </div>
-          <div className="model-comparator__bar-actions">
-            <button type="button" className="model-comparator__btn model-comparator__btn--outline" onClick={clearSelection}>
-              Clear
-            </button>
-            <button
-              type="button"
-              className="model-comparator__btn model-comparator__btn--primary"
-              onClick={() => setComparing(true)}
-              disabled={selectedIds.length < 2}
-            >
-              <GitCompareArrows size={14} strokeWidth={2.25} /> Compare Selected
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-export default ModelComparator;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//ModelComparator.scss
+//Models.scss
 @use '../../../styles/variables' as *;
 
-.model-comparator {
+.models-page {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding-bottom: 76px; // room for the sticky bar so it never covers the last row
 
   /* ---------- header ---------- */
   &__header {
@@ -611,6 +21,13 @@ export default ModelComparator;
   &__header-left {
     display: flex;
     flex-direction: column;
+  }
+
+  &__header-right {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
   }
 
   &__header-eyebrow {
@@ -634,6 +51,21 @@ export default ModelComparator;
     }
   }
 
+  &__header-meta {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
+    border-radius: 999px;
+    padding: 7px 13px;
+    white-space: nowrap;
+  }
+
   &__title {
     font-size: 21px;
     font-weight: 800;
@@ -647,23 +79,66 @@ export default ModelComparator;
     font-size: 0.84375rem;
   }
 
-  /* ---------- search ---------- */
-  &__search {
+  &__btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-family: $font-body;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    padding: 9px 14px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease, opacity 0.14s ease;
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    &--outline {
+      background: $bg-main;
+      border-color: $border-default;
+      color: $text-secondary;
+
+      &:hover:not(:disabled) {
+        border-color: $text-primary;
+        color: $text-primary;
+      }
+    }
+  }
+
+  &__spin {
+    animation: models-page-spin 0.9s linear infinite;
+  }
+
+  /* ---------- filters ---------- */
+  &__filters {
     flex-shrink: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+  }
+
+  &__search {
     display: flex;
     align-items: center;
     gap: 9px;
-    width: 300px;
+    width: 280px;
     max-width: 100%;
     border: 1px solid $border-default;
     border-radius: 10px;
     padding: 9px 12px;
     background: $bg-main;
     color: $text-tertiary;
-    transition: border-color 0.14s ease;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
 
     &:focus-within {
       border-color: $primary;
+      box-shadow: 0 0 0 3px $primary-light;
     }
 
     input {
@@ -693,6 +168,7 @@ export default ModelComparator;
     display: grid;
     place-items: center;
     cursor: pointer;
+    transition: background 0.14s ease, color 0.14s ease;
 
     &:hover {
       background: $border-default;
@@ -700,301 +176,256 @@ export default ModelComparator;
     }
   }
 
-  /* ---------- step wrapper (shared by dataset step + model step) ---------- */
-  &__step {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-  }
-
-  &__step-head {
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-  }
-
-  &__step-num {
+  &__seg {
     flex-shrink: 0;
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    background: $primary;
-    color: $on-primary;
-    font-size: 0.75rem;
-    font-weight: 800;
-    display: grid;
-    place-items: center;
-  }
-
-  &__step-title {
-    font-size: 0.9375rem;
-    font-weight: 800;
-    color: $text-primary;
-  }
-
-  &__step-sub {
-    margin-top: 2px;
-    font-size: 0.78125rem;
-    color: $text-tertiary;
-  }
-
-  &__datasets-loading,
-  &__datasets-error {
-    display: flex;
+    display: inline-flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
-    font-size: 0.78125rem;
-    color: $text-tertiary;
-    margin-left: 36px;
-  }
-
-  &__datasets-error {
-    color: $danger;
-  }
-
-  /* ---------- dataset dropdown (structurally mirrors History's <Select />) ---------- */
-  &__select-wrap {
-    margin-left: 36px;
-  }
-
-  &__select {
-    position: relative;
-    width: 320px;
-    max-width: 100%;
-  }
-
-  &__select-trigger {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    border: 1px solid $border-default;
-    border-radius: 10px;
-    padding: 10px 13px;
-    background: $bg-main;
-    font-size: 0.84375rem;
-    font-weight: 500;
-    font-family: $font-body;
-    color: $text-primary;
-    cursor: pointer;
-    transition: border-color 0.14s ease, box-shadow 0.14s ease;
-
-    &:hover {
-      border-color: $border-strong;
-    }
-
-    &--open {
-      border-color: $primary;
-      box-shadow: 0 0 0 3px $primary-light;
-    }
-  }
-
-  &__select-chevron {
-    flex-shrink: 0;
-    color: $text-tertiary;
-    transition: transform 0.16s ease;
-  }
-
-  &__select-trigger--open &__select-chevron {
-    transform: rotate(180deg);
-  }
-
-  &__select-menu {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    right: 0;
-    z-index: 20;
-    max-height: 18rem;
-    overflow-y: auto;
-    background: $bg-main;
+    gap: 2px;
+    padding: 3px;
     border: 1px solid $border-subtle;
-    border-radius: 10px;
-    box-shadow: $shadow-lg;
-    padding: 5px;
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
+    border-radius: 11px;
+    background: $bg-subtle;
   }
 
-  &__select-option {
-    display: flex;
+  &__seg-item {
+    display: inline-flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    width: 100%;
-    text-align: left;
-    padding: 9px 11px;
-    border: none;
-    border-radius: 7px;
-    background: transparent;
-    font-size: 0.8125rem;
+    gap: 6px;
     font-family: $font-body;
-    color: $text-secondary;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-tertiary;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 7px 12px;
     cursor: pointer;
-    transition: background 0.12s ease, color 0.12s ease;
+    transition: background 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
+
+    svg {
+      opacity: 0.8;
+    }
 
     &:hover {
-      background: $bg-subtle;
       color: $text-primary;
     }
 
     &--active {
+      background: $bg-main;
       color: $primary;
-      font-weight: 600;
+      box-shadow: $shadow-xs;
 
       svg {
-        color: $primary;
+        opacity: 1;
       }
     }
   }
 
-  &__link-btn {
-    margin-left: auto;
+  /* ---------- tags ---------- */
+  &__tag {
     flex-shrink: 0;
-    font-family: $font-body;
-    font-size: 0.75rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.6875rem;
     font-weight: 700;
-    color: $primary;
-    background: transparent;
-    border: none;
-    padding: 0;
-    cursor: pointer;
+    border-radius: 999px;
+    padding: 3px 10px;
 
-    &:hover {
-      text-decoration: underline;
+    &--blue {
+      color: $primary;
+      background: $primary-light;
+    }
+
+    &--jade {
+      color: $success;
+      background: $success-subtle;
+    }
+
+    &--gray {
+      color: $text-tertiary;
+      background: $bg-inset;
+    }
+
+    &--outline {
+      color: $text-secondary;
+      background: transparent;
+      border: 1px solid $border-default;
     }
   }
 
-  /* ---------- selection grid ---------- */
+  /* ---------- capability pills ---------- */
+  &__caps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+
+  &__cap-pill {
+    font-size: 0.71875rem;
+    font-weight: 600;
+    border-radius: 999px;
+    padding: 3px 10px;
+
+    &--blue {
+      color: $primary;
+      background: $primary-light;
+    }
+
+    &--violet {
+      color: $violet;
+      background: $violet-light;
+    }
+
+    &--amber {
+      color: $warning;
+      background: $warning-subtle;
+    }
+
+    &--jade {
+      color: $success;
+      background: $success-subtle;
+    }
+
+    &--rose {
+      color: $danger;
+      background: $danger-subtle;
+    }
+  }
+
+  /* ---------- full-info card grid ---------- */
   &__grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 12px;
+    gap: 16px;
   }
 
   &__card {
-    position: relative;
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-    text-align: left;
-    background: $bg-main;
-    border: 1px solid $border-subtle;
-    border-radius: 12px;
-    padding: 14px 16px;
-    cursor: pointer;
-    font-family: inherit;
-    transition: border-color 0.14s ease, box-shadow 0.14s ease, background 0.14s ease;
-
-    &:hover {
-      border-color: $border-strong;
-      box-shadow: $shadow-xs;
-    }
-
-    &--selected {
-      border-color: $primary;
-      background: $primary-light;
-      box-shadow: 0 0 0 1px $primary;
-    }
-
-    &--disabled {
-      opacity: 0.45;
-      cursor: not-allowed;
-
-      &:hover {
-        border-color: $border-subtle;
-        box-shadow: none;
-      }
-    }
-  }
-
-  &__checkbox {
-    flex-shrink: 0;
-    width: 20px;
-    height: 20px;
-    border-radius: 6px;
-    border: 1.5px solid $border-strong;
-    background: $bg-main;
-    display: grid;
-    place-items: center;
-    color: transparent;
-    margin-top: 1px;
-    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
-
-    &--checked {
-      background: $primary;
-      border-color: $primary;
-      color: $on-primary;
-    }
-  }
-
-  &__card-body {
     display: flex;
     flex-direction: column;
-    gap: 5px;
-    min-width: 0;
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-left: 3px solid $card-accent;
+    border-radius: 0.75rem;
+    padding: 15px 18px;
+    box-shadow: $shadow-xs;
+    transition: box-shadow 0.15s ease, transform 0.15s ease;
+
+    &:hover {
+      box-shadow: $shadow-md;
+      transform: translateY(-2px);
+    }
   }
 
   &__card-top {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
-    gap: 8px;
-  }
-
-  &__card-name {
-    font-size: 0.875rem;
-    font-weight: 700;
-    color: $text-primary;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__tag {
-    flex-shrink: 0;
-    font-size: 0.625rem;
-    font-weight: 700;
-    color: $text-tertiary;
-    background: $bg-inset;
-    border-radius: 999px;
-    padding: 2px 8px;
-  }
-
-  &__card--selected &__tag {
-    background: $bg-main;
-    color: $primary;
-  }
-
-  &__card-desc {
-    font-size: 0.75rem;
-    color: $text-secondary;
-    line-height: 1.45;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
+    gap: 10px;
+    margin-bottom: 6px;
   }
 
   &__card-meta {
     display: flex;
     flex-wrap: wrap;
-    gap: 10px;
-    margin-top: 2px;
-    font-size: 0.6875rem;
-    color: $text-tertiary;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
 
-    b {
-      color: $text-secondary;
+  &__card-name {
+    font-size: 0.9375rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: $text-primary;
+  }
+
+  &__card-desc {
+    font-size: 0.78125rem;
+    color: $text-secondary;
+    line-height: 1.5;
+    margin-bottom: 10px;
+  }
+
+  &__card-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px 20px;
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid $border-subtle;
+  }
+
+  &__card-stat-label {
+    font-size: 0.625rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: $text-tertiary;
+  }
+
+  &__card-stat-value {
+    font-size: 0.9375rem;
+    font-weight: 800;
+    color: $text-primary;
+    display: block;
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    &--sm {
+      font-size: 0.78125rem;
       font-weight: 700;
-      margin-left: 3px;
+    }
+
+    &--accent {
+      color: $success;
     }
   }
 
+  &__card-section-label {
+    font-size: 0.65625rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: $text-tertiary;
+    margin-bottom: 6px;
+    display: block;
+  }
+
+  &__card-foot {
+    margin-top: auto;
+    padding-top: 10px;
+    border-top: 1px solid $border-subtle;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  &__card-foot-source {
+    font-family: $font-mono;
+    font-size: 0.6875rem;
+    color: $text-tertiary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ---------- empty state ---------- */
+  /* ---------- loading — plain, no border, just centers the spinner ---------- */
+  &__loading {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 64px 20px;
+  }
+
   &__empty {
-    grid-column: 1 / -1;
+    flex-shrink: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -1008,66 +439,557 @@ export default ModelComparator;
     svg {
       color: $text-tertiary;
     }
+
+    &--error {
+      border-style: solid;
+      border-color: $danger-subtle;
+      background: $danger-subtle;
+      color: $danger;
+
+      svg {
+        color: $danger;
+      }
+    }
   }
 
-  /* ---------- sticky selection/compare bar ---------- */
-  &__bar {
-    position: fixed;
-    left: 50%;
-    bottom: 34px;
-    transform: translateX(-50%);
-    z-index: 40;
+  /* ---------- responsive ---------- */
+  @media (max-width: 1500px) {
+    &__grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+
+  @media (max-width: 1000px) {
+    &__grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 640px) {
+    &__card-stats {
+      flex-wrap: wrap;
+      gap: 14px;
+    }
+  }
+
+  /* ---------- ultra-wide: nudge key text sizes up a touch ---------- */
+  @media (min-width: 1800px) {
+    &__title {
+      font-size: 23px;
+    }
+
+    &__subtitle {
+      font-size: 0.90625rem;
+    }
+
+    &__card-name {
+      font-size: 1.03125rem;
+    }
+
+    &__card-desc {
+      font-size: 0.84375rem;
+    }
+
+    &__card-stat-value {
+      font-size: 1.03125rem;
+    }
+
+    &__card-stat-value--sm {
+      font-size: 0.84375rem;
+    }
+
+    &__cap-pill {
+      font-size: 0.78125rem;
+    }
+
+    &__card-stat-label {
+      font-size: 0.6875rem;
+    }
+
+    &__card-section-label {
+      font-size: 0.71875rem;
+    }
+  }
+}
+
+@keyframes models-page-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Providers.scss
+@use '../../../styles/variables' as *;
+
+.providers-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+
+  /* ---------- header ---------- */
+  &__header {
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1rem;
+    padding-bottom: 18px;
+    margin-bottom: 2px;
+    border-bottom: 1px solid $border-subtle;
+  }
+
+  &__header-left {
+    display: flex;
+    flex-direction: column;
+  }
+
+  &__header-right {
+    flex-shrink: 0;
     display: flex;
     align-items: center;
-    gap: 18px;
-    background: $bg-main;
-    border: 1px solid $border-subtle;
-    border-radius: 999px;
-    box-shadow: $shadow-lg;
-    padding: 10px 12px 10px 18px;
+    gap: 10px;
   }
 
-  &__bar-left {
+  &__header-eyebrow {
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 0.8125rem;
-    color: $text-secondary;
-    white-space: nowrap;
+    font-family: $font-mono;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: $primary;
+    margin-bottom: 6px;
 
-    svg {
-      color: $primary;
+    &::before {
+      content: '';
+      width: 16px;
+      height: 2px;
+      border-radius: 2px;
+      background: $primary;
+    }
+  }
+
+  &__header-meta {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
+    border-radius: 999px;
+    padding: 7px 13px;
+    white-space: nowrap;
+  }
+
+  &__title {
+    font-size: 21px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: $text-primary;
+  }
+
+  &__subtitle {
+    margin-top: 3px;
+    color: $text-secondary;
+    font-size: 0.84375rem;
+  }
+
+  /* ---------- filters ---------- */
+  &__filters {
+    flex-shrink: 0;
+    display: flex;
+  }
+
+  &__search {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 300px;
+    max-width: 100%;
+    border: 1px solid $border-default;
+    border-radius: 10px;
+    padding: 9px 12px;
+    background: $bg-main;
+    color: $text-tertiary;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+
+    &:focus-within {
+      border-color: $primary;
+      box-shadow: 0 0 0 3px $primary-light;
     }
 
-    b {
+    input {
+      flex: 1;
+      border: none;
+      outline: none;
+      font-size: 0.8125rem;
+      color: $text-primary;
+      background: transparent;
+      font-family: $font-body;
+      min-width: 0;
+
+      &::placeholder {
+        color: $text-tertiary;
+      }
+    }
+  }
+
+  &__search-clear {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: none;
+    background: $bg-inset;
+    color: $text-tertiary;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: background 0.14s ease, color 0.14s ease;
+
+    &:hover {
+      background: $border-default;
       color: $text-primary;
     }
   }
 
-  &__bar-actions {
+  /* ---------- avatar ---------- */
+  &__avatar {
+    flex-shrink: 0;
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    overflow: hidden;
+
+    img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    &--blue {
+      color: $primary;
+      background: $primary-light;
+    }
+
+    &--violet {
+      color: $violet;
+      background: $violet-light;
+    }
+
+    &--amber {
+      color: $warning;
+      background: $warning-subtle;
+    }
+
+    &--jade {
+      color: $success;
+      background: $success-subtle;
+    }
+
+    &--rose {
+      color: $danger;
+      background: $danger-subtle;
+    }
+  }
+
+  /* ---------- status tag ---------- */
+  &__tag {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    border-radius: 999px;
+    padding: 3px 10px;
+
+    &--jade {
+      color: $success;
+      background: $success-subtle;
+    }
+
+    &--gray {
+      color: $text-tertiary;
+      background: $bg-inset;
+    }
+  }
+
+  /* ---------- full-info card grid ---------- */
+  &__grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+
+  &__card {
+    display: flex;
+    flex-direction: column;
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-left: 3px solid $card-accent;
+    border-radius: 0.75rem;
+    padding: 15px 18px;
+    box-shadow: $shadow-xs;
+    transition: box-shadow 0.15s ease, transform 0.15s ease;
+
+    &:hover {
+      box-shadow: $shadow-md;
+      transform: translateY(-2px);
+    }
+  }
+
+  &__card-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  &__card-top-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  &__card-name {
+    font-size: 0.9375rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: $text-primary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__card-desc {
+    font-size: 0.78125rem;
+    color: $text-secondary;
+    line-height: 1.5;
+    margin-bottom: 10px;
+  }
+
+  &__card-stats {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+
+  &__card-stat {
+    // Plain stats are <div>s; the clickable "Models" stat is a <button> that
+    // needs its native button chrome reset to look identical to the others.
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    background: $bg-subtle;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 9px 11px;
+    text-align: left;
+    font-family: inherit;
+    cursor: default;
+    transition: background 0.14s ease, border-color 0.14s ease;
+
+    &--clickable {
+      cursor: pointer;
+
+      &:hover {
+        background: $primary-light;
+        border-color: $primary-subtle;
+      }
+
+      &:hover .providers-page__card-stat-icon {
+        background: $bg-main;
+        color: $primary;
+      }
+
+      &:hover .providers-page__card-stat-value--link {
+        color: $primary-hover;
+      }
+    }
+  }
+
+  &__card-stat-icon {
+    flex-shrink: 0;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    background: $bg-main;
+    color: $text-tertiary;
+    display: grid;
+    place-items: center;
+    transition: background 0.14s ease, color 0.14s ease;
+  }
+
+  &__card-stat-body {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+
+  &__card-stat-label {
+    font-size: 0.625rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: $text-tertiary;
+  }
+
+  &__card-stat-value {
+    font-size: 0.875rem;
+    font-weight: 800;
+    color: $text-primary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    &--sm {
+      font-size: 0.75rem;
+      font-weight: 700;
+    }
+
+    &--link {
+      display: inline-flex;
+      align-items: center;
+      gap: 1px;
+      color: $primary;
+      transition: color 0.14s ease;
+
+      svg {
+        opacity: 0.7;
+      }
+    }
+
+    &--accent {
+      color: $success;
+    }
+  }
+
+  &__card-section-label {
+    font-size: 0.65625rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: $text-tertiary;
+    margin-bottom: 6px;
+    display: block;
+  }
+
+  /* ---------- models list (card preview + modal) ---------- */
+  &__card-models {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 6px;
+  }
+
+  &__card-model-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 5px 0;
+    font-size: 0.75rem;
+  }
+
+  &__card-model-name {
+    color: $text-primary;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__card-model-version {
+    font-family: $font-mono;
+    font-size: 0.6875rem;
+    font-weight: 400;
+    color: $text-tertiary;
+  }
+
+  &__card-model-accuracy {
+    flex-shrink: 0;
+    font-weight: 700;
+    color: $success;
+  }
+
+  &__card-view-all {
+    display: inline-flex;
+    align-items: center;
+    font-family: $font-body;
+    font-size: 0.71875rem;
+    font-weight: 700;
+    color: $primary;
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin-bottom: 10px;
+    cursor: pointer;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  /* ---------- card footer / actions ---------- */
+  &__card-foot {
+    margin-top: auto;
+    padding-top: 10px;
+    border-top: 1px solid $border-subtle;
     display: flex;
     gap: 8px;
   }
 
-  /* ---------- buttons ---------- */
   &__btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 6px;
     font-family: $font-body;
-    font-size: 0.8125rem;
+    font-size: 0.78125rem;
     font-weight: 700;
-    padding: 8px 14px;
+    padding: 7px 13px;
     border-radius: 999px;
     border: 1px solid transparent;
     cursor: pointer;
     white-space: nowrap;
-    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease, opacity 0.14s ease;
+    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease, opacity 0.14s ease, transform 0.14s ease, box-shadow 0.14s ease;
 
     &:disabled {
-      opacity: 0.5;
+      opacity: 0.6;
       cursor: not-allowed;
+      transform: none !important;
+      box-shadow: none !important;
     }
 
     &--outline {
@@ -1078,6 +1000,19 @@ export default ModelComparator;
       &:hover:not(:disabled) {
         background: $bg-inset;
         color: $text-primary;
+        transform: translateY(-1px);
+      }
+    }
+
+    &--danger-outline {
+      background: $bg-subtle;
+      border-color: transparent;
+      color: $text-tertiary;
+
+      &:hover:not(:disabled) {
+        color: $danger;
+        background: $danger-subtle;
+        transform: translateY(-1px);
       }
     }
 
@@ -1085,178 +1020,122 @@ export default ModelComparator;
       background: $primary;
       border-color: $primary;
       color: $on-primary;
+      box-shadow: $shadow-xs;
 
       &:hover:not(:disabled) {
         background: $primary-hover;
         border-color: $primary-hover;
+        transform: translateY(-1px);
+        box-shadow: $shadow-sm;
       }
     }
   }
 
-  /* ---------- comparison table ---------- */
-  /* ---------- comparison view: chart + table side by side ---------- */
-  &__compare-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-    align-items: start;
+  /* ---------- empty state ---------- */
+  &__spin {
+    animation: providers-page-spin 0.9s linear infinite;
   }
 
-  &__chart-panel {
-    background: $bg-main;
-    border: 1px solid $border-subtle;
-    border-radius: 14px;
-    padding: 20px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 14px;
-  }
-
-  &__panel-title {
-    align-self: flex-start;
-    font-size: 0.75rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: $text-tertiary;
-  }
-
-  &__radar-svg {
-    width: 100%;
-    max-width: 340px;
-    height: auto;
-    overflow: visible;
-  }
-
-  &__radar-ring {
-    fill: none;
-    stroke: $border-subtle;
-    stroke-width: 1;
-  }
-
-  &__radar-axis {
-    stroke: $border-default;
-    stroke-width: 1;
-  }
-
-  &__radar-label {
-    font-size: 8.5px;
-    font-weight: 700;
-    fill: $text-tertiary;
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
-  }
-
-  &__legend {
-    align-self: stretch;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding-top: 6px;
-    border-top: 1px solid $border-subtle;
-  }
-
-  &__legend-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  &__legend-dot {
+  /* ---------- loading — plain, no border, just centers the spinner ---------- */
+  &__loading {
     flex-shrink: 0;
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 64px 20px;
   }
 
-  &__legend-name {
-    font-size: 0.8125rem;
-    font-weight: 600;
-    color: $text-primary;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__panel-hint {
-    align-self: stretch;
-    font-size: 0.6875rem;
-    line-height: 1.5;
+  &__empty {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 52px 20px;
+    border: 1px dashed $border-strong;
+    border-radius: 14px;
     color: $text-tertiary;
+    font-size: 0.84375rem;
+
+    svg {
+      color: $text-tertiary;
+    }
+
+    &--error {
+      border-style: solid;
+      border-color: $danger-subtle;
+      background: $danger-subtle;
+      color: $danger;
+
+      svg {
+        color: $danger;
+      }
+    }
   }
 
-  &__table-wrap {
-    overflow-x: auto;
+  /* ---------- modals (view-all-models + connect form) ---------- */
+  &__overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(2px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+
+  &__modal {
+    width: 100%;
+    max-width: 32rem;
+    max-height: min(80vh, 40rem);
+    background: $bg-main;
     border: 1px solid $border-subtle;
     border-radius: 14px;
-  }
+    box-shadow: $shadow-lg;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 
-  &__table {
-    width: 100%;
-    border-collapse: collapse;
-    min-width: 640px;
-
-    thead th {
-      background: $bg-subtle;
-      padding: 14px 16px;
-      border-bottom: 1px solid $border-subtle;
-      text-align: left;
-      vertical-align: top;
-    }
-
-    tbody td {
-      padding: 13px 16px;
-      border-bottom: 1px solid $border-subtle;
-      font-size: 0.8125rem;
-      color: $text-secondary;
-      vertical-align: top;
-    }
-
-    tbody tr:last-child td {
-      border-bottom: none;
+    &--sm {
+      max-width: 24rem;
+      max-height: none;
     }
   }
 
-  &__row-label-col {
-    width: 160px;
-    min-width: 160px;
-    position: sticky;
-    left: 0;
-    background: $bg-main;
-    z-index: 1;
-  }
-
-  thead &__row-label-col {
-    background: $bg-subtle;
-  }
-
-  &__row-label {
-    font-size: 0.75rem;
-    font-weight: 700;
-    color: $text-tertiary;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-  }
-
-  &__col-head {
+  &__modal-head {
+    flex-shrink: 0;
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: 8px;
+    gap: 12px;
+    padding: 20px 22px 16px;
+    border-bottom: 1px solid $border-subtle;
+
+    .providers-page__avatar {
+      margin-bottom: 8px;
+    }
   }
 
-  &__col-name {
-    font-size: 0.875rem;
+  &__modal-title {
+    font-size: 1.0625rem;
     font-weight: 800;
+    letter-spacing: -0.01em;
     color: $text-primary;
   }
 
-  &__col-remove {
+  &__modal-sub {
+    margin-top: 3px;
+    font-size: 0.75rem;
+    color: $text-tertiary;
+  }
+
+  &__modal-close {
     flex-shrink: 0;
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
     border: 1px solid $border-default;
     background: $bg-main;
     color: $text-tertiary;
@@ -1266,117 +1145,810 @@ export default ModelComparator;
     transition: border-color 0.14s ease, color 0.14s ease;
 
     &:hover {
-      border-color: $danger;
-      color: $danger;
+      border-color: $text-primary;
+      color: $text-primary;
     }
   }
 
-  &__cell-value {
-    font-weight: 600;
-    color: $text-primary;
-  }
-
-  &__cell--best {
-    background: $success-subtle;
-  }
-
-  &__cell--best &__cell-value {
-    color: $success;
-    font-weight: 800;
-  }
-
-  &__cell-best-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    margin-left: 8px;
-    font-size: 0.625rem;
-    font-weight: 700;
-    color: $success;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-  }
-
-  &__cap-list {
+  &__modal-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 8px 22px 22px;
     display: flex;
-    flex-wrap: wrap;
-    gap: 5px;
+    flex-direction: column;
   }
 
-  &__cap-pill {
-    font-size: 0.6875rem;
+  &__modal-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 0;
+  }
+
+  /* ---------- connect form (inside its own modal) ---------- */
+  &__connect-form {
+    padding: 20px 22px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  &__field-label {
+    font-size: 0.71875rem;
     font-weight: 600;
-    color: $primary;
-    background: $primary-light;
-    border-radius: 999px;
-    padding: 2px 8px;
+    color: $text-secondary;
+  }
+
+  &__input-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid $border-default;
+    border-radius: 8px;
+    padding: 0 11px;
+    background: $bg-main;
+    color: $text-tertiary;
+    transition: border-color 0.14s ease;
+
+    &:focus-within {
+      border-color: $primary;
+    }
+  }
+
+  &__input {
+    flex: 1;
+    width: 100%;
+    border: none;
+    outline: none;
+    padding: 8px 0;
+    font-size: 0.8125rem;
+    font-family: $font-body;
+    color: $text-primary;
+    background: transparent;
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    &::placeholder {
+      color: $text-tertiary;
+    }
+  }
+
+  &__form-error {
+    font-size: 0.75rem;
+    color: $danger;
+    background: $danger-subtle;
+    border-radius: 6px;
+    padding: 7px 10px;
+    line-height: 1.4;
+  }
+
+  &__form-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 6px;
+  }
+
+  &__card-inline-error {
+    font-size: 0.71875rem;
+    color: $danger;
+    padding-top: 6px;
   }
 
   /* ---------- responsive ---------- */
-  @media (max-width: 1400px) {
+  @media (max-width: 1500px) {
     &__grid {
       grid-template-columns: repeat(2, 1fr);
     }
   }
 
-  @media (max-width: 700px) {
-    &__select-wrap,
-    &__datasets-loading,
-    &__datasets-error {
-      margin-left: 0;
-    }
-
-    &__select {
-      width: 100%;
-    }
-  }
-
-  @media (max-width: 1100px) {
-    &__compare-grid {
-      grid-template-columns: 1fr;
-    }
-
-    &__chart-panel {
-      align-items: center;
-    }
-  }
-
-  @media (max-width: 800px) {
+  @media (max-width: 1000px) {
     &__grid {
       grid-template-columns: 1fr;
     }
-
-    &__bar {
-      left: 16px;
-      right: 16px;
-      bottom: 16px;
-      transform: none;
-      flex-direction: column;
-      align-items: stretch;
-      border-radius: 16px;
-    }
-
-    &__bar-actions {
-      justify-content: stretch;
-
-      .model-comparator__btn {
-        flex: 1;
-      }
-    }
   }
 
-  /* ---------- ultra-wide ---------- */
+  /* ---------- ultra-wide: nudge key text sizes up a touch ---------- */
   @media (min-width: 1800px) {
     &__title {
       font-size: 23px;
     }
 
+    &__subtitle {
+      font-size: 0.90625rem;
+    }
+
     &__card-name {
-      font-size: 0.9375rem;
+      font-size: 1.03125rem;
     }
 
     &__card-desc {
+      font-size: 0.84375rem;
+    }
+
+    &__card-stat-value {
+      font-size: 1.03125rem;
+    }
+
+    &__card-stat-value--sm {
+      font-size: 0.84375rem;
+    }
+
+    &__card-stat-label {
+      font-size: 0.6875rem;
+    }
+
+    &__card-section-label {
+      font-size: 0.71875rem;
+    }
+
+    &__card-model-name {
       font-size: 0.8125rem;
     }
+  }
+}
+
+@keyframes providers-page-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Datasets.scss
+@use '../../../styles/variables' as *;
+
+.datasets-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+
+  /* ---------- header ---------- */
+  &__header {
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1rem;
+    padding-bottom: 18px;
+    margin-bottom: 2px;
+    border-bottom: 1px solid $border-subtle;
+  }
+
+  &__header-left {
+    display: flex;
+    flex-direction: column;
+  }
+
+  &__header-right {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  &__header-eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: $font-mono;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: $primary;
+    margin-bottom: 6px;
+
+    &::before {
+      content: '';
+      width: 16px;
+      height: 2px;
+      border-radius: 2px;
+      background: $primary;
+    }
+  }
+
+  &__header-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
+    border-radius: 999px;
+    padding: 7px 13px;
+    white-space: nowrap;
+  }
+
+  &__title {
+    font-size: 21px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: $text-primary;
+  }
+
+  &__subtitle {
+    margin-top: 3px;
+    color: $text-secondary;
+    font-size: 0.84375rem;
+  }
+
+  &__btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-family: $font-body;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    padding: 9px 14px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease, opacity 0.14s ease;
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    &--outline {
+      background: $bg-main;
+      border-color: $border-default;
+      color: $text-secondary;
+
+      &:hover:not(:disabled) {
+        border-color: $text-primary;
+        color: $text-primary;
+      }
+    }
+
+    &--primary {
+      background: $primary;
+      border-color: $primary;
+      color: $on-primary;
+
+      &:hover {
+        background: $primary-hover;
+        border-color: $primary-hover;
+      }
+    }
+  }
+
+  /* ---------- filters ---------- */
+  &__filters {
+    flex-shrink: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+  }
+
+  &__search {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 280px;
+    max-width: 100%;
+    border: 1px solid $border-default;
+    border-radius: 10px;
+    padding: 9px 12px;
+    background: $bg-main;
+    color: $text-tertiary;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+
+    &:focus-within {
+      border-color: $primary;
+      box-shadow: 0 0 0 3px $primary-light;
+    }
+
+    input {
+      flex: 1;
+      border: none;
+      outline: none;
+      font-size: 0.8125rem;
+      color: $text-primary;
+      background: transparent;
+      font-family: $font-body;
+      min-width: 0;
+
+      &::placeholder {
+        color: $text-tertiary;
+      }
+    }
+  }
+
+  &__search-clear {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: none;
+    background: $bg-inset;
+    color: $text-tertiary;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: background 0.14s ease, color 0.14s ease;
+
+    &:hover {
+      background: $border-default;
+      color: $text-primary;
+    }
+  }
+
+  &__seg {
+    flex-shrink: 0;
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px;
+    padding: 3px;
+    border: 1px solid $border-subtle;
+    border-radius: 11px;
+    background: $bg-subtle;
+  }
+
+  &__seg-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: $font-body;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-tertiary;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 7px 12px;
+    cursor: pointer;
+    transition: background 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
+
+    svg {
+      opacity: 0.8;
+    }
+
+    &:hover {
+      color: $text-primary;
+    }
+
+    &--active {
+      background: $bg-main;
+      color: $primary;
+      box-shadow: $shadow-xs;
+
+      svg {
+        opacity: 1;
+      }
+    }
+  }
+
+  /* ---------- tags ---------- */
+  &__tag {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    border-radius: 999px;
+    padding: 3px 10px;
+
+    &--blue {
+      color: $primary;
+      background: $primary-light;
+    }
+  }
+
+  /* ---------- capability pills (shared) ---------- */
+  &__caps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
+  &__cap-pill {
+    font-size: 0.71875rem;
+    font-weight: 600;
+    border-radius: 999px;
+    padding: 3px 10px;
+
+    &--blue {
+      color: $primary;
+      background: $primary-light;
+    }
+
+    &--violet {
+      color: $violet;
+      background: $violet-light;
+    }
+
+    &--amber {
+      color: $warning;
+      background: $warning-subtle;
+    }
+
+    &--jade {
+      color: $success;
+      background: $success-subtle;
+    }
+
+    &--rose {
+      color: $danger;
+      background: $danger-subtle;
+    }
+  }
+
+  /* ---------- full-info card grid ---------- */
+  &__grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+
+  &__card {
+    display: flex;
+    flex-direction: column;
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-left: 3px solid $card-accent;
+    border-radius: 0.75rem;
+    padding: 13px 16px;
+    box-shadow: $shadow-xs;
+    transition: box-shadow 0.15s ease, transform 0.15s ease;
+
+    &:hover {
+      box-shadow: $shadow-md;
+      transform: translateY(-2px);
+    }
+  }
+
+  &__card-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 4px;
+  }
+
+  &__card-name {
+    font-size: 0.9375rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: $text-primary;
+  }
+
+  &__card-desc {
+    font-size: 0.78125rem;
+    color: $text-secondary;
+    line-height: 1.45;
+    margin-bottom: 8px;
+  }
+
+  &__card-stats {
+    display: flex;
+    gap: 20px;
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid $border-subtle;
+  }
+
+  &__card-stat-label {
+    font-size: 0.625rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: $text-tertiary;
+  }
+
+  &__card-stat-value {
+    font-size: 0.9375rem;
+    font-weight: 800;
+    color: $text-primary;
+    display: block;
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    &--sm {
+      font-size: 0.78125rem;
+      font-weight: 700;
+    }
+  }
+
+  &__card-section-label {
+    font-size: 0.65625rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: $text-tertiary;
+    margin-bottom: 5px;
+    display: block;
+  }
+
+  &__card-task {
+    font-size: 0.75rem;
+    line-height: 1.45;
+    margin-bottom: 4px;
+
+    b {
+      color: $text-primary;
+      font-weight: 700;
+    }
+
+    span {
+      color: $text-secondary;
+    }
+  }
+
+  &__card-tasks-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    align-self: flex-start;
+    font-family: $font-body;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
+    border-radius: 999px;
+    padding: 4px 10px 4px 8px;
+    margin-bottom: 4px;
+    cursor: pointer;
+    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+
+    svg {
+      color: $primary;
+    }
+
+    &:hover {
+      background: $primary-light;
+      border-color: $primary-subtle;
+      color: $primary;
+    }
+  }
+
+  &__card-foot {
+    margin-top: auto;
+    padding-top: 8px;
+    border-top: 1px solid $border-subtle;
+  }
+
+  &__card-foot-source {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.6875rem;
+    color: $text-tertiary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    svg {
+      flex-shrink: 0;
+    }
+  }
+
+  /* ---------- loading — plain, no border, just centers the spinner ---------- */
+  &__loading {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 64px 20px;
+  }
+
+  &__empty {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 52px 20px;
+    border: 1px dashed $border-strong;
+    border-radius: 14px;
+    color: $text-tertiary;
+    font-size: 0.84375rem;
+
+    svg {
+      color: $text-tertiary;
+    }
+
+    &--error {
+      border-style: solid;
+      border-color: $danger-subtle;
+      background: $danger-subtle;
+      color: $danger;
+
+      svg {
+        color: $danger;
+      }
+    }
+  }
+
+  &__spin {
+    animation: datasets-page-spin 0.9s linear infinite;
+  }
+
+  /* ---------- tasks modal ---------- */
+  &__overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(2px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+
+  &__modal {
+    width: 100%;
+    max-width: 32rem;
+    max-height: min(80vh, 40rem);
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-radius: 14px;
+    box-shadow: $shadow-lg;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  &__modal-head {
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 20px 22px 16px;
+    border-bottom: 1px solid $border-subtle;
+
+    .datasets-page__tag {
+      margin-bottom: 8px;
+    }
+  }
+
+  &__modal-title {
+    font-size: 1.0625rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: $text-primary;
+  }
+
+  &__modal-sub {
+    margin-top: 3px;
+    font-size: 0.75rem;
+    color: $text-tertiary;
+  }
+
+  &__modal-close {
+    flex-shrink: 0;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    border: 1px solid $border-default;
+    background: $bg-main;
+    color: $text-tertiary;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: border-color 0.14s ease, color 0.14s ease;
+
+    &:hover {
+      border-color: $text-primary;
+      color: $text-primary;
+    }
+  }
+
+  &__modal-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 18px 22px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  /* ---------- responsive ---------- */
+  @media (max-width: 1500px) {
+    &__grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+
+  @media (max-width: 1000px) {
+    &__grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 640px) {
+    &__card-stats {
+      flex-wrap: wrap;
+      gap: 14px;
+    }
+  }
+
+  /* ---------- ultra-wide: nudge key text sizes up a touch ---------- */
+  @media (min-width: 1800px) {
+    &__title {
+      font-size: 23px;
+    }
+
+    &__subtitle {
+      font-size: 0.90625rem;
+    }
+
+    &__card-name {
+      font-size: 1.03125rem;
+    }
+
+    &__card-desc {
+      font-size: 0.84375rem;
+    }
+
+    &__card-stat-value {
+      font-size: 1.03125rem;
+    }
+
+    &__card-stat-value--sm {
+      font-size: 0.84375rem;
+    }
+
+    &__card-task {
+      font-size: 0.8125rem;
+    }
+
+    &__cap-pill {
+      font-size: 0.78125rem;
+    }
+
+    &__card-stat-label {
+      font-size: 0.6875rem;
+    }
+
+    &__card-section-label {
+      font-size: 0.71875rem;
+    }
+
+    &__card-tasks-toggle {
+      font-size: 0.8125rem;
+    }
+  }
+}
+
+@keyframes datasets-page-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
