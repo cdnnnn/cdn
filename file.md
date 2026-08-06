@@ -1,3 +1,313 @@
+//types.ts
+export type EvalTypeId = 'model' | 'agent' | 'rag';
+
+export interface EvalType {
+  id: EvalTypeId;
+  title: string;
+  desc: string;
+  badge: string;
+}
+
+export interface AgentFrameworkOption {
+  id: string;
+  title: string;
+  desc: string;
+}
+
+/* ---------- API: models ---------- */
+
+export interface ModelApi {
+  id: string;
+  name: string;
+  provider_id: string;
+  category: string;
+  capabilities: string[];
+  context_window: number;
+  input_price: number | null;
+  output_price: number | null;
+  accuracy_score: number | null;
+  agent_score: number | null;
+  is_active: boolean;
+  base_url: string | null;
+}
+
+export interface ModelApiResponse {
+  models: ModelApi[];
+}
+
+/* ---------- API: providers ---------- */
+
+export type ProviderStatus = 'connected' | 'not_connected' | string;
+
+export interface ProviderApi {
+  id: string;
+  name: string;
+  description: string;
+  logo_url: string | null;
+  base_url: string | null;
+  url_template: string | null;
+  model_count: number;
+  status: ProviderStatus;
+}
+
+export interface ProvidersResponse {
+  providers: ProviderApi[];
+}
+
+/* ---------- API: benchmarks ---------- */
+
+export interface BenchmarkTask {
+  name: string;
+  value: string;
+}
+
+export interface Benchmark {
+  name: string;
+  description: string;
+  tasks: BenchmarkTask[];
+  task_count: number;
+  required_capabilities: string[];
+  huggingface_dataset: string;
+  type: string;
+}
+
+export interface BenchmarksResponse {
+  benchmarks: Benchmark[];
+  total: number;
+}
+
+export interface EvaluationDraft {
+  name: string;
+  type: EvalTypeId | null;
+  providers: string[];
+  models: string[];
+  dataset: string | null;
+  subgroup: string[];
+  metrics: string[];
+  judgeModelId: string | null;
+  judgeApiKey: string;
+  agentFramework: string | null;
+}
+
+export interface WizardStepMeta {
+  key: string;
+  label: string;
+  description: string;
+}
+
+export const WIZARD_STEPS: WizardStepMeta[] = [
+  { key: 'name', label: 'Name', description: 'Give your evaluation a name' },
+  { key: 'type', label: 'Type', description: 'What kind of AI are you testing' },
+  { key: 'providers', label: 'Providers', description: 'Choose connected providers' },
+  { key: 'models', label: 'Models', description: 'Pick models to compare' },
+  { key: 'dataset', label: 'Test Suite', description: 'Select a benchmark or dataset' },
+  { key: 'metrics', label: 'Metrics', description: 'Choose what to measure' },
+  { key: 'review', label: 'Review', description: 'Confirm and start the run' },
+];
+
+/* ---------- API: create / start evaluation ---------- */
+
+export interface JudgeConfig {
+  model_id: string;
+  base_url: string;
+  api_key: string;
+}
+
+export interface CreateEvaluationRequest {
+  name: string;
+  description?: string;
+  eval_type: string;
+  dataset_id: string;
+  benchmark?: string;
+  model_ids: string[];
+  metrics_config?: Record<string, unknown>;
+  selected_metrics: string[];
+  dataset_limit?: number;
+  selected_category?: string[];
+  judge_config?: JudgeConfig;
+}
+
+export interface CreateEvaluationResponse {
+  id?: string;
+  evaluation_id?: string;
+  [key: string]: unknown;
+}
+
+/* ---------- API: metrics ---------- */
+
+export interface MetricsResponse {
+  all_metrics: string[];
+  custom_agent_metrics: string[];
+}
+
+export type EvaluationStatusValue = 'pending' | 'running' | 'completed' | 'failed' | 'canceled';
+export type CeleryState = 'STARTED' | 'SUCCESS' | 'FAILURE' | 'REVOKED' | null;
+
+export interface EvaluationStatusResponse {
+  status: EvaluationStatusValue;
+  progress: number;
+  total: number;
+  celery_state: CeleryState;
+  error_message: string | null;
+}
+
+/* ---------- API: GET /evaluations (history list) ---------- */
+
+export interface EvaluationDatasetConfig {
+  dataset_id: string;
+}
+
+export interface EvaluationListItem {
+  id: string;
+  name: string;
+  description: string;
+  eval_type: string;
+  dataset_id: string;
+  datasets_config: EvaluationDatasetConfig[];
+  benchmark: string;
+  model_ids: string[];
+  selected_metrics: string[];
+  run_samples: number;
+  selected_category: string[];
+  status: EvaluationStatusValue;
+  progress: number;
+  total_questions: number;
+  top_model: string | null;
+  top_score: number | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface EvaluationsListResponse {
+  evaluations: EvaluationListItem[];
+}
+
+/* ---------- API: GET /evaluations/{id}/results ---------- */
+
+export interface TestDetail {
+  test_id: string;
+  input: string;
+  output: string;
+  expected: string;
+  latency_seconds: number;
+  passed: boolean;
+  score: number;
+  metric_scores: Record<string, number>;
+}
+
+export interface ModelResult {
+  model_id: string;
+  provider: string;
+  rank: number;
+  score: number;
+  accuracy: number;
+  passed_tests: number;
+  failed_tests: number;
+  total_tests: number;
+  metric_scores: Record<string, number>;
+  details: TestDetail[];
+}
+
+export interface EvaluationResultsResponse {
+  evaluation_id: string;
+  status: EvaluationStatusValue;
+  top_model: string;
+  top_score: number;
+  results: ModelResult[];
+}
+
+// Returned with HTTP 400 when the evaluation hasn't finished running yet
+export interface EvaluationResultsErrorResponse {
+  detail: string;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//api.ts
+import api from '../../../services/api';
+import type {
+  CreateEvaluationRequest,
+  CreateEvaluationResponse,
+  EvaluationsListResponse,
+  EvaluationResultsResponse,
+} from './types';
+
+/**
+ * POST /evaluations
+ * Creates a new evaluation from the Run Evaluation wizard draft.
+ */
+export async function createEvaluation(payload: CreateEvaluationRequest): Promise<CreateEvaluationResponse> {
+  const res = await api.post<CreateEvaluationResponse>('/evaluations', payload);
+  return res.data;
+}
+
+/**
+ * POST /evaluations/{evaluation_id}/start
+ * Kicks off execution for a previously created evaluation.
+ */
+export async function startEvaluation(evaluationId: string): Promise<void> {
+  await api.post(`/evaluations/${evaluationId}/start`);
+}
+
+/**
+ * GET /evaluations
+ * Full evaluation history — used to populate the History sidebar list.
+ */
+export async function fetchEvaluations(): Promise<EvaluationsListResponse> {
+  const res = await api.get<EvaluationsListResponse>('/evaluations');
+  return res.data;
+}
+
+/**
+ * GET /evaluations/{evaluation_id}/results
+ * Per-model results + per-test detail for a completed evaluation.
+ * Returns HTTP 400 with { detail: "Execution not completed." } if the
+ * evaluation hasn't finished running yet — callers should catch and
+ * inspect err.response.data.detail for that case.
+ */
+export async function fetchEvaluationResults(evaluationId: string): Promise<EvaluationResultsResponse> {
+  const res = await api.get<EvaluationResultsResponse>(`/evaluations/${evaluationId}/results`);
+  return res.data;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//History.tsx
 import { useEffect, useMemo, useState, type FC, type MouseEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Play, Search, Copy, Trash2, X, Database, FileBarChart, AlertCircle, RefreshCw } from 'lucide-react';
@@ -61,9 +371,16 @@ function formatDate(dateStr: string): string {
   return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
+interface ApiErrorLike {
+  response?: {
+    data?: EvaluationResultsErrorResponse;
+  };
+}
+
 const History: FC = () => {
   const navigate = useNavigate();
 
+  // ── Evaluations list (GET /evaluations) ──────────────────────────
   const [items, setItems] = useState<EvaluationListItem[]>([]);
   const [listLoading, setListLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
@@ -73,6 +390,7 @@ const History: FC = () => {
   const [dateFilter, setDateFilter] = useState(30);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
+  // ── Selected evaluation's results (GET /evaluations/{id}/results) ─
   const [results, setResults] = useState<EvaluationResultsResponse | null>(null);
   const [resultsLoading, setResultsLoading] = useState(false);
   const [resultsError, setResultsError] = useState<string | null>(null);
@@ -110,11 +428,13 @@ const History: FC = () => {
     [filtered, selectedId]
   );
 
-  // Lazy-fetch results whenever the selected evaluation changes
+  // Lazy-fetch results whenever the selected evaluation changes.
+  // Only fires the network call for completed runs.
   useEffect(() => {
     if (!selected) {
       setResults(null);
       setResultsError(null);
+      setResultsLoading(false);
       return;
     }
 
@@ -123,7 +443,7 @@ const History: FC = () => {
     setResultsError(null);
 
     if (selected.status !== 'completed') {
-      // Nothing to fetch — show a friendly status message instead
+      setResultsLoading(false);
       return;
     }
 
@@ -133,9 +453,9 @@ const History: FC = () => {
         if (cancelled) return;
         setResults(res);
       })
-      .catch((err) => {
+      .catch((err: ApiErrorLike | Error) => {
         if (cancelled) return;
-        const detail = (err?.response?.data as EvaluationResultsErrorResponse | undefined)?.detail;
+        const detail = (err as ApiErrorLike)?.response?.data?.detail;
         setResultsError(detail ?? (err instanceof Error ? err.message : 'Failed to load results.'));
       })
       .finally(() => {
@@ -154,6 +474,9 @@ const History: FC = () => {
 
   const handleDelete = (e: MouseEvent, id: string) => {
     e.stopPropagation();
+    // NOTE: no DELETE /evaluations/{id} endpoint was provided — this only
+    // removes the row from local state. Wire in a real delete call here
+    // once that endpoint exists.
     setItems((prev) => prev.filter((ev) => ev.id !== id));
     if (selectedId === id) setSelectedId(null);
   };
@@ -186,7 +509,11 @@ const History: FC = () => {
         <Select value={typeFilter} options={TYPE_FILTERS} onChange={setTypeFilter} width={150} />
         <Select value={dateFilter} options={DATE_FILTERS} onChange={setDateFilter} width={160} />
 
-        <button type="button" className="history__btn history__btn--primary history__btn--push" onClick={() => navigate('/app/run-evaluation')}>
+        <button
+          type="button"
+          className="history__btn history__btn--primary history__btn--push"
+          onClick={() => navigate('/app/run-evaluation')}
+        >
           <Play size={14} strokeWidth={2.25} /> New Evaluation
         </button>
       </div>
@@ -198,10 +525,10 @@ const History: FC = () => {
       )}
 
       {!listLoading && listError && (
-        <div className="history__empty">
+        <div className="history__empty history__empty--error">
           <AlertCircle size={22} />
           <p>{listError}</p>
-          <button type="button" className="history__btn" onClick={loadList}>
+          <button type="button" className="history__btn history__btn--outline" onClick={loadList}>
             <RefreshCw size={14} strokeWidth={2.25} /> Try again
           </button>
         </div>
@@ -259,11 +586,7 @@ const History: FC = () => {
                   <button type="button" className="history__btn" onClick={(e) => handleDuplicate(e, selected.id)}>
                     <Copy size={13} /> Duplicate
                   </button>
-                  <button
-                    type="button"
-                    className="history__btn history__btn--danger"
-                    onClick={(e) => handleDelete(e, selected.id)}
-                  >
+                  <button type="button" className="history__btn history__btn--danger" onClick={(e) => handleDelete(e, selected.id)}>
                     <Trash2 size={13} /> Delete
                   </button>
                   <button
@@ -320,7 +643,7 @@ const History: FC = () => {
               )}
 
               {selected.status === 'completed' && !resultsLoading && resultsError && (
-                <div className="history__empty history__empty--inline">
+                <div className="history__empty history__empty--inline history__empty--error">
                   <AlertCircle size={18} />
                   <p>{resultsError}</p>
                 </div>
