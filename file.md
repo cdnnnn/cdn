@@ -1,4 +1,363 @@
-//RunEvaluation.tsx
+//Typestep.tsx
+import type { FC } from 'react';
+import { MessageSquare, Bot, Search, Check, Workflow, GitBranch } from 'lucide-react';
+import { EVAL_TYPES, AGENT_FRAMEWORKS } from '../data';
+import type { EvalTypeId } from '../types';
+
+interface Props {
+  value: EvalTypeId | null;
+  onChange: (id: EvalTypeId) => void;
+  agentFramework: string | null;
+  onAgentFrameworkChange: (id: string | null) => void;
+}
+
+const ICONS: Record<EvalTypeId, FC<{ size?: number }>> = {
+  model: MessageSquare,
+  agent: Bot,
+  rag: Search,
+};
+
+const FRAMEWORK_ICONS: Record<string, FC<{ size?: number }>> = {
+  hermes: Workflow,
+  langgraph: GitBranch,
+};
+
+const TypeStep: FC<Props> = ({ value, onChange, agentFramework, onAgentFrameworkChange }) => {
+  return (
+    <div className="run-eval__card">
+      <h2 className="run-eval__step-title">What are you testing?</h2>
+      <p className="run-eval__step-desc">Different AI types need different evaluation methods.</p>
+
+      <div className="run-eval__type-grid">
+        {EVAL_TYPES.map((t) => {
+          const Icon = ICONS[t.id];
+          const selected = value === t.id;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              className={`run-eval__type-card${selected ? ' run-eval__type-card--selected' : ''}`}
+              onClick={() => onChange(t.id)}
+            >
+              <span className="run-eval__type-icon">
+                <Icon size={20} />
+              </span>
+              <span className="run-eval__type-content">
+                <span className="run-eval__type-title">{t.title}</span>
+                <span className="run-eval__type-desc">{t.desc}</span>
+              </span>
+              <span className="run-eval__badge">{t.badge}</span>
+              {selected && (
+                <span className="run-eval__type-check">
+                  <Check size={13} strokeWidth={2.75} />
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {value === 'agent' && (
+        <div className="run-eval__framework-section">
+          <p className="run-eval__filter-title">Agent Framework (optional)</p>
+          <p className="run-eval__step-desc">
+            Pick the framework your agent uses, if applicable — this is optional and can be skipped.
+          </p>
+
+          <div className="run-eval__framework-grid">
+            {AGENT_FRAMEWORKS.map((f) => {
+              const FIcon = FRAMEWORK_ICONS[f.id] ?? Workflow;
+              const selected = agentFramework === f.id;
+              return (
+                <button
+                  key={f.id}
+                  type="button"
+                  className={`run-eval__type-card run-eval__type-card--framework${
+                    selected ? ' run-eval__type-card--selected' : ''
+                  }`}
+                  onClick={() => onAgentFrameworkChange(f.id)}
+                >
+                  <span className="run-eval__type-icon">
+                    <FIcon size={18} />
+                  </span>
+                  <span className="run-eval__type-content">
+                    <span className="run-eval__type-title">{f.title}</span>
+                    <span className="run-eval__type-desc">{f.desc}</span>
+                  </span>
+                  {selected && (
+                    <span className="run-eval__type-check">
+                      <Check size={12} strokeWidth={2.75} />
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default TypeStep;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//data.ts
+import type { AgentFrameworkOption, EvalType } from './types';
+
+export const EVAL_TYPES: EvalType[] = [
+  {
+    id: 'model',
+    title: 'General Chat & Text (AI Model)',
+    desc: 'Evaluate base model knowledge, summarization quality, and conversation tone across standardized test suites.',
+    badge: 'Fast Evaluation',
+  },
+  {
+    id: 'agent',
+    title: 'Autonomous Workflow (Agent Evaluation)',
+    desc: 'Test autonomous agents on multi-step tool execution, function calling, and programmatic workflow accuracy.',
+    badge: 'Recommended for Automation',
+  },
+  {
+    id: 'rag',
+    title: 'Document Search & Answering (Knowledge / RAG)',
+    desc: 'Measure how accurately AI models retrieve information from documents without generating incorrect answers.',
+    badge: 'High Precision',
+  },
+];
+
+export const AGENT_FRAMEWORKS: AgentFrameworkOption[] = [
+  {
+    id: 'hermes',
+    title: 'Hermes',
+    desc: 'Function-calling optimized tool-use format.',
+  },
+  {
+    id: 'langgraph',
+    title: 'LangGraph',
+    desc: 'Graph-based orchestration for multi-step agent workflows.',
+  },
+];
+
+export const SUGGESTED_NAMES = ['Agent Tool Calling Test', 'Support Bot Comparison', 'Code Generation Test'];
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//types.ts
+export type EvalTypeId = 'model' | 'agent' | 'rag';
+
+export interface EvalType {
+  id: EvalTypeId;
+  title: string;
+  desc: string;
+  badge: string;
+}
+
+export interface AgentFrameworkOption {
+  id: string;
+  title: string;
+  desc: string;
+}
+
+/* ---------- API: models ---------- */
+
+export interface ModelApi {
+  id: string;
+  name: string;
+  provider_id: string;
+  category: string;
+  capabilities: string[];
+  context_window: number;
+  input_price: number | null;
+  output_price: number | null;
+  accuracy_score: number | null;
+  agent_score: number | null;
+  is_active: boolean;
+  base_url: string | null;
+}
+
+export interface ModelApiResponse {
+  models: ModelApi[];
+}
+
+/* ---------- API: providers ---------- */
+
+export type ProviderStatus = 'connected' | 'not_connected' | string;
+
+export interface ProviderApi {
+  id: string;
+  name: string;
+  description: string;
+  logo_url: string | null;
+  base_url: string | null;
+  url_template: string | null;
+  model_count: number;
+  status: ProviderStatus;
+}
+
+export interface ProvidersResponse {
+  providers: ProviderApi[];
+}
+
+/* ---------- API: benchmarks ---------- */
+
+export interface BenchmarkTask {
+  name: string;
+  value: string;
+}
+
+export interface Benchmark {
+  name: string;
+  description: string;
+  tasks: BenchmarkTask[];
+  task_count: number;
+  required_capabilities: string[];
+  huggingface_dataset: string;
+  type: string;
+}
+
+export interface BenchmarksResponse {
+  benchmarks: Benchmark[];
+  total: number;
+}
+
+export interface EvaluationDraft {
+  name: string;
+  type: EvalTypeId | null;
+  providers: string[];
+  models: string[];
+  dataset: string | null;
+  subgroup: string[];
+  metrics: string[];
+  judgeModelId: string | null;
+  judgeApiKey: string;
+  agentFramework: string | null;
+}
+
+export interface WizardStepMeta {
+  key: string;
+  label: string;
+  description: string;
+}
+
+export const WIZARD_STEPS: WizardStepMeta[] = [
+  { key: 'name', label: 'Name', description: 'Give your evaluation a name' },
+  { key: 'type', label: 'Type', description: 'What kind of AI are you testing' },
+  { key: 'providers', label: 'Providers', description: 'Choose connected providers' },
+  { key: 'models', label: 'Models', description: 'Pick models to compare' },
+  { key: 'dataset', label: 'Test Suite', description: 'Select a benchmark or dataset' },
+  { key: 'metrics', label: 'Metrics', description: 'Choose what to measure' },
+  { key: 'review', label: 'Review', description: 'Confirm and start the run' },
+];
+
+/* ---------- API: evaluations ---------- */
+
+export interface JudgeConfig {
+  model_id: string;
+  base_url: string;
+  api_key: string;
+}
+
+export interface CreateEvaluationRequest {
+  name: string;
+  description?: string;
+  eval_type: string;
+  dataset_id: string;
+  benchmark?: string;
+  model_ids: string[];
+  metrics_config?: Record<string, unknown>;
+  selected_metrics: string[];
+  dataset_limit?: number;
+  selected_category?: string[];
+  judge_config?: JudgeConfig;
+}
+
+export interface CreateEvaluationResponse {
+  id?: string;
+  evaluation_id?: string;
+  [key: string]: unknown;
+}
+
+/* ---------- API: metrics ---------- */
+
+export interface MetricsResponse {
+  all_metrics: string[];
+  custom_agent_metrics: string[];
+}
+
+export type EvaluationStatusValue = 'pending' | 'running' | 'completed' | 'failed' | 'canceled';
+export type CeleryState = 'STARTED' | 'SUCCESS' | 'FAILURE' | 'REVOKED' | null;
+
+export interface EvaluationStatusResponse {
+  status: EvaluationStatusValue;
+  progress: number;
+  total: number;
+  celery_state: CeleryState;
+  error_message: string | null;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Runevaluation.tsx
 import { useEffect, useState, type FC, type ComponentType } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -48,6 +407,7 @@ const EMPTY_DRAFT: EvaluationDraft = {
   metrics: [],
   judgeModelId: null,
   judgeApiKey: '',
+  agentFramework: null,
 };
 
 const STEP_ICONS: ComponentType<{ size?: number }>[] = [
@@ -120,7 +480,11 @@ const RunEvaluation: FC = () => {
   };
 
   const setType = (id: EvaluationDraft['type']) => {
-    setDraft((d) => (d.type === id ? d : { ...d, type: id, metrics: [] }));
+    setDraft((d) => (d.type === id ? d : { ...d, type: id, metrics: [], agentFramework: id === 'agent' ? d.agentFramework : null }));
+  };
+
+  const setAgentFramework = (id: string | null) => {
+    setDraft((d) => (d.agentFramework === id ? { ...d, agentFramework: null } : { ...d, agentFramework: id }));
   };
 
   const setJudgeModel = (id: string | null) => {
@@ -262,7 +626,14 @@ const RunEvaluation: FC = () => {
 
           <div className="run-eval__body">
             {step === 1 && <NameStep name={draft.name} onChange={(name) => setDraft((d) => ({ ...d, name }))} />}
-            {step === 2 && <TypeStep value={draft.type} onChange={setType} />}
+            {step === 2 && (
+              <TypeStep
+                value={draft.type}
+                onChange={setType}
+                agentFramework={draft.agentFramework}
+                onAgentFrameworkChange={setAgentFramework}
+              />
+            )}
             {step === 3 && (
               <ProvidersStep
                 providers={providers}
@@ -381,228 +752,7 @@ export default RunEvaluation;
 
 
 
-
-
-
-
-
-
-//Metricsstep.tsx
-import { useMemo, type FC } from 'react';
-import { Check, Loader2, AlertTriangle, Gavel, Key } from 'lucide-react';
-import type { EvalTypeId, ModelApi } from '../types';
-
-interface Props {
-  evalType: EvalTypeId | null;
-  allMetrics: string[];
-  customAgentMetrics: string[];
-  selected: string[];
-  onToggle: (id: string) => void;
-  onSelectAll: (ids: string[]) => void;
-  onClearAll: () => void;
-  loading: boolean;
-  error: string | null;
-  models: ModelApi[];
-  selectedModelIds: string[];
-  judgeModelId: string | null;
-  onJudgeModelChange: (id: string | null) => void;
-  judgeApiKey: string;
-  onJudgeApiKeyChange: (value: string) => void;
-}
-
-const MetricsStep: FC<Props> = ({
-  evalType,
-  allMetrics,
-  customAgentMetrics,
-  selected,
-  onToggle,
-  onSelectAll,
-  onClearAll,
-  loading,
-  error,
-  models,
-  selectedModelIds,
-  judgeModelId,
-  onJudgeModelChange,
-  judgeApiKey,
-  onJudgeApiKeyChange,
-}) => {
-  const groups = useMemo(() => {
-    const list = [{ label: 'All Metrics', items: allMetrics }];
-    if (evalType === 'agent' && customAgentMetrics.length > 0) {
-      list.push({ label: 'Custom Agent Metrics', items: customAgentMetrics });
-    }
-    return list;
-  }, [allMetrics, customAgentMetrics, evalType]);
-
-  const allApplicableMetrics = useMemo(() => groups.flatMap((g) => g.items), [groups]);
-  const allSelected = allApplicableMetrics.length > 0 && allApplicableMetrics.every((m) => selected.includes(m));
-
-  const eligibleJudgeModels = useMemo(
-    () => models.filter((m) => selectedModelIds.includes(m.id)),
-    [models, selectedModelIds]
-  );
-
-  return (
-    <div className="run-eval__card run-eval__card--wide">
-      <div className="run-eval__step-header-row">
-        <div>
-          <h2 className="run-eval__step-title">What to measure?</h2>
-          <p className="run-eval__step-desc">
-            Select the metrics that matter for your use case. Nothing is selected by default.
-          </p>
-        </div>
-        <div className="run-eval__metrics-count">
-          <span className="run-eval__metrics-count-num">{selected.length}</span> selected
-          {allApplicableMetrics.length > 0 && (
-            <span className="run-eval__metrics-bulk-actions">
-              <button
-                type="button"
-                className="run-eval__metrics-toggle-all"
-                onClick={() => onSelectAll(allApplicableMetrics)}
-                disabled={allSelected}
-              >
-                Select all
-              </button>
-              <span className="run-eval__metrics-bulk-divider" />
-              <button
-                type="button"
-                className="run-eval__metrics-toggle-all"
-                onClick={onClearAll}
-                disabled={selected.length === 0}
-              >
-                Unselect all
-              </button>
-            </span>
-          )}
-        </div>
-      </div>
-
-      {loading && (
-        <div className="run-eval__loading-state">
-          <Loader2 size={18} className="run-eval__spin" />
-          Loading metrics…
-        </div>
-      )}
-
-      {!loading && error && (
-        <div className="run-eval__inline-error">
-          <AlertTriangle size={15} />
-          {error}
-        </div>
-      )}
-
-      {!loading && !error && (
-        <div className="run-eval__metrics-layout">
-          <div className="run-eval__metrics-main">
-            {groups.map((group) => (
-              <div className="run-eval__metric-group" key={group.label}>
-                <p className="run-eval__filter-title">{group.label}</p>
-                <div className="run-eval__metrics-grid">
-                  {group.items.map((m) => {
-                    const isSelected = selected.includes(m);
-                    return (
-                      <button
-                        key={m}
-                        type="button"
-                        className={`run-eval__metric-card${isSelected ? ' run-eval__metric-card--selected' : ''}`}
-                        onClick={() => onToggle(m)}
-                      >
-                        <span className="run-eval__metric-name">{m}</span>
-                        {isSelected && (
-                          <span className="run-eval__type-check">
-                            <Check size={12} strokeWidth={2.75} />
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                  {group.items.length === 0 && <p className="run-eval__empty">No metrics available.</p>}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <aside className="run-eval__judge-panel">
-            <p className="run-eval__filter-title">
-              <Gavel size={13} strokeWidth={2.25} /> Judge Model
-            </p>
-            <p className="run-eval__judge-hint">
-              Pick one model from your selection to grade the other models' responses.
-            </p>
-
-            {eligibleJudgeModels.length === 0 ? (
-              <div className="run-eval__judge-empty">
-                <p>Select models in the previous step to choose a judge.</p>
-              </div>
-            ) : (
-              <div className="run-eval__judge-list">
-                {eligibleJudgeModels.map((m) => {
-                  const isJudge = judgeModelId === m.id;
-                  return (
-                    <button
-                      key={m.id}
-                      type="button"
-                      className={`run-eval__judge-row${isJudge ? ' run-eval__judge-row--selected' : ''}`}
-                      onClick={() => onJudgeModelChange(m.id)}
-                      role="radio"
-                      aria-checked={isJudge}
-                    >
-                      <span className={`run-eval__radio${isJudge ? ' run-eval__radio--checked' : ''}`} />
-                      <span className="run-eval__judge-row-text">
-                        <span className="run-eval__judge-row-name">{m.name}</span>
-                        <span className="run-eval__judge-row-meta">{m.provider_id}</span>
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-
-            {judgeModelId && (
-              <div className="run-eval__field run-eval__field--judge">
-                <label className="run-eval__label" htmlFor="judge-api-key">
-                  <Key size={12} strokeWidth={2.25} /> Judge API Key
-                </label>
-                <input
-                  id="judge-api-key"
-                  type="password"
-                  className="run-eval__input"
-                  placeholder="Enter API key"
-                  value={judgeApiKey}
-                  onChange={(e) => onJudgeApiKeyChange(e.target.value)}
-                />
-              </div>
-            )}
-          </aside>
-        </div>
-      )}
-    </div>
-  );
-};
-
-export default MetricsStep;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//RunEvaluation.scss
+//Runevaluation.scss
 @use '../../../styles/variables' as *;
 
 .run-eval {
@@ -1122,6 +1272,38 @@ export default MetricsStep;
     color: #fff;
     display: grid;
     place-items: center;
+  }
+
+  /* ---------- optional agent framework sub-section ---------- */
+  &__framework-section {
+    margin-top: 1.75rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid $border-subtle;
+  }
+
+  &__framework-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+    margin-top: 1rem;
+  }
+
+  &__type-card--framework {
+    padding: 0.875rem 2.75rem 0.875rem 0.875rem;
+    gap: 0.75rem;
+
+    .run-eval__type-icon {
+      width: 32px;
+      height: 32px;
+    }
+
+    .run-eval__type-title {
+      font-size: 0.9375rem;
+    }
+
+    .run-eval__type-desc {
+      font-size: 0.8125rem;
+    }
   }
 
   &__badge {
@@ -2122,6 +2304,10 @@ export default MetricsStep;
 
     &__judge-panel {
       width: 100%;
+    }
+
+    &__framework-grid {
+      grid-template-columns: 1fr;
     }
   }
 
