@@ -1,3 +1,4 @@
+//Datasets.tsx
 @use '../../../styles/variables' as *;
 
 .datasets-page {
@@ -237,8 +238,8 @@
     background: $primary-light;
     color: $primary;
     border-radius: 4px;
-    font-size: 0.75rem;
-    font-weight: 500;
+    font-size: 0.6875rem;
+    font-weight: 700;
   }
 
   /* ---------- capability pills (matches History's &__type-badge scale) ---------- */
@@ -249,8 +250,8 @@
   }
 
   &__cap-pill {
-    font-size: 0.625rem;
-    font-weight: 700;
+    font-size: 0.71875rem;
+    font-weight: 600;
     border-radius: 999px;
     padding: 2px 8px;
 
@@ -337,8 +338,8 @@
     min-width: 0;
 
     h4 {
-      font-size: 14px;
-      font-weight: 500;
+      font-size: 0.9375rem;
+      font-weight: 700;
       margin-bottom: 4px;
       color: $text-primary;
       overflow: hidden;
@@ -351,12 +352,12 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    font-size: 12px;
+    font-size: 0.6875rem;
     color: $text-tertiary;
   }
 
   &__card-desc {
-    font-size: 12px;
+    font-size: 0.78125rem;
     color: $text-secondary;
     line-height: 1.5;
     margin-bottom: 10px;
@@ -378,16 +379,17 @@
 
   &__card-stat-label {
     display: block;
-    font-size: 10px;
+    font-size: 0.625rem;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.4px;
+    letter-spacing: 0.04em;
     color: $text-tertiary;
     margin-bottom: 2px;
   }
 
   &__card-stat-value {
-    font-size: 13px;
-    font-weight: 500;
+    font-size: 0.9375rem;
+    font-weight: 800;
     color: $text-primary;
     display: block;
     overflow: hidden;
@@ -396,12 +398,13 @@
     max-width: 130px;
 
     &--sm {
-      font-size: 12px;
+      font-size: 0.78125rem;
+      font-weight: 700;
     }
   }
 
   &__card-task {
-    font-size: 12px;
+    font-size: 0.78125rem;
     line-height: 1.5;
     margin-bottom: 4px;
     overflow-wrap: break-word;
@@ -425,7 +428,7 @@
     align-items: center;
     gap: 4px;
     font-family: $font-body;
-    font-size: 11px;
+    font-size: 0.6875rem;
     font-weight: 700;
     color: $text-secondary;
     background: $bg-subtle;
@@ -619,39 +622,39 @@
     }
 
     &__card-heading h4 {
-      font-size: 15px;
+      font-size: 0.96875rem;
     }
 
     &__card-meta {
-      font-size: 13px;
+      font-size: 0.71875rem;
     }
 
     &__card-desc {
-      font-size: 13px;
+      font-size: 0.8125rem;
     }
 
     &__card-stat-value {
-      font-size: 14px;
+      font-size: 0.96875rem;
     }
 
     &__card-stat-value--sm {
-      font-size: 13px;
+      font-size: 0.8125rem;
     }
 
     &__card-task {
-      font-size: 13px;
+      font-size: 0.8125rem;
     }
 
     &__cap-pill {
-      font-size: 0.6875rem;
+      font-size: 0.75rem;
     }
 
     &__card-stat-label {
-      font-size: 11px;
+      font-size: 0.65625rem;
     }
 
     &__card-tasks-toggle {
-      font-size: 12px;
+      font-size: 0.71875rem;
     }
   }
 }
