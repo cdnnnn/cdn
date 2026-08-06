@@ -1,4 +1,428 @@
-//RunEvaluations.tsx
+//Datasetstep.tsx
+import { useMemo, useState, type FC, type MouseEvent } from 'react';
+import { UploadCloud, Check, Loader2, AlertTriangle, Layers, X } from 'lucide-react';
+import type { Benchmark, EvalTypeId } from '../types';
+
+interface Props {
+  evalType: EvalTypeId | null;
+  benchmarks: Benchmark[];
+  loading: boolean;
+  error: string | null;
+  selected: string | null;
+  onSelect: (id: string) => void;
+  subgroup: string[];
+  onToggleSubgroup: (value: string) => void;
+}
+
+const DatasetStep: FC<Props> = ({
+  evalType,
+  benchmarks,
+  loading,
+  error,
+  selected,
+  onSelect,
+  subgroup,
+  onToggleSubgroup,
+}) => {
+  const [tab, setTab] = useState<'official' | 'private'>('official');
+  const [category, setCategory] = useState('All');
+  const [drawerBenchmark, setDrawerBenchmark] = useState<Benchmark | null>(null);
+
+  const categories = useMemo(() => {
+    const set = new Set<string>();
+    benchmarks.forEach((b) => set.add(b.type));
+    return ['All', ...Array.from(set).sort()];
+  }, [benchmarks]);
+
+  const filtered = useMemo(
+    () => benchmarks.filter((b) => category === 'All' || b.type === category),
+    [benchmarks, category]
+  );
+
+  const openSubgroupDrawer = (b: Benchmark, e: MouseEvent) => {
+    e.stopPropagation();
+    setDrawerBenchmark(b);
+  };
+
+  const closeDrawer = () => setDrawerBenchmark(null);
+
+  const handleTaskToggle = (taskValue: string) => {
+    if (drawerBenchmark && selected !== drawerBenchmark.name) {
+      onSelect(drawerBenchmark.name);
+    }
+    onToggleSubgroup(taskValue);
+  };
+
+  return (
+    <div className="run-eval__card">
+      <h2 className="run-eval__step-title">Pick a test suite</h2>
+      <p className="run-eval__step-desc">Test suites contain questions that measure AI capabilities.</p>
+
+      <div className="run-eval__tabs">
+        {(['official', 'private'] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            className={`run-eval__tab${tab === t ? ' run-eval__tab--active' : ''}`}
+            onClick={() => setTab(t)}
+          >
+            {t === 'official' ? 'Benchmarks' : 'Upload'}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'official' && (
+        <>
+          {loading && (
+            <div className="run-eval__loading-state">
+              <Loader2 size={18} className="run-eval__spin" />
+              Loading test suites…
+            </div>
+          )}
+
+          {!loading && error && (
+            <div className="run-eval__inline-error">
+              <AlertTriangle size={15} />
+              {error}
+            </div>
+          )}
+
+          {!loading && !error && (
+            <>
+              <div className="run-eval__category-filters">
+                {categories.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    className={`run-eval__chip${category === c ? ' run-eval__chip--active' : ''}`}
+                    onClick={() => setCategory(c)}
+                  >
+                    {c}
+                  </button>
+                ))}
+              </div>
+
+              <div className="run-eval__dataset-grid">
+                {filtered.map((b) => {
+                  const isSelected = selected === b.name;
+                  const recommended = evalType ? b.type === evalType : false;
+                  const hasSubgroupSelected = isSelected && subgroup.length > 0;
+                  return (
+                    <button
+                      key={b.name}
+                      type="button"
+                      className={`run-eval__dataset-card${isSelected ? ' run-eval__dataset-card--selected' : ''}`}
+                      onClick={() => onSelect(b.name)}
+                    >
+                      <div className="run-eval__dataset-top">
+                        <span className="run-eval__dataset-name">{b.name}</span>
+                        <span className="run-eval__dataset-top-actions">
+                          {b.tasks.length > 0 && (
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              className="run-eval__subgroup-btn"
+                              title="View subgroups"
+                              onClick={(e) => openSubgroupDrawer(b, e)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') openSubgroupDrawer(b, e as never);
+                              }}
+                            >
+                              <Layers size={12} />
+                              Subgroup
+                            </span>
+                          )}
+                          {isSelected && (
+                            <span className="run-eval__type-check">
+                              <Check size={12} strokeWidth={2.75} />
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                      <p className="run-eval__dataset-desc">{b.description}</p>
+                      <div className="run-eval__dataset-meta n">
+                        <span>{b.task_count} tasks</span>
+                        <span>{b.type}</span>
+                      </div>
+                      {b.required_capabilities.length > 0 && (
+                        <div className="run-eval__dataset-caps">
+                          {b.required_capabilities.slice(0, 4).map((c) => (
+                            <span key={c} className="run-eval__chip run-eval__chip--static">
+                              {c}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {hasSubgroupSelected && (
+                        <span className="run-eval__badge run-eval__badge--soft">
+                          {subgroup.length} subgroup{subgroup.length === 1 ? '' : 's'} selected
+                        </span>
+                      )}
+                      {!hasSubgroupSelected && recommended && (
+                        <span className="run-eval__badge run-eval__badge--soft">Recommended</span>
+                      )}
+                    </button>
+                  );
+                })}
+                {filtered.length === 0 && <p className="run-eval__empty">No test suites match this category.</p>}
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      {tab === 'private' && (
+        <div className="run-eval__upload-zone">
+          <UploadCloud size={26} />
+          <h3>Upload Test Data</h3>
+          <p>Drag &amp; drop or click to browse</p>
+          <div className="run-eval__format-chips">
+            {['CSV', 'JSON', 'JSONL', 'HuggingFace'].map((f) => (
+              <span key={f} className="run-eval__chip run-eval__chip--static">
+                {f}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div
+        className={`run-eval__drawer-overlay${drawerBenchmark ? ' run-eval__drawer-overlay--open' : ''}`}
+        onClick={closeDrawer}
+      >
+        <aside
+          className={`run-eval__drawer${drawerBenchmark ? ' run-eval__drawer--open' : ''}`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="run-eval__drawer-header">
+            <div>
+              <p className="run-eval__drawer-eyebrow">Subgroups</p>
+              <h3 className="run-eval__drawer-title">{drawerBenchmark?.name}</h3>
+            </div>
+            <button type="button" className="run-eval__drawer-close" onClick={closeDrawer} aria-label="Close">
+              <X size={16} />
+            </button>
+          </div>
+
+          <div className="run-eval__drawer-body">
+            {drawerBenchmark && drawerBenchmark.tasks.length === 0 && (
+              <p className="run-eval__empty">This test suite has no subgroups.</p>
+            )}
+            {drawerBenchmark?.tasks.map((task) => {
+              const taskSelected = subgroup.includes(task.value);
+              return (
+                <button
+                  key={task.value}
+                  type="button"
+                  className={`run-eval__drawer-task${taskSelected ? ' run-eval__drawer-task--selected' : ''}`}
+                  onClick={() => handleTaskToggle(task.value)}
+                  role="checkbox"
+                  aria-checked={taskSelected}
+                >
+                  <span className={`run-eval__checkbox${taskSelected ? ' run-eval__checkbox--checked' : ''}`}>
+                    {taskSelected && <Check size={12} strokeWidth={3} />}
+                  </span>
+                  <span className="run-eval__drawer-task-name">{task.name}</span>
+                </button>
+              );
+            })}
+          </div>
+        </aside>
+      </div>
+    </div>
+  );
+};
+
+export default DatasetStep;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//types.ts
+export type EvalTypeId = 'model' | 'agent' | 'rag';
+
+export interface EvalType {
+  id: EvalTypeId;
+  title: string;
+  desc: string;
+  badge: string;
+}
+
+/* ---------- API: models ---------- */
+
+export interface ModelApi {
+  id: string;
+  name: string;
+  provider_id: string;
+  category: string;
+  capabilities: string[];
+  context_window: number;
+  input_price: number | null;
+  output_price: number | null;
+  accuracy_score: number | null;
+  agent_score: number | null;
+  is_active: boolean;
+  base_url: string | null;
+}
+
+export interface ModelApiResponse {
+  models: ModelApi[];
+}
+
+/* ---------- API: providers ---------- */
+
+export type ProviderStatus = 'connected' | 'not_connected' | string;
+
+export interface ProviderApi {
+  id: string;
+  name: string;
+  description: string;
+  logo_url: string | null;
+  base_url: string | null;
+  url_template: string | null;
+  model_count: number;
+  status: ProviderStatus;
+}
+
+export interface ProvidersResponse {
+  providers: ProviderApi[];
+}
+
+/* ---------- API: benchmarks ---------- */
+
+export interface BenchmarkTask {
+  name: string;
+  value: string;
+}
+
+export interface Benchmark {
+  name: string;
+  description: string;
+  tasks: BenchmarkTask[];
+  task_count: number;
+  required_capabilities: string[];
+  huggingface_dataset: string;
+  type: string;
+}
+
+export interface BenchmarksResponse {
+  benchmarks: Benchmark[];
+  total: number;
+}
+
+export interface EvaluationDraft {
+  name: string;
+  type: EvalTypeId | null;
+  providers: string[];
+  models: string[];
+  dataset: string | null;
+  subgroup: string[];
+  metrics: string[];
+}
+
+export interface WizardStepMeta {
+  key: string;
+  label: string;
+  description: string;
+}
+
+export const WIZARD_STEPS: WizardStepMeta[] = [
+  { key: 'name', label: 'Name', description: 'Give your evaluation a name' },
+  { key: 'type', label: 'Type', description: 'What kind of AI are you testing' },
+  { key: 'providers', label: 'Providers', description: 'Choose connected providers' },
+  { key: 'models', label: 'Models', description: 'Pick models to compare' },
+  { key: 'dataset', label: 'Test Suite', description: 'Select a benchmark or dataset' },
+  { key: 'metrics', label: 'Metrics', description: 'Choose what to measure' },
+  { key: 'review', label: 'Review', description: 'Confirm and start the run' },
+];
+
+/* ---------- API: evaluations ---------- */
+
+export interface JudgeConfig {
+  model_id: string;
+  base_url: string;
+  api_key: string;
+}
+
+export interface CreateEvaluationRequest {
+  name: string;
+  description?: string;
+  eval_type: string;
+  dataset_id: string;
+  benchmark?: string;
+  model_ids: string[];
+  subgroup?: string[];
+  metrics_config?: Record<string, unknown>;
+  selected_metrics: string[];
+  dataset_limit?: number;
+  selected_category?: string;
+  judge_config?: JudgeConfig;
+}
+
+export interface CreateEvaluationResponse {
+  id?: string;
+  evaluation_id?: string;
+  [key: string]: unknown;
+}
+
+/* ---------- API: metrics ---------- */
+
+export interface MetricsResponse {
+  all_metrics: string[];
+  custom_agent_metrics: string[];
+}
+
+export type EvaluationStatusValue = 'pending' | 'running' | 'completed' | 'failed' | 'canceled';
+export type CeleryState = 'STARTED' | 'SUCCESS' | 'FAILURE' | 'REVOKED' | null;
+
+export interface EvaluationStatusResponse {
+  status: EvaluationStatusValue;
+  progress: number;
+  total: number;
+  celery_state: CeleryState;
+  error_message: string | null;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Runevaluation.tsx
 import { useEffect, useState, type FC, type ComponentType } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -44,7 +468,7 @@ const EMPTY_DRAFT: EvaluationDraft = {
   providers: [],
   models: [],
   dataset: null,
-  subgroup: null,
+  subgroup: [],
   metrics: [],
 };
 
@@ -109,7 +533,7 @@ const RunEvaluation: FC = () => {
     };
   }, []);
 
-  const toggleInArray = (key: 'providers' | 'models' | 'metrics', id: string) => {
+  const toggleInArray = (key: 'providers' | 'models' | 'metrics' | 'subgroup', id: string) => {
     setDraft((d) => {
       const arr = d[key];
       const next = arr.includes(id) ? arr.filter((x) => x !== id) : [...arr, id];
@@ -168,7 +592,7 @@ const RunEvaluation: FC = () => {
     eval_type: draft.type ?? '',
     dataset_id: '',
     benchmark: draft.dataset ?? '',
-    subgroup: draft.subgroup ?? undefined,
+    subgroup: draft.subgroup.length > 0 ? draft.subgroup : undefined,
     model_ids: draft.models,
     selected_metrics: draft.metrics,
     dataset_limit: 1,
@@ -272,10 +696,10 @@ const RunEvaluation: FC = () => {
                 error={catalogError}
                 selected={draft.dataset}
                 onSelect={(id) =>
-                  setDraft((d) => (d.dataset === id ? d : { ...d, dataset: id, subgroup: null }))
+                  setDraft((d) => (d.dataset === id ? d : { ...d, dataset: id, subgroup: [] }))
                 }
                 subgroup={draft.subgroup}
-                onSubgroupChange={(value) => setDraft((d) => ({ ...d, subgroup: value }))}
+                onToggleSubgroup={(value) => toggleInArray('subgroup', value)}
               />
             )}
             {step === 6 && (
@@ -357,7 +781,103 @@ export default RunEvaluation;
 
 
 
-//RunEvaluation.scss
+
+//Reviewstep.tsx
+import { useMemo, type FC } from 'react';
+import { Info } from 'lucide-react';
+import { EVAL_TYPES } from '../data';
+import type { Benchmark, EvaluationDraft, ModelApi } from '../types';
+
+interface Props {
+  draft: EvaluationDraft;
+  models: ModelApi[];
+  benchmarks: Benchmark[];
+}
+
+const ReviewStep: FC<Props> = ({ draft, models, benchmarks }) => {
+  const typeInfo = EVAL_TYPES.find((t) => t.id === draft.type);
+  const modelNames = draft.models.map((id) => models.find((m) => m.id === id)?.name).filter(Boolean);
+  const dataset = benchmarks.find((b) => b.name === draft.dataset);
+  const subgroupTasks = dataset?.tasks.filter((t) => draft.subgroup.includes(t.value)) ?? [];
+
+  const { cost, minutes } = useMemo(() => {
+    const questions = dataset?.task_count ?? 0;
+    const modelCount = draft.models.length || 1;
+    const estCost = questions * modelCount * 0.0009;
+    const estMinutes = Math.max(1, Math.round((questions * modelCount) / 180));
+    return { cost: estCost, minutes: estMinutes };
+  }, [dataset, draft.models.length]);
+
+  return (
+    <div className="run-eval__card">
+      <h2 className="run-eval__step-title">Review &amp; Run</h2>
+      <p className="run-eval__step-desc">Confirm your settings before starting.</p>
+
+      <div className="run-eval__review">
+        <div className="run-eval__review-row">
+          <span>Name</span>
+          <span>{draft.name || '—'}</span>
+        </div>
+        <div className="run-eval__review-row">
+          <span>Type</span>
+          <span>{typeInfo?.title ?? '—'}</span>
+        </div>
+        <div className="run-eval__review-row">
+          <span>Models</span>
+          <span>{modelNames.length ? modelNames.join(', ') : '—'}</span>
+        </div>
+        <div className="run-eval__review-row">
+          <span>Test Suite</span>
+          <span>{dataset?.name ?? '—'}</span>
+        </div>
+        {subgroupTasks.length > 0 && (
+          <div className="run-eval__review-row">
+            <span>Subgroup{subgroupTasks.length === 1 ? '' : 's'}</span>
+            <span>{subgroupTasks.map((t) => t.name).join(', ')}</span>
+          </div>
+        )}
+        <div className="run-eval__review-row">
+          <span>Questions</span>
+          <span>{dataset ? dataset.task_count : '—'}</span>
+        </div>
+        <div className="run-eval__review-divider" />
+        <div className="run-eval__review-row run-eval__review-row--highlight">
+          <span>Est. Cost</span>
+          <span>~${cost.toFixed(2)}</span>
+        </div>
+        <div className="run-eval__review-row run-eval__review-row--highlight">
+          <span>Est. Time</span>
+          <span>~{minutes} min</span>
+        </div>
+      </div>
+
+      <div className="run-eval__hint">
+        <Info size={14} />
+        <span>Costs are estimates. Actual costs depend on provider pricing.</span>
+      </div>
+    </div>
+  );
+};
+
+export default ReviewStep;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Runevaluation.tsx
 @use '../../../styles/variables' as *;
 
 .run-eval {
@@ -1623,11 +2143,10 @@ export default RunEvaluation;
     position: relative;
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: 0.75rem;
     text-align: left;
     width: 100%;
-    padding: 0.75rem 2rem 0.75rem 0.875rem;
+    padding: 0.75rem 0.875rem;
     border: 1px solid $border-default;
     border-radius: 0.625rem;
     background: $bg-main;
@@ -1650,9 +2169,23 @@ export default RunEvaluation;
     color: $text-primary;
   }
 
-  &__drawer-task .run-eval__type-check {
-    position: static;
+  &__checkbox {
     flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
+    border: 1.5px solid $border-strong;
+    background: $bg-main;
+    display: grid;
+    place-items: center;
+    color: transparent;
+    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+
+    &--checked {
+      background: $primary;
+      border-color: $primary;
+      color: #fff;
+    }
   }
 
   /* ---------- shared feedback ---------- */
@@ -1731,677 +2264,3 @@ export default RunEvaluation;
     }
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//types.ts
-export type EvalTypeId = 'model' | 'agent' | 'rag';
-
-export interface EvalType {
-  id: EvalTypeId;
-  title: string;
-  desc: string;
-  badge: string;
-}
-
-/* ---------- API: models ---------- */
-
-export interface ModelApi {
-  id: string;
-  name: string;
-  provider_id: string;
-  category: string;
-  capabilities: string[];
-  context_window: number;
-  input_price: number | null;
-  output_price: number | null;
-  accuracy_score: number | null;
-  agent_score: number | null;
-  is_active: boolean;
-  base_url: string | null;
-}
-
-export interface ModelApiResponse {
-  models: ModelApi[];
-}
-
-/* ---------- API: providers ---------- */
-
-export type ProviderStatus = 'connected' | 'not_connected' | string;
-
-export interface ProviderApi {
-  id: string;
-  name: string;
-  description: string;
-  logo_url: string | null;
-  base_url: string | null;
-  url_template: string | null;
-  model_count: number;
-  status: ProviderStatus;
-}
-
-export interface ProvidersResponse {
-  providers: ProviderApi[];
-}
-
-/* ---------- API: benchmarks ---------- */
-
-export interface BenchmarkTask {
-  name: string;
-  value: string;
-}
-
-export interface Benchmark {
-  name: string;
-  description: string;
-  tasks: BenchmarkTask[];
-  task_count: number;
-  required_capabilities: string[];
-  huggingface_dataset: string;
-  type: string;
-}
-
-export interface BenchmarksResponse {
-  benchmarks: Benchmark[];
-  total: number;
-}
-
-export interface EvaluationDraft {
-  name: string;
-  type: EvalTypeId | null;
-  providers: string[];
-  models: string[];
-  dataset: string | null;
-  subgroup: string | null;
-  metrics: string[];
-}
-
-export interface WizardStepMeta {
-  key: string;
-  label: string;
-  description: string;
-}
-
-export const WIZARD_STEPS: WizardStepMeta[] = [
-  { key: 'name', label: 'Name', description: 'Give your evaluation a name' },
-  { key: 'type', label: 'Type', description: 'What kind of AI are you testing' },
-  { key: 'providers', label: 'Providers', description: 'Choose connected providers' },
-  { key: 'models', label: 'Models', description: 'Pick models to compare' },
-  { key: 'dataset', label: 'Test Suite', description: 'Select a benchmark or dataset' },
-  { key: 'metrics', label: 'Metrics', description: 'Choose what to measure' },
-  { key: 'review', label: 'Review', description: 'Confirm and start the run' },
-];
-
-/* ---------- API: evaluations ---------- */
-
-export interface JudgeConfig {
-  model_id: string;
-  base_url: string;
-  api_key: string;
-}
-
-export interface CreateEvaluationRequest {
-  name: string;
-  description?: string;
-  eval_type: string;
-  dataset_id: string;
-  benchmark?: string;
-  model_ids: string[];
-  subgroup?: string;
-  metrics_config?: Record<string, unknown>;
-  selected_metrics: string[];
-  dataset_limit?: number;
-  selected_category?: string;
-  judge_config?: JudgeConfig;
-}
-
-export interface CreateEvaluationResponse {
-  id?: string;
-  evaluation_id?: string;
-  [key: string]: unknown;
-}
-
-/* ---------- API: metrics ---------- */
-
-export interface MetricsResponse {
-  all_metrics: string[];
-  custom_agent_metrics: string[];
-}
-
-export type EvaluationStatusValue = 'pending' | 'running' | 'completed' | 'failed' | 'canceled';
-export type CeleryState = 'STARTED' | 'SUCCESS' | 'FAILURE' | 'REVOKED' | null;
-
-export interface EvaluationStatusResponse {
-  status: EvaluationStatusValue;
-  progress: number;
-  total: number;
-  celery_state: CeleryState;
-  error_message: string | null;
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//data.ts
-import type { EvalType } from './types';
-
-export const EVAL_TYPES: EvalType[] = [
-  {
-    id: 'model',
-    title: 'General Chat & Text (AI Model)',
-    desc: 'Evaluate base model knowledge, summarization quality, and conversation tone across standardized test suites.',
-    badge: 'Fast Evaluation',
-  },
-  {
-    id: 'agent',
-    title: 'Autonomous Workflow (Agent Evaluation)',
-    desc: 'Test autonomous agents on multi-step tool execution, function calling, and programmatic workflow accuracy.',
-    badge: 'Recommended for Automation',
-  },
-  {
-    id: 'rag',
-    title: 'Document Search & Answering (Knowledge / RAG)',
-    desc: 'Measure how accurately AI models retrieve information from documents without generating incorrect answers.',
-    badge: 'High Precision',
-  },
-];
-
-export const SUGGESTED_NAMES = ['Agent Tool Calling Test', 'Support Bot Comparison', 'Code Generation Test'];
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//metrics api.ts
-import api from '../../../services/api';
-import type { MetricsResponse } from './types';
-
-/** GET /metrics — fetch the available metrics catalog. */
-export async function fetchMetrics(): Promise<MetricsResponse> {
-  const res = await api.get<MetricsResponse>('/metrics');
-  return res.data;
-}
-
-
-
-
-
-
-
-
-
-
-
-//Datasetstep.tsx
-import { useMemo, useState, type FC, type MouseEvent } from 'react';
-import { UploadCloud, Check, Loader2, AlertTriangle, Layers, X } from 'lucide-react';
-import type { Benchmark, EvalTypeId } from '../types';
-
-interface Props {
-  evalType: EvalTypeId | null;
-  benchmarks: Benchmark[];
-  loading: boolean;
-  error: string | null;
-  selected: string | null;
-  onSelect: (id: string) => void;
-  subgroup: string | null;
-  onSubgroupChange: (value: string | null) => void;
-}
-
-const DatasetStep: FC<Props> = ({
-  evalType,
-  benchmarks,
-  loading,
-  error,
-  selected,
-  onSelect,
-  subgroup,
-  onSubgroupChange,
-}) => {
-  const [tab, setTab] = useState<'official' | 'private'>('official');
-  const [category, setCategory] = useState('All');
-  const [drawerBenchmark, setDrawerBenchmark] = useState<Benchmark | null>(null);
-
-  const categories = useMemo(() => {
-    const set = new Set<string>();
-    benchmarks.forEach((b) => set.add(b.type));
-    return ['All', ...Array.from(set).sort()];
-  }, [benchmarks]);
-
-  const filtered = useMemo(
-    () => benchmarks.filter((b) => category === 'All' || b.type === category),
-    [benchmarks, category]
-  );
-
-  const openSubgroupDrawer = (b: Benchmark, e: MouseEvent) => {
-    e.stopPropagation();
-    setDrawerBenchmark(b);
-  };
-
-  const closeDrawer = () => setDrawerBenchmark(null);
-
-  const handleTaskSelect = (taskValue: string) => {
-    if (drawerBenchmark && selected !== drawerBenchmark.name) {
-      onSelect(drawerBenchmark.name);
-    }
-    onSubgroupChange(subgroup === taskValue ? null : taskValue);
-  };
-
-  return (
-    <div className="run-eval__card">
-      <h2 className="run-eval__step-title">Pick a test suite</h2>
-      <p className="run-eval__step-desc">Test suites contain questions that measure AI capabilities.</p>
-
-      <div className="run-eval__tabs">
-        {(['official', 'private'] as const).map((t) => (
-          <button
-            key={t}
-            type="button"
-            className={`run-eval__tab${tab === t ? ' run-eval__tab--active' : ''}`}
-            onClick={() => setTab(t)}
-          >
-            {t === 'official' ? 'Benchmarks' : 'Upload'}
-          </button>
-        ))}
-      </div>
-
-      {tab === 'official' && (
-        <>
-          {loading && (
-            <div className="run-eval__loading-state">
-              <Loader2 size={18} className="run-eval__spin" />
-              Loading test suites…
-            </div>
-          )}
-
-          {!loading && error && (
-            <div className="run-eval__inline-error">
-              <AlertTriangle size={15} />
-              {error}
-            </div>
-          )}
-
-          {!loading && !error && (
-            <>
-              <div className="run-eval__category-filters">
-                {categories.map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    className={`run-eval__chip${category === c ? ' run-eval__chip--active' : ''}`}
-                    onClick={() => setCategory(c)}
-                  >
-                    {c}
-                  </button>
-                ))}
-              </div>
-
-              <div className="run-eval__dataset-grid">
-                {filtered.map((b) => {
-                  const isSelected = selected === b.name;
-                  const recommended = evalType ? b.type === evalType : false;
-                  const hasSubgroupSelected = isSelected && subgroup;
-                  return (
-                    <button
-                      key={b.name}
-                      type="button"
-                      className={`run-eval__dataset-card${isSelected ? ' run-eval__dataset-card--selected' : ''}`}
-                      onClick={() => onSelect(b.name)}
-                    >
-                      <div className="run-eval__dataset-top">
-                        <span className="run-eval__dataset-name">{b.name}</span>
-                        <span className="run-eval__dataset-top-actions">
-                          {b.tasks.length > 0 && (
-                            <span
-                              role="button"
-                              tabIndex={0}
-                              className="run-eval__subgroup-btn"
-                              title="View subgroups"
-                              onClick={(e) => openSubgroupDrawer(b, e)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' || e.key === ' ') openSubgroupDrawer(b, e as never);
-                              }}
-                            >
-                              <Layers size={12} />
-                              Subgroup
-                            </span>
-                          )}
-                          {isSelected && (
-                            <span className="run-eval__type-check">
-                              <Check size={12} strokeWidth={2.75} />
-                            </span>
-                          )}
-                        </span>
-                      </div>
-                      <p className="run-eval__dataset-desc">{b.description}</p>
-                      <div className="run-eval__dataset-meta n">
-                        <span>{b.task_count} tasks</span>
-                        <span>{b.type}</span>
-                      </div>
-                      {b.required_capabilities.length > 0 && (
-                        <div className="run-eval__dataset-caps">
-                          {b.required_capabilities.slice(0, 4).map((c) => (
-                            <span key={c} className="run-eval__chip run-eval__chip--static">
-                              {c}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      {hasSubgroupSelected && (
-                        <span className="run-eval__badge run-eval__badge--soft">Subgroup: {subgroup}</span>
-                      )}
-                      {!hasSubgroupSelected && recommended && (
-                        <span className="run-eval__badge run-eval__badge--soft">Recommended</span>
-                      )}
-                    </button>
-                  );
-                })}
-                {filtered.length === 0 && <p className="run-eval__empty">No test suites match this category.</p>}
-              </div>
-            </>
-          )}
-        </>
-      )}
-
-      {tab === 'private' && (
-        <div className="run-eval__upload-zone">
-          <UploadCloud size={26} />
-          <h3>Upload Test Data</h3>
-          <p>Drag &amp; drop or click to browse</p>
-          <div className="run-eval__format-chips">
-            {['CSV', 'JSON', 'JSONL', 'HuggingFace'].map((f) => (
-              <span key={f} className="run-eval__chip run-eval__chip--static">
-                {f}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div
-        className={`run-eval__drawer-overlay${drawerBenchmark ? ' run-eval__drawer-overlay--open' : ''}`}
-        onClick={closeDrawer}
-      >
-        <aside
-          className={`run-eval__drawer${drawerBenchmark ? ' run-eval__drawer--open' : ''}`}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="run-eval__drawer-header">
-            <div>
-              <p className="run-eval__drawer-eyebrow">Subgroups</p>
-              <h3 className="run-eval__drawer-title">{drawerBenchmark?.name}</h3>
-            </div>
-            <button type="button" className="run-eval__drawer-close" onClick={closeDrawer} aria-label="Close">
-              <X size={16} />
-            </button>
-          </div>
-
-          <div className="run-eval__drawer-body">
-            {drawerBenchmark && drawerBenchmark.tasks.length === 0 && (
-              <p className="run-eval__empty">This test suite has no subgroups.</p>
-            )}
-            {drawerBenchmark?.tasks.map((task) => {
-              const taskSelected = subgroup === task.value;
-              return (
-                <button
-                  key={task.value}
-                  type="button"
-                  className={`run-eval__drawer-task${taskSelected ? ' run-eval__drawer-task--selected' : ''}`}
-                  onClick={() => handleTaskSelect(task.value)}
-                >
-                  <span className="run-eval__drawer-task-name">{task.name}</span>
-                  {taskSelected && (
-                    <span className="run-eval__type-check">
-                      <Check size={12} strokeWidth={2.75} />
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </aside>
-      </div>
-    </div>
-  );
-};
-
-export default DatasetStep;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Metricsstep.tsx
-import { useMemo, type FC } from 'react';
-import { Check, Loader2, AlertTriangle } from 'lucide-react';
-import type { EvalTypeId } from '../types';
-
-interface Props {
-  evalType: EvalTypeId | null;
-  allMetrics: string[];
-  customAgentMetrics: string[];
-  selected: string[];
-  onToggle: (id: string) => void;
-  loading: boolean;
-  error: string | null;
-}
-
-const MetricsStep: FC<Props> = ({
-  evalType,
-  allMetrics,
-  customAgentMetrics,
-  selected,
-  onToggle,
-  loading,
-  error,
-}) => {
-  const groups = useMemo(() => {
-    const list = [{ label: 'All Metrics', items: allMetrics }];
-    if (evalType === 'agent' && customAgentMetrics.length > 0) {
-      list.push({ label: 'Custom Agent Metrics', items: customAgentMetrics });
-    }
-    return list;
-  }, [allMetrics, customAgentMetrics, evalType]);
-
-  return (
-    <div className="run-eval__card run-eval__card--wide">
-      <div className="run-eval__step-header-row">
-        <div>
-          <h2 className="run-eval__step-title">What to measure?</h2>
-          <p className="run-eval__step-desc">
-            Select the metrics that matter for your use case. Metrics are tailored to your evaluation type.
-          </p>
-        </div>
-        <div className="run-eval__metrics-count">
-          <span>{selected.length}</span> selected
-        </div>
-      </div>
-
-      {loading && (
-        <div className="run-eval__loading-state">
-          <Loader2 size={18} className="run-eval__spin" />
-          Loading metrics…
-        </div>
-      )}
-
-      {!loading && error && (
-        <div className="run-eval__inline-error">
-          <AlertTriangle size={15} />
-          {error}
-        </div>
-      )}
-
-      {!loading &&
-        !error &&
-        groups.map((group) => (
-          <div className="run-eval__metric-group" key={group.label}>
-            <p className="run-eval__filter-title">{group.label}</p>
-            <div className="run-eval__metrics-grid">
-              {group.items.map((m) => {
-                const isSelected = selected.includes(m);
-                return (
-                  <button
-                    key={m}
-                    type="button"
-                    className={`run-eval__metric-card${isSelected ? ' run-eval__metric-card--selected' : ''}`}
-                    onClick={() => onToggle(m)}
-                  >
-                    <span className="run-eval__metric-name">{m}</span>
-                    {isSelected && (
-                      <span className="run-eval__type-check">
-                        <Check size={12} strokeWidth={2.75} />
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-              {group.items.length === 0 && <p className="run-eval__empty">No metrics available.</p>}
-            </div>
-          </div>
-        ))}
-    </div>
-  );
-};
-
-export default MetricsStep;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Reviewstep.tsx
-import { useMemo, type FC } from 'react';
-import { Info } from 'lucide-react';
-import { EVAL_TYPES } from '../data';
-import type { Benchmark, EvaluationDraft, ModelApi } from '../types';
-
-interface Props {
-  draft: EvaluationDraft;
-  models: ModelApi[];
-  benchmarks: Benchmark[];
-}
-
-const ReviewStep: FC<Props> = ({ draft, models, benchmarks }) => {
-  const typeInfo = EVAL_TYPES.find((t) => t.id === draft.type);
-  const modelNames = draft.models.map((id) => models.find((m) => m.id === id)?.name).filter(Boolean);
-  const dataset = benchmarks.find((b) => b.name === draft.dataset);
-  const subgroupTask = dataset?.tasks.find((t) => t.value === draft.subgroup);
-
-  const { cost, minutes } = useMemo(() => {
-    const questions = dataset?.task_count ?? 0;
-    const modelCount = draft.models.length || 1;
-    const estCost = questions * modelCount * 0.0009;
-    const estMinutes = Math.max(1, Math.round((questions * modelCount) / 180));
-    return { cost: estCost, minutes: estMinutes };
-  }, [dataset, draft.models.length]);
-
-  return (
-    <div className="run-eval__card">
-      <h2 className="run-eval__step-title">Review &amp; Run</h2>
-      <p className="run-eval__step-desc">Confirm your settings before starting.</p>
-
-      <div className="run-eval__review">
-        <div className="run-eval__review-row">
-          <span>Name</span>
-          <span>{draft.name || '—'}</span>
-        </div>
-        <div className="run-eval__review-row">
-          <span>Type</span>
-          <span>{typeInfo?.title ?? '—'}</span>
-        </div>
-        <div className="run-eval__review-row">
-          <span>Models</span>
-          <span>{modelNames.length ? modelNames.join(', ') : '—'}</span>
-        </div>
-        <div className="run-eval__review-row">
-          <span>Test Suite</span>
-          <span>{dataset?.name ?? '—'}</span>
-        </div>
-        {subgroupTask && (
-          <div className="run-eval__review-row">
-            <span>Subgroup</span>
-            <span>{subgroupTask.name}</span>
-          </div>
-        )}
-        <div className="run-eval__review-row">
-          <span>Questions</span>
-          <span>{dataset ? dataset.task_count : '—'}</span>
-        </div>
-        <div className="run-eval__review-divider" />
-        <div className="run-eval__review-row run-eval__review-row--highlight">
-          <span>Est. Cost</span>
-          <span>~${cost.toFixed(2)}</span>
-        </div>
-        <div className="run-eval__review-row run-eval__review-row--highlight">
-          <span>Est. Time</span>
-          <span>~{minutes} min</span>
-        </div>
-      </div>
-
-      <div className="run-eval__hint">
-        <Info size={14} />
-        <span>Costs are estimates. Actual costs depend on provider pricing.</span>
-      </div>
-    </div>
-  );
-};
-
-export default ReviewStep;
