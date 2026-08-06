@@ -1,7 +1,7 @@
-//Datasets.tsx
+//Models.scss
 @use '../../../styles/variables' as *;
 
-.datasets-page {
+.models-page {
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -52,6 +52,7 @@
   }
 
   &__header-meta {
+    flex-shrink: 0;
     display: inline-flex;
     align-items: center;
     gap: 6px;
@@ -107,17 +108,10 @@
         color: $text-primary;
       }
     }
+  }
 
-    &--primary {
-      background: $primary;
-      border-color: $primary;
-      color: $on-primary;
-
-      &:hover {
-        background: $primary-hover;
-        border-color: $primary-hover;
-      }
-    }
+  &__spin {
+    animation: models-page-spin 0.9s linear infinite;
   }
 
   /* ---------- filters ---------- */
@@ -182,78 +176,146 @@
     }
   }
 
-  &__seg {
+  /* ---------- capability dropdown (structurally mirrors History's <Select />) ---------- */
+  &__select {
+    position: relative;
     flex-shrink: 0;
-    display: inline-flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 2px;
-    padding: 3px;
-    border: 1px solid $border-subtle;
-    border-radius: 11px;
-    background: $bg-subtle;
+    width: 200px;
   }
 
-  &__seg-item {
-    display: inline-flex;
+  &__select-trigger {
+    width: 100%;
+    display: flex;
     align-items: center;
-    gap: 6px;
+    justify-content: space-between;
+    gap: 8px;
+    border: 1px solid $border-default;
+    border-radius: 10px;
+    padding: 9px 12px;
+    background: $bg-main;
+    font-size: 0.8125rem;
+    font-weight: 500;
     font-family: $font-body;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: $text-tertiary;
-    background: transparent;
-    border: none;
-    border-radius: 8px;
-    padding: 7px 12px;
+    color: $text-primary;
     cursor: pointer;
-    transition: background 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
-
-    svg {
-      opacity: 0.8;
-    }
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
 
     &:hover {
+      border-color: $border-strong;
+    }
+
+    &--open {
+      border-color: $primary;
+      box-shadow: 0 0 0 3px $primary-light;
+    }
+  }
+
+  &__select-chevron {
+    flex-shrink: 0;
+    color: $text-tertiary;
+    transition: transform 0.16s ease;
+  }
+
+  &__select-trigger--open &__select-chevron {
+    transform: rotate(180deg);
+  }
+
+  &__select-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    right: 0;
+    z-index: 20;
+    max-height: 16rem;
+    overflow-y: auto;
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-radius: 10px;
+    box-shadow: $shadow-lg;
+    padding: 5px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+
+  &__select-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    padding: 8px 10px;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    font-size: 0.8125rem;
+    font-family: $font-body;
+    color: $text-secondary;
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease;
+
+    &:hover {
+      background: $bg-subtle;
       color: $text-primary;
     }
 
     &--active {
-      background: $bg-main;
       color: $primary;
-      box-shadow: $shadow-xs;
+      font-weight: 600;
 
       svg {
-        opacity: 1;
+        color: $primary;
       }
     }
   }
 
-  /* ---------- tags (matches History's &__type badge exactly) ---------- */
+  /* ---------- tags ---------- */
   &__tag {
     flex-shrink: 0;
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    padding: 2px 8px;
-    background: $primary-light;
-    color: $primary;
-    border-radius: 4px;
     font-size: 0.6875rem;
     font-weight: 700;
+    border-radius: 999px;
+    padding: 3px 10px;
+
+    &--blue {
+      color: $primary;
+      background: $primary-light;
+    }
+
+    &--jade {
+      color: $success;
+      background: $success-subtle;
+    }
+
+    &--gray {
+      color: $text-tertiary;
+      background: $bg-inset;
+    }
+
+    &--outline {
+      color: $text-secondary;
+      background: transparent;
+      border: 1px solid $border-default;
+    }
   }
 
-  /* ---------- capability pills (matches History's &__type-badge scale) ---------- */
+  /* ---------- capability pills ---------- */
   &__caps {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
+    margin-bottom: 10px;
   }
 
   &__cap-pill {
     font-size: 0.71875rem;
     font-weight: 600;
     border-radius: 999px;
-    padding: 2px 8px;
+    padding: 3px 10px;
 
     &--blue {
       color: $primary;
@@ -288,20 +350,14 @@
     gap: 16px;
   }
 
-  // Grid tracks default to a min-width equal to their content's min-content
-  // size — a single long unbroken string (e.g. a huggingface_dataset id)
-  // anywhere in one card can force that whole column wider than the others,
-  // which is what was making cards look unequal width. min-width: 0 lets the
-  // card shrink to the track's actual (equal) size instead of dictating it.
   &__card {
     display: flex;
     flex-direction: column;
-    min-width: 0;
     background: $bg-main;
     border: 1px solid $border-subtle;
     border-left: 3px solid $card-accent;
-    border-radius: $radius-lg;
-    padding: 14px 16px;
+    border-radius: 0.75rem;
+    padding: 15px 18px;
     box-shadow: $shadow-xs;
     transition: box-shadow 0.15s ease, transform 0.15s ease;
 
@@ -314,46 +370,23 @@
   &__card-top {
     display: flex;
     align-items: flex-start;
+    justify-content: space-between;
     gap: 10px;
-    margin-bottom: 10px;
-  }
-
-  &__card-icon {
-    width: 36px;
-    height: 36px;
-    flex-shrink: 0;
-    background: $primary-light;
-    border-radius: $radius-md;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    svg {
-      color: $primary;
-    }
-  }
-
-  &__card-heading {
-    flex: 1;
-    min-width: 0;
-
-    h4 {
-      font-size: 0.9375rem;
-      font-weight: 700;
-      margin-bottom: 4px;
-      color: $text-primary;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
+    margin-bottom: 6px;
   }
 
   &__card-meta {
     display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 0.6875rem;
-    color: $text-tertiary;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+
+  &__card-name {
+    font-size: 0.9375rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: $text-primary;
   }
 
   &__card-desc {
@@ -361,30 +394,23 @@
     color: $text-secondary;
     line-height: 1.5;
     margin-bottom: 10px;
-    overflow-wrap: break-word;
   }
 
-  /* ---------- stats + capability pills share one bordered box ---------- */
   &__card-stats {
     display: flex;
-    flex-direction: column;
-    gap: 8px;
+    flex-wrap: wrap;
+    gap: 16px 20px;
     margin-bottom: 10px;
-  }
-
-  &__card-stats-row {
-    display: flex;
-    gap: 20px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid $border-subtle;
   }
 
   &__card-stat-label {
-    display: block;
     font-size: 0.625rem;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: $text-tertiary;
-    margin-bottom: 2px;
   }
 
   &__card-stat-value {
@@ -392,80 +418,677 @@
     font-weight: 800;
     color: $text-primary;
     display: block;
+    margin-top: 2px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 130px;
 
     &--sm {
       font-size: 0.78125rem;
       font-weight: 700;
     }
-  }
 
-  &__card-task {
-    font-size: 0.78125rem;
-    line-height: 1.5;
-    margin-bottom: 4px;
-    overflow-wrap: break-word;
-
-    b {
-      color: $text-primary;
-      font-weight: 600;
-    }
-
-    span {
-      color: $text-secondary;
+    &--accent {
+      color: $success;
     }
   }
 
-  // Compact icon+count pill in the top-right corner of the card, opens the
-  // full tasks modal — kept out of the main flow entirely instead of taking
-  // its own row, which is what was adding extra height before.
-  &__card-tasks-toggle {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-family: $font-body;
-    font-size: 0.6875rem;
+  &__card-section-label {
+    font-size: 0.65625rem;
     font-weight: 700;
-    color: $text-secondary;
-    background: $bg-subtle;
-    border: 1px solid $border-subtle;
-    border-radius: 999px;
-    padding: 4px 8px;
-    cursor: pointer;
-    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
-
-    svg {
-      color: $primary;
-    }
-
-    &:hover {
-      background: $primary-light;
-      border-color: $primary-subtle;
-      color: $primary;
-    }
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: $text-tertiary;
+    margin-bottom: 6px;
+    display: block;
   }
 
   &__card-foot {
     margin-top: auto;
+    padding-top: 10px;
+    border-top: 1px solid $border-subtle;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
   }
 
   &__card-foot-source {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 12px;
+    font-family: $font-mono;
+    font-size: 0.6875rem;
     color: $text-tertiary;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* ---------- empty state ---------- */
+  /* ---------- loading — plain, no border, just centers the spinner ---------- */
+  &__loading {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 64px 20px;
+  }
+
+  &__empty {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 52px 20px;
+    border: 1px dashed $border-strong;
+    border-radius: 14px;
+    color: $text-tertiary;
+    font-size: 0.84375rem;
 
     svg {
-      flex-shrink: 0;
+      color: $text-tertiary;
     }
+
+    &--error {
+      border-style: solid;
+      border-color: $danger-subtle;
+      background: $danger-subtle;
+      color: $danger;
+
+      svg {
+        color: $danger;
+      }
+    }
+  }
+
+  /* ---------- responsive ---------- */
+  @media (max-width: 1500px) {
+    &__grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+
+  @media (max-width: 1000px) {
+    &__grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 640px) {
+    &__card-stats {
+      flex-wrap: wrap;
+      gap: 14px;
+    }
+  }
+
+  /* ---------- ultra-wide: nudge key text sizes up a touch ---------- */
+  @media (min-width: 1800px) {
+    &__title {
+      font-size: 22px;
+    }
+
+    &__subtitle {
+      font-size: 0.875rem;
+    }
+
+    &__card-name {
+      font-size: 0.96875rem;
+    }
+
+    &__card-desc {
+      font-size: 0.8125rem;
+    }
+
+    &__card-stat-value {
+      font-size: 0.96875rem;
+    }
+
+    &__card-stat-value--sm {
+      font-size: 0.8125rem;
+    }
+
+    &__cap-pill {
+      font-size: 0.75rem;
+    }
+
+    &__card-stat-label {
+      font-size: 0.65625rem;
+    }
+
+    &__card-section-label {
+      font-size: 0.6875rem;
+    }
+  }
+}
+
+@keyframes models-page-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Providers.scss
+@use '../../../styles/variables' as *;
+
+.providers-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+
+  /* ---------- header ---------- */
+  &__header {
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1rem;
+    padding-bottom: 18px;
+    margin-bottom: 2px;
+    border-bottom: 1px solid $border-subtle;
+  }
+
+  &__header-left {
+    display: flex;
+    flex-direction: column;
+  }
+
+  &__header-right {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  &__header-eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: $font-mono;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: $primary;
+    margin-bottom: 6px;
+
+    &::before {
+      content: '';
+      width: 16px;
+      height: 2px;
+      border-radius: 2px;
+      background: $primary;
+    }
+  }
+
+  &__header-meta {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
+    border-radius: 999px;
+    padding: 7px 13px;
+    white-space: nowrap;
+  }
+
+  &__title {
+    font-size: 21px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: $text-primary;
+  }
+
+  &__subtitle {
+    margin-top: 3px;
+    color: $text-secondary;
+    font-size: 0.84375rem;
+  }
+
+  /* ---------- filters ---------- */
+  &__filters {
+    flex-shrink: 0;
+    display: flex;
+  }
+
+  &__search {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 300px;
+    max-width: 100%;
+    border: 1px solid $border-default;
+    border-radius: 10px;
+    padding: 9px 12px;
+    background: $bg-main;
+    color: $text-tertiary;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+
+    &:focus-within {
+      border-color: $primary;
+      box-shadow: 0 0 0 3px $primary-light;
+    }
+
+    input {
+      flex: 1;
+      border: none;
+      outline: none;
+      font-size: 0.8125rem;
+      color: $text-primary;
+      background: transparent;
+      font-family: $font-body;
+      min-width: 0;
+
+      &::placeholder {
+        color: $text-tertiary;
+      }
+    }
+  }
+
+  &__search-clear {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: none;
+    background: $bg-inset;
+    color: $text-tertiary;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: background 0.14s ease, color 0.14s ease;
+
+    &:hover {
+      background: $border-default;
+      color: $text-primary;
+    }
+  }
+
+  /* ---------- avatar ---------- */
+  &__avatar {
+    flex-shrink: 0;
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    overflow: hidden;
+
+    img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    &--blue {
+      color: $primary;
+      background: $primary-light;
+    }
+
+    &--violet {
+      color: $violet;
+      background: $violet-light;
+    }
+
+    &--amber {
+      color: $warning;
+      background: $warning-subtle;
+    }
+
+    &--jade {
+      color: $success;
+      background: $success-subtle;
+    }
+
+    &--rose {
+      color: $danger;
+      background: $danger-subtle;
+    }
+  }
+
+  /* ---------- status tag ---------- */
+  &__tag {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    border-radius: 999px;
+    padding: 3px 10px;
+
+    &--jade {
+      color: $success;
+      background: $success-subtle;
+    }
+
+    &--gray {
+      color: $text-tertiary;
+      background: $bg-inset;
+    }
+  }
+
+  /* ---------- full-info card grid ---------- */
+  &__grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+
+  &__card {
+    display: flex;
+    flex-direction: column;
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-left: 3px solid $card-accent;
+    border-radius: 0.75rem;
+    padding: 15px 18px;
+    box-shadow: $shadow-xs;
+    transition: box-shadow 0.15s ease, transform 0.15s ease;
+
+    &:hover {
+      box-shadow: $shadow-md;
+      transform: translateY(-2px);
+    }
+  }
+
+  &__card-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  &__card-top-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  &__card-name {
+    font-size: 0.9375rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: $text-primary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__card-desc {
+    font-size: 0.78125rem;
+    color: $text-secondary;
+    line-height: 1.5;
+    margin-bottom: 10px;
+  }
+
+  &__card-stats {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+
+  &__card-stat {
+    // Plain stats are <div>s; the clickable "Models" stat is a <button> that
+    // needs its native button chrome reset to look identical to the others.
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    background: $bg-subtle;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 9px 11px;
+    text-align: left;
+    font-family: inherit;
+    cursor: default;
+    transition: background 0.14s ease, border-color 0.14s ease;
+
+    &--clickable {
+      cursor: pointer;
+
+      &:hover {
+        background: $primary-light;
+        border-color: $primary-subtle;
+      }
+
+      &:hover .providers-page__card-stat-icon {
+        background: $bg-main;
+        color: $primary;
+      }
+
+      &:hover .providers-page__card-stat-value--link {
+        color: $primary-hover;
+      }
+    }
+  }
+
+  &__card-stat-icon {
+    flex-shrink: 0;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    background: $bg-main;
+    color: $text-tertiary;
+    display: grid;
+    place-items: center;
+    transition: background 0.14s ease, color 0.14s ease;
+  }
+
+  &__card-stat-body {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+
+  &__card-stat-label {
+    font-size: 0.625rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: $text-tertiary;
+  }
+
+  &__card-stat-value {
+    font-size: 0.875rem;
+    font-weight: 800;
+    color: $text-primary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    &--sm {
+      font-size: 0.75rem;
+      font-weight: 700;
+    }
+
+    &--link {
+      display: inline-flex;
+      align-items: center;
+      gap: 1px;
+      color: $primary;
+      transition: color 0.14s ease;
+
+      svg {
+        opacity: 0.7;
+      }
+    }
+
+    &--accent {
+      color: $success;
+    }
+  }
+
+  &__card-section-label {
+    font-size: 0.65625rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: $text-tertiary;
+    margin-bottom: 6px;
+    display: block;
+  }
+
+  /* ---------- models list (card preview + modal) ---------- */
+  &__card-models {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 6px;
+  }
+
+  &__card-model-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 5px 0;
+    font-size: 0.75rem;
+  }
+
+  &__card-model-name {
+    color: $text-primary;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__card-model-version {
+    font-family: $font-mono;
+    font-size: 0.6875rem;
+    font-weight: 400;
+    color: $text-tertiary;
+  }
+
+  &__card-model-accuracy {
+    flex-shrink: 0;
+    font-weight: 700;
+    color: $success;
+  }
+
+  &__card-view-all {
+    display: inline-flex;
+    align-items: center;
+    font-family: $font-body;
+    font-size: 0.71875rem;
+    font-weight: 700;
+    color: $primary;
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin-bottom: 10px;
+    cursor: pointer;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  /* ---------- card footer / actions ---------- */
+  &__card-foot {
+    margin-top: auto;
+    padding-top: 10px;
+    border-top: 1px solid $border-subtle;
+    display: flex;
+    gap: 8px;
+  }
+
+  &__btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-family: $font-body;
+    font-size: 0.78125rem;
+    font-weight: 700;
+    padding: 7px 13px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease, opacity 0.14s ease, transform 0.14s ease, box-shadow 0.14s ease;
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none !important;
+      box-shadow: none !important;
+    }
+
+    &--outline {
+      background: $bg-subtle;
+      border-color: transparent;
+      color: $text-secondary;
+
+      &:hover:not(:disabled) {
+        background: $bg-inset;
+        color: $text-primary;
+        transform: translateY(-1px);
+      }
+    }
+
+    &--danger-outline {
+      background: $bg-subtle;
+      border-color: transparent;
+      color: $text-tertiary;
+
+      &:hover:not(:disabled) {
+        color: $danger;
+        background: $danger-subtle;
+        transform: translateY(-1px);
+      }
+    }
+
+    &--primary {
+      background: $primary;
+      border-color: $primary;
+      color: $on-primary;
+      box-shadow: $shadow-xs;
+
+      &:hover:not(:disabled) {
+        background: $primary-hover;
+        border-color: $primary-hover;
+        transform: translateY(-1px);
+        box-shadow: $shadow-sm;
+      }
+    }
+  }
+
+  /* ---------- empty state ---------- */
+  &__spin {
+    animation: providers-page-spin 0.9s linear infinite;
   }
 
   /* ---------- loading — plain, no border, just centers the spinner ---------- */
@@ -505,11 +1128,7 @@
     }
   }
 
-  &__spin {
-    animation: datasets-page-spin 0.9s linear infinite;
-  }
-
-  /* ---------- tasks modal ---------- */
+  /* ---------- modals (view-all-models + connect form) ---------- */
   &__overlay {
     position: fixed;
     inset: 0;
@@ -533,6 +1152,11 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+
+    &--sm {
+      max-width: 24rem;
+      max-height: none;
+    }
   }
 
   &__modal-head {
@@ -544,7 +1168,7 @@
     padding: 20px 22px 16px;
     border-bottom: 1px solid $border-subtle;
 
-    .datasets-page__tag {
+    .providers-page__avatar {
       margin-bottom: 8px;
     }
   }
@@ -585,10 +1209,89 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 18px 22px 22px;
+    padding: 8px 22px 22px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+  }
+
+  &__modal-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 0;
+  }
+
+  /* ---------- connect form (inside its own modal) ---------- */
+  &__connect-form {
+    padding: 20px 22px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  &__field-label {
+    font-size: 0.71875rem;
+    font-weight: 600;
+    color: $text-secondary;
+  }
+
+  &__input-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid $border-default;
+    border-radius: 8px;
+    padding: 0 11px;
+    background: $bg-main;
+    color: $text-tertiary;
+    transition: border-color 0.14s ease;
+
+    &:focus-within {
+      border-color: $primary;
+    }
+  }
+
+  &__input {
+    flex: 1;
+    width: 100%;
+    border: none;
+    outline: none;
+    padding: 8px 0;
+    font-size: 0.8125rem;
+    font-family: $font-body;
+    color: $text-primary;
+    background: transparent;
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    &::placeholder {
+      color: $text-tertiary;
+    }
+  }
+
+  &__form-error {
+    font-size: 0.75rem;
+    color: $danger;
+    background: $danger-subtle;
+    border-radius: 6px;
+    padding: 7px 10px;
+    line-height: 1.4;
+  }
+
+  &__form-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 6px;
+  }
+
+  &__card-inline-error {
+    font-size: 0.71875rem;
+    color: $danger;
+    padding-top: 6px;
   }
 
   /* ---------- responsive ---------- */
@@ -604,13 +1307,6 @@
     }
   }
 
-  @media (max-width: 640px) {
-    &__card-stats {
-      flex-wrap: wrap;
-      gap: 14px;
-    }
-  }
-
   /* ---------- ultra-wide: nudge key text sizes up a touch ---------- */
   @media (min-width: 1800px) {
     &__title {
@@ -621,12 +1317,8 @@
       font-size: 0.875rem;
     }
 
-    &__card-heading h4 {
+    &__card-name {
       font-size: 0.96875rem;
-    }
-
-    &__card-meta {
-      font-size: 0.71875rem;
     }
 
     &__card-desc {
@@ -641,25 +1333,21 @@
       font-size: 0.8125rem;
     }
 
-    &__card-task {
-      font-size: 0.8125rem;
-    }
-
-    &__cap-pill {
-      font-size: 0.75rem;
-    }
-
     &__card-stat-label {
       font-size: 0.65625rem;
     }
 
-    &__card-tasks-toggle {
-      font-size: 0.71875rem;
+    &__card-section-label {
+      font-size: 0.6875rem;
+    }
+
+    &__card-model-name {
+      font-size: 0.78125rem;
     }
   }
 }
 
-@keyframes datasets-page-spin {
+@keyframes providers-page-spin {
   to {
     transform: rotate(360deg);
   }
