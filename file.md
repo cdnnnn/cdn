@@ -1,4 +1,3 @@
-//History.tsx
 import { useEffect, useMemo, useState, type FC, type MouseEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -75,6 +74,22 @@ function statusLabel(status: string): string {
       return 'Canceled';
     default:
       return status;
+  }
+}
+
+function statusTint(status: string): 'green' | 'blue' | 'amber' | 'danger' | 'violet' {
+  switch (status) {
+    case 'completed':
+      return 'green';
+    case 'running':
+      return 'blue';
+    case 'pending':
+      return 'amber';
+    case 'failed':
+    case 'canceled':
+      return 'danger';
+    default:
+      return 'violet';
   }
 }
 
@@ -287,6 +302,9 @@ const History: FC = () => {
                       <h4>{ev.name}</h4>
                       <div className="history__meta">
                         <span className="history__type">{typeLabel(ev.eval_type)}</span>
+                        <span className={`history__status-badge history__status-badge--${statusTint(ev.status)}`}>
+                          {statusLabel(ev.status)}
+                        </span>
                         <span>{formatDate(ev.created_at)}</span>
                       </div>
                     </div>
@@ -341,7 +359,10 @@ const History: FC = () => {
                   </span>
                   <h2 className="history__detail-name">{selected.name}</h2>
                   <span className="history__detail-date">
-                    {statusLabel(selected.status)} &middot; {formatDate(selected.created_at)}
+                    <span className={`history__status-badge history__status-badge--${statusTint(selected.status)}`}>
+                      {statusLabel(selected.status)}
+                    </span>
+                    &middot; {formatDate(selected.created_at)}
                   </span>
                 </div>
 
@@ -487,7 +508,20 @@ export default History;
 
 
 
-//History.scss
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 @use '../../../styles/variables' as *;
 
 .history {
@@ -893,6 +927,55 @@ export default History;
 
   &__item--active &__type {
     background: $bg-main;
+  }
+
+  /* ---------- status badge (list row + detail header) ---------- */
+  &__status-badge {
+    flex-shrink: 0;
+    font-size: 0.625rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    border-radius: 999px;
+    padding: 2px 8px;
+    white-space: nowrap;
+
+    &--green {
+      color: $success;
+      background: $success-subtle;
+    }
+
+    &--blue {
+      color: $primary;
+      background: $primary-light;
+    }
+
+    &--amber {
+      color: $warning;
+      background: $warning-subtle;
+    }
+
+    &--violet {
+      color: $violet;
+      background: $violet-light;
+    }
+
+    &--danger {
+      color: $danger;
+      background: $danger-subtle;
+    }
+  }
+
+  &__item--active &__status-badge--green,
+  &__item--active &__status-badge--blue,
+  &__item--active &__status-badge--amber,
+  &__item--active &__status-badge--violet,
+  &__item--active &__status-badge--danger {
+    background: $bg-main;
+  }
+
+  &__detail-date &__status-badge {
+    margin-right: 6px;
+    vertical-align: 1px;
   }
 
   &__results {
