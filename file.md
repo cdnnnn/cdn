@@ -1,155 +1,5 @@
 //types.ts
-export type EvalTypeId = 'model' | 'agent' | 'rag';
-
-export interface EvalType {
-  id: EvalTypeId;
-  title: string;
-  desc: string;
-  badge: string;
-}
-
-export interface AgentFrameworkOption {
-  id: string;
-  title: string;
-  desc: string;
-}
-
-/* ---------- API: models ---------- */
-
-export interface ModelApi {
-  id: string;
-  name: string;
-  provider_id: string;
-  category: string;
-  capabilities: string[];
-  context_window: number;
-  input_price: number | null;
-  output_price: number | null;
-  accuracy_score: number | null;
-  agent_score: number | null;
-  is_active: boolean;
-  base_url: string | null;
-}
-
-export interface ModelApiResponse {
-  models: ModelApi[];
-}
-
-/* ---------- API: providers ---------- */
-
-export type ProviderStatus = 'connected' | 'not_connected' | string;
-
-export interface ProviderApi {
-  id: string;
-  name: string;
-  description: string;
-  logo_url: string | null;
-  base_url: string | null;
-  url_template: string | null;
-  model_count: number;
-  status: ProviderStatus;
-}
-
-export interface ProvidersResponse {
-  providers: ProviderApi[];
-}
-
-/* ---------- API: benchmarks ---------- */
-
-export interface BenchmarkTask {
-  name: string;
-  value: string;
-}
-
-export interface Benchmark {
-  name: string;
-  description: string;
-  tasks: BenchmarkTask[];
-  task_count: number;
-  required_capabilities: string[];
-  huggingface_dataset: string;
-  type: string;
-}
-
-export interface BenchmarksResponse {
-  benchmarks: Benchmark[];
-  total: number;
-}
-
-export interface EvaluationDraft {
-  name: string;
-  type: EvalTypeId | null;
-  providers: string[];
-  models: string[];
-  dataset: string | null;
-  subgroup: string[];
-  metrics: string[];
-  judgeModelId: string | null;
-  judgeApiKey: string;
-  agentFramework: string | null;
-}
-
-export interface WizardStepMeta {
-  key: string;
-  label: string;
-  description: string;
-}
-
-export const WIZARD_STEPS: WizardStepMeta[] = [
-  { key: 'name', label: 'Name', description: 'Give your evaluation a name' },
-  { key: 'type', label: 'Type', description: 'What kind of AI are you testing' },
-  { key: 'providers', label: 'Providers', description: 'Choose connected providers' },
-  { key: 'models', label: 'Models', description: 'Pick models to compare' },
-  { key: 'dataset', label: 'Test Suite', description: 'Select a benchmark or dataset' },
-  { key: 'metrics', label: 'Metrics', description: 'Choose what to measure' },
-  { key: 'review', label: 'Review', description: 'Confirm and start the run' },
-];
-
-/* ---------- API: create / start evaluation ---------- */
-
-export interface JudgeConfig {
-  model_id: string;
-  base_url: string;
-  api_key: string;
-}
-
-export interface CreateEvaluationRequest {
-  name: string;
-  description?: string;
-  eval_type: string;
-  dataset_id: string;
-  benchmark?: string;
-  model_ids: string[];
-  metrics_config?: Record<string, unknown>;
-  selected_metrics: string[];
-  dataset_limit?: number;
-  selected_category?: string[];
-  judge_config?: JudgeConfig;
-}
-
-export interface CreateEvaluationResponse {
-  id?: string;
-  evaluation_id?: string;
-  [key: string]: unknown;
-}
-
-/* ---------- API: metrics ---------- */
-
-export interface MetricsResponse {
-  all_metrics: string[];
-  custom_agent_metrics: string[];
-}
-
 export type EvaluationStatusValue = 'pending' | 'running' | 'completed' | 'failed' | 'canceled';
-export type CeleryState = 'STARTED' | 'SUCCESS' | 'FAILURE' | 'REVOKED' | null;
-
-export interface EvaluationStatusResponse {
-  status: EvaluationStatusValue;
-  progress: number;
-  total: number;
-  celery_state: CeleryState;
-  error_message: string | null;
-}
 
 /* ---------- API: GET /evaluations (history list) ---------- */
 
@@ -237,36 +87,9 @@ export interface EvaluationResultsErrorResponse {
 
 
 
-
-
-
-
-
 //api.ts
 import api from '../../../services/api';
-import type {
-  CreateEvaluationRequest,
-  CreateEvaluationResponse,
-  EvaluationsListResponse,
-  EvaluationResultsResponse,
-} from './types';
-
-/**
- * POST /evaluations
- * Creates a new evaluation from the Run Evaluation wizard draft.
- */
-export async function createEvaluation(payload: CreateEvaluationRequest): Promise<CreateEvaluationResponse> {
-  const res = await api.post<CreateEvaluationResponse>('/evaluations', payload);
-  return res.data;
-}
-
-/**
- * POST /evaluations/{evaluation_id}/start
- * Kicks off execution for a previously created evaluation.
- */
-export async function startEvaluation(evaluationId: string): Promise<void> {
-  await api.post(`/evaluations/${evaluationId}/start`);
-}
+import type { EvaluationsListResponse, EvaluationResultsResponse } from './types';
 
 /**
  * GET /evaluations
@@ -304,15 +127,12 @@ export async function fetchEvaluationResults(evaluationId: string): Promise<Eval
 
 
 
-
-
-
 //History.tsx
 import { useEffect, useMemo, useState, type FC, type MouseEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Play, Search, Copy, Trash2, X, Database, FileBarChart, AlertCircle, RefreshCw } from 'lucide-react';
-import { fetchEvaluations, fetchEvaluationResults } from '../RunEvaluation/evaluationsApi';
-import type { EvaluationListItem, EvaluationResultsResponse, EvaluationResultsErrorResponse } from '../RunEvaluation/types';
+import { fetchEvaluations, fetchEvaluationResults } from './api';
+import type { EvaluationListItem, EvaluationResultsResponse, EvaluationResultsErrorResponse } from './types';
 import Spinner from '../../../components/Spinner/Spinner';
 import Select from './Select';
 import './History.scss';
