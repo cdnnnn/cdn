@@ -1,604 +1,153 @@
-//types.ts
-export type EvaluationStatusValue = 'pending' | 'running' | 'completed' | 'failed' | 'canceled';
+import { useMemo, useState, type FC } from 'react';
+import { Search, Check, X } from 'lucide-react';
+import { MODELS } from '../data';
+import type { ModelInfo } from '../types';
 
-/* ---------- API: GET /evaluations (history list) ---------- */
-
-export interface EvaluationDatasetConfig {
-  dataset_id: string;
+interface Props {
+  providers: string[];
+  selected: string[];
+  onToggle: (id: string) => void;
+  onClear: () => void;
 }
 
-export interface EvaluationListItem {
-  id: string;
-  name: string;
-  description: string;
-  eval_type: string;
-  dataset_id: string;
-  datasets_config: EvaluationDatasetConfig[];
-  benchmark: string;
-  model_ids: string[];
-  selected_metrics: string[];
-  run_samples: number;
-  selected_category: string[];
-  status: EvaluationStatusValue;
-  progress: number;
-  total_questions: number;
-  top_model: string | null;
-  top_score: number | null;
-  created_at: string;
-  started_at: string | null;
-  completed_at: string | null;
-}
-
-export interface EvaluationsListResponse {
-  evaluations: EvaluationListItem[];
-}
-
-/* ---------- API: GET /evaluations/{id}/results ---------- */
-
-export interface TestDetail {
-  test_id: string;
-  input: string;
-  output: string;
-  expected: string;
-  latency_seconds: number;
-  passed: boolean;
-  score: number;
-  metric_scores: Record<string, number>;
-}
-
-export interface ModelResult {
-  model_id: string;
-  provider: string;
-  rank: number;
-  score: number;
-  accuracy: number;
-  passed_tests: number;
-  failed_tests: number;
-  total_tests: number;
-  metric_scores: Record<string, number>;
-  details: TestDetail[];
-}
-
-export interface EvaluationResultsResponse {
-  evaluation_id: string;
-  status: EvaluationStatusValue;
-  top_model: string;
-  top_score: number;
-  results: ModelResult[];
-}
-
-// Returned with HTTP 400 when the evaluation hasn't finished running yet
-export interface EvaluationResultsErrorResponse {
-  detail: string;
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//api.ts
-import api from '../../../services/api';
-import type { EvaluationsListResponse, EvaluationResultsResponse } from './types';
-
-/**
- * GET /evaluations
- * Full evaluation history — used to populate the History sidebar list.
- */
-export async function fetchEvaluations(): Promise<EvaluationsListResponse> {
-  const res = await api.get<EvaluationsListResponse>('/evaluations');
-  return res.data;
-}
-
-/**
- * GET /evaluations/{evaluation_id}/results
- * Per-model results + per-test detail for a completed evaluation.
- * Returns HTTP 400 with { detail: "Execution not completed." } if the
- * evaluation hasn't finished running yet — callers should catch and
- * inspect err.response.data.detail for that case.
- */
-export async function fetchEvaluationResults(evaluationId: string): Promise<EvaluationResultsResponse> {
-  const res = await api.get<EvaluationResultsResponse>(`/evaluations/${evaluationId}/results`);
-  return res.data;
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//History.tsx
-import { useEffect, useMemo, useState, type FC, type MouseEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
-import {
-  Play,
-  Search,
-  Copy,
-  Trash2,
-  X,
-  Bot,
-  MessageSquare,
-  Trophy,
-  ListChecks,
-  Info,
-  FileBarChart,
-  Loader2,
-  AlertCircle,
-  RefreshCw,
-} from 'lucide-react';
-import { fetchEvaluations, fetchEvaluationResults } from './api';
-import type { EvaluationListItem, EvaluationResultsResponse, EvaluationResultsErrorResponse } from './types';
-import Select from './Select';
-import './History.scss';
-
-const TYPE_FILTERS = [
-  { value: 'all', label: 'All Types' },
-  { value: 'model', label: 'AI Model' },
-  { value: 'agent', label: 'Agent' },
-  { value: 'rag', label: 'RAG' },
-];
-
-const DATE_FILTERS = [
-  { value: 30, label: 'Last 30 days' },
-  { value: 7, label: 'Last 7 days' },
-  { value: Infinity, label: 'All time' },
-];
-
-function matchesType(evType: string, filter: string) {
-  if (filter === 'all') return true;
-  return evType === filter;
-}
-
-// Mirrors the icon logic from renderHistory() in the original app.js:
-// Agent -> bot, RAG -> search, everything else -> message-square
-function HistoryIcon({ type }: { type: string }) {
-  if (type === 'agent') return <Bot />;
-  if (type === 'rag') return <Search />;
-  return <MessageSquare />;
-}
-
-function typeTint(type: string): 'violet' | 'blue' | 'amber' {
-  if (type === 'agent') return 'violet';
-  if (type === 'rag') return 'blue';
-  return 'amber';
-}
-
-function typeLabel(type: string): string {
-  if (type === 'agent') return 'Agent';
-  if (type === 'rag') return 'RAG';
-  return 'AI Model';
-}
-
-function statusLabel(status: string): string {
-  switch (status) {
-    case 'completed':
-      return 'Completed';
-    case 'running':
-      return 'Running';
-    case 'pending':
-      return 'Pending';
-    case 'failed':
-      return 'Failed';
-    case 'canceled':
-      return 'Canceled';
-    default:
-      return status;
-  }
-}
-
-function daysAgo(dateStr: string): number {
-  const then = new Date(dateStr).getTime();
-  if (Number.isNaN(then)) return Infinity;
-  return Math.floor((Date.now() - then) / (1000 * 60 * 60 * 24));
-}
-
-function formatDate(dateStr: string | null): string {
-  if (!dateStr) return '—';
-  const d = new Date(dateStr);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-}
-
-interface ApiErrorLike {
-  response?: {
-    data?: EvaluationResultsErrorResponse;
-  };
-}
-
-// Add this to History.scss if it's not already there (mirrors .datasets-page__spin):
-//   &__spin { animation: history-spin 0.8s linear infinite; }
-//   @keyframes history-spin { to { transform: rotate(360deg); } }
-
-const History: FC = () => {
-  const navigate = useNavigate();
-
-  // ── Evaluations list (GET /evaluations) ──────────────────────────
-  const [items, setItems] = useState<EvaluationListItem[]>([]);
-  const [listLoading, setListLoading] = useState(true);
-  const [listError, setListError] = useState<string | null>(null);
-
+const ModelsStep: FC<Props> = ({ providers, selected, onToggle, onClear }) => {
   const [query, setQuery] = useState('');
-  const [typeFilter, setTypeFilter] = useState('all');
-  const [dateFilter, setDateFilter] = useState(30);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [capFilters, setCapFilters] = useState<string[]>([]);
 
-  // ── Selected evaluation's results (GET /evaluations/{id}/results) ─
-  const [results, setResults] = useState<EvaluationResultsResponse | null>(null);
-  const [resultsLoading, setResultsLoading] = useState(false);
-  const [resultsError, setResultsError] = useState<string | null>(null);
-
-  const loadList = () => {
-    setListLoading(true);
-    setListError(null);
-    fetchEvaluations()
-      .then((res) => {
-        setItems(res.evaluations);
-        setSelectedId((prev) => prev ?? res.evaluations[0]?.id ?? null);
-      })
-      .catch((err) => {
-        setListError(err instanceof Error ? err.message : 'Failed to load evaluation history.');
-      })
-      .finally(() => setListLoading(false));
-  };
-
-  useEffect(() => {
-    loadList();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const filtered = useMemo(() => {
-    return items.filter((ev) => {
-      if (query && !ev.name.toLowerCase().includes(query.toLowerCase())) return false;
-      if (!matchesType(ev.eval_type, typeFilter)) return false;
-      if (daysAgo(ev.created_at) > dateFilter) return false;
-      return true;
-    });
-  }, [items, query, typeFilter, dateFilter]);
-
-  const selected = useMemo(
-    () => filtered.find((ev) => ev.id === selectedId) ?? filtered[0] ?? null,
-    [filtered, selectedId]
+  const pool = useMemo(
+    () => (providers.length ? MODELS.filter((m) => providers.includes(m.providerId)) : MODELS),
+    [providers]
   );
 
-  // Lazy-fetch results whenever the selected evaluation changes.
-  // Only fires the network call for completed runs.
-  useEffect(() => {
-    if (!selected) {
-      setResults(null);
-      setResultsError(null);
-      setResultsLoading(false);
-      return;
-    }
+  const allCapabilities = useMemo(() => {
+    const set = new Set<string>();
+    pool.forEach((m) => m.capabilities.forEach((c) => set.add(c)));
+    return Array.from(set).sort();
+  }, [pool]);
 
-    let cancelled = false;
-    setResults(null);
-    setResultsError(null);
+  const filtered = useMemo(() => {
+    return pool.filter((m: ModelInfo) => {
+      if (query && !m.name.toLowerCase().includes(query.toLowerCase()) && !m.provider.toLowerCase().includes(query.toLowerCase())) {
+        return false;
+      }
+      if (capFilters.length && !capFilters.every((c) => m.capabilities.includes(c))) return false;
+      return true;
+    });
+  }, [pool, query, capFilters]);
 
-    if (selected.status !== 'completed') {
-      setResultsLoading(false);
-      return;
-    }
-
-    setResultsLoading(true);
-    fetchEvaluationResults(selected.id)
-      .then((res) => {
-        if (cancelled) return;
-        setResults(res);
-      })
-      .catch((err: ApiErrorLike | Error) => {
-        if (cancelled) return;
-        const detail = (err as ApiErrorLike)?.response?.data?.detail;
-        setResultsError(detail ?? (err instanceof Error ? err.message : 'Failed to load results.'));
-      })
-      .finally(() => {
-        if (!cancelled) setResultsLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [selected]);
-
-  // Mirrors duplicateEval(id): send the user into a fresh Run Evaluation flow.
-  const handleDuplicate = (e: MouseEvent, _id: string) => {
-    e.stopPropagation();
-    navigate('/app/run-evaluation');
-  };
-
-  // Mirrors deleteEval(id): confirm, then remove from the list.
-  // NOTE: no DELETE /evaluations/{id} endpoint was provided — this only
-  // removes the row from local state. Wire in a real delete call once
-  // that endpoint exists.
-  const handleDelete = (e: MouseEvent, id: string) => {
-    e.stopPropagation();
-    if (window.confirm('Delete this evaluation?')) {
-      setItems((prev) => prev.filter((ev) => ev.id !== id));
-      if (selectedId === id) setSelectedId(null);
-    }
+  const toggleCap = (cap: string) =>
+    setCapFilters((prev) => (prev.includes(cap) ? prev.filter((c) => c !== cap) : [...prev, cap]));
+  const resetFilters = () => {
+    setCapFilters([]);
+    setQuery('');
   };
 
   return (
-    <div className="history">
-      <div className="history__header">
-        <div>
-          <h1 className="history__title">History</h1>
-          <p className="history__subtitle">Past evaluations</p>
-        </div>
-        <button type="button" className="history__btn history__btn--primary" onClick={() => navigate('/app/run-evaluation')}>
-          <Play size={14} strokeWidth={2.25} /> New Evaluation
-        </button>
-      </div>
+    <div className="run-eval__card run-eval__card--wide">
+      <h2 className="run-eval__step-title">Choose models</h2>
+      <p className="run-eval__step-desc">Select the models you want to compare. Use filters to narrow the list.</p>
 
-      <div className="history__filters">
-        <div className="history__search">
-          <Search size={15} />
-          <input type="text" placeholder="Search..." value={query} onChange={(e) => setQuery(e.target.value)} />
-          {query && (
-            <button type="button" className="history__search-clear" onClick={() => setQuery('')} aria-label="Clear search">
-              <X size={13} />
+      <div className="run-eval__models-layout">
+        <aside className="run-eval__filters">
+          <div className="run-eval__filters-head">
+            <span>Filters</span>
+            <button type="button" className="run-eval__link" onClick={resetFilters}>
+              Reset all
             </button>
+          </div>
+
+          <div className="run-eval__filters-scroll">
+            <div className="run-eval__filter-section">
+              <p className="run-eval__filter-title">Capabilities</p>
+              <div className="run-eval__filter-options">
+                {allCapabilities.map((cap) => (
+                  <label key={cap} className="run-eval__filter-chip">
+                    <input type="checkbox" checked={capFilters.includes(cap)} onChange={() => toggleCap(cap)} />
+                    {cap}
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <div className="run-eval__models-main">
+          <div className="run-eval__search-bar">
+            <Search size={15} />
+            <input
+              type="text"
+              placeholder="Search models..."
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </div>
+
+          {capFilters.length > 0 && (
+            <div className="run-eval__active-filters">
+              {capFilters.map((c) => (
+                <span key={c} className="run-eval__tag">
+                  {c}
+                  <button type="button" onClick={() => toggleCap(c)}>
+                    <X size={11} />
+                  </button>
+                </span>
+              ))}
+            </div>
           )}
-        </div>
-        <Select value={typeFilter} options={TYPE_FILTERS} onChange={setTypeFilter} width={140} />
-        <Select value={dateFilter} options={DATE_FILTERS} onChange={setDateFilter} width={140} />
-      </div>
 
-      {listLoading && (
-        <div className="history__empty">
-          <Loader2 size={22} className="history__spin" />
-          <p>Loading history…</p>
-        </div>
-      )}
-
-      {!listLoading && listError && (
-        <div className="history__empty">
-          <AlertCircle size={22} />
-          <p>{listError}</p>
-          <button type="button" className="history__btn" onClick={loadList}>
-            <RefreshCw size={14} strokeWidth={2.25} /> Try again
-          </button>
-        </div>
-      )}
-
-      {!listLoading && !listError && filtered.length === 0 && (
-        <div className="history__empty">
-          <Search size={22} />
-          <p>No evaluations match your filters.</p>
-        </div>
-      )}
-
-      {!listLoading && !listError && filtered.length > 0 && (
-        <div className="history__body">
-          <div className="history__list-panel">
-            <div className="history__list">
-              {filtered.map((ev) => {
-                const isActive = selected?.id === ev.id;
+          <div className="run-eval__models-scroll">
+            <div className="run-eval__models-grid">
+              {filtered.map((m) => {
+                const isSelected = selected.includes(m.id);
                 return (
-                  <div
-                    key={ev.id}
-                    className={`history__item${isActive ? ' history__item--active' : ''}`}
-                    onClick={() => setSelectedId(ev.id)}
+                  <button
+                    key={m.id}
+                    type="button"
+                    className={`run-eval__model-card${isSelected ? ' run-eval__model-card--selected' : ''}`}
+                    onClick={() => onToggle(m.id)}
                   >
-                    <div className="history__icon">
-                      <HistoryIcon type={ev.eval_type} />
-                    </div>
-
-                    <div className="history__content">
-                      <h4>{ev.name}</h4>
-                      <div className="history__meta">
-                        <span className="history__type">{typeLabel(ev.eval_type)}</span>
-                        <span>{formatDate(ev.created_at)}</span>
-                      </div>
-                    </div>
-
-                    <div className="history__results">
-                      <div className="history__stat">
-                        <span className="history__stat-label">Winner</span>
-                        <span className="history__stat-value">{ev.top_model ?? '—'}</span>
-                      </div>
-                      <div className="history__stat">
-                        <span className="history__stat-label">Score</span>
-                        <span className="history__stat-value history__stat-value--highlight n">
-                          {ev.top_score != null ? ev.top_score.toFixed(3) : '—'}
+                    <div className="run-eval__model-top">
+                      <span className="run-eval__model-name">{m.name}</span>
+                      {isSelected && (
+                        <span className="run-eval__type-check">
+                          <Check size={12} strokeWidth={2.75} />
                         </span>
-                      </div>
-                      <div className="history__stat">
-                        <span className="history__stat-label">Models</span>
-                        <span className="history__stat-value n">{ev.model_ids.length}</span>
-                      </div>
+                      )}
                     </div>
-
-                    <div className="history__actions">
-                      <button
-                        type="button"
-                        className="history__btn history__btn--sm"
-                        onClick={(e) => handleDuplicate(e, ev.id)}
-                        aria-label="Duplicate evaluation"
-                      >
-                        <Copy size={16} />
-                      </button>
-                      <button
-                        type="button"
-                        className="history__btn history__btn--sm"
-                        onClick={(e) => handleDelete(e, ev.id)}
-                        aria-label="Delete evaluation"
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                    <span className="run-eval__model-provider">{m.provider}</span>
+                    <div className="run-eval__model-caps">
+                      {m.capabilities.slice(0, 3).map((c) => (
+                        <span key={c} className="run-eval__chip run-eval__chip--static">
+                          {c}
+                        </span>
+                      ))}
                     </div>
-                  </div>
+                    <div className="run-eval__model-meta n">
+                      <span>{m.contextWindow}</span>
+                      <span>{m.speedRating}</span>
+                      <span>{m.pricing}</span>
+                    </div>
+                  </button>
                 );
               })}
+              {filtered.length === 0 && <p className="run-eval__empty">No models match these filters.</p>}
             </div>
           </div>
 
-          {selected && (
-            <div className="history__detail-panel">
-              <div className="history__detail-head">
-                <div className="history__detail-head-left">
-                  <span className={`history__type-badge history__type-badge--${typeTint(selected.eval_type)}`}>
-                    {typeLabel(selected.eval_type)}
-                  </span>
-                  <h2 className="history__detail-name">{selected.name}</h2>
-                  <span className="history__detail-date">
-                    {statusLabel(selected.status)} &middot; {formatDate(selected.created_at)}
-                  </span>
-                </div>
-
-                <div className="history__detail-actions">
-                  <button type="button" className="history__btn" onClick={(e) => handleDuplicate(e, selected.id)}>
-                    <Copy size={13} /> Duplicate
-                  </button>
-                  <button type="button" className="history__btn history__btn--danger" onClick={(e) => handleDelete(e, selected.id)}>
-                    <Trash2 size={13} /> Delete
-                  </button>
-                  <button
-                    type="button"
-                    className="history__btn history__btn--primary"
-                    onClick={() => navigate('/app/reports', { state: { evaluationId: selected.id } })}
-                    disabled={selected.status !== 'completed'}
-                  >
-                    <FileBarChart size={13} /> View Report
-                  </button>
-                </div>
-              </div>
-
-              {/* Summary cards — winner card kept as-is; the other two are repurposed
-                  to fields the real API actually returns (no avg response time / cost). */}
-              <div className="history__summary-cards">
-                <div className="history__summary-card history__summary-card--winner">
-                  <div className="history__summary-icon">
-                    <Trophy />
-                  </div>
-                  <div className="history__summary-content">
-                    <div className="history__summary-label">Winner</div>
-                    <div className="history__summary-value">{selected.top_model ?? '—'}</div>
-                    <div className="history__summary-score">
-                      {selected.top_score != null ? selected.top_score.toFixed(3) : '—'}
-                    </div>
-                  </div>
-                </div>
-                <div className="history__summary-card">
-                  <div className="history__summary-icon">
-                    <ListChecks />
-                  </div>
-                  <div className="history__summary-content">
-                    <div className="history__summary-label">Total Questions</div>
-                    <div className="history__summary-value">{selected.total_questions}</div>
-                    <div className="history__summary-score">{selected.model_ids.length} models tested</div>
-                  </div>
-                </div>
-                <div className="history__summary-card">
-                  <div className="history__summary-icon">
-                    <Info />
-                  </div>
-                  <div className="history__summary-content">
-                    <div className="history__summary-label">Status</div>
-                    <div className="history__summary-value">{statusLabel(selected.status)}</div>
-                    <div className="history__summary-score">
-                      {selected.completed_at ? `Completed ${formatDate(selected.completed_at)}` : formatDate(selected.started_at)}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <p className="history__section-title">Full results</p>
-
-              {selected.status !== 'completed' && (
-                <div className="history__empty">
-                  <AlertCircle size={22} />
-                  <p>
-                    {selected.status === 'running' || selected.status === 'pending'
-                      ? 'This evaluation is still running. Results will appear once it completes.'
-                      : selected.status === 'failed'
-                      ? 'This evaluation failed, so no results are available.'
-                      : 'This evaluation was canceled, so no results are available.'}
-                  </p>
-                </div>
-              )}
-
-              {selected.status === 'completed' && resultsLoading && (
-                <div className="history__empty">
-                  <Loader2 size={22} className="history__spin" />
-                  <p>Loading results…</p>
-                </div>
-              )}
-
-              {selected.status === 'completed' && !resultsLoading && resultsError && (
-                <div className="history__empty">
-                  <AlertCircle size={22} />
-                  <p>{resultsError}</p>
-                </div>
-              )}
-
-              {selected.status === 'completed' && !resultsLoading && !resultsError && results && (
-                <div className="history__table-wrap">
-                  <table className="history__table">
-                    <thead>
-                      <tr>
-                        <th style={{ width: 48 }}>Rank</th>
-                        <th>Model</th>
-                        <th>Provider</th>
-                        <th>Score</th>
-                        <th>Accuracy</th>
-                        <th>Passed</th>
-                        <th>Failed</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {results.results
-                        .slice()
-                        .sort((a, b) => a.rank - b.rank)
-                        .map((r) => (
-                          <tr key={r.model_id}>
-                            <td>
-                              <span className={`history__rank-pill${r.rank === 1 ? ' history__rank-pill--1' : ''}`}>{r.rank}</span>
-                            </td>
-                            <td className="history__cell-strong">{r.model_id}</td>
-                            <td>{r.provider}</td>
-                            <td className={`n${r.rank === 1 ? ' history__score-cell' : ''}`}>{r.score.toFixed(3)}</td>
-                            <td className="n">{r.accuracy.toFixed(3)}</td>
-                            <td className="n">
-                              {r.passed_tests}/{r.total_tests}
-                            </td>
-                            <td className="n">{r.failed_tests}</td>
-                          </tr>
-                        ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+          {selected.length > 0 && (
+            <div className="run-eval__selected-bar">
+              <span>
+                <strong>{selected.length}</strong> models selected
+              </span>
+              <button type="button" className="run-eval__btn run-eval__btn--sm" onClick={onClear}>
+                Clear
+              </button>
             </div>
           )}
         </div>
-      )}
+      </div>
     </div>
   );
 };
 
-export default History;
+export default ModelsStep;
