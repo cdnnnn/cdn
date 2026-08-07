@@ -1,657 +1,97 @@
-//ReviewStep.tsx
-import { useMemo, type FC } from 'react';
-import {
-  Info,
-  Tag,
-  Cpu,
-  Database,
-  Gauge,
-  Gavel,
-  Wallet,
-  Clock3,
-  Layers,
-  CheckCircle2,
-  Workflow,
-} from 'lucide-react';
-import { EVAL_TYPES } from '../data';
-import type { Benchmark, EvaluationDraft, ModelApi, ProviderApi } from '../types';
+//Namestep.tsx
+import type { FC } from 'react';
+import { Lightbulb, LayoutGrid, Plug, Cpu, Database, Gauge, ClipboardCheck, ArrowRight } from 'lucide-react';
+import { SUGGESTED_NAMES } from '../data';
+import { WIZARD_STEPS } from '../types';
 
 interface Props {
-  draft: EvaluationDraft;
-  models: ModelApi[];
-  benchmarks: Benchmark[];
-  providers?: ProviderApi[];
+  name: string;
+  onChange: (name: string) => void;
 }
 
-const ReviewStep: FC<Props> = ({ draft, models, benchmarks, providers = [] }) => {
-  const typeInfo = EVAL_TYPES.find((t) => t.id === draft.type);
+// Icons for steps 2–7 (everything after Name), mirroring STEP_ICONS in RunEvaluation.tsx.
+const ROADMAP_ICONS = [LayoutGrid, Plug, Cpu, Database, Gauge, ClipboardCheck];
 
-  const providerNameById = useMemo(() => {
-    const map = new Map<string, string>();
-    providers.forEach((p) => map.set(p.id, p.name));
-    return map;
-  }, [providers]);
+const NAMING_TIPS = [
+  'Include what you\u2019re testing, e.g. a model, a product feature, or a use case.',
+  'Add a date or version so you can track changes over time (e.g. "Q3", "v2").',
+  'Keep it specific enough to tell apart from similar past evaluations in History.',
+];
 
-  const selectedModels = useMemo(
-    () => draft.models.map((id) => models.find((m) => m.id === id)).filter((m): m is ModelApi => Boolean(m)),
-    [draft.models, models]
-  );
-
-  const dataset = benchmarks.find((b) => b.name === draft.dataset);
-
-  // NOTE: keeps compatibility whether `subgroup` is a single string or an array.
-  const subgroupValues: string[] = Array.isArray(draft.subgroup)
-    ? draft.subgroup
-    : draft.subgroup
-    ? [draft.subgroup as unknown as string]
-    : [];
-  const subgroupTasks = dataset?.tasks.filter((t) => subgroupValues.includes(t.value)) ?? [];
-
-  const judgeModel = draft.judgeModelId ? models.find((m) => m.id === draft.judgeModelId) : null;
-
-  const { cost, minutes } = useMemo(() => {
-    const questions = dataset?.task_count ?? 0;
-    const modelCount = draft.models.length || 1;
-    const estCost = questions * modelCount * 0.0009;
-    const estMinutes = Math.max(1, Math.round((questions * modelCount) / 180));
-    return { cost: estCost, minutes: estMinutes };
-  }, [dataset, draft.models.length]);
+const NameStep: FC<Props> = ({ name, onChange }) => {
+  const upcomingSteps = WIZARD_STEPS.slice(1);
 
   return (
     <div className="run-eval__card">
-      <h2 className="run-eval__step-title">Review &amp; Run</h2>
-      <p className="run-eval__step-desc">Confirm your settings before starting.</p>
+      <h2 className="run-eval__step-title">Name your evaluation</h2>
+      <p className="run-eval__step-desc">Give it a memorable name so you can find it later.</p>
 
-      {/* ---------- headline stats ---------- */}
-      <div className="run-eval__review-stats">
-        <div className="run-eval__review-stat">
-          <span className="run-eval__review-stat-icon">
-            <Wallet size={16} strokeWidth={2} />
-          </span>
-          <div>
-            <span className="run-eval__review-stat-label">Est. Cost</span>
-            <span className="run-eval__review-stat-value">~${cost.toFixed(2)}</span>
-          </div>
-        </div>
-        <div className="run-eval__review-stat">
-          <span className="run-eval__review-stat-icon">
-            <Clock3 size={16} strokeWidth={2} />
-          </span>
-          <div>
-            <span className="run-eval__review-stat-label">Est. Time</span>
-            <span className="run-eval__review-stat-value">~{minutes} min</span>
-          </div>
-        </div>
-        <div className="run-eval__review-stat">
-          <span className="run-eval__review-stat-icon">
-            <Layers size={16} strokeWidth={2} />
-          </span>
-          <div>
-            <span className="run-eval__review-stat-label">Questions</span>
-            <span className="run-eval__review-stat-value">{dataset ? dataset.task_count : '—'}</span>
-          </div>
-        </div>
-        <div className="run-eval__review-stat">
-          <span className="run-eval__review-stat-icon">
-            <Cpu size={16} strokeWidth={2} />
-          </span>
-          <div>
-            <span className="run-eval__review-stat-label">Models</span>
-            <span className="run-eval__review-stat-value">{selectedModels.length}</span>
-          </div>
-        </div>
+      <div className="run-eval__field">
+        <label className="run-eval__label" htmlFor="eval-name">
+          Evaluation Name
+        </label>
+        <input
+          id="eval-name"
+          type="text"
+          className="run-eval__input run-eval__input--lg"
+          placeholder="e.g., Q3 Customer Support Bot Test"
+          value={name}
+          onChange={(e) => onChange(e.target.value)}
+        />
       </div>
 
-      {/* ---------- overview ---------- */}
-      <div className="run-eval__review-section">
-        <p className="run-eval__filter-title">
-          <Tag size={12} strokeWidth={2.25} /> Overview
-        </p>
-        <div className="run-eval__review">
-          <div className="run-eval__review-row">
-            <span>Name</span>
-            <span>{draft.name || '—'}</span>
-          </div>
-          <div className="run-eval__review-row">
-            <span>Type</span>
-            <span>{typeInfo?.title ?? '—'}</span>
-          </div>
-          {draft.agentFramework && (
-            <div className="run-eval__review-row">
-              <span>
-                <Workflow size={12} strokeWidth={2.25} style={{ marginRight: 5, verticalAlign: -2 }} />
-                Agent Framework
-              </span>
-              <span>{draft.agentFramework}</span>
-            </div>
-          )}
-        </div>
+      <div className="run-eval__suggestions">
+        <span className="run-eval__suggestions-label">Try:</span>
+        {SUGGESTED_NAMES.map((s) => (
+          <button key={s} type="button" className="run-eval__chip" onClick={() => onChange(s)}>
+            {s}
+          </button>
+        ))}
       </div>
 
-      {/* ---------- models ---------- */}
-      <div className="run-eval__review-section">
-        <p className="run-eval__filter-title">
-          <Cpu size={12} strokeWidth={2.25} /> Models ({selectedModels.length})
-        </p>
-        {selectedModels.length > 0 ? (
-          <div className="run-eval__review-model-list">
-            {selectedModels.map((m) => (
-              <div className="run-eval__review-model-chip" key={m.id}>
-                <span className="run-eval__review-model-chip-name">{m.name}</span>
-                <span className="run-eval__review-model-chip-provider">
-                  {providerNameById.get(m.provider_id) ?? m.provider_id}
-                </span>
-              </div>
+      {/* ---------- naming tips ---------- */}
+      <div className="run-eval__tips">
+        <div className="run-eval__tips-icon">
+          <Lightbulb size={16} strokeWidth={2} />
+        </div>
+        <div>
+          <p className="run-eval__tips-title">Tips for a good name</p>
+          <ul className="run-eval__tips-list">
+            {NAMING_TIPS.map((tip) => (
+              <li key={tip}>{tip}</li>
             ))}
-          </div>
-        ) : (
-          <p className="run-eval__filter-empty">No models selected.</p>
-        )}
-      </div>
-
-      {/* ---------- test suite ---------- */}
-      <div className="run-eval__review-section">
-        <p className="run-eval__filter-title">
-          <Database size={12} strokeWidth={2.25} /> Test Suite
-        </p>
-        <div className="run-eval__review">
-          <div className="run-eval__review-row">
-            <span>Suite</span>
-            <span>{dataset?.name ?? '—'}</span>
-          </div>
-          {dataset?.description && (
-            <div className="run-eval__review-row">
-              <span>Description</span>
-              <span>{dataset.description}</span>
-            </div>
-          )}
-          {dataset?.huggingface_dataset && (
-            <div className="run-eval__review-row">
-              <span>Source</span>
-              <span>{dataset.huggingface_dataset}</span>
-            </div>
-          )}
-          {subgroupTasks.length > 0 && (
-            <div className="run-eval__review-row">
-              <span>Subgroup{subgroupTasks.length === 1 ? '' : 's'}</span>
-              <span>{subgroupTasks.map((t) => t.name).join(', ')}</span>
-            </div>
-          )}
-        </div>
-        {dataset && dataset.required_capabilities.length > 0 && (
-          <div className="run-eval__review-caps">
-            {dataset.required_capabilities.map((c) => (
-              <span key={c} className="run-eval__chip run-eval__chip--static">
-                {c}
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* ---------- metrics ---------- */}
-      <div className="run-eval__review-section">
-        <p className="run-eval__filter-title">
-          <Gauge size={12} strokeWidth={2.25} /> Metrics ({draft.metrics.length})
-        </p>
-        {draft.metrics.length > 0 ? (
-          <div className="run-eval__review-caps">
-            {draft.metrics.map((m) => (
-              <span key={m} className="run-eval__review-metric-pill">
-                <CheckCircle2 size={11} strokeWidth={2.5} />
-                {m}
-              </span>
-            ))}
-          </div>
-        ) : (
-          <p className="run-eval__filter-empty">No metrics selected.</p>
-        )}
-      </div>
-
-      {/* ---------- judge model ---------- */}
-      {judgeModel && (
-        <div className="run-eval__review-section">
-          <p className="run-eval__filter-title">
-            <Gavel size={12} strokeWidth={2.25} /> Judge Model
-          </p>
-          <div className="run-eval__review">
-            <div className="run-eval__review-row">
-              <span>Model</span>
-              <span>{judgeModel.name}</span>
-            </div>
-            <div className="run-eval__review-row">
-              <span>API Key</span>
-              <span>{draft.judgeApiKey ? '•'.repeat(10) : 'Not provided'}</span>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className="run-eval__hint">
-        <Info size={14} />
-        <span>Costs are estimates. Actual costs depend on provider pricing.</span>
-      </div>
-    </div>
-  );
-};
-
-export default ReviewStep;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//RunEvaluation.tsx
-import { useEffect, useState, type FC, type ComponentType } from 'react';
-import { useNavigate } from 'react-router-dom';
-import {
-  ArrowLeft,
-  ArrowRight,
-  Play,
-  Check,
-  Clock3,
-  Tag,
-  LayoutGrid,
-  Plug,
-  Cpu,
-  Database,
-  Gauge,
-  ClipboardCheck,
-  Loader2,
-} from 'lucide-react';
-import NameStep from './steps/NameStep';
-import TypeStep from './steps/TypeStep';
-import ProvidersStep from './steps/ProvidersStep';
-import ModelsStep from './steps/ModelsStep';
-import DatasetStep from './steps/DatasetStep';
-import MetricsStep from './steps/MetricsStep';
-import ReviewStep from './steps/ReviewStep';
-import { createEvaluation, startEvaluation as startEvaluationRequest } from './evaluationsApi';
-import { fetchModels } from './modelsApi';
-import { fetchProviders } from './providersApi';
-import { fetchBenchmarks } from './benchmarksApi';
-import { fetchMetrics } from './metricsApi';
-import {
-  WIZARD_STEPS,
-  type Benchmark,
-  type CreateEvaluationRequest,
-  type EvaluationDraft,
-  type ModelApi,
-  type ProviderApi,
-} from './types';
-import './RunEvaluation.scss';
-
-const EMPTY_DRAFT: EvaluationDraft = {
-  name: '',
-  type: null,
-  providers: [],
-  models: [],
-  dataset: null,
-  subgroup: [],
-  metrics: [],
-  judgeModelId: null,
-  judgeApiKey: '',
-  agentFramework: null,
-};
-
-const STEP_ICONS: ComponentType<{ size?: number }>[] = [
-  Tag,
-  LayoutGrid,
-  Plug,
-  Cpu,
-  Database,
-  Gauge,
-  ClipboardCheck,
-];
-
-const RunEvaluation: FC = () => {
-  const navigate = useNavigate();
-  const [step, setStep] = useState(1);
-  const [draft, setDraft] = useState<EvaluationDraft>(EMPTY_DRAFT);
-  const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const totalSteps = WIZARD_STEPS.length;
-
-  const [providers, setProviders] = useState<ProviderApi[]>([]);
-  const [models, setModels] = useState<ModelApi[]>([]);
-  const [benchmarks, setBenchmarks] = useState<Benchmark[]>([]);
-  const [allMetrics, setAllMetrics] = useState<string[]>([]);
-  const [customAgentMetrics, setCustomAgentMetrics] = useState<string[]>([]);
-  const [catalogLoading, setCatalogLoading] = useState(true);
-  const [catalogError, setCatalogError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadCatalog = async () => {
-      setCatalogLoading(true);
-      setCatalogError(null);
-      try {
-        const [providersRes, modelsRes, benchmarksRes, metricsRes] = await Promise.all([
-          fetchProviders(),
-          fetchModels(),
-          fetchBenchmarks(),
-          fetchMetrics(),
-        ]);
-        if (cancelled) return;
-        setProviders(providersRes.providers);
-        setModels(modelsRes.models);
-        setBenchmarks(benchmarksRes.benchmarks);
-        setAllMetrics(metricsRes.all_metrics);
-        setCustomAgentMetrics(metricsRes.custom_agent_metrics);
-      } catch (err) {
-        if (cancelled) return;
-        setCatalogError(
-          err instanceof Error ? err.message : 'Failed to load providers, models, test suites, and metrics.'
-        );
-      } finally {
-        if (!cancelled) setCatalogLoading(false);
-      }
-    };
-
-    loadCatalog();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const toggleInArray = (key: 'providers' | 'models' | 'metrics' | 'subgroup', id: string) => {
-    setDraft((d) => {
-      const arr = d[key];
-      const next = arr.includes(id) ? arr.filter((x) => x !== id) : [...arr, id];
-      return { ...d, [key]: next };
-    });
-  };
-
-  const setType = (id: EvaluationDraft['type']) => {
-    setDraft((d) => (d.type === id ? d : { ...d, type: id, metrics: [], agentFramework: id === 'agent' ? d.agentFramework : null }));
-  };
-
-  const setAgentFramework = (id: string | null) => {
-    setDraft((d) => (d.agentFramework === id ? { ...d, agentFramework: null } : { ...d, agentFramework: id }));
-  };
-
-  const setJudgeModel = (id: string | null) => {
-    setDraft((d) => (d.judgeModelId === id ? { ...d, judgeModelId: null } : { ...d, judgeModelId: id }));
-  };
-
-  const setJudgeApiKey = (value: string) => {
-    setDraft((d) => ({ ...d, judgeApiKey: value }));
-  };
-
-  const selectAllMetrics = (ids: string[]) => {
-    setDraft((d) => ({ ...d, metrics: Array.from(new Set([...d.metrics, ...ids])) }));
-  };
-
-  const clearAllMetrics = () => {
-    setDraft((d) => ({ ...d, metrics: [] }));
-  };
-
-  const validate = (): boolean => {
-    setError(null);
-    if (step === 1 && !draft.name.trim()) {
-      setError('Enter an evaluation name to continue.');
-      return false;
-    }
-    if (step === 2 && !draft.type) {
-      setError('Select an evaluation type to continue.');
-      return false;
-    }
-    if (step === 3 && draft.providers.length === 0) {
-      setError('Select at least one provider to continue.');
-      return false;
-    }
-    if (step === 4 && draft.models.length === 0) {
-      setError('Select at least one model to continue.');
-      return false;
-    }
-    if (step === 5 && !draft.dataset) {
-      setError('Select a test suite to continue.');
-      return false;
-    }
-    if (step === 6 && draft.metrics.length === 0) {
-      setError('Select at least one metric to continue.');
-      return false;
-    }
-    return true;
-  };
-
-  const goNext = () => {
-    if (!validate()) return;
-    setStep((s) => Math.min(totalSteps, s + 1));
-  };
-  const goBack = () => setStep((s) => Math.max(1, s - 1));
-  const goToStep = (target: number) => {
-    if (target < step) setStep(target);
-  };
-
-  const buildPayload = (): CreateEvaluationRequest => ({
-    name: draft.name.trim(),
-    eval_type: draft.type ?? '',
-    dataset_id: '',
-    benchmark: draft.dataset ?? '',
-    selected_category: draft.subgroup.length > 0 ? draft.subgroup : undefined,
-    model_ids: draft.models,
-    selected_metrics: draft.metrics,
-    dataset_limit: 1,
-    judge_config: draft.judgeModelId
-      ? {
-          model_id: draft.judgeModelId,
-          base_url: models.find((m) => m.id === draft.judgeModelId)?.base_url ?? '',
-          api_key: draft.judgeApiKey,
-        }
-      : undefined,
-  });
-
-  const startEvaluation = async () => {
-    if (!validate()) return;
-    setError(null);
-    setSubmitting(true);
-    try {
-      const created = await createEvaluation(buildPayload());
-      const evaluationId = created.id ?? created.evaluation_id;
-      if (!evaluationId) {
-        throw new Error('The server did not return an evaluation id.');
-      }
-      await startEvaluationRequest(evaluationId);
-      navigate('/app/history', { state: { evaluationId } });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start the evaluation. Please try again.');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const progressPct = Math.round(((step - 1) / (totalSteps - 1)) * 100);
-
-  return (
-    <div className="run-eval">
-      <div className="run-eval__header">
-        <div className="run-eval__header-left">
-          <p className="run-eval__header-eyebrow">Create evaluation</p>
-          <h1 className="run-eval__title">New Evaluation</h1>
-          <p className="run-eval__subtitle">Compare AI models with standardized tests</p>
-        </div>
-
-        <div className="run-eval__header-meta">
-          <Clock3 size={13} />
-          ~5 min guided setup
+          </ul>
         </div>
       </div>
 
-      <div className="run-eval__wizard">
-        <aside className="run-eval__sidebar">
-          <div className="run-eval__sidebar-progress">
-            <div className="run-eval__sidebar-progress-head">
-              <span>
-                Step {step} of {totalSteps}
-              </span>
-              <span>{progressPct}%</span>
-            </div>
-            <div className="run-eval__sidebar-progress-track">
-              <div className="run-eval__sidebar-progress-fill" style={{ width: `${progressPct}%` }} />
-            </div>
-          </div>
-
-          {WIZARD_STEPS.map((s, i) => {
-            const num = i + 1;
-            const state = num === step ? 'active' : num < step ? 'complete' : 'upcoming';
-            const Icon = STEP_ICONS[i];
+      {/* ---------- what's next roadmap ---------- */}
+      <div className="run-eval__roadmap">
+        <p className="run-eval__filter-title">What you'll set up next</p>
+        <div className="run-eval__roadmap-list">
+          {upcomingSteps.map((s, i) => {
+            const Icon = ROADMAP_ICONS[i];
             return (
-              <button
-                key={s.key}
-                type="button"
-                className={`run-eval__step run-eval__step--${state}`}
-                onClick={() => goToStep(num)}
-                disabled={num > step}
-              >
-                <span className="run-eval__step-marker">
-                  {state === 'complete' ? <Check size={14} strokeWidth={3} /> : <Icon size={15} />}
+              <div className="run-eval__roadmap-item" key={s.key}>
+                <span className="run-eval__roadmap-icon">
+                  <Icon size={15} strokeWidth={2} />
                 </span>
-                <span className="run-eval__step-text">
-                  <span className="run-eval__step-label">{s.label}</span>
-                  <span className="run-eval__step-desc">{s.description}</span>
-                </span>
-              </button>
+                <div className="run-eval__roadmap-text">
+                  <span className="run-eval__roadmap-label">{s.label}</span>
+                  <span className="run-eval__roadmap-desc">{s.description}</span>
+                </div>
+                {i < upcomingSteps.length - 1 && (
+                  <ArrowRight size={13} strokeWidth={2} className="run-eval__roadmap-arrow" />
+                )}
+              </div>
             );
           })}
-        </aside>
-
-        <div className="run-eval__content">
-          <p className="run-eval__step-kicker">
-            Step {step} of {totalSteps}
-          </p>
-
-          <div className="run-eval__body">
-            {step === 1 && <NameStep name={draft.name} onChange={(name) => setDraft((d) => ({ ...d, name }))} />}
-            {step === 2 && (
-              <TypeStep
-                value={draft.type}
-                onChange={setType}
-                agentFramework={draft.agentFramework}
-                onAgentFrameworkChange={setAgentFramework}
-              />
-            )}
-            {step === 3 && (
-              <ProvidersStep
-                providers={providers}
-                loading={catalogLoading}
-                error={catalogError}
-                selected={draft.providers}
-                onToggle={(id) => toggleInArray('providers', id)}
-                onGoToProviders={() => navigate('/app/providers')}
-              />
-            )}
-            {step === 4 && (
-              <ModelsStep
-                models={models}
-                providerCatalog={providers}
-                selectedProviders={draft.providers}
-                selected={draft.models}
-                onToggle={(id) => toggleInArray('models', id)}
-                onClear={() => setDraft((d) => ({ ...d, models: [] }))}
-                loading={catalogLoading}
-                error={catalogError}
-              />
-            )}
-            {step === 5 && (
-              <DatasetStep
-                evalType={draft.type}
-                benchmarks={benchmarks}
-                loading={catalogLoading}
-                error={catalogError}
-                selected={draft.dataset}
-                onSelect={(id) =>
-                  setDraft((d) => (d.dataset === id ? d : { ...d, dataset: id, subgroup: [] }))
-                }
-                subgroup={draft.subgroup}
-                onToggleSubgroup={(value) => toggleInArray('subgroup', value)}
-              />
-            )}
-            {step === 6 && (
-              <MetricsStep
-                evalType={draft.type}
-                allMetrics={allMetrics}
-                customAgentMetrics={customAgentMetrics}
-                selected={draft.metrics}
-                onToggle={(id) => toggleInArray('metrics', id)}
-                onSelectAll={selectAllMetrics}
-                onClearAll={clearAllMetrics}
-                loading={catalogLoading}
-                error={catalogError}
-                models={models}
-                selectedModelIds={draft.models}
-                judgeModelId={draft.judgeModelId}
-                onJudgeModelChange={setJudgeModel}
-                judgeApiKey={draft.judgeApiKey}
-                onJudgeApiKeyChange={setJudgeApiKey}
-              />
-            )}
-            {step === 7 && <ReviewStep draft={draft} models={models} benchmarks={benchmarks} providers={providers} />}
-
-            {error && <p className="run-eval__error">{error}</p>}
-          </div>
-
-          <div className="run-eval__nav">
-            {step > 1 ? (
-              <button
-                type="button"
-                className="run-eval__btn run-eval__btn--secondary run-eval__btn--lg"
-                onClick={goBack}
-                disabled={submitting}
-              >
-                <ArrowLeft size={16} /> Back
-              </button>
-            ) : (
-              <span />
-            )}
-
-            {step < totalSteps ? (
-              <button type="button" className="run-eval__btn run-eval__btn--primary run-eval__btn--lg" onClick={goNext}>
-                Continue <ArrowRight size={16} />
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="run-eval__btn run-eval__btn--primary run-eval__btn--lg"
-                onClick={startEvaluation}
-                disabled={submitting}
-              >
-                {submitting ? (
-                  <>
-                    <Loader2 size={16} className="run-eval__spin" /> Starting…
-                  </>
-                ) : (
-                  <>
-                    <Play size={16} /> Start Evaluation
-                  </>
-                )}
-              </button>
-            )}
-          </div>
         </div>
       </div>
     </div>
   );
 };
 
-export default RunEvaluation;
-
-
-
-
-
+export default NameStep;
 
 
 
@@ -1159,6 +599,110 @@ export default RunEvaluation;
         color: $text-secondary;
       }
     }
+  }
+
+  /* ---------- name step: tips panel ---------- */
+  &__tips {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    margin-top: 1.75rem;
+    padding: 1rem 1.125rem;
+    border: 1px solid $border-subtle;
+    border-radius: 0.875rem;
+    background: linear-gradient(135deg, $primary-light 0%, rgba(255, 255, 255, 0) 140%);
+  }
+
+  &__tips-icon {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 0.625rem;
+    display: grid;
+    place-items: center;
+    background: $bg-main;
+    color: $primary;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+  }
+
+  &__tips-title {
+    font-size: 0.84375rem;
+    font-weight: 700;
+    color: $text-primary;
+    margin-bottom: 6px;
+  }
+
+  &__tips-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.8125rem;
+    color: $text-secondary;
+    line-height: 1.5;
+    padding-left: 1.125rem;
+
+    li {
+      list-style: disc;
+    }
+  }
+
+  /* ---------- name step: what's-next roadmap ---------- */
+  &__roadmap {
+    margin-top: 1.75rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid $border-subtle;
+  }
+
+  &__roadmap-list {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem;
+    margin-top: 0.875rem;
+  }
+
+  &__roadmap-item {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+  }
+
+  &__roadmap-icon {
+    flex-shrink: 0;
+    width: 30px;
+    height: 30px;
+    border-radius: 0.5rem;
+    display: grid;
+    place-items: center;
+    background: $bg-subtle;
+    color: $text-secondary;
+    border: 1px solid $border-subtle;
+  }
+
+  &__roadmap-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding-right: 0.5rem;
+  }
+
+  &__roadmap-label {
+    font-size: 0.78125rem;
+    font-weight: 700;
+    color: $text-primary;
+    white-space: nowrap;
+  }
+
+  &__roadmap-desc {
+    font-size: 0.6875rem;
+    color: $text-tertiary;
+    white-space: nowrap;
+  }
+
+  &__roadmap-arrow {
+    flex-shrink: 0;
+    color: $border-strong;
+    margin-right: 0.375rem;
   }
 
   /* ---------- eval type cards ---------- */
@@ -2517,6 +2061,16 @@ export default RunEvaluation;
 
     &__review-stats {
       grid-template-columns: repeat(2, 1fr);
+    }
+
+    &__roadmap-list {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.75rem;
+    }
+
+    &__roadmap-arrow {
+      display: none;
     }
   }
 
