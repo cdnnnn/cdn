@@ -1,97 +1,222 @@
-//Namestep.tsx
-import type { FC } from 'react';
-import { Lightbulb, LayoutGrid, Plug, Cpu, Database, Gauge, ClipboardCheck, ArrowRight } from 'lucide-react';
-import { SUGGESTED_NAMES } from '../data';
-import { WIZARD_STEPS } from '../types';
+//Datasetstep.tsx
+import { useMemo, useState, type FC } from 'react';
+import { UploadCloud, Check, Loader2, AlertTriangle, Layers } from 'lucide-react';
+import type { Benchmark, EvalTypeId } from '../types';
 
 interface Props {
-  name: string;
-  onChange: (name: string) => void;
+  evalType: EvalTypeId | null;
+  benchmarks: Benchmark[];
+  loading: boolean;
+  error: string | null;
+  selected: string | null;
+  onSelect: (id: string) => void;
+  subgroup: string[];
+  onToggleSubgroup: (value: string) => void;
 }
 
-// Icons for steps 2–7 (everything after Name), mirroring STEP_ICONS in RunEvaluation.tsx.
-const ROADMAP_ICONS = [LayoutGrid, Plug, Cpu, Database, Gauge, ClipboardCheck];
+const DatasetStep: FC<Props> = ({
+  evalType,
+  benchmarks,
+  loading,
+  error,
+  selected,
+  onSelect,
+  subgroup,
+  onToggleSubgroup,
+}) => {
+  const [tab, setTab] = useState<'official' | 'private'>('official');
+  const [category, setCategory] = useState('All');
 
-const NAMING_TIPS = [
-  'Include what you\u2019re testing, e.g. a model, a product feature, or a use case.',
-  'Add a date or version so you can track changes over time (e.g. "Q3", "v2").',
-  'Keep it specific enough to tell apart from similar past evaluations in History.',
-];
+  const categories = useMemo(() => {
+    const set = new Set<string>();
+    benchmarks.forEach((b) => set.add(b.type));
+    return ['All', ...Array.from(set).sort()];
+  }, [benchmarks]);
 
-const NameStep: FC<Props> = ({ name, onChange }) => {
-  const upcomingSteps = WIZARD_STEPS.slice(1);
+  const filtered = useMemo(
+    () => benchmarks.filter((b) => category === 'All' || b.type === category),
+    [benchmarks, category]
+  );
+
+  const selectedBenchmark = useMemo(
+    () => benchmarks.find((b) => b.name === selected) ?? null,
+    [benchmarks, selected]
+  );
+
+  const handleTaskToggle = (taskValue: string) => {
+    onToggleSubgroup(taskValue);
+  };
 
   return (
     <div className="run-eval__card">
-      <h2 className="run-eval__step-title">Name your evaluation</h2>
-      <p className="run-eval__step-desc">Give it a memorable name so you can find it later.</p>
+      <h2 className="run-eval__step-title">Pick a test suite</h2>
+      <p className="run-eval__step-desc">Test suites contain questions that measure AI capabilities.</p>
 
-      <div className="run-eval__field">
-        <label className="run-eval__label" htmlFor="eval-name">
-          Evaluation Name
-        </label>
-        <input
-          id="eval-name"
-          type="text"
-          className="run-eval__input run-eval__input--lg"
-          placeholder="e.g., Q3 Customer Support Bot Test"
-          value={name}
-          onChange={(e) => onChange(e.target.value)}
-        />
-      </div>
-
-      <div className="run-eval__suggestions">
-        <span className="run-eval__suggestions-label">Try:</span>
-        {SUGGESTED_NAMES.map((s) => (
-          <button key={s} type="button" className="run-eval__chip" onClick={() => onChange(s)}>
-            {s}
+      <div className="run-eval__tabs">
+        {(['official', 'private'] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            className={`run-eval__tab${tab === t ? ' run-eval__tab--active' : ''}`}
+            onClick={() => setTab(t)}
+          >
+            {t === 'official' ? 'Benchmarks' : 'Upload'}
           </button>
         ))}
       </div>
 
-      {/* ---------- naming tips ---------- */}
-      <div className="run-eval__tips">
-        <div className="run-eval__tips-icon">
-          <Lightbulb size={16} strokeWidth={2} />
-        </div>
-        <div>
-          <p className="run-eval__tips-title">Tips for a good name</p>
-          <ul className="run-eval__tips-list">
-            {NAMING_TIPS.map((tip) => (
-              <li key={tip}>{tip}</li>
-            ))}
-          </ul>
-        </div>
-      </div>
+      {tab === 'official' && (
+        <>
+          {loading && (
+            <div className="run-eval__loading-state">
+              <Loader2 size={18} className="run-eval__spin" />
+              Loading test suites…
+            </div>
+          )}
 
-      {/* ---------- what's next roadmap ---------- */}
-      <div className="run-eval__roadmap">
-        <p className="run-eval__filter-title">What you'll set up next</p>
-        <div className="run-eval__roadmap-list">
-          {upcomingSteps.map((s, i) => {
-            const Icon = ROADMAP_ICONS[i];
-            return (
-              <div className="run-eval__roadmap-item" key={s.key}>
-                <span className="run-eval__roadmap-icon">
-                  <Icon size={15} strokeWidth={2} />
-                </span>
-                <div className="run-eval__roadmap-text">
-                  <span className="run-eval__roadmap-label">{s.label}</span>
-                  <span className="run-eval__roadmap-desc">{s.description}</span>
+          {!loading && error && (
+            <div className="run-eval__inline-error">
+              <AlertTriangle size={15} />
+              {error}
+            </div>
+          )}
+
+          {!loading && !error && (
+            <>
+              <div className="run-eval__category-filters">
+                {categories.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    className={`run-eval__chip${category === c ? ' run-eval__chip--active' : ''}`}
+                    onClick={() => setCategory(c)}
+                  >
+                    {c}
+                  </button>
+                ))}
+              </div>
+
+              {/* Dataset grid + persistent subgroup column, each with its own scroll. */}
+              <div className="run-eval__dataset-layout">
+                <div className="run-eval__dataset-grid-scroll">
+                  <div className="run-eval__dataset-grid">
+                    {filtered.map((b) => {
+                      const isSelected = selected === b.name;
+                      const recommended = evalType ? b.type === evalType : false;
+                      const hasSubgroupSelected = isSelected && subgroup.length > 0;
+                      return (
+                        <button
+                          key={b.name}
+                          type="button"
+                          className={`run-eval__dataset-card${isSelected ? ' run-eval__dataset-card--selected' : ''}`}
+                          onClick={() => onSelect(b.name)}
+                        >
+                          <div className="run-eval__dataset-top">
+                            <span className="run-eval__dataset-name">{b.name}</span>
+                            <span className="run-eval__dataset-top-actions">
+                              {b.tasks.length > 0 && (
+                                <span className="run-eval__subgroup-btn" title="Has subgroups">
+                                  <Layers size={12} />
+                                  {b.tasks.length}
+                                </span>
+                              )}
+                              {isSelected && (
+                                <span className="run-eval__type-check">
+                                  <Check size={12} strokeWidth={2.75} />
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                          <p className="run-eval__dataset-desc">{b.description}</p>
+                          <div className="run-eval__dataset-meta n">
+                            <span>{b.task_count} tasks</span>
+                            <span>{b.type}</span>
+                          </div>
+                          {b.required_capabilities.length > 0 && (
+                            <div className="run-eval__dataset-caps">
+                              {b.required_capabilities.slice(0, 4).map((c) => (
+                                <span key={c} className="run-eval__chip run-eval__chip--static">
+                                  {c}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {hasSubgroupSelected && (
+                            <span className="run-eval__badge run-eval__badge--soft">
+                              {subgroup.length} subgroup{subgroup.length === 1 ? '' : 's'} selected
+                            </span>
+                          )}
+                          {!hasSubgroupSelected && recommended && (
+                            <span className="run-eval__badge run-eval__badge--soft">Recommended</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                    {filtered.length === 0 && <p className="run-eval__empty">No test suites match this category.</p>}
+                  </div>
                 </div>
-                {i < upcomingSteps.length - 1 && (
-                  <ArrowRight size={13} strokeWidth={2} className="run-eval__roadmap-arrow" />
+
+                {/* Subgroup column — only shown once a dataset with subgroups is selected. */}
+                {selectedBenchmark && selectedBenchmark.tasks.length > 0 && (
+                  <aside className="run-eval__subgroup-panel">
+                    <div className="run-eval__subgroup-panel-head">
+                      <p className="run-eval__subgroup-panel-eyebrow">Subgroups</p>
+                      <h3 className="run-eval__subgroup-panel-title">{selectedBenchmark.name}</h3>
+                      <p className="run-eval__subgroup-panel-sub">
+                        {subgroup.length > 0
+                          ? `${subgroup.length} of ${selectedBenchmark.tasks.length} selected`
+                          : `${selectedBenchmark.tasks.length} available`}
+                      </p>
+                    </div>
+
+                    <div className="run-eval__subgroup-panel-scroll">
+                      {selectedBenchmark.tasks.map((task) => {
+                        const taskSelected = subgroup.includes(task.value);
+                        return (
+                          <button
+                            key={task.value}
+                            type="button"
+                            className={`run-eval__drawer-task${taskSelected ? ' run-eval__drawer-task--selected' : ''}`}
+                            onClick={() => handleTaskToggle(task.value)}
+                            role="checkbox"
+                            aria-checked={taskSelected}
+                          >
+                            <span className={`run-eval__checkbox${taskSelected ? ' run-eval__checkbox--checked' : ''}`}>
+                              {taskSelected && <Check size={12} strokeWidth={3} />}
+                            </span>
+                            <span className="run-eval__drawer-task-name">{task.name}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </aside>
                 )}
               </div>
-            );
-          })}
+            </>
+          )}
+        </>
+      )}
+
+      {tab === 'private' && (
+        <div className="run-eval__upload-zone">
+          <UploadCloud size={26} />
+          <h3>Upload Test Data</h3>
+          <p>Drag &amp; drop or click to browse</p>
+          <div className="run-eval__format-chips">
+            {['CSV', 'JSON', 'JSONL', 'HuggingFace'].map((f) => (
+              <span key={f} className="run-eval__chip run-eval__chip--static">
+                {f}
+              </span>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };
 
-export default NameStep;
+export default DatasetStep;
+
 
 
 
@@ -1259,8 +1384,28 @@ export default NameStep;
     margin-top: 1.125rem;
   }
 
-  &__dataset-grid {
+  /* Dataset grid on the left + persistent subgroup panel on the right,
+     each scrolling independently within a fixed-height row. */
+  &__dataset-layout {
+    display: flex;
+    align-items: stretch;
+    gap: 1.25rem;
     margin-top: 1.125rem;
+    height: 30rem;
+    min-height: 0;
+  }
+
+  &__dataset-grid-scroll {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 4px;
+    margin-right: -4px;
+  }
+
+  &__dataset-grid {
+    margin-top: 0;
     display: grid;
     grid-template-columns: repeat(2, 1fr);
     gap: 0.75rem;
@@ -1352,6 +1497,62 @@ export default NameStep;
     display: flex;
     flex-wrap: wrap;
     gap: 0.3125rem;
+  }
+
+  /* ---------- persistent subgroup column (appears after the dataset grid) ---------- */
+  &__subgroup-panel {
+    flex-shrink: 0;
+    width: 400px;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid $border-subtle;
+    border-radius: 0.875rem;
+    background: $bg-subtle;
+    overflow: hidden;
+  }
+
+  &__subgroup-panel-head {
+    flex-shrink: 0;
+    padding: 16px 18px 14px;
+    border-bottom: 1px solid $border-subtle;
+  }
+
+  &__subgroup-panel-eyebrow {
+    font-family: $font-mono;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: $primary;
+    margin-bottom: 4px;
+  }
+
+  &__subgroup-panel-title {
+    font-size: 0.9375rem;
+    font-weight: 800;
+    color: $text-primary;
+    letter-spacing: -0.01em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__subgroup-panel-sub {
+    margin-top: 2px;
+    font-size: 0.75rem;
+    color: $text-tertiary;
+  }
+
+  // Scrolls independently from the dataset grid on the left.
+  &__subgroup-panel-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
   }
 
   &__empty-state,
@@ -2008,6 +2209,22 @@ export default NameStep;
   }
 
   /* ---------- responsive ---------- */
+  @media (max-width: 1100px) {
+    &__dataset-layout {
+      flex-direction: column;
+      height: auto;
+    }
+
+    &__dataset-grid-scroll {
+      max-height: 26rem;
+    }
+
+    &__subgroup-panel {
+      width: 100%;
+      max-height: 20rem;
+    }
+  }
+
   @media (max-width: 896px) {
     &__provider-grid,
     &__models-grid,
