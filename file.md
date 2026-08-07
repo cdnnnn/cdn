@@ -1,3 +1,223 @@
+//Metricsstep.tsx
+import { useMemo, type FC } from 'react';
+import { Check, Loader2, AlertTriangle, Gavel, Key, Sparkles } from 'lucide-react';
+import type { EvalTypeId, ModelApi } from '../types';
+
+interface Props {
+  evalType: EvalTypeId | null;
+  allMetrics: string[];
+  customAgentMetrics: string[];
+  selected: string[];
+  onToggle: (id: string) => void;
+  onSelectAll: (ids: string[]) => void;
+  onClearAll: () => void;
+  loading: boolean;
+  error: string | null;
+  models: ModelApi[];
+  selectedModelIds: string[];
+  judgeModelId: string | null;
+  onJudgeModelChange: (id: string | null) => void;
+  judgeApiKey: string;
+  onJudgeApiKeyChange: (value: string) => void;
+}
+
+const MetricsStep: FC<Props> = ({
+  evalType,
+  allMetrics,
+  customAgentMetrics,
+  selected,
+  onToggle,
+  onSelectAll,
+  onClearAll,
+  loading,
+  error,
+  models,
+  selectedModelIds,
+  judgeModelId,
+  onJudgeModelChange,
+  judgeApiKey,
+  onJudgeApiKeyChange,
+}) => {
+  const groups = useMemo(() => {
+    const list = [{ label: 'All Metrics', items: allMetrics }];
+    if (evalType === 'agent' && customAgentMetrics.length > 0) {
+      list.push({ label: 'Custom Agent Metrics', items: customAgentMetrics });
+    }
+    return list;
+  }, [allMetrics, customAgentMetrics, evalType]);
+
+  const allApplicableMetrics = useMemo(() => groups.flatMap((g) => g.items), [groups]);
+  const allSelected = allApplicableMetrics.length > 0 && allApplicableMetrics.every((m) => selected.includes(m));
+
+  const eligibleJudgeModels = useMemo(
+    () => models.filter((m) => selectedModelIds.includes(m.id)),
+    [models, selectedModelIds]
+  );
+
+  return (
+    <div className="run-eval__card run-eval__card--wide">
+      <div className="run-eval__step-header-row">
+        <div>
+          <h2 className="run-eval__step-title">What to measure?</h2>
+          <p className="run-eval__step-desc">
+            Select the metrics that matter for your use case. Nothing is selected by default.
+          </p>
+        </div>
+        <div className="run-eval__metrics-count">
+          <span className="run-eval__metrics-count-num">{selected.length}</span> selected
+          {allApplicableMetrics.length > 0 && (
+            <span className="run-eval__metrics-bulk-actions">
+              <button
+                type="button"
+                className="run-eval__metrics-toggle-all"
+                onClick={() => onSelectAll(allApplicableMetrics)}
+                disabled={allSelected}
+              >
+                Select all
+              </button>
+              <span className="run-eval__metrics-bulk-divider" />
+              <button
+                type="button"
+                className="run-eval__metrics-toggle-all"
+                onClick={onClearAll}
+                disabled={selected.length === 0}
+              >
+                Unselect all
+              </button>
+            </span>
+          )}
+        </div>
+      </div>
+
+      {loading && (
+        <div className="run-eval__loading-state">
+          <Loader2 size={18} className="run-eval__spin" />
+          Loading metrics…
+        </div>
+      )}
+
+      {!loading && error && (
+        <div className="run-eval__inline-error">
+          <AlertTriangle size={15} />
+          {error}
+        </div>
+      )}
+
+      {!loading && !error && (
+        <div className="run-eval__metrics-layout">
+          <div className="run-eval__metrics-main">
+            <div className="run-eval__metrics-main-scroll">
+              {groups.map((group) => (
+                <div className="run-eval__metric-group" key={group.label}>
+                  <p className="run-eval__filter-title">{group.label}</p>
+                  <div className="run-eval__metrics-grid">
+                    {group.items.map((m) => {
+                      const isSelected = selected.includes(m);
+                      return (
+                        <button
+                          key={m}
+                          type="button"
+                          className={`run-eval__metric-card${isSelected ? ' run-eval__metric-card--selected' : ''}`}
+                          onClick={() => onToggle(m)}
+                        >
+                          <span className="run-eval__metric-card-icon">
+                            <Sparkles size={15} strokeWidth={2} />
+                          </span>
+                          <span className="run-eval__metric-name">{m}</span>
+                          <span
+                            className={`run-eval__metric-card-check${
+                              isSelected ? ' run-eval__metric-card-check--on' : ''
+                            }`}
+                          >
+                            <Check size={12} strokeWidth={3} />
+                          </span>
+                        </button>
+                      );
+                    })}
+                    {group.items.length === 0 && <p className="run-eval__empty">No metrics available.</p>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <aside className="run-eval__judge-panel">
+            <p className="run-eval__filter-title">
+              <Gavel size={13} strokeWidth={2.25} /> Judge Model
+            </p>
+            <p className="run-eval__judge-hint">
+              Pick one model from your selection to grade the other models' responses.
+            </p>
+
+            <div className="run-eval__judge-panel-scroll">
+              {eligibleJudgeModels.length === 0 ? (
+                <div className="run-eval__judge-empty">
+                  <p>Select models in the previous step to choose a judge.</p>
+                </div>
+              ) : (
+                <div className="run-eval__judge-list">
+                  {eligibleJudgeModels.map((m) => {
+                    const isJudge = judgeModelId === m.id;
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        className={`run-eval__judge-row${isJudge ? ' run-eval__judge-row--selected' : ''}`}
+                        onClick={() => onJudgeModelChange(m.id)}
+                        role="radio"
+                        aria-checked={isJudge}
+                      >
+                        <span className={`run-eval__radio${isJudge ? ' run-eval__radio--checked' : ''}`} />
+                        <span className="run-eval__judge-row-text">
+                          <span className="run-eval__judge-row-name">{m.name}</span>
+                          <span className="run-eval__judge-row-meta">{m.provider_id}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {judgeModelId && (
+                <div className="run-eval__field run-eval__field--judge">
+                  <label className="run-eval__label" htmlFor="judge-api-key">
+                    <Key size={12} strokeWidth={2.25} /> Judge API Key
+                  </label>
+                  <input
+                    id="judge-api-key"
+                    type="password"
+                    className="run-eval__input"
+                    placeholder="Enter API key"
+                    value={judgeApiKey}
+                    onChange={(e) => onJudgeApiKeyChange(e.target.value)}
+                  />
+                </div>
+              )}
+            </div>
+          </aside>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default MetricsStep;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//RunEvaluations.scss
 @use '../../../styles/variables' as *;
 
 .run-eval {
@@ -1184,6 +1404,11 @@
 
   &__metric-group {
     margin-top: 1.5rem;
+
+    &:first-child {
+      margin-top: 0;
+    }
+
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
@@ -1191,27 +1416,76 @@
 
   &__metrics-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 0.625rem;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
   }
 
+  /* ---------- redesigned metric card ---------- */
   &__metric-card {
     position: relative;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
     text-align: left;
-    padding: 0.75rem 2rem 0.75rem 0.875rem;
+    width: 100%;
+    padding: 0.875rem 2.5rem 0.875rem 0.875rem;
     border: 1px solid $border-default;
-    border-radius: 0.625rem;
+    border-radius: 0.875rem;
     background: $bg-main;
     cursor: pointer;
-    transition: border-color 0.14s ease, background 0.14s ease;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.03);
+    transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
 
     &:hover {
       border-color: $primary;
+      box-shadow: $shadow-sm;
+      transform: translateY(-1px);
     }
 
     &--selected {
       border-color: $primary;
-      background: $primary-light;
+      background: linear-gradient(135deg, $primary-light 0%, rgba(255, 255, 255, 0) 120%);
+      box-shadow: 0 0 0 1px $primary, $shadow-sm;
+    }
+  }
+
+  &__metric-card-icon {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 0.625rem;
+    display: grid;
+    place-items: center;
+    background: $bg-subtle;
+    color: $text-tertiary;
+    transition: background 0.16s ease, color 0.16s ease;
+  }
+
+  &__metric-card--selected &__metric-card-icon {
+    background: $primary;
+    color: #fff;
+  }
+
+  &__metric-card-check {
+    position: absolute;
+    top: 50%;
+    right: 0.875rem;
+    transform: translateY(-50%) scale(0.6);
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: $bg-subtle;
+    color: transparent;
+    opacity: 0;
+    transition: opacity 0.16s ease, transform 0.16s ease, background 0.16s ease, color 0.16s ease;
+
+    &--on {
+      opacity: 1;
+      transform: translateY(-50%) scale(1);
+      background: $primary;
+      color: #fff;
     }
   }
 
@@ -1220,24 +1494,38 @@
     font-size: 0.875rem;
     font-weight: 600;
     color: $text-primary;
+    line-height: 1.3;
   }
 
-  /* ---------- metrics + judge model split ---------- */
+  /* ---------- metrics + judge model split (two independent scroll columns) ---------- */
   &__metrics-layout {
-    display: flex;
-    align-items: flex-start;
+    display: grid;
+    grid-template-columns: 1fr 350px;
+    align-items: stretch;
     gap: 1.5rem;
     margin-top: 0.5rem;
+    height: 32rem;
+    min-height: 0;
   }
 
   &__metrics-main {
-    flex: 1;
     min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  // Scrolls independently from the judge panel on the right.
+  &__metrics-main-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 4px;
+    margin-right: -4px;
   }
 
   &__judge-panel {
     flex-shrink: 0;
-    width: 350px;
     background: $bg-subtle;
     border: 1px solid $border-subtle;
     border-radius: 0.75rem;
@@ -1245,6 +1533,8 @@
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
+    min-height: 0;
+    overflow: hidden;
 
     .run-eval__filter-title {
       display: flex;
@@ -1263,6 +1553,19 @@
     color: $text-tertiary;
     line-height: 1.5;
     margin-bottom: 0.75rem;
+    flex-shrink: 0;
+  }
+
+  // Scrolls independently from the metrics list on the left.
+  &__judge-panel-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding-right: 4px;
+    margin-right: -4px;
   }
 
   &__judge-empty {
@@ -1278,8 +1581,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    max-height: 16rem;
-    overflow-y: auto;
+    flex-shrink: 0;
   }
 
   &__judge-row {
@@ -1589,14 +1891,29 @@
 
   @media (max-width: 900px) {
     &__metrics-layout {
-      flex-direction: column;
+      grid-template-columns: 1fr;
+      height: auto;
+    }
+
+    &__metrics-main-scroll {
+      max-height: 22rem;
     }
 
     &__judge-panel {
       width: 100%;
     }
 
+    &__judge-panel-scroll {
+      max-height: 18rem;
+    }
+
     &__framework-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 640px) {
+    &__metrics-grid {
       grid-template-columns: 1fr;
     }
   }
