@@ -112,6 +112,8 @@ const DatasetStep: FC<Props> = ({
                       const isSelected = selected === b.name;
                       const recommended = evalType ? b.type === evalType : false;
                       const hasSubgroupSelected = isSelected && subgroup.length > 0;
+                      const tasks = b.tasks ?? [];
+                      const requiredCapabilities = b.required_capabilities ?? [];
                       return (
                         <button
                           key={b.name}
@@ -122,10 +124,10 @@ const DatasetStep: FC<Props> = ({
                           <div className="run-eval__dataset-top">
                             <span className="run-eval__dataset-name">{b.name}</span>
                             <span className="run-eval__dataset-top-actions">
-                              {b.tasks.length > 0 && (
+                              {tasks.length > 0 && (
                                 <span className="run-eval__subgroup-btn" title="Has subgroups">
                                   <Layers size={12} />
-                                  {b.tasks.length}
+                                  {tasks.length}
                                 </span>
                               )}
                               {isSelected && (
@@ -140,9 +142,9 @@ const DatasetStep: FC<Props> = ({
                             <span>{b.task_count} tasks</span>
                             <span>{b.type}</span>
                           </div>
-                          {b.required_capabilities.length > 0 && (
+                          {requiredCapabilities.length > 0 && (
                             <div className="run-eval__dataset-caps">
-                              {b.required_capabilities.slice(0, 4).map((c) => (
+                              {requiredCapabilities.slice(0, 4).map((c) => (
                                 <span key={c} className="run-eval__chip run-eval__chip--static">
                                   {c}
                                 </span>
@@ -165,20 +167,20 @@ const DatasetStep: FC<Props> = ({
                 </div>
 
                 {/* Subgroup column — only shown once a dataset with subgroups is selected. */}
-                {selectedBenchmark && selectedBenchmark.tasks.length > 0 && (
+                {selectedBenchmark && (selectedBenchmark.tasks ?? []).length > 0 && (
                   <aside className="run-eval__subgroup-panel">
                     <div className="run-eval__subgroup-panel-head">
                       <p className="run-eval__subgroup-panel-eyebrow">Subgroups</p>
                       <h3 className="run-eval__subgroup-panel-title">{selectedBenchmark.name}</h3>
                       <p className="run-eval__subgroup-panel-sub">
                         {subgroup.length > 0
-                          ? `${subgroup.length} of ${selectedBenchmark.tasks.length} selected`
-                          : `${selectedBenchmark.tasks.length} available`}
+                          ? `${subgroup.length} of ${(selectedBenchmark.tasks ?? []).length} selected`
+                          : `${(selectedBenchmark.tasks ?? []).length} available`}
                       </p>
                     </div>
 
                     <div className="run-eval__subgroup-panel-scroll">
-                      {selectedBenchmark.tasks.map((task) => {
+                      {(selectedBenchmark.tasks ?? []).map((task) => {
                         const taskSelected = subgroup.includes(task.value);
                         return (
                           <button
