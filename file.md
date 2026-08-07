@@ -1,540 +1,38 @@
-import { useEffect, useMemo, useState, type FC } from 'react';
-import { useNavigate } from 'react-router-dom';
-import {
-  Play,
-  PlugZap,
-  Upload,
-  Search,
-  ChevronRight,
-  Trophy,
-  Cpu,
-  Database,
-  Gauge,
-  CheckCircle2,
-  Sparkles,
-  Loader2,
-  AlertCircle,
-  RefreshCw,
-  BarChart3,
-  PieChart as PieChartIcon,
-} from 'lucide-react';
-import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  PieChart,
-  Pie,
-  Cell,
-} from 'recharts';
-import { fetchDashboard } from './api';
-import type { DashboardResponse, RecentEval } from './types';
-import './Dashboard.scss';
-
-const QUICK_ACTIONS = [
-  { icon: Play, label: 'Run Evaluation', desc: 'Test models on benchmarks', to: '/app/run-evaluation', tint: 'blue' },
-  { icon: PlugZap, label: 'Add Provider', desc: 'Connect API keys', to: '/app/providers', tint: 'green' },
-  { icon: Upload, label: 'Upload Dataset', desc: 'Custom test questions', to: '/app/datasets', tint: 'amber' },
-  { icon: Search, label: 'Browse Models', desc: 'Explore 100+ models', to: '/app/models', tint: 'violet' },
-] as const;
-
-// Maps the icon keywords the API sends to actual Lucide components.
-const STAT_ICON_MAP: Record<string, typeof Cpu> = {
-  microchip: Cpu,
-  database: Database,
-  gauge: Gauge,
-  check: CheckCircle2,
-};
-
-function statIcon(icon: string) {
-  return STAT_ICON_MAP[icon] ?? Sparkles;
-}
-
-function statTint(index: number): 'blue' | 'amber' | 'violet' | 'green' {
-  const tints = ['blue', 'amber', 'violet', 'green'] as const;
-  return tints[index % tints.length];
-}
-
-function statusTint(status: string): 'violet' | 'blue' | 'amber' | 'green' | 'danger' {
-  switch (status) {
-    case 'completed':
-      return 'green';
-    case 'running':
-      return 'blue';
-    case 'pending':
-      return 'amber';
-    case 'failed':
-    case 'canceled':
-      return 'danger';
-    default:
-      return 'violet';
-  }
-}
-
-function statusLabel(status: string): string {
-  switch (status) {
-    case 'completed':
-      return 'Completed';
-    case 'running':
-      return 'Running';
-    case 'pending':
-      return 'Pending';
-    case 'failed':
-      return 'Failed';
-    case 'canceled':
-      return 'Canceled';
-    default:
-      return status;
-  }
-}
-
-function formatDate(dateStr: string): string {
-  const d = new Date(dateStr);
-  if (Number.isNaN(d.getTime())) return dateStr;
-  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-}
-
-// NOTE: these are plain hex values chosen to visually match the app's
-// $primary / $success / $warning / $danger / violet tokens used elsewhere.
-// SCSS variables aren't available to inline JS/SVG styling, so if your
-// actual design tokens differ, adjust CHART_COLORS to match.
-const CHART_COLORS = {
-  primary: '#4f46e5',
-  primaryLight: '#eef2ff',
-  success: '#16a34a',
-  successLight: '#dcfce7',
-  warning: '#d97706',
-  warningLight: '#fef3c7',
-  danger: '#dc2626',
-  dangerLight: '#fee2e2',
-  violet: '#7c3aed',
-  violetLight: '#f3e8ff',
-  textTertiary: '#94a3b8',
-  border: '#e5e7eb',
-};
-
-const STATUS_COLORS: Record<string, string> = {
-  completed: CHART_COLORS.success,
-  running: CHART_COLORS.primary,
-  pending: CHART_COLORS.warning,
-  failed: CHART_COLORS.danger,
-  canceled: CHART_COLORS.danger,
-};
-
-interface BarTooltipProps {
-  active?: boolean;
-  payload?: { value: number; payload: { name: string; desc: string } }[];
-}
-
-const MetricBarTooltip: FC<BarTooltipProps> = ({ active, payload }) => {
-  if (!active || !payload || payload.length === 0) return null;
-  const { name, desc } = payload[0].payload;
-  return (
-    <div className="dash__chart-tooltip">
-      <p className="dash__chart-tooltip-title">{name}</p>
-      <p className="dash__chart-tooltip-value">{payload[0].value.toFixed(2)}</p>
-      {desc && <p className="dash__chart-tooltip-desc">{desc}</p>}
-    </div>
-  );
-};
-
-interface PieTooltipProps {
-  active?: boolean;
-  payload?: { value: number; name: string; payload: { fill: string } }[];
-}
-
-const StatusPieTooltip: FC<PieTooltipProps> = ({ active, payload }) => {
-  if (!active || !payload || payload.length === 0) return null;
-  const entry = payload[0];
-  return (
-    <div className="dash__chart-tooltip">
-      <p className="dash__chart-tooltip-title">
-        <span className="dash__chart-tooltip-swatch" style={{ background: entry.payload.fill }} />
-        {entry.name}
-      </p>
-      <p className="dash__chart-tooltip-value">{entry.value}</p>
-    </div>
-  );
-};
-
-const Dashboard: FC = () => {
-  const navigate = useNavigate();
-
-  const [data, setData] = useState<DashboardResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = () => {
-    setLoading(true);
-    setError(null);
-    fetchDashboard()
-      .then(setData)
-      .catch((err) => {
-        setError(err instanceof Error ? err.message : 'Failed to load the dashboard.');
-      })
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => {
-    load();
-  }, []);
-
-  // Prefer the "Best Score" stat's top model if present, otherwise fall
-  // back to whichever metric card has one — used for the hero highlight.
-  const heroHighlight = useMemo(() => {
-    if (!data) return null;
-    const bestScoreStat = data.overall_data.find((s) => s.title.toLowerCase().includes('score') && s.top_model);
-    if (bestScoreStat?.top_model) return { model: bestScoreStat.top_model, score: bestScoreStat.count };
-    const withTopModel = data.metrics_overview_cards.find((m) => m.top_model);
-    if (withTopModel?.top_model) return { model: withTopModel.top_model, score: withTopModel.best_avg_score };
-    return null;
-  }, [data]);
-
-  const metricChartData = useMemo(
-    () =>
-      (data?.metrics_overview_cards ?? []).map((m) => ({
-        name: m.metric_name,
-        desc: m.metric_desc,
-        score: m.best_avg_score,
-      })),
-    [data]
-  );
-
-  const statusChartData = useMemo(() => {
-    if (!data) return [];
-    const counts = new Map<string, number>();
-    data.recent_evals.forEach((ev) => {
-      counts.set(ev.eval_status, (counts.get(ev.eval_status) ?? 0) + 1);
-    });
-    return Array.from(counts.entries()).map(([status, count]) => ({
-      name: statusLabel(status),
-      value: count,
-      fill: STATUS_COLORS[status] ?? CHART_COLORS.violet,
-    }));
-  }, [data]);
-
-  const totalRecentEvals = data?.recent_evals.length ?? 0;
-
-  return (
-    <div className="dash">
-      {/* ---------- hero ---------- */}
-      <section className="dash__hero">
-        <div className="dash__hero-grid" aria-hidden="true" />
-        <div className="dash__hero-content">
-          <p className="dash__hero-eyebrow">Evaluation overview</p>
-          <h1 className="dash__hero-title">Compare models with confidence</h1>
-          <p className="dash__hero-sub">Run standardized tests across providers and let the results guide your next decision.</p>
-
-          {heroHighlight && (
-            <div className="dash__hero-highlight">
-              <Trophy size={14} />
-              Top performer: <strong>{heroHighlight.model}</strong>
-              <span className="dash__hero-highlight-score n">{heroHighlight.score}</span>
-            </div>
-          )}
-        </div>
-        <button type="button" className="dash__hero-btn" onClick={() => navigate('/app/run-evaluation')}>
-          <Play size={15} strokeWidth={2.25} />
-          New Evaluation
-        </button>
-      </section>
-
-      {loading && (
-        <section className="dash__card dash__loading">
-          <Loader2 size={20} className="dash__spin" />
-          <p>Loading dashboard…</p>
-        </section>
-      )}
-
-      {!loading && error && (
-        <section className="dash__card dash__loading">
-          <AlertCircle size={20} />
-          <p>{error}</p>
-          <button type="button" className="dash__btn dash__btn--sm" onClick={load}>
-            <RefreshCw size={13} /> Try again
-          </button>
-        </section>
-      )}
-
-      {!loading && !error && data && (
-        <>
-          {/* ---------- stats ---------- */}
-          <section className="dash__stats">
-            {data.overall_data.map((s, i) => {
-              const Icon = statIcon(s.icon);
-              return (
-                <div className="dash__stat-card" key={s.id}>
-                  <span className={`dash__stat-icon dash__stat-icon--${statTint(i)}`}>
-                    <Icon size={16} strokeWidth={2} />
-                  </span>
-                  <div>
-                    <span className="dash__stat-value n">{s.count}</span>
-                    <span className="dash__stat-label">{s.title}</span>
-                    {s.top_model && <span className="dash__stat-sub">Top: {s.top_model}</span>}
-                  </div>
-                </div>
-              );
-            })}
-          </section>
-
-          {/* ---------- charts row ---------- */}
-          <section className="dash__charts-row">
-            <div className="dash__card dash__chart-card">
-              <div className="dash__card-head">
-                <div>
-                  <h2 className="dash__card-title">Metrics Performance</h2>
-                  <p className="dash__card-subtitle">Best average score per metric</p>
-                </div>
-                <span className="dash__badge">
-                  <BarChart3 size={12} /> {metricChartData.length}
-                </span>
-              </div>
-
-              {metricChartData.length === 0 ? (
-                <p className="dash__empty">No metrics data yet.</p>
-              ) : (
-                <div className="dash__chart-wrap">
-                  <ResponsiveContainer width="100%" height={260}>
-                    <BarChart data={metricChartData} margin={{ top: 8, right: 8, left: -12, bottom: 0 }} barCategoryGap="28%">
-                      <defs>
-                        <linearGradient id="dashBarGradient" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor={CHART_COLORS.primary} stopOpacity={0.95} />
-                          <stop offset="100%" stopColor={CHART_COLORS.primary} stopOpacity={0.55} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid vertical={false} stroke={CHART_COLORS.border} strokeDasharray="3 4" />
-                      <XAxis
-                        dataKey="name"
-                        tick={{ fontSize: 11, fill: CHART_COLORS.textTertiary }}
-                        axisLine={{ stroke: CHART_COLORS.border }}
-                        tickLine={false}
-                        interval={0}
-                        angle={metricChartData.length > 5 ? -20 : 0}
-                        textAnchor={metricChartData.length > 5 ? 'end' : 'middle'}
-                        height={metricChartData.length > 5 ? 44 : 24}
-                      />
-                      <YAxis
-                        tick={{ fontSize: 11, fill: CHART_COLORS.textTertiary }}
-                        axisLine={false}
-                        tickLine={false}
-                        width={34}
-                      />
-                      <Tooltip content={<MetricBarTooltip />} cursor={{ fill: CHART_COLORS.primaryLight }} />
-                      <Bar dataKey="score" fill="url(#dashBarGradient)" radius={[8, 8, 0, 0]} maxBarSize={44} isAnimationActive />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              )}
-            </div>
-
-            <div className="dash__card dash__chart-card">
-              <div className="dash__card-head">
-                <div>
-                  <h2 className="dash__card-title">Evaluation Status</h2>
-                  <p className="dash__card-subtitle">Breakdown of recent evaluations</p>
-                </div>
-                <span className="dash__badge">
-                  <PieChartIcon size={12} /> {totalRecentEvals}
-                </span>
-              </div>
-
-              {statusChartData.length === 0 ? (
-                <p className="dash__empty">No recent evaluations yet.</p>
-              ) : (
-                <div className="dash__donut-wrap">
-                  <ResponsiveContainer width="100%" height={220}>
-                    <PieChart>
-                      <Tooltip content={<StatusPieTooltip />} />
-                      <Pie
-                        data={statusChartData}
-                        dataKey="value"
-                        nameKey="name"
-                        innerRadius={62}
-                        outerRadius={88}
-                        paddingAngle={3}
-                        cornerRadius={6}
-                        isAnimationActive
-                      >
-                        {statusChartData.map((entry) => (
-                          <Cell key={entry.name} fill={entry.fill} stroke="none" />
-                        ))}
-                      </Pie>
-                    </PieChart>
-                  </ResponsiveContainer>
-                  <div className="dash__donut-center">
-                    <span className="dash__donut-center-value">{totalRecentEvals}</span>
-                    <span className="dash__donut-center-label">Evaluations</span>
-                  </div>
-                </div>
-              )}
-
-              {statusChartData.length > 0 && (
-                <div className="dash__donut-legend">
-                  {statusChartData.map((entry) => (
-                    <span className="dash__donut-legend-item" key={entry.name}>
-                      <span className="dash__donut-legend-swatch" style={{ background: entry.fill }} />
-                      {entry.name}
-                      <span className="dash__donut-legend-count">{entry.value}</span>
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-          </section>
-
-          {/* ---------- recent + quick actions ---------- */}
-          <section className="dash__row">
-            <div className="dash__card">
-              <div className="dash__card-head">
-                <h2 className="dash__card-title">Recent Evaluations</h2>
-                <button type="button" className="dash__btn dash__btn--sm" onClick={() => navigate('/app/history')}>
-                  View All
-                </button>
-              </div>
-
-              {data.recent_evals.length === 0 ? (
-                <p className="dash__empty">No evaluations yet. Run your first one to see it here.</p>
-              ) : (
-                <div className="dash__eval-list">
-                  {data.recent_evals.slice(0, 5).map((ev: RecentEval) => (
-                    <button
-                      type="button"
-                      key={ev.id}
-                      className="dash__eval-item"
-                      onClick={() => navigate('/app/history', { state: { evaluationId: ev.id } })}
-                    >
-                      <div className="dash__eval-info">
-                        <span className="dash__eval-name">{ev.eval_name}</span>
-                        <span className="dash__eval-meta">
-                          <span className="dash__eval-type-badge">{ev.provider}</span>
-                          <span className="dash__eval-date">{formatDate(ev.created_at)}</span>
-                        </span>
-                      </div>
-                      <span className={`dash__status-badge dash__status-badge--${statusTint(ev.eval_status)}`}>
-                        {statusLabel(ev.eval_status)}
-                      </span>
-                      <ChevronRight size={16} className="dash__eval-arrow" />
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="dash__card">
-              <div className="dash__card-head">
-                <h2 className="dash__card-title">Quick Actions</h2>
-              </div>
-              <div className="dash__qa-grid">
-                {QUICK_ACTIONS.map((qa) => (
-                  <button type="button" key={qa.label} className="dash__qa-card" onClick={() => navigate(qa.to)}>
-                    <span className={`dash__qa-icon dash__qa-icon--${qa.tint}`}>
-                      <qa.icon size={17} strokeWidth={2} />
-                    </span>
-                    <span>
-                      <span className="dash__qa-title">{qa.label}</span>
-                      <span className="dash__qa-desc">{qa.desc}</span>
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </section>
-
-          {/* ---------- metrics overview ---------- */}
-          <section className="dash__card">
-            <div className="dash__card-head">
-              <div>
-                <h2 className="dash__card-title">Metrics Overview</h2>
-                <p className="dash__card-subtitle">Best average score per metric across all evaluations</p>
-              </div>
-              <span className="dash__badge">
-                <BarChart3 size={12} /> {data.metrics_overview_cards.length} metrics
-              </span>
-            </div>
-
-            {data.metrics_overview_cards.length === 0 ? (
-              <p className="dash__empty">No metrics data yet.</p>
-            ) : (
-              <div className="dash__metric-grid">
-                {data.metrics_overview_cards.map((m) => (
-                  <div className="dash__metric-card" key={m.id}>
-                    <div className="dash__metric-card-head">
-                      <span className="dash__metric-card-name">{m.metric_name}</span>
-                      <span className="dash__metric-card-score n">{m.best_avg_score.toFixed(2)}</span>
-                    </div>
-                    {m.metric_desc && <p className="dash__metric-card-desc">{m.metric_desc}</p>}
-                    {m.top_model && (
-                      <span className="dash__metric-card-top">
-                        <Trophy size={11} strokeWidth={2.5} /> {m.top_model}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-        </>
-      )}
-    </div>
-  );
-};
-
-export default Dashboard;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 @use '../../../styles/variables' as *;
 
-.dash {
+.history {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 18px;
+  min-height: 0;
+  // .main-layout__body / .workspace-layout / .workspace-layout__content form an
+  // unbroken flex chain sized to the viewport (header/footer are fixed and offset
+  // via margin), so height: 100% here resolves to the visible content area.
+  // workspace-layout__content also has a 3rem bottom padding, which would
+  // otherwise leave a large gap below .history — pull most of that back in,
+  // keeping just a small 0.75rem breathing-room strip at the true bottom edge,
+  // and giving the two scrollable panels below a real height to scroll within.
+  height: calc(100% + 3rem - 0.75rem);
+  margin-bottom: calc(-3rem + 0.75rem);
 
-  /* ---------- hero ---------- */
-  &__hero {
-    position: relative;
-    overflow: hidden;
+  /* ---------- header — matches run-eval__header's eyebrow/title/subtitle + meta-pill pattern ---------- */
+  &__header {
+    flex-shrink: 0;
     display: flex;
-    align-items: flex-start;
+    align-items: flex-end;
     justify-content: space-between;
-    gap: 1.5rem;
-    padding: 28px 30px;
-    border-radius: 18px;
-    border: 1px solid $border-subtle;
-    background: $bg-main;
-    box-shadow: $shadow-xs;
+    gap: 1rem;
+    padding-bottom: 18px;
+    margin-bottom: 2px;
+    border-bottom: 1px solid $border-subtle;
   }
 
-  &__hero-grid {
-    position: absolute;
-    inset: 0;
-    background-image: linear-gradient(to right, $border-subtle 1px, transparent 1px),
-      linear-gradient(to bottom, $border-subtle 1px, transparent 1px);
-    background-size: 40px 40px;
-    mask-image: radial-gradient(80% 130% at 100% 0%, #000 5%, transparent 68%);
-    -webkit-mask-image: radial-gradient(80% 130% at 100% 0%, #000 5%, transparent 68%);
-    pointer-events: none;
+  &__header-left {
+    display: flex;
+    flex-direction: column;
   }
 
-  &__hero-content {
-    position: relative;
-  }
-
-  &__hero-eyebrow {
+  &__header-eyebrow {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -544,7 +42,7 @@ export default Dashboard;
     letter-spacing: 0.12em;
     text-transform: uppercase;
     color: $primary;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
 
     &::before {
       content: '';
@@ -555,444 +53,413 @@ export default Dashboard;
     }
   }
 
-  &__hero-title {
-    font-size: 24px;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    color: $text-primary;
-  }
-
-  &__hero-sub {
-    margin-top: 6px;
-    font-size: 0.875rem;
-    color: $text-secondary;
-    max-width: 34rem;
-  }
-
-  &__hero-highlight {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 16px;
-    padding: 7px 14px;
-    border-radius: 999px;
-    background: $success-subtle;
-    color: $text-secondary;
-    font-size: 0.78125rem;
-
-    svg {
-      color: $success;
-      flex-shrink: 0;
-    }
-
-    strong {
-      color: $text-primary;
-      font-weight: 700;
-    }
-  }
-
-  &__hero-highlight-score {
-    font-weight: 700;
-    color: $success;
-  }
-
-  &__hero-btn {
-    position: relative;
+  &__header-right {
     flex-shrink: 0;
-    margin-top: 2px;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 11px 18px;
-    border: 1px solid $primary;
-    border-radius: 10px;
-    background: $primary;
-    color: #fff;
-    font-size: 0.84375rem;
-    font-weight: 600;
-    font-family: $font-body;
-    cursor: pointer;
-    transition: background 0.14s ease, border-color 0.14s ease;
-
-    &:hover {
-      background: $primary-hover;
-      border-color: $primary-hover;
-    }
-  }
-
-  /* ---------- loading / error state ---------- */
-  &__spin {
-    animation: dash-spin 0.8s linear infinite;
-  }
-
-  @keyframes dash-spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-
-  &__loading {
     display: flex;
-    flex-direction: column;
     align-items: center;
     gap: 10px;
-    padding: 44px 20px;
-    color: $text-tertiary;
-    font-size: 0.84375rem;
-    text-align: center;
+    margin-bottom: 3px;
   }
 
-  &__empty {
-    padding: 20px 4px;
-    color: $text-tertiary;
-    font-size: 0.8125rem;
-  }
-
-  /* ---------- charts row ---------- */
-  &__charts-row {
-    display: grid;
-    grid-template-columns: 1.4fr 1fr;
-    gap: 14px;
-    align-items: stretch;
-  }
-
-  &__chart-card {
-    display: flex;
-    flex-direction: column;
-  }
-
-  &__chart-wrap {
-    margin-top: 4px;
-  }
-
-  // Recharts renders its own SVG text/tooltips outside our component tree,
-  // so this custom tooltip is a plain floating card recharts positions for us.
-  &__chart-tooltip {
-    background: $bg-main;
-    border: 1px solid $border-subtle;
-    border-radius: 10px;
-    box-shadow: $shadow-md;
-    padding: 8px 12px;
-    min-width: 120px;
-  }
-
-  &__chart-tooltip-title {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.75rem;
-    font-weight: 700;
-    color: $text-primary;
-    margin-bottom: 2px;
-  }
-
-  &__chart-tooltip-swatch {
+  &__header-meta {
     flex-shrink: 0;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-  }
-
-  &__chart-tooltip-value {
-    font-size: 0.9375rem;
-    font-weight: 800;
-    color: $primary;
-    letter-spacing: -0.01em;
-  }
-
-  &__chart-tooltip-desc {
-    margin-top: 2px;
-    font-size: 0.6875rem;
-    color: $text-tertiary;
-    max-width: 180px;
-    line-height: 1.4;
-  }
-
-  /* ---------- donut chart ---------- */
-  &__donut-wrap {
-    position: relative;
-    margin-top: 4px;
-  }
-
-  &__donut-center {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    pointer-events: none;
-  }
-
-  &__donut-center-value {
-    font-size: 1.5rem;
-    font-weight: 800;
-    color: $text-primary;
-    letter-spacing: -0.02em;
-    line-height: 1.1;
-  }
-
-  &__donut-center-label {
-    font-size: 0.65625rem;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: $text-tertiary;
-    margin-top: 2px;
-  }
-
-  &__donut-legend {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px 16px;
-    margin-top: 12px;
-    padding-top: 12px;
-    border-top: 1px solid $border-subtle;
-  }
-
-  &__donut-legend-item {
     display: inline-flex;
     align-items: center;
     gap: 6px;
     font-size: 0.75rem;
     font-weight: 600;
     color: $text-secondary;
-  }
-
-  &__donut-legend-swatch {
-    flex-shrink: 0;
-    width: 8px;
-    height: 8px;
-    border-radius: 2px;
-  }
-
-  &__donut-legend-count {
-    font-weight: 700;
-    color: $text-primary;
-  }
-
-  /* ---------- stats ---------- */
-  &__stats {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 14px;
-  }
-
-  &__stat-card {
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-    padding: 18px 20px;
+    background: $bg-subtle;
     border: 1px solid $border-subtle;
-    border-radius: 14px;
-    background: $bg-main;
-    box-shadow: $shadow-xs;
-  }
-
-  &__stat-icon {
-    flex-shrink: 0;
-    width: 36px;
-    height: 36px;
-    border-radius: 10px;
-    display: grid;
-    place-items: center;
-
-    &--blue {
-      background: $primary-light;
-      color: $primary;
-    }
-
-    &--green {
-      background: $success-subtle;
-      color: $success;
-    }
-
-    &--amber {
-      background: $warning-subtle;
-      color: $warning;
-    }
-
-    &--violet {
-      background: #f3e8ff;
-      color: #7c3aed;
-    }
-  }
-
-  &__stat-value {
-    display: block;
-    font-size: 26px;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    color: $text-primary;
-    line-height: 1.1;
-  }
-
-  &__stat-label {
-    display: block;
-    font-family: $font-mono;
-    font-size: 0.65625rem;
-    font-weight: 600;
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-    color: $text-tertiary;
-    margin-top: 4px;
-  }
-
-  &__stat-sub {
-    display: block;
-    font-size: 0.71875rem;
-    color: $text-tertiary;
-    margin-top: 4px;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    border-radius: 999px;
+    padding: 7px 13px;
     white-space: nowrap;
   }
 
-  /* ---------- two-column row ---------- */
-  &__row {
-    display: grid;
-    grid-template-columns: 1.35fr 1fr;
-    gap: 14px;
-    align-items: start;
-  }
-
-  /* ---------- shared card ---------- */
-  &__card {
-    border: 1px solid $border-subtle;
-    border-radius: 16px;
-    background: $bg-main;
-    box-shadow: $shadow-xs;
-    padding: 20px 22px 22px;
-  }
-
-  &__card-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 14px;
-  }
-
-  &__card-title {
-    font-size: 1rem;
-    font-weight: 700;
-    letter-spacing: -0.01em;
+  &__title {
+    font-size: 21px;
+    font-weight: 800;
+    letter-spacing: -0.03em;
     color: $text-primary;
+    line-height: 1.15;
   }
 
-  &__card-subtitle {
+  &__subtitle {
     margin-top: 3px;
-    font-size: 0.78125rem;
-    color: $text-tertiary;
+    color: $text-secondary;
+    font-size: 0.84375rem;
   }
 
+  /* ---------- generic buttons ---------- */
   &__btn {
-    font-family: $font-body;
-    border-radius: 8px;
-    cursor: pointer;
-    font-weight: 600;
-    transition: border-color 0.14s ease, color 0.14s ease;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-
-    &--sm {
-      padding: 6px 12px;
-      font-size: 0.78125rem;
-      background: $bg-main;
-      color: $text-secondary;
-      border: 1px solid $border-default;
-
-      &:hover {
-        border-color: $text-primary;
-        color: $text-primary;
-      }
-    }
-  }
-
-  /* ---------- recent evaluations ---------- */
-  &__eval-list {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  &__eval-item {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    width: 100%;
-    text-align: left;
-    padding: 12px 12px;
-    border: 1px solid transparent;
-    border-radius: 12px;
-    background: transparent;
+    justify-content: center;
+    gap: 7px;
+    font-family: $font-body;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    padding: 9px 14px;
+    border-radius: 8px;
+    border: 1px solid $border-default;
+    background: $bg-main;
+    color: $text-secondary;
     cursor: pointer;
-    transition: background 0.14s ease, border-color 0.14s ease;
+    white-space: nowrap;
+    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
 
     &:hover {
-      background: $bg-subtle;
-      border-color: $border-subtle;
+      border-color: $primary;
+      box-shadow: $shadow-sm;
+    }
 
-      .dash__eval-arrow {
-        transform: translateX(2px);
-        color: $primary;
+    &--primary {
+      background: $primary;
+      border-color: $primary;
+      color: #fff;
+
+      &:hover {
+        background: $primary-hover;
+        border-color: $primary-hover;
+        color: #fff;
+      }
+    }
+
+    &--danger:hover {
+      border-color: $danger;
+      color: $danger;
+      background: $danger-subtle;
+    }
+
+    &--sm {
+      padding: 6px;
+
+      svg {
+        width: 15px;
+        height: 15px;
       }
     }
   }
 
-  &__eval-info {
+  /* ---------- filters ---------- */
+  &__filters {
+    flex-shrink: 0;
     display: flex;
-    flex-direction: column;
-    gap: 5px;
-    min-width: 0;
-    flex: 1;
+    flex-wrap: wrap;
+    gap: 10px;
   }
 
-  &__eval-name {
-    font-size: 0.84375rem;
-    font-weight: 600;
-    color: $text-primary;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  &__eval-meta {
+  &__search {
     display: flex;
     align-items: center;
-    gap: 8px;
-  }
-
-  &__eval-type-badge {
-    font-size: 0.65625rem;
-    font-weight: 600;
-    color: $primary;
-    background: $primary-light;
-    border-radius: 5px;
-    padding: 2px 7px;
-  }
-
-  &__eval-date {
-    font-size: 0.71875rem;
+    gap: 9px;
+    width: 280px;
+    max-width: 100%;
+    border: 1px solid $border-default;
+    border-radius: 10px;
+    padding: 9px 12px;
+    background: $bg-main;
     color: $text-tertiary;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+
+    &:focus-within {
+      border-color: $primary;
+      box-shadow: 0 0 0 3px $primary-light;
+    }
+
+    input {
+      flex: 1;
+      border: none;
+      outline: none;
+      font-size: 0.8125rem;
+      color: $text-primary;
+      background: transparent;
+      font-family: $font-body;
+      min-width: 0;
+
+      &::placeholder {
+        color: $text-tertiary;
+      }
+    }
   }
 
-  &__eval-arrow {
+  &__search-clear {
     flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: none;
+    background: $bg-inset;
     color: $text-tertiary;
-    transition: transform 0.14s ease, color 0.14s ease;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: background 0.14s ease, color 0.14s ease;
+
+    &:hover {
+      background: $border-default;
+      color: $text-primary;
+    }
   }
 
-  /* status badge on each recent-eval row */
+  /* ---------- custom dropdown (used by <Select />) ---------- */
+  &-select {
+    position: relative;
+    flex-shrink: 0;
+
+    &__trigger {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      border: 1px solid $border-default;
+      border-radius: 10px;
+      padding: 9px 12px;
+      background: $bg-main;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      font-family: $font-body;
+      color: $text-primary;
+      cursor: pointer;
+      transition: border-color 0.14s ease, box-shadow 0.14s ease;
+
+      &:hover {
+        border-color: $border-strong;
+      }
+
+      &--open {
+        border-color: $primary;
+        box-shadow: 0 0 0 3px $primary-light;
+      }
+    }
+
+    &__chevron {
+      flex-shrink: 0;
+      color: $text-tertiary;
+      transition: transform 0.16s ease;
+    }
+
+    &__trigger--open &__chevron {
+      transform: rotate(180deg);
+    }
+
+    &__menu {
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 0;
+      right: 0;
+      z-index: 20;
+      background: $bg-main;
+      border: 1px solid $border-subtle;
+      border-radius: 10px;
+      box-shadow: $shadow-lg;
+      padding: 5px;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+
+    &__option {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      width: 100%;
+      text-align: left;
+      padding: 8px 10px;
+      border: none;
+      border-radius: 7px;
+      background: transparent;
+      font-size: 0.8125rem;
+      font-family: $font-body;
+      color: $text-secondary;
+      cursor: pointer;
+      transition: background 0.12s ease, color 0.12s ease;
+
+      &:hover {
+        background: $bg-subtle;
+        color: $text-primary;
+      }
+
+      &--active {
+        color: $primary;
+        font-weight: 600;
+
+        svg {
+          color: $primary;
+        }
+      }
+    }
+  }
+
+  /* ---------- default two-column layout: 400px list + detail, each independently scrollable ---------- */
+  &__body {
+    flex: 1;
+    display: flex;
+    gap: 16px;
+    min-height: 0;
+  }
+
+  &__list-panel {
+    flex: 0 0 400px;
+    max-width: 400px;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  /* ---------- list ---------- */
+  &__list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  &__item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 16px;
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-radius: $radius-lg;
+    cursor: pointer;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+
+    &:hover {
+      border-color: $primary;
+      box-shadow: $shadow-sm;
+    }
+
+    &--active {
+      border-color: $primary;
+      background: $primary-light;
+      box-shadow: $shadow-sm;
+    }
+
+    // Running evaluations get a thin light that continuously travels
+    // around the card's border, rather than a flat pulsing glow.
+    &--running {
+      position: relative;
+      border-color: $border-subtle;
+
+      &::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        padding: 1.5px;
+        background: conic-gradient(
+          from var(--history-angle, 0deg),
+          transparent 0deg,
+          transparent 265deg,
+          rgba($primary, 0.9) 300deg,
+          $primary 320deg,
+          rgba($primary, 0.9) 340deg,
+          transparent 360deg
+        );
+        -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+        -webkit-mask-composite: xor;
+        mask-composite: exclude;
+        animation: history-border-travel 2.6s linear infinite;
+        pointer-events: none;
+      }
+
+      &.history__item--active {
+        border-color: $primary;
+        background: $primary-light;
+        box-shadow: $shadow-sm;
+      }
+    }
+  }
+
+  @property --history-angle {
+    syntax: '<angle>';
+    inherits: false;
+    initial-value: 0deg;
+  }
+
+  @keyframes history-border-travel {
+    to {
+      --history-angle: 360deg;
+    }
+  }
+
+  &__icon {
+    width: 36px;
+    height: 36px;
+    background: $primary-light;
+    border-radius: $radius-md;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+
+    svg {
+      width: 18px;
+      height: 18px;
+      color: $primary;
+      stroke-width: 1.5;
+    }
+  }
+
+  &__item--active &__icon {
+    background: $bg-main;
+  }
+
+  &__content {
+    flex-basis: calc(100% - 46px);
+    flex-grow: 1;
+    min-width: 0;
+
+    h4 {
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 4px;
+      color: $text-primary;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  &__meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: $text-tertiary;
+    overflow: hidden;
+
+    span:last-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  &__type {
+    flex-shrink: 0;
+    padding: 2px 8px;
+    background: $primary-light;
+    color: $primary;
+    border-radius: 4px;
+    font-weight: 500;
+  }
+
+  &__item--active &__type {
+    background: $bg-main;
+  }
+
+  /* ---------- status badge (list row + detail header) ---------- */
   &__status-badge {
     flex-shrink: 0;
-    font-size: 0.65625rem;
+    font-size: 0.625rem;
     font-weight: 700;
     letter-spacing: 0.02em;
     border-radius: 999px;
-    padding: 4px 10px;
+    padding: 2px 8px;
     white-space: nowrap;
 
     &--green {
@@ -1011,8 +478,8 @@ export default Dashboard;
     }
 
     &--violet {
-      color: #7c3aed;
-      background: #f3e8ff;
+      color: $violet;
+      background: $violet-light;
     }
 
     &--danger {
@@ -1021,174 +488,390 @@ export default Dashboard;
     }
   }
 
-  /* ---------- quick actions ---------- */
-  &__qa-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
+  &__item--active &__status-badge--green,
+  &__item--active &__status-badge--blue,
+  &__item--active &__status-badge--amber,
+  &__item--active &__status-badge--violet,
+  &__item--active &__status-badge--danger {
+    background: $bg-main;
   }
 
-  &__qa-card {
-    display: flex;
+  &__status-badge--live {
+    display: inline-flex;
     align-items: center;
-    gap: 12px;
-    text-align: left;
-    padding: 14px;
-    border: 1px solid $border-subtle;
-    border-radius: 12px;
-    background: $bg-main;
-    cursor: pointer;
-    transition: border-color 0.14s ease, background 0.14s ease;
+    gap: 4px;
+  }
 
-    &:hover {
-      border-color: $border-strong;
-      background: $bg-subtle;
+  &__status-dot {
+    flex-shrink: 0;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: history-dot-pulse 1.4s ease-in-out infinite;
+  }
+
+  @keyframes history-dot-pulse {
+    0%,
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.35;
+      transform: scale(0.7);
     }
   }
 
-  &__qa-icon {
-    width: 36px;
-    height: 36px;
-    flex-shrink: 0;
-    border-radius: 10px;
-    display: grid;
-    place-items: center;
+  &__detail-date &__status-badge {
+    margin-right: 6px;
+    vertical-align: 1px;
+  }
 
-    &--blue {
-      background: $primary-light;
+  &__results {
+    display: flex;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+
+  &__stat {
+    display: flex;
+    flex-direction: column;
+  }
+
+  &__stat-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: $text-tertiary;
+    margin-bottom: 2px;
+  }
+
+  &__stat-value {
+    font-size: 13px;
+    font-weight: 500;
+    color: $text-primary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 84px;
+
+    &--highlight {
       color: $primary;
     }
+  }
 
-    &--green {
-      background: $success-subtle;
-      color: $success;
+  &__actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+
+  /* ---------- detail panel ---------- */
+  &__detail-panel {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-radius: 16px;
+    box-shadow: $shadow-xs;
+    padding: 26px 28px;
+    overflow-y: auto;
+  }
+
+  &__detail-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding-bottom: 18px;
+    margin-bottom: 22px;
+    border-bottom: 1px solid $border-subtle;
+  }
+
+  &__detail-head-left {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  &__detail-name {
+    font-size: 1.25rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: $text-primary;
+  }
+
+  &__detail-date {
+    font-size: 0.8125rem;
+    color: $text-tertiary;
+  }
+
+  &__detail-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+
+  /* ---------- type badge (sidebar + detail) ---------- */
+  &__type-badge {
+    width: fit-content;
+    flex-shrink: 0;
+    font-size: 0.625rem;
+    font-weight: 700;
+    border-radius: 999px;
+    padding: 2px 8px;
+
+    &--violet {
+      color: $violet;
+      background: $violet-light;
+    }
+
+    &--blue {
+      color: $primary;
+      background: $primary-light;
     }
 
     &--amber {
-      background: $warning-subtle;
       color: $warning;
-    }
-
-    &--violet {
-      background: #f3e8ff;
-      color: #7c3aed;
+      background: $warning-subtle;
     }
   }
 
-  &__qa-title {
-    display: block;
-    font-size: 0.8125rem;
+  /* ---------- summary cards — matches reference .results-summary-cards / .summary-card ---------- */
+  &__summary-cards {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+
+  &__summary-card {
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-radius: $radius-lg;
+    padding: 20px;
+    display: flex;
+    gap: 14px;
+    min-width: 0;
+
+    &--winner {
+      // Reference uses a fixed warm amber gradient/border for the winner
+      // card in both themes (it's a celebratory accent, not a surface
+      // token), so this intentionally does not switch with dark mode.
+      background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+      border-color: #fde68a;
+    }
+  }
+
+  &__summary-icon {
+    width: 44px;
+    height: 44px;
+    background: $bg-subtle;
+    border-radius: $radius-md;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+
+    svg {
+      width: 22px;
+      height: 22px;
+      color: $text-secondary;
+      stroke-width: 1.5;
+    }
+  }
+
+  &__summary-card--winner &__summary-icon {
+    background: rgba(180, 83, 9, 0.12);
+
+    svg {
+      color: #b45309;
+    }
+  }
+
+  &__summary-content {
+    min-width: 0;
+  }
+
+  &__summary-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: $text-tertiary;
+    margin-bottom: 4px;
+  }
+
+  &__summary-value {
+    font-size: 16px;
     font-weight: 600;
     color: $text-primary;
-  }
-
-  &__qa-desc {
-    display: block;
-    margin-top: 2px;
-    font-size: 0.71875rem;
-    color: $text-tertiary;
-  }
-
-  /* ---------- metrics overview ---------- */
-  &__badge {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 0.6875rem;
-    font-weight: 600;
-    color: $success;
-    background: $success-subtle;
-    border-radius: 999px;
-    padding: 5px 10px;
+    margin-bottom: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  &__metric-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 12px;
+  &__summary-score {
+    font-size: 13px;
+    color: $text-secondary;
   }
 
-  &__metric-card {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    padding: 14px 16px;
-    border: 1px solid $border-subtle;
-    border-radius: 12px;
-    background: $bg-subtle;
-    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+  /* ---------- results table ---------- */
+  &__section-title {
+    font-size: 0.8125rem;
+    font-weight: 700;
+    color: $text-primary;
+    margin-bottom: 12px;
+  }
 
-    &:hover {
-      border-color: $primary;
-      box-shadow: $shadow-xs;
+  &__table-wrap {
+    overflow-x: auto;
+  }
+
+  &__table {
+    width: 100%;
+    border-collapse: collapse;
+
+    thead th {
+      text-align: left;
+      font-size: 0.6875rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: $text-tertiary;
+      padding: 10px 14px;
+      background: $bg-subtle;
+      white-space: nowrap;
+
+      &:first-child {
+        border-radius: 8px 0 0 8px;
+      }
+
+      &:last-child {
+        border-radius: 0 8px 8px 0;
+      }
+    }
+
+    tbody td {
+      padding: 12px 14px;
+      font-size: 0.84375rem;
+      color: $text-secondary;
+      border-bottom: 1px solid $border-subtle;
+      white-space: nowrap;
+    }
+
+    tbody tr:last-child td {
+      border-bottom: none;
     }
   }
 
-  &__metric-card-head {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 8px;
-  }
-
-  &__metric-card-name {
-    font-size: 0.84375rem;
-    font-weight: 700;
+  &__cell-strong {
+    font-weight: 600;
     color: $text-primary;
   }
 
-  &__metric-card-score {
-    font-size: 1.0625rem;
-    font-weight: 800;
-    color: $primary;
-    letter-spacing: -0.01em;
-  }
-
-  &__metric-card-desc {
-    font-size: 0.75rem;
-    color: $text-tertiary;
-    line-height: 1.45;
-  }
-
-  &__metric-card-top {
+  &__rank-pill {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    margin-top: 2px;
-    font-size: 0.71875rem;
-    font-weight: 600;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    background: $bg-inset;
+    color: $text-tertiary;
+    font-size: 0.6875rem;
+    font-weight: 700;
+
+    &--1 {
+      background: $primary-light;
+      color: $primary;
+    }
+  }
+
+  &__score-cell {
     color: $success;
+    font-weight: 700;
+  }
+
+  /* ---------- loading spinner (used by History.tsx's Loader2 icons) ---------- */
+  &__spin {
+    animation: history-spin 0.8s linear infinite;
+  }
+
+  @keyframes history-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* ---------- empty state ---------- */
+  &__empty {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 52px 20px;
+    border: 1px dashed $border-strong;
+    border-radius: 14px;
+    color: $text-tertiary;
+    font-size: 0.84375rem;
+
+    svg {
+      color: $text-tertiary;
+    }
   }
 
   /* ---------- responsive ---------- */
   @media (max-width: 900px) {
-    &__stats {
-      grid-template-columns: repeat(2, 1fr);
-    }
+    height: auto;
+    margin-bottom: 0;
 
-    &__row {
-      grid-template-columns: 1fr;
-    }
-
-    &__charts-row {
-      grid-template-columns: 1fr;
-    }
-
-    &__hero {
+    &__header {
       flex-direction: column;
       align-items: flex-start;
     }
-  }
 
-  @media (max-width: 560px) {
-    &__stats {
-      grid-template-columns: 1fr;
+    &__header-right {
+      margin-bottom: 0;
     }
 
-    &__metric-grid {
+    &__body {
+      flex-direction: column;
+    }
+
+    &__list-panel {
+      flex: 0 0 auto;
+      max-width: none;
+      max-height: 16rem;
+    }
+
+    &__detail-panel {
+      max-height: none;
+    }
+
+    &__summary-cards {
       grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 520px) {
+    &__header-right {
+      width: 100%;
+      justify-content: space-between;
+    }
+
+    &__detail-panel {
+      padding: 18px 16px;
+    }
+
+    &__detail-head {
+      flex-direction: column;
     }
   }
 }
