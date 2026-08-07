@@ -1,275 +1,72 @@
-import { useMemo, useState, type FC } from 'react';
-import { Search, Check, X, Loader2, AlertTriangle } from 'lucide-react';
-import type { ModelApi, ProviderApi } from '../types';
-
-interface Props {
-  models: ModelApi[];
-  providerCatalog: ProviderApi[];
-  selectedProviders: string[];
-  selected: string[];
-  onToggle: (id: string) => void;
-  onClear: () => void;
-  loading: boolean;
-  error: string | null;
-}
-
-function formatContextWindow(tokens: number): string {
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toLocaleString()}M tokens`;
-  if (tokens >= 1_000) return `${Math.round(tokens / 1000)}k tokens`;
-  return `${tokens} tokens`;
-}
-
-function formatPrice(price: number | null): string {
-  return price === null ? '—' : `$${price.toFixed(2)}`;
-}
-
-function formatPricing(m: ModelApi): string {
-  if (m.input_price === null && m.output_price === null) return 'Custom pricing';
-  return `${formatPrice(m.input_price)} in · ${formatPrice(m.output_price)} out /1M`;
-}
-
-const ModelsStep: FC<Props> = ({
-  models,
-  providerCatalog,
-  selectedProviders,
-  selected,
-  onToggle,
-  onClear,
-  loading,
-  error,
-}) => {
-  const [query, setQuery] = useState('');
-  const [capFilters, setCapFilters] = useState<string[]>([]);
-
-  const providerNameById = useMemo(() => {
-    const map = new Map<string, string>();
-    providerCatalog.forEach((p) => map.set(p.id, p.name));
-    return map;
-  }, [providerCatalog]);
-
-  const activeModels = useMemo(() => models.filter((m) => m.is_active), [models]);
-
-  const pool = useMemo(
-    () =>
-      selectedProviders.length
-        ? activeModels.filter((m) => selectedProviders.includes(m.provider_id))
-        : activeModels,
-    [activeModels, selectedProviders]
-  );
-
-  const allCapabilities = useMemo(() => {
-    const set = new Set<string>();
-    pool.forEach((m) => m.capabilities.forEach((c) => set.add(c)));
-    return Array.from(set).sort();
-  }, [pool]);
-
-  const filtered = useMemo(() => {
-    return pool.filter((m: ModelApi) => {
-      const providerName = providerNameById.get(m.provider_id) ?? '';
-      if (
-        query &&
-        !m.name.toLowerCase().includes(query.toLowerCase()) &&
-        !providerName.toLowerCase().includes(query.toLowerCase())
-      ) {
-        return false;
-      }
-      if (capFilters.length && !capFilters.every((c) => m.capabilities.includes(c))) return false;
-      return true;
-    });
-  }, [pool, query, capFilters, providerNameById]);
-
-  const toggleCap = (cap: string) =>
-    setCapFilters((prev) => (prev.includes(cap) ? prev.filter((c) => c !== cap) : [...prev, cap]));
-  const resetFilters = () => {
-    setCapFilters([]);
-    setQuery('');
-  };
-
-  return (
-    <div className="run-eval__card run-eval__card--wide">
-      <h2 className="run-eval__step-title">Choose models</h2>
-      <p className="run-eval__step-desc">Select the models you want to compare. Use filters to narrow the list.</p>
-
-      {loading && (
-        <div className="run-eval__loading-state">
-          <Loader2 size={18} className="run-eval__spin" />
-          Loading models…
-        </div>
-      )}
-
-      {!loading && error && (
-        <div className="run-eval__inline-error">
-          <AlertTriangle size={15} />
-          {error}
-        </div>
-      )}
-
-      {!loading && !error && (
-        <div className="run-eval__models-layout">
-          <aside className="run-eval__filters">
-            <div className="run-eval__filters-head">
-              <span>Filters</span>
-              <button type="button" className="run-eval__link" onClick={resetFilters}>
-                Reset all
-              </button>
-            </div>
-
-            <div className="run-eval__filters-scroll">
-              <div className="run-eval__filter-section">
-                <p className="run-eval__filter-title">Capabilities</p>
-                <div className="run-eval__filter-options">
-                  {allCapabilities.map((cap) => (
-                    <label key={cap} className="run-eval__filter-chip">
-                      <input type="checkbox" checked={capFilters.includes(cap)} onChange={() => toggleCap(cap)} />
-                      {cap}
-                    </label>
-                  ))}
-                  {allCapabilities.length === 0 && <p className="run-eval__filter-empty">No capabilities listed.</p>}
-                </div>
-              </div>
-            </div>
-          </aside>
-
-          <div className="run-eval__models-main">
-            <div className="run-eval__search-bar">
-              <Search size={15} />
-              <input
-                type="text"
-                placeholder="Search models..."
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-            </div>
-
-            {capFilters.length > 0 && (
-              <div className="run-eval__active-filters">
-                {capFilters.map((c) => (
-                  <span key={c} className="run-eval__tag">
-                    {c}
-                    <button type="button" onClick={() => toggleCap(c)}>
-                      <X size={11} />
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
-
-            <div className="run-eval__models-scroll">
-              <div className="run-eval__models-grid">
-                {filtered.map((m) => {
-                  const isSelected = selected.includes(m.id);
-                  return (
-                    <button
-                      key={m.id}
-                      type="button"
-                      className={`run-eval__model-card${isSelected ? ' run-eval__model-card--selected' : ''}`}
-                      onClick={() => onToggle(m.id)}
-                    >
-                      <div className="run-eval__model-top">
-                        <span className="run-eval__model-name">{m.name}</span>
-                        {isSelected && (
-                          <span className="run-eval__type-check">
-                            <Check size={12} strokeWidth={2.75} />
-                          </span>
-                        )}
-                      </div>
-                      <span className="run-eval__model-provider">
-                        {providerNameById.get(m.provider_id) ?? m.provider_id}
-                      </span>
-                      <div className="run-eval__model-caps">
-                        {m.capabilities.slice(0, 3).map((c) => (
-                          <span key={c} className="run-eval__chip run-eval__chip--static">
-                            {c}
-                          </span>
-                        ))}
-                      </div>
-                      <div className="run-eval__model-meta n">
-                        <span>{formatContextWindow(m.context_window)}</span>
-                        <span>{formatPricing(m)}</span>
-                        {m.accuracy_score !== null && <span>Accuracy {m.accuracy_score.toFixed(1)}%</span>}
-                      </div>
-                    </button>
-                  );
-                })}
-                {filtered.length === 0 && <p className="run-eval__empty">No models match these filters.</p>}
-              </div>
-            </div>
-
-            {selected.length > 0 && (
-              <div className="run-eval__selected-bar">
-                <span>
-                  <strong>{selected.length}</strong> models selected
-                </span>
-                <button type="button" className="run-eval__btn run-eval__btn--sm" onClick={onClear}>
-                  Clear
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-export default ModelsStep;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 @use '../../../styles/variables' as *;
 
 .run-eval {
+  width: 100%;
+  height: calc(100vh - 166px);
   display: flex;
   flex-direction: column;
-  gap: 18px;
   min-height: 0;
-  height: calc(100% + 3rem - 0.75rem);
-  margin-bottom: calc(-3rem + 0.75rem);
 
-  /* ---------- header ---------- */
+  /* ---------- page header ---------- */
   &__header {
     flex-shrink: 0;
     display: flex;
-    align-items: flex-start;
+    align-items: flex-end;
     justify-content: space-between;
     gap: 1rem;
+    padding-bottom: 18px;
+    margin-bottom: 20px;
+    border-bottom: 1px solid $border-subtle;
+  }
+
+  &__header-left {
+    display: flex;
+    flex-direction: column;
   }
 
   &__header-eyebrow {
-    font-size: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: $font-mono;
+    font-size: 0.6875rem;
     font-weight: 700;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
     color: $primary;
-    margin-bottom: 2px;
+    margin-bottom: 6px;
+
+    &::before {
+      content: '';
+      width: 16px;
+      height: 2px;
+      border-radius: 2px;
+      background: $primary;
+    }
+  }
+
+  &__header-meta {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
+    border-radius: 999px;
+    padding: 7px 13px;
+    white-space: nowrap;
+    margin-bottom: 3px;
   }
 
   &__title {
     font-size: 21px;
     font-weight: 800;
-    letter-spacing: -0.02em;
+    letter-spacing: -0.03em;
     color: $text-primary;
+    line-height: 1.15;
   }
 
   &__subtitle {
@@ -278,323 +75,354 @@ export default ModelsStep;
     font-size: 0.84375rem;
   }
 
-  &__header-meta {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: $text-tertiary;
-    background: $bg-subtle;
-    border: 1px solid $border-subtle;
-    border-radius: 999px;
-    padding: 6px 12px;
-  }
-
-  /* ---------- generic buttons ---------- */
+  /* ---------- buttons ---------- */
   &__btn {
     display: inline-flex;
     align-items: center;
-    justify-content: center;
-    gap: 7px;
-    font-family: $font-body;
-    font-size: 0.8125rem;
+    gap: 0.5rem;
+    font-size: 0.90625rem;
     font-weight: 600;
-    padding: 9px 14px;
-    border-radius: 8px;
-    border: 1px solid $border-default;
-    background: $bg-main;
-    color: $text-secondary;
+    padding: 0.5625rem 0.9375rem;
+    border-radius: 0.5rem;
+    border: 1px solid transparent;
     cursor: pointer;
-    white-space: nowrap;
-    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
+    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+    font-family: $font-body;
 
-    &:hover:not(:disabled) {
+    &--primary {
+      background: $primary;
+      color: #fff;
       border-color: $primary;
-      box-shadow: $shadow-sm;
+
+      &:hover {
+        background: $primary-hover;
+        border-color: $primary-hover;
+      }
+    }
+
+    &--secondary {
+      background: $bg-main;
+      color: $text-primary;
+      border-color: $border-default;
+
+      &:hover {
+        border-color: $text-primary;
+      }
+    }
+
+    &--lg {
+      padding: 0.625rem 1.125rem;
+      font-size: 0.90625rem;
+    }
+
+    &--sm {
+      padding: 0.375rem 0.6875rem;
+      font-size: 0.84375rem;
+      background: $bg-main;
+      color: $text-secondary;
+      border-color: $border-default;
+
+      &:hover {
+        border-color: $text-primary;
+        color: $text-primary;
+      }
     }
 
     &:disabled {
       opacity: 0.5;
       cursor: not-allowed;
     }
-
-    &--primary {
-      background: $primary;
-      border-color: $primary;
-      color: #fff;
-
-      &:hover:not(:disabled) {
-        background: $primary-hover;
-        border-color: $primary-hover;
-        color: #fff;
-      }
-    }
-
-    &--secondary {
-      background: $bg-main;
-      color: $text-secondary;
-    }
-
-    &--danger:hover:not(:disabled) {
-      border-color: $danger;
-      color: $danger;
-      background: $danger-subtle;
-    }
-
-    &--sm {
-      padding: 6px 10px;
-      font-size: 0.75rem;
-
-      svg {
-        width: 13px;
-        height: 13px;
-      }
-    }
-
-    &--lg {
-      padding: 11px 20px;
-      font-size: 0.875rem;
-    }
-  }
-
-  &__link {
-    background: none;
-    border: none;
-    padding: 0;
-    font-family: $font-body;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: $primary;
-    cursor: pointer;
-
-    &:hover {
-      text-decoration: underline;
-    }
-  }
-
-  &__spin {
-    animation: run-eval-spin 0.8s linear infinite;
   }
 
   /* ---------- wizard shell ---------- */
   &__wizard {
+    position: relative;
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-radius: 20px;
+    box-shadow: $shadow-md;
+    overflow: hidden;
     flex: 1;
-    display: flex;
-    gap: 20px;
     min-height: 0;
+    display: flex;
   }
 
-  /* ---------- sidebar step list ---------- */
+  /* ---------- sidebar / vertical stepper ---------- */
   &__sidebar {
-    flex: 0 0 240px;
+    flex-shrink: 0;
+    width: 320px;
+    background: $bg-subtle;
+    border-right: 1px solid $border-subtle;
+    padding: 28px 14px;
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    min-height: 0;
+    gap: 2px;
     overflow-y: auto;
   }
 
   &__step {
+    position: relative;
     display: flex;
     align-items: flex-start;
     gap: 12px;
     text-align: left;
-    padding: 12px;
-    border: 1px solid transparent;
-    border-radius: $radius-lg;
+    width: 100%;
+    border: none;
     background: transparent;
+    border-radius: 0.625rem;
+    padding: 10px 12px 22px 12px;
     cursor: pointer;
-    transition: background 0.12s ease, border-color 0.12s ease;
+    transition: background 0.14s ease;
+
+    &::before {
+      content: '';
+      position: absolute;
+      top: 42px;
+      left: 29px;
+      width: 2px;
+      height: calc(100% - 34px);
+      background: $border-default;
+      transition: background 0.16s ease;
+    }
+
+    &:last-child {
+      padding-bottom: 10px;
+
+      &::before {
+        display: none;
+      }
+    }
 
     &:disabled {
-      cursor: not-allowed;
-      opacity: 0.55;
+      cursor: default;
     }
 
-    &--active {
-      background: $primary-light;
-      border-color: $primary;
-    }
-
-    &--complete:hover {
-      background: $bg-subtle;
+    &:not(:disabled):hover {
+      background: $bg-inset;
     }
   }
 
   &__step-marker {
+    position: relative;
+    z-index: 1;
     flex-shrink: 0;
-    width: 28px;
-    height: 28px;
+    width: 34px;
+    height: 34px;
     border-radius: 50%;
     display: grid;
     place-items: center;
-    background: $bg-inset;
+    background: $bg-main;
+    border: 1.5px solid $border-default;
     color: $text-tertiary;
-  }
-
-  &__step--active &__step-marker {
-    background: $primary;
-    color: #fff;
-  }
-
-  &__step--complete &__step-marker {
-    background: $success-subtle;
-    color: $success;
+    transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
   }
 
   &__step-text {
     display: flex;
     flex-direction: column;
     gap: 2px;
+    padding-top: 5px;
     min-width: 0;
   }
 
   &__step-label {
-    font-size: 0.8125rem;
+    font-size: 0.875rem;
     font-weight: 700;
     color: $text-primary;
+    transition: color 0.16s ease;
   }
 
-  /* ---------- main content column ---------- */
+  &__step-desc {
+    font-size: 0.75rem;
+    color: $text-tertiary;
+    line-height: 1.35;
+  }
+
+  &__step--active {
+    background: $bg-main;
+    box-shadow: $shadow-sm;
+
+    .run-eval__step-marker {
+      background: $primary;
+      border-color: $primary;
+      color: #fff;
+      box-shadow: 0 0 0 4px $primary-light;
+    }
+
+    .run-eval__step-label {
+      color: $primary;
+    }
+  }
+
+  &__step--complete {
+    &::before {
+      background: $primary;
+    }
+
+    .run-eval__step-marker {
+      background: $primary-light;
+      border-color: $primary;
+      color: $primary;
+    }
+  }
+
+  &__step--upcoming {
+    .run-eval__step-label {
+      color: $text-secondary;
+    }
+
+    .run-eval__step-desc {
+      color: #a8b1bb;
+    }
+  }
+
+  /* ---------- content pane ---------- */
   &__content {
     flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
-    min-width: 0;
-    min-height: 0;
-  }
-
-  &__step-kicker {
-    flex-shrink: 0;
-    font-size: 0.6875rem;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    color: $text-tertiary;
-    margin-bottom: 10px;
+    padding: 28px 36px 24px;
   }
 
   &__body {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    padding-right: 4px;
+    margin-right: -4px;
   }
 
-  /* ---------- step card shell ---------- */
-  &__card {
-    background: $bg-main;
-    border: 1px solid $border-subtle;
-    border-radius: 16px;
-    box-shadow: $shadow-xs;
-    padding: 26px 28px;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
+  &__spin {
+    animation: run-eval-spin 0.8s linear infinite;
+  }
 
+  @keyframes run-eval-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* ---------- step kicker + heading ---------- */
+  &__step-kicker {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: $font-mono;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: $primary;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+
+    &::before {
+      content: '';
+      width: 16px;
+      height: 2px;
+      border-radius: 2px;
+      background: $primary;
+    }
+  }
+
+  /* ---------- step cards ---------- */
+  &__card {
     &--wide {
-      height: 100%;
+      max-width: none;
     }
   }
 
   &__step-title {
-    font-size: 1.0625rem;
+    font-size: 19px;
     font-weight: 800;
-    letter-spacing: -0.01em;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
     color: $text-primary;
-    margin-bottom: 4px;
   }
 
   &__step-desc {
-    font-size: 0.8125rem;
+    margin-top: 6px;
+    font-size: 0.9375rem;
     color: $text-secondary;
-    margin-bottom: 18px;
+    max-width: 608px;
   }
 
   &__step-header-row {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: 16px;
-    margin-bottom: 4px;
+    gap: 1rem;
   }
 
-  &__error {
-    margin-top: 14px;
-    font-size: 0.8125rem;
+  &__field {
+    max-width: 480px;
+    margin-top: 1.75rem;
+  }
+
+  &__label {
+    display: block;
+    font-size: 0.84375rem;
     font-weight: 600;
-    color: $danger;
+    color: $text-secondary;
+    margin-bottom: 0.4375rem;
   }
 
-  &__hint {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    margin-top: 18px;
-    padding: 12px 14px;
-    border-radius: 10px;
-    background: $bg-subtle;
-    color: $text-tertiary;
-    font-size: 0.75rem;
+  &__input {
+    width: 100%;
+    border: 1px solid $border-default;
+    border-radius: 0.5rem;
+    padding: 0.625rem 0.75rem;
+    font-size: 0.9375rem;
+    font-family: $font-body;
+    color: $text-primary;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
 
-    svg {
-      flex-shrink: 0;
-      margin-top: 1px;
+    &::placeholder {
+      color: #a8b1bb;
+    }
+
+    &:focus {
+      outline: none;
+      border-color: $primary;
+      box-shadow: 0 0 0 0.1875rem $primary-light;
+    }
+
+    &--lg {
+      padding: 0.75rem 0.875rem;
+      font-size: 1rem;
     }
   }
 
-  &__empty {
-    grid-column: 1 / -1;
-    padding: 32px 16px;
-    text-align: center;
-    color: $text-tertiary;
-    font-size: 0.8125rem;
-  }
-
-  &__filter-empty {
-    color: $text-tertiary;
-    font-size: 0.75rem;
-  }
-
-  &__loading-state,
-  &__inline-error {
+  /* ---------- suggestion / static chips ---------- */
+  &__suggestions {
+    margin-top: 1.125rem;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
-    font-size: 0.8125rem;
-    padding: 14px;
-    border-radius: 10px;
+    gap: 0.5rem;
   }
 
-  &__loading-state {
+  &__suggestions-label {
+    font-size: 0.84375rem;
     color: $text-tertiary;
-    background: $bg-subtle;
+    margin-right: 0.125rem;
   }
 
-  &__inline-error {
-    color: $danger;
-    background: $danger-subtle;
-  }
-
-  /* ---------- generic chips / tags ---------- */
   &__chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 5px 10px;
-    border-radius: 999px;
-    border: 1px solid $border-default;
-    background: $bg-main;
-    font-size: 0.75rem;
-    font-weight: 600;
+    font-size: 0.8125rem;
+    font-weight: 500;
     color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-default;
+    border-radius: 999px;
+    padding: 0.3125rem 0.75rem;
     cursor: pointer;
-    white-space: nowrap;
-    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+    transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
 
     &:hover {
       border-color: $primary;
+      color: $primary;
     }
 
     &--active {
@@ -605,286 +433,192 @@ export default ModelsStep;
 
     &--static {
       cursor: default;
-      background: $bg-subtle;
-      border-color: $border-subtle;
-      color: $text-tertiary;
-      font-weight: 500;
+      font-size: 0.75rem;
+      padding: 0.1875rem 0.5rem;
 
       &:hover {
-        border-color: $border-subtle;
+        border-color: $border-default;
+        color: $text-secondary;
       }
     }
   }
 
-  &__tag {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 5px 6px 5px 10px;
-    border-radius: 999px;
-    background: $primary-light;
-    color: $primary;
-    font-size: 0.75rem;
-    font-weight: 600;
-
-    button {
-      display: grid;
-      place-items: center;
-      width: 16px;
-      height: 16px;
-      border-radius: 50%;
-      border: none;
-      background: rgba(255, 255, 255, 0.5);
-      color: $primary;
-      cursor: pointer;
-
-      &:hover {
-        background: #fff;
-      }
-    }
-  }
-
-  &__badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 3px 9px;
-    border-radius: 999px;
-    background: $bg-subtle;
-    color: $text-tertiary;
-    font-size: 0.625rem;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-
-    &--soft {
-      background: $success-subtle;
-      color: $success;
-    }
-  }
-
-  &__type-check {
-    flex-shrink: 0;
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    display: grid;
-    place-items: center;
-    background: $primary;
-    color: #fff;
-  }
-
-  &__radio {
-    flex-shrink: 0;
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    border: 2px solid $border-strong;
-    background: $bg-main;
-
-    &--checked {
-      border-color: $primary;
-      border-width: 5px;
-    }
-  }
-
-  &__checkbox {
-    flex-shrink: 0;
-    width: 16px;
-    height: 16px;
-    border-radius: 4px;
-    border: 1.5px solid $border-strong;
-    background: $bg-main;
-    display: grid;
-    place-items: center;
-    color: #fff;
-
-    &--checked {
-      background: $primary;
-      border-color: $primary;
-    }
-  }
-
-  &__filter-title {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.6875rem;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: $text-tertiary;
-    margin-bottom: 10px;
-  }
-
-  /* ================================================================
-     Step 1 — Name
-     ================================================================ */
-  &__field {
+  /* ---------- eval type cards ---------- */
+  &__type-grid {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    max-width: 420px;
-
-    &--judge {
-      max-width: none;
-      margin-top: 14px;
-    }
-  }
-
-  &__label {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.75rem;
-    font-weight: 700;
-    color: $text-secondary;
-  }
-
-  &__input {
-    border: 1px solid $border-default;
-    border-radius: 10px;
-    padding: 10px 12px;
-    font-size: 0.84375rem;
-    font-family: $font-body;
-    color: $text-primary;
-    background: $bg-main;
-    transition: border-color 0.14s ease, box-shadow 0.14s ease;
-
-    &:focus {
-      outline: none;
-      border-color: $primary;
-      box-shadow: 0 0 0 3px $primary-light;
-    }
-
-    &::placeholder {
-      color: $text-tertiary;
-    }
-  }
-
-  &__name-suggestions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 12px;
-  }
-
-  /* ================================================================
-     Step 2 — Type
-     ================================================================ */
-  &__type-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-    gap: 14px;
+    gap: 0.75rem;
+    margin-top: 1.5rem;
   }
 
   &__type-card {
     position: relative;
     display: flex;
-    flex-direction: column;
     align-items: flex-start;
-    gap: 10px;
+    gap: 0.875rem;
     text-align: left;
-    padding: 18px;
-    border: 1px solid $border-subtle;
-    border-radius: $radius-lg;
+    width: 100%;
+    padding: 1.125rem 3rem 1.125rem 1.125rem;
+    border: 1px solid $border-default;
+    border-radius: 0.75rem;
     background: $bg-main;
     cursor: pointer;
-    transition: border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+    transition: border-color 0.14s ease, background 0.14s ease;
 
     &:hover {
       border-color: $primary;
-      box-shadow: $shadow-sm;
     }
 
     &--selected {
       border-color: $primary;
       background: $primary-light;
     }
-
-    &--framework {
-      padding: 14px;
-    }
   }
 
   &__type-icon {
-    width: 40px;
-    height: 40px;
-    border-radius: $radius-md;
+    width: 38px;
+    height: 38px;
+    flex-shrink: 0;
+    border-radius: 0.5rem;
+    background: $bg-subtle;
+    color: $primary;
     display: grid;
     place-items: center;
-    background: $bg-subtle;
-    color: $text-secondary;
-  }
-
-  &__type-card--selected &__type-icon {
-    background: $bg-main;
-    color: $primary;
   }
 
   &__type-content {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 0.25rem;
+    flex: 1;
   }
 
   &__type-title {
-    font-size: 0.875rem;
-    font-weight: 700;
+    font-size: 1rem;
+    font-weight: 600;
     color: $text-primary;
   }
 
   &__type-desc {
-    font-size: 0.75rem;
-    color: $text-tertiary;
-    line-height: 1.45;
+    font-size: 0.875rem;
+    color: $text-secondary;
+    line-height: 1.5;
   }
 
-  &__type-card &__badge {
-    margin-top: 2px;
-  }
-
-  &__type-card &__type-check {
+  &__type-check {
     position: absolute;
-    top: 14px;
-    right: 14px;
+    top: 50%;
+    right: 1.125rem;
+    transform: translateY(-50%);
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: $primary;
+    color: #fff;
+    display: grid;
+    place-items: center;
   }
 
+  /* ---------- optional agent framework sub-section ---------- */
   &__framework-section {
-    margin-top: 24px;
-    padding-top: 20px;
+    margin-top: 1.75rem;
+    padding-top: 1.5rem;
     border-top: 1px solid $border-subtle;
   }
 
   &__framework-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 12px;
-    margin-top: 12px;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+    margin-top: 1rem;
   }
 
-  /* ================================================================
-     Step 3 — Providers
-     ================================================================ */
+  &__type-card--framework {
+    padding: 0.875rem 2.75rem 0.875rem 0.875rem;
+    gap: 0.75rem;
+
+    .run-eval__type-icon {
+      width: 32px;
+      height: 32px;
+    }
+
+    .run-eval__type-title {
+      font-size: 0.9375rem;
+    }
+
+    .run-eval__type-desc {
+      font-size: 0.8125rem;
+    }
+  }
+
+  &__badge {
+    align-self: flex-start;
+    flex-shrink: 0;
+    font-size: 0.71875rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: $primary;
+    background: $primary-light;
+    border-radius: 0.375rem;
+    padding: 0.25rem 0.5rem;
+
+    &--soft {
+      margin-top: 0.625rem;
+    }
+  }
+
+  /* ---------- async states (providers / models) ---------- */
+  &__loading-state {
+    margin-top: 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.90625rem;
+    color: $text-secondary;
+    padding: 1.5rem 0;
+  }
+
+  &__inline-error {
+    margin-top: 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    color: $danger;
+    background: $danger-subtle;
+    border-radius: 0.5rem;
+    padding: 0.75rem 0.875rem;
+  }
+
+  &__filter-empty {
+    font-size: 0.8125rem;
+    color: $text-tertiary;
+  }
+
+  /* ---------- providers ---------- */
   &__provider-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 14px;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+    margin-top: 1.5rem;
   }
 
   &__provider-card {
+    position: relative;
     display: flex;
-    flex-direction: column;
-    gap: 10px;
+    align-items: flex-start;
+    gap: 0.75rem;
     text-align: left;
-    padding: 16px;
-    border: 1px solid $border-subtle;
-    border-radius: $radius-lg;
+    padding: 0.875rem 2.5rem 0.875rem 0.875rem;
+    border: 1px solid $border-default;
+    border-radius: 0.75rem;
     background: $bg-main;
     cursor: pointer;
-    transition: border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+    transition: border-color 0.14s ease, background 0.14s ease;
 
-    &:hover {
+    &:hover:not(&--disabled) {
       border-color: $primary;
-      box-shadow: $shadow-sm;
     }
 
     &--selected {
@@ -894,28 +628,124 @@ export default ModelsStep;
 
     &--disabled {
       cursor: not-allowed;
-      opacity: 0.55;
+      opacity: 0.7;
     }
   }
 
-  /* ================================================================
-     Step 4 — Models  (independent-scroll filters + card list)
-     ================================================================ */
-  &__models-layout {
-    flex: 1;
+  &__provider-logo {
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    border-radius: 0.5rem;
+    background: $text-primary;
+    color: #fff;
+    font-weight: 700;
+    font-size: 0.875rem;
+    display: grid;
+    place-items: center;
+    margin-top: 0.0625rem;
+    overflow: hidden;
+
+    img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+  }
+
+  &__provider-info {
     display: flex;
-    gap: 20px;
+    flex-direction: column;
+    gap: 0.3125rem;
+    min-width: 0;
+    flex: 1;
+  }
+
+  &__provider-name-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  &__provider-name {
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__provider-desc {
+    font-size: 0.8125rem;
+    color: $text-tertiary;
+  }
+
+  &__status-badge {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3125rem;
+    font-size: 0.71875rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: $text-tertiary;
+    background: $bg-inset;
+    border-radius: 999px;
+    padding: 0.1875rem 0.5rem;
+
+    &--on {
+      color: $success;
+      background: $success-subtle;
+    }
+  }
+
+  &__hint {
+    margin-top: 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    color: $text-tertiary;
+
+    svg {
+      flex-shrink: 0;
+    }
+  }
+
+  &__link {
+    background: none;
+    border: none;
+    padding: 0;
+    color: $primary;
+    font-weight: 600;
+    font-size: inherit;
+    cursor: pointer;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  /* ---------- models step ---------- */
+  /* EDITED: fixed-height layout so the filters column and the model card
+     list scroll independently of one another (and of run-eval__body). */
+  &__models-layout {
+    display: grid;
+    grid-template-columns: 15rem 1fr;
+    gap: 1.5rem;
+    margin-top: 1.5rem;
+    align-items: stretch;
+    height: 34rem;
     min-height: 0;
   }
 
   &__filters {
-    flex: 0 0 220px;
+    border: 1px solid $border-subtle;
+    border-radius: 0.75rem;
+    padding: 1rem;
     display: flex;
     flex-direction: column;
+    gap: 1.125rem;
     min-height: 0;
-    border: 1px solid $border-subtle;
-    border-radius: $radius-lg;
-    background: $bg-subtle;
     overflow: hidden;
   }
 
@@ -924,93 +754,83 @@ export default ModelsStep;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 14px 14px 10px;
-    font-size: 0.75rem;
-    font-weight: 700;
+    font-size: 0.875rem;
+    font-weight: 600;
     color: $text-primary;
   }
 
-  // Scrolls independently from the model card list on the right.
+  // NEW: scrolls independently from the model card list on the right.
   &__filters-scroll {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 0 14px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 1.125rem;
+    padding-right: 4px;
+    margin-right: -4px;
   }
 
   &__filter-section {
-    padding-bottom: 16px;
-    margin-bottom: 16px;
-    border-bottom: 1px solid $border-subtle;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    flex-shrink: 0;
+  }
 
-    &:last-child {
-      border-bottom: none;
-      margin-bottom: 0;
-      padding-bottom: 0;
-    }
+  &__filter-title {
+    font-family: $font-mono;
+    font-size: 0.71875rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: $text-tertiary;
   }
 
   &__filter-options {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 0.4375rem;
   }
 
   &__filter-chip {
     display: flex;
     align-items: center;
-    gap: 8px;
-    font-size: 0.78125rem;
+    gap: 0.5rem;
+    font-size: 0.875rem;
     color: $text-secondary;
     cursor: pointer;
 
-    input[type='checkbox'] {
-      width: 14px;
-      height: 14px;
+    input {
       accent-color: $primary;
-      cursor: pointer;
-    }
-
-    &:hover {
-      color: $text-primary;
     }
   }
 
   &__models-main {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
     min-width: 0;
     min-height: 0;
+    display: flex;
+    flex-direction: column;
   }
 
   &__search-bar {
     flex-shrink: 0;
     display: flex;
     align-items: center;
-    gap: 9px;
+    gap: 0.5rem;
     border: 1px solid $border-default;
-    border-radius: 10px;
-    padding: 9px 12px;
-    background: $bg-main;
+    border-radius: 0.5rem;
+    padding: 0.5625rem 0.75rem;
     color: $text-tertiary;
-    transition: border-color 0.14s ease, box-shadow 0.14s ease;
-
-    &:focus-within {
-      border-color: $primary;
-      box-shadow: 0 0 0 3px $primary-light;
-    }
 
     input {
       flex: 1;
       border: none;
       outline: none;
-      font-size: 0.8125rem;
+      font-size: 0.90625rem;
       color: $text-primary;
       background: transparent;
       font-family: $font-body;
-      min-width: 0;
 
       &::placeholder {
         color: $text-tertiary;
@@ -1022,38 +842,61 @@ export default ModelsStep;
     flex-shrink: 0;
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: 0.375rem;
+    margin-top: 0.75rem;
   }
 
-  // Scrolls independently from the filters panel on the left.
+  &__tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: 0.78125rem;
+    color: $primary;
+    background: $primary-light;
+    border-radius: 0.375rem;
+    padding: 0.25rem 0.25rem 0.25rem 0.5rem;
+
+    button {
+      display: grid;
+      place-items: center;
+      border: none;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+    }
+  }
+
+  // NEW: scrolls independently from the filters panel on the left.
   &__models-scroll {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    margin-top: 1rem;
+    padding-right: 4px;
+    margin-right: -4px;
   }
 
   &__models-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-    gap: 12px;
-    align-content: start;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
   }
 
   &__model-card {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+    position: relative;
     text-align: left;
-    padding: 14px;
-    border: 1px solid $border-subtle;
-    border-radius: $radius-lg;
+    padding: 0.875rem 1rem;
+    border: 1px solid $border-default;
+    border-radius: 0.75rem;
     background: $bg-main;
     cursor: pointer;
-    transition: border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    transition: border-color 0.14s ease, background 0.14s ease;
 
     &:hover {
       border-color: $primary;
-      box-shadow: $shadow-sm;
     }
 
     &--selected {
@@ -1066,108 +909,116 @@ export default ModelsStep;
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: 8px;
+    gap: 0.5rem;
   }
 
   &__model-name {
-    font-size: 0.84375rem;
-    font-weight: 700;
+    font-size: 0.9375rem;
+    font-weight: 600;
     color: $text-primary;
   }
 
   &__model-provider {
-    font-size: 0.75rem;
+    font-size: 0.84375rem;
     color: $text-tertiary;
+    margin-top: -0.25rem;
   }
 
   &__model-caps {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 0.3125rem;
   }
 
   &__model-meta {
     display: flex;
     flex-wrap: wrap;
-    gap: 10px;
-    font-size: 0.71875rem;
+    gap: 0.625rem;
+    font-size: 0.78125rem;
     color: $text-tertiary;
-    margin-top: 2px;
+    margin-top: 0.125rem;
+  }
+
+  &__empty {
+    grid-column: 1 / -1;
+    padding: 2rem;
+    text-align: center;
+    color: $text-tertiary;
+    font-size: 0.90625rem;
   }
 
   &__selected-bar {
     flex-shrink: 0;
+    margin-top: 1rem;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
-    padding: 10px 14px;
-    border-radius: 10px;
+    padding: 0.75rem 1rem;
     background: $primary-light;
-    color: $primary;
-    font-size: 0.8125rem;
+    border-radius: 0.625rem;
+    font-size: 0.90625rem;
+    color: $text-primary;
+
+    strong {
+      color: $primary;
+    }
   }
 
-  /* ================================================================
-     Step 5 — Dataset
-     ================================================================ */
+  /* ---------- dataset step ---------- */
   &__tabs {
     display: flex;
-    gap: 4px;
-    padding: 4px;
-    border-radius: 10px;
-    background: $bg-subtle;
-    width: fit-content;
-    margin-bottom: 18px;
+    gap: 0.375rem;
+    margin-top: 1.5rem;
+    border-bottom: 1px solid $border-subtle;
   }
 
   &__tab {
-    padding: 8px 16px;
-    border-radius: 8px;
+    padding: 0.5625rem 0.25rem;
+    margin-right: 1.25rem;
     border: none;
     background: transparent;
-    font-family: $font-body;
-    font-size: 0.8125rem;
+    font-size: 0.90625rem;
     font-weight: 600;
     color: $text-tertiary;
     cursor: pointer;
-    transition: background 0.12s ease, color 0.12s ease;
+    border-bottom: 2px solid transparent;
+    transition: color 0.14s ease, border-color 0.14s ease;
 
     &--active {
-      background: $bg-main;
-      color: $text-primary;
-      box-shadow: $shadow-xs;
+      color: $primary;
+      border-bottom-color: $primary;
     }
   }
 
   &__category-filters {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
-    margin-bottom: 16px;
+    gap: 0.5rem;
+    margin-top: 1.125rem;
   }
 
   &__dataset-grid {
+    margin-top: 1.125rem;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-    gap: 14px;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
   }
 
   &__dataset-card {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+    position: relative;
     text-align: left;
-    padding: 16px;
-    border: 1px solid $border-subtle;
-    border-radius: $radius-lg;
+    padding: 1rem 1.125rem;
+    border: 1px solid $border-default;
+    border-radius: 0.75rem;
     background: $bg-main;
     cursor: pointer;
-    transition: border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    transition: border-color 0.14s ease, background 0.14s ease;
 
     &:hover {
       border-color: $primary;
-      box-shadow: $shadow-sm;
     }
 
     &--selected {
@@ -1180,240 +1031,145 @@ export default ModelsStep;
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: 8px;
+    gap: 0.5rem;
   }
 
   &__dataset-top-actions {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 0.5rem;
     flex-shrink: 0;
+
+    .run-eval__type-check {
+      position: static;
+    }
+  }
+
+  &__subgroup-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.71875rem;
+    font-weight: 600;
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-default;
+    border-radius: 999px;
+    padding: 0.25rem 0.5625rem;
+    cursor: pointer;
+    transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+      color: $primary;
+      background: $primary-light;
+    }
   }
 
   &__dataset-name {
-    font-size: 0.84375rem;
-    font-weight: 700;
+    font-size: 0.9375rem;
+    font-weight: 600;
     color: $text-primary;
   }
 
   &__dataset-desc {
-    font-size: 0.75rem;
+    font-size: 0.875rem;
     color: $text-secondary;
-    line-height: 1.45;
+    line-height: 1.5;
   }
 
   &__dataset-meta {
     display: flex;
-    gap: 10px;
-    font-size: 0.71875rem;
+    flex-wrap: wrap;
+    gap: 0.625rem;
+    font-size: 0.78125rem;
     color: $text-tertiary;
   }
 
   &__dataset-caps {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 0.3125rem;
   }
 
-  &__subgroup-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 4px 8px;
-    border-radius: 999px;
-    background: $bg-subtle;
+  &__empty-state,
+  &__upload-zone {
+    margin-top: 1.5rem;
+    border: 1.5008px dashed $border-strong;
+    border-radius: 0.75rem;
+    padding: 2.75rem 1.5rem;
+    text-align: center;
     color: $text-tertiary;
-    font-size: 0.6875rem;
-    font-weight: 700;
-    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
 
-    &:hover {
-      background: $primary-light;
-      color: $primary;
+    svg {
+      color: $text-tertiary;
+      margin-bottom: 0.25rem;
+    }
+
+    h3 {
+      font-size: 1rem;
+      color: $text-primary;
+    }
+
+    p {
+      font-size: 0.875rem;
     }
   }
 
   &__upload-zone {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 8px;
-    padding: 48px 20px;
-    border: 1.5px dashed $border-strong;
-    border-radius: $radius-lg;
-    color: $text-tertiary;
-    text-align: center;
+    cursor: pointer;
 
-    h3 {
-      font-size: 0.9375rem;
-      font-weight: 700;
-      color: $text-primary;
-      margin-top: 4px;
-    }
-
-    p {
-      font-size: 0.8125rem;
+    &:hover {
+      border-color: $primary;
     }
   }
 
   &__format-chips {
     display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 8px;
-    margin-top: 8px;
+    gap: 0.375rem;
+    margin-top: 0.375rem;
   }
 
-  /* ---------- subgroup drawer ---------- */
-  &__drawer-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(15, 23, 42, 0.4);
-    opacity: 0;
-    pointer-events: none;
-    z-index: 40;
-    transition: opacity 0.18s ease;
-
-    &--open {
-      opacity: 1;
-      pointer-events: auto;
-    }
-  }
-
-  &__drawer {
-    position: fixed;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: min(380px, 100%);
-    background: $bg-main;
-    box-shadow: $shadow-lg;
-    transform: translateX(100%);
-    transition: transform 0.22s ease;
-    display: flex;
-    flex-direction: column;
-
-    &--open {
-      transform: translateX(0);
-    }
-  }
-
-  &__drawer-header {
-    flex-shrink: 0;
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 20px;
-    border-bottom: 1px solid $border-subtle;
-  }
-
-  &__drawer-eyebrow {
-    font-size: 0.6875rem;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: $text-tertiary;
-    margin-bottom: 4px;
-  }
-
-  &__drawer-title {
-    font-size: 1rem;
-    font-weight: 800;
-    color: $text-primary;
-  }
-
-  &__drawer-close {
-    flex-shrink: 0;
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    border: none;
-    background: $bg-subtle;
-    color: $text-tertiary;
-    display: grid;
-    place-items: center;
-    cursor: pointer;
-
-    &:hover {
-      background: $border-default;
-      color: $text-primary;
-    }
-  }
-
-  &__drawer-body {
-    flex: 1;
-    overflow-y: auto;
-    padding: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  &__drawer-task {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px;
-    border-radius: 8px;
-    border: none;
-    background: transparent;
-    text-align: left;
-    cursor: pointer;
-    transition: background 0.12s ease;
-
-    &:hover {
-      background: $bg-subtle;
-    }
-
-    &--selected {
-      background: $primary-light;
-    }
-  }
-
-  &__drawer-task-name {
-    font-size: 0.8125rem;
-    color: $text-primary;
-  }
-
-  /* ================================================================
-     Step 6 — Metrics
-     ================================================================ */
+  /* ---------- metrics step ---------- */
   &__metrics-count {
     flex-shrink: 0;
     display: flex;
     align-items: center;
-    gap: 10px;
-    font-size: 0.75rem;
-    color: $text-tertiary;
+    gap: 0.625rem;
+    font-size: 0.875rem;
+    color: $text-secondary;
   }
 
   &__metrics-count-num {
-    font-size: 0.9375rem;
-    font-weight: 800;
+    font-weight: 700;
     color: $primary;
   }
 
   &__metrics-bulk-actions {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 0.5rem;
+    margin-left: 0.25rem;
   }
 
   &__metrics-bulk-divider {
     width: 1px;
     height: 12px;
-    background: $border-default;
+    background: $border-strong;
   }
 
   &__metrics-toggle-all {
-    background: none;
-    border: none;
-    padding: 0;
     font-family: $font-body;
-    font-size: 0.75rem;
+    font-size: 0.8125rem;
     font-weight: 600;
     color: $primary;
+    background: transparent;
+    border: none;
+    padding: 0;
     cursor: pointer;
 
     &:hover:not(:disabled) {
@@ -1426,49 +1182,31 @@ export default ModelsStep;
     }
   }
 
-  &__metrics-layout {
-    flex: 1;
-    display: flex;
-    gap: 24px;
-    min-height: 0;
-    margin-top: 16px;
-  }
-
-  &__metrics-main {
-    flex: 1;
-    min-width: 0;
-    overflow-y: auto;
-  }
-
   &__metric-group {
-    margin-bottom: 22px;
-
-    &:last-child {
-      margin-bottom: 0;
-    }
+    margin-top: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
   }
 
   &__metrics-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-    gap: 10px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.625rem;
   }
 
   &__metric-card {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 12px 14px;
-    border: 1px solid $border-subtle;
-    border-radius: $radius-md;
+    position: relative;
+    text-align: left;
+    padding: 0.75rem 2rem 0.75rem 0.875rem;
+    border: 1px solid $border-default;
+    border-radius: 0.625rem;
     background: $bg-main;
     cursor: pointer;
-    transition: border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+    transition: border-color 0.14s ease, background 0.14s ease;
 
     &:hover {
       border-color: $primary;
-      box-shadow: $shadow-sm;
     }
 
     &--selected {
@@ -1478,57 +1216,84 @@ export default ModelsStep;
   }
 
   &__metric-name {
-    font-size: 0.8125rem;
+    display: block;
+    font-size: 0.875rem;
     font-weight: 600;
     color: $text-primary;
   }
 
-  /* ---------- judge panel ---------- */
+  /* ---------- metrics + judge model split ---------- */
+  &__metrics-layout {
+    display: flex;
+    align-items: flex-start;
+    gap: 1.5rem;
+    margin-top: 0.5rem;
+  }
+
+  &__metrics-main {
+    flex: 1;
+    min-width: 0;
+  }
+
   &__judge-panel {
-    flex: 0 0 280px;
+    flex-shrink: 0;
+    width: 350px;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
+    border-radius: 0.75rem;
+    padding: 1.125rem 1.25rem;
     display: flex;
     flex-direction: column;
-    border: 1px solid $border-subtle;
-    border-radius: $radius-lg;
-    background: $bg-subtle;
-    padding: 16px;
-    overflow-y: auto;
+    gap: 0.25rem;
+
+    .run-eval__filter-title {
+      display: flex;
+      align-items: center;
+      gap: 0.375rem;
+      margin-top: 0;
+
+      svg {
+        color: $primary;
+      }
+    }
   }
 
   &__judge-hint {
-    font-size: 0.75rem;
+    font-size: 0.78125rem;
     color: $text-tertiary;
-    line-height: 1.45;
-    margin-bottom: 14px;
+    line-height: 1.5;
+    margin-bottom: 0.75rem;
   }
 
   &__judge-empty {
-    padding: 16px;
-    border-radius: 10px;
-    background: $bg-main;
-    border: 1px dashed $border-strong;
-    color: $text-tertiary;
-    font-size: 0.75rem;
+    padding: 1.25rem 0.75rem;
     text-align: center;
+    border: 1px dashed $border-strong;
+    border-radius: 0.625rem;
+    font-size: 0.8125rem;
+    color: $text-tertiary;
   }
 
   &__judge-list {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 0.5rem;
+    max-height: 16rem;
+    overflow-y: auto;
   }
 
   &__judge-row {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 10px;
-    border: 1px solid $border-subtle;
-    border-radius: $radius-md;
+    gap: 0.625rem;
+    width: 100%;
+    text-align: left;
+    padding: 0.625rem 0.75rem;
+    border: 1px solid $border-default;
+    border-radius: 0.625rem;
     background: $bg-main;
     cursor: pointer;
-    text-align: left;
-    transition: border-color 0.12s ease, background 0.12s ease;
+    transition: border-color 0.14s ease, background 0.14s ease;
 
     &:hover {
       border-color: $primary;
@@ -1543,13 +1308,13 @@ export default ModelsStep;
   &__judge-row-text {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 1px;
     min-width: 0;
   }
 
   &__judge-row-name {
-    font-size: 0.8125rem;
-    font-weight: 700;
+    font-size: 0.84375rem;
+    font-weight: 600;
     color: $text-primary;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1557,123 +1322,324 @@ export default ModelsStep;
   }
 
   &__judge-row-meta {
-    font-size: 0.6875rem;
+    font-size: 0.71875rem;
     color: $text-tertiary;
   }
 
-  /* ================================================================
-     Step 7 — Review
-     ================================================================ */
+  &__radio {
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 1.5px solid $border-strong;
+    background: $bg-main;
+    position: relative;
+    transition: border-color 0.14s ease;
+
+    &--checked {
+      border-color: $primary;
+      border-width: 5px;
+    }
+  }
+
+  &__field--judge {
+    max-width: none;
+    margin-top: 0.875rem;
+
+    .run-eval__label {
+      display: flex;
+      align-items: center;
+      gap: 0.375rem;
+    }
+  }
+
+  &__metric-tooltip {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.78125rem;
+    color: $text-tertiary;
+    line-height: 1.4;
+  }
+
+  /* ---------- review step ---------- */
   &__review {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+    margin-top: 1.5rem;
+    border: 1px solid $border-subtle;
+    border-radius: 0.75rem;
+    overflow: hidden;
   }
 
   &__review-row {
     display: flex;
-    align-items: flex-start;
+    align-items: baseline;
     justify-content: space-between;
-    gap: 16px;
-    padding: 11px 0;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    font-size: 0.90625rem;
     border-bottom: 1px solid $border-subtle;
-    font-size: 0.8125rem;
+
+    &:last-child {
+      border-bottom: 0;
+    }
 
     span:first-child {
       color: $text-tertiary;
-      font-weight: 600;
       flex-shrink: 0;
     }
 
     span:last-child {
       color: $text-primary;
-      font-weight: 600;
+      font-weight: 500;
       text-align: right;
     }
 
-    &--highlight {
-      span:last-child {
-        color: $primary;
-        font-size: 0.9375rem;
-        font-weight: 800;
-      }
+    &--highlight span:last-child {
+      color: $primary;
+      font-weight: 700;
     }
   }
 
   &__review-divider {
     height: 1px;
-    background: $border-default;
-    margin: 6px 0;
+    background: $border-subtle;
   }
 
-  /* ---------- footer nav ---------- */
+  /* ---------- subgroup drawer ---------- */
+  &__drawer-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(14, 21, 38, 0.32);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s ease, visibility 0.2s ease;
+    z-index: 200;
+
+    &--open {
+      opacity: 1;
+      visibility: visible;
+    }
+  }
+
+  &__drawer {
+    position: absolute;
+    top: 0;
+    right: 0;
+    height: 100%;
+    width: 400px;
+    max-width: 92vw;
+    background: $bg-main;
+    box-shadow: $shadow-xl;
+    display: flex;
+    flex-direction: column;
+    transform: translateX(100%);
+    transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1);
+
+    &--open {
+      transform: translateX(0);
+    }
+  }
+
+  &__drawer-header {
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 20px 20px 16px;
+    border-bottom: 1px solid $border-subtle;
+  }
+
+  &__drawer-eyebrow {
+    font-family: $font-mono;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: $primary;
+    margin-bottom: 4px;
+  }
+
+  &__drawer-title {
+    font-size: 1.0625rem;
+    font-weight: 800;
+    color: $text-primary;
+    letter-spacing: -0.02em;
+  }
+
+  &__drawer-close {
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 0.5rem;
+    border: 1px solid $border-default;
+    background: $bg-main;
+    color: $text-secondary;
+    cursor: pointer;
+    transition: border-color 0.14s ease, color 0.14s ease;
+
+    &:hover {
+      border-color: $text-primary;
+      color: $text-primary;
+    }
+  }
+
+  &__drawer-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  &__drawer-task {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    text-align: left;
+    width: 100%;
+    padding: 0.75rem 0.875rem;
+    border: 1px solid $border-default;
+    border-radius: 0.625rem;
+    background: $bg-main;
+    cursor: pointer;
+    transition: border-color 0.14s ease, background 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+    }
+
+    &--selected {
+      border-color: $primary;
+      background: $primary-light;
+    }
+  }
+
+  &__drawer-task-name {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__checkbox {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
+    border: 1.5px solid $border-strong;
+    background: $bg-main;
+    display: grid;
+    place-items: center;
+    color: transparent;
+    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+
+    &--checked {
+      background: $primary;
+      border-color: $primary;
+      color: #fff;
+    }
+  }
+
+  /* ---------- shared feedback ---------- */
+  &__error {
+    margin-top: 1.25rem;
+    font-size: 0.875rem;
+    color: $danger;
+    background: $danger-subtle;
+    border-radius: 0.5rem;
+    padding: 0.625rem 0.875rem;
+  }
+
   &__nav {
     flex-shrink: 0;
+    margin-top: 1.25rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid $border-subtle;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
-    margin-top: 18px;
   }
 
   /* ---------- responsive ---------- */
-  @media (max-width: 1100px) {
+  @media (max-width: 896px) {
+    &__provider-grid,
+    &__models-grid,
+    &__dataset-grid,
+    &__metrics-grid {
+      grid-template-columns: 1fr;
+    }
+
     &__models-layout {
-      flex-direction: column;
+      grid-template-columns: 1fr;
+      height: auto;
+      max-height: none;
     }
 
     &__filters {
-      flex: 0 0 auto;
-      max-height: 220px;
+      max-height: 16rem;
     }
 
+    &__models-scroll {
+      margin-top: 0.75rem;
+    }
+  }
+
+  @media (max-width: 900px) {
     &__metrics-layout {
       flex-direction: column;
     }
 
     &__judge-panel {
-      flex: 0 0 auto;
-      max-height: 320px;
+      width: 100%;
+    }
+
+    &__framework-grid {
+      grid-template-columns: 1fr;
     }
   }
 
-  @media (max-width: 900px) {
-    height: auto;
-    margin-bottom: 0;
-
+  @media (max-width: 720px) {
     &__wizard {
       flex-direction: column;
     }
 
     &__sidebar {
-      flex: 0 0 auto;
+      width: 100%;
       flex-direction: row;
-      flex-wrap: wrap;
-      overflow-y: visible;
+      overflow-x: auto;
+      border-right: none;
+      border-bottom: 1px solid $border-subtle;
+      padding: 14px;
+      gap: 6px;
     }
 
     &__step {
-      flex: 1 1 200px;
-    }
-  }
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      padding: 8px 10px;
+      flex-shrink: 0;
+      width: 96px;
 
-  @media (max-width: 520px) {
-    &__card {
-      padding: 18px 16px;
+      &::before {
+        display: none;
+      }
     }
 
-    &__type-grid,
-    &__provider-grid,
-    &__dataset-grid,
-    &__models-grid,
-    &__metrics-grid {
-      grid-template-columns: 1fr;
+    &__step-text {
+      align-items: center;
+      padding-top: 2px;
     }
-  }
-}
 
-@keyframes run-eval-spin {
-  to {
-    transform: rotate(360deg);
+    &__step-desc {
+      display: none;
+    }
+
+    &__content {
+      padding: 24px 20px;
+    }
   }
 }
