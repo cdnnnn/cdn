@@ -1,242 +1,3 @@
-//HBar.tsx
-import { useEffect, useState } from 'react';
-
-interface HBarProps {
-  value: number;
-  max?: number;
-  color?: string;
-  label: string;
-  sublabel?: string;
-}
-
-export default function HBar({ value, max = 100, color = '#1428A0', label, sublabel }: HBarProps) {
-  const [width, setWidth] = useState(0);
-  useEffect(() => {
-    const t = setTimeout(() => setWidth(value), 50);
-    return () => clearTimeout(t);
-  }, [value]);
-
-  return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-        <span style={{ fontSize: 13, fontWeight: 600 }}>{label}</span>
-        <span style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontSize: 13, fontWeight: 700, color }}>{value}%</span>
-      </div>
-      {sublabel && <div style={{ fontSize: 11, color: '#9CA3AF', marginBottom: 4 }}>{sublabel}</div>}
-      <div style={{ height: 8, background: '#F1F4F9', borderRadius: 4, overflow: 'hidden' }}>
-        <div
-          style={{
-            height: '100%',
-            width: `${(width / max) * 100}%`,
-            background: color,
-            borderRadius: 4,
-            transition: 'width 1s cubic-bezier(.16,1,.3,1)',
-          }}
-        />
-      </div>
-    </div>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-//RadarChart.tsx
-import { useState } from 'react';
-
-export interface RadarModel {
-  name: string;
-  values: number[]; // 0..1, one per metric, same order as `metrics`
-}
-
-interface RadarChartProps {
-  models: RadarModel[];
-  metrics?: string[];
-  size?: number;
-  colors?: string[];
-}
-
-const DEFAULT_METRICS = ['Accuracy', 'Speed', 'Cost Eff.', 'Context', 'Capability'];
-const DEFAULT_COLORS = ['#1428A0', '#F59E0B', '#10B981'];
-
-export default function RadarChart({ models, metrics = DEFAULT_METRICS, size = 300, colors = DEFAULT_COLORS }: RadarChartProps) {
-  const [hovered, setHovered] = useState<number | null>(null);
-  const cx = size / 2;
-  const cy = size / 2;
-  const r = size / 2 - 44;
-  const angleStep = (2 * Math.PI) / metrics.length;
-  const pt = (angle: number, radius: number) => ({ x: cx + radius * Math.sin(angle), y: cy - radius * Math.cos(angle) });
-
-  return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ overflow: 'visible' }}>
-      {[0.2, 0.4, 0.6, 0.8, 1].map((l, i) => (
-        <polygon
-          key={i}
-          points={metrics.map((_, mi) => { const p = pt(mi * angleStep, r * l); return `${p.x},${p.y}`; }).join(' ')}
-          fill={i < 4 ? '#F1F4F9' : 'none'}
-          stroke="#E5E7EB"
-          strokeWidth={1}
-          opacity={0.6}
-        />
-      ))}
-      {metrics.map((m, i) => {
-        const label = pt(i * angleStep, r + 24);
-        const lineEnd = pt(i * angleStep, r);
-        return (
-          <g key={i}>
-            <line x1={cx} y1={cy} x2={lineEnd.x} y2={lineEnd.y} stroke="#E5E7EB" strokeWidth={1} strokeDasharray="3,3" />
-            <text x={label.x} y={label.y} textAnchor="middle" dominantBaseline="middle" fill="#6B7280" fontSize={11} fontWeight={600} fontFamily="'Segoe UI', Roboto, Arial, sans-serif">
-              {m}
-            </text>
-          </g>
-        );
-      })}
-      {models.map((model, mi) => (
-        <g key={mi} onMouseEnter={() => setHovered(mi)} onMouseLeave={() => setHovered(null)} style={{ cursor: 'pointer' }}>
-          <polygon
-            points={model.values.map((v, vi) => { const p = pt(vi * angleStep, r * v); return `${p.x},${p.y}`; }).join(' ')}
-            fill={colors[mi]}
-            fillOpacity={hovered === mi ? 0.18 : 0.08}
-            stroke={colors[mi]}
-            strokeWidth={hovered === mi ? 3 : 2}
-            strokeLinejoin="round"
-            style={{ transition: 'all .25s' }}
-          />
-          {model.values.map((v, vi) => {
-            const p = pt(vi * angleStep, r * v);
-            return <circle key={vi} cx={p.x} cy={p.y} r={hovered === mi ? 5 : 3.5} fill="#FFFFFF" stroke={colors[mi]} strokeWidth={2} style={{ transition: 'r .2s' }} />;
-          })}
-        </g>
-      ))}
-    </svg>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//ScoreRing.tsx
-import { useEffect, useState } from 'react';
-import styles from './ScoreRing.module.scss';
-
-interface ScoreRingProps {
-  score: number;
-  size?: number;
-  stroke?: number;
-  color?: string;
-  label?: string;
-}
-
-export default function ScoreRing({ score, size = 72, stroke = 6, color = '#1428A0', label }: ScoreRingProps) {
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => {
-    const t = setTimeout(() => setMounted(true), 100);
-    return () => clearTimeout(t);
-  }, []);
-
-  const r = (size - stroke) / 2;
-  const c = 2 * Math.PI * r;
-  const offset = c - (c * (mounted ? score : 0)) / 100;
-
-  return (
-    <div className={styles["score-ring"]} style={{ width: size, height: size }}>
-      <svg width={size} height={size} style={{ transform: 'rotate(-90deg)' }}>
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#F3F4F6" strokeWidth={stroke} />
-        <circle
-          cx={size / 2}
-          cy={size / 2}
-          r={r}
-          fill="none"
-          stroke={color}
-          strokeWidth={stroke}
-          strokeDasharray={c}
-          strokeDashoffset={offset}
-          strokeLinecap="round"
-          className={styles["score-ring__progress"]}
-        />
-      </svg>
-      <div className={styles["score-ring__center"]}>
-        <span className={styles["score-ring__value"]} style={{ fontSize: size * 0.22 }}>
-          {mounted ? score : 0}
-        </span>
-        {label && <span className={styles["score-ring__label"]}>{label}</span>}
-      </div>
-    </div>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-//Sparkline.tsx
-interface SparklineProps {
-  data: number[];
-  color?: string;
-  width?: number;
-  height?: number;
-}
-
-export default function Sparkline({ data, color = '#1428A0', width = 80, height = 28 }: SparklineProps) {
-  const max = Math.max(...data);
-  const min = Math.min(...data);
-  const range = max - min || 1;
-  const points = data
-    .map((v, i) => `${(i / (data.length - 1)) * width},${height - ((v - min) / range) * height}`)
-    .join(' ');
-  const gradientId = 'sparkline-grad-' + color.replace('#', '');
-
-  return (
-    <svg width={width} height={height} style={{ overflow: 'visible' }}>
-      <defs>
-        <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor={color} stopOpacity=".2" />
-          <stop offset="1" stopColor={color} stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      <polygon points={`0,${height} ${points} ${width},${height}`} fill={`url(#${gradientId})`} />
-      <polyline points={points} fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 //Comparison.tsx
 import { useEffect, useMemo, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
@@ -296,7 +57,7 @@ export default function Comparison() {
   ];
 
   return (
-    <div className="page-enter">
+    <div className="page-enter pg-shell">
       <div className="pg-hdr"><h1>Model Comparison</h1><p>Side-by-side performance across a shared benchmark</p></div>
       <div className="pg-body">
         <div className={styles['comparison__controls']}>
@@ -371,7 +132,6 @@ export default function Comparison() {
 
 
 
-
 //Dashboard.tsx
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -425,7 +185,7 @@ export default function Dashboard() {
   }));
 
   return (
-    <div className="page-enter">
+    <div className="page-enter pg-shell">
       <div className="pg-hdr"><h1>Dashboard</h1><p>Your evaluation activity at a glance</p></div>
       <div className="pg-body">
         <div className={styles['d-stats']}>
@@ -527,6 +287,76 @@ export default function Dashboard() {
 
 
 
+//Datasets.module.scss
+@use '../../styles/_variables' as *;
+
+.header { flex-shrink: 0; padding: 32px 40px 0; }
+.header__eyebrow { font-size: 12px; font-weight: 700; color: $indigo; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 6px; }
+.header__title { font-size: 28px; font-weight: 700; letter-spacing: -.5px; }
+.header__subtitle { color: $text-secondary; font-size: 14px; margin-top: 6px; max-width: 560px; }
+.header__row { display: flex; align-items: center; gap: 14px; margin-top: 16px; padding-bottom: 20px; }
+.header__count { font-size: 13px; font-weight: 700; color: $text-secondary; }
+
+.state {
+  display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 64px 24px;
+  color: $text-secondary; background: $surface; border: 1px solid $border; border-radius: 16px; text-align: center;
+}
+
+.statRow {
+  display: flex; gap: 14px; font-size: 12px; color: $text-secondary; font-weight: 600;
+  padding: 10px 0; border-top: 1px solid $border-light; border-bottom: 1px solid $border-light; margin-bottom: 10px;
+}
+.pillRow { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.pill { padding: 3px 10px; border-radius: 100px; font-size: 11px; font-weight: 700; }
+
+.sourceLink { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: $indigo; font-weight: 600; text-decoration: none; }
+.sourceLink:hover { text-decoration: underline; }
+
+.modalOverlay {
+  position: fixed; inset: 0; background: rgba(17,24,39,.45); z-index: 200;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.modal {
+  width: 100%; max-width: 480px; max-height: 70vh; background: $surface; border-radius: 18px;
+  box-shadow: $shadow-4; display: flex; flex-direction: column; overflow: hidden;
+}
+.modal__hdr {
+  padding: 16px 20px; border-bottom: 1px solid $border-light; display: flex; justify-content: space-between; align-items: center;
+  font-weight: 700; font-size: 14px;
+}
+.modal__body { padding: 8px 12px; overflow-y: auto; }
+.modal__row {
+  display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; font-size: 13px;
+  border-bottom: 1px solid $border-light;
+  code { font-family: $font-mono; font-size: 11px; color: $text-muted; }
+}
+.modal__row:last-child { border-bottom: none; }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 //Datasets.tsx
 import { useEffect, useMemo, useState } from 'react';
 import { RefreshCw, Search, ExternalLink, Layers, AlertTriangle } from 'lucide-react';
@@ -565,7 +395,7 @@ export default function Datasets() {
   });
 
   return (
-    <div className="page-enter">
+    <div className="page-enter pg-shell">
       <div className={styles.header}>
         <div className={styles.header__eyebrow}>Datasets</div>
         <h1 className={styles.header__title}>Test Suite Library</h1>
@@ -576,11 +406,14 @@ export default function Datasets() {
         </div>
       </div>
 
-      <div className="pg-body" style={{ paddingTop: 0 }}>
+      <div className="pg-toolbar" style={{ paddingTop: 0 }}>
         <div className="toolbar">
           <div className="search-box"><Search size={16} color="#9CA3AF" /><input placeholder="Search datasets…" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
           <div className="pills">{types.map((t) => <button key={t} className={`pill ${typeFilter === t ? 'on' : ''}`} onClick={() => setTypeFilter(t)}>{t}</button>)}</div>
         </div>
+      </div>
+
+      <div className="pg-body" style={{ paddingTop: 0 }}>
 
         {status === 'loading' && (
           <div className={styles.state}><Layers size={28} /><div>Loading datasets…</div></div>
@@ -682,151 +515,613 @@ export default function Datasets() {
 
 
 
-//NewEvaluation.module.scss
+
+
+
+
+
+
+
+//NewEvaluation.tsx
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  ChevronLeft, ChevronRight, Check, Cpu, Bot, Database, Play,
+  FileText, ListChecks, Layers, Users, Gauge, ClipboardList, ExternalLink, Upload, Sparkles,
+} from 'lucide-react';
+import { useAppDispatch, useAppSelector } from '../../hooks/redux';
+import { fetchProviders } from '../../store/slices/providersSlice';
+import { fetchModels } from '../../store/slices/modelsSlice';
+import { fetchBenchmarks } from '../../store/slices/benchmarksSlice';
+import { fetchMetrics } from '../../store/slices/metricsSlice';
+import { launchEvaluation, setDraft, setDraftType } from '../../store/slices/evaluationsSlice';
+import type { CreateEvaluationRequest, EvaluationDraft } from '../../types';
+import styles from './NewEvaluation.module.scss';
+
+const STEPS: { key: keyof typeof STEP_ICONS; label: string }[] = [
+  { key: 'name', label: 'Name' },
+  { key: 'type', label: 'Type' },
+  { key: 'providers', label: 'Providers' },
+  { key: 'models', label: 'Models' },
+  { key: 'suite', label: 'Test Suite' },
+  { key: 'metrics', label: 'Metrics' },
+  { key: 'review', label: 'Review' },
+];
+
+const STEP_ICONS = {
+  name: FileText,
+  type: Layers,
+  providers: Users,
+  models: Cpu,
+  suite: Database,
+  metrics: Gauge,
+  review: ClipboardList,
+};
+
+const NAME_SUGGESTIONS = ['Q3 Model Selection', 'Weekly Regression Check', 'Agent Framework Bake-off', 'RAG Pipeline Benchmark'];
+
+export default function NewEvaluation() {
+  const dispatch = useAppDispatch();
+  const navigate = useNavigate();
+  const [step, setStep] = useState(0);
+  const [toast, setToast] = useState(false);
+  const [suiteTab, setSuiteTab] = useState<'benchmarks' | 'upload'>('benchmarks');
+  const [suiteCategory, setSuiteCategory] = useState('All');
+
+  const draft = useAppSelector((s) => s.evaluations.draft);
+  const launching = useAppSelector((s) => s.evaluations.launching);
+  const launchError = useAppSelector((s) => s.evaluations.launchError);
+
+  const providers = useAppSelector((s) => s.providers.items);
+  const models = useAppSelector((s) => s.models.items);
+  const benchmarks = useAppSelector((s) => s.benchmarks.items);
+  const metrics = useAppSelector((s) => s.metrics);
+
+  useEffect(() => {
+    dispatch(fetchProviders());
+    dispatch(fetchModels());
+    dispatch(fetchBenchmarks());
+    dispatch(fetchMetrics());
+  }, [dispatch]);
+
+  const connectedProviders = providers.filter((p) => p.status === 'connected');
+  const availableModels = useMemo(
+    () => models.filter((m) => draft.providers.includes(m.provider_id) && m.is_active),
+    [models, draft.providers]
+  );
+  const modelCapabilities = useMemo(
+    () => [...new Set(availableModels.flatMap((m) => m.capabilities))],
+    [availableModels]
+  );
+  const [capFilter, setCapFilter] = useState<string[]>([]);
+  const filteredModels = capFilter.length
+    ? availableModels.filter((m) => capFilter.some((c) => m.capabilities.includes(c)))
+    : availableModels;
+
+  const activeMetricsList = draft.type === 'agent' ? metrics.allMetrics : metrics.allMetrics;
+  const showCustomAgentMetrics = draft.type === 'agent' && metrics.customAgentMetrics.length > 0;
+
+  const suiteCategories = useMemo(() => ['All', ...new Set(benchmarks.map((b) => b.type))], [benchmarks]);
+  const filteredBenchmarks = suiteCategory === 'All' ? benchmarks : benchmarks.filter((b) => b.type === suiteCategory);
+  const selectedBenchmark = benchmarks.find((b) => b.name === draft.dataset);
+
+  const toggle = <T,>(list: T[], value: T): T[] => (list.includes(value) ? list.filter((v) => v !== value) : [...list, value]);
+
+  const canGo = () => {
+    if (step === 0) return draft.name.trim().length > 0;
+    if (step === 1) return draft.type !== null;
+    if (step === 2) return draft.providers.length > 0;
+    if (step === 3) return draft.models.length > 0;
+    if (step === 4) return Boolean(draft.dataset);
+    if (step === 5) return draft.metrics.length > 0;
+    return true;
+  };
+
+  const launch = async () => {
+    const benchmark = benchmarks.find((b) => b.name === draft.dataset);
+    const judgeModel = draft.judgeModelId ? models.find((m) => m.id === draft.judgeModelId) : undefined;
+    const payload: CreateEvaluationRequest = {
+      name: draft.name,
+      eval_type: draft.type ?? 'model',
+      dataset_id: benchmark?.huggingface_dataset || '',
+      benchmark: draft.dataset || undefined,
+      model_ids: draft.models,
+      selected_metrics: draft.metrics,
+      run_samples: draft.runSamples,
+      selected_category: draft.subgroup.length ? draft.subgroup : undefined,
+      // Per spec §1.4: no real API key is collected for the judge model —
+      // the judge model's own id is sent in the api_key slot instead.
+      ...(judgeModel
+        ? { judge_config: { model_id: judgeModel.id, base_url: judgeModel.base_url || '', api_key: judgeModel.id } }
+        : {}),
+    };
+
+    const result = await dispatch(launchEvaluation(payload));
+    if (launchEvaluation.fulfilled.match(result)) {
+      setToast(true);
+      setTimeout(() => {
+        setToast(false);
+        navigate('/app/history');
+      }, 1600);
+    }
+  };
+
+  const setD = (partial: Partial<EvaluationDraft>) => dispatch(setDraft(partial));
+
+  return (
+    <div className="page-enter pg-shell">
+      <div className="pg-hdr"><h1>New Evaluation</h1><p>Set up and launch a structured model evaluation</p></div>
+      <div className="pg-body">
+        <div className={styles.layout}>
+          {/* ---------- Vertical stepper sidebar ---------- */}
+          <aside className={styles.stepper}>
+            <div className={styles['stepper__progress-label']}>
+              Step {step + 1} of {STEPS.length} &middot; {Math.round(((step + 1) / STEPS.length) * 100)}%
+            </div>
+            <div className={styles['stepper__progress-track']}>
+              <div className={styles['stepper__progress-fill']} style={{ width: `${((step + 1) / STEPS.length) * 100}%` }} />
+            </div>
+            <ol className={styles['stepper__list']}>
+              {STEPS.map((s, i) => {
+                const Icon = STEP_ICONS[s.key];
+                const done = i < step;
+                const current = i === step;
+                const clickable = i <= step;
+                return (
+                  <li key={s.key} className={styles['stepper__item']}>
+                    <button
+                      className={`${styles['stepper__node']} ${done ? styles.done : ''} ${current ? styles.current : ''}`}
+                      disabled={!clickable}
+                      onClick={() => clickable && setStep(i)}
+                    >
+                      <span className={styles['stepper__icon']}>{done ? <Check size={14} /> : <Icon size={14} />}</span>
+                      <span className={styles['stepper__label']}>{s.label}</span>
+                    </button>
+                    {i < STEPS.length - 1 && <div className={`${styles['stepper__line']} ${done ? styles.done : ''}`} />}
+                  </li>
+                );
+              })}
+            </ol>
+          </aside>
+
+          {/* ---------- Step content ---------- */}
+          <div className={styles.wiz}>
+            <div className={styles['wiz-body']}>
+              {step === 0 && (
+                <>
+                  <h2>Name your evaluation</h2>
+                  <p className={styles.sub}>Give it a recognizable name — you can always rename it later.</p>
+                  <div className="fg">
+                    <label className="fl">Evaluation Name</label>
+                    <input className="fi" placeholder="e.g. Q3 Model Selection" value={draft.name} onChange={(e) => setD({ name: e.target.value })} />
+                  </div>
+                  <div className={styles['name-suggestions']}>
+                    {NAME_SUGGESTIONS.map((s) => (
+                      <button key={s} className={styles['name-chip']} onClick={() => setD({ name: s })}><Sparkles size={12} /> {s}</button>
+                    ))}
+                  </div>
+                  <div className={styles['name-tips']}>
+                    <div className={styles['name-tips__title']}>What's next</div>
+                    <ul className={styles['name-tips__list']}>
+                      <li>Choose what you're evaluating — a model, an agent, or a RAG pipeline</li>
+                      <li>Pick providers and models to compare</li>
+                      <li>Select a benchmark and how many questions to sample</li>
+                      <li>Choose metrics and an optional judge model</li>
+                      <li>Review the cost/time estimate and launch</li>
+                    </ul>
+                  </div>
+                </>
+              )}
+
+              {step === 1 && (
+                <>
+                  <h2>What are you evaluating?</h2>
+                  <p className={styles.sub}>This determines which metrics and judge options are available later.</p>
+                  <div className="sel-grid">
+                    {[
+                      { v: 'model' as const, i: <Cpu size={18} />, s: 'General-purpose chat or text model' },
+                      { v: 'agent' as const, i: <Bot size={18} />, s: 'Autonomous agent with tool use' },
+                      { v: 'rag' as const, i: <Database size={18} />, s: 'Retrieval-augmented generation pipeline' },
+                    ].map((o) => (
+                      <div key={o.v} className={`sel-opt ${draft.type === o.v ? 'on' : ''}`} onClick={() => dispatch(setDraftType(o.v))}>
+                        <div className="sel-chk">{draft.type === o.v && <Check size={13} />}</div>
+                        <div><div className="sel-txt" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>{o.i} {o.v === 'model' ? 'General Chat/Text' : o.v === 'agent' ? 'Agent' : 'RAG'}</div><div className="sel-sub">{o.s}</div></div>
+                      </div>
+                    ))}
+                  </div>
+                  {draft.type === 'agent' && (
+                    <div className="fg" style={{ marginTop: 20 }}>
+                      <label className="fl">Agent Framework <span className="opt">(optional)</span></label>
+                      <select className="fi" value={draft.agentFramework || ''} onChange={(e) => setD({ agentFramework: e.target.value || null })}>
+                        <option value="">None</option>
+                        <option value="hermes">Hermes</option>
+                        <option value="langgraph">LangGraph</option>
+                      </select>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {step === 2 && (
+                <>
+                  <h2>Select providers</h2>
+                  <p className={styles.sub}>
+                    Choose which connected providers to draw models from.{' '}
+                    <a className={styles['inline-link']} onClick={() => navigate('/app/providers')}>Connect more providers <ExternalLink size={12} /></a>
+                  </p>
+                  <div className="sel-grid">
+                    {connectedProviders.map((p) => (
+                      <div key={p.id} className={`sel-opt ${draft.providers.includes(p.id) ? 'on' : ''}`} onClick={() => setD({ providers: toggle(draft.providers, p.id) })}>
+                        <div className="sel-chk">{draft.providers.includes(p.id) && <Check size={13} />}</div>
+                        <div><div className="sel-txt">{p.name}</div><div className="sel-sub">{p.model_count} models available</div></div>
+                      </div>
+                    ))}
+                    {connectedProviders.length === 0 && <div className={styles['wiz-empty']}>No connected providers yet — connect one to continue.</div>}
+                  </div>
+                </>
+              )}
+
+              {step === 3 && (
+                <>
+                  <h2>Choose models</h2>
+                  <p className={styles.sub}>Pick which models to include in this evaluation.</p>
+                  <div className={styles['models-layout']}>
+                    <div className={styles['models-filters']}>
+                      <div className={styles['models-filters__title']}>Capabilities</div>
+                      {modelCapabilities.length === 0 && <div className={styles['wiz-empty-sm']}>No models yet</div>}
+                      {modelCapabilities.map((c) => (
+                        <label key={c} className={styles['models-filters__row']}>
+                          <input type="checkbox" checked={capFilter.includes(c)} onChange={() => setCapFilter((prev) => toggle(prev, c))} />
+                          {c}
+                        </label>
+                      ))}
+                    </div>
+                    <div className={styles['models-grid']}>
+                      {filteredModels.map((m) => (
+                        <div key={m.id} className={`sel-opt ${draft.models.includes(m.id) ? 'on' : ''}`} onClick={() => setD({ models: toggle(draft.models, m.id) })}>
+                          <div className="sel-chk">{draft.models.includes(m.id) && <Check size={13} />}</div>
+                          <div><div className="sel-txt">{m.name}</div><div className="sel-sub">{m.context_window.toLocaleString()} ctx &middot; {m.capabilities.join(', ')}</div></div>
+                        </div>
+                      ))}
+                      {filteredModels.length === 0 && <div className={styles['wiz-empty']}>Select providers first, or adjust the capability filter.</div>}
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {step === 4 && (
+                <>
+                  <h2>Test suite</h2>
+                  <div className="fg" style={{ maxWidth: 220 }}>
+                    <label className="fl">Run Samples <span className="opt">(per model)</span></label>
+                    <input
+                      className="fi" type="number" min={0} value={draft.runSamples}
+                      onChange={(e) => setD({ runSamples: Math.max(0, Number(e.target.value) || 0) })}
+                    />
+                  </div>
+                  <div className={styles['suite-tabs']}>
+                    <button className={`${styles['suite-tab']} ${suiteTab === 'benchmarks' ? styles.on : ''}`} onClick={() => setSuiteTab('benchmarks')}><ListChecks size={14} /> Benchmarks</button>
+                    <button className={`${styles['suite-tab']} ${suiteTab === 'upload' ? styles.on : ''}`} onClick={() => setSuiteTab('upload')}><Upload size={14} /> Upload</button>
+                  </div>
+
+                  {suiteTab === 'upload' ? (
+                    <div className={styles['upload-placeholder']}>
+                      <Upload size={22} />
+                      <div>Custom dataset upload is coming soon — not yet wired to an endpoint.</div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="pills" style={{ marginBottom: 14 }}>
+                        {suiteCategories.map((c) => <button key={c} className={`pill ${suiteCategory === c ? 'on' : ''}`} onClick={() => setSuiteCategory(c)}>{c}</button>)}
+                      </div>
+                      <div className={selectedBenchmark && selectedBenchmark.tasks.length > 0 ? styles['suite-layout--split'] : styles['suite-layout']}>
+                        <div className={styles['suite-grid']}>
+                          {filteredBenchmarks.map((b) => (
+                            <div
+                              key={b.name}
+                              className={`sel-opt ${draft.dataset === b.name ? 'on' : ''}`}
+                              onClick={() => setD({ dataset: b.name, subgroup: [] })}
+                              style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 8 }}
+                            >
+                              <div style={{ display: 'flex', width: '100%', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <div className="sel-txt">{b.name}</div><div className="sel-chk">{draft.dataset === b.name && <Check size={13} />}</div>
+                              </div>
+                              <div className="sel-sub">{b.description}</div>
+                              <div><span className="tag tag-amb">{b.type}</span><span style={{ fontSize: 11, color: '#9CA3AF', marginLeft: 8 }}>{b.task_count.toLocaleString()} tasks</span></div>
+                            </div>
+                          ))}
+                        </div>
+                        {selectedBenchmark && selectedBenchmark.tasks.length > 0 && (
+                          <div className={styles['subgroup-panel']}>
+                            <div className={styles['subgroup-panel__hdr']}>
+                              Subgroups <span>{draft.subgroup.length} of {selectedBenchmark.tasks.length} selected</span>
+                            </div>
+                            <div className={styles['subgroup-panel__list']}>
+                              {selectedBenchmark.tasks.map((t) => (
+                                <label key={t.value} className={styles['subgroup-panel__row']}>
+                                  <input type="checkbox" checked={draft.subgroup.includes(t.value)} onChange={() => setD({ subgroup: toggle(draft.subgroup, t.value) })} />
+                                  {t.name}
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+
+              {step === 5 && (
+                <>
+                  <h2>Configure metrics</h2>
+                  <div className={styles['metrics-layout']}>
+                    <div className={styles['metrics-col']}>
+                      <div className={styles['metrics-col__hdr']}>
+                        <span>All Metrics</span>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <button className="btn btn-sm btn-ghost" onClick={() => setD({ metrics: [...activeMetricsList, ...(showCustomAgentMetrics ? metrics.customAgentMetrics : [])] })}>Select all</button>
+                          <button className="btn btn-sm btn-ghost" onClick={() => setD({ metrics: [] })}>Unselect all</button>
+                        </div>
+                      </div>
+                      <div className={styles['metrics-col__body']}>
+                        <div className="sel-grid" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(160px,1fr))' }}>
+                          {activeMetricsList.map((m) => (
+                            <div key={m} className={`sel-opt ${draft.metrics.includes(m) ? 'on' : ''}`} onClick={() => setD({ metrics: toggle(draft.metrics, m) })}>
+                              <div className="sel-chk">{draft.metrics.includes(m) && <Check size={13} />}</div><div className="sel-txt">{m}</div>
+                            </div>
+                          ))}
+                        </div>
+                        {showCustomAgentMetrics && (
+                          <>
+                            <div className={styles['metrics-col__subhdr']}>Custom Agent Metrics</div>
+                            <div className="sel-grid" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(160px,1fr))' }}>
+                              {metrics.customAgentMetrics.map((m) => (
+                                <div key={m} className={`sel-opt ${draft.metrics.includes(m) ? 'on' : ''}`} onClick={() => setD({ metrics: toggle(draft.metrics, m) })}>
+                                  <div className="sel-chk">{draft.metrics.includes(m) && <Check size={13} />}</div><div className="sel-txt">{m}</div>
+                                </div>
+                              ))}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className={styles['metrics-col']}>
+                      <div className={styles['metrics-col__hdr']}><span>Judge Model</span></div>
+                      <p className={styles['judge-note']}>Shows every model in the catalog — judge eligibility is independent of the models selected in Step 4. No API key required.</p>
+                      <div className={styles['metrics-col__body']}>
+                        <div className={styles['judge-list']}>
+                          <label className={styles['judge-row']}>
+                            <input type="radio" name="judge" checked={draft.judgeModelId === null} onChange={() => setD({ judgeModelId: null })} />
+                            None
+                          </label>
+                          {models.map((m) => (
+                            <label key={m.id} className={styles['judge-row']}>
+                              <input type="radio" name="judge" checked={draft.judgeModelId === m.id} onChange={() => setD({ judgeModelId: m.id })} />
+                              {m.name}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {step === 6 && (() => {
+                const suite = benchmarks.find((b) => b.name === draft.dataset);
+                const judgeModel = draft.judgeModelId ? models.find((m) => m.id === draft.judgeModelId) : null;
+                const modelChips = draft.models.map((id) => {
+                  const m = models.find((mm) => mm.id === id);
+                  const p = providers.find((pp) => pp.id === m?.provider_id);
+                  return { id, label: m ? `${m.name} (${p?.name || m.provider_id})` : id };
+                });
+                const totalQuestions = draft.runSamples * Math.max(draft.models.length, 1);
+                const estCost = (draft.models.length * draft.runSamples * 0.004).toFixed(2);
+                const estMinutes = Math.max(1, Math.round((draft.runSamples * draft.models.length) / 12));
+                return (
+                  <>
+                    <h2>Review & Launch</h2>
+                    <p className={styles.sub}>Confirm your evaluation setup.</p>
+
+                    <div className={styles['review-stats']}>
+                      {[{ l: 'Est. Cost', v: `$${estCost}` }, { l: 'Est. Time', v: `~${estMinutes} min` }, { l: 'Questions', v: totalQuestions.toLocaleString() }, { l: 'Models', v: String(draft.models.length) }].map((d, i) => (
+                        <div key={i} className={styles['review-stat']}><div className={styles['review-stat__label']}>{d.l}</div><div className={styles['review-stat__val']}>{d.v}</div></div>
+                      ))}
+                    </div>
+
+                    <div className={styles['review-section']}>
+                      <div className={styles['review-section__title']}>Overview</div>
+                      <div className={styles['review-section__row']}><span>Name</span><strong>{draft.name}</strong></div>
+                      <div className={styles['review-section__row']}><span>Type</span><strong>{draft.type}</strong></div>
+                      {draft.agentFramework && <div className={styles['review-section__row']}><span>Agent Framework</span><strong>{draft.agentFramework}</strong></div>}
+                    </div>
+
+                    <div className={styles['review-section']}>
+                      <div className={styles['review-section__title']}>Models</div>
+                      <div>{modelChips.map((c) => <span key={c.id} className="tag tag-ind">{c.label}</span>)}</div>
+                    </div>
+
+                    <div className={styles['review-section']}>
+                      <div className={styles['review-section__title']}>Test Suite</div>
+                      <div className={styles['review-section__row']}><span>Name</span><strong>{suite?.name || '—'}</strong></div>
+                      <div className={styles['review-section__row']}><span>Source</span><strong>{suite?.huggingface_dataset || '—'}</strong></div>
+                      <div className={styles['review-section__row']}><span>Run Samples</span><strong>{draft.runSamples}</strong></div>
+                      {draft.subgroup.length > 0 && <div className={styles['review-section__row']}><span>Subgroups</span><strong>{draft.subgroup.length} selected</strong></div>}
+                      <div>{(suite?.required_capabilities ?? []).map((c) => <span key={c} className="tag tag-em">{c}</span>)}</div>
+                    </div>
+
+                    <div className={styles['review-section']}>
+                      <div className={styles['review-section__title']}>Metrics ({draft.metrics.length})</div>
+                      <div>{draft.metrics.map((m) => <span key={m} className="tag tag-amb">{m}</span>)}</div>
+                    </div>
+
+                    <div className={styles['review-section']}>
+                      <div className={styles['review-section__title']}>Judge Model</div>
+                      <div className={styles['review-section__row']}><span>Model</span><strong>{judgeModel?.name || 'None'}</strong></div>
+                    </div>
+
+                    {launchError && <div className={styles['wiz-error']}>{launchError}</div>}
+                  </>
+                );
+              })()}
+            </div>
+
+            <div className={styles['wiz-foot']}>
+              <button className="btn btn-ghost" onClick={() => (step > 0 ? setStep(step - 1) : navigate('/app/dashboard'))}>
+                <ChevronLeft size={16} /> {step === 0 ? 'Cancel' : 'Back'}
+              </button>
+              {step < STEPS.length - 1 ? (
+                <button className="btn btn-ind" onClick={() => setStep(step + 1)} disabled={!canGo()}>Continue <ChevronRight size={16} /></button>
+              ) : (
+                <button className={`btn btn-ind ${styles['wiz-launch']}`} onClick={launch} disabled={launching}>
+                  <Play size={16} /> {launching ? 'Launching…' : 'Start Evaluation'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {toast && (
+        <div className="toast">
+          <div className={styles['toast__icon']}><Check size={18} color="#10B981" /></div>
+          <div><div style={{ fontWeight: 700, fontSize: 14 }}>Evaluation launched</div><div style={{ fontSize: 12, color: '#6B7280' }}>Redirecting to History…</div></div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//History.module.scss
 @use '../../styles/_variables' as *;
+
+@property --angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes rotate-angle {
+  to { --angle: 360deg; }
+}
+@keyframes live-dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: .5; transform: scale(1.3); }
+}
+
+// Fixed-shell override: History's list + detail panels need to scroll
+// independently of each other, so pg-body itself must not scroll — this
+// makes it a plain flex:1/min-height:0 pass-through instead.
+.pg-body-fixed {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
 
 .layout {
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: 380px 1fr;
   gap: 20px;
-  align-items: start;
+  flex: 1;
+  min-height: 0;
 }
 
-// ---------- Vertical stepper sidebar ----------
-.stepper {
-  background: $surface;
-  border: 1px solid $border;
-  border-radius: 20px;
-  padding: 20px;
-  position: sticky;
-  top: 24px;
+.sidebar {
+  background: $surface; border: 1px solid $border; border-radius: 20px; padding: 18px;
+  display: flex; flex-direction: column; min-height: 0;
+}
+.filters { flex-shrink: 0; }
+.empty { padding: 24px; text-align: center; color: $text-secondary; font-size: 13px; display: flex; align-items: center; gap: 8px; justify-content: center; }
 
-  &__progress-label { font-size: 12px; font-weight: 700; color: $text-secondary; margin-bottom: 8px; }
-  &__progress-track { height: 6px; background: $surface-alt; border-radius: 3px; overflow: hidden; margin-bottom: 20px; }
-  &__progress-fill { height: 100%; background: $grad-primary; border-radius: 3px; transition: width .4s cubic-bezier(.16,1,.3,1); }
-  &__list { list-style: none; }
-  &__item { position: relative; }
-  &__node {
-    display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 6px;
-    background: none; border: none; cursor: pointer; text-align: left; border-radius: 10px; transition: background .15s;
-  }
-  &__node:disabled { cursor: not-allowed; opacity: .5; }
-  &__node:not(:disabled):hover { background: $surface-alt; }
-  &__icon {
-    width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0;
-    display: flex; align-items: center; justify-content: center;
-    background: $surface-alt; color: $text-muted; border: 2px solid $border; transition: all .2s;
-  }
-  &__node.current &__icon { background: $grad-primary; color: #fff; border-color: transparent; box-shadow: 0 0 0 4px rgba(20,40,160,.15); }
-  &__node.done &__icon { background: $indigo; color: #fff; border-color: transparent; }
-  &__label { font-size: 13px; font-weight: 600; color: $text-secondary; }
-  &__node.current &__label { color: $indigo; font-weight: 700; }
-  &__node.done &__label { color: $text-primary; }
-  &__line { width: 2px; height: 14px; background: $border; margin-left: 19px; border-radius: 1px; }
-  &__line.done { background: $indigo; }
+.rows { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+
+.row {
+  border: 1px solid $border; border-radius: 14px; padding: 14px; cursor: pointer; transition: all .15s;
+  position: relative;
+}
+.row:hover { border-color: $indigo-light; }
+.row.selected { border-color: $indigo; background: $indigo-pale; }
+
+// Running-state animation: a thin light continuously traveling around the
+// card border (spec §2.2), built with a rotating conic-gradient angle.
+.row--running {
+  --angle: 0deg;
+  border: 1px solid transparent;
+  background:
+    linear-gradient(#fff, #fff) padding-box,
+    conic-gradient(from var(--angle), $border 0%, $indigo 8%, $border 16%) border-box;
+  animation: rotate-angle 2.4s linear infinite;
+}
+.row--running.selected {
+  background:
+    linear-gradient($indigo-pale, $indigo-pale) padding-box,
+    conic-gradient(from var(--angle), $border 0%, $indigo 8%, $border 16%) border-box;
 }
 
-// ---------- Wizard shell ----------
-.wiz {
-  background: $surface; border: 1px solid $border; border-radius: 20px; overflow: hidden; box-shadow: $shadow-2;
-  display: flex; flex-direction: column; min-height: 560px;
-}
-.wiz-body { padding: 32px; flex: 1; overflow-y: auto; }
-.wiz-body h2 { font-size: 22px; font-weight: 700; margin-bottom: 8px; letter-spacing: -.4px; }
-.sub { font-size: 14px; color: $text-secondary; margin-bottom: 22px; line-height: 1.5; }
-.wiz-foot { display: flex; justify-content: space-between; padding: 18px 32px; border-top: 1px solid $border; background: $surface-alt; }
-.wiz-launch { background: $emerald; box-shadow: 0 4px 14px rgba(16,185,129,.3); }
-.wiz-empty { padding: 40px; text-align: center; color: $text-secondary; background: $surface-alt; border-radius: 14px; grid-column: 1 / -1; }
-.wiz-empty-sm { padding: 12px; text-align: center; color: $text-muted; font-size: 12px; }
-.wiz-error { margin-top: 16px; padding: 12px 16px; background: $red-pale; color: $red; border-radius: 10px; font-size: 13px; font-weight: 600; }
-.inline-link { color: $indigo; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+.row__top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.row__icon { width: 30px; height: 30px; border-radius: 9px; background: $indigo-pale; color: $indigo; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.row__name { font-weight: 700; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row__badges { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+.row__meta { font-size: 11px; color: $text-muted; margin-bottom: 8px; }
+.row__stats { display: flex; gap: 12px; font-size: 11px; color: $text-secondary; margin-bottom: 10px; flex-wrap: wrap; }
+.row__actions { display: flex; gap: 6px; }
 
-// ---------- Step 1: Name ----------
-.name-suggestions { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0 24px; }
-.name-chip {
-  display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 100px;
-  border: 1px solid $border; background: $surface; color: $text-secondary; font-size: 12px; font-weight: 600; cursor: pointer;
+.live-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block;
+  animation: live-dot-pulse 1.4s ease-in-out infinite;
 }
-.name-chip:hover { border-color: $indigo; color: $indigo; background: $indigo-pale; }
-.name-tips { background: $surface-alt; border-radius: 14px; padding: 18px 20px; }
-.name-tips__title { font-weight: 700; font-size: 13px; margin-bottom: 10px; }
-.name-tips__list { padding-left: 18px; font-size: 13px; color: $text-secondary; line-height: 1.9; }
 
-// ---------- Step 4: Models (independently scrolling filter + grid) ----------
-.models-layout { display: grid; grid-template-columns: 200px 1fr; gap: 20px; align-items: start; }
-.models-filters {
-  border: 1px solid $border; border-radius: 14px; padding: 14px; max-height: 420px; overflow-y: auto; position: sticky; top: 0;
-}
-.models-filters__title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: $text-muted; margin-bottom: 10px; }
-.models-filters__row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 6px 0; cursor: pointer; }
-.models-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(240px,1fr)); gap: 10px; max-height: 420px; overflow-y: auto; align-content: start; }
+.detail { background: $surface; border: 1px solid $border; border-radius: 20px; padding: 24px; min-height: 0; overflow-y: auto; }
+.detail-empty { padding: 80px 24px; text-align: center; color: $text-secondary; font-size: 14px; }
 
-// ---------- Step 5: Test Suite ----------
-.suite-tabs { display: flex; gap: 8px; margin-bottom: 18px; }
-.suite-tab {
-  display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border-radius: 10px;
-  border: 1px solid $border; background: $surface; color: $text-secondary; font-weight: 600; font-size: 13px; cursor: pointer;
-}
-.suite-tab.on { background: $indigo-pale; border-color: $indigo; color: $indigo; }
-.upload-placeholder {
-  display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 60px 20px; text-align: center;
-  color: $text-secondary; background: $surface-alt; border: 2px dashed $border; border-radius: 16px; font-size: 13px;
-}
-.suite-layout { display: block; }
-.suite-layout--split { display: grid; grid-template-columns: 1fr 400px; gap: 20px; align-items: start; }
-.suite-grid {
-  display: grid; grid-template-columns: repeat(auto-fill,minmax(260px,1fr)); gap: 10px;
-  max-height: 480px; overflow-y: auto; align-content: start;
-}
-.subgroup-panel {
-  width: 400px; border: 1px solid $border; border-radius: 14px; overflow: hidden; position: sticky; top: 0;
-  display: flex; flex-direction: column; max-height: 480px;
-}
-.subgroup-panel__hdr {
-  padding: 14px 16px; background: $surface-alt; border-bottom: 1px solid $border; font-weight: 700; font-size: 13px;
-  display: flex; justify-content: space-between; align-items: center;
-  span { font-weight: 600; font-size: 12px; color: $text-secondary; }
-}
-.subgroup-panel__list { flex: 1; overflow-y: auto; padding: 8px 4px; }
-.subgroup-panel__row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 8px 12px; cursor: pointer; }
-.subgroup-panel__row:hover { background: $surface-alt; }
+.detail-hdr { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; flex-wrap: wrap; gap: 16px; }
+.detail-hdr__badges { display: flex; gap: 8px; margin-bottom: 10px; }
+.detail-hdr__name { font-size: 22px; font-weight: 700; letter-spacing: -.3px; }
+.detail-hdr__date { font-size: 12px; color: $text-muted; margin-top: 4px; }
+.detail-hdr__actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
-// ---------- Step 6: Metrics (two independently-scrolling columns) ----------
-.metrics-layout { display: grid; grid-template-columns: 1fr 320px; gap: 20px; align-items: start; }
-.metrics-col { border: 1px solid $border; border-radius: 14px; overflow: hidden; display: flex; flex-direction: column; max-height: 480px; }
-.metrics-col__hdr {
-  padding: 14px 16px; background: $surface-alt; border-bottom: 1px solid $border; font-weight: 700; font-size: 13px;
-  display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;
-}
-.metrics-col__subhdr { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: $text-muted; margin: 16px 0 10px; }
-.metrics-col__body { padding: 14px 16px; overflow-y: auto; flex: 1; }
-.judge-note { font-size: 12px; color: $text-secondary; padding: 0 16px; margin-top: 10px; line-height: 1.5; }
-.judge-list { display: flex; flex-direction: column; gap: 2px; }
-.judge-row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
-.judge-row:hover { background: $surface-alt; }
+.summary-cards { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; margin-bottom: 24px; }
+.summary-card { display: flex; align-items: center; gap: 12px; padding: 16px; background: $surface-alt; border-radius: 14px; }
+.summary-card__label { font-size: 11px; color: $text-muted; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; }
+.summary-card__val { font-size: 13px; font-weight: 700; margin-top: 2px; }
 
-// ---------- Step 7: Review ----------
-.review-stats { display: grid; grid-template-columns: repeat(4,1fr); gap: 14px; margin-bottom: 24px; }
-.review-stat { padding: 18px; background: $indigo-pale; border-radius: 14px; border: 1px solid rgba(20,40,160,.12); }
-.review-stat__label { font-size: 11px; color: $text-secondary; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
-.review-stat__val { font-family: $font-mono; font-size: 22px; font-weight: 700; margin-top: 4px; }
-.review-section { padding: 16px 0; border-bottom: 1px solid $border-light; }
-.review-section:last-child { border-bottom: none; }
-.review-section__title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: $text-muted; margin-bottom: 10px; }
-.review-section__row { display: flex; justify-content: space-between; font-size: 13px; padding: 5px 0; color: $text-secondary; }
-.review-section__row strong { color: $text-primary; font-weight: 600; }
-
-.toast__icon { width: 36px; height: 36px; border-radius: 10px; background: $emerald-pale; display: flex; align-items: center; justify-content: center; }
+.status-message { padding: 40px; text-align: center; background: $surface-alt; border-radius: 14px; color: $text-secondary; font-size: 14px; }
 
 @media (max-width: 900px) {
   .layout { grid-template-columns: 1fr; }
-  .stepper { position: static; }
-  .stepper__list { display: flex; overflow-x: auto; gap: 12px; }
-  .stepper__line { display: none; }
-  .models-layout, .suite-layout--split, .metrics-layout { grid-template-columns: 1fr; }
-  .subgroup-panel { width: 100%; }
-  .review-stats { grid-template-columns: repeat(2,1fr); }
+  .summary-cards { grid-template-columns: 1fr; }
+  // Independent-panel scrolling relies on the grid stretching each panel to
+  // a definite row height; once stacked to one column that no longer holds,
+  // so fall back to one normal scrolling column instead of risking clipped
+  // content under pg-body-fixed's overflow:hidden.
+  .pg-body-fixed { overflow-y: auto; }
+  .sidebar, .detail { overflow-y: visible; min-height: 0; }
+  .rows { overflow-y: visible; }
 }
+
+
+
+
+
 
 
 
@@ -944,32 +1239,37 @@ export default function History() {
   const resultsError = selected ? resultsErrorByEvalId[selected.id] : undefined;
 
   return (
-    <div className="page-enter">
+    <div className="page-enter pg-shell">
       <div className="pg-hdr"><h1>History</h1><p>All past and in-progress evaluations</p></div>
-      <div className="pg-body">
+      {/* This page needs the list and detail panels to scroll independently
+          of each other (spec: point 4 of the fixed-header pattern), so
+          pg-body itself doesn't scroll here — .layout fills it instead. */}
+      <div className={`pg-body ${styles['pg-body-fixed']}`}>
         <div className={styles.layout}>
           {/* ---------- Sidebar list ---------- */}
           <div className={styles.sidebar}>
-            <div className="search-box" style={{ minWidth: 0, marginBottom: 10 }}>
-              <Search size={16} color="#9CA3AF" />
-              <input placeholder="Search evaluations…" value={search} onChange={(e) => setSearch(e.target.value)} />
-            </div>
-            <div className="pills" style={{ marginBottom: 8 }}>
-              {['All', 'model', 'agent', 'rag'].map((t) => (
-                <button key={t} className={`pill ${typeFilter === t ? 'on' : ''}`} onClick={() => setTypeFilter(t)}>
-                  {t === 'All' ? 'All' : TYPE_LABEL[t]}
-                </button>
-              ))}
-            </div>
-            <select className="fi" style={{ marginBottom: 14 }} value={dateFilter} onChange={(e) => setDateFilter(e.target.value)}>
-              <option value="all">All time</option>
-              <option value="30">Last 30 days</option>
-              <option value="7">Last 7 days</option>
-            </select>
+            <div className={styles.filters}>
+              <div className="search-box" style={{ minWidth: 0, marginBottom: 10 }}>
+                <Search size={16} color="#9CA3AF" />
+                <input placeholder="Search evaluations…" value={search} onChange={(e) => setSearch(e.target.value)} />
+              </div>
+              <div className="pills" style={{ marginBottom: 8 }}>
+                {['All', 'model', 'agent', 'rag'].map((t) => (
+                  <button key={t} className={`pill ${typeFilter === t ? 'on' : ''}`} onClick={() => setTypeFilter(t)}>
+                    {t === 'All' ? 'All' : TYPE_LABEL[t]}
+                  </button>
+                ))}
+              </div>
+              <select className="fi" style={{ marginBottom: 0 }} value={dateFilter} onChange={(e) => setDateFilter(e.target.value)}>
+                <option value="all">All time</option>
+                <option value="30">Last 30 days</option>
+                <option value="7">Last 7 days</option>
+              </select>
 
-            {listStatus === 'loading' && list.length === 0 && <div className={styles.empty}>Loading evaluations…</div>}
-            {listStatus === 'failed' && list.length === 0 && <div className={styles.empty}>{listError || 'Failed to load evaluations.'}</div>}
-            {listStatus !== 'loading' && filtered.length === 0 && list.length > 0 && <div className={styles.empty}>No evaluations match your filters.</div>}
+              {listStatus === 'loading' && list.length === 0 && <div className={styles.empty}>Loading evaluations…</div>}
+              {listStatus === 'failed' && list.length === 0 && <div className={styles.empty}>{listError || 'Failed to load evaluations.'}</div>}
+              {listStatus !== 'loading' && filtered.length === 0 && list.length > 0 && <div className={styles.empty}>No evaluations match your filters.</div>}
+            </div>
 
             <div className={styles.rows}>
               {filtered.map((e) => {
@@ -1112,156 +1412,6 @@ export default function History() {
 
 
 
-//Landing.module.scss
-@use '../../styles/_variables' as *;
-
-.landing { min-height: 100vh; background: $surface; overflow-x: hidden; padding-bottom: $footer-height; }
-
-.l-nav {
-  display: flex; align-items: center; justify-content: space-between; padding: 18px 48px;
-  max-width: 1440px; margin: 0 auto; position: relative; z-index: 10;
-}
-.l-logo {
-  font-family: $font-display; font-size: 22px; font-weight: 700; letter-spacing: -.5px;
-  display: flex; align-items: center; gap: 10px; color: $text-primary;
-
-  .mark {
-    width: 34px; height: 34px; background: $grad-primary; border-radius: 10px;
-    display: flex; align-items: center; justify-content: center; color: #fff; font-size: 18px;
-    box-shadow: 0 2px 8px rgba(20, 40, 160, .35);
-  }
-}
-
-.btn-primary {
-  display: inline-flex; align-items: center; gap: 8px; background: $grad-primary; color: #fff; border: none;
-  padding: 14px 28px; border-radius: 14px; font-size: 15px; font-weight: 600; cursor: pointer; transition: all .25s;
-  font-family: $font-display; box-shadow: 0 4px 14px rgba(20, 40, 160, .3);
-}
-.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(20, 40, 160, .35); }
-.btn-primary:disabled { opacity: .6; cursor: default; transform: none; }
-
-.btn-secondary {
-  display: inline-flex; align-items: center; gap: 8px; background: $surface; color: $text-primary;
-  border: 1px solid $border; padding: 14px 28px; border-radius: 14px; font-size: 15px; font-weight: 600;
-  cursor: pointer; transition: all .25s; font-family: $font-display;
-}
-.btn-secondary:hover { border-color: $indigo; color: $indigo; background: $indigo-pale; box-shadow: $shadow-2; }
-
-.hero-section {
-  position: relative; max-width: 1440px; margin: 0 auto; padding: 64px 48px 80px;
-  display: grid; grid-template-columns: 1fr 1fr; gap: 80px; align-items: center;
-}
-.hero-bg-dots {
-  position: absolute; inset: 0; background-image: radial-gradient(circle, $border 1px, transparent 1px);
-  background-size: 24px 24px; opacity: .5; pointer-events: none; animation: dotPulse 4s ease infinite;
-}
-.hero-content { position: relative; z-index: 2; }
-.hero-badge {
-  display: inline-flex; align-items: center; gap: 8px; background: $indigo-pale;
-  border: 1px solid rgba(20, 40, 160, .15); border-radius: 100px; padding: 6px 16px 6px 8px;
-  font-size: 13px; color: $indigo; margin-bottom: 28px; font-weight: 600;
-
-  .badge-dot { width: 8px; height: 8px; border-radius: 50%; background: $indigo; animation: pulse 2s infinite; }
-}
-.hero-content h1 {
-  font-size: 54px; font-weight: 700; line-height: 1.08; letter-spacing: -2.5px; margin-bottom: 24px;
-  .grad { background: $grad-primary; -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-}
-.hero-content > p { font-size: 17px; color: $text-secondary; line-height: 1.7; margin-bottom: 40px; max-width: 480px; }
-.hero-actions { display: flex; gap: 14px; }
-
-.hero-visual { position: relative; z-index: 2; }
-.hero-card { background: $surface; border: 1px solid $border; border-radius: 20px; padding: 28px; box-shadow: $shadow-4; }
-.hero-card-hdr { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-.hero-card-title { font-family: $font-display; font-size: 13px; font-weight: 700; color: $text-muted; text-transform: uppercase; letter-spacing: 1.5px; }
-.hero-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.hero-bar:last-child { margin-bottom: 0; }
-.hero-bar-label { font-size: 13px; color: $text-secondary; width: 120px; flex-shrink: 0; font-weight: 600; }
-.hero-bar-track { flex: 1; height: 34px; background: $surface-alt; border-radius: 10px; overflow: hidden; }
-.hero-bar-fill {
-  height: 100%; border-radius: 10px; display: flex; align-items: center; padding: 0 14px;
-  font-family: $font-mono; font-size: 12px; font-weight: 700; color: #fff; transition: width 1.8s cubic-bezier(.16, 1, .3, 1);
-
-  &--primary { background: $grad-primary; }
-  &--warm { background: $grad-warm; }
-  &--cool { background: $grad-cool; }
-  &--gray { background: linear-gradient(135deg, #6B7280, #9CA3AF); }
-}
-
-.float-badge {
-  position: absolute; background: $surface; border: 1px solid $border; border-radius: 14px;
-  padding: 12px 18px; display: flex; align-items: center; gap: 10px; box-shadow: $shadow-3;
-  z-index: 3; animation: float 4s ease infinite; font-size: 13px; color: $text-secondary;
-  strong { color: $text-primary; }
-}
-.float-badge.tr { top: -24px; right: -16px; animation-delay: .5s; }
-.float-badge.bl { bottom: -20px; left: -16px; animation-delay: 1.5s; }
-.pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: $emerald; animation: pulse 2s infinite; }
-
-.features { max-width: 1440px; margin: 0 auto; padding: 96px 48px; background: $bg; }
-.feat-header { text-align: center; margin-bottom: 72px; }
-.feat-header h2 { font-size: 38px; font-weight: 700; letter-spacing: -1.5px; margin-bottom: 14px; }
-.feat-header p { color: $text-secondary; font-size: 16px; max-width: 460px; margin: 0 auto; line-height: 1.6; }
-.feat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
-.feat-card {
-  background: $surface; border: 1px solid $border; border-radius: 18px; padding: 32px;
-  transition: all .3s; cursor: default; position: relative; overflow: hidden;
-
-  &::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: $grad-primary; opacity: 0; transition: opacity .3s; }
-  &:hover { border-color: transparent; box-shadow: $shadow-3; transform: translateY(-6px); }
-  &:hover::before { opacity: 1; }
-  h3 { font-size: 17px; font-weight: 700; margin-bottom: 8px; letter-spacing: -.2px; }
-  p { font-size: 14px; color: $text-secondary; line-height: 1.65; }
-}
-.feat-icon {
-  width: 50px; height: 50px; border-radius: 14px; display: flex; align-items: center; justify-content: center; margin-bottom: 22px;
-  &--ind { background: $indigo-pale; color: $indigo; }
-  &--amb { background: $amber-pale; color: $amber; }
-  &--em { background: $emerald-pale; color: $emerald; }
-  &--sky { background: $sky-pale; color: $sky; }
-  &--rose { background: $rose-pale; color: $rose; }
-}
-
-.stats-section {
-  max-width: 1440px; margin: 0 auto; padding: 64px 48px; display: grid; grid-template-columns: repeat(4, 1fr);
-  gap: 24px; background: $surface; border-top: 1px solid $border; border-bottom: 1px solid $border;
-}
-.stat-box { text-align: center; padding: 16px; }
-.stat-val { font-family: $font-mono; font-size: 44px; font-weight: 700; letter-spacing: -2px; background: $grad-primary; -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-.stat-lbl { font-size: 14px; color: $text-secondary; margin-top: 4px; font-weight: 500; }
-
-.cta-section { max-width: 1440px; margin: 0 auto; padding: 96px 48px; text-align: center; background: $bg; }
-.cta-box {
-  background: $surface; border: 1px solid $border; border-radius: 28px; padding: 72px;
-  position: relative; overflow: hidden; box-shadow: $shadow-2;
-  &::before { content: ''; position: absolute; inset: -2px; background: $grad-primary; border-radius: 30px; z-index: -1; opacity: .15; }
-  h2 { font-size: 38px; font-weight: 700; letter-spacing: -1.5px; margin-bottom: 14px; }
-  p { color: $text-secondary; font-size: 16px; margin-bottom: 36px; line-height: 1.6; }
-}
-
-// .l-footer moved to src/components/layout/Footer.module.scss — shared with /app.
-
-@media (max-width: 768px) {
-  .hero-section { grid-template-columns: 1fr; padding: 48px 24px; gap: 40px; }
-  .hero-content h1 { font-size: 36px; }
-  .feat-grid { grid-template-columns: 1fr; }
-  .stats-section { grid-template-columns: repeat(2, 1fr); }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -1277,13 +1427,20 @@ export default function History() {
 
   &__main {
     flex: 1;
-    overflow-y: auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden; // scrolling now happens inside each page's .pg-body
     background: $bg;
   }
 
   &__content {
+    flex: 1;
+    min-height: 0;
     // Reserves space so the fixed Footer (see Footer.module.scss) never
-    // overlaps the bottom of the page content.
+    // overlaps the bottom of the page content. Each page's .pg-shell
+    // reclaims most of this via its height/margin-bottom calc, leaving a
+    // small breathing-room gap above the footer.
     padding-bottom: $footer-height;
   }
 }
@@ -1302,22 +1459,100 @@ export default function History() {
 
 
 
-//AppShell.tsx
-import { Outlet } from 'react-router-dom';
-import Sidebar from './Sidebar';
-import Footer from './Footer';
-import styles from './AppShell.module.scss';
 
-export default function AppShell() {
+
+
+
+
+
+
+
+//ModelCatalog.tsx
+import { useEffect, useMemo, useState } from 'react';
+import { Search, Plus } from 'lucide-react';
+import { useAppDispatch, useAppSelector } from '../../hooks/redux';
+import { fetchModels, createCustomModel } from '../../store/slices/modelsSlice';
+import { fetchProviders } from '../../store/slices/providersSlice';
+import AddCustomModelDrawer from './AddCustomModelDrawer';
+import styles from './ModelCatalog.module.scss';
+
+export default function ModelCatalog() {
+  const dispatch = useAppDispatch();
+  const { items, status, creating } = useAppSelector((s) => s.models);
+  const providers = useAppSelector((s) => s.providers.items);
+  const [search, setSearch] = useState('');
+  const [capFilter, setCapFilter] = useState('All');
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  useEffect(() => {
+    dispatch(fetchModels());
+    dispatch(fetchProviders());
+  }, [dispatch]);
+
+  const caps = useMemo(() => ['All', ...new Set(items.flatMap((m) => m.capabilities))], [items]);
+  const providerName = (id: string) => providers.find((p) => p.id === id)?.name || id;
+
+  const filtered = items.filter((m) => {
+    if (capFilter !== 'All' && !m.capabilities.includes(capFilter)) return false;
+    const q = search.toLowerCase();
+    return !q || m.name.toLowerCase().includes(q) || providerName(m.provider_id).toLowerCase().includes(q);
+  });
+
   return (
-    <div className={styles['app-shell']}>
-      <Sidebar />
-      <main className={styles['app-shell__main']}>
-        <div className={styles['app-shell__content']}>
-          <Outlet />
+    <div className="page-enter pg-shell">
+      <div className="pg-hdr"><h1>Model Catalog</h1><p>All models across connected providers</p></div>
+      <div className="pg-toolbar">
+        <div className="toolbar">
+          <div className="search-box">
+            <Search size={16} color="#9CA3AF" />
+            <input placeholder="Search models or providers…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div className="pills">{caps.map((c) => <button key={c} className={`pill ${capFilter === c ? 'on' : ''}`} onClick={() => setCapFilter(c)}>{c}</button>)}</div>
+            <button className="btn btn-ind btn-sm" onClick={() => setDrawerOpen(true)}><Plus size={14} /> Register Custom</button>
+          </div>
         </div>
-        <Footer variant="app" />
-      </main>
+      </div>
+      <div className="pg-body">
+        {status === 'loading' && <div className={styles['model-catalog__loading']}>Loading models…</div>}
+
+        <div className="tw">
+          <table className="tbl">
+            <thead>
+              <tr><th>Model</th><th>Provider</th><th>Capabilities</th><th>Context</th><th>Price (in/out)</th><th>Accuracy</th><th>Status</th></tr>
+            </thead>
+            <tbody>
+              {filtered.map((m) => (
+                <tr key={m.id}>
+                  <td style={{ fontWeight: 700 }}>{m.name}</td>
+                  <td style={{ color: '#6B7280' }}>{providerName(m.provider_id)}</td>
+                  <td>{m.capabilities.map((c) => <span key={c} className="tag tag-ind">{c}</span>)}</td>
+                  <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontSize: 13 }}>{m.context_window.toLocaleString()}</td>
+                  <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontSize: 13, color: '#6B7280' }}>
+                    {m.input_price != null ? `$${m.input_price.toFixed(2)}` : '—'} / {m.output_price != null ? `$${m.output_price.toFixed(2)}` : '—'}
+                  </td>
+                  <td>
+                    <span style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontWeight: 700, color: (m.accuracy_score || 0) >= 90 ? '#10B981' : '#111827' }}>
+                      {m.accuracy_score != null ? `${m.accuracy_score}%` : '—'}
+                    </span>
+                  </td>
+                  <td><span className={`badge ${m.is_active ? 'badge-green' : 'badge-gray'}`}>{m.is_active ? 'Active' : 'Inactive'}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {drawerOpen && (
+        <AddCustomModelDrawer
+          submitting={creating}
+          onClose={() => setDrawerOpen(false)}
+          onSubmit={(payload) => {
+            dispatch(createCustomModel(payload)).then(() => setDrawerOpen(false));
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1332,36 +1567,6 @@ export default function AppShell() {
 
 
 
-//Footer.module.scss
-@use '../../styles/_variables' as *;
-
-.footer {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: $footer-height;
-  z-index: 40;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: 0 48px;
-  color: $text-muted;
-  font-size: 13px;
-  border-top: 1px solid $border;
-  background: $surface;
-}
-
-// Offset past the sidebar so it doesn't sit underneath it, matching the
-// sidebar's own mobile breakpoint (hidden below 768px — see Sidebar.module.scss).
-.footer--app {
-  left: $sidebar-width;
-
-  @media (max-width: 768px) {
-    left: 0;
-  }
-}
 
 
 
@@ -1372,29 +1577,120 @@ export default function AppShell() {
 
 
 
+//Providers.tsx
+import { useEffect, useState } from 'react';
+import { Search, Check, Plus, Settings, Unlink, Loader2 } from 'lucide-react';
+import { useAppDispatch, useAppSelector } from '../../hooks/redux';
+import { fetchProviders, connectProvider, disconnectProvider } from '../../store/slices/providersSlice';
+import styles from './Providers.module.scss';
 
+type Filter = 'all' | 'connected' | 'available';
 
+export default function Providers() {
+  const dispatch = useAppDispatch();
+  const { items, status, mutatingId } = useAppSelector((s) => s.providers);
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState<Filter>('all');
+  const [keyPromptFor, setKeyPromptFor] = useState<string | null>(null);
+  const [apiKeyInput, setApiKeyInput] = useState('');
 
+  useEffect(() => {
+    dispatch(fetchProviders());
+  }, [dispatch]);
 
+  const filtered = items.filter((p) => {
+    if (filter === 'connected' && p.status !== 'connected') return false;
+    if (filter === 'available' && p.status === 'connected') return false;
+    return !search || p.name.toLowerCase().includes(search.toLowerCase());
+  });
 
-//Footer.tsx
-// Shared footer used on both the public Landing page and every /app route
-// (rendered from AppShell). Fixed to the bottom of the viewport.
-//
-// variant="full"   → spans the full viewport width (Landing — no sidebar)
-// variant="app"     → offset past the sidebar width (/app/* — has a sidebar)
-import styles from './Footer.module.scss';
+  const submitConnect = (providerId: string) => {
+    if (!apiKeyInput.trim()) return;
+    dispatch(connectProvider({ providerId, payload: { api_key: apiKeyInput } }));
+    setKeyPromptFor(null);
+    setApiKeyInput('');
+  };
 
-interface FooterProps {
-  variant?: 'full' | 'app';
-}
-
-export default function Footer({ variant = 'full' }: FooterProps) {
-  const year = new Date().getFullYear();
   return (
-    <footer className={`${styles.footer} ${variant === 'app' ? styles['footer--app'] : ''}`}>
-      &copy; {year} SemcoEval &middot; Privacy &middot; Terms &middot; Documentation
-    </footer>
+    <div className="page-enter pg-shell">
+      <div className="pg-hdr"><h1>Providers</h1><p>Manage your AI provider connections</p></div>
+      <div className="pg-toolbar">
+        <div className="toolbar">
+          <div className="search-box">
+            <Search size={16} color="#9CA3AF" />
+            <input placeholder="Search providers…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+          <div className="pills">
+            {(['all', 'connected', 'available'] as Filter[]).map((f) => (
+              <button key={f} className={`pill ${filter === f ? 'on' : ''}`} onClick={() => setFilter(f)}>
+                {f[0].toUpperCase() + f.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="pg-body">
+        {status === 'loading' && <div className={styles['providers__loading']}><Loader2 size={18} style={{ animation: 'spin 1.5s linear infinite' }} /> Loading providers…</div>}
+
+        <div className="cards-grid">
+          {filtered.map((p) => (
+            <div className="card" key={p.id}>
+              <div className="card-hdr">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <div className={`card-icon ${styles['providers__icon']}`}>{p.logo_url ? <img src={p.logo_url} alt={p.name} /> : p.name[0]}</div>
+                  <div>
+                    <div className="card-title">{p.name}</div>
+                    <div style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>{p.model_count} models</div>
+                  </div>
+                </div>
+                <span className={`badge ${p.status === 'connected' ? 'badge-green' : 'badge-gray'}`}>
+                  {p.status === 'connected' ? <><Check size={11} /> Connected</> : 'Not connected'}
+                </span>
+              </div>
+              <div className="card-desc">{p.description}</div>
+
+              {keyPromptFor === p.id ? (
+                <div className={styles['providers__key-form']}>
+                  <input
+                    className="fi"
+                    type="password"
+                    placeholder="Paste API key…"
+                    value={apiKeyInput}
+                    onChange={(e) => setApiKeyInput(e.target.value)}
+                    autoFocus
+                  />
+                  <div className={styles['providers__key-actions']}>
+                    <button className="btn btn-sm btn-ind" onClick={() => submitConnect(p.id)}>Save</button>
+                    <button className="btn btn-sm btn-ghost" onClick={() => setKeyPromptFor(null)}>Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="card-foot">
+                  <button
+                    className={`btn btn-sm ${p.status === 'connected' ? 'btn-ghost' : 'btn-ind'}`}
+                    disabled={mutatingId === p.id}
+                    onClick={() => setKeyPromptFor(p.id)}
+                  >
+                    {mutatingId === p.id ? (
+                      <Loader2 size={14} style={{ animation: 'spin 1.5s linear infinite' }} />
+                    ) : p.status === 'connected' ? (
+                      <><Settings size={14} /> Configure</>
+                    ) : (
+                      <><Plus size={14} /> Connect</>
+                    )}
+                  </button>
+                  {p.status === 'connected' && (
+                    <button className="btn btn-sm btn-danger" disabled={mutatingId === p.id} onClick={() => dispatch(disconnectProvider(p.id))}>
+                      <Unlink size={14} /> Disconnect
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1407,62 +1703,6 @@ export default function Footer({ variant = 'full' }: FooterProps) {
 
 
 
-
-
-
-
-
-//Sidebar.module.scss
-@use '../../styles/_variables' as *;
-
-.sidebar {
-  width: 256px; background: $surface; border-right: 1px solid $border;
-  display: flex; flex-direction: column; flex-shrink: 0;
-
-  &__logo {
-    padding: 24px; display: flex; align-items: center; gap: 10px;
-    font-family: $font-display; font-size: 18px; font-weight: 700;
-    color: $text-primary; border-bottom: 1px solid $border-light;
-  }
-  &__mark {
-    width: 30px; height: 30px; background: $grad-primary; border-radius: 9px;
-    display: flex; align-items: center; justify-content: center; color: #fff;
-    font-size: 14px; box-shadow: 0 2px 8px rgba(20, 40, 160, .25);
-  }
-  &__nav { flex: 1; padding: 14px 12px; display: flex; flex-direction: column; gap: 2px; }
-  &__section {
-    font-size: 11px; font-weight: 700; color: $text-muted; text-transform: uppercase;
-    letter-spacing: 1.5px; padding: 20px 14px 8px; font-family: $font-display;
-  }
-  &__foot { padding: 16px; border-top: 1px solid $border-light; }
-  &__user {
-    display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 12px;
-    transition: background .15s; cursor: pointer;
-  }
-  &__user:hover { background: $surface-alt; }
-  &__avatar {
-    width: 36px; height: 36px; border-radius: 10px; background: $grad-primary;
-    display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; color: #fff;
-  }
-  &__user-info { flex: 1; }
-  &__user-name { font-size: 13px; font-weight: 600; color: $text-primary; }
-  &__user-email { font-size: 11px; color: $text-muted; }
-}
-
-.nav-item {
-  display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-radius: 12px;
-  font-size: 14px; font-weight: 500; color: $text-secondary; cursor: pointer; transition: all .2s;
-  border: none; background: none; width: 100%; text-align: left; text-decoration: none;
-}
-.nav-item:hover { color: $text-primary; background: $surface-alt; }
-.nav-item.active {
-  color: $indigo; background: $indigo-pale; font-weight: 600; box-shadow: inset 3px 0 0 $indigo;
-  svg { color: $indigo; }
-}
-
-@media (max-width: 768px) {
-  .sidebar { display: none; }
-}
 
 
 
@@ -1513,6 +1753,10 @@ $shadow-4: 0 16px 48px rgba(0, 0, 0, .1), 0 4px 12px rgba(0, 0, 0, .05);
 
 $footer-height: 60px;
 $sidebar-width: 256px;
+// Small gap reclaimed above the fixed footer when a page's scroll shell
+// pulls back the workspace content wrapper's bottom padding — see
+// .pg-shell in global.scss.
+$page-bottom-reclaim: 0.75rem;
 
 $grad-primary: linear-gradient(135deg, #1428A0, #2B45C9);
 $grad-warm: linear-gradient(135deg, #F59E0B, #F97316);
@@ -1521,6 +1765,12 @@ $grad-cool: linear-gradient(135deg, #10B981, #0EA5E9);
 $font-display: 'Segoe UI', Roboto, Arial, sans-serif;
 $font-body: 'Segoe UI', Roboto, Arial, sans-serif;
 $font-mono: 'Segoe UI', Roboto, Arial, sans-serif;
+
+
+
+
+
+
 
 
 
@@ -1668,12 +1918,40 @@ h1, h2, h3, h4, h5 { font-family: $font-display; }
 // Shared by Dashboard and Comparison — kept global since both need it.
 .radar-wrap { display: flex; justify-content: center; align-items: center; padding: 20px; }
 
-.pg-hdr { padding: 32px 40px 0; }
+// ─────────────────────────────────────────────────────────────────────────
+// Fixed-header page shell. Every /app page's root uses `pg-shell`; the
+// header (`pg-hdr`) and, if present, a filters/toolbar row (`pg-toolbar`)
+// stay pinned while only `pg-body` scrolls beneath them.
+//
+// `pg-shell`'s height is derived from the parent flex chain (AppShell's
+// __main -> __content, both flex:1/min-height:0 — see AppShell.module.scss)
+// rather than grown from content, then extended via calc to reclaim
+// __content's $footer-height bottom padding (reserved for the fixed
+// Footer), leaving a small $page-bottom-reclaim gap above it.
+// ─────────────────────────────────────────────────────────────────────────
+.pg-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: calc(100% + #{$footer-height} - #{$page-bottom-reclaim});
+  margin-bottom: calc(-#{$footer-height} + #{$page-bottom-reclaim});
+}
+
+.pg-hdr { flex-shrink: 0; padding: 32px 40px 0; }
 .pg-hdr h1 { font-size: 28px; font-weight: 700; letter-spacing: -.5px; }
 .pg-hdr p { color: $text-secondary; font-size: 14px; margin-top: 4px; }
-.pg-body { padding: 24px 40px 40px; }
+
+// Wraps a page's search/filter row (`.toolbar`) so it stays fixed directly
+// below the header, above the scrolling body.
+.pg-toolbar { flex-shrink: 0; padding: 20px 40px 0; }
+
+// The ONLY element that scrolls. When it directly follows `.pg-toolbar`,
+// that block already provides the header-to-content gap (plus `.toolbar`'s
+// own margin-bottom), so drop pg-body's own top padding to avoid doubling up.
+.pg-body { flex: 1; min-height: 0; overflow-y: auto; padding: 24px 40px 40px; }
+.pg-toolbar + .pg-body { padding-top: 0; }
 
 @media (max-width: 768px) {
   .cards-grid { grid-template-columns: 1fr; }
-  .pg-hdr, .pg-body { padding-left: 20px; padding-right: 20px; }
+  .pg-hdr, .pg-toolbar, .pg-body { padding-left: 20px; padding-right: 20px; }
 }
