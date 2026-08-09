@@ -1,4 +1,4 @@
-/HBar.tsx
+//HBar.tsx
 import { useEffect, useState } from 'react';
 
 interface HBarProps {
@@ -9,7 +9,7 @@ interface HBarProps {
   sublabel?: string;
 }
 
-export default function HBar({ value, max = 100, color = '#6366F1', label, sublabel }: HBarProps) {
+export default function HBar({ value, max = 100, color = '#1428A0', label, sublabel }: HBarProps) {
   const [width, setWidth] = useState(0);
   useEffect(() => {
     const t = setTimeout(() => setWidth(value), 50);
@@ -63,7 +63,7 @@ interface RadarChartProps {
 }
 
 const DEFAULT_METRICS = ['Accuracy', 'Speed', 'Cost Eff.', 'Context', 'Capability'];
-const DEFAULT_COLORS = ['#6366F1', '#F59E0B', '#10B981'];
+const DEFAULT_COLORS = ['#1428A0', '#F59E0B', '#10B981'];
 
 export default function RadarChart({ models, metrics = DEFAULT_METRICS, size = 300, colors = DEFAULT_COLORS }: RadarChartProps) {
   const [hovered, setHovered] = useState<number | null>(null);
@@ -132,25 +132,95 @@ export default function RadarChart({ models, metrics = DEFAULT_METRICS, size = 3
 
 
 
+//ScoreRing.tsx
+import { useEffect, useState } from 'react';
+import styles from './ScoreRing.module.scss';
+
+interface ScoreRingProps {
+  score: number;
+  size?: number;
+  stroke?: number;
+  color?: string;
+  label?: string;
+}
+
+export default function ScoreRing({ score, size = 72, stroke = 6, color = '#1428A0', label }: ScoreRingProps) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setMounted(true), 100);
+    return () => clearTimeout(t);
+  }, []);
+
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const offset = c - (c * (mounted ? score : 0)) / 100;
+
+  return (
+    <div className={styles["score-ring"]} style={{ width: size, height: size }}>
+      <svg width={size} height={size} style={{ transform: 'rotate(-90deg)' }}>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#F3F4F6" strokeWidth={stroke} />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke={color}
+          strokeWidth={stroke}
+          strokeDasharray={c}
+          strokeDashoffset={offset}
+          strokeLinecap="round"
+          className={styles["score-ring__progress"]}
+        />
+      </svg>
+      <div className={styles["score-ring__center"]}>
+        <span className={styles["score-ring__value"]} style={{ fontSize: size * 0.22 }}>
+          {mounted ? score : 0}
+        </span>
+        {label && <span className={styles["score-ring__label"]}>{label}</span>}
+      </div>
+    </div>
+  );
+}
 
 
 
 
 
-// src\components\common\ScoreRing.module.scss
-@use '../../styles/_variables' as *;
 
-.score-ring {
-  position: relative;
-  flex-shrink: 0;
 
-  &__progress { transition: stroke-dashoffset 1.2s cubic-bezier(.16, 1, .3, 1); }
-  &__center {
-    position: absolute; inset: 0; display: flex; flex-direction: column;
-    align-items: center; justify-content: center;
-  }
-  &__value { font-family: $font-mono; font-weight: 700; color: #111827; line-height: 1; }
-  &__label { font-size: 9px; color: #9CA3AF; font-weight: 600; margin-top: 1px; }
+
+
+
+
+//Sparkline.tsx
+interface SparklineProps {
+  data: number[];
+  color?: string;
+  width?: number;
+  height?: number;
+}
+
+export default function Sparkline({ data, color = '#1428A0', width = 80, height = 28 }: SparklineProps) {
+  const max = Math.max(...data);
+  const min = Math.min(...data);
+  const range = max - min || 1;
+  const points = data
+    .map((v, i) => `${(i / (data.length - 1)) * width},${height - ((v - min) / range) * height}`)
+    .join(' ');
+  const gradientId = 'sparkline-grad-' + color.replace('#', '');
+
+  return (
+    <svg width={width} height={height} style={{ overflow: 'visible' }}>
+      <defs>
+        <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor={color} stopOpacity=".2" />
+          <stop offset="1" stopColor={color} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <polygon points={`0,${height} ${points} ${width},${height}`} fill={`url(#${gradientId})`} />
+      <polyline points={points} fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
 }
 
 
@@ -176,7 +246,7 @@ import RadarChart from '../common/RadarChart';
 import ScoreRing from '../common/ScoreRing';
 import styles from './Comparison.module.scss';
 
-const COLORS = ['#6366F1', '#F59E0B', '#10B981'];
+const COLORS = ['#1428A0', '#F59E0B', '#10B981'];
 
 export default function Comparison() {
   const dispatch = useAppDispatch();
@@ -367,7 +437,7 @@ export default function Dashboard() {
                   <div className={styles['d-stat-val']}>{s.value}</div>
                   <div className={styles['d-stat-change']}><TrendingUp size={12} /> {s.change}</div>
                 </div>
-                <Sparkline data={s.spark} color="#6366F1" width={72} height={32} />
+                <Sparkline data={s.spark} color="#1428A0" width={72} height={32} />
               </div>
             </div>
           ))}
@@ -386,9 +456,9 @@ export default function Dashboard() {
               <div key={run.id} className={styles['dash__run-row']} onClick={() => navigate(`/app/history?id=${run.id}`)}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                   {run.status === 'completed' ? (
-                    <ScoreRing score={Math.round(run.top_score ?? 0)} size={44} stroke={4} color="#6366F1" />
+                    <ScoreRing score={Math.round(run.top_score ?? 0)} size={44} stroke={4} color="#1428A0" />
                   ) : (
-                    <div className={styles['dash__spinner']}><Loader2 size={18} color="#6366F1" style={{ animation: 'spin 1.5s linear infinite' }} /></div>
+                    <div className={styles['dash__spinner']}><Loader2 size={18} color="#1428A0" style={{ animation: 'spin 1.5s linear infinite' }} /></div>
                   )}
                   <div>
                     <div style={{ fontWeight: 600, fontSize: 14 }}>{run.name}</div>
@@ -408,7 +478,7 @@ export default function Dashboard() {
                 <div className="radar-wrap"><RadarChart models={radarModels} size={260} /></div>
                 <div className={styles['dash__legend']}>
                   {radarModels.map((m, i) => (
-                    <span key={i}><span className={styles['dash__dot']} style={{ background: ['#6366F1', '#F59E0B', '#10B981'][i] }} /> {m.name}</span>
+                    <span key={i}><span className={styles['dash__dot']} style={{ background: ['#1428A0', '#F59E0B', '#10B981'][i] }} /> {m.name}</span>
                   ))}
                 </div>
               </>
@@ -468,7 +538,7 @@ import styles from './Datasets.module.scss';
 // Deterministic color hash so the same capability always gets the same pill
 // color across cards/renders, without a hardcoded lookup table.
 const PILL_COLORS = [
-  { bg: '#EEF2FF', fg: '#6366F1' }, { bg: '#FFFBEB', fg: '#D97706' }, { bg: '#ECFDF5', fg: '#059669' },
+  { bg: '#E9EBF8', fg: '#1428A0' }, { bg: '#FFFBEB', fg: '#D97706' }, { bg: '#ECFDF5', fg: '#059669' },
   { bg: '#FFF1F2', fg: '#F43F5E' }, { bg: '#F0F9FF', fg: '#0EA5E9' }, { bg: '#FEF2F2', fg: '#EF4444' },
 ];
 function hashColor(label: string) {
@@ -602,6 +672,161 @@ export default function Datasets() {
 
 
 
+
+
+
+
+
+
+
+
+
+
+//NewEvaluation.module.scss
+@use '../../styles/_variables' as *;
+
+.layout {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+// ---------- Vertical stepper sidebar ----------
+.stepper {
+  background: $surface;
+  border: 1px solid $border;
+  border-radius: 20px;
+  padding: 20px;
+  position: sticky;
+  top: 24px;
+
+  &__progress-label { font-size: 12px; font-weight: 700; color: $text-secondary; margin-bottom: 8px; }
+  &__progress-track { height: 6px; background: $surface-alt; border-radius: 3px; overflow: hidden; margin-bottom: 20px; }
+  &__progress-fill { height: 100%; background: $grad-primary; border-radius: 3px; transition: width .4s cubic-bezier(.16,1,.3,1); }
+  &__list { list-style: none; }
+  &__item { position: relative; }
+  &__node {
+    display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 6px;
+    background: none; border: none; cursor: pointer; text-align: left; border-radius: 10px; transition: background .15s;
+  }
+  &__node:disabled { cursor: not-allowed; opacity: .5; }
+  &__node:not(:disabled):hover { background: $surface-alt; }
+  &__icon {
+    width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: $surface-alt; color: $text-muted; border: 2px solid $border; transition: all .2s;
+  }
+  &__node.current &__icon { background: $grad-primary; color: #fff; border-color: transparent; box-shadow: 0 0 0 4px rgba(20,40,160,.15); }
+  &__node.done &__icon { background: $indigo; color: #fff; border-color: transparent; }
+  &__label { font-size: 13px; font-weight: 600; color: $text-secondary; }
+  &__node.current &__label { color: $indigo; font-weight: 700; }
+  &__node.done &__label { color: $text-primary; }
+  &__line { width: 2px; height: 14px; background: $border; margin-left: 19px; border-radius: 1px; }
+  &__line.done { background: $indigo; }
+}
+
+// ---------- Wizard shell ----------
+.wiz {
+  background: $surface; border: 1px solid $border; border-radius: 20px; overflow: hidden; box-shadow: $shadow-2;
+  display: flex; flex-direction: column; min-height: 560px;
+}
+.wiz-body { padding: 32px; flex: 1; overflow-y: auto; }
+.wiz-body h2 { font-size: 22px; font-weight: 700; margin-bottom: 8px; letter-spacing: -.4px; }
+.sub { font-size: 14px; color: $text-secondary; margin-bottom: 22px; line-height: 1.5; }
+.wiz-foot { display: flex; justify-content: space-between; padding: 18px 32px; border-top: 1px solid $border; background: $surface-alt; }
+.wiz-launch { background: $emerald; box-shadow: 0 4px 14px rgba(16,185,129,.3); }
+.wiz-empty { padding: 40px; text-align: center; color: $text-secondary; background: $surface-alt; border-radius: 14px; grid-column: 1 / -1; }
+.wiz-empty-sm { padding: 12px; text-align: center; color: $text-muted; font-size: 12px; }
+.wiz-error { margin-top: 16px; padding: 12px 16px; background: $red-pale; color: $red; border-radius: 10px; font-size: 13px; font-weight: 600; }
+.inline-link { color: $indigo; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+
+// ---------- Step 1: Name ----------
+.name-suggestions { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0 24px; }
+.name-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 100px;
+  border: 1px solid $border; background: $surface; color: $text-secondary; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.name-chip:hover { border-color: $indigo; color: $indigo; background: $indigo-pale; }
+.name-tips { background: $surface-alt; border-radius: 14px; padding: 18px 20px; }
+.name-tips__title { font-weight: 700; font-size: 13px; margin-bottom: 10px; }
+.name-tips__list { padding-left: 18px; font-size: 13px; color: $text-secondary; line-height: 1.9; }
+
+// ---------- Step 4: Models (independently scrolling filter + grid) ----------
+.models-layout { display: grid; grid-template-columns: 200px 1fr; gap: 20px; align-items: start; }
+.models-filters {
+  border: 1px solid $border; border-radius: 14px; padding: 14px; max-height: 420px; overflow-y: auto; position: sticky; top: 0;
+}
+.models-filters__title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: $text-muted; margin-bottom: 10px; }
+.models-filters__row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 6px 0; cursor: pointer; }
+.models-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(240px,1fr)); gap: 10px; max-height: 420px; overflow-y: auto; align-content: start; }
+
+// ---------- Step 5: Test Suite ----------
+.suite-tabs { display: flex; gap: 8px; margin-bottom: 18px; }
+.suite-tab {
+  display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border-radius: 10px;
+  border: 1px solid $border; background: $surface; color: $text-secondary; font-weight: 600; font-size: 13px; cursor: pointer;
+}
+.suite-tab.on { background: $indigo-pale; border-color: $indigo; color: $indigo; }
+.upload-placeholder {
+  display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 60px 20px; text-align: center;
+  color: $text-secondary; background: $surface-alt; border: 2px dashed $border; border-radius: 16px; font-size: 13px;
+}
+.suite-layout { display: block; }
+.suite-layout--split { display: grid; grid-template-columns: 1fr 400px; gap: 20px; align-items: start; }
+.suite-grid {
+  display: grid; grid-template-columns: repeat(auto-fill,minmax(260px,1fr)); gap: 10px;
+  max-height: 480px; overflow-y: auto; align-content: start;
+}
+.subgroup-panel {
+  width: 400px; border: 1px solid $border; border-radius: 14px; overflow: hidden; position: sticky; top: 0;
+  display: flex; flex-direction: column; max-height: 480px;
+}
+.subgroup-panel__hdr {
+  padding: 14px 16px; background: $surface-alt; border-bottom: 1px solid $border; font-weight: 700; font-size: 13px;
+  display: flex; justify-content: space-between; align-items: center;
+  span { font-weight: 600; font-size: 12px; color: $text-secondary; }
+}
+.subgroup-panel__list { flex: 1; overflow-y: auto; padding: 8px 4px; }
+.subgroup-panel__row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 8px 12px; cursor: pointer; }
+.subgroup-panel__row:hover { background: $surface-alt; }
+
+// ---------- Step 6: Metrics (two independently-scrolling columns) ----------
+.metrics-layout { display: grid; grid-template-columns: 1fr 320px; gap: 20px; align-items: start; }
+.metrics-col { border: 1px solid $border; border-radius: 14px; overflow: hidden; display: flex; flex-direction: column; max-height: 480px; }
+.metrics-col__hdr {
+  padding: 14px 16px; background: $surface-alt; border-bottom: 1px solid $border; font-weight: 700; font-size: 13px;
+  display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;
+}
+.metrics-col__subhdr { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: $text-muted; margin: 16px 0 10px; }
+.metrics-col__body { padding: 14px 16px; overflow-y: auto; flex: 1; }
+.judge-note { font-size: 12px; color: $text-secondary; padding: 0 16px; margin-top: 10px; line-height: 1.5; }
+.judge-list { display: flex; flex-direction: column; gap: 2px; }
+.judge-row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+.judge-row:hover { background: $surface-alt; }
+
+// ---------- Step 7: Review ----------
+.review-stats { display: grid; grid-template-columns: repeat(4,1fr); gap: 14px; margin-bottom: 24px; }
+.review-stat { padding: 18px; background: $indigo-pale; border-radius: 14px; border: 1px solid rgba(20,40,160,.12); }
+.review-stat__label { font-size: 11px; color: $text-secondary; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
+.review-stat__val { font-family: $font-mono; font-size: 22px; font-weight: 700; margin-top: 4px; }
+.review-section { padding: 16px 0; border-bottom: 1px solid $border-light; }
+.review-section:last-child { border-bottom: none; }
+.review-section__title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: $text-muted; margin-bottom: 10px; }
+.review-section__row { display: flex; justify-content: space-between; font-size: 13px; padding: 5px 0; color: $text-secondary; }
+.review-section__row strong { color: $text-primary; font-weight: 600; }
+
+.toast__icon { width: 36px; height: 36px; border-radius: 10px; background: $emerald-pale; display: flex; align-items: center; justify-content: center; }
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .stepper { position: static; }
+  .stepper__list { display: flex; overflow-x: auto; gap: 12px; }
+  .stepper__line { display: none; }
+  .models-layout, .suite-layout--split, .metrics-layout { grid-template-columns: 1fr; }
+  .subgroup-panel { width: 100%; }
+  .review-stats { grid-template-columns: repeat(2,1fr); }
+}
 
 
 
@@ -817,7 +1042,7 @@ export default function History() {
                     </div>
                   </div>
                   <div className={styles['summary-card']}>
-                    <ListChecks size={16} color="#6366F1" />
+                    <ListChecks size={16} color="#1428A0" />
                     <div>
                       <div className={styles['summary-card__label']}>Questions / Models</div>
                       <div className={styles['summary-card__val']}>{selected.total_questions.toLocaleString()} &middot; {selected.model_ids.length} models</div>
@@ -890,7 +1115,7 @@ export default function History() {
 //Landing.module.scss
 @use '../../styles/_variables' as *;
 
-.landing { min-height: 100vh; background: $surface; overflow-x: hidden; }
+.landing { min-height: 100vh; background: $surface; overflow-x: hidden; padding-bottom: $footer-height; }
 
 .l-nav {
   display: flex; align-items: center; justify-content: space-between; padding: 18px 48px;
@@ -903,16 +1128,16 @@ export default function History() {
   .mark {
     width: 34px; height: 34px; background: $grad-primary; border-radius: 10px;
     display: flex; align-items: center; justify-content: center; color: #fff; font-size: 18px;
-    box-shadow: 0 2px 8px rgba(99, 102, 241, .35);
+    box-shadow: 0 2px 8px rgba(20, 40, 160, .35);
   }
 }
 
 .btn-primary {
   display: inline-flex; align-items: center; gap: 8px; background: $grad-primary; color: #fff; border: none;
   padding: 14px 28px; border-radius: 14px; font-size: 15px; font-weight: 600; cursor: pointer; transition: all .25s;
-  font-family: $font-display; box-shadow: 0 4px 14px rgba(99, 102, 241, .3);
+  font-family: $font-display; box-shadow: 0 4px 14px rgba(20, 40, 160, .3);
 }
-.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(99, 102, 241, .35); }
+.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(20, 40, 160, .35); }
 .btn-primary:disabled { opacity: .6; cursor: default; transform: none; }
 
 .btn-secondary {
@@ -933,7 +1158,7 @@ export default function History() {
 .hero-content { position: relative; z-index: 2; }
 .hero-badge {
   display: inline-flex; align-items: center; gap: 8px; background: $indigo-pale;
-  border: 1px solid rgba(99, 102, 241, .15); border-radius: 100px; padding: 6px 16px 6px 8px;
+  border: 1px solid rgba(20, 40, 160, .15); border-radius: 100px; padding: 6px 16px 6px 8px;
   font-size: 13px; color: $indigo; margin-bottom: 28px; font-weight: 600;
 
   .badge-dot { width: 8px; height: 8px; border-radius: 50%; background: $indigo; animation: pulse 2s infinite; }
@@ -1037,126 +1262,6 @@ export default function History() {
 
 
 
-//Landing.tsx
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { ArrowRight, Play, Award, Link2, Cpu, FlaskConical, BarChart3, GitCompare, Shield } from 'lucide-react';
-import Footer from '../layout/Footer';
-import styles from './Landing.module.scss';
-
-const features = [
-  { icon: <Link2 size={22} />, cls: 'ind', title: 'Provider Hub', desc: 'Connect any AI provider with API keys. Manage credentials, monitor status, and see available models instantly.' },
-  { icon: <Cpu size={22} />, cls: 'amb', title: 'Model Catalog', desc: 'Browse all models across providers. Filter by capability, compare pricing, and register custom endpoints.' },
-  { icon: <FlaskConical size={22} />, cls: 'em', title: 'Guided Evaluations', desc: 'A step-by-step wizard for model selection, test suite choice, and metric configuration.' },
-  { icon: <BarChart3 size={22} />, cls: 'sky', title: 'Results & History', desc: 'Every evaluation stored with full breakdowns. Duplicate past runs, track trends, export findings.' },
-  { icon: <GitCompare size={22} />, cls: 'rose', title: 'Visual Comparison', desc: 'Radar charts and metric tables make it obvious where each model excels or falls short.' },
-  { icon: <Shield size={22} />, cls: 'ind', title: 'SSO & Security', desc: 'Enterprise-grade sign-in. API keys encrypted and isolated to your environment.' },
-];
-
-export default function Landing() {
-  const [animated, setAnimated] = useState(false);
-  const navigate = useNavigate();
-
-  useEffect(() => {
-    const t = setTimeout(() => setAnimated(true), 200);
-    return () => clearTimeout(t);
-  }, []);
-
-  // Landing is now gated by AuthGuard (wrapping "/"), so by the time this
-  // page renders the user is already authenticated — these buttons are
-  // plain navigation into the app, not sign-in triggers.
-  const goToDashboard = () => navigate('/app/dashboard');
-
-  const bars = [
-    { label: 'Claude Sonnet 4', pct: animated ? 94 : 0, cls: 'primary' },
-    { label: 'GPT-4o', pct: animated ? 91 : 0, cls: 'warm' },
-    { label: 'Gemini 2.5 Pro', pct: animated ? 89 : 0, cls: 'cool' },
-    { label: 'Mistral Large', pct: animated ? 85 : 0, cls: 'gray' },
-  ];
-
-  return (
-    <div className={styles.landing}>
-      <nav className={styles['l-nav']}>
-        <div className={styles['l-logo']}><div className={styles.mark}>&#9670;</div>SemcoEval</div>
-      </nav>
-
-      <section className={styles['hero-section']}>
-        <div className={styles['hero-bg-dots']} />
-        <div className={styles['hero-content']}>
-          <div className={styles['hero-badge']}><div className={styles['badge-dot']} /> Now supporting 40+ models</div>
-          <h1>Evaluate AI models<br />with <span className={styles.grad}>measured evidence</span></h1>
-          <p>Stop guessing which model fits your use case. Run structured benchmarks, compare results side-by-side, and make selection decisions backed by real data.</p>
-          <div className={styles['hero-actions']}>
-            <button className={styles['btn-primary']} onClick={goToDashboard}>Open Dashboard <ArrowRight size={16} /></button>
-            <button className={styles['btn-secondary']}><Play size={16} /> Watch Demo</button>
-          </div>
-        </div>
-        <div className={styles['hero-visual']}>
-          <div className={styles['hero-card']}>
-            <div className={styles['hero-card-hdr']}>
-              <span className={styles['hero-card-title']}>Live Benchmark</span>
-              <span className="badge badge-green"><div className={styles['pulse-dot']} /> Running</span>
-            </div>
-            {bars.map((b, i) => (
-              <div className={styles['hero-bar']} key={i}>
-                <span className={styles['hero-bar-label']}>{b.label}</span>
-                <div className={styles['hero-bar-track']}>
-                  <div className={`${styles['hero-bar-fill']} ${styles[`hero-bar-fill--${b.cls}`]}`} style={{ width: `${b.pct}%`, transitionDelay: `${i * 250}ms` }}>
-                    {b.pct > 0 && <span>{b.pct}%</span>}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className={`${styles['float-badge']} ${styles.tr}`}><Award size={16} style={{ color: '#F59E0B' }} /><span>Winner: <strong>Claude Sonnet 4</strong></span></div>
-          <div className={`${styles['float-badge']} ${styles.bl}`}><div className={styles['pulse-dot']} /><span>3 evaluations running</span></div>
-        </div>
-      </section>
-
-      <section className={styles.features}>
-        <div className={styles['feat-header']}><h2>Everything you need to decide</h2><p>From connecting providers to comparing results — a complete evaluation workflow</p></div>
-        <div className={styles['feat-grid']}>
-          {features.map((f, i) => (
-            <div className={styles['feat-card']} key={i}>
-              <div className={`${styles['feat-icon']} ${styles[`feat-icon--${f.cls}`]}`}>{f.icon}</div>
-              <h3>{f.title}</h3>
-              <p>{f.desc}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className={styles['stats-section']}>
-        {[{ v: '40+', l: 'Models supported' }, { v: '6', l: 'Benchmark suites' }, { v: '12K+', l: 'Evaluation tasks' }, { v: '<5min', l: 'Average eval time' }].map((s, i) => (
-          <div className={styles['stat-box']} key={i}><div className={styles['stat-val']}>{s.v}</div><div className={styles['stat-lbl']}>{s.l}</div></div>
-        ))}
-      </section>
-
-      <section className={styles['cta-section']}>
-        <div className={styles['cta-box']}>
-          <h2>Ready to evaluate with confidence?</h2>
-          <p>Connect your first provider and run a benchmark in under five minutes.</p>
-          <button className={styles['btn-primary']} onClick={goToDashboard}>Get Started Free <ArrowRight size={16} /></button>
-        </div>
-      </section>
-
-      <Footer />
-    </div>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -1174,15 +1279,15 @@ export default function Landing() {
     flex: 1;
     overflow-y: auto;
     background: $bg;
-    display: flex;
-    flex-direction: column;
-    min-height: 100%;
   }
 
   &__content {
-    flex: 1;
+    // Reserves space so the fixed Footer (see Footer.module.scss) never
+    // overlaps the bottom of the page content.
+    padding-bottom: $footer-height;
   }
 }
+
 
 
 
@@ -1211,7 +1316,7 @@ export default function AppShell() {
         <div className={styles['app-shell__content']}>
           <Outlet />
         </div>
-        <Footer />
+        <Footer variant="app" />
       </main>
     </div>
   );
@@ -1227,26 +1332,36 @@ export default function AppShell() {
 
 
 
-
-
-
-
-
 //Footer.module.scss
 @use '../../styles/_variables' as *;
 
 .footer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: $footer-height;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
-  padding: 32px 48px;
+  padding: 0 48px;
   color: $text-muted;
   font-size: 13px;
   border-top: 1px solid $border;
   background: $surface;
-  flex-shrink: 0;
 }
 
+// Offset past the sidebar so it doesn't sit underneath it, matching the
+// sidebar's own mobile breakpoint (hidden below 768px — see Sidebar.module.scss).
+.footer--app {
+  left: $sidebar-width;
 
-
+  @media (max-width: 768px) {
+    left: 0;
+  }
+}
 
 
 
@@ -1264,14 +1379,20 @@ export default function AppShell() {
 
 //Footer.tsx
 // Shared footer used on both the public Landing page and every /app route
-// (rendered from AppShell). Keeping it as one component means copy/links
-// only ever need to be updated in one place.
+// (rendered from AppShell). Fixed to the bottom of the viewport.
+//
+// variant="full"   → spans the full viewport width (Landing — no sidebar)
+// variant="app"     → offset past the sidebar width (/app/* — has a sidebar)
 import styles from './Footer.module.scss';
 
-export default function Footer() {
+interface FooterProps {
+  variant?: 'full' | 'app';
+}
+
+export default function Footer({ variant = 'full' }: FooterProps) {
   const year = new Date().getFullYear();
   return (
-    <footer className={styles.footer}>
+    <footer className={`${styles.footer} ${variant === 'app' ? styles['footer--app'] : ''}`}>
       &copy; {year} SemcoEval &middot; Privacy &middot; Terms &middot; Documentation
     </footer>
   );
@@ -1291,168 +1412,57 @@ export default function Footer() {
 
 
 
+//Sidebar.module.scss
+@use '../../styles/_variables' as *;
 
-//ModelCatalog.tsx
-import { useEffect, useMemo, useState } from 'react';
-import { Search, Plus } from 'lucide-react';
-import { useAppDispatch, useAppSelector } from '../../hooks/redux';
-import { fetchModels, createCustomModel } from '../../store/slices/modelsSlice';
-import { fetchProviders } from '../../store/slices/providersSlice';
-import AddCustomModelDrawer from './AddCustomModelDrawer';
-import styles from './ModelCatalog.module.scss';
+.sidebar {
+  width: 256px; background: $surface; border-right: 1px solid $border;
+  display: flex; flex-direction: column; flex-shrink: 0;
 
-export default function ModelCatalog() {
-  const dispatch = useAppDispatch();
-  const { items, status, creating } = useAppSelector((s) => s.models);
-  const providers = useAppSelector((s) => s.providers.items);
-  const [search, setSearch] = useState('');
-  const [capFilter, setCapFilter] = useState('All');
-  const [drawerOpen, setDrawerOpen] = useState(false);
-
-  useEffect(() => {
-    dispatch(fetchModels());
-    dispatch(fetchProviders());
-  }, [dispatch]);
-
-  const caps = useMemo(() => ['All', ...new Set(items.flatMap((m) => m.capabilities))], [items]);
-  const providerName = (id: string) => providers.find((p) => p.id === id)?.name || id;
-
-  const filtered = items.filter((m) => {
-    if (capFilter !== 'All' && !m.capabilities.includes(capFilter)) return false;
-    const q = search.toLowerCase();
-    return !q || m.name.toLowerCase().includes(q) || providerName(m.provider_id).toLowerCase().includes(q);
-  });
-
-  return (
-    <div className="page-enter">
-      <div className="pg-hdr"><h1>Model Catalog</h1><p>All models across connected providers</p></div>
-      <div className="pg-body">
-        <div className="toolbar">
-          <div className="search-box">
-            <Search size={16} color="#9CA3AF" />
-            <input placeholder="Search models or providers…" value={search} onChange={(e) => setSearch(e.target.value)} />
-          </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <div className="pills">{caps.map((c) => <button key={c} className={`pill ${capFilter === c ? 'on' : ''}`} onClick={() => setCapFilter(c)}>{c}</button>)}</div>
-            <button className="btn btn-ind btn-sm" onClick={() => setDrawerOpen(true)}><Plus size={14} /> Register Custom</button>
-          </div>
-        </div>
-
-        {status === 'loading' && <div className={styles['model-catalog__loading']}>Loading models…</div>}
-
-        <div className="tw">
-          <table className="tbl">
-            <thead>
-              <tr><th>Model</th><th>Provider</th><th>Capabilities</th><th>Context</th><th>Price (in/out)</th><th>Accuracy</th><th>Status</th></tr>
-            </thead>
-            <tbody>
-              {filtered.map((m) => (
-                <tr key={m.id}>
-                  <td style={{ fontWeight: 700 }}>{m.name}</td>
-                  <td style={{ color: '#6B7280' }}>{providerName(m.provider_id)}</td>
-                  <td>{m.capabilities.map((c) => <span key={c} className="tag tag-ind">{c}</span>)}</td>
-                  <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontSize: 13 }}>{m.context_window.toLocaleString()}</td>
-                  <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontSize: 13, color: '#6B7280' }}>
-                    {m.input_price != null ? `$${m.input_price.toFixed(2)}` : '—'} / {m.output_price != null ? `$${m.output_price.toFixed(2)}` : '—'}
-                  </td>
-                  <td>
-                    <span style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontWeight: 700, color: (m.accuracy_score || 0) >= 90 ? '#10B981' : '#111827' }}>
-                      {m.accuracy_score != null ? `${m.accuracy_score}%` : '—'}
-                    </span>
-                  </td>
-                  <td><span className={`badge ${m.is_active ? 'badge-green' : 'badge-gray'}`}>{m.is_active ? 'Active' : 'Inactive'}</span></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {drawerOpen && (
-        <AddCustomModelDrawer
-          submitting={creating}
-          onClose={() => setDrawerOpen(false)}
-          onSubmit={(payload) => {
-            dispatch(createCustomModel(payload)).then(() => setDrawerOpen(false));
-          }}
-        />
-      )}
-    </div>
-  );
+  &__logo {
+    padding: 24px; display: flex; align-items: center; gap: 10px;
+    font-family: $font-display; font-size: 18px; font-weight: 700;
+    color: $text-primary; border-bottom: 1px solid $border-light;
+  }
+  &__mark {
+    width: 30px; height: 30px; background: $grad-primary; border-radius: 9px;
+    display: flex; align-items: center; justify-content: center; color: #fff;
+    font-size: 14px; box-shadow: 0 2px 8px rgba(20, 40, 160, .25);
+  }
+  &__nav { flex: 1; padding: 14px 12px; display: flex; flex-direction: column; gap: 2px; }
+  &__section {
+    font-size: 11px; font-weight: 700; color: $text-muted; text-transform: uppercase;
+    letter-spacing: 1.5px; padding: 20px 14px 8px; font-family: $font-display;
+  }
+  &__foot { padding: 16px; border-top: 1px solid $border-light; }
+  &__user {
+    display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 12px;
+    transition: background .15s; cursor: pointer;
+  }
+  &__user:hover { background: $surface-alt; }
+  &__avatar {
+    width: 36px; height: 36px; border-radius: 10px; background: $grad-primary;
+    display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700; color: #fff;
+  }
+  &__user-info { flex: 1; }
+  &__user-name { font-size: 13px; font-weight: 600; color: $text-primary; }
+  &__user-email { font-size: 11px; color: $text-muted; }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//AppRoutes.tsx
-import { Routes, Route, Navigate } from 'react-router-dom';
-import Landing from '../components/landing/Landing';
-import SsoLogin from '../components/auth/SsoLogin';
-import AuthGuard from '../components/AuthGuard/AuthGuard';
-import AppShell from '../components/layout/AppShell';
-import Dashboard from '../components/dashboard/Dashboard';
-import Providers from '../components/providers/Providers';
-import ModelCatalog from '../components/models/ModelCatalog';
-import Datasets from '../components/datasets/Datasets';
-import NewEvaluation from '../components/evaluations/NewEvaluation';
-import History from '../components/history/History';
-import Comparison from '../components/comparison/Comparison';
-
-export default function AppRoutes() {
-  return (
-    <Routes>
-      {/* AuthGuard redirects here with { from, errorMessage } on error/logged_out.
-          This is the only route not gated by AuthGuard, so it must stay outside it. */}
-      <Route path="/sso-login" element={<SsoLogin />} />
-
-      {/* AuthGuard now wraps BOTH "/" and "/app/*" — the landing page's content
-          only renders once authenticated, same as the rest of the app. It
-          triggers the SSO WebSocket handshake (useSsoAuth) as soon as it
-          mounts, which happens on every fresh page load / refresh (auth
-          state is in-memory only, never persisted), and shows AuthSpinner
-          while that's in flight. */}
-      <Route element={<AuthGuard />}>
-        <Route path="/" element={<Landing />} />
-
-        <Route path="/app" element={<AppShell />}>
-          <Route index element={<Navigate to="dashboard" replace />} />
-          <Route path="dashboard" element={<Dashboard />} />
-          <Route path="providers" element={<Providers />} />
-          <Route path="models" element={<ModelCatalog />} />
-          <Route path="datasets" element={<Datasets />} />
-          <Route path="run-evaluation" element={<NewEvaluation />} />
-          <Route path="history" element={<History />} />
-          <Route path="comparison" element={<Comparison />} />
-        </Route>
-      </Route>
-
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
-  );
+.nav-item {
+  display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-radius: 12px;
+  font-size: 14px; font-weight: 500; color: $text-secondary; cursor: pointer; transition: all .2s;
+  border: none; background: none; width: 100%; text-align: left; text-decoration: none;
+}
+.nav-item:hover { color: $text-primary; background: $surface-alt; }
+.nav-item.active {
+  color: $indigo; background: $indigo-pale; font-weight: 600; box-shadow: inset 3px 0 0 $indigo;
+  svg { color: $indigo; }
 }
 
-
-
-
-
-
-
-
-
-
+@media (max-width: 768px) {
+  .sidebar { display: none; }
+}
 
 
 
@@ -1469,11 +1479,11 @@ $surface: #FFFFFF;
 $surface-alt: #F1F4F9;
 $surface-hover: #F8F9FD;
 
-$indigo: #6366F1;
-$indigo-light: #818CF8;
-$indigo-dark: #4F46E5;
-$violet: #8B5CF6;
-$indigo-pale: #EEF2FF;
+$indigo: #1428A0;
+$indigo-light: #4C63C7;
+$indigo-dark: #0E1C74;
+$violet: #2B45C9;
+$indigo-pale: #E9EBF8;
 
 $amber: #F59E0B;
 $amber-dark: #D97706;
@@ -1501,16 +1511,16 @@ $shadow-2: 0 2px 8px rgba(0, 0, 0, .06), 0 1px 2px rgba(0, 0, 0, .04);
 $shadow-3: 0 8px 24px rgba(0, 0, 0, .08), 0 2px 6px rgba(0, 0, 0, .04);
 $shadow-4: 0 16px 48px rgba(0, 0, 0, .1), 0 4px 12px rgba(0, 0, 0, .05);
 
-$grad-primary: linear-gradient(135deg, #6366F1, #8B5CF6);
+$footer-height: 60px;
+$sidebar-width: 256px;
+
+$grad-primary: linear-gradient(135deg, #1428A0, #2B45C9);
 $grad-warm: linear-gradient(135deg, #F59E0B, #F97316);
 $grad-cool: linear-gradient(135deg, #10B981, #0EA5E9);
 
 $font-display: 'Segoe UI', Roboto, Arial, sans-serif;
 $font-body: 'Segoe UI', Roboto, Arial, sans-serif;
 $font-mono: 'Segoe UI', Roboto, Arial, sans-serif;
-
-
-
 
 
 
@@ -1555,8 +1565,8 @@ h1, h2, h3, h4, h5 { font-family: $font-display; }
   padding: 10px 20px; border-radius: 12px; font-size: 14px; font-weight: 600;
   cursor: pointer; transition: all .2s; border: none; font-family: $font-display;
 }
-.btn-ind { background: $grad-primary; color: #fff; box-shadow: 0 2px 8px rgba(99, 102, 241, .2); }
-.btn-ind:hover { box-shadow: 0 4px 16px rgba(99, 102, 241, .3); transform: translateY(-1px); }
+.btn-ind { background: $grad-primary; color: #fff; box-shadow: 0 2px 8px rgba(20, 40, 160, .2); }
+.btn-ind:hover { box-shadow: 0 4px 16px rgba(20, 40, 160, .3); transform: translateY(-1px); }
 .btn-ghost { background: $surface; color: $text-secondary; border: 1px solid $border; }
 .btn-ghost:hover { border-color: $indigo; color: $indigo; background: $indigo-pale; }
 .btn-sm { padding: 7px 14px; font-size: 13px; border-radius: 10px; }
@@ -1584,7 +1594,7 @@ h1, h2, h3, h4, h5 { font-family: $font-display; }
   background: $surface; border: 1px solid $border; border-radius: 12px;
   padding: 10px 16px; min-width: 300px; transition: all .2s;
 }
-.search-box:focus-within { border-color: $indigo; box-shadow: 0 0 0 4px rgba(99, 102, 241, .08); }
+.search-box:focus-within { border-color: $indigo; box-shadow: 0 0 0 4px rgba(20, 40, 160, .08); }
 .search-box input { border: none; outline: none; font-size: 14px; flex: 1; color: $text-primary; font-family: $font-body; background: transparent; }
 .search-box input::placeholder { color: $text-muted; }
 
@@ -1594,7 +1604,7 @@ h1, h2, h3, h4, h5 { font-family: $font-display; }
   border: 1px solid $border; background: $surface; color: $text-secondary; cursor: pointer; transition: all .2s;
 }
 .pill:hover { border-color: $indigo; color: $indigo; }
-.pill.on { background: $grad-primary; color: #fff; border-color: transparent; box-shadow: 0 2px 8px rgba(99, 102, 241, .25); }
+.pill.on { background: $grad-primary; color: #fff; border-color: transparent; box-shadow: 0 2px 8px rgba(20, 40, 160, .25); }
 
 .toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }
 
@@ -1603,7 +1613,7 @@ h1, h2, h3, h4, h5 { font-family: $font-display; }
   background: $surface; border: 1px solid $border; border-radius: 16px; padding: 24px;
   transition: all .25s; position: relative; overflow: hidden;
 }
-.card:hover { border-color: rgba(99, 102, 241, .2); box-shadow: $shadow-3; transform: translateY(-2px); }
+.card:hover { border-color: rgba(20, 40, 160, .2); box-shadow: $shadow-3; transform: translateY(-2px); }
 .card-hdr { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; }
 .card-icon { width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .card-title { font-family: $font-display; font-size: 16px; font-weight: 700; }
@@ -1631,7 +1641,7 @@ h1, h2, h3, h4, h5 { font-family: $font-display; }
   width: 100%; padding: 12px 16px; border: 1px solid $border; border-radius: 12px;
   font-size: 14px; font-family: $font-body; color: $text-primary; transition: all .2s; background: $surface;
 }
-.fi:focus { outline: none; border-color: $indigo; box-shadow: 0 0 0 4px rgba(99, 102, 241, .08); }
+.fi:focus { outline: none; border-color: $indigo; box-shadow: 0 0 0 4px rgba(20, 40, 160, .08); }
 .fi::placeholder { color: $text-muted; }
 
 .sel-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
@@ -1645,7 +1655,7 @@ h1, h2, h3, h4, h5 { font-family: $font-display; }
   width: 22px; height: 22px; border: 2px solid $border; border-radius: 7px;
   display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all .2s;
 }
-.sel-opt.on .sel-chk { background: $grad-primary; border-color: $indigo; color: #fff; box-shadow: 0 2px 4px rgba(99, 102, 241, .25); }
+.sel-opt.on .sel-chk { background: $grad-primary; border-color: $indigo; color: #fff; box-shadow: 0 2px 4px rgba(20, 40, 160, .25); }
 .sel-txt { font-size: 14px; font-weight: 600; }
 .sel-sub { font-size: 12px; color: $text-secondary; margin-top: 2px; }
 
