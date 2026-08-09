@@ -1,28 +1,122 @@
-// src/api/endpoints/benchmarks.ts
-import api from '../axiosInstance';
-import type { Benchmark, BenchmarksResponse } from '../../types';
+/HBar.tsx
+import { useEffect, useState } from 'react';
 
-// Spec §5 "Known data-contract gap": the real API doesn't always return
-// `tasks` / `required_capabilities` on every benchmark object (sometimes
-// omitted or null), even though the documented contract says they're
-// required arrays. Rather than defend against this at every read site
-// (DatasetStep, Datasets page, etc.), normalize once here so every
-// consumer downstream can trust the declared type.
-function normalizeBenchmark(b: Benchmark): Benchmark {
-  return {
-    ...b,
-    tasks: b.tasks ?? [],
-    required_capabilities: b.required_capabilities ?? [],
-  };
+interface HBarProps {
+  value: number;
+  max?: number;
+  color?: string;
+  label: string;
+  sublabel?: string;
 }
 
-export const benchmarksApi = {
-  list: () =>
-    api.get<BenchmarksResponse>('/benchmarks').then((r) => ({
-      ...r.data,
-      benchmarks: r.data.benchmarks.map(normalizeBenchmark),
-    })),
-};
+export default function HBar({ value, max = 100, color = '#6366F1', label, sublabel }: HBarProps) {
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const t = setTimeout(() => setWidth(value), 50);
+    return () => clearTimeout(t);
+  }, [value]);
+
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>{label}</span>
+        <span style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontSize: 13, fontWeight: 700, color }}>{value}%</span>
+      </div>
+      {sublabel && <div style={{ fontSize: 11, color: '#9CA3AF', marginBottom: 4 }}>{sublabel}</div>}
+      <div style={{ height: 8, background: '#F1F4F9', borderRadius: 4, overflow: 'hidden' }}>
+        <div
+          style={{
+            height: '100%',
+            width: `${(width / max) * 100}%`,
+            background: color,
+            borderRadius: 4,
+            transition: 'width 1s cubic-bezier(.16,1,.3,1)',
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+//RadarChart.tsx
+import { useState } from 'react';
+
+export interface RadarModel {
+  name: string;
+  values: number[]; // 0..1, one per metric, same order as `metrics`
+}
+
+interface RadarChartProps {
+  models: RadarModel[];
+  metrics?: string[];
+  size?: number;
+  colors?: string[];
+}
+
+const DEFAULT_METRICS = ['Accuracy', 'Speed', 'Cost Eff.', 'Context', 'Capability'];
+const DEFAULT_COLORS = ['#6366F1', '#F59E0B', '#10B981'];
+
+export default function RadarChart({ models, metrics = DEFAULT_METRICS, size = 300, colors = DEFAULT_COLORS }: RadarChartProps) {
+  const [hovered, setHovered] = useState<number | null>(null);
+  const cx = size / 2;
+  const cy = size / 2;
+  const r = size / 2 - 44;
+  const angleStep = (2 * Math.PI) / metrics.length;
+  const pt = (angle: number, radius: number) => ({ x: cx + radius * Math.sin(angle), y: cy - radius * Math.cos(angle) });
+
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ overflow: 'visible' }}>
+      {[0.2, 0.4, 0.6, 0.8, 1].map((l, i) => (
+        <polygon
+          key={i}
+          points={metrics.map((_, mi) => { const p = pt(mi * angleStep, r * l); return `${p.x},${p.y}`; }).join(' ')}
+          fill={i < 4 ? '#F1F4F9' : 'none'}
+          stroke="#E5E7EB"
+          strokeWidth={1}
+          opacity={0.6}
+        />
+      ))}
+      {metrics.map((m, i) => {
+        const label = pt(i * angleStep, r + 24);
+        const lineEnd = pt(i * angleStep, r);
+        return (
+          <g key={i}>
+            <line x1={cx} y1={cy} x2={lineEnd.x} y2={lineEnd.y} stroke="#E5E7EB" strokeWidth={1} strokeDasharray="3,3" />
+            <text x={label.x} y={label.y} textAnchor="middle" dominantBaseline="middle" fill="#6B7280" fontSize={11} fontWeight={600} fontFamily="'Segoe UI', Roboto, Arial, sans-serif">
+              {m}
+            </text>
+          </g>
+        );
+      })}
+      {models.map((model, mi) => (
+        <g key={mi} onMouseEnter={() => setHovered(mi)} onMouseLeave={() => setHovered(null)} style={{ cursor: 'pointer' }}>
+          <polygon
+            points={model.values.map((v, vi) => { const p = pt(vi * angleStep, r * v); return `${p.x},${p.y}`; }).join(' ')}
+            fill={colors[mi]}
+            fillOpacity={hovered === mi ? 0.18 : 0.08}
+            stroke={colors[mi]}
+            strokeWidth={hovered === mi ? 3 : 2}
+            strokeLinejoin="round"
+            style={{ transition: 'all .25s' }}
+          />
+          {model.values.map((v, vi) => {
+            const p = pt(vi * angleStep, r * v);
+            return <circle key={vi} cx={p.x} cy={p.y} r={hovered === mi ? 5 : 3.5} fill="#FFFFFF" stroke={colors[mi]} strokeWidth={2} style={{ transition: 'r .2s' }} />;
+          })}
+        </g>
+      ))}
+    </svg>
+  );
+}
 
 
 
@@ -39,44 +133,25 @@ export const benchmarksApi = {
 
 
 
-// src/api/endpoints/evaluations.ts
-import api from '../axiosInstance';
-import type {
-  CreateEvaluationRequest,
-  CreateEvaluationResponse,
-  EvaluationsListResponse,
-  EvaluationResultsResponse,
-} from '../../types';
 
-export const evaluationsApi = {
-  // Populates the History sidebar list. Called on mount and every 10s
-  // (silent poll) — see History.tsx.
-  list: () => api.get<EvaluationsListResponse>('/evaluations').then((r) => r.data.evaluations),
 
-  create: (payload: CreateEvaluationRequest) =>
-    api.post<CreateEvaluationResponse>('/evaluations', payload).then((r) => r.data),
 
-  start: (evaluationId: string) =>
-    api.post<void>(`/evaluations/${evaluationId}/start`).then(() => undefined),
 
-  // Only ever called when the selected evaluation's status === 'completed'.
-  // The backend returns 400 with { detail: "Execution not completed." } if
-  // called too early — callers should surface err.response.data.detail.
-  results: (evaluationId: string) =>
-    api.get<EvaluationResultsResponse>(`/evaluations/${evaluationId}/results`).then((r) => r.data),
+// src\components\common\ScoreRing.module.scss
+@use '../../styles/_variables' as *;
 
-  // Convenience helper used by the wizard's "Start Evaluation" (step 7):
-  // create, then immediately start.
-  createAndStart: async (payload: CreateEvaluationRequest) => {
-    const created = await evaluationsApi.create(payload);
-    const id = created.id || created.evaluation_id;
-    if (!id) {
-      throw new Error('Evaluation was created but no id was returned by the server.');
-    }
-    await evaluationsApi.start(id);
-    return id;
-  },
-};
+.score-ring {
+  position: relative;
+  flex-shrink: 0;
+
+  &__progress { transition: stroke-dashoffset 1.2s cubic-bezier(.16, 1, .3, 1); }
+  &__center {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+  }
+  &__value { font-family: $font-mono; font-weight: 700; color: #111827; line-height: 1; }
+  &__label { font-size: 9px; color: #9CA3AF; font-weight: 600; margin-top: 1px; }
+}
 
 
 
@@ -92,7 +167,142 @@ export const evaluationsApi = {
 
 
 
-// src/components/dashboard/Dashboard.tsx
+//Comparison.tsx
+import { useEffect, useMemo, useState } from 'react';
+import { useAppDispatch, useAppSelector } from '../../hooks/redux';
+import { fetchModels } from '../../store/slices/modelsSlice';
+import { fetchBenchmarks } from '../../store/slices/benchmarksSlice';
+import RadarChart from '../common/RadarChart';
+import ScoreRing from '../common/ScoreRing';
+import styles from './Comparison.module.scss';
+
+const COLORS = ['#6366F1', '#F59E0B', '#10B981'];
+
+export default function Comparison() {
+  const dispatch = useAppDispatch();
+  const models = useAppSelector((s) => s.models.items);
+  const benchmarks = useAppSelector((s) => s.benchmarks.items);
+
+  // Explicit user selections; null/empty means "no override yet", in which
+  // case the memoized defaults below take over. This avoids writing state
+  // from inside an effect just to seed a default.
+  const [selSuiteOverride, setSelSuiteOverride] = useState<string | null>(null);
+  // No model-picker UI yet — reserved for when users can swap which models
+  // are compared; falls back to the first three models in the catalog.
+  const [selModelIdsOverride] = useState<string[] | null>(null);
+
+  useEffect(() => {
+    dispatch(fetchModels());
+    dispatch(fetchBenchmarks());
+  }, [dispatch]);
+
+  const selSuite = selSuiteOverride ?? benchmarks[0]?.name ?? '';
+  const defaultModelIds = useMemo(() => models.slice(0, 3).map((m) => m.id), [models]);
+  const selModelIds = selModelIdsOverride ?? defaultModelIds;
+
+  const comp = selModelIds
+    .map((id) => models.find((m) => m.id === id))
+    .filter((m): m is NonNullable<typeof m> => Boolean(m))
+    .map((m) => ({
+      name: m.name,
+      accuracy: m.accuracy_score ?? 0,
+      speed: m.input_price ?? 0,
+      cost: m.output_price ?? 0,
+      ctx: m.context_window,
+      values: [
+        (m.accuracy_score || 0) / 100,
+        0.75,
+        m.input_price ? Math.max(0, 1 - m.input_price / 10) : 0.5,
+        Math.min(1, m.context_window / 200000),
+        (m.agent_score || m.accuracy_score || 0) / 100,
+      ],
+    }));
+
+  const mets = [
+    { k: 'accuracy' as const, l: 'Accuracy' },
+    { k: 'ctx' as const, l: 'Context Window' },
+    { k: 'speed' as const, l: 'Input Price' },
+    { k: 'cost' as const, l: 'Output Price' },
+  ];
+
+  return (
+    <div className="page-enter">
+      <div className="pg-hdr"><h1>Model Comparison</h1><p>Side-by-side performance across a shared benchmark</p></div>
+      <div className="pg-body">
+        <div className={styles['comparison__controls']}>
+          <span className={styles['comparison__label']}>Test Suite:</span>
+          <select className={`fi ${styles['comparison__select']}`} value={selSuite} onChange={(e) => setSelSuiteOverride(e.target.value)}>
+            {benchmarks.map((b) => <option key={b.name} value={b.name}>{b.name}</option>)}
+          </select>
+          <span className={styles['comparison__label']}>Comparing:</span>
+          {comp.map((m, i) => (
+            <span key={m.name} className={styles['model-chip']} style={{ borderColor: COLORS[i], color: COLORS[i], background: `${COLORS[i]}14` }}>
+              <span className={styles['model-chip__dot']} style={{ background: COLORS[i] }} /> {m.name}
+            </span>
+          ))}
+        </div>
+
+        <div className={styles['comparison__grid']}>
+          <div className="card">
+            <div className={styles['comparison__panel-title']}>Strength Profile</div>
+            <div className={styles['comparison__panel-sub']}>Multi-dimensional performance comparison</div>
+            <div className="radar-wrap"><RadarChart models={comp} size={280} colors={COLORS} /></div>
+            <div className={styles['comparison__legend']}>
+              {comp.map((m, i) => <span key={i}><span className={styles['comparison__dot']} style={{ background: COLORS[i] }} /> {m.name}</span>)}
+            </div>
+          </div>
+
+          <div className="card" style={{ padding: 0 }}>
+            <div className={styles['comparison__panel-title']} style={{ padding: '20px 24px', borderBottom: '1px solid #F3F4F6' }}>Metric Breakdown</div>
+            <table className="tbl">
+              <thead><tr><th>Metric</th>{comp.map((m, i) => <th key={i} style={{ color: COLORS[i] }}>{m.name}</th>)}</tr></thead>
+              <tbody>
+                {mets.map((met) => (
+                  <tr key={met.k}>
+                    <td style={{ fontWeight: 700, fontSize: 13 }}>{met.l}</td>
+                    {comp.map((m, i) => <td key={i} style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontWeight: 700 }}>{m[met.k]}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className={styles['comparison__panel-title']} style={{ marginBottom: 20 }}>Score Comparison</div>
+          <div className={styles['comparison__scores']}>
+            {comp.map((m, i) => (
+              <div key={i} className={styles['comparison__score-item']}>
+                <ScoreRing score={Math.round(m.accuracy)} size={100} stroke={7} color={COLORS[i]} label="ACCURACY" />
+                <div style={{ fontWeight: 700, fontSize: 14, textAlign: 'center' }}>{m.name}</div>
+                <div style={{ fontSize: 12, color: '#6B7280' }}>{m.ctx.toLocaleString()} ctx</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Dashboard.tsx
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Loader2, TrendingUp, Play, Plus, GitCompare, BookOpen, ChevronRight } from 'lucide-react';
@@ -191,7 +401,7 @@ export default function Dashboard() {
           </div>
 
           <div className="card">
-            <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Top Models</div>
+            <div style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Top Models</div>
             <div style={{ fontSize: 13, color: '#6B7280', marginBottom: 12 }}>Strength comparison across 5 dimensions</div>
             {radarModels.length > 0 ? (
               <>
@@ -209,7 +419,7 @@ export default function Dashboard() {
         </div>
 
         <div className="card" style={{ padding: 24 }}>
-          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, fontSize: 15, marginBottom: 20 }}>Quick Actions</div>
+          <div style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontWeight: 700, fontSize: 15, marginBottom: 20 }}>Quick Actions</div>
           <div className={styles['dash__actions']}>
             {[
               { icon: <Play size={20} />, label: 'New Evaluation', desc: 'Start a benchmark run', to: '/app/run-evaluation', cls: 'ind' },
@@ -242,67 +452,12 @@ export default function Dashboard() {
 
 
 
-// src/datasets/Datasets.module.scss
-@use '../../styles/_variables' as *;
-
-.header { padding: 32px 40px 0; }
-.header__eyebrow { font-size: 12px; font-weight: 700; color: $indigo; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 6px; }
-.header__title { font-size: 28px; font-weight: 700; letter-spacing: -.5px; }
-.header__subtitle { color: $text-secondary; font-size: 14px; margin-top: 6px; max-width: 560px; }
-.header__row { display: flex; align-items: center; gap: 14px; margin-top: 16px; padding-bottom: 20px; }
-.header__count { font-size: 13px; font-weight: 700; color: $text-secondary; }
-
-.state {
-  display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 64px 24px;
-  color: $text-secondary; background: $surface; border: 1px solid $border; border-radius: 16px; text-align: center;
-}
-
-.statRow {
-  display: flex; gap: 14px; font-size: 12px; color: $text-secondary; font-weight: 600;
-  padding: 10px 0; border-top: 1px solid $border-light; border-bottom: 1px solid $border-light; margin-bottom: 10px;
-}
-.pillRow { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
-.pill { padding: 3px 10px; border-radius: 100px; font-size: 11px; font-weight: 700; }
-
-.sourceLink { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: $indigo; font-weight: 600; text-decoration: none; }
-.sourceLink:hover { text-decoration: underline; }
-
-.modalOverlay {
-  position: fixed; inset: 0; background: rgba(17,24,39,.45); z-index: 200;
-  display: flex; align-items: center; justify-content: center; padding: 24px;
-}
-.modal {
-  width: 100%; max-width: 480px; max-height: 70vh; background: $surface; border-radius: 18px;
-  box-shadow: $shadow-4; display: flex; flex-direction: column; overflow: hidden;
-}
-.modal__hdr {
-  padding: 16px 20px; border-bottom: 1px solid $border-light; display: flex; justify-content: space-between; align-items: center;
-  font-weight: 700; font-size: 14px;
-}
-.modal__body { padding: 8px 12px; overflow-y: auto; }
-.modal__row {
-  display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; font-size: 13px;
-  border-bottom: 1px solid $border-light;
-  code { font-family: $font-mono; font-size: 11px; color: $text-muted; }
-}
-.modal__row:last-child { border-bottom: none; }
 
 
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-// src/components/datasets/Datasets.tsx
+//Datasets.tsx
 import { useEffect, useMemo, useState } from 'react';
 import { RefreshCw, Search, ExternalLink, Layers, AlertTriangle } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
@@ -388,7 +543,7 @@ export default function Datasets() {
                     <div style={{ marginTop: 6 }}><span className="tag tag-amb">{b.type}</span></div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 24, fontWeight: 700 }}>{b.task_count.toLocaleString()}</div>
+                    <div style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontSize: 24, fontWeight: 700 }}>{b.task_count.toLocaleString()}</div>
                     <div style={{ fontSize: 11, color: '#9CA3AF', fontWeight: 600 }}>tasks</div>
                   </div>
                 </div>
@@ -462,767 +617,7 @@ export default function Datasets() {
 
 
 
-// src/components/evaluations/NewEvaluation.module.scss
-@use '../../styles/_variables' as *;
-
-.layout {
-  display: grid;
-  grid-template-columns: 240px 1fr;
-  gap: 20px;
-  align-items: start;
-}
-
-// ---------- Vertical stepper sidebar ----------
-.stepper {
-  background: $surface;
-  border: 1px solid $border;
-  border-radius: 20px;
-  padding: 20px;
-  position: sticky;
-  top: 24px;
-
-  &__progress-label { font-size: 12px; font-weight: 700; color: $text-secondary; margin-bottom: 8px; }
-  &__progress-track { height: 6px; background: $surface-alt; border-radius: 3px; overflow: hidden; margin-bottom: 20px; }
-  &__progress-fill { height: 100%; background: $grad-primary; border-radius: 3px; transition: width .4s cubic-bezier(.16,1,.3,1); }
-  &__list { list-style: none; }
-  &__item { position: relative; }
-  &__node {
-    display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 6px;
-    background: none; border: none; cursor: pointer; text-align: left; border-radius: 10px; transition: background .15s;
-  }
-  &__node:disabled { cursor: not-allowed; opacity: .5; }
-  &__node:not(:disabled):hover { background: $surface-alt; }
-  &__icon {
-    width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0;
-    display: flex; align-items: center; justify-content: center;
-    background: $surface-alt; color: $text-muted; border: 2px solid $border; transition: all .2s;
-  }
-  &__node.current &__icon { background: $grad-primary; color: #fff; border-color: transparent; box-shadow: 0 0 0 4px rgba(99,102,241,.15); }
-  &__node.done &__icon { background: $indigo; color: #fff; border-color: transparent; }
-  &__label { font-size: 13px; font-weight: 600; color: $text-secondary; }
-  &__node.current &__label { color: $indigo; font-weight: 700; }
-  &__node.done &__label { color: $text-primary; }
-  &__line { width: 2px; height: 14px; background: $border; margin-left: 19px; border-radius: 1px; }
-  &__line.done { background: $indigo; }
-}
-
-// ---------- Wizard shell ----------
-.wiz {
-  background: $surface; border: 1px solid $border; border-radius: 20px; overflow: hidden; box-shadow: $shadow-2;
-  display: flex; flex-direction: column; min-height: 560px;
-}
-.wiz-body { padding: 32px; flex: 1; overflow-y: auto; }
-.wiz-body h2 { font-size: 22px; font-weight: 700; margin-bottom: 8px; letter-spacing: -.4px; }
-.sub { font-size: 14px; color: $text-secondary; margin-bottom: 22px; line-height: 1.5; }
-.wiz-foot { display: flex; justify-content: space-between; padding: 18px 32px; border-top: 1px solid $border; background: $surface-alt; }
-.wiz-launch { background: $emerald; box-shadow: 0 4px 14px rgba(16,185,129,.3); }
-.wiz-empty { padding: 40px; text-align: center; color: $text-secondary; background: $surface-alt; border-radius: 14px; grid-column: 1 / -1; }
-.wiz-empty-sm { padding: 12px; text-align: center; color: $text-muted; font-size: 12px; }
-.wiz-error { margin-top: 16px; padding: 12px 16px; background: $red-pale; color: $red; border-radius: 10px; font-size: 13px; font-weight: 600; }
-.inline-link { color: $indigo; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
-
-// ---------- Step 1: Name ----------
-.name-suggestions { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0 24px; }
-.name-chip {
-  display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 100px;
-  border: 1px solid $border; background: $surface; color: $text-secondary; font-size: 12px; font-weight: 600; cursor: pointer;
-}
-.name-chip:hover { border-color: $indigo; color: $indigo; background: $indigo-pale; }
-.name-tips { background: $surface-alt; border-radius: 14px; padding: 18px 20px; }
-.name-tips__title { font-weight: 700; font-size: 13px; margin-bottom: 10px; }
-.name-tips__list { padding-left: 18px; font-size: 13px; color: $text-secondary; line-height: 1.9; }
-
-// ---------- Step 4: Models (independently scrolling filter + grid) ----------
-.models-layout { display: grid; grid-template-columns: 200px 1fr; gap: 20px; align-items: start; }
-.models-filters {
-  border: 1px solid $border; border-radius: 14px; padding: 14px; max-height: 420px; overflow-y: auto; position: sticky; top: 0;
-}
-.models-filters__title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: $text-muted; margin-bottom: 10px; }
-.models-filters__row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 6px 0; cursor: pointer; }
-.models-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(240px,1fr)); gap: 10px; max-height: 420px; overflow-y: auto; align-content: start; }
-
-// ---------- Step 5: Test Suite ----------
-.suite-tabs { display: flex; gap: 8px; margin-bottom: 18px; }
-.suite-tab {
-  display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border-radius: 10px;
-  border: 1px solid $border; background: $surface; color: $text-secondary; font-weight: 600; font-size: 13px; cursor: pointer;
-}
-.suite-tab.on { background: $indigo-pale; border-color: $indigo; color: $indigo; }
-.upload-placeholder {
-  display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 60px 20px; text-align: center;
-  color: $text-secondary; background: $surface-alt; border: 2px dashed $border; border-radius: 16px; font-size: 13px;
-}
-.suite-layout { display: block; }
-.suite-layout--split { display: grid; grid-template-columns: 1fr 400px; gap: 20px; align-items: start; }
-.suite-grid {
-  display: grid; grid-template-columns: repeat(auto-fill,minmax(260px,1fr)); gap: 10px;
-  max-height: 480px; overflow-y: auto; align-content: start;
-}
-.subgroup-panel {
-  width: 400px; border: 1px solid $border; border-radius: 14px; overflow: hidden; position: sticky; top: 0;
-  display: flex; flex-direction: column; max-height: 480px;
-}
-.subgroup-panel__hdr {
-  padding: 14px 16px; background: $surface-alt; border-bottom: 1px solid $border; font-weight: 700; font-size: 13px;
-  display: flex; justify-content: space-between; align-items: center;
-  span { font-weight: 600; font-size: 12px; color: $text-secondary; }
-}
-.subgroup-panel__list { flex: 1; overflow-y: auto; padding: 8px 4px; }
-.subgroup-panel__row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 8px 12px; cursor: pointer; }
-.subgroup-panel__row:hover { background: $surface-alt; }
-
-// ---------- Step 6: Metrics (two independently-scrolling columns) ----------
-.metrics-layout { display: grid; grid-template-columns: 1fr 320px; gap: 20px; align-items: start; }
-.metrics-col { border: 1px solid $border; border-radius: 14px; overflow: hidden; display: flex; flex-direction: column; max-height: 480px; }
-.metrics-col__hdr {
-  padding: 14px 16px; background: $surface-alt; border-bottom: 1px solid $border; font-weight: 700; font-size: 13px;
-  display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;
-}
-.metrics-col__subhdr { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: $text-muted; margin: 16px 0 10px; }
-.metrics-col__body { padding: 14px 16px; overflow-y: auto; flex: 1; }
-.judge-note { font-size: 12px; color: $text-secondary; padding: 0 16px; margin-top: 10px; line-height: 1.5; }
-.judge-list { display: flex; flex-direction: column; gap: 2px; }
-.judge-row { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
-.judge-row:hover { background: $surface-alt; }
-
-// ---------- Step 7: Review ----------
-.review-stats { display: grid; grid-template-columns: repeat(4,1fr); gap: 14px; margin-bottom: 24px; }
-.review-stat { padding: 18px; background: $indigo-pale; border-radius: 14px; border: 1px solid rgba(99,102,241,.12); }
-.review-stat__label { font-size: 11px; color: $text-secondary; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
-.review-stat__val { font-family: $font-mono; font-size: 22px; font-weight: 700; margin-top: 4px; }
-.review-section { padding: 16px 0; border-bottom: 1px solid $border-light; }
-.review-section:last-child { border-bottom: none; }
-.review-section__title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: $text-muted; margin-bottom: 10px; }
-.review-section__row { display: flex; justify-content: space-between; font-size: 13px; padding: 5px 0; color: $text-secondary; }
-.review-section__row strong { color: $text-primary; font-weight: 600; }
-
-.toast__icon { width: 36px; height: 36px; border-radius: 10px; background: $emerald-pale; display: flex; align-items: center; justify-content: center; }
-
-@media (max-width: 900px) {
-  .layout { grid-template-columns: 1fr; }
-  .stepper { position: static; }
-  .stepper__list { display: flex; overflow-x: auto; gap: 12px; }
-  .stepper__line { display: none; }
-  .models-layout, .suite-layout--split, .metrics-layout { grid-template-columns: 1fr; }
-  .subgroup-panel { width: 100%; }
-  .review-stats { grid-template-columns: repeat(2,1fr); }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// src/components/evaluations/NewEvaluation.tsx
-import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import {
-  ChevronLeft, ChevronRight, Check, Cpu, Bot, Database, Play,
-  FileText, ListChecks, Layers, Users, Gauge, ClipboardList, ExternalLink, Upload, Sparkles,
-} from 'lucide-react';
-import { useAppDispatch, useAppSelector } from '../../hooks/redux';
-import { fetchProviders } from '../../store/slices/providersSlice';
-import { fetchModels } from '../../store/slices/modelsSlice';
-import { fetchBenchmarks } from '../../store/slices/benchmarksSlice';
-import { fetchMetrics } from '../../store/slices/metricsSlice';
-import { launchEvaluation, setDraft, setDraftType } from '../../store/slices/evaluationsSlice';
-import type { CreateEvaluationRequest, EvaluationDraft } from '../../types';
-import styles from './NewEvaluation.module.scss';
-
-const STEPS: { key: keyof typeof STEP_ICONS; label: string }[] = [
-  { key: 'name', label: 'Name' },
-  { key: 'type', label: 'Type' },
-  { key: 'providers', label: 'Providers' },
-  { key: 'models', label: 'Models' },
-  { key: 'suite', label: 'Test Suite' },
-  { key: 'metrics', label: 'Metrics' },
-  { key: 'review', label: 'Review' },
-];
-
-const STEP_ICONS = {
-  name: FileText,
-  type: Layers,
-  providers: Users,
-  models: Cpu,
-  suite: Database,
-  metrics: Gauge,
-  review: ClipboardList,
-};
-
-const NAME_SUGGESTIONS = ['Q3 Model Selection', 'Weekly Regression Check', 'Agent Framework Bake-off', 'RAG Pipeline Benchmark'];
-
-export default function NewEvaluation() {
-  const dispatch = useAppDispatch();
-  const navigate = useNavigate();
-  const [step, setStep] = useState(0);
-  const [toast, setToast] = useState(false);
-  const [suiteTab, setSuiteTab] = useState<'benchmarks' | 'upload'>('benchmarks');
-  const [suiteCategory, setSuiteCategory] = useState('All');
-
-  const draft = useAppSelector((s) => s.evaluations.draft);
-  const launching = useAppSelector((s) => s.evaluations.launching);
-  const launchError = useAppSelector((s) => s.evaluations.launchError);
-
-  const providers = useAppSelector((s) => s.providers.items);
-  const models = useAppSelector((s) => s.models.items);
-  const benchmarks = useAppSelector((s) => s.benchmarks.items);
-  const metrics = useAppSelector((s) => s.metrics);
-
-  useEffect(() => {
-    dispatch(fetchProviders());
-    dispatch(fetchModels());
-    dispatch(fetchBenchmarks());
-    dispatch(fetchMetrics());
-  }, [dispatch]);
-
-  const connectedProviders = providers.filter((p) => p.status === 'connected');
-  const availableModels = useMemo(
-    () => models.filter((m) => draft.providers.includes(m.provider_id) && m.is_active),
-    [models, draft.providers]
-  );
-  const modelCapabilities = useMemo(
-    () => [...new Set(availableModels.flatMap((m) => m.capabilities))],
-    [availableModels]
-  );
-  const [capFilter, setCapFilter] = useState<string[]>([]);
-  const filteredModels = capFilter.length
-    ? availableModels.filter((m) => capFilter.some((c) => m.capabilities.includes(c)))
-    : availableModels;
-
-  const activeMetricsList = draft.type === 'agent' ? metrics.allMetrics : metrics.allMetrics;
-  const showCustomAgentMetrics = draft.type === 'agent' && metrics.customAgentMetrics.length > 0;
-
-  const suiteCategories = useMemo(() => ['All', ...new Set(benchmarks.map((b) => b.type))], [benchmarks]);
-  const filteredBenchmarks = suiteCategory === 'All' ? benchmarks : benchmarks.filter((b) => b.type === suiteCategory);
-  const selectedBenchmark = benchmarks.find((b) => b.name === draft.dataset);
-
-  const toggle = <T,>(list: T[], value: T): T[] => (list.includes(value) ? list.filter((v) => v !== value) : [...list, value]);
-
-  const canGo = () => {
-    if (step === 0) return draft.name.trim().length > 0;
-    if (step === 1) return draft.type !== null;
-    if (step === 2) return draft.providers.length > 0;
-    if (step === 3) return draft.models.length > 0;
-    if (step === 4) return Boolean(draft.dataset);
-    if (step === 5) return draft.metrics.length > 0;
-    return true;
-  };
-
-  const launch = async () => {
-    const benchmark = benchmarks.find((b) => b.name === draft.dataset);
-    const judgeModel = draft.judgeModelId ? models.find((m) => m.id === draft.judgeModelId) : undefined;
-    const payload: CreateEvaluationRequest = {
-      name: draft.name,
-      eval_type: draft.type ?? 'model',
-      dataset_id: benchmark?.huggingface_dataset || '',
-      benchmark: draft.dataset || undefined,
-      model_ids: draft.models,
-      selected_metrics: draft.metrics,
-      run_samples: draft.runSamples,
-      selected_category: draft.subgroup.length ? draft.subgroup : undefined,
-      // Per spec §1.4: no real API key is collected for the judge model —
-      // the judge model's own id is sent in the api_key slot instead.
-      ...(judgeModel
-        ? { judge_config: { model_id: judgeModel.id, base_url: judgeModel.base_url || '', api_key: judgeModel.id } }
-        : {}),
-    };
-
-    const result = await dispatch(launchEvaluation(payload));
-    if (launchEvaluation.fulfilled.match(result)) {
-      setToast(true);
-      setTimeout(() => {
-        setToast(false);
-        navigate('/app/history');
-      }, 1600);
-    }
-  };
-
-  const setD = (partial: Partial<EvaluationDraft>) => dispatch(setDraft(partial));
-
-  return (
-    <div className="page-enter">
-      <div className="pg-hdr"><h1>New Evaluation</h1><p>Set up and launch a structured model evaluation</p></div>
-      <div className="pg-body">
-        <div className={styles.layout}>
-          {/* ---------- Vertical stepper sidebar ---------- */}
-          <aside className={styles.stepper}>
-            <div className={styles['stepper__progress-label']}>
-              Step {step + 1} of {STEPS.length} &middot; {Math.round(((step + 1) / STEPS.length) * 100)}%
-            </div>
-            <div className={styles['stepper__progress-track']}>
-              <div className={styles['stepper__progress-fill']} style={{ width: `${((step + 1) / STEPS.length) * 100}%` }} />
-            </div>
-            <ol className={styles['stepper__list']}>
-              {STEPS.map((s, i) => {
-                const Icon = STEP_ICONS[s.key];
-                const done = i < step;
-                const current = i === step;
-                const clickable = i <= step;
-                return (
-                  <li key={s.key} className={styles['stepper__item']}>
-                    <button
-                      className={`${styles['stepper__node']} ${done ? styles.done : ''} ${current ? styles.current : ''}`}
-                      disabled={!clickable}
-                      onClick={() => clickable && setStep(i)}
-                    >
-                      <span className={styles['stepper__icon']}>{done ? <Check size={14} /> : <Icon size={14} />}</span>
-                      <span className={styles['stepper__label']}>{s.label}</span>
-                    </button>
-                    {i < STEPS.length - 1 && <div className={`${styles['stepper__line']} ${done ? styles.done : ''}`} />}
-                  </li>
-                );
-              })}
-            </ol>
-          </aside>
-
-          {/* ---------- Step content ---------- */}
-          <div className={styles.wiz}>
-            <div className={styles['wiz-body']}>
-              {step === 0 && (
-                <>
-                  <h2>Name your evaluation</h2>
-                  <p className={styles.sub}>Give it a recognizable name — you can always rename it later.</p>
-                  <div className="fg">
-                    <label className="fl">Evaluation Name</label>
-                    <input className="fi" placeholder="e.g. Q3 Model Selection" value={draft.name} onChange={(e) => setD({ name: e.target.value })} />
-                  </div>
-                  <div className={styles['name-suggestions']}>
-                    {NAME_SUGGESTIONS.map((s) => (
-                      <button key={s} className={styles['name-chip']} onClick={() => setD({ name: s })}><Sparkles size={12} /> {s}</button>
-                    ))}
-                  </div>
-                  <div className={styles['name-tips']}>
-                    <div className={styles['name-tips__title']}>What's next</div>
-                    <ul className={styles['name-tips__list']}>
-                      <li>Choose what you're evaluating — a model, an agent, or a RAG pipeline</li>
-                      <li>Pick providers and models to compare</li>
-                      <li>Select a benchmark and how many questions to sample</li>
-                      <li>Choose metrics and an optional judge model</li>
-                      <li>Review the cost/time estimate and launch</li>
-                    </ul>
-                  </div>
-                </>
-              )}
-
-              {step === 1 && (
-                <>
-                  <h2>What are you evaluating?</h2>
-                  <p className={styles.sub}>This determines which metrics and judge options are available later.</p>
-                  <div className="sel-grid">
-                    {[
-                      { v: 'model' as const, i: <Cpu size={18} />, s: 'General-purpose chat or text model' },
-                      { v: 'agent' as const, i: <Bot size={18} />, s: 'Autonomous agent with tool use' },
-                      { v: 'rag' as const, i: <Database size={18} />, s: 'Retrieval-augmented generation pipeline' },
-                    ].map((o) => (
-                      <div key={o.v} className={`sel-opt ${draft.type === o.v ? 'on' : ''}`} onClick={() => dispatch(setDraftType(o.v))}>
-                        <div className="sel-chk">{draft.type === o.v && <Check size={13} />}</div>
-                        <div><div className="sel-txt" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>{o.i} {o.v === 'model' ? 'General Chat/Text' : o.v === 'agent' ? 'Agent' : 'RAG'}</div><div className="sel-sub">{o.s}</div></div>
-                      </div>
-                    ))}
-                  </div>
-                  {draft.type === 'agent' && (
-                    <div className="fg" style={{ marginTop: 20 }}>
-                      <label className="fl">Agent Framework <span className="opt">(optional)</span></label>
-                      <select className="fi" value={draft.agentFramework || ''} onChange={(e) => setD({ agentFramework: e.target.value || null })}>
-                        <option value="">None</option>
-                        <option value="hermes">Hermes</option>
-                        <option value="langgraph">LangGraph</option>
-                      </select>
-                    </div>
-                  )}
-                </>
-              )}
-
-              {step === 2 && (
-                <>
-                  <h2>Select providers</h2>
-                  <p className={styles.sub}>
-                    Choose which connected providers to draw models from.{' '}
-                    <a className={styles['inline-link']} onClick={() => navigate('/app/providers')}>Connect more providers <ExternalLink size={12} /></a>
-                  </p>
-                  <div className="sel-grid">
-                    {connectedProviders.map((p) => (
-                      <div key={p.id} className={`sel-opt ${draft.providers.includes(p.id) ? 'on' : ''}`} onClick={() => setD({ providers: toggle(draft.providers, p.id) })}>
-                        <div className="sel-chk">{draft.providers.includes(p.id) && <Check size={13} />}</div>
-                        <div><div className="sel-txt">{p.name}</div><div className="sel-sub">{p.model_count} models available</div></div>
-                      </div>
-                    ))}
-                    {connectedProviders.length === 0 && <div className={styles['wiz-empty']}>No connected providers yet — connect one to continue.</div>}
-                  </div>
-                </>
-              )}
-
-              {step === 3 && (
-                <>
-                  <h2>Choose models</h2>
-                  <p className={styles.sub}>Pick which models to include in this evaluation.</p>
-                  <div className={styles['models-layout']}>
-                    <div className={styles['models-filters']}>
-                      <div className={styles['models-filters__title']}>Capabilities</div>
-                      {modelCapabilities.length === 0 && <div className={styles['wiz-empty-sm']}>No models yet</div>}
-                      {modelCapabilities.map((c) => (
-                        <label key={c} className={styles['models-filters__row']}>
-                          <input type="checkbox" checked={capFilter.includes(c)} onChange={() => setCapFilter((prev) => toggle(prev, c))} />
-                          {c}
-                        </label>
-                      ))}
-                    </div>
-                    <div className={styles['models-grid']}>
-                      {filteredModels.map((m) => (
-                        <div key={m.id} className={`sel-opt ${draft.models.includes(m.id) ? 'on' : ''}`} onClick={() => setD({ models: toggle(draft.models, m.id) })}>
-                          <div className="sel-chk">{draft.models.includes(m.id) && <Check size={13} />}</div>
-                          <div><div className="sel-txt">{m.name}</div><div className="sel-sub">{m.context_window.toLocaleString()} ctx &middot; {m.capabilities.join(', ')}</div></div>
-                        </div>
-                      ))}
-                      {filteredModels.length === 0 && <div className={styles['wiz-empty']}>Select providers first, or adjust the capability filter.</div>}
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {step === 4 && (
-                <>
-                  <h2>Test suite</h2>
-                  <div className="fg" style={{ maxWidth: 220 }}>
-                    <label className="fl">Run Samples <span className="opt">(per model)</span></label>
-                    <input
-                      className="fi" type="number" min={0} value={draft.runSamples}
-                      onChange={(e) => setD({ runSamples: Math.max(0, Number(e.target.value) || 0) })}
-                    />
-                  </div>
-                  <div className={styles['suite-tabs']}>
-                    <button className={`${styles['suite-tab']} ${suiteTab === 'benchmarks' ? styles.on : ''}`} onClick={() => setSuiteTab('benchmarks')}><ListChecks size={14} /> Benchmarks</button>
-                    <button className={`${styles['suite-tab']} ${suiteTab === 'upload' ? styles.on : ''}`} onClick={() => setSuiteTab('upload')}><Upload size={14} /> Upload</button>
-                  </div>
-
-                  {suiteTab === 'upload' ? (
-                    <div className={styles['upload-placeholder']}>
-                      <Upload size={22} />
-                      <div>Custom dataset upload is coming soon — not yet wired to an endpoint.</div>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="pills" style={{ marginBottom: 14 }}>
-                        {suiteCategories.map((c) => <button key={c} className={`pill ${suiteCategory === c ? 'on' : ''}`} onClick={() => setSuiteCategory(c)}>{c}</button>)}
-                      </div>
-                      <div className={selectedBenchmark && selectedBenchmark.tasks.length > 0 ? styles['suite-layout--split'] : styles['suite-layout']}>
-                        <div className={styles['suite-grid']}>
-                          {filteredBenchmarks.map((b) => (
-                            <div
-                              key={b.name}
-                              className={`sel-opt ${draft.dataset === b.name ? 'on' : ''}`}
-                              onClick={() => setD({ dataset: b.name, subgroup: [] })}
-                              style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 8 }}
-                            >
-                              <div style={{ display: 'flex', width: '100%', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <div className="sel-txt">{b.name}</div><div className="sel-chk">{draft.dataset === b.name && <Check size={13} />}</div>
-                              </div>
-                              <div className="sel-sub">{b.description}</div>
-                              <div><span className="tag tag-amb">{b.type}</span><span style={{ fontSize: 11, color: '#9CA3AF', marginLeft: 8 }}>{b.task_count.toLocaleString()} tasks</span></div>
-                            </div>
-                          ))}
-                        </div>
-                        {selectedBenchmark && selectedBenchmark.tasks.length > 0 && (
-                          <div className={styles['subgroup-panel']}>
-                            <div className={styles['subgroup-panel__hdr']}>
-                              Subgroups <span>{draft.subgroup.length} of {selectedBenchmark.tasks.length} selected</span>
-                            </div>
-                            <div className={styles['subgroup-panel__list']}>
-                              {selectedBenchmark.tasks.map((t) => (
-                                <label key={t.value} className={styles['subgroup-panel__row']}>
-                                  <input type="checkbox" checked={draft.subgroup.includes(t.value)} onChange={() => setD({ subgroup: toggle(draft.subgroup, t.value) })} />
-                                  {t.name}
-                                </label>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </>
-                  )}
-                </>
-              )}
-
-              {step === 5 && (
-                <>
-                  <h2>Configure metrics</h2>
-                  <div className={styles['metrics-layout']}>
-                    <div className={styles['metrics-col']}>
-                      <div className={styles['metrics-col__hdr']}>
-                        <span>All Metrics</span>
-                        <div style={{ display: 'flex', gap: 6 }}>
-                          <button className="btn btn-sm btn-ghost" onClick={() => setD({ metrics: [...activeMetricsList, ...(showCustomAgentMetrics ? metrics.customAgentMetrics : [])] })}>Select all</button>
-                          <button className="btn btn-sm btn-ghost" onClick={() => setD({ metrics: [] })}>Unselect all</button>
-                        </div>
-                      </div>
-                      <div className={styles['metrics-col__body']}>
-                        <div className="sel-grid" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(160px,1fr))' }}>
-                          {activeMetricsList.map((m) => (
-                            <div key={m} className={`sel-opt ${draft.metrics.includes(m) ? 'on' : ''}`} onClick={() => setD({ metrics: toggle(draft.metrics, m) })}>
-                              <div className="sel-chk">{draft.metrics.includes(m) && <Check size={13} />}</div><div className="sel-txt">{m}</div>
-                            </div>
-                          ))}
-                        </div>
-                        {showCustomAgentMetrics && (
-                          <>
-                            <div className={styles['metrics-col__subhdr']}>Custom Agent Metrics</div>
-                            <div className="sel-grid" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(160px,1fr))' }}>
-                              {metrics.customAgentMetrics.map((m) => (
-                                <div key={m} className={`sel-opt ${draft.metrics.includes(m) ? 'on' : ''}`} onClick={() => setD({ metrics: toggle(draft.metrics, m) })}>
-                                  <div className="sel-chk">{draft.metrics.includes(m) && <Check size={13} />}</div><div className="sel-txt">{m}</div>
-                                </div>
-                              ))}
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className={styles['metrics-col']}>
-                      <div className={styles['metrics-col__hdr']}><span>Judge Model</span></div>
-                      <p className={styles['judge-note']}>Shows every model in the catalog — judge eligibility is independent of the models selected in Step 4. No API key required.</p>
-                      <div className={styles['metrics-col__body']}>
-                        <div className={styles['judge-list']}>
-                          <label className={styles['judge-row']}>
-                            <input type="radio" name="judge" checked={draft.judgeModelId === null} onChange={() => setD({ judgeModelId: null })} />
-                            None
-                          </label>
-                          {models.map((m) => (
-                            <label key={m.id} className={styles['judge-row']}>
-                              <input type="radio" name="judge" checked={draft.judgeModelId === m.id} onChange={() => setD({ judgeModelId: m.id })} />
-                              {m.name}
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {step === 6 && (() => {
-                const suite = benchmarks.find((b) => b.name === draft.dataset);
-                const judgeModel = draft.judgeModelId ? models.find((m) => m.id === draft.judgeModelId) : null;
-                const modelChips = draft.models.map((id) => {
-                  const m = models.find((mm) => mm.id === id);
-                  const p = providers.find((pp) => pp.id === m?.provider_id);
-                  return { id, label: m ? `${m.name} (${p?.name || m.provider_id})` : id };
-                });
-                const totalQuestions = draft.runSamples * Math.max(draft.models.length, 1);
-                const estCost = (draft.models.length * draft.runSamples * 0.004).toFixed(2);
-                const estMinutes = Math.max(1, Math.round((draft.runSamples * draft.models.length) / 12));
-                return (
-                  <>
-                    <h2>Review & Launch</h2>
-                    <p className={styles.sub}>Confirm your evaluation setup.</p>
-
-                    <div className={styles['review-stats']}>
-                      {[{ l: 'Est. Cost', v: `$${estCost}` }, { l: 'Est. Time', v: `~${estMinutes} min` }, { l: 'Questions', v: totalQuestions.toLocaleString() }, { l: 'Models', v: String(draft.models.length) }].map((d, i) => (
-                        <div key={i} className={styles['review-stat']}><div className={styles['review-stat__label']}>{d.l}</div><div className={styles['review-stat__val']}>{d.v}</div></div>
-                      ))}
-                    </div>
-
-                    <div className={styles['review-section']}>
-                      <div className={styles['review-section__title']}>Overview</div>
-                      <div className={styles['review-section__row']}><span>Name</span><strong>{draft.name}</strong></div>
-                      <div className={styles['review-section__row']}><span>Type</span><strong>{draft.type}</strong></div>
-                      {draft.agentFramework && <div className={styles['review-section__row']}><span>Agent Framework</span><strong>{draft.agentFramework}</strong></div>}
-                    </div>
-
-                    <div className={styles['review-section']}>
-                      <div className={styles['review-section__title']}>Models</div>
-                      <div>{modelChips.map((c) => <span key={c.id} className="tag tag-ind">{c.label}</span>)}</div>
-                    </div>
-
-                    <div className={styles['review-section']}>
-                      <div className={styles['review-section__title']}>Test Suite</div>
-                      <div className={styles['review-section__row']}><span>Name</span><strong>{suite?.name || '—'}</strong></div>
-                      <div className={styles['review-section__row']}><span>Source</span><strong>{suite?.huggingface_dataset || '—'}</strong></div>
-                      <div className={styles['review-section__row']}><span>Run Samples</span><strong>{draft.runSamples}</strong></div>
-                      {draft.subgroup.length > 0 && <div className={styles['review-section__row']}><span>Subgroups</span><strong>{draft.subgroup.length} selected</strong></div>}
-                      <div>{(suite?.required_capabilities ?? []).map((c) => <span key={c} className="tag tag-em">{c}</span>)}</div>
-                    </div>
-
-                    <div className={styles['review-section']}>
-                      <div className={styles['review-section__title']}>Metrics ({draft.metrics.length})</div>
-                      <div>{draft.metrics.map((m) => <span key={m} className="tag tag-amb">{m}</span>)}</div>
-                    </div>
-
-                    <div className={styles['review-section']}>
-                      <div className={styles['review-section__title']}>Judge Model</div>
-                      <div className={styles['review-section__row']}><span>Model</span><strong>{judgeModel?.name || 'None'}</strong></div>
-                    </div>
-
-                    {launchError && <div className={styles['wiz-error']}>{launchError}</div>}
-                  </>
-                );
-              })()}
-            </div>
-
-            <div className={styles['wiz-foot']}>
-              <button className="btn btn-ghost" onClick={() => (step > 0 ? setStep(step - 1) : navigate('/app/dashboard'))}>
-                <ChevronLeft size={16} /> {step === 0 ? 'Cancel' : 'Back'}
-              </button>
-              {step < STEPS.length - 1 ? (
-                <button className="btn btn-ind" onClick={() => setStep(step + 1)} disabled={!canGo()}>Continue <ChevronRight size={16} /></button>
-              ) : (
-                <button className={`btn btn-ind ${styles['wiz-launch']}`} onClick={launch} disabled={launching}>
-                  <Play size={16} /> {launching ? 'Launching…' : 'Start Evaluation'}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {toast && (
-        <div className="toast">
-          <div className={styles['toast__icon']}><Check size={18} color="#10B981" /></div>
-          <div><div style={{ fontWeight: 700, fontSize: 14 }}>Evaluation launched</div><div style={{ fontSize: 12, color: '#6B7280' }}>Redirecting to History…</div></div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// src/components/history/History.module.scss
-@use '../../styles/_variables' as *;
-
-@property --angle {
-  syntax: '<angle>';
-  initial-value: 0deg;
-  inherits: false;
-}
-@keyframes rotate-angle {
-  to { --angle: 360deg; }
-}
-@keyframes live-dot-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: .5; transform: scale(1.3); }
-}
-
-.layout {
-  display: grid;
-  grid-template-columns: 380px 1fr;
-  gap: 20px;
-  align-items: start;
-}
-
-.sidebar { background: $surface; border: 1px solid $border; border-radius: 20px; padding: 18px; }
-.empty { padding: 24px; text-align: center; color: $text-secondary; font-size: 13px; display: flex; align-items: center; gap: 8px; justify-content: center; }
-
-.rows { display: flex; flex-direction: column; gap: 10px; max-height: 720px; overflow-y: auto; }
-
-.row {
-  border: 1px solid $border; border-radius: 14px; padding: 14px; cursor: pointer; transition: all .15s;
-  position: relative;
-}
-.row:hover { border-color: $indigo-light; }
-.row.selected { border-color: $indigo; background: $indigo-pale; }
-
-// Running-state animation: a thin light continuously traveling around the
-// card border (spec §2.2), built with a rotating conic-gradient angle.
-.row--running {
-  --angle: 0deg;
-  border: 1px solid transparent;
-  background:
-    linear-gradient(#fff, #fff) padding-box,
-    conic-gradient(from var(--angle), $border 0%, $indigo 8%, $border 16%) border-box;
-  animation: rotate-angle 2.4s linear infinite;
-}
-.row--running.selected {
-  background:
-    linear-gradient($indigo-pale, $indigo-pale) padding-box,
-    conic-gradient(from var(--angle), $border 0%, $indigo 8%, $border 16%) border-box;
-}
-
-.row__top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
-.row__icon { width: 30px; height: 30px; border-radius: 9px; background: $indigo-pale; color: $indigo; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.row__name { font-weight: 700; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.row__badges { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
-.row__meta { font-size: 11px; color: $text-muted; margin-bottom: 8px; }
-.row__stats { display: flex; gap: 12px; font-size: 11px; color: $text-secondary; margin-bottom: 10px; flex-wrap: wrap; }
-.row__actions { display: flex; gap: 6px; }
-
-.live-dot {
-  width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block;
-  animation: live-dot-pulse 1.4s ease-in-out infinite;
-}
-
-.detail { background: $surface; border: 1px solid $border; border-radius: 20px; padding: 24px; min-height: 400px; }
-.detail-empty { padding: 80px 24px; text-align: center; color: $text-secondary; font-size: 14px; }
-
-.detail-hdr { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; flex-wrap: wrap; gap: 16px; }
-.detail-hdr__badges { display: flex; gap: 8px; margin-bottom: 10px; }
-.detail-hdr__name { font-size: 22px; font-weight: 700; letter-spacing: -.3px; }
-.detail-hdr__date { font-size: 12px; color: $text-muted; margin-top: 4px; }
-.detail-hdr__actions { display: flex; gap: 8px; flex-wrap: wrap; }
-
-.summary-cards { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; margin-bottom: 24px; }
-.summary-card { display: flex; align-items: center; gap: 12px; padding: 16px; background: $surface-alt; border-radius: 14px; }
-.summary-card__label { font-size: 11px; color: $text-muted; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; }
-.summary-card__val { font-size: 13px; font-weight: 700; margin-top: 2px; }
-
-.status-message { padding: 40px; text-align: center; background: $surface-alt; border-radius: 14px; color: $text-secondary; font-size: 14px; }
-
-@media (max-width: 900px) {
-  .layout { grid-template-columns: 1fr; }
-  .summary-cards { grid-template-columns: 1fr; }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// src/components/history/History.tsx
+//History.tsx
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -1451,10 +846,10 @@ export default function History() {
                                 <td style={{ fontWeight: 700 }}>{r.rank === 1 ? '🏆 ' : ''}{r.rank}</td>
                                 <td style={{ fontWeight: 700 }}>{modelName(r.model_id)}</td>
                                 <td style={{ color: '#6B7280' }}>{providerName(r.model_id)}</td>
-                                <td style={{ fontFamily: "'JetBrains Mono',monospace", fontWeight: 700 }}>{r.score}%</td>
-                                <td style={{ fontFamily: "'JetBrains Mono',monospace" }}>{r.accuracy}%</td>
-                                <td style={{ fontFamily: "'JetBrains Mono',monospace", color: '#10B981' }}>{r.passed_tests}</td>
-                                <td style={{ fontFamily: "'JetBrains Mono',monospace", color: '#EF4444' }}>{r.failed_tests}</td>
+                                <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontWeight: 700 }}>{r.score}%</td>
+                                <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif" }}>{r.accuracy}%</td>
+                                <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", color: '#10B981' }}>{r.passed_tests}</td>
+                                <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", color: '#EF4444' }}>{r.failed_tests}</td>
                               </tr>
                             ))}
                           </tbody>
@@ -1492,69 +887,260 @@ export default function History() {
 
 
 
+//Landing.module.scss
+@use '../../styles/_variables' as *;
+
+.landing { min-height: 100vh; background: $surface; overflow-x: hidden; }
+
+.l-nav {
+  display: flex; align-items: center; justify-content: space-between; padding: 18px 48px;
+  max-width: 1440px; margin: 0 auto; position: relative; z-index: 10;
+}
+.l-logo {
+  font-family: $font-display; font-size: 22px; font-weight: 700; letter-spacing: -.5px;
+  display: flex; align-items: center; gap: 10px; color: $text-primary;
+
+  .mark {
+    width: 34px; height: 34px; background: $grad-primary; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center; color: #fff; font-size: 18px;
+    box-shadow: 0 2px 8px rgba(99, 102, 241, .35);
+  }
+}
+
+.btn-primary {
+  display: inline-flex; align-items: center; gap: 8px; background: $grad-primary; color: #fff; border: none;
+  padding: 14px 28px; border-radius: 14px; font-size: 15px; font-weight: 600; cursor: pointer; transition: all .25s;
+  font-family: $font-display; box-shadow: 0 4px 14px rgba(99, 102, 241, .3);
+}
+.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(99, 102, 241, .35); }
+.btn-primary:disabled { opacity: .6; cursor: default; transform: none; }
+
+.btn-secondary {
+  display: inline-flex; align-items: center; gap: 8px; background: $surface; color: $text-primary;
+  border: 1px solid $border; padding: 14px 28px; border-radius: 14px; font-size: 15px; font-weight: 600;
+  cursor: pointer; transition: all .25s; font-family: $font-display;
+}
+.btn-secondary:hover { border-color: $indigo; color: $indigo; background: $indigo-pale; box-shadow: $shadow-2; }
+
+.hero-section {
+  position: relative; max-width: 1440px; margin: 0 auto; padding: 64px 48px 80px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 80px; align-items: center;
+}
+.hero-bg-dots {
+  position: absolute; inset: 0; background-image: radial-gradient(circle, $border 1px, transparent 1px);
+  background-size: 24px 24px; opacity: .5; pointer-events: none; animation: dotPulse 4s ease infinite;
+}
+.hero-content { position: relative; z-index: 2; }
+.hero-badge {
+  display: inline-flex; align-items: center; gap: 8px; background: $indigo-pale;
+  border: 1px solid rgba(99, 102, 241, .15); border-radius: 100px; padding: 6px 16px 6px 8px;
+  font-size: 13px; color: $indigo; margin-bottom: 28px; font-weight: 600;
+
+  .badge-dot { width: 8px; height: 8px; border-radius: 50%; background: $indigo; animation: pulse 2s infinite; }
+}
+.hero-content h1 {
+  font-size: 54px; font-weight: 700; line-height: 1.08; letter-spacing: -2.5px; margin-bottom: 24px;
+  .grad { background: $grad-primary; -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+}
+.hero-content > p { font-size: 17px; color: $text-secondary; line-height: 1.7; margin-bottom: 40px; max-width: 480px; }
+.hero-actions { display: flex; gap: 14px; }
+
+.hero-visual { position: relative; z-index: 2; }
+.hero-card { background: $surface; border: 1px solid $border; border-radius: 20px; padding: 28px; box-shadow: $shadow-4; }
+.hero-card-hdr { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.hero-card-title { font-family: $font-display; font-size: 13px; font-weight: 700; color: $text-muted; text-transform: uppercase; letter-spacing: 1.5px; }
+.hero-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.hero-bar:last-child { margin-bottom: 0; }
+.hero-bar-label { font-size: 13px; color: $text-secondary; width: 120px; flex-shrink: 0; font-weight: 600; }
+.hero-bar-track { flex: 1; height: 34px; background: $surface-alt; border-radius: 10px; overflow: hidden; }
+.hero-bar-fill {
+  height: 100%; border-radius: 10px; display: flex; align-items: center; padding: 0 14px;
+  font-family: $font-mono; font-size: 12px; font-weight: 700; color: #fff; transition: width 1.8s cubic-bezier(.16, 1, .3, 1);
+
+  &--primary { background: $grad-primary; }
+  &--warm { background: $grad-warm; }
+  &--cool { background: $grad-cool; }
+  &--gray { background: linear-gradient(135deg, #6B7280, #9CA3AF); }
+}
+
+.float-badge {
+  position: absolute; background: $surface; border: 1px solid $border; border-radius: 14px;
+  padding: 12px 18px; display: flex; align-items: center; gap: 10px; box-shadow: $shadow-3;
+  z-index: 3; animation: float 4s ease infinite; font-size: 13px; color: $text-secondary;
+  strong { color: $text-primary; }
+}
+.float-badge.tr { top: -24px; right: -16px; animation-delay: .5s; }
+.float-badge.bl { bottom: -20px; left: -16px; animation-delay: 1.5s; }
+.pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: $emerald; animation: pulse 2s infinite; }
+
+.features { max-width: 1440px; margin: 0 auto; padding: 96px 48px; background: $bg; }
+.feat-header { text-align: center; margin-bottom: 72px; }
+.feat-header h2 { font-size: 38px; font-weight: 700; letter-spacing: -1.5px; margin-bottom: 14px; }
+.feat-header p { color: $text-secondary; font-size: 16px; max-width: 460px; margin: 0 auto; line-height: 1.6; }
+.feat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+.feat-card {
+  background: $surface; border: 1px solid $border; border-radius: 18px; padding: 32px;
+  transition: all .3s; cursor: default; position: relative; overflow: hidden;
+
+  &::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: $grad-primary; opacity: 0; transition: opacity .3s; }
+  &:hover { border-color: transparent; box-shadow: $shadow-3; transform: translateY(-6px); }
+  &:hover::before { opacity: 1; }
+  h3 { font-size: 17px; font-weight: 700; margin-bottom: 8px; letter-spacing: -.2px; }
+  p { font-size: 14px; color: $text-secondary; line-height: 1.65; }
+}
+.feat-icon {
+  width: 50px; height: 50px; border-radius: 14px; display: flex; align-items: center; justify-content: center; margin-bottom: 22px;
+  &--ind { background: $indigo-pale; color: $indigo; }
+  &--amb { background: $amber-pale; color: $amber; }
+  &--em { background: $emerald-pale; color: $emerald; }
+  &--sky { background: $sky-pale; color: $sky; }
+  &--rose { background: $rose-pale; color: $rose; }
+}
+
+.stats-section {
+  max-width: 1440px; margin: 0 auto; padding: 64px 48px; display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 24px; background: $surface; border-top: 1px solid $border; border-bottom: 1px solid $border;
+}
+.stat-box { text-align: center; padding: 16px; }
+.stat-val { font-family: $font-mono; font-size: 44px; font-weight: 700; letter-spacing: -2px; background: $grad-primary; -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.stat-lbl { font-size: 14px; color: $text-secondary; margin-top: 4px; font-weight: 500; }
+
+.cta-section { max-width: 1440px; margin: 0 auto; padding: 96px 48px; text-align: center; background: $bg; }
+.cta-box {
+  background: $surface; border: 1px solid $border; border-radius: 28px; padding: 72px;
+  position: relative; overflow: hidden; box-shadow: $shadow-2;
+  &::before { content: ''; position: absolute; inset: -2px; background: $grad-primary; border-radius: 30px; z-index: -1; opacity: .15; }
+  h2 { font-size: 38px; font-weight: 700; letter-spacing: -1.5px; margin-bottom: 14px; }
+  p { color: $text-secondary; font-size: 16px; margin-bottom: 36px; line-height: 1.6; }
+}
+
+// .l-footer moved to src/components/layout/Footer.module.scss — shared with /app.
+
+@media (max-width: 768px) {
+  .hero-section { grid-template-columns: 1fr; padding: 48px 24px; gap: 40px; }
+  .hero-content h1 { font-size: 36px; }
+  .feat-grid { grid-template-columns: 1fr; }
+  .stats-section { grid-template-columns: repeat(2, 1fr); }
+}
 
 
 
 
 
-// src/components/layout/Sidebar.tsx
-import { NavLink } from 'react-router-dom';
-import { Home, Link2, Cpu, BookOpen, Play, FlaskConical, GitCompare, LogOut } from 'lucide-react';
-import { useAppDispatch, useAppSelector } from '../../hooks/redux';
-import { logout } from '../../store/slices/authSlice';
-import styles from './Sidebar.module.scss';
 
-const navItems = [
-  { to: '/app/dashboard', icon: <Home size={18} />, label: 'Dashboard' },
-  { to: '/app/providers', icon: <Link2 size={18} />, label: 'Providers' },
-  { to: '/app/models', icon: <Cpu size={18} />, label: 'Models' },
-  { to: '/app/datasets', icon: <BookOpen size={18} />, label: 'Datasets' },
+
+
+
+
+
+
+
+
+
+//Landing.tsx
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { ArrowRight, Play, Award, Link2, Cpu, FlaskConical, BarChart3, GitCompare, Shield } from 'lucide-react';
+import Footer from '../layout/Footer';
+import styles from './Landing.module.scss';
+
+const features = [
+  { icon: <Link2 size={22} />, cls: 'ind', title: 'Provider Hub', desc: 'Connect any AI provider with API keys. Manage credentials, monitor status, and see available models instantly.' },
+  { icon: <Cpu size={22} />, cls: 'amb', title: 'Model Catalog', desc: 'Browse all models across providers. Filter by capability, compare pricing, and register custom endpoints.' },
+  { icon: <FlaskConical size={22} />, cls: 'em', title: 'Guided Evaluations', desc: 'A step-by-step wizard for model selection, test suite choice, and metric configuration.' },
+  { icon: <BarChart3 size={22} />, cls: 'sky', title: 'Results & History', desc: 'Every evaluation stored with full breakdowns. Duplicate past runs, track trends, export findings.' },
+  { icon: <GitCompare size={22} />, cls: 'rose', title: 'Visual Comparison', desc: 'Radar charts and metric tables make it obvious where each model excels or falls short.' },
+  { icon: <Shield size={22} />, cls: 'ind', title: 'SSO & Security', desc: 'Enterprise-grade sign-in. API keys encrypted and isolated to your environment.' },
 ];
 
-const workflowItems = [
-  { to: '/app/run-evaluation', icon: <Play size={18} />, label: 'New Evaluation' },
-  { to: '/app/history', icon: <FlaskConical size={18} />, label: 'History' },
-  { to: '/app/comparison', icon: <GitCompare size={18} />, label: 'Comparison' },
-];
+export default function Landing() {
+  const [animated, setAnimated] = useState(false);
+  const navigate = useNavigate();
 
-export default function Sidebar() {
-  const dispatch = useAppDispatch();
-  const user = useAppSelector((s) => s.auth.user);
+  useEffect(() => {
+    const t = setTimeout(() => setAnimated(true), 200);
+    return () => clearTimeout(t);
+  }, []);
 
-  const navLinkClass = ({ isActive }: { isActive: boolean }) =>
-    `${styles['nav-item']} ${isActive ? styles.active : ''}`;
+  // Landing is now gated by AuthGuard (wrapping "/"), so by the time this
+  // page renders the user is already authenticated — these buttons are
+  // plain navigation into the app, not sign-in triggers.
+  const goToDashboard = () => navigate('/app/dashboard');
+
+  const bars = [
+    { label: 'Claude Sonnet 4', pct: animated ? 94 : 0, cls: 'primary' },
+    { label: 'GPT-4o', pct: animated ? 91 : 0, cls: 'warm' },
+    { label: 'Gemini 2.5 Pro', pct: animated ? 89 : 0, cls: 'cool' },
+    { label: 'Mistral Large', pct: animated ? 85 : 0, cls: 'gray' },
+  ];
 
   return (
-    <div className={styles.sidebar}>
-      <div className={styles['sidebar__logo']}>
-        <div className={styles['sidebar__mark']}>&#9670;</div>
-        SemcoEval
-      </div>
-      <nav className={styles['sidebar__nav']}>
-        {navItems.map((item) => (
-          <NavLink key={item.to} to={item.to} className={navLinkClass}>
-            {item.icon}
-            {item.label}
-          </NavLink>
-        ))}
-        <div className={styles['sidebar__section']}>Workflow</div>
-        {workflowItems.map((item) => (
-          <NavLink key={item.to} to={item.to} className={navLinkClass}>
-            {item.icon}
-            {item.label}
-          </NavLink>
-        ))}
+    <div className={styles.landing}>
+      <nav className={styles['l-nav']}>
+        <div className={styles['l-logo']}><div className={styles.mark}>&#9670;</div>SemcoEval</div>
       </nav>
-      <div className={styles['sidebar__foot']}>
-        <div className={styles['sidebar__user']}>
-          <div className={styles['sidebar__avatar']}>{(user?.username || 'U').slice(0, 2).toUpperCase()}</div>
-          <div className={styles['sidebar__user-info']}>
-            <div className={styles['sidebar__user-name']}>{user?.profileName || user?.username || 'Guest'}</div>
-            <div className={styles['sidebar__user-email']}>{user?.email || ''}</div>
+
+      <section className={styles['hero-section']}>
+        <div className={styles['hero-bg-dots']} />
+        <div className={styles['hero-content']}>
+          <div className={styles['hero-badge']}><div className={styles['badge-dot']} /> Now supporting 40+ models</div>
+          <h1>Evaluate AI models<br />with <span className={styles.grad}>measured evidence</span></h1>
+          <p>Stop guessing which model fits your use case. Run structured benchmarks, compare results side-by-side, and make selection decisions backed by real data.</p>
+          <div className={styles['hero-actions']}>
+            <button className={styles['btn-primary']} onClick={goToDashboard}>Open Dashboard <ArrowRight size={16} /></button>
+            <button className={styles['btn-secondary']}><Play size={16} /> Watch Demo</button>
           </div>
-          <LogOut size={16} style={{ color: '#9CA3AF', cursor: 'pointer' }} onClick={() => dispatch(logout())} />
         </div>
-      </div>
+        <div className={styles['hero-visual']}>
+          <div className={styles['hero-card']}>
+            <div className={styles['hero-card-hdr']}>
+              <span className={styles['hero-card-title']}>Live Benchmark</span>
+              <span className="badge badge-green"><div className={styles['pulse-dot']} /> Running</span>
+            </div>
+            {bars.map((b, i) => (
+              <div className={styles['hero-bar']} key={i}>
+                <span className={styles['hero-bar-label']}>{b.label}</span>
+                <div className={styles['hero-bar-track']}>
+                  <div className={`${styles['hero-bar-fill']} ${styles[`hero-bar-fill--${b.cls}`]}`} style={{ width: `${b.pct}%`, transitionDelay: `${i * 250}ms` }}>
+                    {b.pct > 0 && <span>{b.pct}%</span>}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className={`${styles['float-badge']} ${styles.tr}`}><Award size={16} style={{ color: '#F59E0B' }} /><span>Winner: <strong>Claude Sonnet 4</strong></span></div>
+          <div className={`${styles['float-badge']} ${styles.bl}`}><div className={styles['pulse-dot']} /><span>3 evaluations running</span></div>
+        </div>
+      </section>
+
+      <section className={styles.features}>
+        <div className={styles['feat-header']}><h2>Everything you need to decide</h2><p>From connecting providers to comparing results — a complete evaluation workflow</p></div>
+        <div className={styles['feat-grid']}>
+          {features.map((f, i) => (
+            <div className={styles['feat-card']} key={i}>
+              <div className={`${styles['feat-icon']} ${styles[`feat-icon--${f.cls}`]}`}>{f.icon}</div>
+              <h3>{f.title}</h3>
+              <p>{f.desc}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className={styles['stats-section']}>
+        {[{ v: '40+', l: 'Models supported' }, { v: '6', l: 'Benchmark suites' }, { v: '12K+', l: 'Evaluation tasks' }, { v: '<5min', l: 'Average eval time' }].map((s, i) => (
+          <div className={styles['stat-box']} key={i}><div className={styles['stat-val']}>{s.v}</div><div className={styles['stat-lbl']}>{s.l}</div></div>
+        ))}
+      </section>
+
+      <section className={styles['cta-section']}>
+        <div className={styles['cta-box']}>
+          <h2>Ready to evaluate with confidence?</h2>
+          <p>Connect your first provider and run a benchmark in under five minutes.</p>
+          <button className={styles['btn-primary']} onClick={goToDashboard}>Get Started Free <ArrowRight size={16} /></button>
+        </div>
+      </section>
+
+      <Footer />
     </div>
   );
 }
@@ -1576,290 +1162,225 @@ export default function Sidebar() {
 
 
 
+//AppShell.module.scss
+@use '../../styles/_variables' as *;
 
-// src/mocks/data.ts
-// Seed data for the mock API layer — shaped to exactly match the response
-// contracts in the API reference doc, so swapping MSW off for a real
-// backend later is a no-op for every component/slice/type.
-import type {
-  Provider, Model, Benchmark, EvaluationListItem, EvaluationResultsResponse, ModelResult,
-} from '../types';
+.app-shell {
+  display: flex;
+  height: 100vh;
+  background: $bg;
 
-export const mockProviders: Provider[] = [
-  { id: 'openai', name: 'OpenAI', description: 'GPT family — industry-leading multimodal models', logo_url: null, base_url: 'https://api.openai.com/v1', url_template: null, model_count: 8, status: 'connected' },
-  { id: 'anthropic', name: 'Anthropic', description: 'Claude family — safety-focused, high-capability models', logo_url: null, base_url: 'https://api.anthropic.com/v1', url_template: null, model_count: 5, status: 'connected' },
-  { id: 'google-deepmind', name: 'Google DeepMind', description: 'Gemini & PaLM — massive context, multimodal', logo_url: null, base_url: 'https://generativelanguage.googleapis.com/v1', url_template: null, model_count: 6, status: 'not_connected' },
-  { id: 'meta-ai', name: 'Meta AI', description: 'Llama — open-weight models for self-hosting', logo_url: null, base_url: null, url_template: null, model_count: 4, status: 'not_connected' },
-  { id: 'mistral-ai', name: 'Mistral AI', description: 'Mistral & Mixtral — efficient European models', logo_url: null, base_url: 'https://api.mistral.ai/v1', url_template: null, model_count: 3, status: 'connected' },
-  { id: 'cohere', name: 'Cohere', description: 'Command & Embed — enterprise RAG specialists', logo_url: null, base_url: 'https://api.cohere.ai/v1', url_template: null, model_count: 3, status: 'not_connected' },
-];
-
-export const mockModels: Model[] = [
-  { id: 'gpt-4o', name: 'GPT-4o', provider_id: 'openai', category: 'General', capabilities: ['Text', 'Vision', 'Code'], context_window: 128000, input_price: 2.5, output_price: 10, accuracy_score: 92.4, agent_score: 88, is_active: true, base_url: null },
-  { id: 'claude-sonnet-4', name: 'Claude Sonnet 4', provider_id: 'anthropic', category: 'General', capabilities: ['Text', 'Vision', 'Code', 'Analysis'], context_window: 200000, input_price: 3, output_price: 15, accuracy_score: 94.1, agent_score: 92, is_active: true, base_url: null },
-  { id: 'gemini-2-5-pro', name: 'Gemini 2.5 Pro', provider_id: 'google-deepmind', category: 'General', capabilities: ['Text', 'Vision', 'Code'], context_window: 1000000, input_price: 1.25, output_price: 5, accuracy_score: 91.8, agent_score: 85, is_active: false, base_url: null },
-  { id: 'gpt-4o-mini', name: 'GPT-4o mini', provider_id: 'openai', category: 'Efficient', capabilities: ['Text', 'Code'], context_window: 128000, input_price: 0.15, output_price: 0.6, accuracy_score: 87.2, agent_score: 79, is_active: true, base_url: null },
-  { id: 'claude-haiku-4', name: 'Claude Haiku 4', provider_id: 'anthropic', category: 'Efficient', capabilities: ['Text', 'Code'], context_window: 200000, input_price: 0.25, output_price: 1.25, accuracy_score: 86.9, agent_score: 77, is_active: true, base_url: null },
-  { id: 'mistral-large', name: 'Mistral Large', provider_id: 'mistral-ai', category: 'General', capabilities: ['Text', 'Code', 'Analysis'], context_window: 128000, input_price: 2, output_price: 6, accuracy_score: 89.7, agent_score: 81, is_active: true, base_url: null },
-  { id: 'llama-3-1-405b', name: 'Llama 3.1 405B', provider_id: 'meta-ai', category: 'Open Weight', capabilities: ['Text', 'Code'], context_window: 128000, input_price: 0, output_price: 0, accuracy_score: 88.5, agent_score: 80, is_active: false, base_url: null },
-  { id: 'command-r-plus', name: 'Command R+', provider_id: 'cohere', category: 'RAG', capabilities: ['Text', 'RAG', 'Search'], context_window: 128000, input_price: 3, output_price: 15, accuracy_score: 85.3, agent_score: 75, is_active: false, base_url: null },
-];
-
-// Deliberately includes one benchmark missing `tasks` / `required_capabilities`
-// (MATH-500 below) to exercise the §5 normalization fallback in benchmarksApi.list().
-export const mockBenchmarks: Benchmark[] = [
-  { name: 'MMLU Pro', description: 'Massive multitask language understanding with harder questions', tasks: [{ name: 'STEM', value: 'stem' }, { name: 'Humanities', value: 'humanities' }, { name: 'Social Science', value: 'social-science' }], task_count: 12032, required_capabilities: ['Text', 'Reasoning'], huggingface_dataset: 'TIGER-Lab/MMLU-Pro', type: 'Knowledge' },
-  { name: 'HumanEval+', description: 'Code generation with extended test cases and edge coverage', tasks: [{ name: 'Sample task 1', value: 'humaneval-plus-1' }], task_count: 820, required_capabilities: ['Code'], huggingface_dataset: 'evalplus/humanevalplus', type: 'Code' },
-  { name: 'GPQA Diamond', description: 'Graduate-level science questions verified by domain experts', tasks: [{ name: 'Physics', value: 'physics' }, { name: 'Chemistry', value: 'chemistry' }, { name: 'Biology', value: 'biology' }], task_count: 448, required_capabilities: ['Reasoning', 'Analysis'], huggingface_dataset: 'Idavidrein/gpqa', type: 'Science' },
-  { name: 'MT-Bench', description: 'Multi-turn conversational evaluation across 8 domains', tasks: [{ name: 'Sample task 1', value: 'mt-bench-1' }], task_count: 160, required_capabilities: ['Text', 'Reasoning'], huggingface_dataset: 'lmsys/mt_bench_human_judgments', type: 'Conversation' },
-  { name: 'BigCodeBench', description: 'Complex programming tasks requiring deep library knowledge', tasks: [{ name: 'Sample task 1', value: 'bigcodebench-1' }], task_count: 1140, required_capabilities: ['Code', 'Analysis'], huggingface_dataset: 'bigcode/bigcodebench', type: 'Code' },
-  // Intentionally omits `tasks` / `required_capabilities`
-  { name: 'MATH-500', description: 'Competition-level mathematics problems with step verification', task_count: 500, huggingface_dataset: 'HuggingFaceH4/MATH-500', type: 'Math' } as Benchmark,
-];
-
-export const mockAllMetrics = ['Accuracy', 'Speed', 'Cost', 'Consistency', 'Coherence', 'Factuality', 'Creativity', 'Safety'];
-export const mockCustomAgentMetrics = ['Tool Call Accuracy', 'Task Completion', 'Step Efficiency'];
-
-// ─────────────────────────────────────────────────────────────────────────
-// In-memory evaluation store used only by the mock handlers, so
-// POST /evaluations -> POST /evaluations/{id}/start -> GET /evaluations
-// (list, polled every 10s) -> GET /evaluations/{id}/results behaves like a
-// real, stateful backend across calls.
-// ─────────────────────────────────────────────────────────────────────────
-interface MockEval extends Omit<EvaluationListItem, 'status' | 'progress' | 'top_model' | 'top_score' | 'started_at' | 'completed_at'> {
-  startedAtMs: number | null;
-  durationMs: number;
-  // 'created' means POST /evaluations happened but not yet /start.
-  lifecycle: 'created' | 'running' | 'completed' | 'failed';
-}
-
-export const mockEvals = new Map<string, MockEval>();
-let mockEvalCounter = 1;
-
-function pick<T>(arr: T[], seed: number): T {
-  return arr[seed % arr.length];
-}
-
-function buildResultsFor(evalRecord: MockEval): ModelResult[] {
-  return evalRecord.model_ids.map((modelId, i) => {
-    const model = mockModels.find((m) => m.id === modelId);
-    const total = evalRecord.total_questions;
-    const baseAccuracy = (model?.accuracy_score ?? 85) / 100;
-    // Deterministic per-model jitter so results are stable across refetches.
-    const jitter = ((i * 37) % 11) / 100;
-    const accuracy = Math.min(0.99, Math.max(0.4, baseAccuracy - jitter));
-    const passed = Math.round(total * accuracy);
-    return {
-      model_id: modelId,
-      provider: model?.provider_id ?? 'unknown',
-      rank: i + 1,
-      score: Math.round(accuracy * 1000) / 10,
-      accuracy: Math.round(accuracy * 1000) / 10,
-      passed_tests: passed,
-      failed_tests: total - passed,
-      total_tests: total,
-      metric_scores: Object.fromEntries(
-        evalRecord.selected_metrics.map((m, mi) => [m, Math.round((accuracy - mi * 0.02) * 1000) / 10])
-      ),
-      details: [],
-    };
-  }).sort((a, b) => b.score - a.score).map((r, i) => ({ ...r, rank: i + 1 }));
-}
-
-export function advanceMockEval(evalRecord: MockEval): EvaluationListItem {
-  if (evalRecord.lifecycle === 'created' || evalRecord.startedAtMs === null) {
-    return {
-      ...evalRecord,
-      status: 'pending',
-      progress: 0,
-      top_model: null,
-      top_score: null,
-      started_at: null,
-      completed_at: null,
-    };
+  &__main {
+    flex: 1;
+    overflow-y: auto;
+    background: $bg;
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
   }
 
-  if (evalRecord.lifecycle === 'failed') {
-    return {
-      ...evalRecord,
-      status: 'failed',
-      progress: 0,
-      top_model: null,
-      top_score: null,
-      started_at: new Date(evalRecord.startedAtMs).toISOString(),
-      completed_at: new Date(evalRecord.startedAtMs).toISOString(),
-    };
+  &__content {
+    flex: 1;
   }
-
-  const elapsed = Date.now() - evalRecord.startedAtMs;
-  const pct = Math.min(1, elapsed / evalRecord.durationMs);
-  const progress = pct; // fraction, 0..1
-
-  if (pct >= 1) {
-    if (evalRecord.lifecycle !== 'completed') evalRecord.lifecycle = 'completed';
-    const results = buildResultsFor(evalRecord);
-    const top = results[0];
-    const topModel = mockModels.find((m) => m.id === top?.model_id);
-    return {
-      ...evalRecord,
-      status: 'completed',
-      progress: 1,
-      top_model: topModel?.name ?? null,
-      top_score: top?.score ?? null,
-      started_at: new Date(evalRecord.startedAtMs).toISOString(),
-      completed_at: new Date(evalRecord.startedAtMs + evalRecord.durationMs).toISOString(),
-    };
-  }
-
-  return {
-    ...evalRecord,
-    status: 'running',
-    progress,
-    top_model: null,
-    top_score: null,
-    started_at: new Date(evalRecord.startedAtMs).toISOString(),
-    completed_at: null,
-  };
 }
 
-export function getMockResults(evalId: string): EvaluationResultsResponse | { error: string } {
-  const record = mockEvals.get(evalId);
-  if (!record) return { error: 'Evaluation not found' };
-  const snapshot = advanceMockEval(record);
-  if (snapshot.status !== 'completed') return { error: 'Execution not completed.' };
 
-  const results = buildResultsFor(record);
-  const top = results[0];
-  return {
-    evaluation_id: evalId,
-    status: 'completed',
-    top_model: top?.model_id ?? '',
-    top_score: top?.score ?? 0,
-    results,
-  };
+
+
+
+
+
+
+
+
+
+
+
+
+//AppShell.tsx
+import { Outlet } from 'react-router-dom';
+import Sidebar from './Sidebar';
+import Footer from './Footer';
+import styles from './AppShell.module.scss';
+
+export default function AppShell() {
+  return (
+    <div className={styles['app-shell']}>
+      <Sidebar />
+      <main className={styles['app-shell__main']}>
+        <div className={styles['app-shell__content']}>
+          <Outlet />
+        </div>
+        <Footer />
+      </main>
+    </div>
+  );
 }
 
-export function createMockEval(input: {
-  name: string;
-  description?: string;
-  eval_type: string;
-  dataset_id: string;
-  benchmark?: string;
-  model_ids: string[];
-  selected_metrics: string[];
-  run_samples: number;
-  selected_category?: string[];
-}): string {
-  const id = `eval_${mockEvalCounter++}`;
-  mockEvals.set(id, {
-    id,
-    name: input.name,
-    description: input.description ?? '',
-    eval_type: input.eval_type,
-    dataset_id: input.dataset_id,
-    datasets_config: [{ dataset_id: input.dataset_id }],
-    benchmark: input.benchmark ?? '',
-    model_ids: input.model_ids,
-    selected_metrics: input.selected_metrics,
-    run_samples: input.run_samples,
-    selected_category: input.selected_category ?? [],
-    total_questions: Math.max(input.run_samples, 1) * Math.max(input.model_ids.length, 1),
-    created_at: new Date().toISOString(),
-    startedAtMs: null,
-    // ~10% chance of a simulated failure, ~ (samples*models)-scaled duration otherwise.
-    durationMs: 8000 + pick([0, 4000, 8000], mockEvalCounter),
-    lifecycle: 'created',
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Footer.module.scss
+@use '../../styles/_variables' as *;
+
+.footer {
+  text-align: center;
+  padding: 32px 48px;
+  color: $text-muted;
+  font-size: 13px;
+  border-top: 1px solid $border;
+  background: $surface;
+  flex-shrink: 0;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Footer.tsx
+// Shared footer used on both the public Landing page and every /app route
+// (rendered from AppShell). Keeping it as one component means copy/links
+// only ever need to be updated in one place.
+import styles from './Footer.module.scss';
+
+export default function Footer() {
+  const year = new Date().getFullYear();
+  return (
+    <footer className={styles.footer}>
+      &copy; {year} SemcoEval &middot; Privacy &middot; Terms &middot; Documentation
+    </footer>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//ModelCatalog.tsx
+import { useEffect, useMemo, useState } from 'react';
+import { Search, Plus } from 'lucide-react';
+import { useAppDispatch, useAppSelector } from '../../hooks/redux';
+import { fetchModels, createCustomModel } from '../../store/slices/modelsSlice';
+import { fetchProviders } from '../../store/slices/providersSlice';
+import AddCustomModelDrawer from './AddCustomModelDrawer';
+import styles from './ModelCatalog.module.scss';
+
+export default function ModelCatalog() {
+  const dispatch = useAppDispatch();
+  const { items, status, creating } = useAppSelector((s) => s.models);
+  const providers = useAppSelector((s) => s.providers.items);
+  const [search, setSearch] = useState('');
+  const [capFilter, setCapFilter] = useState('All');
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  useEffect(() => {
+    dispatch(fetchModels());
+    dispatch(fetchProviders());
+  }, [dispatch]);
+
+  const caps = useMemo(() => ['All', ...new Set(items.flatMap((m) => m.capabilities))], [items]);
+  const providerName = (id: string) => providers.find((p) => p.id === id)?.name || id;
+
+  const filtered = items.filter((m) => {
+    if (capFilter !== 'All' && !m.capabilities.includes(capFilter)) return false;
+    const q = search.toLowerCase();
+    return !q || m.name.toLowerCase().includes(q) || providerName(m.provider_id).toLowerCase().includes(q);
   });
-  return id;
+
+  return (
+    <div className="page-enter">
+      <div className="pg-hdr"><h1>Model Catalog</h1><p>All models across connected providers</p></div>
+      <div className="pg-body">
+        <div className="toolbar">
+          <div className="search-box">
+            <Search size={16} color="#9CA3AF" />
+            <input placeholder="Search models or providers…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div className="pills">{caps.map((c) => <button key={c} className={`pill ${capFilter === c ? 'on' : ''}`} onClick={() => setCapFilter(c)}>{c}</button>)}</div>
+            <button className="btn btn-ind btn-sm" onClick={() => setDrawerOpen(true)}><Plus size={14} /> Register Custom</button>
+          </div>
+        </div>
+
+        {status === 'loading' && <div className={styles['model-catalog__loading']}>Loading models…</div>}
+
+        <div className="tw">
+          <table className="tbl">
+            <thead>
+              <tr><th>Model</th><th>Provider</th><th>Capabilities</th><th>Context</th><th>Price (in/out)</th><th>Accuracy</th><th>Status</th></tr>
+            </thead>
+            <tbody>
+              {filtered.map((m) => (
+                <tr key={m.id}>
+                  <td style={{ fontWeight: 700 }}>{m.name}</td>
+                  <td style={{ color: '#6B7280' }}>{providerName(m.provider_id)}</td>
+                  <td>{m.capabilities.map((c) => <span key={c} className="tag tag-ind">{c}</span>)}</td>
+                  <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontSize: 13 }}>{m.context_window.toLocaleString()}</td>
+                  <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontSize: 13, color: '#6B7280' }}>
+                    {m.input_price != null ? `$${m.input_price.toFixed(2)}` : '—'} / {m.output_price != null ? `$${m.output_price.toFixed(2)}` : '—'}
+                  </td>
+                  <td>
+                    <span style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontWeight: 700, color: (m.accuracy_score || 0) >= 90 ? '#10B981' : '#111827' }}>
+                      {m.accuracy_score != null ? `${m.accuracy_score}%` : '—'}
+                    </span>
+                  </td>
+                  <td><span className={`badge ${m.is_active ? 'badge-green' : 'badge-gray'}`}>{m.is_active ? 'Active' : 'Inactive'}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {drawerOpen && (
+        <AddCustomModelDrawer
+          submitting={creating}
+          onClose={() => setDrawerOpen(false)}
+          onSubmit={(payload) => {
+            dispatch(createCustomModel(payload)).then(() => setDrawerOpen(false));
+          }}
+        />
+      )}
+    </div>
+  );
 }
 
-export function startMockEval(evalId: string): void {
-  const record = mockEvals.get(evalId);
-  if (!record) return;
-  record.startedAtMs = Date.now();
-  record.lifecycle = mockEvalCounter % 9 === 0 ? 'failed' : 'running';
-}
-
-// ---- Seed a small history so the History page has content on first load ----
-function seedHistoricalEval(opts: {
-  name: string;
-  eval_type: string;
-  benchmark: string;
-  model_ids: string[];
-  selected_metrics: string[];
-  run_samples: number;
-  lifecycle: MockEval['lifecycle'];
-  startedMinutesAgo: number | null;
-  durationMs: number;
-}): void {
-  const id = `eval_${mockEvalCounter++}`;
-  mockEvals.set(id, {
-    id,
-    name: opts.name,
-    description: '',
-    eval_type: opts.eval_type,
-    dataset_id: '',
-    datasets_config: [],
-    benchmark: opts.benchmark,
-    model_ids: opts.model_ids,
-    selected_metrics: opts.selected_metrics,
-    run_samples: opts.run_samples,
-    selected_category: [],
-    total_questions: opts.run_samples * opts.model_ids.length,
-    created_at: new Date(Date.now() - (opts.startedMinutesAgo ?? 0) * 60000 - 120000).toISOString(),
-    startedAtMs: opts.startedMinutesAgo === null ? null : Date.now() - opts.startedMinutesAgo * 60000,
-    durationMs: opts.durationMs,
-    lifecycle: opts.lifecycle,
-  });
-}
-
-seedHistoricalEval({
-  name: 'Q3 Support Bot Test',
-  eval_type: 'model',
-  benchmark: 'MMLU Pro',
-  model_ids: ['gpt-4o', 'claude-sonnet-4'],
-  selected_metrics: ['Accuracy', 'Consistency'],
-  run_samples: 25,
-  lifecycle: 'completed',
-  startedMinutesAgo: 240,
-  durationMs: 5000,
-});
-
-seedHistoricalEval({
-  name: 'Agent Framework Comparison',
-  eval_type: 'agent',
-  benchmark: 'MT-Bench',
-  model_ids: ['claude-sonnet-4', 'mistral-large'],
-  selected_metrics: ['Accuracy', 'Tool Call Accuracy'],
-  run_samples: 15,
-  lifecycle: 'completed',
-  startedMinutesAgo: 1440,
-  durationMs: 5000,
-});
-
-seedHistoricalEval({
-  name: 'Code Generation Sprint',
-  eval_type: 'model',
-  benchmark: 'HumanEval+',
-  model_ids: ['gpt-4o', 'claude-sonnet-4', 'mistral-large'],
-  selected_metrics: ['Accuracy', 'Speed'],
-  run_samples: 20,
-  lifecycle: 'running',
-  startedMinutesAgo: 0,
-  durationMs: 45000,
-});
-
-seedHistoricalEval({
-  name: 'RAG Pipeline Benchmark',
-  eval_type: 'rag',
-  benchmark: 'GPQA Diamond',
-  model_ids: ['command-r-plus', 'gpt-4o'],
-  selected_metrics: ['Accuracy', 'Factuality'],
-  run_samples: 10,
-  lifecycle: 'failed',
-  startedMinutesAgo: 60,
-  durationMs: 5000,
-});
 
 
 
@@ -1876,193 +1397,7 @@ seedHistoricalEval({
 
 
 
-
-// src/mocks/handlers.ts
-import { http, HttpResponse, delay } from 'msw';
-import {
-  mockProviders, mockModels, mockBenchmarks, mockAllMetrics, mockCustomAgentMetrics,
-  mockEvals, advanceMockEval, getMockResults, createMockEval, startMockEval,
-} from './data';
-import type {
-  SsoLoginRequest, SsoLoginResponse,
-  ConnectProviderRequest, ConnectProviderResponse, DisconnectProviderResponse,
-  CustomModelRequest,
-  BenchmarksResponse, MetricsResponse,
-  CreateEvaluationRequest, CreateEvaluationResponse,
-  EvaluationsListResponse,
-} from '../types';
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
-const url = (path: string) => `${API_BASE}${path}`;
-
-let providers = mockProviders.map((p) => ({ ...p }));
-let models = mockModels.map((m) => ({ ...m }));
-
-export const handlers = [
-  // ---------- Auth ----------
-  http.post(url('/sso_login'), async ({ request }) => {
-    await delay(400);
-    const body = (await request.json()) as SsoLoginRequest;
-    const response: SsoLoginResponse = {
-      status: 'ok',
-      message: 'Signed in',
-      result: {
-        token: `mock-token-${body.token}-${Date.now()}`,
-        username: 'jane.doe',
-        email: 'jane@semco.ai',
-        language: 'en',
-        profile_name: 'Jane Doe',
-      },
-    };
-    return HttpResponse.json(response);
-  }),
-
-  // ---------- Providers ----------
-  http.get(url('/providers'), async () => {
-    await delay(300);
-    return HttpResponse.json({ providers });
-  }),
-
-  http.post(url('/providers/:providerId/connect'), async ({ params, request }) => {
-    await delay(500);
-    const { providerId } = params as { providerId: string };
-    const body = (await request.json()) as ConnectProviderRequest;
-    if (!body.api_key?.trim()) {
-      return HttpResponse.json({ message: 'api_key is required' }, { status: 400 });
-    }
-    providers = providers.map((p) => (p.id === providerId ? { ...p, status: 'connected' } : p));
-    const response: ConnectProviderResponse = {
-      status: 'connected',
-      provider_id: providerId,
-      models_synced: providers.find((p) => p.id === providerId)?.model_count ?? 0,
-    };
-    return HttpResponse.json(response);
-  }),
-
-  http.delete(url('/providers/:providerId/disconnect'), async ({ params }) => {
-    await delay(300);
-    const { providerId } = params as { providerId: string };
-    providers = providers.map((p) => (p.id === providerId ? { ...p, status: 'not_connected' } : p));
-    const response: DisconnectProviderResponse = { status: 'disconnected', provider_id: providerId };
-    return HttpResponse.json(response);
-  }),
-
-  // ---------- Models ----------
-  http.get(url('/models'), async () => {
-    await delay(300);
-    return HttpResponse.json({ models });
-  }),
-
-  http.post(url('/models/custom'), async ({ request }) => {
-    await delay(500);
-    const body = (await request.json()) as CustomModelRequest;
-    models = [
-      ...models,
-      {
-        id: body.model_id || `custom-${Date.now()}`,
-        name: body.name,
-        provider_id: 'custom',
-        category: body.category,
-        capabilities: ['Text'],
-        context_window: body.context_window,
-        input_price: null,
-        output_price: null,
-        accuracy_score: null,
-        agent_score: null,
-        is_active: true,
-        base_url: body.base_url,
-      },
-    ];
-    return new HttpResponse(null, { status: 200 });
-  }),
-
-  // ---------- Benchmarks ----------
-  http.get(url('/benchmarks'), async () => {
-    await delay(300);
-    const response: BenchmarksResponse = { benchmarks: mockBenchmarks, total: mockBenchmarks.length };
-    return HttpResponse.json(response);
-  }),
-
-  // ---------- Metrics ----------
-  http.get(url('/metrics'), async () => {
-    await delay(200);
-    const response: MetricsResponse = { all_metrics: mockAllMetrics, custom_agent_metrics: mockCustomAgentMetrics };
-    return HttpResponse.json(response);
-  }),
-
-  // ---------- Evaluations ----------
-  http.get(url('/evaluations'), async () => {
-    await delay(250);
-    const evaluations = Array.from(mockEvals.values()).map(advanceMockEval);
-    // Newest first, matching how the History page expects the list ordered.
-    evaluations.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
-    const response: EvaluationsListResponse = { evaluations };
-    return HttpResponse.json(response);
-  }),
-
-  http.post(url('/evaluations'), async ({ request }) => {
-    await delay(500);
-    const body = (await request.json()) as CreateEvaluationRequest;
-    const benchmark = mockBenchmarks.find((b) => b.name === body.benchmark);
-    const id = createMockEval({
-      name: body.name,
-      description: body.description,
-      eval_type: body.eval_type,
-      dataset_id: body.dataset_id,
-      benchmark: body.benchmark,
-      model_ids: body.model_ids,
-      selected_metrics: body.selected_metrics,
-      run_samples: body.run_samples,
-      selected_category: body.selected_category,
-    });
-    void benchmark; // task_count no longer drives total_questions — run_samples does (spec §1.2 Step 5)
-    const response: CreateEvaluationResponse = { id, evaluation_id: id };
-    return HttpResponse.json(response);
-  }),
-
-  http.post(url('/evaluations/:evaluationId/start'), async ({ params }) => {
-    await delay(300);
-    const { evaluationId } = params as { evaluationId: string };
-    startMockEval(evaluationId);
-    return new HttpResponse(null, { status: 200 });
-  }),
-
-  http.get(url('/evaluations/:evaluationId/results'), async ({ params }) => {
-    await delay(300);
-    const { evaluationId } = params as { evaluationId: string };
-    const result = getMockResults(evaluationId);
-    if ('error' in result) {
-      return HttpResponse.json({ detail: result.error }, { status: 400 });
-    }
-    return HttpResponse.json(result);
-  }),
-];
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// src/routes/AppRoutes.tsx
+//AppRoutes.tsx
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Landing from '../components/landing/Landing';
 import SsoLogin from '../components/auth/SsoLogin';
@@ -2079,13 +1414,19 @@ import Comparison from '../components/comparison/Comparison';
 export default function AppRoutes() {
   return (
     <Routes>
-      <Route path="/" element={<Landing />} />
-      {/* AuthGuard redirects here with { from, errorMessage } on error/logged_out. */}
+      {/* AuthGuard redirects here with { from, errorMessage } on error/logged_out.
+          This is the only route not gated by AuthGuard, so it must stay outside it. */}
       <Route path="/sso-login" element={<SsoLogin />} />
 
-      {/* AuthGuard triggers the SSO WebSocket handshake (useSsoAuth) as soon as
-          this layout route mounts, and shows AuthSpinner until authenticated. */}
+      {/* AuthGuard now wraps BOTH "/" and "/app/*" — the landing page's content
+          only renders once authenticated, same as the rest of the app. It
+          triggers the SSO WebSocket handshake (useSsoAuth) as soon as it
+          mounts, which happens on every fresh page load / refresh (auth
+          state is in-memory only, never persisted), and shows AuthSpinner
+          while that's in flight. */}
       <Route element={<AuthGuard />}>
+        <Route path="/" element={<Landing />} />
+
         <Route path="/app" element={<AppShell />}>
           <Route index element={<Navigate to="dashboard" replace />} />
           <Route path="dashboard" element={<Dashboard />} />
@@ -2121,376 +1462,208 @@ export default function AppRoutes() {
 
 
 
+//_variables.scss
+// Design tokens — ported 1:1 from the original theme object (T)
+$bg: #F7F8FC;
+$surface: #FFFFFF;
+$surface-alt: #F1F4F9;
+$surface-hover: #F8F9FD;
 
-// src/store/slices/evaluationsSlice.ts
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import type { PayloadAction } from '@reduxjs/toolkit';
-import { evaluationsApi } from '../../api/endpoints/evaluations';
-import type {
-  CreateEvaluationRequest,
-  EvaluationDraft,
-  EvaluationListItem,
-  EvaluationResultsResponse,
-} from '../../types';
+$indigo: #6366F1;
+$indigo-light: #818CF8;
+$indigo-dark: #4F46E5;
+$violet: #8B5CF6;
+$indigo-pale: #EEF2FF;
 
-type AsyncStatus = 'idle' | 'loading' | 'succeeded' | 'failed';
+$amber: #F59E0B;
+$amber-dark: #D97706;
+$amber-pale: #FFFBEB;
 
-interface EvaluationsState {
-  draft: EvaluationDraft;
+$emerald: #10B981;
+$emerald-dark: #059669;
+$emerald-pale: #ECFDF5;
 
-  // History list (GET /evaluations) — silently re-fetched every 10s from
-  // History.tsx. `listStatus` only gates the *initial* loading/error UI;
-  // components should check `list.length === 0` alongside it so a failed
-  // background poll never shows a spinner/error over existing data (spec §2.4).
-  list: EvaluationListItem[];
-  listStatus: AsyncStatus;
-  listError: string | null;
+$red: #EF4444;
+$red-pale: #FEF2F2;
+$sky: #0EA5E9;
+$sky-pale: #F0F9FF;
+$rose: #F43F5E;
+$rose-pale: #FFF1F2;
 
-  // Per-evaluation results (GET /evaluations/{id}/results), fetched lazily
-  // and only once status === 'completed' (spec §2.3).
-  resultsByEvalId: Record<string, EvaluationResultsResponse>;
-  resultsStatusByEvalId: Record<string, AsyncStatus>;
-  resultsErrorByEvalId: Record<string, string | null>;
+$border: #E5E7EB;
+$border-light: #F3F4F6;
 
-  launching: boolean;
-  launchError: string | null;
+$text-primary: #111827;
+$text-secondary: #6B7280;
+$text-muted: #9CA3AF;
+
+$shadow-2: 0 2px 8px rgba(0, 0, 0, .06), 0 1px 2px rgba(0, 0, 0, .04);
+$shadow-3: 0 8px 24px rgba(0, 0, 0, .08), 0 2px 6px rgba(0, 0, 0, .04);
+$shadow-4: 0 16px 48px rgba(0, 0, 0, .1), 0 4px 12px rgba(0, 0, 0, .05);
+
+$grad-primary: linear-gradient(135deg, #6366F1, #8B5CF6);
+$grad-warm: linear-gradient(135deg, #F59E0B, #F97316);
+$grad-cool: linear-gradient(135deg, #10B981, #0EA5E9);
+
+$font-display: 'Segoe UI', Roboto, Arial, sans-serif;
+$font-body: 'Segoe UI', Roboto, Arial, sans-serif;
+$font-mono: 'Segoe UI', Roboto, Arial, sans-serif;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//global.scss
+@use './_variables' as *;
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: $font-body;
+  background: $bg;
+  color: $text-primary;
+  -webkit-font-smoothing: antialiased;
 }
 
-const initialDraft: EvaluationDraft = {
-  name: '',
-  type: null,
-  providers: [],
-  models: [],
-  dataset: null,
-  subgroup: [],
-  runSamples: 10,
-  metrics: [],
-  judgeModelId: null,
-  agentFramework: null,
-};
+h1, h2, h3, h4, h5 { font-family: $font-display; }
 
-const initialState: EvaluationsState = {
-  draft: initialDraft,
-  list: [],
-  listStatus: 'idle',
-  listError: null,
-  resultsByEvalId: {},
-  resultsStatusByEvalId: {},
-  resultsErrorByEvalId: {},
-  launching: false,
-  launchError: null,
-};
+.page-enter { animation: pageIn .35s ease both; }
+@keyframes pageIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+@keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+@keyframes dotPulse { 0%, 100% { opacity: .15; } 50% { opacity: .35; } }
+@keyframes toastIn { from { opacity: 0; transform: translateY(20px) scale(.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
 
-export const fetchEvaluations = createAsyncThunk('evaluations/fetchList', () => evaluationsApi.list());
-
-export const fetchEvaluationResults = createAsyncThunk(
-  'evaluations/fetchResults',
-  async (evaluationId: string, { rejectWithValue }) => {
-    try {
-      const data = await evaluationsApi.results(evaluationId);
-      return { evaluationId, data };
-    } catch (err) {
-      const detail =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-        (err as Error)?.message ||
-        'Failed to load results';
-      return rejectWithValue({ evaluationId, message: detail });
-    }
-  }
-);
-
-export const launchEvaluation = createAsyncThunk(
-  'evaluations/launch',
-  (payload: CreateEvaluationRequest) => evaluationsApi.createAndStart(payload)
-);
-
-const evaluationsSlice = createSlice({
-  name: 'evaluations',
-  initialState,
-  reducers: {
-    setDraft(state, action: PayloadAction<Partial<EvaluationDraft>>) {
-      state.draft = { ...state.draft, ...action.payload };
-    },
-    // Step 2: changing type clears any previously selected metrics (spec §1.2).
-    setDraftType(state, action: PayloadAction<EvaluationDraft['type']>) {
-      state.draft.type = action.payload;
-      state.draft.metrics = [];
-      if (action.payload !== 'agent') {
-        state.draft.agentFramework = null;
-      }
-    },
-    resetDraft(state) {
-      state.draft = initialDraft;
-    },
-    // Local-only removal — no DELETE /evaluations/{id} endpoint exists yet
-    // (spec §4.6). Does not persist; a background poll will bring it back
-    // if the backend still has it.
-    removeEvaluationLocal(state, action: PayloadAction<string>) {
-      state.list = state.list.filter((e) => e.id !== action.payload);
-    },
-  },
-  extraReducers: (builder) => {
-    builder
-      .addCase(fetchEvaluations.pending, (state) => {
-        if (state.list.length === 0) state.listStatus = 'loading';
-      })
-      .addCase(fetchEvaluations.fulfilled, (state, action) => {
-        state.listStatus = 'succeeded';
-        state.listError = null;
-        state.list = action.payload;
-      })
-      .addCase(fetchEvaluations.rejected, (state, action) => {
-        // Background polls fail silently (spec §2.4) — only surface the
-        // error state when we have nothing on screen yet.
-        if (state.list.length === 0) {
-          state.listStatus = 'failed';
-          state.listError = action.error.message || 'Failed to load evaluations';
-        }
-      })
-      .addCase(fetchEvaluationResults.pending, (state, action) => {
-        state.resultsStatusByEvalId[action.meta.arg] = 'loading';
-        state.resultsErrorByEvalId[action.meta.arg] = null;
-      })
-      .addCase(fetchEvaluationResults.fulfilled, (state, action) => {
-        const { evaluationId, data } = action.payload;
-        state.resultsStatusByEvalId[evaluationId] = 'succeeded';
-        state.resultsByEvalId[evaluationId] = data;
-      })
-      .addCase(fetchEvaluationResults.rejected, (state, action) => {
-        const payload = action.payload as { evaluationId: string; message: string } | undefined;
-        const id = payload?.evaluationId ?? action.meta.arg;
-        state.resultsStatusByEvalId[id] = 'failed';
-        state.resultsErrorByEvalId[id] = payload?.message || 'Failed to load results';
-      })
-      .addCase(launchEvaluation.pending, (state) => {
-        state.launching = true;
-        state.launchError = null;
-      })
-      .addCase(launchEvaluation.fulfilled, (state) => {
-        state.launching = false;
-        state.draft = initialDraft;
-      })
-      .addCase(launchEvaluation.rejected, (state, action) => {
-        state.launching = false;
-        state.launchError = action.error.message || 'Failed to launch evaluation';
-      });
-  },
-});
-
-export const { setDraft, setDraftType, resetDraft, removeEvaluationLocal } = evaluationsSlice.actions;
-export default evaluationsSlice.reducer;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// src/types/index.ts
-// ---------- Auth ----------
-export interface SsoLoginRequest {
-  token: string;
-  data: string;
+// ---- Shared primitives reused across feature components ----
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 10px 20px; border-radius: 12px; font-size: 14px; font-weight: 600;
+  cursor: pointer; transition: all .2s; border: none; font-family: $font-display;
 }
-export interface SsoLoginResult {
-  token: string;
-  username: string;
-  email: string;
-  language: string;
-  profile_name: string;
+.btn-ind { background: $grad-primary; color: #fff; box-shadow: 0 2px 8px rgba(99, 102, 241, .2); }
+.btn-ind:hover { box-shadow: 0 4px 16px rgba(99, 102, 241, .3); transform: translateY(-1px); }
+.btn-ghost { background: $surface; color: $text-secondary; border: 1px solid $border; }
+.btn-ghost:hover { border-color: $indigo; color: $indigo; background: $indigo-pale; }
+.btn-sm { padding: 7px 14px; font-size: 13px; border-radius: 10px; }
+.btn-danger { background: $red-pale; color: $red; border: 1px solid transparent; }
+.btn-danger:hover { background: #FEE2E2; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+
+.badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 12px; border-radius: 100px; font-size: 12px; font-weight: 700; letter-spacing: .2px;
 }
-export interface SsoLoginResponse {
-  status: string;
-  message: string;
-  result: SsoLoginResult;
+.badge-green { background: $emerald-pale; color: $emerald-dark; }
+.badge-gray { background: $surface-alt; color: $text-muted; }
+.badge-blue { background: $indigo-pale; color: $indigo; }
+.badge-amber { background: $amber-pale; color: $amber-dark; }
+.badge-run { background: $indigo-pale; color: $indigo; }
+
+.tag { display: inline-block; padding: 3px 9px; border-radius: 7px; font-size: 11px; font-weight: 700; margin-right: 4px; margin-bottom: 4px; }
+.tag-ind { background: $indigo-pale; color: $indigo; }
+.tag-amb { background: $amber-pale; color: $amber-dark; }
+.tag-em { background: $emerald-pale; color: $emerald-dark; }
+
+.search-box {
+  display: flex; align-items: center; gap: 8px;
+  background: $surface; border: 1px solid $border; border-radius: 12px;
+  padding: 10px 16px; min-width: 300px; transition: all .2s;
+}
+.search-box:focus-within { border-color: $indigo; box-shadow: 0 0 0 4px rgba(99, 102, 241, .08); }
+.search-box input { border: none; outline: none; font-size: 14px; flex: 1; color: $text-primary; font-family: $font-body; background: transparent; }
+.search-box input::placeholder { color: $text-muted; }
+
+.pills { display: flex; gap: 6px; flex-wrap: wrap; }
+.pill {
+  padding: 7px 16px; border-radius: 100px; font-size: 13px; font-weight: 600;
+  border: 1px solid $border; background: $surface; color: $text-secondary; cursor: pointer; transition: all .2s;
+}
+.pill:hover { border-color: $indigo; color: $indigo; }
+.pill.on { background: $grad-primary; color: #fff; border-color: transparent; box-shadow: 0 2px 8px rgba(99, 102, 241, .25); }
+
+.toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }
+
+.cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 16px; }
+.card {
+  background: $surface; border: 1px solid $border; border-radius: 16px; padding: 24px;
+  transition: all .25s; position: relative; overflow: hidden;
+}
+.card:hover { border-color: rgba(99, 102, 241, .2); box-shadow: $shadow-3; transform: translateY(-2px); }
+.card-hdr { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; }
+.card-icon { width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.card-title { font-family: $font-display; font-size: 16px; font-weight: 700; }
+.card-desc { font-size: 13px; color: $text-secondary; line-height: 1.6; margin-bottom: 16px; }
+.card-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; padding-top: 16px; border-top: 1px solid $border-light; }
+
+.tw { background: $surface; border: 1px solid $border; border-radius: 16px; overflow: hidden; }
+.tbl { width: 100%; border-collapse: collapse; }
+.tbl th {
+  text-align: left; padding: 14px 20px; font-size: 11px; font-weight: 700; color: $text-muted;
+  text-transform: uppercase; letter-spacing: 1px; background: $surface-alt; border-bottom: 1px solid $border;
+  font-family: $font-display;
+}
+.tbl td { padding: 14px 20px; font-size: 14px; border-bottom: 1px solid $border-light; }
+.tbl tr:last-child td { border-bottom: none; }
+.tbl tr { transition: background .15s; }
+.tbl tr:hover td { background: $surface-hover; }
+.tbl .winner td { background: $amber-pale; }
+.tbl .winner td:first-child { box-shadow: inset 3px 0 0 $amber; }
+
+.fg { margin-bottom: 22px; }
+.fl { display: block; font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+.fl .opt { color: $text-muted; font-weight: 400; font-size: 12px; }
+.fi {
+  width: 100%; padding: 12px 16px; border: 1px solid $border; border-radius: 12px;
+  font-size: 14px; font-family: $font-body; color: $text-primary; transition: all .2s; background: $surface;
+}
+.fi:focus { outline: none; border-color: $indigo; box-shadow: 0 0 0 4px rgba(99, 102, 241, .08); }
+.fi::placeholder { color: $text-muted; }
+
+.sel-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.sel-opt {
+  display: flex; align-items: center; gap: 12px; padding: 16px;
+  border: 1.5px solid $border; border-radius: 14px; cursor: pointer; transition: all .2s; background: $surface;
+}
+.sel-opt:hover { border-color: $indigo-light; background: rgba(238, 242, 255, .4); }
+.sel-opt.on { border-color: $indigo; background: $indigo-pale; }
+.sel-chk {
+  width: 22px; height: 22px; border: 2px solid $border; border-radius: 7px;
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all .2s;
+}
+.sel-opt.on .sel-chk { background: $grad-primary; border-color: $indigo; color: #fff; box-shadow: 0 2px 4px rgba(99, 102, 241, .25); }
+.sel-txt { font-size: 14px; font-weight: 600; }
+.sel-sub { font-size: 12px; color: $text-secondary; margin-top: 2px; }
+
+.toast {
+  position: fixed; bottom: 32px; right: 32px; background: $surface; border: 1px solid $border;
+  border-radius: 16px; padding: 18px 24px; display: flex; align-items: center; gap: 12px;
+  box-shadow: $shadow-4; z-index: 999; animation: toastIn .4s ease both;
 }
 
-// ---------- Providers ----------
-export interface Provider {
-  id: string;
-  name: string;
-  description: string;
-  logo_url: string | null;
-  base_url: string | null;
-  url_template: string | null;
-  model_count: number;
-  status: 'connected' | 'not_connected' | string;
-}
-export interface ConnectProviderRequest {
-  api_key: string;
-}
-export interface ConnectProviderResponse {
-  status: 'connected';
-  provider_id: string;
-  models_synced: number;
-}
-export interface DisconnectProviderResponse {
-  status: 'disconnected';
-  provider_id: string;
-}
+// Shared by Dashboard and Comparison — kept global since both need it.
+.radar-wrap { display: flex; justify-content: center; align-items: center; padding: 20px; }
 
-// ---------- Models ----------
-export interface Model {
-  id: string;
-  name: string;
-  provider_id: string;
-  category: string;
-  capabilities: string[];
-  context_window: number;
-  input_price: number | null;
-  output_price: number | null;
-  accuracy_score: number | null;
-  agent_score: number | null;
-  is_active: boolean;
-  base_url: string | null;
-}
-export interface CustomModelRequest {
-  base_url: string;
-  category: string;
-  api_key: string;
-  model_id: string;
-  name: string;
-  context_window: number;
-  description: string;
-}
+.pg-hdr { padding: 32px 40px 0; }
+.pg-hdr h1 { font-size: 28px; font-weight: 700; letter-spacing: -.5px; }
+.pg-hdr p { color: $text-secondary; font-size: 14px; margin-top: 4px; }
+.pg-body { padding: 24px 40px 40px; }
 
-// ---------- Benchmarks ----------
-export interface BenchmarkTask {
-  name: string;
-  value: string;
-}
-export interface Benchmark {
-  name: string;
-  description: string;
-  // ⚠️ Not always present on the real API response — normalized to [] at the
-  // fetch boundary (benchmarksApi.list), so consumers can trust these are
-  // always arrays. See spec §5 "Known data-contract gap".
-  tasks: BenchmarkTask[];
-  task_count: number;
-  required_capabilities: string[];
-  huggingface_dataset: string;
-  type: string;
-}
-export interface BenchmarksResponse {
-  benchmarks: Benchmark[];
-  total: number;
-}
-
-// ---------- Metrics ----------
-export interface MetricsResponse {
-  all_metrics: string[];
-  custom_agent_metrics: string[];
-}
-
-// ---------- Evaluations: create/start ----------
-export interface JudgeConfig {
-  model_id: string;
-  base_url: string;
-  // NOTE: populated with the judge model's own id, not a real credential —
-  // the Judge API Key field was removed from the UI entirely (spec §1.4).
-  api_key: string;
-}
-export interface CreateEvaluationRequest {
-  name: string;
-  description?: string;
-  eval_type: 'model' | 'agent' | 'rag' | string;
-  dataset_id: string;
-  benchmark?: string;
-  model_ids: string[];
-  metrics_config?: Record<string, unknown>;
-  selected_metrics: string[];
-  dataset_limit?: number;
-  run_samples: number;
-  selected_category?: string[];
-  judge_config?: JudgeConfig;
-}
-export interface CreateEvaluationResponse {
-  id?: string;
-  evaluation_id?: string;
-  [key: string]: unknown;
-}
-
-// ---------- Evaluations: list (History) ----------
-export type EvaluationStatusValue = 'pending' | 'running' | 'completed' | 'failed' | 'canceled';
-
-export interface EvaluationListItem {
-  id: string;
-  name: string;
-  description: string;
-  eval_type: string;
-  dataset_id: string;
-  datasets_config: { dataset_id: string }[];
-  benchmark: string;
-  model_ids: string[];
-  selected_metrics: string[];
-  run_samples: number;
-  selected_category: string[];
-  status: EvaluationStatusValue;
-  progress: number;
-  total_questions: number;
-  top_model: string | null;
-  top_score: number | null;
-  created_at: string;
-  started_at: string | null;
-  completed_at: string | null;
-}
-export interface EvaluationsListResponse {
-  evaluations: EvaluationListItem[];
-}
-
-// ---------- Evaluations: results ----------
-export interface TestDetail {
-  test_id: string;
-  input: string;
-  output: string;
-  expected: string;
-  latency_seconds: number;
-  passed: boolean;
-  score: number;
-  metric_scores: Record<string, number>;
-}
-export interface ModelResult {
-  model_id: string;
-  provider: string;
-  rank: number;
-  score: number;
-  accuracy: number;
-  passed_tests: number;
-  failed_tests: number;
-  total_tests: number;
-  metric_scores: Record<string, number>;
-  details: TestDetail[];
-}
-export interface EvaluationResultsResponse {
-  evaluation_id: string;
-  status: EvaluationStatusValue;
-  top_model: string;
-  top_score: number;
-  results: ModelResult[];
-}
-
-// UI-only draft built up across the wizard's 7 steps (spec §6).
-export interface EvaluationDraft {
-  name: string;
-  type: 'model' | 'agent' | 'rag' | null;
-  providers: string[];
-  models: string[];
-  dataset: string | null;
-  subgroup: string[];
-  runSamples: number; // default 10
-  metrics: string[];
-  judgeModelId: string | null;
-  // judgeApiKey intentionally omitted — no longer collected (spec §1.4)
-  agentFramework: string | null;
+@media (max-width: 768px) {
+  .cards-grid { grid-template-columns: 1fr; }
+  .pg-hdr, .pg-body { padding-left: 20px; padding-right: 20px; }
 }
