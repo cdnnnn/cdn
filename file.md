@@ -38,17 +38,6 @@ export default AuthSpinner;
 
 
 @use '../../styles/_variables' as *;
-// Token mapping from the reference design system to ours:
-//   $bg-page        -> $bg
-//   $bg-main        -> $surface
-//   $border-subtle  -> $border-light
-//   $border-default -> $border
-//   $shadow-lg      -> $shadow-4
-//   $shadow-md      -> $shadow-3
-//   $primary        -> $indigo
-//   $primary-hover  -> $indigo-dark
-//   $on-primary     -> #fff
-//   $text-tertiary  -> $text-muted
 .auth-spinner {
   position: fixed;
   inset: 0;
@@ -79,10 +68,15 @@ export default AuthSpinner;
     animation: auth-spinner-pulse 2.2s ease-in-out infinite;
     overflow: hidden;
 
+    // Targets the <img> directly by element, so it works regardless of
+    // whether styles['auth-spinner__logo'] resolves (camelCase vs kebab
+    // key mismatches in css-modules configs are the usual cause of a
+    // class silently not attaching).
     img {
       width: 28px;
       height: 28px;
       object-fit: contain;
+      display: block;
     }
   }
   &__ring {
@@ -110,7 +104,6 @@ export default AuthSpinner;
     font-size: 0.8125rem;
     color: $text-muted;
   }
-  /* ---------- ultra-wide: nudge text sizes up a touch ---------- */
   @media (min-width: 1800px) {
     &__label {
       font-size: 1.03125rem;
