@@ -1,4 +1,3 @@
-//Newevaluation.tsx
 import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -22,7 +21,6 @@ import {
   Workflow,
   Waypoints,
   Lightbulb,
-  ArrowRight,
 } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
 import { fetchProviders } from '../../store/slices/providersSlice';
@@ -46,9 +44,24 @@ const STEPS = [
 const STEP_ICONS: ComponentType<{ size?: number }>[] = [Tag, LayoutGrid, Plug, Cpu, Database, Target, ClipboardCheck];
 
 const TYPE_OPTIONS = [
-  { v: 'Model', icon: Cpu, sub: 'General-purpose model', variant: '' },
-  { v: 'Agent', icon: Bot, sub: 'Autonomous agent', variant: 'agent' },
-  { v: 'RAG', icon: Database, sub: 'Retrieval-augmented', variant: 'rag' },
+  {
+    v: 'Model',
+    icon: Cpu,
+    sub: 'Benchmark a general-purpose LLM on standard tasks like reasoning, coding, and knowledge — ideal for comparing raw model quality across providers.',
+    variant: '',
+  },
+  {
+    v: 'Agent',
+    icon: Bot,
+    sub: 'Test an autonomous agent that plans, calls tools, and completes multi-step tasks — measures task completion, not just single-turn output.',
+    variant: 'agent',
+  },
+  {
+    v: 'RAG',
+    icon: Database,
+    sub: 'Evaluate a retrieval-augmented pipeline for grounding accuracy — checks how well answers stay faithful to your retrieved context.',
+    variant: 'rag',
+  },
 ];
 
 // Optional agent frameworks, only shown once "Agent" is selected as the type.
@@ -303,21 +316,21 @@ export default function NewEvaluation() {
                   </div>
 
                   <div className={styles.wiz__roadmap}>
-                    <p className={styles['wiz__review-section-title']}>What you'll set up next</p>
-                    <div className={styles['wiz__roadmap-list']}>
+                    <p className={styles['wiz__roadmap-title']}>What you'll set up next</p>
+                    <p className={styles['wiz__roadmap-sub']}>A quick look at the rest of the flow before you continue.</p>
+                    <div className={styles['wiz__roadmap-grid']}>
                       {STEPS.slice(1).map((s, i) => {
                         const Icon = STEP_ICONS[i + 1];
                         return (
-                          <div className={styles['wiz__roadmap-item']} key={s.label}>
+                          <div className={styles['wiz__roadmap-card']} key={s.label}>
+                            <span className={styles['wiz__roadmap-num']}>{String(i + 2).padStart(2, '0')}</span>
                             <span className={styles['wiz__roadmap-icon']}>
-                              <Icon size={14} />
+                              <Icon size={15} />
                             </span>
                             <span className={styles['wiz__roadmap-text']}>
                               <span className={styles['wiz__roadmap-label']}>{s.label}</span>
+                              <span className={styles['wiz__roadmap-desc']}>{s.description}</span>
                             </span>
-                            {i < STEPS.length - 2 && (
-                              <ArrowRight size={12} strokeWidth={2} className={styles['wiz__roadmap-arrow']} />
-                            )}
                           </div>
                         );
                       })}
@@ -448,7 +461,7 @@ export default function NewEvaluation() {
                   <p className={styles['wiz-sub']}>Pick which models to include in this evaluation.</p>
                   {availableModels.length > 0 ? (
                     <div className={styles['wiz__grid-scroll']}>
-                      <div className={styles.wiz__grid}>
+                      <div className={styles['wiz__models-grid']}>
                         {availableModels.map((m) => {
                           const selected = draft.selModels.includes(m.id);
                           const caps = (m as any).capabilities as string[] | undefined;
@@ -588,7 +601,7 @@ export default function NewEvaluation() {
 
                   <div className={styles['wiz__metrics-toolbar']}>
                     <span className={styles['wiz__metrics-count']}>
-                      <strong>{draft.selMetrics.length}</strong> metrics selected
+                      <strong>{draft.selMetrics.length}</strong> selected
                     </span>
                     <div className={styles['wiz__metrics-actions']}>
                       <button
@@ -867,7 +880,33 @@ export default function NewEvaluation() {
 
 
 
-//Newevaluation.scss
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 @use '../../styles/_variables' as *;
 
 // ---------------------------------------------------------------------------
@@ -1197,7 +1236,7 @@ $shadow-md: $shadow-3;
 
   /* ---------- fields ---------- */
   &__field {
-    max-width: 480px;
+    max-width: 600px;
     margin-top: 1.75rem;
 
     &:first-child {
@@ -1270,7 +1309,7 @@ $shadow-md: $shadow-3;
     flex-wrap: wrap;
     align-items: center;
     gap: 0.5rem;
-    max-width: 560px;
+    max-width: 600px;
   }
 
   &__suggestions-label {
@@ -1303,7 +1342,7 @@ $shadow-md: $shadow-3;
     gap: 0.75rem;
     margin-top: 1.75rem;
     padding: 1rem 1.125rem;
-    max-width: 560px;
+    max-width: 600px;
     border: 1px solid $border-subtle;
     border-radius: 0.875rem;
     background: linear-gradient(135deg, $primary-light 0%, rgba(255, 255, 255, 0) 140%);
@@ -1343,49 +1382,87 @@ $shadow-md: $shadow-3;
   }
 
   &__roadmap {
-    margin-top: 1.75rem;
-    padding-top: 1.5rem;
+    margin-top: 2rem;
+    padding-top: 1.75rem;
     border-top: 1px solid $border-subtle;
-    max-width: 640px;
+    max-width: 600px;
   }
 
-  &__roadmap-list {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.375rem;
-    margin-top: 0.875rem;
+  &__roadmap-title {
+    font-size: 0.9375rem;
+    font-weight: 700;
+    color: $text-primary;
   }
 
-  &__roadmap-item {
+  &__roadmap-sub {
+    font-size: 0.8125rem;
+    color: $text-tertiary;
+    margin-top: 2px;
+  }
+
+  &__roadmap-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.625rem;
+    margin-top: 1rem;
+  }
+
+  &__roadmap-card {
+    position: relative;
     display: flex;
-    align-items: center;
-    gap: 0.5rem;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.875rem 0.9375rem;
+    border: 1px solid $border-subtle;
+    border-radius: 0.75rem;
+    background: $bg-main;
+    transition: border-color 0.14s ease, background 0.14s ease;
+
+    &:hover {
+      border-color: $border-strong;
+      background: $bg-subtle;
+    }
+  }
+
+  &__roadmap-num {
+    position: absolute;
+    top: 0.625rem;
+    right: 0.75rem;
+    font-family: $font-mono;
+    font-size: 0.65625rem;
+    font-weight: 700;
+    color: $text-tertiary;
   }
 
   &__roadmap-icon {
     flex-shrink: 0;
-    width: 28px;
-    height: 28px;
-    border-radius: 0.5rem;
+    width: 32px;
+    height: 32px;
+    border-radius: 0.625rem;
     display: grid;
     place-items: center;
     background: $bg-subtle;
     color: $text-secondary;
-    border: 1px solid $border-subtle;
+  }
+
+  &__roadmap-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding-top: 1px;
+    min-width: 0;
   }
 
   &__roadmap-label {
-    font-size: 0.78125rem;
+    font-size: 0.8125rem;
     font-weight: 700;
     color: $text-primary;
-    white-space: nowrap;
   }
 
-  &__roadmap-arrow {
-    flex-shrink: 0;
-    color: $border-strong;
-    margin: 0 0.25rem;
+  &__roadmap-desc {
+    font-size: 0.71875rem;
+    color: $text-tertiary;
+    line-height: 1.4;
   }
 
   &__select {
@@ -1412,11 +1489,7 @@ $shadow-md: $shadow-3;
     flex-direction: column;
     gap: 0.75rem;
     margin-top: 1.5rem;
-    padding: 1rem;
-    max-width: 560px;
-    border: 1px solid $border-subtle;
-    border-radius: 1rem;
-    background: $bg-subtle;
+    max-width: 650px;
   }
 
   &__type-card {
@@ -1502,7 +1575,7 @@ $shadow-md: $shadow-3;
     margin-top: 1.75rem;
     padding-top: 1.5rem;
     border-top: 1px solid $border-subtle;
-    max-width: 560px;
+    max-width: 650px;
   }
 
   &__framework-hint {
@@ -1541,6 +1614,12 @@ $shadow-md: $shadow-3;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: 0.75rem;
     margin-top: 1.5rem;
+  }
+
+  &__models-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+    gap: 0.75rem;
   }
 
   &__card {
@@ -1977,56 +2056,39 @@ $shadow-md: $shadow-3;
     justify-content: space-between;
     gap: 1rem;
     margin-top: 1.5rem;
-    padding: 0.625rem 0.875rem;
-    background: $bg-subtle;
-    border: 1px solid $border-subtle;
-    border-radius: 0.75rem;
   }
 
   &__metrics-count {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    font-size: 0.84375rem;
+    gap: 0.625rem;
+    font-size: 0.875rem;
     color: $text-secondary;
 
     strong {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-width: 22px;
-      height: 22px;
-      padding: 0 6px;
-      border-radius: 999px;
-      background: $primary;
-      color: #fff;
-      font-weight: 800;
-      font-size: 0.75rem;
+      font-weight: 700;
+      color: $primary;
     }
   }
 
   &__metrics-actions {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 12px;
   }
 
   &__link-btn {
     font-family: $font-body;
-    font-size: 0.78125rem;
+    font-size: 0.8125rem;
     font-weight: 600;
-    color: $text-secondary;
-    background: $bg-main;
-    border: 1px solid $border-default;
-    border-radius: 0.5rem;
-    padding: 0.375rem 0.75rem;
+    color: $primary;
+    background: transparent;
+    border: none;
+    padding: 0;
     cursor: pointer;
-    transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
 
     &:hover {
-      border-color: $primary;
-      color: $primary;
-      background: $primary-light;
+      text-decoration: underline;
     }
   }
 
@@ -2371,9 +2433,8 @@ $shadow-md: $shadow-3;
     grid-template-columns: 1fr;
   }
 
-  .wiz__type-grid {
+  .wiz__roadmap-grid {
     grid-template-columns: 1fr;
-    max-width: 480px;
   }
 }
 
