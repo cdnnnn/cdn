@@ -1,36 +1,41 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Landing from '../components/landing/Landing';
+import SsoLogin from '../components/auth/SsoLogin';
+import AuthGuard from '../components/AuthGuard/AuthGuard';
 import AppShell from '../components/layout/AppShell';
-import ProtectedRoute from './ProtectedRoute';
 import Dashboard from '../components/dashboard/Dashboard';
 import Providers from '../components/providers/Providers';
 import ModelCatalog from '../components/models/ModelCatalog';
-import TestSuites from '../components/suites/TestSuites';
+import Datasets from '../components/datasets/Datasets';
 import NewEvaluation from '../components/evaluations/NewEvaluation';
-import Evaluations from '../components/evaluations/Evaluations';
-import EvaluationDetail from '../components/evaluations/EvaluationDetail';
+import History from '../components/history/History';
 import Comparison from '../components/comparison/Comparison';
 import Reports from '../components/reports/Reports';
-
-const MOCKS_ENABLED = import.meta.env.VITE_ENABLE_MOCKS === 'true';
 
 export default function AppRoutes() {
   return (
     <Routes>
-      {/* In mock mode, main.tsx already seeds a session before render, so
-          skip the landing/SSO page entirely and land straight in the app. */}
-      <Route path="/" element={MOCKS_ENABLED ? <Navigate to="/app/dashboard" replace /> : <Landing />} />
+      {/* AuthGuard redirects here with { from, errorMessage } on error/logged_out.
+          This is the only route not gated by AuthGuard, so it must stay outside it. */}
+      <Route path="/sso-login" element={<SsoLogin />} />
 
-      <Route element={<ProtectedRoute />}>
+      {/* AuthGuard now wraps BOTH "/" and "/app/*" — the landing page's content
+          only renders once authenticated, same as the rest of the app. It
+          triggers the SSO WebSocket handshake (useSsoAuth) as soon as it
+          mounts, which happens on every fresh page load / refresh (auth
+          state is in-memory only, never persisted), and shows AuthSpinner
+          while that's in flight. */}
+      <Route element={<AuthGuard />}>
+        <Route path="/" element={<Landing />} />
+
         <Route path="/app" element={<AppShell />}>
           <Route index element={<Navigate to="dashboard" replace />} />
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="providers" element={<Providers />} />
           <Route path="models" element={<ModelCatalog />} />
-          <Route path="suites" element={<TestSuites />} />
-          <Route path="new-eval" element={<NewEvaluation />} />
-          <Route path="evaluations" element={<Evaluations />} />
-          <Route path="evaluations/:id" element={<EvaluationDetail />} />
+          <Route path="datasets" element={<Datasets />} />
+          <Route path="run-evaluation" element={<NewEvaluation />} />
+          <Route path="history" element={<History />} />
           <Route path="comparison" element={<Comparison />} />
           <Route path="reports" element={<Reports />} />
         </Route>
