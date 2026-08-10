@@ -20,6 +20,9 @@ import {
   Loader2,
   Workflow,
   Waypoints,
+  Lightbulb,
+  ArrowRight,
+  Sparkles,
 } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
 import { fetchProviders } from '../../store/slices/providersSlice';
@@ -53,6 +56,29 @@ const AGENT_FRAMEWORKS = [
   { id: 'hermes', title: 'Hermes', desc: 'Lightweight tool-calling agent runtime' },
   { id: 'langgraph', title: 'LangGraph', desc: 'Graph-based multi-step agent orchestration' },
 ];
+
+const SUGGESTED_NAMES = [
+  'Q3 Model Selection',
+  'Support Bot Regression Test',
+  'RAG Accuracy Benchmark v2',
+  'GPT-4o vs Claude Comparison',
+];
+
+const NAMING_TIPS = [
+  "Include what you're testing, e.g. a model, a product feature, or a use case.",
+  'Add a date or version so you can track changes over time (e.g. "Q3", "v2").',
+  'Keep it specific enough to tell apart from similar past evaluations later.',
+];
+
+function formatContextWindow(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toLocaleString()}M tokens`;
+  if (tokens >= 1_000) return `${Math.round(tokens / 1000)}k tokens`;
+  return `${tokens} tokens`;
+}
+
+function formatPrice(price: number | null | undefined): string {
+  return price === null || price === undefined ? '—' : `$${price.toFixed(2)}`;
+}
 
 export default function NewEvaluation() {
   const dispatch = useAppDispatch();
@@ -244,6 +270,56 @@ export default function NewEvaluation() {
                       autoFocus
                     />
                   </div>
+
+                  <div className={styles['wiz__suggestions']}>
+                    <span className={styles['wiz__suggestions-label']}>Try:</span>
+                    {SUGGESTED_NAMES.map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        className={styles['wiz__suggestion-chip']}
+                        onClick={() => dispatch(setDraft({ name: s }))}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className={styles.wiz__tips}>
+                    <div className={styles['wiz__tips-icon']}>
+                      <Lightbulb size={16} strokeWidth={2} />
+                    </div>
+                    <div>
+                      <p className={styles['wiz__tips-title']}>Tips for a good name</p>
+                      <ul className={styles['wiz__tips-list']}>
+                        {NAMING_TIPS.map((tip) => (
+                          <li key={tip}>{tip}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+
+                  <div className={styles.wiz__roadmap}>
+                    <p className={styles['wiz__review-section-title']}>What you'll set up next</p>
+                    <div className={styles['wiz__roadmap-list']}>
+                      {STEPS.slice(1).map((s, i) => {
+                        const Icon = STEP_ICONS[i + 1];
+                        return (
+                          <div className={styles['wiz__roadmap-item']} key={s.label}>
+                            <span className={styles['wiz__roadmap-icon']}>
+                              <Icon size={14} />
+                            </span>
+                            <span className={styles['wiz__roadmap-text']}>
+                              <span className={styles['wiz__roadmap-label']}>{s.label}</span>
+                            </span>
+                            {i < STEPS.length - 2 && (
+                              <ArrowRight size={12} strokeWidth={2} className={styles['wiz__roadmap-arrow']} />
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </>
               )}
 
@@ -343,6 +419,7 @@ export default function NewEvaluation() {
                             <span className={styles['wiz__card-text']}>
                               <span className={styles['wiz__card-name']}>{p.name}</span>
                               <span className={styles['wiz__card-sub']}>{p.model_count} models available</span>
+                              <span className={styles['wiz__provider-status']}>Connected</span>
                             </span>
                             {selected && (
                               <span className={styles['wiz__card-check']}>
@@ -369,25 +446,46 @@ export default function NewEvaluation() {
                       <div className={styles.wiz__grid}>
                         {availableModels.map((m) => {
                           const selected = draft.selModels.includes(m.id);
+                          const caps = (m as any).capabilities as string[] | undefined;
+                          const inputPrice = (m as any).input_price as number | null | undefined;
+                          const outputPrice = (m as any).output_price as number | null | undefined;
+                          const accuracy = (m as any).accuracy_score as number | null | undefined;
                           return (
                             <button
                               key={m.id}
                               type="button"
-                              className={`${styles.wiz__card} ${selected ? styles['wiz__card--selected'] : ''}`}
+                              className={`${styles['wiz__model-card']} ${selected ? styles['wiz__model-card--selected'] : ''}`}
                               onClick={() => dispatch(setDraft({ selModels: toggle(draft.selModels, m.id) }))}
                             >
-                              <span className={styles['wiz__card-icon']}>
-                                <Cpu size={15} />
+                              <div className={styles['wiz__model-top']}>
+                                <span className={styles['wiz__model-name']}>{m.name}</span>
+                                {selected && (
+                                  <span className={styles['wiz__card-check']} style={{ position: 'static' }}>
+                                    <Check size={11} strokeWidth={2.75} />
+                                  </span>
+                                )}
+                              </div>
+                              <span className={styles['wiz__model-provider']}>
+                                {providers.find((p) => p.id === m.provider_id)?.name ?? m.provider_id}
                               </span>
-                              <span className={styles['wiz__card-text']}>
-                                <span className={styles['wiz__card-name']}>{m.name}</span>
-                                <span className={styles['wiz__card-sub']}>{m.context_window.toLocaleString()} ctx</span>
-                              </span>
-                              {selected && (
-                                <span className={styles['wiz__card-check']}>
-                                  <Check size={11} strokeWidth={2.75} />
-                                </span>
+                              {caps && caps.length > 0 && (
+                                <div className={styles['wiz__model-caps']}>
+                                  {caps.slice(0, 3).map((c) => (
+                                    <span key={c} className={styles['wiz__model-cap-chip']}>
+                                      {c}
+                                    </span>
+                                  ))}
+                                </div>
                               )}
+                              <div className={styles['wiz__model-meta']}>
+                                <span>{formatContextWindow(m.context_window)}</span>
+                                {(inputPrice !== undefined || outputPrice !== undefined) && (
+                                  <span>
+                                    {formatPrice(inputPrice)} in · {formatPrice(outputPrice)} out /1M
+                                  </span>
+                                )}
+                                {accuracy !== undefined && accuracy !== null && <span>Accuracy {accuracy.toFixed(1)}%</span>}
+                              </div>
                             </button>
                           );
                         })}
@@ -417,7 +515,12 @@ export default function NewEvaluation() {
                               onClick={() => dispatch(setDraft({ selBenchmark: b.name }))}
                             >
                               <div className={styles['wiz__dataset-top']}>
-                                <span className={styles['wiz__dataset-name']}>{b.name}</span>
+                                <span className={styles['wiz__dataset-top-left']}>
+                                  <span className={styles['wiz__dataset-icon']}>
+                                    <Database size={14} />
+                                  </span>
+                                  <span className={styles['wiz__dataset-name']}>{b.name}</span>
+                                </span>
                                 {selected && (
                                   <span className={styles['wiz__card-check']} style={{ position: 'static' }}>
                                     <Check size={11} strokeWidth={2.75} />
@@ -426,7 +529,7 @@ export default function NewEvaluation() {
                               </div>
                               <p className={styles['wiz__dataset-desc']}>{b.description}</p>
                               <div className={styles['wiz__dataset-meta']}>
-                                <span className={styles.wiz__chip}>{b.type}</span>
+                                <span className={`${styles.wiz__chip} ${styles['wiz__chip--static']}`}>{b.type}</span>
                                 <span>{b.task_count.toLocaleString()} tasks</span>
                               </div>
                             </button>
@@ -772,6 +875,8 @@ export default function NewEvaluation() {
 
 
 
+
+
 @use '../../styles/_variables' as *;
 
 // ---------------------------------------------------------------------------
@@ -1079,6 +1184,8 @@ $shadow-md: $shadow-3;
     overflow-y: auto;
     padding-right: 4px;
     margin-right: -4px;
+    display: flex;
+    flex-direction: column;
   }
 
   &__body h2 {
@@ -1143,6 +1250,131 @@ $shadow-md: $shadow-3;
       border-color: $primary;
       box-shadow: 0 0 0 0.1875rem $primary-light;
     }
+  }
+
+  /* ---------- name step: suggestions / tips / roadmap ---------- */
+  &__suggestions {
+    margin-top: 1.125rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    max-width: 560px;
+  }
+
+  &__suggestions-label {
+    font-size: 0.84375rem;
+    color: $text-tertiary;
+    margin-right: 0.125rem;
+  }
+
+  &__suggestion-chip {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-default;
+    border-radius: 999px;
+    padding: 0.3125rem 0.75rem;
+    cursor: pointer;
+    transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+      color: $primary;
+      background: $primary-light;
+    }
+  }
+
+  &__tips {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    margin-top: 1.75rem;
+    padding: 1rem 1.125rem;
+    max-width: 560px;
+    border: 1px solid $border-subtle;
+    border-radius: 0.875rem;
+    background: linear-gradient(135deg, $primary-light 0%, rgba(255, 255, 255, 0) 140%);
+  }
+
+  &__tips-icon {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 0.625rem;
+    display: grid;
+    place-items: center;
+    background: $bg-main;
+    color: $primary;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+  }
+
+  &__tips-title {
+    font-size: 0.84375rem;
+    font-weight: 700;
+    color: $text-primary;
+    margin-bottom: 6px;
+  }
+
+  &__tips-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.8125rem;
+    color: $text-secondary;
+    line-height: 1.5;
+    padding-left: 1.125rem;
+
+    li {
+      list-style: disc;
+    }
+  }
+
+  &__roadmap {
+    margin-top: 1.75rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid $border-subtle;
+    max-width: 640px;
+  }
+
+  &__roadmap-list {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.375rem;
+    margin-top: 0.875rem;
+  }
+
+  &__roadmap-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  &__roadmap-icon {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    border-radius: 0.5rem;
+    display: grid;
+    place-items: center;
+    background: $bg-subtle;
+    color: $text-secondary;
+    border: 1px solid $border-subtle;
+  }
+
+  &__roadmap-label {
+    font-size: 0.78125rem;
+    font-weight: 700;
+    color: $text-primary;
+    white-space: nowrap;
+  }
+
+  &__roadmap-arrow {
+    flex-shrink: 0;
+    color: $border-strong;
+    margin: 0 0.25rem;
   }
 
   &__select {
@@ -1294,18 +1526,22 @@ $shadow-md: $shadow-3;
     gap: 0.75rem;
     padding: 0.875rem 2.25rem 0.875rem 0.875rem;
     border: 1px solid $border-default;
-    border-radius: 0.75rem;
+    border-radius: 0.875rem;
     background: $bg-main;
     cursor: pointer;
-    transition: border-color 0.14s ease, background 0.14s ease;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.03);
+    transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
 
     &:hover {
       border-color: $primary;
+      box-shadow: $shadow-sm;
+      transform: translateY(-1px);
     }
 
     &--selected {
       border-color: $primary;
-      background: $primary-light;
+      background: linear-gradient(135deg, $primary-light 0%, rgba(255, 255, 255, 0) 130%);
+      box-shadow: 0 0 0 1px $primary, $shadow-sm;
     }
   }
 
@@ -1365,6 +1601,106 @@ $shadow-md: $shadow-3;
     flex-shrink: 0;
   }
 
+  /* ---------- provider card status pill ---------- */
+  &__provider-status {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.65625rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: $success;
+    background: $success-subtle;
+    border-radius: 999px;
+    padding: 0.1875rem 0.5rem 0.1875rem 0.375rem;
+    margin-top: 2px;
+
+    &::before {
+      content: '';
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: $success;
+    }
+  }
+
+  /* ---------- richer model card ---------- */
+  &__model-card {
+    position: relative;
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.9375rem 1.0625rem;
+    border: 1px solid $border-default;
+    border-radius: 0.875rem;
+    background: $bg-main;
+    cursor: pointer;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.03);
+    transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+
+    &:hover {
+      border-color: $primary;
+      box-shadow: $shadow-sm;
+      transform: translateY(-1px);
+    }
+
+    &--selected {
+      border-color: $primary;
+      background: linear-gradient(135deg, $primary-light 0%, rgba(255, 255, 255, 0) 130%);
+      box-shadow: 0 0 0 1px $primary, $shadow-sm;
+    }
+  }
+
+  &__model-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  &__model-name {
+    font-size: 0.90625rem;
+    font-weight: 700;
+    color: $text-primary;
+    line-height: 1.3;
+  }
+
+  &__model-provider {
+    font-size: 0.78125rem;
+    color: $text-tertiary;
+    margin-top: -0.25rem;
+  }
+
+  &__model-caps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3125rem;
+  }
+
+  &__model-cap-chip {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
+    border-radius: 0.375rem;
+    padding: 0.125rem 0.4375rem;
+  }
+
+  &__model-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.625rem;
+    font-size: 0.71875rem;
+    color: $text-tertiary;
+    padding-top: 0.375rem;
+    margin-top: 0.125rem;
+    border-top: 1px solid $border-subtle;
+  }
+
   &__empty {
     grid-column: 1 / -1;
     padding: 2rem;
@@ -1377,8 +1713,9 @@ $shadow-md: $shadow-3;
 
   // scrollable wrapper used for the providers / models card grids
   &__grid-scroll {
+    flex: 1;
+    min-height: 0;
     margin-top: 1.5rem;
-    max-height: 26rem;
     overflow-y: auto;
     padding-right: 4px;
     margin-right: -4px;
@@ -1394,8 +1731,8 @@ $shadow-md: $shadow-3;
     align-items: stretch;
     gap: 1.25rem;
     margin-top: 1.5rem;
-    height: 28rem;
-    min-height: 0;
+    flex: 1;
+    min-height: 22rem;
   }
 
   &__dataset-grid-scroll {
@@ -1416,23 +1753,27 @@ $shadow-md: $shadow-3;
   &__dataset-card {
     position: relative;
     text-align: left;
-    padding: 1rem 1.125rem;
+    padding: 1.0625rem 1.1875rem;
     border: 1px solid $border-default;
-    border-radius: 0.75rem;
+    border-radius: 0.875rem;
     background: $bg-main;
     cursor: pointer;
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
-    transition: border-color 0.14s ease, background 0.14s ease;
+    gap: 0.625rem;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.03);
+    transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
 
     &:hover {
       border-color: $primary;
+      box-shadow: $shadow-sm;
+      transform: translateY(-1px);
     }
 
     &--selected {
       border-color: $primary;
-      background: $primary-light;
+      background: linear-gradient(135deg, $primary-light 0%, rgba(255, 255, 255, 0) 130%);
+      box-shadow: 0 0 0 1px $primary, $shadow-sm;
     }
   }
 
@@ -1443,10 +1784,36 @@ $shadow-md: $shadow-3;
     gap: 0.5rem;
   }
 
+  &__dataset-top-left {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    min-width: 0;
+  }
+
+  &__dataset-icon {
+    flex-shrink: 0;
+    width: 30px;
+    height: 30px;
+    border-radius: 0.5625rem;
+    display: grid;
+    place-items: center;
+    background: $bg-subtle;
+    color: $text-tertiary;
+  }
+
+  &__dataset-card--selected &__dataset-icon {
+    background: $primary;
+    color: #fff;
+  }
+
   &__dataset-name {
-    font-size: 0.9375rem;
-    font-weight: 600;
+    font-size: 0.90625rem;
+    font-weight: 700;
     color: $text-primary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   &__dataset-desc {
@@ -1582,6 +1949,14 @@ $shadow-md: $shadow-3;
     display: inline-block;
   }
 
+  &__chip--static {
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
+    font-weight: 600;
+    font-size: 0.71875rem;
+  }
+
   /* ---------- metrics: cards + judge panel side by side ---------- */
   &__metrics-toolbar {
     display: flex;
@@ -1625,8 +2000,8 @@ $shadow-md: $shadow-3;
     align-items: stretch;
     gap: 1.25rem;
     margin-top: 0.875rem;
-    height: 26rem;
-    min-height: 0;
+    flex: 1;
+    min-height: 20rem;
   }
 
   &__metrics-main-scroll {
