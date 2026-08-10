@@ -88,18 +88,14 @@
 .rows { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
 
 .row {
-  border: 1px solid $border; border-radius: 14px; padding: 14px 14px 14px 16px; cursor: pointer; transition: all .15s;
+  border: 1px solid $border; border-radius: 14px; padding: 14px; cursor: pointer; transition: all .15s;
   background: #FFF;
   position: relative;
 }
 .row:hover { border-color: $indigo-light; box-shadow: $shadow-2; }
 .row.selected {
-  border-color: transparent;
-  background:
-    linear-gradient(135deg, rgba(20, 40, 160, 0.07), rgba(20, 40, 160, 0.02)) padding-box,
-    #FFF padding-box;
+  border-color: $indigo;
   background-color: #EEF1FC;
-  box-shadow: $shadow-2, inset 3px 0 0 $indigo;
 }
 
 .row__top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
@@ -139,7 +135,6 @@
   .sidebar, .detail { overflow-y: visible; min-height: 0; }
   .rows { overflow-y: visible; }
 }
-
 
 
 
@@ -255,15 +250,14 @@
 .rows { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
 
 .row {
-  border: 1px solid $border; border-radius: 14px; padding: 14px 14px 14px 16px; cursor: pointer; transition: all .15s;
+  border: 1px solid $border; border-radius: 14px; padding: 14px; cursor: pointer; transition: all .15s;
   background: #FFF;
   position: relative;
 }
 .row:hover { border-color: $indigo-light; box-shadow: $shadow-2; }
 .row.selected {
-  border-color: transparent;
+  border-color: $indigo;
   background-color: #EEF1FC;
-  box-shadow: $shadow-2, inset 3px 0 0 $indigo;
 }
 
 // Running-state animation: a thin light continuously traveling around the
@@ -283,7 +277,6 @@
   background:
     linear-gradient(#EEF1FC, #EEF1FC) padding-box,
     conic-gradient(from var(--angle), $border 0%, $indigo 8%, $border 16%) border-box;
-  box-shadow: $shadow-2;
 }
 
 .row__top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
