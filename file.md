@@ -170,7 +170,7 @@ export default function NewEvaluation() {
   const progressPct = Math.round((step / (totalSteps - 1)) * 100);
 
   return (
-    <div className="page-enter">
+    <div className="page-enter" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <div className={styles.page}>
         <div className={styles.wiz__header}>
           <div>
@@ -772,11 +772,6 @@ export default function NewEvaluation() {
 
 
 
-
-
-
-
-
 @use '../../styles/_variables' as *;
 
 // ---------------------------------------------------------------------------
@@ -801,11 +796,17 @@ $shadow-sm: $shadow-2;
 $shadow-md: $shadow-3;
 
 .page {
+  flex: 1;
+  height: 100%;
+  min-height: 0;
   padding: 28px 40px 40px;
+  display: flex;
+  flex-direction: column;
 }
 
 .wiz {
   &__header {
+    flex-shrink: 0;
     display: flex;
     align-items: flex-end;
     justify-content: space-between;
@@ -861,7 +862,8 @@ $shadow-md: $shadow-3;
     box-shadow: $shadow-md;
     overflow: hidden;
     display: flex;
-    min-height: 600px;
+    flex: 1;
+    min-height: 0;
   }
 
   /* ---------- sidebar / vertical stepper ---------- */
