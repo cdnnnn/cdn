@@ -214,7 +214,6 @@ export default function NewEvaluation() {
 
         <div className={styles['wiz-shell']}>
           <aside className={styles.wiz__sidebar}>
-            <p className={styles['wiz__sidebar-eyebrow']}>Setup steps</p>
             <div className={styles['wiz__sidebar-progress']}>
               <div className={styles['wiz__sidebar-progress-head']}>
                 <span>
@@ -617,13 +616,12 @@ export default function NewEvaluation() {
                               className={`${styles['wiz__metric-card']} ${selected ? styles['wiz__metric-card--selected'] : ''}`}
                               onClick={() => dispatch(setDraft({ selMetrics: toggle(draft.selMetrics, m) }))}
                             >
-                              <span className={styles['wiz__metric-check']}>
-                                <Check size={11} strokeWidth={3} />
-                              </span>
-                              <span className={styles['wiz__metric-icon']}>
-                                <Target size={16} />
-                              </span>
                               <span className={styles['wiz__metric-name']}>{m}</span>
+                              {selected && (
+                                <span className={styles['wiz__metric-check']}>
+                                  <Check size={11} strokeWidth={2.75} />
+                                </span>
+                              )}
                             </button>
                           );
                         })}
@@ -869,10 +867,7 @@ export default function NewEvaluation() {
 
 
 
-
-
-
-//Newevaluation.module.scss
+//Newevaluation.scss
 @use '../../styles/_variables' as *;
 
 // ---------------------------------------------------------------------------
@@ -970,31 +965,20 @@ $shadow-md: $shadow-3;
   /* ---------- sidebar / vertical stepper ---------- */
   &__sidebar {
     flex-shrink: 0;
-    width: 288px;
-    background: linear-gradient(180deg, $bg-subtle 0%, rgba(255, 255, 255, 0) 60%), $bg-subtle;
+    width: 280px;
+    background: $bg-subtle;
     border-right: 1px solid $border-subtle;
-    padding: 22px 16px 24px;
+    padding: 24px 14px 28px;
     display: flex;
     flex-direction: column;
     gap: 2px;
     overflow-y: auto;
   }
 
-  &__sidebar-eyebrow {
-    flex-shrink: 0;
-    font-family: $font-mono;
-    font-size: 0.65625rem;
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: $text-tertiary;
-    padding: 2px 8px 14px;
-  }
-
   &__sidebar-progress {
     flex-shrink: 0;
-    padding: 4px 8px 18px;
-    margin-bottom: 8px;
+    padding: 4px 12px 20px;
+    margin-bottom: 6px;
     border-bottom: 1px solid $border-subtle;
   }
 
@@ -1008,7 +992,7 @@ $shadow-md: $shadow-3;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: $text-tertiary;
-    margin-bottom: 9px;
+    margin-bottom: 8px;
 
     span:last-child {
       color: $primary;
@@ -1017,10 +1001,9 @@ $shadow-md: $shadow-3;
   }
 
   &__sidebar-progress-track {
-    height: 7px;
+    height: 6px;
     border-radius: 999px;
-    background: $bg-main;
-    border: 1px solid $border-subtle;
+    background: $border-subtle;
     overflow: hidden;
   }
 
@@ -1028,7 +1011,6 @@ $shadow-md: $shadow-3;
     height: 100%;
     border-radius: 999px;
     background: linear-gradient(90deg, $primary 0%, $primary-hover 100%);
-    box-shadow: 0 0 8px rgba(79, 70, 229, 0.4);
     transition: width 0.28s cubic-bezier(0.32, 0.72, 0, 1);
   }
 
@@ -1039,26 +1021,26 @@ $shadow-md: $shadow-3;
     gap: 12px;
     text-align: left;
     width: 100%;
-    border: 1px solid transparent;
+    border: none;
     background: transparent;
     border-radius: 0.75rem;
-    padding: 9px 10px 20px 10px;
+    padding: 10px 12px 20px 12px;
     cursor: pointer;
-    transition: background 0.16s ease, border-color 0.16s ease, transform 0.16s ease;
+    transition: background 0.16s ease, transform 0.16s ease;
 
     &::before {
       content: '';
       position: absolute;
-      top: 38px;
-      left: 25px;
+      top: 40px;
+      left: 27px;
       width: 2px;
-      height: calc(100% - 30px);
+      height: calc(100% - 32px);
       background: $border-default;
       transition: background 0.2s ease;
     }
 
     &:last-child {
-      padding-bottom: 9px;
+      padding-bottom: 10px;
 
       &::before {
         display: none;
@@ -1070,8 +1052,7 @@ $shadow-md: $shadow-3;
     }
 
     &:not(:disabled):hover {
-      background: $bg-main;
-      border-color: $border-subtle;
+      background: $bg-inset;
     }
   }
 
@@ -1079,19 +1060,18 @@ $shadow-md: $shadow-3;
     position: relative;
     z-index: 1;
     flex-shrink: 0;
-    width: 30px;
-    height: 30px;
-    border-radius: 0.625rem;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
     display: grid;
     place-items: center;
     background: $bg-main;
     border: 1.5px solid $border-default;
     color: $text-tertiary;
     font-family: $font-mono;
-    font-size: 0.71875rem;
+    font-size: 0.75rem;
     font-weight: 700;
-    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
-    transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+    transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
   }
 
   &__step-text {
@@ -1117,15 +1097,13 @@ $shadow-md: $shadow-3;
 
   &__step--active {
     background: $bg-main;
-    border-color: $border-subtle;
     box-shadow: $shadow-sm;
 
     .wiz__step-marker {
-      background: linear-gradient(135deg, $primary 0%, $primary-hover 100%);
+      background: $primary;
       border-color: $primary;
       color: #fff;
       box-shadow: 0 0 0 5px $primary-light;
-      transform: scale(1.06);
     }
 
     .wiz__step-label {
@@ -1145,7 +1123,7 @@ $shadow-md: $shadow-3;
     }
 
     &:not(:disabled):hover {
-      background: $bg-main;
+      background: rgba(0, 0, 0, 0.02);
     }
   }
 
@@ -1430,100 +1408,58 @@ $shadow-md: $shadow-3;
 
   /* ---------- type cards (Model / Agent / RAG) ---------- */
   &__type-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 0.875rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
     margin-top: 1.5rem;
-    max-width: 720px;
+    padding: 1rem;
+    max-width: 560px;
+    border: 1px solid $border-subtle;
+    border-radius: 1rem;
+    background: $bg-subtle;
   }
 
   &__type-card {
     position: relative;
     display: flex;
-    flex-direction: column;
     align-items: flex-start;
-    gap: 0.75rem;
+    gap: 0.875rem;
     text-align: left;
     width: 100%;
-    padding: 1.375rem 1.25rem 1.25rem;
+    padding: 1.125rem 3rem 1.125rem 1.125rem;
     border: 1px solid $border-default;
-    border-radius: 1rem;
+    border-radius: 0.75rem;
     background: $bg-main;
     cursor: pointer;
-    overflow: hidden;
-    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.03);
-    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
-
-    &::after {
-      content: '';
-      position: absolute;
-      inset: 0;
-      border-radius: inherit;
-      opacity: 0;
-      background: radial-gradient(140px 90px at 16% -10%, rgba(99, 102, 241, 0.18), transparent 70%);
-      transition: opacity 0.18s ease;
-    }
+    transition: border-color 0.14s ease, background 0.14s ease;
 
     &:hover {
       border-color: $primary;
-      box-shadow: $shadow-sm;
-      transform: translateY(-2px);
-    }
-
-    &:hover::after {
-      opacity: 1;
     }
 
     &--selected {
       border-color: $primary;
-      box-shadow: 0 0 0 1.5px $primary, $shadow-sm;
-
-      &::after {
-        opacity: 1;
-      }
+      background: $primary-light;
     }
   }
 
   &__type-icon {
-    position: relative;
-    z-index: 1;
-    width: 42px;
-    height: 42px;
+    width: 38px;
+    height: 38px;
     flex-shrink: 0;
-    border-radius: 0.75rem;
+    border-radius: 0.5rem;
     background: $bg-subtle;
     color: $primary;
     display: grid;
     place-items: center;
-    transition: transform 0.18s ease;
-  }
-
-  &__type-card:hover &__type-icon {
-    transform: scale(1.06);
-  }
-
-  &__type-card--selected &__type-icon {
-    background: linear-gradient(135deg, $primary 0%, $primary-hover 100%);
-    color: #fff;
-    box-shadow: 0 4px 10px rgba(79, 70, 229, 0.35);
   }
 
   &__type-icon--agent {
     color: $violet;
   }
 
-  &__type-card--selected &__type-icon--agent {
-    background: linear-gradient(135deg, $violet 0%, #7c3aed 100%);
-    box-shadow: 0 4px 10px rgba(139, 92, 246, 0.35);
-  }
-
   &__type-icon--rag {
     color: $sky;
-  }
-
-  &__type-card--selected &__type-icon--rag {
-    background: linear-gradient(135deg, $sky 0%, #0284c7 100%);
-    box-shadow: 0 4px 10px rgba(14, 165, 233, 0.35);
   }
 
   &__type-content {
@@ -1536,22 +1472,22 @@ $shadow-md: $shadow-3;
   }
 
   &__type-title {
-    font-size: 0.9375rem;
-    font-weight: 700;
+    font-size: 1rem;
+    font-weight: 600;
     color: $text-primary;
   }
 
   &__type-desc {
-    font-size: 0.8125rem;
+    font-size: 0.875rem;
     color: $text-secondary;
-    line-height: 1.45;
+    line-height: 1.5;
   }
 
   &__type-check {
     position: absolute;
-    z-index: 1;
-    top: 0.875rem;
-    right: 0.875rem;
+    top: 50%;
+    right: 1.125rem;
+    transform: translateY(-50%);
     width: 20px;
     height: 20px;
     border-radius: 50%;
@@ -1559,7 +1495,6 @@ $shadow-md: $shadow-3;
     color: #fff;
     display: grid;
     place-items: center;
-    box-shadow: 0 2px 5px rgba(79, 70, 229, 0.35);
   }
 
   /* ---------- optional agent framework sub-section ---------- */
@@ -1583,31 +1518,27 @@ $shadow-md: $shadow-3;
   }
 
   &__type-card--framework {
-    flex-direction: row;
-    align-items: flex-start;
-    padding: 0.9375rem 2.5rem 0.9375rem 0.9375rem;
+    padding: 0.875rem 2.75rem 0.875rem 0.875rem;
     gap: 0.75rem;
-    border-radius: 0.875rem;
 
     .wiz__type-icon {
       width: 32px;
       height: 32px;
-      border-radius: 0.625rem;
     }
 
     .wiz__type-title {
-      font-size: 0.875rem;
+      font-size: 0.9375rem;
     }
 
     .wiz__type-desc {
-      font-size: 0.78125rem;
+      font-size: 0.8125rem;
     }
   }
 
   /* ---------- generic selectable card grid (providers / models / metrics) ---------- */
   &__grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: 0.75rem;
     margin-top: 1.5rem;
   }
@@ -1620,22 +1551,18 @@ $shadow-md: $shadow-3;
     gap: 0.75rem;
     padding: 0.875rem 2.25rem 0.875rem 0.875rem;
     border: 1px solid $border-default;
-    border-radius: 0.875rem;
+    border-radius: 0.75rem;
     background: $bg-main;
     cursor: pointer;
-    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.03);
-    transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+    transition: border-color 0.14s ease, background 0.14s ease;
 
     &:hover {
       border-color: $primary;
-      box-shadow: $shadow-sm;
-      transform: translateY(-1px);
     }
 
     &--selected {
       border-color: $primary;
-      background: linear-gradient(135deg, $primary-light 0%, rgba(255, 255, 255, 0) 130%);
-      box-shadow: 0 0 0 1px $primary, $shadow-sm;
+      background: $primary-light;
     }
   }
 
@@ -1729,22 +1656,18 @@ $shadow-md: $shadow-3;
     gap: 0.5rem;
     padding: 0.9375rem 1.0625rem;
     border: 1px solid $border-default;
-    border-radius: 0.875rem;
+    border-radius: 0.75rem;
     background: $bg-main;
     cursor: pointer;
-    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.03);
-    transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+    transition: border-color 0.14s ease, background 0.14s ease;
 
     &:hover {
       border-color: $primary;
-      box-shadow: $shadow-sm;
-      transform: translateY(-1px);
     }
 
     &--selected {
       border-color: $primary;
-      background: linear-gradient(135deg, $primary-light 0%, rgba(255, 255, 255, 0) 130%);
-      box-shadow: 0 0 0 1px $primary, $shadow-sm;
+      background: $primary-light;
     }
   }
 
@@ -1840,34 +1763,30 @@ $shadow-md: $shadow-3;
 
   &__dataset-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
     gap: 0.75rem;
   }
 
   &__dataset-card {
     position: relative;
     text-align: left;
-    padding: 1.0625rem 1.1875rem;
+    padding: 1rem 1.125rem;
     border: 1px solid $border-default;
-    border-radius: 0.875rem;
+    border-radius: 0.75rem;
     background: $bg-main;
     cursor: pointer;
     display: flex;
     flex-direction: column;
-    gap: 0.625rem;
-    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.03);
-    transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+    gap: 0.5rem;
+    transition: border-color 0.14s ease, background 0.14s ease;
 
     &:hover {
       border-color: $primary;
-      box-shadow: $shadow-sm;
-      transform: translateY(-1px);
     }
 
     &--selected {
       border-color: $primary;
-      background: linear-gradient(135deg, $primary-light 0%, rgba(255, 255, 255, 0) 130%);
-      box-shadow: 0 0 0 1px $primary, $shadow-sm;
+      background: $primary-light;
     }
   }
 
@@ -2123,7 +2042,7 @@ $shadow-md: $shadow-3;
 
   &__metrics-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: 0.75rem;
   }
 
@@ -2131,101 +2050,44 @@ $shadow-md: $shadow-3;
     position: relative;
     text-align: left;
     display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.625rem;
-    padding: 1rem 1rem 0.9375rem;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.875rem 2.25rem 0.875rem 0.875rem;
     border: 1px solid $border-default;
-    border-radius: 1rem;
+    border-radius: 0.75rem;
     background: $bg-main;
     cursor: pointer;
-    overflow: hidden;
-    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.03);
-    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
-
-    &::after {
-      content: '';
-      position: absolute;
-      inset: 0;
-      border-radius: inherit;
-      opacity: 0;
-      background: radial-gradient(120px 80px at 14% -10%, rgba(99, 102, 241, 0.16), transparent 70%);
-      transition: opacity 0.18s ease;
-    }
+    transition: border-color 0.14s ease, background 0.14s ease;
 
     &:hover {
       border-color: $primary;
-      box-shadow: $shadow-sm;
-      transform: translateY(-2px);
-    }
-
-    &:hover::after {
-      opacity: 1;
     }
 
     &--selected {
       border-color: $primary;
-      background: $bg-main;
-      box-shadow: 0 0 0 1.5px $primary, $shadow-sm;
-
-      &::after {
-        opacity: 1;
-      }
+      background: $primary-light;
     }
   }
 
-  &__metric-icon {
-    flex-shrink: 0;
-    width: 36px;
-    height: 36px;
-    border-radius: 0.75rem;
-    display: grid;
-    place-items: center;
-    background: $bg-subtle;
-    color: $text-tertiary;
-    z-index: 1;
-    transition: background 0.18s ease, color 0.18s ease, transform 0.18s ease;
-  }
-
-  &__metric-card--selected &__metric-icon {
-    background: linear-gradient(135deg, $primary 0%, $primary-hover 100%);
-    color: #fff;
-    box-shadow: 0 4px 10px rgba(79, 70, 229, 0.35);
-  }
-
-  &__metric-card:hover &__metric-icon {
-    transform: scale(1.06);
-  }
-
   &__metric-name {
-    position: relative;
-    z-index: 1;
-    font-size: 0.84375rem;
-    font-weight: 700;
+    font-size: 0.875rem;
+    font-weight: 600;
     color: $text-primary;
-    line-height: 1.35;
   }
 
   &__metric-check {
     position: absolute;
-    top: 0.75rem;
+    top: 50%;
     right: 0.75rem;
-    z-index: 1;
-    width: 20px;
-    height: 20px;
+    transform: translateY(-50%);
+    width: 18px;
+    height: 18px;
     border-radius: 50%;
     display: grid;
     place-items: center;
     background: $primary;
     color: #fff;
-    opacity: 0;
-    transform: scale(0.5);
-    transition: opacity 0.16s ease, transform 0.16s ease;
-  }
-
-  &__metric-card--selected &__metric-check {
-    opacity: 1;
-    transform: scale(1);
+    flex-shrink: 0;
   }
 
   &__metrics-main-scroll {
