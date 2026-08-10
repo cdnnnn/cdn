@@ -4,7 +4,6 @@ import { Loader2, TrendingUp, Play, Plus, GitCompare, BookOpen, ChevronRight, Cl
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
 import { fetchProviders } from '../../store/slices/providersSlice';
 import { fetchModels } from '../../store/slices/modelsSlice';
-import { fetchEvaluations } from '../../store/slices/evaluationsSlice';
 import ScoreRing from '../common/ScoreRing';
 import Sparkline from '../common/Sparkline';
 import RadarChart from '../common/RadarChart';
@@ -17,12 +16,11 @@ export default function Dashboard() {
 
   const providers = useAppSelector((s) => s.providers.items);
   const models = useAppSelector((s) => s.models.items);
-  const runs = useAppSelector((s) => s.evaluations.runs) ?? [];
+  const runs = useAppSelector((s) => s.evaluations.runs);
 
   useEffect(() => {
     dispatch(fetchProviders());
     dispatch(fetchModels());
-    dispatch(fetchEvaluations());
   }, [dispatch]);
 
   const connectedCount = providers.filter((p) => p.status === 'connected').length;
@@ -159,14 +157,6 @@ export default function Dashboard() {
 
 
 
-
-
-
-
-
-
-
-
 @use '../../styles/_variables' as *;
 
 .dash {
@@ -189,12 +179,6 @@ export default function Dashboard() {
     }
   }
 
-  &__header-sub {
-    margin-top: 4px !important;
-    font-size: 0.875rem;
-    color: $text-secondary;
-  }
-
   &__header-eyebrow {
     display: flex;
     align-items: center;
@@ -214,6 +198,12 @@ export default function Dashboard() {
       border-radius: 2px;
       background: $indigo;
     }
+  }
+
+  &__header-sub {
+    margin-top: 4px;
+    font-size: 0.875rem;
+    color: $text-secondary;
   }
 
   &__header-meta {
