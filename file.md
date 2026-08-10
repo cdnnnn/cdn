@@ -21,6 +21,7 @@ import {
   Workflow,
   Waypoints,
   Lightbulb,
+  Wand2,
 } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
 import { fetchProviders } from '../../store/slices/providersSlice';
@@ -100,6 +101,7 @@ export default function NewEvaluation() {
   const [toast, setToast] = useState(false);
   const [agentFramework, setAgentFramework] = useState<string | null>(null);
   const [selSubgroup, setSelSubgroup] = useState<string[]>([]);
+  const [runSamples, setRunSamples] = useState<number>(10);
   const totalSteps = STEPS.length;
 
   const rawDraft = useAppSelector((s) => s.evaluations.draft);
@@ -192,6 +194,7 @@ export default function NewEvaluation() {
       benchmark: draft.selBenchmark || undefined,
       model_ids: draft.selModels,
       selected_metrics: draft.selMetrics,
+      run_samples: runSamples,
       selected_category: selSubgroup.length > 0 ? selSubgroup : benchmark ? [benchmark.type] : undefined,
       ...(draft.judgeModelId ? { judge_config: { model_id: draft.judgeModelId, base_url: '', api_key: '' } } : {}),
     };
@@ -288,17 +291,24 @@ export default function NewEvaluation() {
                   </div>
 
                   <div className={styles['wiz__suggestions']}>
-                    <span className={styles['wiz__suggestions-label']}>Try:</span>
-                    {SUGGESTED_NAMES.map((s) => (
-                      <button
-                        key={s}
-                        type="button"
-                        className={styles['wiz__suggestion-chip']}
-                        onClick={() => dispatch(setDraft({ name: s }))}
-                      >
-                        {s}
-                      </button>
-                    ))}
+                    <p className={styles['wiz__suggestions-title']}>Quick start</p>
+                    <p className={styles['wiz__suggestions-sub']}>Not sure what to call it? Start from one of these.</p>
+                    <div className={styles['wiz__suggestions-grid']}>
+                      {SUGGESTED_NAMES.map((s) => (
+                        <button
+                          key={s}
+                          type="button"
+                          className={styles['wiz__suggestion-card']}
+                          onClick={() => dispatch(setDraft({ name: s }))}
+                        >
+                          <span className={styles['wiz__suggestion-icon']}>
+                            <Wand2 size={14} />
+                          </span>
+                          <span className={styles['wiz__suggestion-text']}>{s}</span>
+                          <span className={styles['wiz__suggestion-use']}>Use</span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
 
                   <div className={styles.wiz__tips}>
@@ -599,6 +609,20 @@ export default function NewEvaluation() {
                   <h2>Configure metrics</h2>
                   <p className={styles['wiz-sub']}>Choose which metrics to measure.</p>
 
+                  <div className={styles['wiz__field']} style={{ maxWidth: 220 }}>
+                    <label className={styles.wiz__label}>Run Samples</label>
+                    <input
+                      type="number"
+                      min={0}
+                      className={styles.wiz__input}
+                      value={runSamples}
+                      onChange={(e) => {
+                        const val = e.target.value === '' ? 0 : Math.max(0, Number(e.target.value));
+                        setRunSamples(Number.isNaN(val) ? 0 : val);
+                      }}
+                    />
+                  </div>
+
                   <div className={styles['wiz__metrics-toolbar']}>
                     <span className={styles['wiz__metrics-count']}>
                       <strong>{draft.selMetrics.length}</strong> selected
@@ -767,6 +791,10 @@ export default function NewEvaluation() {
                         <span>Suite</span>
                         <span>{suite?.name ?? '—'}</span>
                       </div>
+                      <div className={styles['wiz__review-row']}>
+                        <span>Run Samples</span>
+                        <span>{runSamples}</span>
+                      </div>
                       {suite?.description && (
                         <div className={styles['wiz__review-row']}>
                           <span>Description</span>
@@ -864,24 +892,6 @@ export default function NewEvaluation() {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -1304,36 +1314,83 @@ $shadow-md: $shadow-3;
 
   /* ---------- name step: suggestions / tips / roadmap ---------- */
   &__suggestions {
-    margin-top: 1.125rem;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.5rem;
+    margin-top: 1.75rem;
     max-width: 600px;
   }
 
-  &__suggestions-label {
+  &__suggestions-title {
     font-size: 0.84375rem;
-    color: $text-tertiary;
-    margin-right: 0.125rem;
+    font-weight: 700;
+    color: $text-primary;
   }
 
-  &__suggestion-chip {
-    font-size: 0.8125rem;
-    font-weight: 500;
-    color: $text-secondary;
-    background: $bg-subtle;
+  &__suggestions-sub {
+    font-size: 0.78125rem;
+    color: $text-tertiary;
+    margin-top: 2px;
+  }
+
+  &__suggestions-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.625rem;
+    margin-top: 0.875rem;
+  }
+
+  &__suggestion-card {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    text-align: left;
+    padding: 0.75rem 0.875rem;
     border: 1px solid $border-default;
-    border-radius: 999px;
-    padding: 0.3125rem 0.75rem;
+    border-radius: 0.75rem;
+    background: $bg-main;
     cursor: pointer;
-    transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+    transition: border-color 0.14s ease, background 0.14s ease;
 
     &:hover {
       border-color: $primary;
-      color: $primary;
       background: $primary-light;
     }
+
+    &:hover .wiz__suggestion-use {
+      opacity: 1;
+    }
+  }
+
+  &__suggestion-icon {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    border-radius: 0.5rem;
+    display: grid;
+    place-items: center;
+    background: $bg-subtle;
+    color: $primary;
+  }
+
+  &__suggestion-text {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: $text-secondary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__suggestion-use {
+    flex-shrink: 0;
+    font-size: 0.65625rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: $primary;
+    opacity: 0;
+    transition: opacity 0.14s ease;
   }
 
   &__tips {
@@ -2434,6 +2491,10 @@ $shadow-md: $shadow-3;
   }
 
   .wiz__roadmap-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .wiz__suggestions-grid {
     grid-template-columns: 1fr;
   }
 }
