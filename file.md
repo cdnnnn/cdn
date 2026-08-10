@@ -1,259 +1,655 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import {
-  Search, Copy, Trash2, FileBarChart, Cpu, Bot, Database, Loader2,
-  Award, ListChecks, Clock, History as HistoryIcon,
-} from 'lucide-react';
+//Providers.tsx
+import { useEffect, useState } from 'react';
+import { Search, Check, Plus, Settings, Unlink, Loader2, Cable, Trash2, RefreshCw } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
 import {
-  fetchEvaluations, fetchEvaluationResults, removeEvaluationLocal, setDraft,
-} from '../../store/slices/evaluationsSlice';
-import type { EvaluationListItem, EvaluationStatusValue } from '../../types';
-import { SkeletonListRows } from '../common/Skeleton';
-import styles from './History.module.scss';
+  fetchProviders,
+  createProvider,
+  deleteProvider,
+  connectProvider,
+  disconnectProvider,
+  syncModels,
+} from '../../store/slices/providersSlice';
+import AddProviderDrawer from './AddProviderDrawer';
+import { SkeletonCards } from '../common/Skeleton';
+import styles from './Providers.module.scss';
 
-const TYPE_ICON: Record<string, typeof Cpu> = { model: Cpu, agent: Bot, rag: Database };
-const TYPE_LABEL: Record<string, string> = { model: 'AI Model', agent: 'Agent', rag: 'RAG' };
+type Filter = 'all' | 'connected' | 'available';
 
-function statusBadgeClass(status: EvaluationStatusValue): string {
-  switch (status) {
-    case 'completed': return 'badge-green';
-    case 'running': return 'badge-run';
-    case 'pending': return 'badge-amber';
-    case 'failed': case 'canceled': return 'badge-gray';
-    default: return 'badge-blue';
-  }
-}
-
-export default function History() {
+export default function Providers() {
   const dispatch = useAppDispatch();
-  const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const selectedId = searchParams.get('id');
-
-  const { list, listStatus, listError, resultsByEvalId, resultsStatusByEvalId, resultsErrorByEvalId } = useAppSelector((s) => s.evaluations);
-  const models = useAppSelector((s) => s.models.items);
-  const providers = useAppSelector((s) => s.providers.items);
-
+  const { items, status, mutatingId, creating, syncingId } = useAppSelector((s) => s.providers);
   const [search, setSearch] = useState('');
-  const [typeFilter, setTypeFilter] = useState('All');
+  const [filter, setFilter] = useState<Filter>('all');
+  const [keyPromptFor, setKeyPromptFor] = useState<string | null>(null);
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
-  // Initial load + silent 10s poll (spec §2.4) — no spinner/error disruption
-  // on background refreshes; the slice only flips listStatus when list is empty.
   useEffect(() => {
-    dispatch(fetchEvaluations());
-    const interval = setInterval(() => dispatch(fetchEvaluations()), 10000);
-    return () => clearInterval(interval);
+    dispatch(fetchProviders());
   }, [dispatch]);
 
-  const filtered = useMemo(() => {
-    return list.filter((e) => {
-      if (search && !e.name.toLowerCase().includes(search.toLowerCase())) return false;
-      if (typeFilter !== 'All' && e.eval_type !== typeFilter) return false;
-      return true;
-    });
-  }, [list, search, typeFilter]);
+  const connectedCount = items.filter((p) => p.status === 'connected').length;
 
-  const selected = list.find((e) => e.id === selectedId) || filtered[0] || null;
+  const filtered = items.filter((p) => {
+    if (filter === 'connected' && p.status !== 'connected') return false;
+    if (filter === 'available' && p.status === 'connected') return false;
+    return !search || p.name.toLowerCase().includes(search.toLowerCase());
+  });
 
-  // Keyed on id + status (not the whole object) so a background poll that
-  // doesn't change either doesn't re-trigger the results fetch (spec §2.4).
-  useEffect(() => {
-    if (selected && selected.status === 'completed' && !resultsByEvalId[selected.id]) {
-      dispatch(fetchEvaluationResults(selected.id));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id, selected?.status]);
-
-  const selectRow = (id: string) => setSearchParams({ id });
-
-  const duplicate = (e: EvaluationListItem) => {
-    dispatch(setDraft({
-      name: `${e.name} (copy)`,
-      type: (e.eval_type as 'model' | 'agent' | 'rag') || 'model',
-      models: e.model_ids,
-      dataset: e.benchmark || null,
-      subgroup: e.selected_category,
-      runSamples: e.run_samples,
-      metrics: e.selected_metrics,
-    }));
-    navigate('/app/run-evaluation');
+  const submitConnect = (providerId: string) => {
+    if (!apiKeyInput.trim()) return;
+    dispatch(connectProvider({ providerId, payload: { api_key: apiKeyInput } }));
+    setKeyPromptFor(null);
+    setApiKeyInput('');
   };
-
-  const modelName = (id: string) => models.find((m) => m.id === id)?.name || id;
-  const providerName = (id: string) => {
-    const model = models.find((m) => m.id === id);
-    return providers.find((p) => p.id === model?.provider_id)?.name || model?.provider_id || '—';
-  };
-
-  const results = selected ? resultsByEvalId[selected.id] : undefined;
-  const resultsStatus = selected ? resultsStatusByEvalId[selected.id] : undefined;
-  const resultsError = selected ? resultsErrorByEvalId[selected.id] : undefined;
 
   return (
     <div className="page-enter pg-shell">
-      <div className={styles['history__header']}>
+      <div className={styles.providers__header}>
         <div>
-          <p className={styles['history__header-eyebrow']}>Activity</p>
-          <h1>History</h1>
-          <p className={styles['history__header-sub']}>All past and in-progress evaluations</p>
+          <p className={styles['providers__header-eyebrow']}>Integrations</p>
+          <h1>Providers</h1>
+          <p className={styles['providers__header-sub']}>Manage your AI provider connections</p>
         </div>
-        <div className={styles['history__header-meta']}>
-          <HistoryIcon size={13} />
-          {list.length} evaluation{list.length === 1 ? '' : 's'} tracked
+        <div className={styles['providers__header-meta']}>
+          <Cable size={13} />
+          {connectedCount} of {items.length} connected
         </div>
       </div>
-      {/* This page needs the list and detail panels to scroll independently
-          of each other (spec: point 4 of the fixed-header pattern), so
-          pg-body itself doesn't scroll here — .layout fills it instead. */}
-      <div className={`pg-body ${styles['pg-body-fixed']}`}>
-        <div className="split-shell split-shell--fill">
-          {/* ---------- Sidebar list ---------- */}
-          <div className={`split-shell__sidebar ${styles.sidebar}`}>
-            <div className={styles.filters}>
-              <div className="search-box" style={{ minWidth: 0, marginBottom: 10 }}>
-                <Search size={16} color="#9CA3AF" />
-                <input placeholder="Search evaluations…" value={search} onChange={(e) => setSearch(e.target.value)} />
-              </div>
-              <div className="pills" style={{ marginBottom: 8 }}>
-                {['All', 'model', 'agent', 'rag'].map((t) => (
-                  <button key={t} className={`pill ${typeFilter === t ? 'on' : ''}`} onClick={() => setTypeFilter(t)}>
-                    {t === 'All' ? 'All' : TYPE_LABEL[t]}
-                  </button>
-                ))}
-              </div>
-
-              {listStatus === 'failed' && list.length === 0 && <div className={styles.empty}>{listError || 'Failed to load evaluations.'}</div>}
-              {listStatus !== 'loading' && filtered.length === 0 && list.length > 0 && <div className={styles.empty}>No evaluations match your filters.</div>}
-            </div>
-
-            <div className={styles.rows}>
-              {listStatus === 'loading' && list.length === 0 && <SkeletonListRows count={5} />}
-              {filtered.map((e) => {
-                const Icon = TYPE_ICON[e.eval_type] || Cpu;
-                const isSelected = selected?.id === e.id;
-                return (
-                  <div
-                    key={e.id}
-                    className={`${styles.row} ${isSelected ? styles.selected : ''} ${e.status === 'running' ? styles['row--running'] : ''}`}
-                    onClick={() => selectRow(e.id)}
-                  >
-                    <div className={styles.row__top}>
-                      <div className={styles.row__icon}><Icon size={16} /></div>
-                      <div className={styles.row__name}>{e.name}</div>
-                    </div>
-                    <div className={styles.row__badges}>
-                      <div className={styles['row__badges-left']}>
-                        <span className="tag tag-ind">{TYPE_LABEL[e.eval_type] || e.eval_type}</span>
-                        <span className={`badge ${statusBadgeClass(e.status)}`}>
-                          {e.status === 'running' && <span className={styles['live-dot']} />}
-                          {e.status}
-                        </span>
-                      </div>
-                      <div className={styles.row__actions} onClick={(ev) => ev.stopPropagation()}>
-                        <button className={`btn btn-sm btn-ghost ${styles['icon-btn']}`} title="Duplicate" onClick={() => duplicate(e)}><Copy size={12} /></button>
-                        <button className={`btn btn-sm btn-danger ${styles['icon-btn']}`} title="Delete" onClick={() => dispatch(removeEvaluationLocal(e.id))}><Trash2 size={12} /></button>
-                      </div>
-                    </div>
-                    <div className={styles.row__meta}>{new Date(e.created_at).toLocaleDateString()}</div>
-                    <div className={styles.row__stats}>
-                      <span>{e.top_model ? `🏆 ${e.top_model}` : '—'}</span>
-                      <span>{e.top_score != null ? `${e.top_score}%` : '—'}</span>
-                      <span>{e.model_ids.length} models</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+      <div className="pg-toolbar">
+        <div className="toolbar">
+          <div className="search-box">
+            <Search size={16} color="#9CA3AF" />
+            <input placeholder="Search providers…" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
-
-          {/* ---------- Detail panel ---------- */}
-          <div className={`split-shell__main ${styles.detail}`}>
-            {!selected ? (
-              <div className={styles['detail-empty']}>Select an evaluation to see its details.</div>
-            ) : (
-              <>
-                <div className={styles['detail-hdr']}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div className="pills">
+              {(['all', 'connected', 'available'] as Filter[]).map((f) => (
+                <button key={f} className={`pill ${filter === f ? 'on' : ''}`} onClick={() => setFilter(f)}>
+                  {f[0].toUpperCase() + f.slice(1)}
+                </button>
+              ))}
+            </div>
+            <button className="btn btn-ind btn-sm" onClick={() => setDrawerOpen(true)}><Plus size={14} /> Add Provider</button>
+          </div>
+        </div>
+      </div>
+      <div className="pg-body">
+        <div className="cards-grid">
+          {status === 'loading' && <SkeletonCards count={6} />}
+          {status !== 'loading' && filtered.map((p) => (
+            <div className="card" key={p.id}>
+              <div className="card-hdr">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <div className={`card-icon ${styles['providers__icon']}`}>{p.logo_url ? <img src={p.logo_url} alt={p.name} /> : p.name[0]}</div>
                   <div>
-                    <div className={styles['detail-hdr__badges']}>
-                      <span className="tag tag-ind">{TYPE_LABEL[selected.eval_type] || selected.eval_type}</span>
-                      <span className={`badge ${statusBadgeClass(selected.status)}`}>
-                        {selected.status === 'running' && <span className={styles['live-dot']} />}
-                        {selected.status}
-                      </span>
-                    </div>
-                    <h2 className={styles['detail-hdr__name']}>{selected.name}</h2>
-                    <div className={styles['detail-hdr__date']}>Created {new Date(selected.created_at).toLocaleString()}</div>
-                  </div>
-                  <div className={styles['detail-hdr__actions']}>
-                    <button className="btn btn-ghost" onClick={() => duplicate(selected)}><Copy size={14} /> Duplicate</button>
-                    <button className="btn btn-danger" onClick={() => dispatch(removeEvaluationLocal(selected.id))}><Trash2 size={14} /> Delete</button>
-                    <button className="btn btn-ind" disabled={selected.status !== 'completed'}><FileBarChart size={14} /> View Report</button>
+                    <div className="card-title">{p.name}</div>
+                    <div style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>{p.model_count} models</div>
                   </div>
                 </div>
+                <span className={`badge ${p.status === 'connected' ? 'badge-green' : 'badge-gray'}`}>
+                  {p.status === 'connected' ? <><Check size={11} /> Connected</> : 'Not connected'}
+                </span>
+              </div>
+              <div className="card-desc">{p.description}</div>
 
-                <div className={styles['summary-cards']}>
-                  <div className={styles['summary-card']}>
-                    <Award size={16} color="#F59E0B" />
-                    <div>
-                      <div className={styles['summary-card__label']}>Winner</div>
-                      <div className={styles['summary-card__val']}>{selected.top_model || '—'}{selected.top_score != null ? ` · ${selected.top_score}%` : ''}</div>
-                    </div>
-                  </div>
-                  <div className={styles['summary-card']}>
-                    <ListChecks size={16} color="#1428A0" />
-                    <div>
-                      <div className={styles['summary-card__label']}>Questions / Models</div>
-                      <div className={styles['summary-card__val']}>{selected.total_questions.toLocaleString()} &middot; {selected.model_ids.length} models</div>
-                    </div>
-                  </div>
-                  <div className={styles['summary-card']}>
-                    <Clock size={16} color="#10B981" />
-                    <div>
-                      <div className={styles['summary-card__label']}>Status</div>
-                      <div className={styles['summary-card__val']}>{selected.status}{selected.completed_at ? ` · ${new Date(selected.completed_at).toLocaleDateString()}` : ''}</div>
-                    </div>
+              {keyPromptFor === p.id ? (
+                <div className={styles['providers__key-form']}>
+                  <input
+                    className="fi"
+                    type="password"
+                    placeholder="Paste API key…"
+                    value={apiKeyInput}
+                    onChange={(e) => setApiKeyInput(e.target.value)}
+                    autoFocus
+                  />
+                  <div className={styles['providers__key-actions']}>
+                    <button className="btn btn-sm btn-ind" onClick={() => submitConnect(p.id)}>Save</button>
+                    <button className="btn btn-sm btn-ghost" onClick={() => setKeyPromptFor(null)}>Cancel</button>
                   </div>
                 </div>
-
-                {selected.status === 'completed' ? (
-                  <>
-                    {resultsStatus === 'loading' && <div className={styles.empty}><Loader2 size={16} style={{ animation: 'spin 1.5s linear infinite' }} /> Loading results…</div>}
-                    {resultsStatus === 'failed' && <div className={styles.empty}>{resultsError}</div>}
-                    {results && (
-                      <div className="tw">
-                        <table className="tbl">
-                          <thead><tr><th>Rank</th><th>Model</th><th>Provider</th><th>Score</th><th>Accuracy</th><th>Passed</th><th>Failed</th></tr></thead>
-                          <tbody>
-                            {results.results.map((r) => (
-                              <tr key={r.model_id} className={r.rank === 1 ? 'winner' : ''}>
-                                <td style={{ fontWeight: 700 }}>{r.rank === 1 ? '🏆 ' : ''}{r.rank}</td>
-                                <td style={{ fontWeight: 700 }}>{modelName(r.model_id)}</td>
-                                <td style={{ color: '#6B7280' }}>{providerName(r.model_id)}</td>
-                                <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontWeight: 700 }}>{r.score}%</td>
-                                <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif" }}>{r.accuracy}%</td>
-                                <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", color: '#10B981' }}>{r.passed_tests}</td>
-                                <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", color: '#EF4444' }}>{r.failed_tests}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
+              ) : (
+                <div className="card-foot">
+                  <button
+                    className={`btn btn-sm ${p.status === 'connected' ? 'btn-ghost' : 'btn-ind'}`}
+                    disabled={mutatingId === p.id}
+                    onClick={() => setKeyPromptFor(p.id)}
+                  >
+                    {mutatingId === p.id ? (
+                      <Loader2 size={14} style={{ animation: 'spin 1.5s linear infinite' }} />
+                    ) : p.status === 'connected' ? (
+                      <><Settings size={14} /> Configure</>
+                    ) : (
+                      <><Plus size={14} /> Connect</>
                     )}
-                  </>
-                ) : (
-                  <div className={styles['status-message']}>
-                    {selected.status === 'running' && 'This evaluation is still running — results will appear once it completes.'}
-                    {selected.status === 'pending' && 'This evaluation hasn\u2019t started yet.'}
-                    {selected.status === 'failed' && 'This evaluation failed to complete.'}
-                    {selected.status === 'canceled' && 'This evaluation was canceled.'}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+                  </button>
+                  {p.status === 'connected' && (
+                    <>
+                      <button
+                        className="btn btn-sm btn-ghost"
+                        disabled={syncingId === p.id}
+                        onClick={() => dispatch(syncModels(p.id))}
+                      >
+                        {syncingId === p.id ? (
+                          <Loader2 size={14} style={{ animation: 'spin 1.5s linear infinite' }} />
+                        ) : (
+                          <><RefreshCw size={14} /> Sync Models</>
+                        )}
+                      </button>
+                      <button className="btn btn-sm btn-danger" disabled={mutatingId === p.id} onClick={() => dispatch(disconnectProvider(p.id))}>
+                        <Unlink size={14} /> Disconnect
+                      </button>
+                    </>
+                  )}
+                  {p.status !== 'connected' && (
+                    <button
+                      className="btn btn-sm btn-danger"
+                      disabled={mutatingId === p.id}
+                      onClick={() => {
+                        if (window.confirm(`Delete ${p.name}? This cannot be undone.`)) {
+                          dispatch(deleteProvider(p.id));
+                        }
+                      }}
+                    >
+                      <Trash2 size={14} /> Delete
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {drawerOpen && (
+        <AddProviderDrawer
+          submitting={creating}
+          onClose={() => setDrawerOpen(false)}
+          onSubmit={(payload) => {
+            dispatch(createProvider(payload)).then(() => setDrawerOpen(false));
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+/AddProviderDrawer.tsx
+
+import { useState } from 'react';
+import { X } from 'lucide-react';
+import type { CreateProviderRequest } from '../../types';
+import styles from './AddProviderDrawer.module.scss';
+
+interface Props {
+  onClose: () => void;
+  onSubmit: (payload: CreateProviderRequest) => void;
+  submitting: boolean;
+}
+
+const initial: CreateProviderRequest = {
+  id: '',
+  name: '',
+  description: '',
+  base_url: '',
+  logo: '',
+};
+
+export default function AddProviderDrawer({ onClose, onSubmit, submitting }: Props) {
+  const [form, setForm] = useState<CreateProviderRequest>(initial);
+
+  const set = <K extends keyof CreateProviderRequest>(key: K, value: CreateProviderRequest[K]) =>
+    setForm((f) => ({ ...f, [key]: value }));
+
+  const valid = form.id.trim() && form.name.trim() && form.base_url.trim();
+
+  return (
+    <div className={styles['drawer-overlay']} onClick={onClose}>
+      <div className={styles.drawer} onClick={(e) => e.stopPropagation()}>
+        <div className={styles['drawer__hdr']}>
+          <h2>Add Provider</h2>
+          <button className={styles['drawer__close']} onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className={styles['drawer__body']}>
+          <div className="fg"><label className="fl">Provider ID</label><input className="fi" value={form.id} onChange={(e) => set('id', e.target.value)} placeholder="e.g. openai" /></div>
+          <div className="fg"><label className="fl">Display Name</label><input className="fi" value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="e.g. OpenAI" /></div>
+          <div className="fg"><label className="fl">Base URL</label><input className="fi" value={form.base_url} onChange={(e) => set('base_url', e.target.value)} placeholder="https://…" /></div>
+          <div className="fg"><label className="fl">Logo URL <span className="opt">(optional)</span></label><input className="fi" value={form.logo} onChange={(e) => set('logo', e.target.value)} placeholder="https://…/logo.png" /></div>
+          <div className="fg"><label className="fl">Description <span className="opt">(optional)</span></label><textarea className="fi" rows={3} value={form.description} onChange={(e) => set('description', e.target.value)} /></div>
+        </div>
+        <div className={styles['drawer__foot']}>
+          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn btn-ind" disabled={!valid || submitting} onClick={() => onSubmit(form)}>{submitting ? 'Adding…' : 'Add Provider'}</button>
         </div>
       </div>
     </div>
   );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// AddProviderDrawer.module.scss
+
+@use '../../styles/_variables' as *;
+
+.drawer-overlay {
+  position: fixed; inset: 0; background: rgba(17, 24, 39, .4); z-index: 100;
+  display: flex; justify-content: flex-end;
+}
+.drawer {
+  width: 420px; max-width: 100%; height: 100%; background: $surface; box-shadow: $shadow-4;
+  display: flex; flex-direction: column; animation: drawerIn .25s ease both;
+}
+@keyframes drawerIn { from { transform: translateX(24px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+.drawer__hdr {
+  display: flex; justify-content: space-between; align-items: center; padding: 20px 24px; border-bottom: 1px solid $border-light;
+  h2 { font-size: 18px; font-weight: 700; }
+}
+.drawer__close { background: none; border: none; cursor: pointer; color: $text-muted; }
+.drawer__body { flex: 1; overflow-y: auto; padding: 24px; }
+.drawer__foot { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 24px; border-top: 1px solid $border-light; }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//providersSlice.ts
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import { providersApi } from '../../api/endpoints/providers';
+import type { Provider, ConnectProviderRequest, CreateProviderRequest } from '../../types';
+
+interface ProvidersState {
+  items: Provider[];
+  status: 'idle' | 'loading' | 'succeeded' | 'failed';
+  error: string | null;
+  mutatingId: string | null;
+  creating: boolean;
+  syncingId: string | null;
+}
+
+const initialState: ProvidersState = {
+  items: [],
+  status: 'idle',
+  error: null,
+  mutatingId: null,
+  creating: false,
+  syncingId: null,
+};
+
+export const fetchProviders = createAsyncThunk('providers/fetchAll', () => providersApi.list());
+
+export const createProvider = createAsyncThunk(
+  'providers/create',
+  (payload: CreateProviderRequest) => providersApi.create(payload)
+);
+
+export const deleteProvider = createAsyncThunk(
+  'providers/delete',
+  async (providerId: string) => {
+    await providersApi.remove(providerId);
+    return providerId;
+  }
+);
+
+export const connectProvider = createAsyncThunk(
+  'providers/connect',
+  async ({ providerId, payload }: { providerId: string; payload: ConnectProviderRequest }) => {
+    await providersApi.connect(providerId, payload);
+    return providerId;
+  }
+);
+
+export const disconnectProvider = createAsyncThunk(
+  'providers/disconnect',
+  async (providerId: string) => {
+    await providersApi.disconnect(providerId);
+    return providerId;
+  }
+);
+
+export const syncModels = createAsyncThunk(
+  'providers/syncModels',
+  async (providerId: string) => providersApi.syncModels(providerId)
+);
+
+const providersSlice = createSlice({
+  name: 'providers',
+  initialState,
+  reducers: {},
+  extraReducers: (builder) => {
+    builder
+      .addCase(fetchProviders.pending, (state) => {
+        state.status = 'loading';
+      })
+      .addCase(fetchProviders.fulfilled, (state, action) => {
+        state.status = 'succeeded';
+        state.items = action.payload;
+      })
+      .addCase(fetchProviders.rejected, (state, action) => {
+        state.status = 'failed';
+        state.error = action.error.message || 'Failed to load providers';
+      })
+      .addCase(createProvider.pending, (state) => {
+        state.creating = true;
+      })
+      .addCase(createProvider.fulfilled, (state, action) => {
+        state.creating = false;
+        state.items.push(action.payload);
+      })
+      .addCase(createProvider.rejected, (state, action) => {
+        state.creating = false;
+        state.error = action.error.message || 'Failed to create provider';
+      })
+      .addCase(deleteProvider.pending, (state, action) => {
+        state.mutatingId = action.meta.arg;
+      })
+      .addCase(deleteProvider.fulfilled, (state, action) => {
+        state.mutatingId = null;
+        state.items = state.items.filter((i) => i.id !== action.payload);
+      })
+      .addCase(deleteProvider.rejected, (state) => {
+        state.mutatingId = null;
+      })
+      .addCase(connectProvider.pending, (state, action) => {
+        state.mutatingId = action.meta.arg.providerId;
+      })
+      .addCase(connectProvider.fulfilled, (state, action) => {
+        state.mutatingId = null;
+        const p = state.items.find((i) => i.id === action.payload);
+        if (p) p.status = 'connected';
+      })
+      .addCase(connectProvider.rejected, (state) => {
+        state.mutatingId = null;
+      })
+      .addCase(disconnectProvider.pending, (state, action) => {
+        state.mutatingId = action.meta.arg;
+      })
+      .addCase(disconnectProvider.fulfilled, (state, action) => {
+        state.mutatingId = null;
+        const p = state.items.find((i) => i.id === action.payload);
+        if (p) p.status = 'not_connected';
+      })
+      .addCase(disconnectProvider.rejected, (state) => {
+        state.mutatingId = null;
+      })
+      .addCase(syncModels.pending, (state, action) => {
+        state.syncingId = action.meta.arg;
+      })
+      .addCase(syncModels.fulfilled, (state, action) => {
+        state.syncingId = null;
+        const p = state.items.find((i) => i.id === action.payload.provider_id);
+        if (p) p.model_count = action.payload.total_available;
+      })
+      .addCase(syncModels.rejected, (state) => {
+        state.syncingId = null;
+      });
+  },
+});
+
+export default providersSlice.reducer;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//providers.api.ts
+import api from '../axiosInstance';
+import type {
+  Provider,
+  ConnectProviderRequest,
+  ConnectProviderResponse,
+  DisconnectProviderResponse,
+  CreateProviderRequest,
+  CreateProviderResponse,
+  DeleteProviderResponse,
+  SyncModelsResponse,
+} from '../../types';
+
+export const providersApi = {
+  list: () => api.get<{ providers: Provider[] }>('/providers').then((r) => r.data.providers),
+
+  create: (payload: CreateProviderRequest) =>
+    api.post<CreateProviderResponse>('/providers', payload).then((r) => r.data),
+
+  remove: (providerId: string) =>
+    api.delete<DeleteProviderResponse>(`/providers/${providerId}`).then((r) => r.data),
+
+  connect: (providerId: string, payload: ConnectProviderRequest) =>
+    api
+      .post<ConnectProviderResponse>(`/providers/${providerId}/connect`, payload)
+      .then((r) => r.data),
+
+  disconnect: (providerId: string) =>
+    api
+      .delete<DisconnectProviderResponse>(`/providers/${providerId}/disconnect`)
+      .then((r) => r.data),
+
+  syncModels: (providerId: string) =>
+    api
+      .post<SyncModelsResponse>(`/providers/${providerId}/sync-models`)
+      .then((r) => r.data),
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+//index.ts
+// ---------- Auth ----------
+export interface SsoLoginRequest {
+  token: string;
+  data: string;
+}
+export interface SsoLoginResult {
+  token: string;
+  username: string;
+  email: string;
+  language: string;
+  profile_name: string;
+}
+export interface SsoLoginResponse {
+  status: string;
+  message: string;
+  result: SsoLoginResult;
+}
+
+// ---------- Providers ----------
+export interface Provider {
+  id: string;
+  name: string;
+  description: string;
+  logo_url: string | null;
+  base_url: string | null;
+  url_template: string | null;
+  model_count: number;
+  status: 'connected' | 'not_connected' | string;
+}
+export interface ConnectProviderRequest {
+  api_key: string;
+}
+export interface ConnectProviderResponse {
+  status: 'connected';
+  provider_id: string;
+  models_synced: number;
+}
+export interface DisconnectProviderResponse {
+  status: 'disconnected';
+  provider_id: string;
+}
+export interface CreateProviderRequest {
+  id: string;
+  name: string;
+  description: string;
+  base_url: string;
+  logo: string;
+}
+export type CreateProviderResponse = Provider;
+export interface DeleteProviderResponse {
+  status: 'deleted';
+  provider_id: string;
+}
+export interface SyncModelsResponse {
+  status: 'synced';
+  provider_id: string;
+  models_synced: number;
+  total_synced: number;
+  total_available: number;
+  errors: string[];
+}
+
+// ---------- Models ----------
+export interface Model {
+  id: string;
+  name: string;
+  provider_id: string;
+  category: string;
+  capabilities: string[];
+  context_window: number;
+  input_price: number | null;
+  output_price: number | null;
+  accuracy_score: number | null;
+  agent_score: number | null;
+  is_active: boolean;
+  base_url: string | null;
+}
+export interface CustomModelRequest {
+  base_url: string;
+  category: string;
+  api_key: string;
+  model_id: string;
+  name: string;
+  context_window: number;
+  description: string;
+}
+
+// ---------- Benchmarks ----------
+export interface BenchmarkTask {
+  name: string;
+  value: string;
+}
+export interface Benchmark {
+  name: string;
+  description: string;
+  tasks: BenchmarkTask[];
+  task_count: number;
+  required_capabilities: string[];
+  huggingface_dataset: string;
+  type: string;
+}
+export interface BenchmarksResponse {
+  benchmarks: Benchmark[];
+  total: number;
+}
+
+// ---------- Metrics ----------
+export interface MetricsResponse {
+  all_metrics: string[];
+  custom_agent_metrics: string[];
+}
+
+// ---------- Evaluations ----------
+export interface JudgeConfig {
+  model_id: string;
+  base_url: string;
+  api_key: string;
+}
+export interface CreateEvaluationRequest {
+  name: string;
+  description?: string;
+  eval_type: 'model' | 'agent' | 'rag' | string;
+  dataset_id: string;
+  benchmark?: string;
+  model_ids: string[];
+  metrics_config?: Record<string, unknown>;
+  selected_metrics: string[];
+  dataset_limit?: number;
+  selected_category?: string[];
+  judge_config?: JudgeConfig;
+}
+export interface CreateEvaluationResponse {
+  id?: string;
+  evaluation_id?: string;
+  [key: string]: unknown;
+}
+export type EvaluationStatusValue = 'pending' | 'running' | 'completed' | 'failed' | 'canceled';
+export interface EvaluationStatusResponse {
+  status: EvaluationStatusValue;
+  progress: number;
+  total: number;
+  celery_state: 'STARTED' | 'SUCCESS' | 'FAILURE' | 'REVOKED' | null;
+  error_message: string | null;
+}
+
+// UI-only aggregate type used while the wizard builds up a draft
+export interface EvaluationDraft {
+  name: string;
+  eval_type: string;
+  selProviders: string[];
+  selModels: string[];
+  selBenchmark: string | null;
+  selMetrics: string[];
+  judgeModelId?: string;
 }
