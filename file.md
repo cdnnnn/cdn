@@ -25,13 +25,6 @@ function statusBadgeClass(status: EvaluationStatusValue): string {
   }
 }
 
-function withinDateRange(iso: string, range: string): boolean {
-  if (range === 'all') return true;
-  const days = range === '7' ? 7 : 30;
-  const cutoff = Date.now() - days * 86400000;
-  return new Date(iso).getTime() >= cutoff;
-}
-
 export default function History() {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
@@ -44,7 +37,6 @@ export default function History() {
 
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('All');
-  const [dateFilter, setDateFilter] = useState('all');
 
   // Initial load + silent 10s poll (spec §2.4) — no spinner/error disruption
   // on background refreshes; the slice only flips listStatus when list is empty.
@@ -58,10 +50,9 @@ export default function History() {
     return list.filter((e) => {
       if (search && !e.name.toLowerCase().includes(search.toLowerCase())) return false;
       if (typeFilter !== 'All' && e.eval_type !== typeFilter) return false;
-      if (!withinDateRange(e.created_at, dateFilter)) return false;
       return true;
     });
-  }, [list, search, typeFilter, dateFilter]);
+  }, [list, search, typeFilter]);
 
   const selected = list.find((e) => e.id === selectedId) || filtered[0] || null;
 
@@ -131,11 +122,6 @@ export default function History() {
                   </button>
                 ))}
               </div>
-              <select className="fi" style={{ marginBottom: 0 }} value={dateFilter} onChange={(e) => setDateFilter(e.target.value)}>
-                <option value="all">All time</option>
-                <option value="30">Last 30 days</option>
-                <option value="7">Last 7 days</option>
-              </select>
 
               {listStatus === 'failed' && list.length === 0 && <div className={styles.empty}>{listError || 'Failed to load evaluations.'}</div>}
               {listStatus !== 'loading' && filtered.length === 0 && list.length > 0 && <div className={styles.empty}>No evaluations match your filters.</div>}
