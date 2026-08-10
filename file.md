@@ -9,7 +9,7 @@ const AuthSpinner: FC = () => (
   <div className={styles['auth-spinner']} role="status" aria-live="polite">
     <div className={styles['auth-spinner__card']}>
       <div className={styles['auth-spinner__mark']}>
-        <img src="/assets/logo.png" alt="SemcoEval" className={styles['auth-spinner__logo']} />
+        <img src="/assets/logo.png" alt="SemcoEval" />
       </div>
       <div className={styles['auth-spinner__ring']}>
         <div className={styles['auth-spinner__arc']} />
@@ -78,11 +78,12 @@ export default AuthSpinner;
     box-shadow: $shadow-3, inset 0 0 0 0.0625rem rgba(255, 255, 255, 0.14);
     animation: auth-spinner-pulse 2.2s ease-in-out infinite;
     overflow: hidden;
-  }
-  &__logo {
-    width: 28px;
-    height: 28px;
-    object-fit: contain;
+
+    img {
+      width: 28px;
+      height: 28px;
+      object-fit: contain;
+    }
   }
   &__ring {
     position: relative;
