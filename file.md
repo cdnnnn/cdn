@@ -4,6 +4,7 @@ import { Loader2, TrendingUp, Play, Plus, GitCompare, BookOpen, ChevronRight, Cl
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
 import { fetchProviders } from '../../store/slices/providersSlice';
 import { fetchModels } from '../../store/slices/modelsSlice';
+import { fetchEvaluations } from '../../store/slices/evaluationsSlice';
 import ScoreRing from '../common/ScoreRing';
 import Sparkline from '../common/Sparkline';
 import RadarChart from '../common/RadarChart';
@@ -16,11 +17,12 @@ export default function Dashboard() {
 
   const providers = useAppSelector((s) => s.providers.items);
   const models = useAppSelector((s) => s.models.items);
-  const runs = useAppSelector((s) => s.evaluations.runs);
+  const runs = useAppSelector((s) => s.evaluations.list);
 
   useEffect(() => {
     dispatch(fetchProviders());
     dispatch(fetchModels());
+    dispatch(fetchEvaluations());
   }, [dispatch]);
 
   const connectedCount = providers.filter((p) => p.status === 'connected').length;
@@ -48,7 +50,7 @@ export default function Dashboard() {
   }));
 
   return (
-    <div className="page-enter">
+    <div className="page-enter pg-shell">
       <div className={styles.dash__header}>
         <div>
           <p className={styles['dash__header-eyebrow']}>Overview</p>
@@ -70,7 +72,7 @@ export default function Dashboard() {
                   <div className={styles['d-stat-val']}>{s.value}</div>
                   <div className={styles['d-stat-change']}><TrendingUp size={12} /> {s.change}</div>
                 </div>
-                <Sparkline data={s.spark} color="#6366F1" width={72} height={32} />
+                <Sparkline data={s.spark} color="#1428A0" width={72} height={32} />
               </div>
             </div>
           ))}
@@ -80,18 +82,18 @@ export default function Dashboard() {
           <div className="card" style={{ padding: 0 }}>
             <div className={styles['dash__panel-hdr']}>
               <span>Recent Evaluations</span>
-              <button className="btn btn-ghost btn-sm" onClick={() => navigate('/app/evaluations')}>View All <ChevronRight size={14} /></button>
+              <button className="btn btn-ghost btn-sm" onClick={() => navigate('/app/history')}>View All <ChevronRight size={14} /></button>
             </div>
             {runs.length === 0 && (
               <div className={styles['dash__empty']}>No evaluations yet — launch one from Quick Actions below.</div>
             )}
             {runs.slice(0, 4).map((run) => (
-              <div key={run.id} className={styles['dash__run-row']} onClick={() => navigate(`/app/evaluations/${run.id}`)}>
+              <div key={run.id} className={styles['dash__run-row']} onClick={() => navigate(`/app/history?id=${run.id}`)}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                   {run.status === 'completed' ? (
-                    <ScoreRing score={Math.round((run.progress / (run.total || 1)) * 100)} size={44} stroke={4} color="#6366F1" />
+                    <ScoreRing score={Math.round(run.top_score ?? 0)} size={44} stroke={4} color="#1428A0" />
                   ) : (
-                    <div className={styles['dash__spinner']}><Loader2 size={18} color="#6366F1" style={{ animation: 'spin 1.5s linear infinite' }} /></div>
+                    <div className={styles['dash__spinner']}><Loader2 size={18} color="#1428A0" style={{ animation: 'spin 1.5s linear infinite' }} /></div>
                   )}
                   <div>
                     <div style={{ fontWeight: 600, fontSize: 14 }}>{run.name}</div>
@@ -104,14 +106,14 @@ export default function Dashboard() {
           </div>
 
           <div className="card">
-            <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Top Models</div>
+            <div style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Top Models</div>
             <div style={{ fontSize: 13, color: '#6B7280', marginBottom: 12 }}>Strength comparison across 5 dimensions</div>
             {radarModels.length > 0 ? (
               <>
                 <div className="radar-wrap"><RadarChart models={radarModels} size={260} /></div>
                 <div className={styles['dash__legend']}>
                   {radarModels.map((m, i) => (
-                    <span key={i}><span className={styles['dash__dot']} style={{ background: ['#6366F1', '#F59E0B', '#10B981'][i] }} /> {m.name}</span>
+                    <span key={i}><span className={styles['dash__dot']} style={{ background: ['#1428A0', '#F59E0B', '#10B981'][i] }} /> {m.name}</span>
                   ))}
                 </div>
               </>
@@ -122,13 +124,13 @@ export default function Dashboard() {
         </div>
 
         <div className="card" style={{ padding: 24 }}>
-          <div style={{ fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, fontSize: 15, marginBottom: 20 }}>Quick Actions</div>
+          <div style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontWeight: 700, fontSize: 15, marginBottom: 20 }}>Quick Actions</div>
           <div className={styles['dash__actions']}>
             {[
-              { icon: <Play size={20} />, label: 'New Evaluation', desc: 'Start a benchmark run', to: '/app/new-eval', cls: 'ind' },
+              { icon: <Play size={20} />, label: 'New Evaluation', desc: 'Start a benchmark run', to: '/app/run-evaluation', cls: 'ind' },
               { icon: <Plus size={20} />, label: 'Add Provider', desc: 'Connect an API', to: '/app/providers', cls: 'em' },
               { icon: <GitCompare size={20} />, label: 'Compare Models', desc: 'Side-by-side analysis', to: '/app/comparison', cls: 'amb' },
-              { icon: <BookOpen size={20} />, label: 'Browse Suites', desc: 'Explore benchmarks', to: '/app/suites', cls: 'sky' },
+              { icon: <BookOpen size={20} />, label: 'Datasets', desc: 'Browse benchmark suites', to: '/app/datasets', cls: 'sky' },
             ].map((a, i) => (
               <button key={i} onClick={() => navigate(a.to)} className={`${styles['qa-btn']} ${styles[`qa-btn--${a.cls}`]}`}>
                 <div className={styles['qa-btn__icon']}>{a.icon}</div>
@@ -141,6 +143,9 @@ export default function Dashboard() {
     </div>
   );
 }
+
+
+
 
 
 
