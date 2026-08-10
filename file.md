@@ -1,141 +1,587 @@
-//Datasets.tsx
-import { useEffect, useMemo, useState } from 'react';
-import { RefreshCw, Search, ExternalLink, Layers, AlertTriangle, Loader2 } from 'lucide-react';
+//Newevaluation.tsx
+import { useEffect, useMemo, useState, type ComponentType } from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  ChevronLeft,
+  ChevronRight,
+  Check,
+  Cpu,
+  Bot,
+  Database,
+  Play,
+  Clock3,
+  Tag,
+  LayoutGrid,
+  Plug,
+  Gauge,
+  ClipboardCheck,
+  Gavel,
+  Wallet,
+  Layers,
+  Loader2,
+} from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
+import { fetchProviders } from '../../store/slices/providersSlice';
+import { fetchModels } from '../../store/slices/modelsSlice';
 import { fetchBenchmarks } from '../../store/slices/benchmarksSlice';
-import type { Benchmark } from '../../types';
-import styles from './Datasets.module.scss';
+import { fetchMetrics } from '../../store/slices/metricsSlice';
+import { launchEvaluation, setDraft } from '../../store/slices/evaluationsSlice';
+import type { CreateEvaluationRequest } from '../../types';
+import styles from './NewEvaluation.module.scss';
 
-// Deterministic color hash so the same capability always gets the same pill
-// color across cards/renders, without a hardcoded lookup table.
-const PILL_COLORS = [
-  { bg: '#E9EBF8', fg: '#1428A0' }, { bg: '#FFFBEB', fg: '#D97706' }, { bg: '#ECFDF5', fg: '#059669' },
-  { bg: '#FFF1F2', fg: '#F43F5E' }, { bg: '#F0F9FF', fg: '#0EA5E9' }, { bg: '#FEF2F2', fg: '#EF4444' },
+const STEPS = [
+  { label: 'Name & Type', description: 'Name it and pick what you\u2019re testing' },
+  { label: 'Providers', description: 'Choose connected providers' },
+  { label: 'Models', description: 'Pick models to compare' },
+  { label: 'Test Suite', description: 'Select a benchmark or dataset' },
+  { label: 'Metrics', description: 'Choose what to measure' },
+  { label: 'Review', description: 'Confirm and launch the run' },
 ];
-function hashColor(label: string) {
-  const sum = [...label].reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
-  return PILL_COLORS[sum % PILL_COLORS.length];
-}
 
-export default function Datasets() {
+const STEP_ICONS: ComponentType<{ size?: number }>[] = [Tag, Plug, Cpu, Database, Gauge, ClipboardCheck];
+
+const TYPE_OPTIONS = [
+  { v: 'Model', icon: Cpu, sub: 'General-purpose model' },
+  { v: 'Agent', icon: Bot, sub: 'Autonomous agent' },
+  { v: 'RAG', icon: Database, sub: 'Retrieval-augmented' },
+];
+
+export default function NewEvaluation() {
   const dispatch = useAppDispatch();
-  const { items, status, error } = useAppSelector((s) => s.benchmarks);
-  const [search, setSearch] = useState('');
-  const [typeFilter, setTypeFilter] = useState('All');
-  const [subgroupsFor, setSubgroupsFor] = useState<Benchmark | null>(null);
+  const navigate = useNavigate();
+  const [step, setStep] = useState(0);
+  const [toast, setToast] = useState(false);
+  const totalSteps = STEPS.length;
+
+  const draft = useAppSelector((s) => s.evaluations.draft);
+  const launching = useAppSelector((s) => s.evaluations.launching);
+  const launchError = useAppSelector((s) => s.evaluations.launchError);
+
+  const providers = useAppSelector((s) => s.providers.items);
+  const models = useAppSelector((s) => s.models.items);
+  const benchmarks = useAppSelector((s) => s.benchmarks.items);
+  const metrics = useAppSelector((s) => s.metrics);
 
   useEffect(() => {
+    dispatch(fetchProviders());
+    dispatch(fetchModels());
     dispatch(fetchBenchmarks());
+    dispatch(fetchMetrics());
   }, [dispatch]);
 
-  const types = useMemo(() => ['All', ...new Set(items.map((b) => b.type))], [items]);
-  const filtered = items.filter((b) => {
-    if (typeFilter !== 'All' && b.type !== typeFilter) return false;
-    const q = search.toLowerCase();
-    return !q || b.name.toLowerCase().includes(q) || b.description.toLowerCase().includes(q);
-  });
+  const connectedProviders = providers.filter((p) => p.status === 'connected');
+  const availableModels = useMemo(
+    () => models.filter((m) => draft.selProviders.includes(m.provider_id)),
+    [models, draft.selProviders]
+  );
+  const activeMetricsList =
+    draft.eval_type === 'agent' ? [...metrics.allMetrics, ...metrics.customAgentMetrics] : metrics.allMetrics;
+
+  const toggle = (list: string[], value: string) =>
+    list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
+
+  const canGo = () => {
+    if (step === 0) return Boolean(draft.name.trim() && draft.eval_type);
+    if (step === 1) return draft.selProviders.length > 0;
+    if (step === 2) return draft.selModels.length > 0;
+    if (step === 3) return Boolean(draft.selBenchmark);
+    return true;
+  };
+
+  const goNext = () => {
+    if (!canGo()) return;
+    setStep((s) => Math.min(totalSteps - 1, s + 1));
+  };
+  const goBack = () => setStep((s) => Math.max(0, s - 1));
+  const goToStep = (target: number) => {
+    if (target < step) setStep(target);
+  };
+
+  const suite = benchmarks.find((b) => b.name === draft.selBenchmark);
+  const selectedModels = draft.selModels.map((id) => models.find((m) => m.id === id)).filter(Boolean) as typeof models;
+  const judgeModel = draft.judgeModelId ? models.find((m) => m.id === draft.judgeModelId) : null;
+
+  const { estCost, estMinutes } = useMemo(() => {
+    const questions = suite?.task_count ?? 0;
+    const modelCount = draft.selModels.length || 1;
+    return {
+      estCost: questions * modelCount * 0.0009,
+      estMinutes: Math.max(1, Math.round((questions * modelCount) / 180)),
+    };
+  }, [suite, draft.selModels.length]);
+
+  const launch = async () => {
+    const benchmark = benchmarks.find((b) => b.name === draft.selBenchmark);
+    const payload: CreateEvaluationRequest = {
+      name: draft.name,
+      eval_type: draft.eval_type.toLowerCase(),
+      dataset_id: benchmark?.huggingface_dataset || '',
+      benchmark: draft.selBenchmark || undefined,
+      model_ids: draft.selModels,
+      selected_metrics: draft.selMetrics,
+      selected_category: benchmark ? [benchmark.type] : undefined,
+      ...(draft.judgeModelId ? { judge_config: { model_id: draft.judgeModelId, base_url: '', api_key: '' } } : {}),
+    };
+
+    const result = await dispatch(launchEvaluation(payload));
+    if (launchEvaluation.fulfilled.match(result)) {
+      setToast(true);
+      setTimeout(() => {
+        setToast(false);
+        navigate('/app/evaluations');
+      }, 2000);
+    }
+  };
+
+  const progressPct = Math.round((step / (totalSteps - 1)) * 100);
 
   return (
-    <div className="page-enter pg-shell">
-      <div className={styles.header}>
-        <div className={styles.header__eyebrow}>Datasets</div>
-        <h1 className={styles.header__title}>Test Suite Library</h1>
-        <p className={styles.header__subtitle}>Browse every benchmark available for evaluations, independent of any single wizard run.</p>
-        <div className={styles.header__row}>
-          <span className={styles.header__count}>{items.length} suites available</span>
-          <button className="btn btn-ghost btn-sm" onClick={() => dispatch(fetchBenchmarks())}><RefreshCw size={14} /> Refresh</button>
-        </div>
-      </div>
-
-      <div className="pg-toolbar" style={{ paddingTop: 0 }}>
-        <div className="toolbar">
-          <div className="search-box"><Search size={16} color="#9CA3AF" /><input placeholder="Search datasets…" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
-          <div className="pills">{types.map((t) => <button key={t} className={`pill ${typeFilter === t ? 'on' : ''}`} onClick={() => setTypeFilter(t)}>{t}</button>)}</div>
-        </div>
-      </div>
-
-      <div className="pg-body" style={{ paddingTop: 0 }}>
-
-        {status === 'loading' && (
-          <div className={styles.state}><Loader2 size={28} style={{ animation: 'spin 1.5s linear infinite' }} /><div>Loading datasets…</div></div>
-        )}
-
-        {status === 'failed' && (
-          <div className={styles.state}>
-            <AlertTriangle size={28} color="#EF4444" />
-            <div>{error || 'Failed to load datasets.'}</div>
-            <button className="btn btn-ind btn-sm" onClick={() => dispatch(fetchBenchmarks())}>Retry</button>
+    <div className="page-enter">
+      <div className={styles.wiz}>
+        <div className={styles.wiz__header}>
+          <div>
+            <p className={styles['wiz__header-eyebrow']}>Create evaluation</p>
+            <h1>New Evaluation</h1>
+            <p className={styles['wiz-sub']} style={{ marginBottom: 0 }}>
+              Set up and launch a structured model evaluation
+            </p>
           </div>
-        )}
+          <div className={styles['wiz__header-meta']}>
+            <Clock3 size={13} />
+            ~5 min guided setup
+          </div>
+        </div>
 
-        {status === 'succeeded' && filtered.length === 0 && (
-          <div className={styles.state}><Layers size={28} /><div>No datasets match your search.</div></div>
-        )}
-
-        <div className="cards-grid">
-          {status !== 'loading' && filtered.map((b) => {
-            // Defensive per spec §3.2 / §5 — tasks & required_capabilities are
-            // normalized to [] in benchmarksApi.list(), but reads still fall
-            // back defensively here in case a consumer bypasses that layer.
-            const tasks = b.tasks ?? [];
-            const caps = b.required_capabilities ?? [];
-            return (
-              <div className="card" key={b.name}>
-                <div className="card-hdr">
-                  <div>
-                    <div className="card-title">{b.name}</div>
-                    <div style={{ marginTop: 6 }}><span className="tag tag-amb">{b.type}</span></div>
-                  </div>
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontSize: 24, fontWeight: 700 }}>{b.task_count.toLocaleString()}</div>
-                    <div style={{ fontSize: 11, color: '#9CA3AF', fontWeight: 600 }}>tasks</div>
-                  </div>
-                </div>
-                <div className="card-desc">{b.description}</div>
-
-                <div className={styles.statRow}>
-                  <span>{b.task_count.toLocaleString()} Tasks</span>
-                  <span>{caps.length} Capabilities</span>
-                  <span>{b.huggingface_dataset.split('/')[0]}</span>
-                </div>
-
-                <div className={styles.pillRow}>
-                  {caps.map((c) => {
-                    const color = hashColor(c);
-                    return <span key={c} className={styles.pill} style={{ background: color.bg, color: color.fg }}>{c}</span>;
-                  })}
-                </div>
-
-                <div className="card-foot">
-                  {tasks.length > 0 ? (
-                    <button className="btn btn-sm btn-ghost" onClick={() => setSubgroupsFor(b)}>View subgroups</button>
-                  ) : <span />}
-                  <a
-                    className={styles.sourceLink}
-                    href={`https://huggingface.co/datasets/${b.huggingface_dataset}`}
-                    target="_blank" rel="noreferrer"
-                  >
-                    Source <ExternalLink size={12} />
-                  </a>
-                </div>
+        <div className={styles['wiz-shell']}>
+          <aside className={styles.wiz__sidebar}>
+            <div className={styles['wiz__sidebar-progress']}>
+              <div className={styles['wiz__sidebar-progress-head']}>
+                <span>
+                  Step {step + 1} of {totalSteps}
+                </span>
+                <span>{progressPct}%</span>
               </div>
-            );
-          })}
+              <div className={styles['wiz__sidebar-progress-track']}>
+                <div className={styles['wiz__sidebar-progress-fill']} style={{ width: `${progressPct}%` }} />
+              </div>
+            </div>
+
+            {STEPS.map((s, i) => {
+              const state = i === step ? 'active' : i < step ? 'complete' : 'upcoming';
+              const Icon = STEP_ICONS[i];
+              return (
+                <button
+                  key={s.label}
+                  type="button"
+                  className={`${styles.wiz__step} ${styles[`wiz__step--${state}`]}`}
+                  onClick={() => goToStep(i)}
+                  disabled={i > step}
+                >
+                  <span className={styles['wiz__step-marker']}>
+                    {state === 'complete' ? <Check size={14} strokeWidth={3} /> : <Icon size={15} />}
+                  </span>
+                  <span className={styles['wiz__step-text']}>
+                    <span className={styles['wiz__step-label']}>{s.label}</span>
+                    <span className={styles['wiz__step-desc']}>{s.description}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </aside>
+
+          <div className={styles.wiz__content}>
+            <p className={styles['wiz__step-kicker']}>
+              Step {step + 1} of {totalSteps}
+            </p>
+
+            <div className={styles.wiz__body}>
+              {step === 0 && (
+                <>
+                  <h2>Name your evaluation</h2>
+                  <p className={styles['wiz-sub']}>Give it a recognizable name and choose what you're evaluating.</p>
+
+                  <div className={styles.wiz__field}>
+                    <label className={styles.wiz__label}>Evaluation Name</label>
+                    <input
+                      className={styles.wiz__input}
+                      placeholder="e.g. Q3 Model Selection"
+                      value={draft.name}
+                      onChange={(e) => dispatch(setDraft({ name: e.target.value }))}
+                    />
+                  </div>
+
+                  <div className={styles.wiz__field} style={{ maxWidth: 'none' }}>
+                    <label className={styles.wiz__label}>Evaluation Type</label>
+                    <div className={styles['wiz__type-grid']}>
+                      {TYPE_OPTIONS.map((o) => {
+                        const Icon = o.icon;
+                        const selected = draft.eval_type === o.v;
+                        return (
+                          <button
+                            key={o.v}
+                            type="button"
+                            className={`${styles['wiz__type-card']} ${selected ? styles['wiz__type-card--selected'] : ''}`}
+                            onClick={() => dispatch(setDraft({ eval_type: o.v }))}
+                          >
+                            <span className={styles['wiz__type-icon']}>
+                              <Icon size={18} />
+                            </span>
+                            <span className={styles['wiz__type-content']}>
+                              <span className={styles['wiz__type-title']}>{o.v}</span>
+                              <span className={styles['wiz__type-desc']}>{o.sub}</span>
+                            </span>
+                            {selected && (
+                              <span className={styles['wiz__type-check']}>
+                                <Check size={13} strokeWidth={2.75} />
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {step === 1 && (
+                <>
+                  <h2>Select providers</h2>
+                  <p className={styles['wiz-sub']}>Choose which connected providers to draw models from.</p>
+                  <div className={styles.wiz__grid}>
+                    {connectedProviders.map((p) => {
+                      const selected = draft.selProviders.includes(p.id);
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          className={`${styles.wiz__card} ${selected ? styles['wiz__card--selected'] : ''}`}
+                          onClick={() => dispatch(setDraft({ selProviders: toggle(draft.selProviders, p.id) }))}
+                        >
+                          <span className={styles['wiz__card-icon']}>
+                            <Plug size={15} />
+                          </span>
+                          <span className={styles['wiz__card-text']}>
+                            <span className={styles['wiz__card-name']}>{p.name}</span>
+                            <span className={styles['wiz__card-sub']}>{p.model_count} models available</span>
+                          </span>
+                          {selected && (
+                            <span className={styles['wiz__card-check']}>
+                              <Check size={12} strokeWidth={2.75} />
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                    {connectedProviders.length === 0 && (
+                      <p className={styles.wiz__empty}>No connected providers yet — connect one from the Providers page first.</p>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {step === 2 && (
+                <>
+                  <h2>Choose models</h2>
+                  <p className={styles['wiz-sub']}>Pick which models to include in this evaluation.</p>
+                  {availableModels.length > 0 ? (
+                    <div className={styles.wiz__grid}>
+                      {availableModels.map((m) => {
+                        const selected = draft.selModels.includes(m.id);
+                        return (
+                          <button
+                            key={m.id}
+                            type="button"
+                            className={`${styles.wiz__card} ${selected ? styles['wiz__card--selected'] : ''}`}
+                            onClick={() => dispatch(setDraft({ selModels: toggle(draft.selModels, m.id) }))}
+                          >
+                            <span className={styles['wiz__card-icon']}>
+                              <Cpu size={15} />
+                            </span>
+                            <span className={styles['wiz__card-text']}>
+                              <span className={styles['wiz__card-name']}>{m.name}</span>
+                              <span className={styles['wiz__card-sub']}>{m.context_window.toLocaleString()} ctx</span>
+                            </span>
+                            {selected && (
+                              <span className={styles['wiz__card-check']}>
+                                <Check size={12} strokeWidth={2.75} />
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className={styles.wiz__empty}>Select providers first to see available models.</p>
+                  )}
+                </>
+              )}
+
+              {step === 3 && (
+                <>
+                  <h2>Pick a test suite</h2>
+                  <p className={styles['wiz-sub']}>Select the benchmark to evaluate against.</p>
+                  <div className={styles['wiz__dataset-grid']}>
+                    {benchmarks.map((b) => {
+                      const selected = draft.selBenchmark === b.name;
+                      return (
+                        <button
+                          key={b.name}
+                          type="button"
+                          className={`${styles['wiz__dataset-card']} ${selected ? styles['wiz__dataset-card--selected'] : ''}`}
+                          onClick={() => dispatch(setDraft({ selBenchmark: b.name }))}
+                        >
+                          <div className={styles['wiz__dataset-top']}>
+                            <span className={styles['wiz__dataset-name']}>{b.name}</span>
+                            {selected && (
+                              <span className={styles['wiz__type-check-inline']}>
+                                <Check size={12} strokeWidth={2.75} />
+                              </span>
+                            )}
+                          </div>
+                          <p className={styles['wiz__dataset-desc']}>{b.description}</p>
+                          <div className={styles['wiz__dataset-meta']}>
+                            <span className={styles.wiz__chip}>{b.type}</span>
+                            <span>{b.task_count.toLocaleString()} tasks</span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
+              {step === 4 && (
+                <>
+                  <h2>Configure metrics</h2>
+                  <p className={styles['wiz-sub']}>Choose which metrics to measure.</p>
+
+                  <div className={styles['wiz__metrics-toolbar']}>
+                    <span className={styles['wiz__metrics-count']}>
+                      <strong>{draft.selMetrics.length}</strong> selected
+                    </span>
+                    <div style={{ display: 'flex', gap: 12 }}>
+                      <button
+                        type="button"
+                        className={styles['wiz__link-btn']}
+                        onClick={() => dispatch(setDraft({ selMetrics: [...activeMetricsList] }))}
+                      >
+                        Select all
+                      </button>
+                      <button type="button" className={styles['wiz__link-btn']} onClick={() => dispatch(setDraft({ selMetrics: [] }))}>
+                        Unselect all
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className={styles.wiz__grid}>
+                    {activeMetricsList.map((m) => {
+                      const selected = draft.selMetrics.includes(m);
+                      return (
+                        <button
+                          key={m}
+                          type="button"
+                          className={`${styles.wiz__card} ${selected ? styles['wiz__card--selected'] : ''}`}
+                          onClick={() => dispatch(setDraft({ selMetrics: toggle(draft.selMetrics, m) }))}
+                        >
+                          <span className={styles['wiz__card-icon']}>
+                            <Gauge size={15} />
+                          </span>
+                          <span className={styles['wiz__card-text']}>
+                            <span className={styles['wiz__card-name']}>{m}</span>
+                          </span>
+                          {selected && (
+                            <span className={styles['wiz__card-check']}>
+                              <Check size={12} strokeWidth={2.75} />
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                    {activeMetricsList.length === 0 && <p className={styles.wiz__empty}>No metrics available.</p>}
+                  </div>
+
+                  <div className={styles['wiz__field--judge']}>
+                    <label className={styles.wiz__label}>
+                      <Gavel size={13} strokeWidth={2.25} />
+                      Judge Model <span className="opt">(optional — grades other models)</span>
+                    </label>
+                    <select
+                      className={styles.wiz__select}
+                      value={draft.judgeModelId || ''}
+                      onChange={(e) => dispatch(setDraft({ judgeModelId: e.target.value || undefined }))}
+                    >
+                      <option value="">None</option>
+                      {models
+                        .filter((m) => m.is_active)
+                        .map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.name}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                </>
+              )}
+
+              {step === 5 && (
+                <>
+                  <h2>Review &amp; Launch</h2>
+                  <p className={styles['wiz-sub']}>Confirm your evaluation setup.</p>
+
+                  <div className={styles['wiz__review-stats']}>
+                    <div className={styles['wiz__review-stat']}>
+                      <span className={styles['wiz__review-stat-label']}>
+                        <Wallet size={12} strokeWidth={2} style={{ marginRight: 4, verticalAlign: -2 }} />
+                        Est. Cost
+                      </span>
+                      <span className={styles['wiz__review-stat-value']}>~${estCost.toFixed(2)}</span>
+                    </div>
+                    <div className={styles['wiz__review-stat']}>
+                      <span className={styles['wiz__review-stat-label']}>
+                        <Clock3 size={12} strokeWidth={2} style={{ marginRight: 4, verticalAlign: -2 }} />
+                        Est. Time
+                      </span>
+                      <span className={styles['wiz__review-stat-value']}>~{estMinutes} min</span>
+                    </div>
+                    <div className={styles['wiz__review-stat']}>
+                      <span className={styles['wiz__review-stat-label']}>
+                        <Layers size={12} strokeWidth={2} style={{ marginRight: 4, verticalAlign: -2 }} />
+                        Questions
+                      </span>
+                      <span className={styles['wiz__review-stat-value']}>{suite ? suite.task_count.toLocaleString() : '—'}</span>
+                    </div>
+                  </div>
+
+                  <div className={styles['wiz__review-section']}>
+                    <p className={styles['wiz__review-section-title']}>Overview</p>
+                    <div className={styles.wiz__review}>
+                      <div className={styles['wiz__review-row']}>
+                        <span>Name</span>
+                        <span>{draft.name || '—'}</span>
+                      </div>
+                      <div className={styles['wiz__review-row']}>
+                        <span>Type</span>
+                        <span>{draft.eval_type || '—'}</span>
+                      </div>
+                      <div className={styles['wiz__review-row']}>
+                        <span>Providers</span>
+                        <span>{draft.selProviders.map((id) => providers.find((p) => p.id === id)?.name || id).join(', ') || '—'}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className={styles['wiz__review-section']}>
+                    <p className={styles['wiz__review-section-title']}>Models ({selectedModels.length})</p>
+                    {selectedModels.length > 0 ? (
+                      <div className={styles.wiz__grid} style={{ marginTop: '0.75rem' }}>
+                        {selectedModels.map((m) => (
+                          <div key={m!.id} className={styles.wiz__card} style={{ cursor: 'default' }}>
+                            <span className={styles['wiz__card-icon']}>
+                              <Cpu size={15} />
+                            </span>
+                            <span className={styles['wiz__card-text']}>
+                              <span className={styles['wiz__card-name']}>{m!.name}</span>
+                              <span className={styles['wiz__card-sub']}>{providers.find((p) => p.id === m!.provider_id)?.name || m!.provider_id}</span>
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className={styles.wiz__empty}>No models selected.</p>
+                    )}
+                  </div>
+
+                  <div className={styles['wiz__review-section']}>
+                    <p className={styles['wiz__review-section-title']}>Test Suite</p>
+                    <div className={styles.wiz__review}>
+                      <div className={styles['wiz__review-row']}>
+                        <span>Suite</span>
+                        <span>{suite?.name ?? '—'}</span>
+                      </div>
+                      {suite?.description && (
+                        <div className={styles['wiz__review-row']}>
+                          <span>Description</span>
+                          <span>{suite.description}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className={styles['wiz__review-section']}>
+                    <p className={styles['wiz__review-section-title']}>Metrics ({draft.selMetrics.length})</p>
+                    {draft.selMetrics.length > 0 ? (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '0.75rem' }}>
+                        {draft.selMetrics.map((m) => (
+                          <span key={m} className={styles.wiz__chip}>
+                            {m}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className={styles.wiz__empty}>No metrics selected.</p>
+                    )}
+                  </div>
+
+                  {judgeModel && (
+                    <div className={styles['wiz__review-section']}>
+                      <p className={styles['wiz__review-section-title']}>
+                        <Gavel size={11} strokeWidth={2.25} style={{ marginRight: 4, verticalAlign: -2 }} />
+                        Judge Model
+                      </p>
+                      <div className={styles.wiz__review}>
+                        <div className={styles['wiz__review-row']}>
+                          <span>Model</span>
+                          <span>{judgeModel.name}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {launchError && <p className={styles.wiz__error}>{launchError}</p>}
+                </>
+              )}
+            </div>
+
+            <div className={styles.wiz__nav}>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => (step > 0 ? goBack() : navigate('/app/dashboard'))}
+                disabled={launching}
+              >
+                <ChevronLeft size={16} /> {step === 0 ? 'Cancel' : 'Back'}
+              </button>
+
+              {step < totalSteps - 1 ? (
+                <button type="button" className="btn btn-ind" onClick={goNext} disabled={!canGo()}>
+                  Continue <ChevronRight size={16} />
+                </button>
+              ) : (
+                <button type="button" className="btn btn-ind" onClick={launch} disabled={launching}>
+                  {launching ? (
+                    <>
+                      <Loader2 size={16} className={styles.wiz__spin} /> Launching…
+                    </>
+                  ) : (
+                    <>
+                      <Play size={16} /> Launch Evaluation
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
-      {subgroupsFor && (
-        <div className={styles.modalOverlay} onClick={() => setSubgroupsFor(null)}>
-          <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
-            <div className={styles.modal__hdr}>
-              <span>{subgroupsFor.name} — subgroups</span>
-              <button className="btn btn-sm btn-ghost" onClick={() => setSubgroupsFor(null)}>Close</button>
-            </div>
-            <div className={styles.modal__body}>
-              {(subgroupsFor.tasks ?? []).map((t) => (
-                <div key={t.value} className={styles.modal__row}><span>{t.name}</span><code>{t.value}</code></div>
-              ))}
-            </div>
+      {toast && (
+        <div className="toast">
+          <div className={styles['toast__icon']}>
+            <Check size={18} color="#10B981" />
+          </div>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>Evaluation launched</div>
+            <div style={{ fontSize: 12, color: '#6B7280' }}>You'll find it in Evaluations once it completes.</div>
           </div>
         </div>
       )}
@@ -156,520 +602,838 @@ export default function Datasets() {
 
 
 
+//Newevaluation.module.scss
+@use '../../styles/_variables' as *;
 
-//History.tsx
-import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import {
-  Search, Copy, Trash2, FileBarChart, Cpu, Bot, Database, Loader2,
-  Award, ListChecks, Clock,
-} from 'lucide-react';
-import { useAppDispatch, useAppSelector } from '../../hooks/redux';
-import {
-  fetchEvaluations, fetchEvaluationResults, removeEvaluationLocal, setDraft,
-} from '../../store/slices/evaluationsSlice';
-import type { EvaluationListItem, EvaluationStatusValue } from '../../types';
-import styles from './History.module.scss';
+// ---------------------------------------------------------------------------
+// Local aliases: map this component's design tokens onto the shared theme
+// tokens defined in _variables.scss, so the markup/scss below can mirror the
+// reference "run-eval" design 1:1 without needing new global variables.
+// ---------------------------------------------------------------------------
+$primary: $indigo;
+$primary-hover: $indigo-dark;
+$primary-light: $indigo-pale;
+$bg-main: $surface;
+$bg-subtle: $surface-alt;
+$bg-inset: $surface-hover;
+$border-subtle: $border-light;
+$border-default: $border;
+$border-strong: rgba(17, 24, 39, 0.16);
+$text-tertiary: $text-muted;
+$danger: $red;
+$danger-subtle: $red-pale;
+$success: $emerald;
+$success-subtle: $emerald-pale;
+$shadow-sm: $shadow-2;
+$shadow-md: $shadow-3;
 
-const TYPE_ICON: Record<string, typeof Cpu> = { model: Cpu, agent: Bot, rag: Database };
-const TYPE_LABEL: Record<string, string> = { model: 'AI Model', agent: 'Agent', rag: 'RAG' };
+.wiz {
+  &__header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1rem;
+    padding-bottom: 18px;
+    margin-bottom: 20px;
+    border-bottom: 1px solid $border-subtle;
+  }
 
-function statusBadgeClass(status: EvaluationStatusValue): string {
-  switch (status) {
-    case 'completed': return 'badge-green';
-    case 'running': return 'badge-run';
-    case 'pending': return 'badge-amber';
-    case 'failed': case 'canceled': return 'badge-gray';
-    default: return 'badge-blue';
+  &__header-eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: $font-mono;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: $primary;
+    margin-bottom: 6px;
+
+    &::before {
+      content: '';
+      width: 16px;
+      height: 2px;
+      border-radius: 2px;
+      background: $primary;
+    }
+  }
+
+  &__header-meta {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
+    border-radius: 999px;
+    padding: 7px 13px;
+    white-space: nowrap;
+    margin-bottom: 3px;
+  }
+
+  /* ---------- wizard shell ---------- */
+  &-shell {
+    position: relative;
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-radius: 20px;
+    box-shadow: $shadow-md;
+    overflow: hidden;
+    display: flex;
+    min-height: 560px;
+  }
+
+  /* ---------- sidebar / vertical stepper ---------- */
+  &__sidebar {
+    flex-shrink: 0;
+    width: 300px;
+    background: $bg-subtle;
+    border-right: 1px solid $border-subtle;
+    padding: 24px 14px 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  &__sidebar-progress {
+    flex-shrink: 0;
+    padding: 4px 12px 20px;
+    margin-bottom: 6px;
+    border-bottom: 1px solid $border-subtle;
+  }
+
+  &__sidebar-progress-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-family: $font-mono;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: $text-tertiary;
+    margin-bottom: 8px;
+
+    span:last-child {
+      color: $primary;
+      font-weight: 800;
+    }
+  }
+
+  &__sidebar-progress-track {
+    height: 6px;
+    border-radius: 999px;
+    background: $border-subtle;
+    overflow: hidden;
+  }
+
+  &__sidebar-progress-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, $primary 0%, $primary-hover 100%);
+    transition: width 0.28s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  &__step {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    text-align: left;
+    width: 100%;
+    border: none;
+    background: transparent;
+    border-radius: 0.75rem;
+    padding: 11px 12px 22px 12px;
+    cursor: pointer;
+    transition: background 0.16s ease, transform 0.16s ease;
+
+    &::before {
+      content: '';
+      position: absolute;
+      top: 42px;
+      left: 29px;
+      width: 2px;
+      height: calc(100% - 34px);
+      background: $border-default;
+      transition: background 0.2s ease;
+    }
+
+    &:last-child {
+      padding-bottom: 10px;
+
+      &::before {
+        display: none;
+      }
+    }
+
+    &:disabled {
+      cursor: default;
+    }
+
+    &:not(:disabled):hover {
+      background: $bg-inset;
+    }
+  }
+
+  &__step-marker {
+    position: relative;
+    z-index: 1;
+    flex-shrink: 0;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: $bg-main;
+    border: 1.5px solid $border-default;
+    color: $text-tertiary;
+    font-family: $font-mono;
+    font-size: 0.75rem;
+    font-weight: 700;
+    transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+  }
+
+  &__step-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-top: 5px;
+    min-width: 0;
+  }
+
+  &__step-label {
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: $text-primary;
+    transition: color 0.18s ease;
+  }
+
+  &__step-desc {
+    font-size: 0.75rem;
+    color: $text-tertiary;
+    line-height: 1.35;
+  }
+
+  &__step--active {
+    background: $bg-main;
+    box-shadow: $shadow-sm;
+
+    .wiz__step-marker {
+      background: $primary;
+      border-color: $primary;
+      color: #fff;
+      box-shadow: 0 0 0 5px $primary-light;
+    }
+
+    .wiz__step-label {
+      color: $primary;
+    }
+  }
+
+  &__step--complete {
+    &::before {
+      background: linear-gradient(180deg, $primary 0%, $primary-hover 100%);
+    }
+
+    .wiz__step-marker {
+      background: $primary-light;
+      border-color: $primary;
+      color: $primary;
+    }
+
+    &:not(:disabled):hover {
+      background: rgba(0, 0, 0, 0.02);
+    }
+  }
+
+  &__step--upcoming {
+    .wiz__step-label {
+      color: $text-secondary;
+    }
+
+    .wiz__step-desc {
+      color: #a8b1bb;
+    }
+  }
+
+  /* ---------- content pane ---------- */
+  &__content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 28px 36px 24px;
+  }
+
+  &__step-kicker {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: $font-mono;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: $primary;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+
+    &::before {
+      content: '';
+      width: 16px;
+      height: 2px;
+      border-radius: 2px;
+      background: $primary;
+    }
+  }
+
+  &__body {
+    flex: 1;
+    min-height: 0;
+  }
+
+  &__body h2 {
+    font-size: 19px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+    color: $text-primary;
+  }
+
+  &-sub {
+    margin-top: 6px;
+    font-size: 0.9375rem;
+    color: $text-secondary;
+    max-width: 608px;
+    margin-bottom: 1.5rem;
+  }
+
+  /* ---------- fields ---------- */
+  &__field {
+    max-width: 480px;
+    margin-top: 1.75rem;
+  }
+
+  &__label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.84375rem;
+    font-weight: 600;
+    color: $text-secondary;
+    margin-bottom: 0.4375rem;
+
+    .opt {
+      color: $text-tertiary;
+      font-weight: 400;
+      font-size: 0.75rem;
+    }
+  }
+
+  &__input {
+    width: 100%;
+    border: 1px solid $border-default;
+    border-radius: 0.5rem;
+    padding: 0.75rem 0.875rem;
+    font-size: 1rem;
+    font-family: $font-body;
+    color: $text-primary;
+    background: $bg-main;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+
+    &::placeholder {
+      color: #a8b1bb;
+    }
+
+    &:focus {
+      outline: none;
+      border-color: $primary;
+      box-shadow: 0 0 0 0.1875rem $primary-light;
+    }
+  }
+
+  &__select {
+    width: 100%;
+    border: 1px solid $border-default;
+    border-radius: 0.5rem;
+    padding: 0.625rem 0.75rem;
+    font-size: 0.9375rem;
+    font-family: $font-body;
+    color: $text-primary;
+    background: $bg-main;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+
+    &:focus {
+      outline: none;
+      border-color: $primary;
+      box-shadow: 0 0 0 0.1875rem $primary-light;
+    }
+  }
+
+  /* ---------- type cards (Model / Agent / RAG) ---------- */
+  &__type-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-top: 1.5rem;
+    max-width: 560px;
+  }
+
+  &__type-card {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.875rem;
+    text-align: left;
+    width: 100%;
+    padding: 1.125rem 3rem 1.125rem 1.125rem;
+    border: 1px solid $border-default;
+    border-radius: 0.75rem;
+    background: $bg-main;
+    cursor: pointer;
+    transition: border-color 0.14s ease, background 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+    }
+
+    &--selected {
+      border-color: $primary;
+      background: $primary-light;
+    }
+  }
+
+  &__type-icon {
+    width: 38px;
+    height: 38px;
+    flex-shrink: 0;
+    border-radius: 0.5rem;
+    background: $bg-subtle;
+    color: $primary;
+    display: grid;
+    place-items: center;
+  }
+
+  &__type-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    flex: 1;
+  }
+
+  &__type-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__type-desc {
+    font-size: 0.875rem;
+    color: $text-secondary;
+    line-height: 1.5;
+  }
+
+  &__type-check {
+    position: absolute;
+    top: 50%;
+    right: 1.125rem;
+    transform: translateY(-50%);
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: $primary;
+    color: #fff;
+    display: grid;
+    place-items: center;
+  }
+
+  /* ---------- generic 2-up selectable card grid (providers / models / metrics) ---------- */
+  &__grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+    margin-top: 1.5rem;
+  }
+
+  &__card {
+    position: relative;
+    text-align: left;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.875rem 2.5rem 0.875rem 0.875rem;
+    border: 1px solid $border-default;
+    border-radius: 0.75rem;
+    background: $bg-main;
+    cursor: pointer;
+    transition: border-color 0.14s ease, background 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+    }
+
+    &--selected {
+      border-color: $primary;
+      background: $primary-light;
+    }
+  }
+
+  &__card-icon {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 0.625rem;
+    display: grid;
+    place-items: center;
+    background: $bg-subtle;
+    color: $text-tertiary;
+    transition: background 0.16s ease, color 0.16s ease;
+  }
+
+  &__card--selected &__card-icon {
+    background: $primary;
+    color: #fff;
+  }
+
+  &__card-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  &__card-name {
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__card-sub {
+    font-size: 0.8125rem;
+    color: $text-tertiary;
+  }
+
+  &__card-check {
+    position: absolute;
+    top: 50%;
+    right: 0.875rem;
+    transform: translateY(-50%);
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: $primary;
+    color: #fff;
+  }
+
+  &__empty {
+    grid-column: 1 / -1;
+    padding: 2rem;
+    text-align: center;
+    color: $text-tertiary;
+    font-size: 0.90625rem;
+    background: $bg-subtle;
+    border-radius: 0.875rem;
+  }
+
+  /* ---------- dataset cards (wider, with description + tags) ---------- */
+  &__dataset-grid {
+    margin-top: 1.5rem;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+  }
+
+  &__dataset-card {
+    position: relative;
+    text-align: left;
+    padding: 1rem 1.125rem;
+    border: 1px solid $border-default;
+    border-radius: 0.75rem;
+    background: $bg-main;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    transition: border-color 0.14s ease, background 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+    }
+
+    &--selected {
+      border-color: $primary;
+      background: $primary-light;
+    }
+  }
+
+  &__dataset-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  &__dataset-name {
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__dataset-desc {
+    font-size: 0.875rem;
+    color: $text-secondary;
+    line-height: 1.5;
+  }
+
+  &__dataset-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.625rem;
+    font-size: 0.78125rem;
+    color: $text-tertiary;
+  }
+
+  /* ---------- static chips / tags ---------- */
+  &__chip {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $primary;
+    background: $primary-light;
+    border-radius: 0.375rem;
+    padding: 0.1875rem 0.5rem;
+    display: inline-block;
+  }
+
+  &__type-check-inline {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: $primary;
+    color: #fff;
+  }
+
+  /* ---------- metrics bulk actions ---------- */
+  &__metrics-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-top: 1.5rem;
+  }
+
+  &__metrics-count {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    font-size: 0.875rem;
+    color: $text-secondary;
+
+    strong {
+      font-weight: 700;
+      color: $primary;
+    }
+  }
+
+  &__link-btn {
+    font-family: $font-body;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: $primary;
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  &__field--judge {
+    max-width: 480px;
+    margin-top: 1.75rem;
+  }
+
+  /* ---------- review step ---------- */
+  &__review-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.75rem;
+    margin-top: 1.5rem;
+  }
+
+  &__review-stat {
+    padding: 0.875rem 1rem;
+    border: 1px solid $border-subtle;
+    border-radius: 0.75rem;
+    background: $bg-subtle;
+  }
+
+  &__review-stat-label {
+    display: block;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: $text-tertiary;
+    margin-bottom: 4px;
+  }
+
+  &__review-stat-value {
+    display: block;
+    font-family: $font-mono;
+    font-size: 1.375rem;
+    font-weight: 800;
+    color: $text-primary;
+    letter-spacing: -0.01em;
+  }
+
+  &__review {
+    margin-top: 0.75rem;
+    border: 1px solid $border-subtle;
+    border-radius: 0.75rem;
+    overflow: hidden;
+  }
+
+  &__review-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    font-size: 0.90625rem;
+    border-bottom: 1px solid $border-subtle;
+
+    &:last-child {
+      border-bottom: 0;
+    }
+
+    span:first-child {
+      color: $text-tertiary;
+      flex-shrink: 0;
+    }
+
+    span:last-child {
+      color: $text-primary;
+      font-weight: 500;
+      text-align: right;
+    }
+  }
+
+  &__review-section {
+    margin-top: 1.75rem;
+  }
+
+  &__review-section-title {
+    font-family: $font-mono;
+    font-size: 0.71875rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: $text-tertiary;
+  }
+
+  &__error {
+    margin-top: 1.25rem;
+    font-size: 0.875rem;
+    color: $danger;
+    background: $danger-subtle;
+    border-radius: 0.5rem;
+    padding: 0.625rem 0.875rem;
+  }
+
+  /* ---------- nav footer ---------- */
+  &__nav {
+    flex-shrink: 0;
+    margin-top: 1.5rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid $border-subtle;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  &__spin {
+    animation: wiz-spin 0.8s linear infinite;
+  }
+
+  @keyframes wiz-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 }
 
-function withinDateRange(iso: string, range: string): boolean {
-  if (range === 'all') return true;
-  const days = range === '7' ? 7 : 30;
-  const cutoff = Date.now() - days * 86400000;
-  return new Date(iso).getTime() >= cutoff;
+.toast__icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: $success-subtle;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-export default function History() {
-  const dispatch = useAppDispatch();
-  const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const selectedId = searchParams.get('id');
+@media (max-width: 896px) {
+  .wiz__grid,
+  .wiz__dataset-grid {
+    grid-template-columns: 1fr;
+  }
 
-  const { list, listStatus, listError, resultsByEvalId, resultsStatusByEvalId, resultsErrorByEvalId } = useAppSelector((s) => s.evaluations);
-  const models = useAppSelector((s) => s.models.items);
-  const providers = useAppSelector((s) => s.providers.items);
+  .wiz__review-stats {
+    grid-template-columns: 1fr;
+  }
+}
 
-  const [search, setSearch] = useState('');
-  const [typeFilter, setTypeFilter] = useState('All');
-  const [dateFilter, setDateFilter] = useState('all');
+@media (max-width: 720px) {
+  .wiz-shell {
+    flex-direction: column;
+  }
 
-  // Initial load + silent 10s poll (spec §2.4) — no spinner/error disruption
-  // on background refreshes; the slice only flips listStatus when list is empty.
-  useEffect(() => {
-    dispatch(fetchEvaluations());
-    const interval = setInterval(() => dispatch(fetchEvaluations()), 10000);
-    return () => clearInterval(interval);
-  }, [dispatch]);
+  .wiz__sidebar {
+    width: 100%;
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: none;
+    border-bottom: 1px solid $border-subtle;
+    padding: 14px;
+    gap: 6px;
+  }
 
-  const filtered = useMemo(() => {
-    return list.filter((e) => {
-      if (search && !e.name.toLowerCase().includes(search.toLowerCase())) return false;
-      if (typeFilter !== 'All' && e.eval_type !== typeFilter) return false;
-      if (!withinDateRange(e.created_at, dateFilter)) return false;
-      return true;
-    });
-  }, [list, search, typeFilter, dateFilter]);
+  .wiz__step {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: 8px 10px;
+    flex-shrink: 0;
+    width: 96px;
 
-  const selected = list.find((e) => e.id === selectedId) || filtered[0] || null;
-
-  // Keyed on id + status (not the whole object) so a background poll that
-  // doesn't change either doesn't re-trigger the results fetch (spec §2.4).
-  useEffect(() => {
-    if (selected && selected.status === 'completed' && !resultsByEvalId[selected.id]) {
-      dispatch(fetchEvaluationResults(selected.id));
+    &::before {
+      display: none;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id, selected?.status]);
-
-  const selectRow = (id: string) => setSearchParams({ id });
-
-  const duplicate = (e: EvaluationListItem) => {
-    dispatch(setDraft({
-      name: `${e.name} (copy)`,
-      type: (e.eval_type as 'model' | 'agent' | 'rag') || 'model',
-      models: e.model_ids,
-      dataset: e.benchmark || null,
-      subgroup: e.selected_category,
-      runSamples: e.run_samples,
-      metrics: e.selected_metrics,
-    }));
-    navigate('/app/run-evaluation');
-  };
-
-  const modelName = (id: string) => models.find((m) => m.id === id)?.name || id;
-  const providerName = (id: string) => {
-    const model = models.find((m) => m.id === id);
-    return providers.find((p) => p.id === model?.provider_id)?.name || model?.provider_id || '—';
-  };
-
-  const results = selected ? resultsByEvalId[selected.id] : undefined;
-  const resultsStatus = selected ? resultsStatusByEvalId[selected.id] : undefined;
-  const resultsError = selected ? resultsErrorByEvalId[selected.id] : undefined;
-
-  return (
-    <div className="page-enter pg-shell">
-      <div className="pg-hdr"><h1>History</h1><p>All past and in-progress evaluations</p></div>
-      {/* This page needs the list and detail panels to scroll independently
-          of each other (spec: point 4 of the fixed-header pattern), so
-          pg-body itself doesn't scroll here — .layout fills it instead. */}
-      <div className={`pg-body ${styles['pg-body-fixed']}`}>
-        <div className={styles.layout}>
-          {/* ---------- Sidebar list ---------- */}
-          <div className={styles.sidebar}>
-            <div className={styles.filters}>
-              <div className="search-box" style={{ minWidth: 0, marginBottom: 10 }}>
-                <Search size={16} color="#9CA3AF" />
-                <input placeholder="Search evaluations…" value={search} onChange={(e) => setSearch(e.target.value)} />
-              </div>
-              <div className="pills" style={{ marginBottom: 8 }}>
-                {['All', 'model', 'agent', 'rag'].map((t) => (
-                  <button key={t} className={`pill ${typeFilter === t ? 'on' : ''}`} onClick={() => setTypeFilter(t)}>
-                    {t === 'All' ? 'All' : TYPE_LABEL[t]}
-                  </button>
-                ))}
-              </div>
-              <select className="fi" style={{ marginBottom: 0 }} value={dateFilter} onChange={(e) => setDateFilter(e.target.value)}>
-                <option value="all">All time</option>
-                <option value="30">Last 30 days</option>
-                <option value="7">Last 7 days</option>
-              </select>
-
-              {listStatus === 'loading' && list.length === 0 && <div className={styles.empty}><Loader2 size={16} style={{ animation: 'spin 1.5s linear infinite' }} /> Loading evaluations…</div>}
-              {listStatus === 'failed' && list.length === 0 && <div className={styles.empty}>{listError || 'Failed to load evaluations.'}</div>}
-              {listStatus !== 'loading' && filtered.length === 0 && list.length > 0 && <div className={styles.empty}>No evaluations match your filters.</div>}
-            </div>
-
-            <div className={styles.rows}>
-              {filtered.map((e) => {
-                const Icon = TYPE_ICON[e.eval_type] || Cpu;
-                const isSelected = selected?.id === e.id;
-                return (
-                  <div
-                    key={e.id}
-                    className={`${styles.row} ${isSelected ? styles.selected : ''} ${e.status === 'running' ? styles['row--running'] : ''}`}
-                    onClick={() => selectRow(e.id)}
-                  >
-                    <div className={styles.row__top}>
-                      <div className={styles.row__icon}><Icon size={16} /></div>
-                      <div className={styles.row__name}>{e.name}</div>
-                    </div>
-                    <div className={styles.row__badges}>
-                      <span className="tag tag-ind">{TYPE_LABEL[e.eval_type] || e.eval_type}</span>
-                      <span className={`badge ${statusBadgeClass(e.status)}`}>
-                        {e.status === 'running' && <span className={styles['live-dot']} />}
-                        {e.status}
-                      </span>
-                    </div>
-                    <div className={styles.row__meta}>{new Date(e.created_at).toLocaleDateString()}</div>
-                    <div className={styles.row__stats}>
-                      <span>{e.top_model ? `🏆 ${e.top_model}` : '—'}</span>
-                      <span>{e.top_score != null ? `${e.top_score}%` : '—'}</span>
-                      <span>{e.model_ids.length} models</span>
-                    </div>
-                    <div className={styles.row__actions} onClick={(ev) => ev.stopPropagation()}>
-                      <button className="btn btn-sm btn-ghost" onClick={() => duplicate(e)}><Copy size={12} /> Duplicate</button>
-                      <button className="btn btn-sm btn-danger" onClick={() => dispatch(removeEvaluationLocal(e.id))}><Trash2 size={12} /> Delete</button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* ---------- Detail panel ---------- */}
-          <div className={styles.detail}>
-            {!selected ? (
-              <div className={styles['detail-empty']}>Select an evaluation to see its details.</div>
-            ) : (
-              <>
-                <div className={styles['detail-hdr']}>
-                  <div>
-                    <div className={styles['detail-hdr__badges']}>
-                      <span className="tag tag-ind">{TYPE_LABEL[selected.eval_type] || selected.eval_type}</span>
-                      <span className={`badge ${statusBadgeClass(selected.status)}`}>
-                        {selected.status === 'running' && <span className={styles['live-dot']} />}
-                        {selected.status}
-                      </span>
-                    </div>
-                    <h2 className={styles['detail-hdr__name']}>{selected.name}</h2>
-                    <div className={styles['detail-hdr__date']}>Created {new Date(selected.created_at).toLocaleString()}</div>
-                  </div>
-                  <div className={styles['detail-hdr__actions']}>
-                    <button className="btn btn-ghost" onClick={() => duplicate(selected)}><Copy size={14} /> Duplicate</button>
-                    <button className="btn btn-danger" onClick={() => dispatch(removeEvaluationLocal(selected.id))}><Trash2 size={14} /> Delete</button>
-                    <button className="btn btn-ind" disabled={selected.status !== 'completed'}><FileBarChart size={14} /> View Report</button>
-                  </div>
-                </div>
-
-                <div className={styles['summary-cards']}>
-                  <div className={styles['summary-card']}>
-                    <Award size={16} color="#F59E0B" />
-                    <div>
-                      <div className={styles['summary-card__label']}>Winner</div>
-                      <div className={styles['summary-card__val']}>{selected.top_model || '—'}{selected.top_score != null ? ` · ${selected.top_score}%` : ''}</div>
-                    </div>
-                  </div>
-                  <div className={styles['summary-card']}>
-                    <ListChecks size={16} color="#1428A0" />
-                    <div>
-                      <div className={styles['summary-card__label']}>Questions / Models</div>
-                      <div className={styles['summary-card__val']}>{selected.total_questions.toLocaleString()} &middot; {selected.model_ids.length} models</div>
-                    </div>
-                  </div>
-                  <div className={styles['summary-card']}>
-                    <Clock size={16} color="#10B981" />
-                    <div>
-                      <div className={styles['summary-card__label']}>Status</div>
-                      <div className={styles['summary-card__val']}>{selected.status}{selected.completed_at ? ` · ${new Date(selected.completed_at).toLocaleDateString()}` : ''}</div>
-                    </div>
-                  </div>
-                </div>
-
-                {selected.status === 'completed' ? (
-                  <>
-                    {resultsStatus === 'loading' && <div className={styles.empty}><Loader2 size={16} style={{ animation: 'spin 1.5s linear infinite' }} /> Loading results…</div>}
-                    {resultsStatus === 'failed' && <div className={styles.empty}>{resultsError}</div>}
-                    {results && (
-                      <div className="tw">
-                        <table className="tbl">
-                          <thead><tr><th>Rank</th><th>Model</th><th>Provider</th><th>Score</th><th>Accuracy</th><th>Passed</th><th>Failed</th></tr></thead>
-                          <tbody>
-                            {results.results.map((r) => (
-                              <tr key={r.model_id} className={r.rank === 1 ? 'winner' : ''}>
-                                <td style={{ fontWeight: 700 }}>{r.rank === 1 ? '🏆 ' : ''}{r.rank}</td>
-                                <td style={{ fontWeight: 700 }}>{modelName(r.model_id)}</td>
-                                <td style={{ color: '#6B7280' }}>{providerName(r.model_id)}</td>
-                                <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontWeight: 700 }}>{r.score}%</td>
-                                <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif" }}>{r.accuracy}%</td>
-                                <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", color: '#10B981' }}>{r.passed_tests}</td>
-                                <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", color: '#EF4444' }}>{r.failed_tests}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className={styles['status-message']}>
-                    {selected.status === 'running' && 'This evaluation is still running — results will appear once it completes.'}
-                    {selected.status === 'pending' && 'This evaluation hasn\u2019t started yet.'}
-                    {selected.status === 'failed' && 'This evaluation failed to complete.'}
-                    {selected.status === 'canceled' && 'This evaluation was canceled.'}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//ModelCatalog.module.scss
-.model-catalog__loading { display: flex; align-items: center; gap: 8px; color: #6B7280; font-size: 13px; margin-bottom: 16px; }
-
-
-
-
-
-
-
-
-
-
-
-
-
-//ModelCatalog.tsx
-import { useEffect, useMemo, useState } from 'react';
-import { Search, Plus, Loader2 } from 'lucide-react';
-import { useAppDispatch, useAppSelector } from '../../hooks/redux';
-import { fetchModels, createCustomModel } from '../../store/slices/modelsSlice';
-import { fetchProviders } from '../../store/slices/providersSlice';
-import AddCustomModelDrawer from './AddCustomModelDrawer';
-import styles from './ModelCatalog.module.scss';
-
-export default function ModelCatalog() {
-  const dispatch = useAppDispatch();
-  const { items, status, creating } = useAppSelector((s) => s.models);
-  const providers = useAppSelector((s) => s.providers.items);
-  const [search, setSearch] = useState('');
-  const [capFilter, setCapFilter] = useState('All');
-  const [drawerOpen, setDrawerOpen] = useState(false);
-
-  useEffect(() => {
-    dispatch(fetchModels());
-    dispatch(fetchProviders());
-  }, [dispatch]);
-
-  const caps = useMemo(() => ['All', ...new Set(items.flatMap((m) => m.capabilities))], [items]);
-  const providerName = (id: string) => providers.find((p) => p.id === id)?.name || id;
-
-  const filtered = items.filter((m) => {
-    if (capFilter !== 'All' && !m.capabilities.includes(capFilter)) return false;
-    const q = search.toLowerCase();
-    return !q || m.name.toLowerCase().includes(q) || providerName(m.provider_id).toLowerCase().includes(q);
-  });
-
-  return (
-    <div className="page-enter pg-shell">
-      <div className="pg-hdr"><h1>Model Catalog</h1><p>All models across connected providers</p></div>
-      <div className="pg-toolbar">
-        <div className="toolbar">
-          <div className="search-box">
-            <Search size={16} color="#9CA3AF" />
-            <input placeholder="Search models or providers…" value={search} onChange={(e) => setSearch(e.target.value)} />
-          </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <div className="pills">{caps.map((c) => <button key={c} className={`pill ${capFilter === c ? 'on' : ''}`} onClick={() => setCapFilter(c)}>{c}</button>)}</div>
-            <button className="btn btn-ind btn-sm" onClick={() => setDrawerOpen(true)}><Plus size={14} /> Register Custom</button>
-          </div>
-        </div>
-      </div>
-      <div className="pg-body">
-        {status === 'loading' && <div className={styles['model-catalog__loading']}><Loader2 size={18} style={{ animation: 'spin 1.5s linear infinite' }} /> Loading models…</div>}
-
-        <div className="tw">
-          <table className="tbl">
-            <thead>
-              <tr><th>Model</th><th>Provider</th><th>Capabilities</th><th>Context</th><th>Price (in/out)</th><th>Accuracy</th><th>Status</th></tr>
-            </thead>
-            <tbody>
-              {status !== 'loading' && filtered.map((m) => (
-                <tr key={m.id}>
-                  <td style={{ fontWeight: 700 }}>{m.name}</td>
-                  <td style={{ color: '#6B7280' }}>{providerName(m.provider_id)}</td>
-                  <td>{m.capabilities.map((c) => <span key={c} className="tag tag-ind">{c}</span>)}</td>
-                  <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontSize: 13 }}>{m.context_window.toLocaleString()}</td>
-                  <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontSize: 13, color: '#6B7280' }}>
-                    {m.input_price != null ? `$${m.input_price.toFixed(2)}` : '—'} / {m.output_price != null ? `$${m.output_price.toFixed(2)}` : '—'}
-                  </td>
-                  <td>
-                    <span style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontWeight: 700, color: (m.accuracy_score || 0) >= 90 ? '#10B981' : '#111827' }}>
-                      {m.accuracy_score != null ? `${m.accuracy_score}%` : '—'}
-                    </span>
-                  </td>
-                  <td><span className={`badge ${m.is_active ? 'badge-green' : 'badge-gray'}`}>{m.is_active ? 'Active' : 'Inactive'}</span></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {drawerOpen && (
-        <AddCustomModelDrawer
-          submitting={creating}
-          onClose={() => setDrawerOpen(false)}
-          onSubmit={(payload) => {
-            dispatch(createCustomModel(payload)).then(() => setDrawerOpen(false));
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Providers.tsx
-import { useEffect, useState } from 'react';
-import { Search, Check, Plus, Settings, Unlink, Loader2 } from 'lucide-react';
-import { useAppDispatch, useAppSelector } from '../../hooks/redux';
-import { fetchProviders, connectProvider, disconnectProvider } from '../../store/slices/providersSlice';
-import styles from './Providers.module.scss';
-
-type Filter = 'all' | 'connected' | 'available';
-
-export default function Providers() {
-  const dispatch = useAppDispatch();
-  const { items, status, mutatingId } = useAppSelector((s) => s.providers);
-  const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState<Filter>('all');
-  const [keyPromptFor, setKeyPromptFor] = useState<string | null>(null);
-  const [apiKeyInput, setApiKeyInput] = useState('');
-
-  useEffect(() => {
-    dispatch(fetchProviders());
-  }, [dispatch]);
-
-  const filtered = items.filter((p) => {
-    if (filter === 'connected' && p.status !== 'connected') return false;
-    if (filter === 'available' && p.status === 'connected') return false;
-    return !search || p.name.toLowerCase().includes(search.toLowerCase());
-  });
-
-  const submitConnect = (providerId: string) => {
-    if (!apiKeyInput.trim()) return;
-    dispatch(connectProvider({ providerId, payload: { api_key: apiKeyInput } }));
-    setKeyPromptFor(null);
-    setApiKeyInput('');
-  };
-
-  return (
-    <div className="page-enter pg-shell">
-      <div className="pg-hdr"><h1>Providers</h1><p>Manage your AI provider connections</p></div>
-      <div className="pg-toolbar">
-        <div className="toolbar">
-          <div className="search-box">
-            <Search size={16} color="#9CA3AF" />
-            <input placeholder="Search providers…" value={search} onChange={(e) => setSearch(e.target.value)} />
-          </div>
-          <div className="pills">
-            {(['all', 'connected', 'available'] as Filter[]).map((f) => (
-              <button key={f} className={`pill ${filter === f ? 'on' : ''}`} onClick={() => setFilter(f)}>
-                {f[0].toUpperCase() + f.slice(1)}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-      <div className="pg-body">
-        {status === 'loading' && <div className={styles['providers__loading']}><Loader2 size={18} style={{ animation: 'spin 1.5s linear infinite' }} /> Loading providers…</div>}
-
-        <div className="cards-grid">
-          {status !== 'loading' && filtered.map((p) => (
-            <div className="card" key={p.id}>
-              <div className="card-hdr">
-                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                  <div className={`card-icon ${styles['providers__icon']}`}>{p.logo_url ? <img src={p.logo_url} alt={p.name} /> : p.name[0]}</div>
-                  <div>
-                    <div className="card-title">{p.name}</div>
-                    <div style={{ fontSize: 12, color: '#6B7280', marginTop: 2 }}>{p.model_count} models</div>
-                  </div>
-                </div>
-                <span className={`badge ${p.status === 'connected' ? 'badge-green' : 'badge-gray'}`}>
-                  {p.status === 'connected' ? <><Check size={11} /> Connected</> : 'Not connected'}
-                </span>
-              </div>
-              <div className="card-desc">{p.description}</div>
-
-              {keyPromptFor === p.id ? (
-                <div className={styles['providers__key-form']}>
-                  <input
-                    className="fi"
-                    type="password"
-                    placeholder="Paste API key…"
-                    value={apiKeyInput}
-                    onChange={(e) => setApiKeyInput(e.target.value)}
-                    autoFocus
-                  />
-                  <div className={styles['providers__key-actions']}>
-                    <button className="btn btn-sm btn-ind" onClick={() => submitConnect(p.id)}>Save</button>
-                    <button className="btn btn-sm btn-ghost" onClick={() => setKeyPromptFor(null)}>Cancel</button>
-                  </div>
-                </div>
-              ) : (
-                <div className="card-foot">
-                  <button
-                    className={`btn btn-sm ${p.status === 'connected' ? 'btn-ghost' : 'btn-ind'}`}
-                    disabled={mutatingId === p.id}
-                    onClick={() => setKeyPromptFor(p.id)}
-                  >
-                    {mutatingId === p.id ? (
-                      <Loader2 size={14} style={{ animation: 'spin 1.5s linear infinite' }} />
-                    ) : p.status === 'connected' ? (
-                      <><Settings size={14} /> Configure</>
-                    ) : (
-                      <><Plus size={14} /> Connect</>
-                    )}
-                  </button>
-                  {p.status === 'connected' && (
-                    <button className="btn btn-sm btn-danger" disabled={mutatingId === p.id} onClick={() => dispatch(disconnectProvider(p.id))}>
-                      <Unlink size={14} /> Disconnect
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
+  }
+
+  .wiz__step-text {
+    align-items: center;
+    padding-top: 2px;
+  }
+
+  .wiz__step-desc {
+    display: none;
+  }
+
+  .wiz__content {
+    padding: 24px 20px;
+  }
 }
