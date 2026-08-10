@@ -1,47 +1,61 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
-import Landing from '../components/landing/Landing';
-import SsoLogin from '../components/auth/SsoLogin';
-import AuthGuard from '../components/AuthGuard/AuthGuard';
-import AppShell from '../components/layout/AppShell';
-import Dashboard from '../components/dashboard/Dashboard';
-import Providers from '../components/providers/Providers';
-import ModelCatalog from '../components/models/ModelCatalog';
-import Datasets from '../components/datasets/Datasets';
-import NewEvaluation from '../components/evaluations/NewEvaluation';
-import History from '../components/history/History';
-import Comparison from '../components/comparison/Comparison';
-import Reports from '../components/reports/Reports';
+import { Link, NavLink } from 'react-router-dom';
+import { Home, Link2, Cpu, BookOpen, Play, FlaskConical, GitCompare, FileText, LogOut } from 'lucide-react';
+import { useAppDispatch, useAppSelector } from '../../hooks/redux';
+import { logout } from '../../store/slices/authSlice';
+import styles from './Sidebar.module.scss';
 
-export default function AppRoutes() {
+const navItems = [
+  { to: '/app/dashboard', icon: <Home size={18} />, label: 'Dashboard' },
+  { to: '/app/providers', icon: <Link2 size={18} />, label: 'Providers' },
+  { to: '/app/models', icon: <Cpu size={18} />, label: 'Models' },
+  { to: '/app/datasets', icon: <BookOpen size={18} />, label: 'Datasets' },
+];
+
+const workflowItems = [
+  { to: '/app/run-evaluation', icon: <Play size={18} />, label: 'New Evaluation' },
+  { to: '/app/history', icon: <FlaskConical size={18} />, label: 'History' },
+  { to: '/app/comparison', icon: <GitCompare size={18} />, label: 'Comparison' },
+  { to: '/app/reports', icon: <FileText size={18} />, label: 'Reports' },
+];
+
+export default function Sidebar() {
+  const dispatch = useAppDispatch();
+  const user = useAppSelector((s) => s.auth.user);
+
+  const navLinkClass = ({ isActive }: { isActive: boolean }) =>
+    `${styles['nav-item']} ${isActive ? styles.active : ''}`;
+
   return (
-    <Routes>
-      {/* AuthGuard redirects here with { from, errorMessage } on error/logged_out.
-          This is the only route not gated by AuthGuard, so it must stay outside it. */}
-      <Route path="/sso-login" element={<SsoLogin />} />
-
-      {/* AuthGuard now wraps BOTH "/" and "/app/*" — the landing page's content
-          only renders once authenticated, same as the rest of the app. It
-          triggers the SSO WebSocket handshake (useSsoAuth) as soon as it
-          mounts, which happens on every fresh page load / refresh (auth
-          state is in-memory only, never persisted), and shows AuthSpinner
-          while that's in flight. */}
-      <Route element={<AuthGuard />}>
-        <Route path="/" element={<Landing />} />
-
-        <Route path="/app" element={<AppShell />}>
-          <Route index element={<Navigate to="dashboard" replace />} />
-          <Route path="dashboard" element={<Dashboard />} />
-          <Route path="providers" element={<Providers />} />
-          <Route path="models" element={<ModelCatalog />} />
-          <Route path="datasets" element={<Datasets />} />
-          <Route path="run-evaluation" element={<NewEvaluation />} />
-          <Route path="history" element={<History />} />
-          <Route path="comparison" element={<Comparison />} />
-          <Route path="reports" element={<Reports />} />
-        </Route>
-      </Route>
-
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <div className={styles.sidebar}>
+      <Link to="/" className={styles['sidebar__logo']}>
+        <div className={styles['sidebar__mark']}>&#9670;</div>
+        SemcoEval
+      </Link>
+      <nav className={styles['sidebar__nav']}>
+        {navItems.map((item) => (
+          <NavLink key={item.to} to={item.to} className={navLinkClass}>
+            {item.icon}
+            {item.label}
+          </NavLink>
+        ))}
+        <div className={styles['sidebar__section']}>Workflow</div>
+        {workflowItems.map((item) => (
+          <NavLink key={item.to} to={item.to} className={navLinkClass}>
+            {item.icon}
+            {item.label}
+          </NavLink>
+        ))}
+      </nav>
+      <div className={styles['sidebar__foot']}>
+        <div className={styles['sidebar__user']}>
+          <div className={styles['sidebar__avatar']}>{(user?.username || 'U').slice(0, 2).toUpperCase()}</div>
+          <div className={styles['sidebar__user-info']}>
+            <div className={styles['sidebar__user-name']}>{user?.profileName || user?.username || 'Guest'}</div>
+            <div className={styles['sidebar__user-email']}>{user?.email || ''}</div>
+          </div>
+          <LogOut size={16} style={{ color: '#9CA3AF', cursor: 'pointer' }} onClick={() => dispatch(logout())} />
+        </div>
+      </div>
+    </div>
   );
 }
