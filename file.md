@@ -1,98 +1,145 @@
-//Modelcatalog.tsx
+//Datasets.tsx
 import { useEffect, useMemo, useState } from 'react';
-import { Search, Plus, Loader2, Boxes } from 'lucide-react';
+import { RefreshCw, Search, ExternalLink, Layers, AlertTriangle, Loader2, Database } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
-import { fetchModels, createCustomModel } from '../../store/slices/modelsSlice';
-import { fetchProviders } from '../../store/slices/providersSlice';
-import AddCustomModelDrawer from './AddCustomModelDrawer';
-import styles from './ModelCatalog.module.scss';
+import { fetchBenchmarks } from '../../store/slices/benchmarksSlice';
+import type { Benchmark } from '../../types';
+import styles from './Datasets.module.scss';
 
-export default function ModelCatalog() {
+// Deterministic color hash so the same capability always gets the same pill
+// color across cards/renders, without a hardcoded lookup table.
+const PILL_COLORS = [
+  { bg: '#E9EBF8', fg: '#1428A0' }, { bg: '#FFFBEB', fg: '#D97706' }, { bg: '#ECFDF5', fg: '#059669' },
+  { bg: '#FFF1F2', fg: '#F43F5E' }, { bg: '#F0F9FF', fg: '#0EA5E9' }, { bg: '#FEF2F2', fg: '#EF4444' },
+];
+function hashColor(label: string) {
+  const sum = [...label].reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+  return PILL_COLORS[sum % PILL_COLORS.length];
+}
+
+export default function Datasets() {
   const dispatch = useAppDispatch();
-  const { items, status, creating } = useAppSelector((s) => s.models);
-  const providers = useAppSelector((s) => s.providers.items);
+  const { items, status, error } = useAppSelector((s) => s.benchmarks);
   const [search, setSearch] = useState('');
-  const [capFilter, setCapFilter] = useState('All');
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [typeFilter, setTypeFilter] = useState('All');
+  const [subgroupsFor, setSubgroupsFor] = useState<Benchmark | null>(null);
 
   useEffect(() => {
-    dispatch(fetchModels());
-    dispatch(fetchProviders());
+    dispatch(fetchBenchmarks());
   }, [dispatch]);
 
-  const caps = useMemo(() => ['All', ...new Set(items.flatMap((m) => m.capabilities))], [items]);
-  const providerName = (id: string) => providers.find((p) => p.id === id)?.name || id;
-
-  const filtered = items.filter((m) => {
-    if (capFilter !== 'All' && !m.capabilities.includes(capFilter)) return false;
+  const types = useMemo(() => ['All', ...new Set(items.map((b) => b.type))], [items]);
+  const filtered = items.filter((b) => {
+    if (typeFilter !== 'All' && b.type !== typeFilter) return false;
     const q = search.toLowerCase();
-    return !q || m.name.toLowerCase().includes(q) || providerName(m.provider_id).toLowerCase().includes(q);
+    return !q || b.name.toLowerCase().includes(q) || b.description.toLowerCase().includes(q);
   });
 
   return (
     <div className="page-enter pg-shell">
-      <div className={styles['model-catalog__header']}>
+      <div className={styles['datasets__header']}>
         <div>
-          <p className={styles['model-catalog__header-eyebrow']}>Catalog</p>
-          <h1>Model Catalog</h1>
-          <p className={styles['model-catalog__header-sub']}>All models across connected providers</p>
+          <p className={styles['datasets__header-eyebrow']}>Datasets</p>
+          <h1>Test Suite Library</h1>
+          <p className={styles['datasets__header-sub']}>Browse every benchmark available for evaluations, independent of any single wizard run.</p>
         </div>
-        <div className={styles['model-catalog__header-meta']}>
-          <Boxes size={13} />
-          {items.length} model{items.length === 1 ? '' : 's'} listed
+        <div className={styles['datasets__header-meta']}>
+          <span className={styles['datasets__header-count']}><Database size={13} /> {items.length} suites available</span>
+          <button className="btn btn-ghost btn-sm" onClick={() => dispatch(fetchBenchmarks())}><RefreshCw size={14} /> Refresh</button>
         </div>
       </div>
+
       <div className="pg-toolbar">
         <div className="toolbar">
-          <div className="search-box">
-            <Search size={16} color="#9CA3AF" />
-            <input placeholder="Search models or providers…" value={search} onChange={(e) => setSearch(e.target.value)} />
-          </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <div className="pills">{caps.map((c) => <button key={c} className={`pill ${capFilter === c ? 'on' : ''}`} onClick={() => setCapFilter(c)}>{c}</button>)}</div>
-            <button className="btn btn-ind btn-sm" onClick={() => setDrawerOpen(true)}><Plus size={14} /> Register Custom</button>
-          </div>
+          <div className="search-box"><Search size={16} color="#9CA3AF" /><input placeholder="Search datasets…" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
+          <div className="pills">{types.map((t) => <button key={t} className={`pill ${typeFilter === t ? 'on' : ''}`} onClick={() => setTypeFilter(t)}>{t}</button>)}</div>
         </div>
       </div>
+
       <div className="pg-body">
-        {status === 'loading' && <div className={styles['model-catalog__loading']}><Loader2 size={18} style={{ animation: 'spin 1.5s linear infinite' }} /> Loading models…</div>}
 
-        <div className="tw">
-          <table className="tbl">
-            <thead>
-              <tr><th>Model</th><th>Provider</th><th>Capabilities</th><th>Context</th><th>Price (in/out)</th><th>Accuracy</th><th>Status</th></tr>
-            </thead>
-            <tbody>
-              {status !== 'loading' && filtered.map((m) => (
-                <tr key={m.id}>
-                  <td style={{ fontWeight: 700 }}>{m.name}</td>
-                  <td style={{ color: '#6B7280' }}>{providerName(m.provider_id)}</td>
-                  <td>{m.capabilities.map((c) => <span key={c} className="tag tag-ind">{c}</span>)}</td>
-                  <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontSize: 13 }}>{m.context_window.toLocaleString()}</td>
-                  <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontSize: 13, color: '#6B7280' }}>
-                    {m.input_price != null ? `$${m.input_price.toFixed(2)}` : '—'} / {m.output_price != null ? `$${m.output_price.toFixed(2)}` : '—'}
-                  </td>
-                  <td>
-                    <span style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontWeight: 700, color: (m.accuracy_score || 0) >= 90 ? '#10B981' : '#111827' }}>
-                      {m.accuracy_score != null ? `${m.accuracy_score}%` : '—'}
-                    </span>
-                  </td>
-                  <td><span className={`badge ${m.is_active ? 'badge-green' : 'badge-gray'}`}>{m.is_active ? 'Active' : 'Inactive'}</span></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        {status === 'loading' && (
+          <div className={styles.state}><Loader2 size={28} style={{ animation: 'spin 1.5s linear infinite' }} /><div>Loading datasets…</div></div>
+        )}
+
+        {status === 'failed' && (
+          <div className={styles.state}>
+            <AlertTriangle size={28} color="#EF4444" />
+            <div>{error || 'Failed to load datasets.'}</div>
+            <button className="btn btn-ind btn-sm" onClick={() => dispatch(fetchBenchmarks())}>Retry</button>
+          </div>
+        )}
+
+        {status === 'succeeded' && filtered.length === 0 && (
+          <div className={styles.state}><Layers size={28} /><div>No datasets match your search.</div></div>
+        )}
+
+        <div className="cards-grid">
+          {status !== 'loading' && filtered.map((b) => {
+            // Defensive per spec §3.2 / §5 — tasks & required_capabilities are
+            // normalized to [] in benchmarksApi.list(), but reads still fall
+            // back defensively here in case a consumer bypasses that layer.
+            const tasks = b.tasks ?? [];
+            const caps = b.required_capabilities ?? [];
+            return (
+              <div className="card" key={b.name}>
+                <div className="card-hdr">
+                  <div>
+                    <div className="card-title">{b.name}</div>
+                    <div style={{ marginTop: 6 }}><span className="tag tag-amb">{b.type}</span></div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontSize: 24, fontWeight: 700 }}>{b.task_count.toLocaleString()}</div>
+                    <div style={{ fontSize: 11, color: '#9CA3AF', fontWeight: 600 }}>tasks</div>
+                  </div>
+                </div>
+                <div className="card-desc">{b.description}</div>
+
+                <div className={styles.statRow}>
+                  <span>{b.task_count.toLocaleString()} Tasks</span>
+                  <span>{caps.length} Capabilities</span>
+                  <span>{b.huggingface_dataset.split('/')[0]}</span>
+                </div>
+
+                <div className={styles.pillRow}>
+                  {caps.map((c) => {
+                    const color = hashColor(c);
+                    return <span key={c} className={styles.pill} style={{ background: color.bg, color: color.fg }}>{c}</span>;
+                  })}
+                </div>
+
+                <div className="card-foot">
+                  {tasks.length > 0 ? (
+                    <button className="btn btn-sm btn-ghost" onClick={() => setSubgroupsFor(b)}>View subgroups</button>
+                  ) : <span />}
+                  <a
+                    className={styles.sourceLink}
+                    href={`https://huggingface.co/datasets/${b.huggingface_dataset}`}
+                    target="_blank" rel="noreferrer"
+                  >
+                    Source <ExternalLink size={12} />
+                  </a>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
-      {drawerOpen && (
-        <AddCustomModelDrawer
-          submitting={creating}
-          onClose={() => setDrawerOpen(false)}
-          onSubmit={(payload) => {
-            dispatch(createCustomModel(payload)).then(() => setDrawerOpen(false));
-          }}
-        />
+      {subgroupsFor && (
+        <div className={styles.modalOverlay} onClick={() => setSubgroupsFor(null)}>
+          <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+            <div className={styles.modal__hdr}>
+              <span>{subgroupsFor.name} — subgroups</span>
+              <button className="btn btn-sm btn-ghost" onClick={() => setSubgroupsFor(null)}>Close</button>
+            </div>
+            <div className={styles.modal__body}>
+              {(subgroupsFor.tasks ?? []).map((t) => (
+                <div key={t.value} className={styles.modal__row}><span>{t.name}</span><code>{t.value}</code></div>
+              ))}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -110,12 +157,10 @@ export default function ModelCatalog() {
 
 
 
-
-
-//Modelcatalog.scss
+//Datasets.scss
 @use '../../styles/_variables' as *;
 
-.model-catalog {
+.datasets {
   &__header {
     flex-shrink: 0;
     display: flex;
@@ -167,17 +212,55 @@ export default function ModelCatalog() {
     flex-shrink: 0;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 10px;
     font-size: 0.75rem;
     font-weight: 600;
     color: $text-secondary;
+  }
+
+  &__header-count {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     background: $surface-alt;
     border: 1px solid $border-light;
     border-radius: 999px;
     padding: 7px 13px;
     white-space: nowrap;
-    margin-bottom: 3px;
   }
-
-  &__loading { display: flex; align-items: center; gap: 8px; color: $text-secondary; font-size: 13px; margin-bottom: 16px; }
 }
+
+.state {
+  display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 64px 24px;
+  color: $text-secondary; background: $surface; border: 1px solid $border; border-radius: 16px; text-align: center;
+}
+
+.statRow {
+  display: flex; gap: 14px; font-size: 12px; color: $text-secondary; font-weight: 600;
+  padding: 10px 0; border-top: 1px solid $border-light; border-bottom: 1px solid $border-light; margin-bottom: 10px;
+}
+.pillRow { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.pill { padding: 3px 10px; border-radius: 100px; font-size: 11px; font-weight: 700; }
+
+.sourceLink { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: $indigo; font-weight: 600; text-decoration: none; }
+.sourceLink:hover { text-decoration: underline; }
+
+.modalOverlay {
+  position: fixed; inset: 0; background: rgba(17,24,39,.45); z-index: 200;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.modal {
+  width: 100%; max-width: 480px; max-height: 70vh; background: $surface; border-radius: 18px;
+  box-shadow: $shadow-4; display: flex; flex-direction: column; overflow: hidden;
+}
+.modal__hdr {
+  padding: 16px 20px; border-bottom: 1px solid $border-light; display: flex; justify-content: space-between; align-items: center;
+  font-weight: 700; font-size: 14px;
+}
+.modal__body { padding: 8px 12px; overflow-y: auto; }
+.modal__row {
+  display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; font-size: 13px;
+  border-bottom: 1px solid $border-light;
+  code { font-family: $font-mono; font-size: 11px; color: $text-muted; }
+}
+.modal__row:last-child { border-bottom: none; }
