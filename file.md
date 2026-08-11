@@ -1,6 +1,6 @@
 //Providers.tsx
 import { useEffect, useState } from 'react';
-import { Search, Check, Plus, Settings, Unlink, Loader2, Cable, Trash2, RefreshCw, Eye, ListPlus } from 'lucide-react';
+import { Search, Check, Plus, Settings, Unlink, Loader2, Cable, Trash2, RefreshCw, Eye, ListPlus, ListFilter } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
 import {
   fetchProviders,
@@ -79,14 +79,18 @@ export default function Providers() {
             <Search size={16} color="var(--text-muted)" />
             <input placeholder="Search providers…" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <span className={styles['providers__toolbar-label']}>Status</span>
-            <div className="pills">
-              {(['all', 'connected', 'available'] as Filter[]).map((f) => (
-                <button key={f} className={`pill ${filter === f ? 'on' : ''}`} onClick={() => setFilter(f)}>
-                  {f[0].toUpperCase() + f.slice(1)}
-                </button>
-              ))}
+          <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
+            <div className={styles['providers__filter-group']}>
+              <span className={styles['providers__toolbar-label']}>
+                <ListFilter size={11} /> Status
+              </span>
+              <div className="pills">
+                {(['all', 'connected', 'available'] as Filter[]).map((f) => (
+                  <button key={f} className={`pill ${filter === f ? 'on' : ''}`} onClick={() => setFilter(f)}>
+                    {f[0].toUpperCase() + f.slice(1)}
+                  </button>
+                ))}
+              </div>
             </div>
             <span className={styles['providers__toolbar-divider']} />
             <button className="btn btn-ind btn-sm" onClick={() => setDrawerOpen(true)}><Plus size={14} /> Add Provider</button>
@@ -257,6 +261,7 @@ export default function Providers() {
 
 
 
+
 //Providers.module.scss
 @use '../../styles/_variables' as *;
 
@@ -332,20 +337,37 @@ export default function Providers() {
   &__key-form { display: flex; gap: 8px; margin-top: 4px; }
   &__key-actions { display: flex; gap: 6px; }
 
+  &__filter-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 12px 5px 5px;
+    background: $surface-alt;
+    border: 1px solid $border-light;
+    border-radius: 999px;
+  }
+
   &__toolbar-label {
     flex-shrink: 0;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: $text-secondary;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: $indigo-pale;
+    color: $indigo;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
     white-space: nowrap;
   }
 
   &__toolbar-divider {
     flex-shrink: 0;
     width: 1px;
-    height: 22px;
-    background: $border-light;
-    margin: 0 2px;
+    height: 28px;
+    background: linear-gradient(to bottom, transparent, $border-light 15%, $border-light 85%, transparent);
   }
 
   &__badge-idle {
@@ -545,11 +567,9 @@ export default function Providers() {
 
 
 
-
-
 //Modelcatalog.tsx
 import { useEffect, useMemo, useState } from 'react';
-import { Search, Boxes, ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
+import { Search, Boxes, ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ListFilter } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
 import { fetchModels } from '../../store/slices/modelsSlice';
 import { fetchProviders } from '../../store/slices/providersSlice';
@@ -697,8 +717,12 @@ export default function ModelCatalog() {
             <input placeholder="Search models or providers…" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <span className={styles['model-catalog__toolbar-label']}>Capability</span>
-            <div className="pills">{caps.map((c) => <button key={c} className={`pill ${capFilter === c ? 'on' : ''}`} onClick={() => setCapFilter(c)}>{c}</button>)}</div>
+            <div className={styles['model-catalog__filter-group']}>
+              <span className={styles['model-catalog__toolbar-label']}>
+                <ListFilter size={11} /> Capability
+              </span>
+              <div className="pills">{caps.map((c) => <button key={c} className={`pill ${capFilter === c ? 'on' : ''}`} onClick={() => setCapFilter(c)}>{c}</button>)}</div>
+            </div>
           </div>
         </div>
       </div>
@@ -837,6 +861,7 @@ export default function ModelCatalog() {
 
 
 
+
 //Modelcatalog.module.scss
 @use '../../styles/_variables' as *;
 
@@ -906,11 +931,29 @@ export default function ModelCatalog() {
 
   &__loading { display: flex; align-items: center; gap: 8px; color: $text-secondary; font-size: 13px; margin-bottom: 16px; }
 
+  &__filter-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 12px 5px 5px;
+    background: $surface-alt;
+    border: 1px solid $border-light;
+    border-radius: 999px;
+  }
+
   &__toolbar-label {
     flex-shrink: 0;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: $text-secondary;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: $indigo-pale;
+    color: $indigo;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
     white-space: nowrap;
   }
 
