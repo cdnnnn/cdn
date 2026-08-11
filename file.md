@@ -1,3 +1,4 @@
+//Newevaluation.tsx
 import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -26,6 +27,7 @@ import {
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
 import { fetchProviders } from '../../store/slices/providersSlice';
 import { fetchModels } from '../../store/slices/modelsSlice';
+import { fetchDatasets } from '../../store/slices/datasetsSlice';
 import { fetchMetrics } from '../../store/slices/metricsSlice';
 import { launchEvaluation, setDraft } from '../../store/slices/evaluationsSlice';
 import type { CreateEvaluationRequest } from '../../types';
@@ -93,22 +95,6 @@ function formatPrice(price: number | null | undefined): string {
   return price === null || price === undefined ? '—' : `$${price.toFixed(2)}`;
 }
 
-// The /datasets endpoint (replaces the old /benchmark(s) API).
-interface DatasetApi {
-  id: string;
-  name: string;
-  category: string;
-  eval_type: string;
-  question_count: number;
-  schema_version: string;
-  dataset_categories: string[];
-  created_at: string;
-}
-
-interface DatasetsResponse {
-  datasets: DatasetApi[];
-}
-
 export default function NewEvaluation() {
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
@@ -127,9 +113,9 @@ export default function NewEvaluation() {
   const models = useAppSelector((s) => s.models.items) ?? [];
   const metrics = useAppSelector((s) => s.metrics) ?? { allMetrics: [], customAgentMetrics: [] };
 
-  const [datasets, setDatasets] = useState<DatasetApi[]>([]);
-  const [datasetsLoading, setDatasetsLoading] = useState(true);
-  const [datasetsError, setDatasetsError] = useState<string | null>(null);
+  const datasets = useAppSelector((s) => s.datasets.items) ?? [];
+  const datasetsLoading = useAppSelector((s) => s.datasets.status === 'loading' || s.datasets.status === 'idle');
+  const datasetsError = useAppSelector((s) => s.datasets.error);
 
   // Defensive defaults: guards calculations below that run on every render
   // against a draft that hasn't been fully hydrated yet.
@@ -147,34 +133,9 @@ export default function NewEvaluation() {
   useEffect(() => {
     dispatch(fetchProviders());
     dispatch(fetchModels());
+    dispatch(fetchDatasets());
     dispatch(fetchMetrics());
   }, [dispatch]);
-
-  // Datasets aren't in Redux yet — fetched directly from the new /datasets endpoint.
-  useEffect(() => {
-    let cancelled = false;
-    setDatasetsLoading(true);
-    setDatasetsError(null);
-
-    fetch('/datasets')
-      .then((res) => {
-        if (!res.ok) throw new Error(`Failed to load datasets (${res.status})`);
-        return res.json() as Promise<DatasetsResponse>;
-      })
-      .then((data) => {
-        if (!cancelled) setDatasets(data.datasets ?? []);
-      })
-      .catch((err) => {
-        if (!cancelled) setDatasetsError(err instanceof Error ? err.message : 'Failed to load datasets.');
-      })
-      .finally(() => {
-        if (!cancelled) setDatasetsLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   // Reset the subgroup/task selection whenever the chosen benchmark changes.
   useEffect(() => {
@@ -962,21 +923,7 @@ export default function NewEvaluation() {
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+//Newevaluation.scss
 @use '../../styles/_variables' as *;
 
 // ---------------------------------------------------------------------------
@@ -2604,3 +2551,103 @@ $shadow-md: $shadow-3;
     padding: 20px 16px 32px;
   }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//datasetslice.ts
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import { datasetsApi } from '../../api/endpoints/datasets';
+
+export interface Dataset {
+  id: string;
+  name: string;
+  category: string;
+  eval_type: string;
+  question_count: number;
+  schema_version: string;
+  dataset_categories: string[];
+  created_at: string;
+}
+
+interface DatasetsState {
+  items: Dataset[];
+  status: 'idle' | 'loading' | 'succeeded' | 'failed';
+  error: string | null;
+}
+
+const initialState: DatasetsState = {
+  items: [],
+  status: 'idle',
+  error: null,
+};
+
+export const fetchDatasets = createAsyncThunk('datasets/fetchAll', () => datasetsApi.list());
+
+const datasetsSlice = createSlice({
+  name: 'datasets',
+  initialState,
+  reducers: {},
+  extraReducers: (builder) => {
+    builder
+      .addCase(fetchDatasets.pending, (state) => {
+        state.status = 'loading';
+      })
+      .addCase(fetchDatasets.fulfilled, (state, action) => {
+        state.status = 'succeeded';
+        state.items = action.payload;
+      })
+      .addCase(fetchDatasets.rejected, (state, action) => {
+        state.status = 'failed';
+        state.error = action.error.message || 'Failed to load datasets';
+      });
+  },
+});
+
+export default datasetsSlice.reducer;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//datasets.ts
+import { apiClient } from '../client';
+import type { Dataset } from '../../store/slices/datasetsSlice';
+
+interface DatasetsResponse {
+  datasets: Dataset[];
+}
+
+export const datasetsApi = {
+  list: async (): Promise<Dataset[]> => {
+    const { data } = await apiClient.get<DatasetsResponse>('/datasets');
+    return data.datasets;
+  },
+};
