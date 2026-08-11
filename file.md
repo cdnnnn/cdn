@@ -1,4 +1,3 @@
-//Newevaluation.tsx
 import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -23,11 +22,12 @@ import {
   Waypoints,
   Lightbulb,
   Wand2,
+  AlertTriangle,
 } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
 import { fetchProviders } from '../../store/slices/providersSlice';
 import { fetchModels } from '../../store/slices/modelsSlice';
-import { fetchDatasets } from '../../store/slices/datasetsSlice';
+import { fetchBenchmarks } from '../../store/slices/benchmarksSlice';
 import { fetchMetrics } from '../../store/slices/metricsSlice';
 import { launchEvaluation, setDraft } from '../../store/slices/evaluationsSlice';
 import type { CreateEvaluationRequest } from '../../types';
@@ -105,17 +105,20 @@ export default function NewEvaluation() {
   const [runSamples, setRunSamples] = useState<number>(10);
   const totalSteps = STEPS.length;
 
+  // Dataset registration (POST /benchmarks/{name}/register) — required before
+  // the user can continue past the Test Suite step.
+  const [registering, setRegistering] = useState(false);
+  const [registerError, setRegisterError] = useState<string | null>(null);
+  const [registeredDatasetId, setRegisteredDatasetId] = useState<string | null>(null);
+
   const rawDraft = useAppSelector((s) => s.evaluations.draft);
   const launching = useAppSelector((s) => s.evaluations.launching);
   const launchError = useAppSelector((s) => s.evaluations.launchError);
 
   const providers = useAppSelector((s) => s.providers.items) ?? [];
   const models = useAppSelector((s) => s.models.items) ?? [];
+  const benchmarks = useAppSelector((s) => s.benchmarks.items) ?? [];
   const metrics = useAppSelector((s) => s.metrics) ?? { allMetrics: [], customAgentMetrics: [] };
-
-  const datasets = useAppSelector((s) => s.datasets.items) ?? [];
-  const datasetsLoading = useAppSelector((s) => s.datasets.status === 'loading' || s.datasets.status === 'idle');
-  const datasetsError = useAppSelector((s) => s.datasets.error);
 
   // Defensive defaults: guards calculations below that run on every render
   // against a draft that hasn't been fully hydrated yet.
@@ -133,7 +136,7 @@ export default function NewEvaluation() {
   useEffect(() => {
     dispatch(fetchProviders());
     dispatch(fetchModels());
-    dispatch(fetchDatasets());
+    dispatch(fetchBenchmarks());
     dispatch(fetchMetrics());
   }, [dispatch]);
 
@@ -141,6 +144,13 @@ export default function NewEvaluation() {
   useEffect(() => {
     setSelSubgroup([]);
   }, [draft.selBenchmark]);
+
+  // A change of benchmark or run-samples count invalidates any previous
+  // registration — the user has to register again before continuing.
+  useEffect(() => {
+    setRegisteredDatasetId(null);
+    setRegisterError(null);
+  }, [draft.selBenchmark, runSamples]);
 
   // Reset the chosen framework if the user switches away from "Agent".
   useEffect(() => {
@@ -163,7 +173,7 @@ export default function NewEvaluation() {
     if (step === 1) return Boolean(draft.eval_type);
     if (step === 2) return draft.selProviders.length > 0;
     if (step === 3) return draft.selModels.length > 0;
-    if (step === 4) return Boolean(draft.selBenchmark);
+    if (step === 4) return Boolean(draft.selBenchmark) && Boolean(registeredDatasetId);
     return true;
   };
 
@@ -176,12 +186,12 @@ export default function NewEvaluation() {
     if (target < step) setStep(target);
   };
 
-  const suite = datasets.find((d) => d.id === draft.selBenchmark);
+  const suite = benchmarks.find((b) => b.name === draft.selBenchmark);
   const selectedModels = draft.selModels.map((id) => models.find((m) => m.id === id)).filter(Boolean) as typeof models;
   const judgeModel = draft.judgeModelId ? models.find((m) => m.id === draft.judgeModelId) : null;
 
   const { estCost, estMinutes } = useMemo(() => {
-    const questions = suite?.question_count ?? 0;
+    const questions = suite?.task_count ?? 0;
     const modelCount = draft.selModels.length || 1;
     return {
       estCost: questions * modelCount * 0.0009,
@@ -189,20 +199,42 @@ export default function NewEvaluation() {
     };
   }, [suite, draft.selModels.length]);
 
+  // POST /benchmarks/{benchmark_name}/register?run_samples={run_samples}
+  const registerDataset = async () => {
+    if (!draft.selBenchmark) return;
+    setRegistering(true);
+    setRegisterError(null);
+    try {
+      const res = await fetch(
+        `/benchmarks/${encodeURIComponent(draft.selBenchmark)}/register?run_samples=${runSamples}`,
+        { method: 'POST' }
+      );
+      if (!res.ok) throw new Error(`Failed to register dataset (${res.status})`);
+      const data = await res.json();
+      if (!data?.dataset_id) throw new Error('No dataset_id returned from registration.');
+      setRegisteredDatasetId(data.dataset_id);
+    } catch (err) {
+      setRegisteredDatasetId(null);
+      setRegisterError(err instanceof Error ? err.message : 'Failed to register dataset.');
+    } finally {
+      setRegistering(false);
+    }
+  };
+
   const launch = async () => {
-    const dataset = datasets.find((d) => d.id === draft.selBenchmark);
+    const benchmark = benchmarks.find((b) => b.name === draft.selBenchmark);
     const judgeModelObj = draft.judgeModelId ? models.find((m) => m.id === draft.judgeModelId) : undefined;
 
     const payload: CreateEvaluationRequest & { datasets?: { dataset_id: string }[] } = {
       name: draft.name,
       eval_type: draft.eval_type.toLowerCase(),
-      dataset_id: dataset?.id || '',
-      datasets: dataset ? [{ dataset_id: dataset.id }] : [],
-      benchmark: dataset?.name || undefined,
+      dataset_id: registeredDatasetId || '',
+      datasets: registeredDatasetId ? [{ dataset_id: registeredDatasetId }] : [],
+      benchmark: draft.selBenchmark || undefined,
       model_ids: draft.selModels,
       selected_metrics: draft.selMetrics,
       run_samples: runSamples,
-      selected_category: selSubgroup.length > 0 ? selSubgroup : dataset ? [dataset.category] : undefined,
+      selected_category: selSubgroup.length > 0 ? selSubgroup : benchmark ? [benchmark.type] : undefined,
       ...(draft.judgeModelId
         ? {
             judge_config: {
@@ -543,47 +575,43 @@ export default function NewEvaluation() {
               {step === 4 && (
                 <>
                   <h2>Pick a test suite</h2>
-                  <p className={styles['wiz-sub']}>Select the dataset to evaluate against.</p>
+                  <p className={styles['wiz-sub']}>Select the benchmark to evaluate against.</p>
 
                   <div className={styles['wiz__dataset-layout']}>
                     <div className={styles['wiz__dataset-grid-scroll']}>
-                      {datasetsLoading && <p className={styles.wiz__empty}>Loading test suites…</p>}
-                      {!datasetsLoading && datasetsError && <p className={styles.wiz__error}>{datasetsError}</p>}
-                      {!datasetsLoading && !datasetsError && (
-                        <div className={styles['wiz__dataset-grid']}>
-                          {datasets.map((d) => {
-                            const selected = draft.selBenchmark === d.id;
-                            return (
-                              <button
-                                key={d.id}
-                                type="button"
-                                className={`${styles['wiz__dataset-card']} ${selected ? styles['wiz__dataset-card--selected'] : ''}`}
-                                onClick={() => dispatch(setDraft({ selBenchmark: d.id }))}
-                              >
-                                <div className={styles['wiz__dataset-top']}>
-                                  <span className={styles['wiz__dataset-top-left']}>
-                                    <span className={styles['wiz__dataset-icon']}>
-                                      <Database size={14} />
-                                    </span>
-                                    <span className={styles['wiz__dataset-name']}>{d.name}</span>
+                      <div className={styles['wiz__dataset-grid']}>
+                        {benchmarks.map((b) => {
+                          const selected = draft.selBenchmark === b.name;
+                          return (
+                            <button
+                              key={b.name}
+                              type="button"
+                              className={`${styles['wiz__dataset-card']} ${selected ? styles['wiz__dataset-card--selected'] : ''}`}
+                              onClick={() => dispatch(setDraft({ selBenchmark: b.name }))}
+                            >
+                              <div className={styles['wiz__dataset-top']}>
+                                <span className={styles['wiz__dataset-top-left']}>
+                                  <span className={styles['wiz__dataset-icon']}>
+                                    <Database size={14} />
                                   </span>
-                                  {selected && (
-                                    <span className={styles['wiz__card-check']} style={{ position: 'static' }}>
-                                      <Check size={11} strokeWidth={2.75} />
-                                    </span>
-                                  )}
-                                </div>
-                                <div className={styles['wiz__dataset-meta']}>
-                                  <span className={`${styles.wiz__chip} ${styles['wiz__chip--static']}`}>{d.category}</span>
-                                  <span className={`${styles.wiz__chip} ${styles['wiz__chip--static']}`}>{d.eval_type}</span>
-                                  <span>{d.question_count.toLocaleString()} questions</span>
-                                </div>
-                              </button>
-                            );
-                          })}
-                          {datasets.length === 0 && <p className={styles.wiz__empty}>No test suites available.</p>}
-                        </div>
-                      )}
+                                  <span className={styles['wiz__dataset-name']}>{b.name}</span>
+                                </span>
+                                {selected && (
+                                  <span className={styles['wiz__card-check']} style={{ position: 'static' }}>
+                                    <Check size={11} strokeWidth={2.75} />
+                                  </span>
+                                )}
+                              </div>
+                              <p className={styles['wiz__dataset-desc']}>{b.description}</p>
+                              <div className={styles['wiz__dataset-meta']}>
+                                <span className={`${styles.wiz__chip} ${styles['wiz__chip--static']}`}>{b.type}</span>
+                                <span>{b.task_count.toLocaleString()} tasks</span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                        {benchmarks.length === 0 && <p className={styles.wiz__empty}>No test suites available.</p>}
+                      </div>
                     </div>
 
                     <aside className={styles['wiz__subgroup-panel']}>
@@ -592,34 +620,50 @@ export default function NewEvaluation() {
                           <Layers size={13} strokeWidth={2.25} /> Subgroups
                         </p>
                         <p className={styles['wiz__subgroup-panel-sub']}>
-                          {suite ? `Optionally narrow "${suite.name}" to specific categories.` : 'Select a test suite to see its subgroups.'}
+                          {suite ? `Optionally narrow "${suite.name}" to specific tasks.` : 'Select a test suite to see its subgroups.'}
                         </p>
                       </div>
                       <div className={styles['wiz__subgroup-panel-scroll']}>
                         {!suite && <p className={styles['wiz__subgroup-empty']}>No test suite selected yet.</p>}
-                        {suite && suite.dataset_categories.length === 0 && (
+                        {suite && suite.tasks.length === 0 && (
                           <p className={styles['wiz__subgroup-empty']}>This test suite has no subgroups.</p>
                         )}
                         {suite &&
-                          suite.dataset_categories.map((cat) => {
-                            const checked = selSubgroup.includes(cat);
+                          suite.tasks.map((t) => {
+                            const checked = selSubgroup.includes(t.value);
                             return (
                               <button
-                                key={cat}
+                                key={t.value}
                                 type="button"
                                 className={`${styles['wiz__subgroup-row']} ${checked ? styles['wiz__subgroup-row--selected'] : ''}`}
-                                onClick={() => setSelSubgroup((prev) => toggle(prev, cat))}
+                                onClick={() => setSelSubgroup((prev) => toggle(prev, t.value))}
                               >
                                 <span className={`${styles.wiz__checkbox} ${checked ? styles['wiz__checkbox--checked'] : ''}`}>
                                   {checked && <Check size={11} strokeWidth={3} />}
                                 </span>
-                                <span className={styles['wiz__subgroup-row-name']}>{cat}</span>
+                                <span className={styles['wiz__subgroup-row-name']}>{t.name}</span>
                               </button>
                             );
                           })}
                       </div>
                     </aside>
                   </div>
+
+                  {registeredDatasetId && (
+                    <p className={styles['wiz__register-status']} data-state="success">
+                      <Check size={13} strokeWidth={2.75} /> Dataset registered — you can continue.
+                    </p>
+                  )}
+                  {registerError && (
+                    <p className={styles['wiz__register-status']} data-state="error">
+                      <AlertTriangle size={13} strokeWidth={2.25} /> {registerError}
+                    </p>
+                  )}
+                  {!registeredDatasetId && !registerError && draft.selBenchmark && (
+                    <p className={styles['wiz__register-status']} data-state="pending">
+                      Register this dataset to continue.
+                    </p>
+                  )}
                 </>
               )}
 
@@ -748,7 +792,7 @@ export default function NewEvaluation() {
                         <Layers size={12} strokeWidth={2} style={{ marginRight: 4, verticalAlign: -2 }} />
                         Questions
                       </span>
-                      <span className={styles['wiz__review-stat-value']}>{suite ? suite.question_count.toLocaleString() : '—'}</span>
+                      <span className={styles['wiz__review-stat-value']}>{suite ? suite.task_count.toLocaleString() : '—'}</span>
                     </div>
                   </div>
 
@@ -814,16 +858,16 @@ export default function NewEvaluation() {
                         <span>Run Samples</span>
                         <span>{runSamples}</span>
                       </div>
-                      {suite?.category && (
+                      {suite?.description && (
                         <div className={styles['wiz__review-row']}>
-                          <span>Category</span>
-                          <span>{suite.category}</span>
+                          <span>Description</span>
+                          <span>{suite.description}</span>
                         </div>
                       )}
                       {selSubgroup.length > 0 && (
                         <div className={styles['wiz__review-row']}>
                           <span>Subgroups</span>
-                          <span>{selSubgroup.join(', ')}</span>
+                          <span>{suite?.tasks.filter((t) => selSubgroup.includes(t.value)).map((t) => t.name).join(', ')}</span>
                         </div>
                       )}
                     </div>
@@ -875,23 +919,46 @@ export default function NewEvaluation() {
                 <ChevronLeft size={16} /> {step === 0 ? 'Cancel' : 'Back'}
               </button>
 
-              {step < totalSteps - 1 ? (
-                <button type="button" className="btn btn-ind" onClick={goNext} disabled={!canGo()}>
-                  Continue <ChevronRight size={16} />
-                </button>
-              ) : (
-                <button type="button" className="btn btn-ind" onClick={launch} disabled={launching}>
-                  {launching ? (
-                    <>
-                      <Loader2 size={16} className={styles.wiz__spin} /> Launching…
-                    </>
-                  ) : (
-                    <>
-                      <Play size={16} /> Launch Evaluation
-                    </>
-                  )}
-                </button>
-              )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                {step === 4 && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={registerDataset}
+                    disabled={!draft.selBenchmark || registering}
+                  >
+                    {registering ? (
+                      <>
+                        <Loader2 size={16} className={styles.wiz__spin} /> Registering…
+                      </>
+                    ) : registeredDatasetId ? (
+                      <>
+                        <Check size={16} /> Registered
+                      </>
+                    ) : (
+                      'Register'
+                    )}
+                  </button>
+                )}
+
+                {step < totalSteps - 1 ? (
+                  <button type="button" className="btn btn-ind" onClick={goNext} disabled={!canGo()}>
+                    Continue <ChevronRight size={16} />
+                  </button>
+                ) : (
+                  <button type="button" className="btn btn-ind" onClick={launch} disabled={launching}>
+                    {launching ? (
+                      <>
+                        <Loader2 size={16} className={styles.wiz__spin} /> Launching…
+                      </>
+                    ) : (
+                      <>
+                        <Play size={16} /> Launch Evaluation
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -923,7 +990,23 @@ export default function NewEvaluation() {
 
 
 
-//Newevaluation.scss
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 @use '../../styles/_variables' as *;
 
 // ---------------------------------------------------------------------------
@@ -2431,6 +2514,33 @@ $shadow-md: $shadow-3;
     padding: 0.625rem 0.875rem;
   }
 
+  &__register-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 1rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    padding: 0.5625rem 0.875rem;
+    border-radius: 0.5rem;
+    width: fit-content;
+
+    &[data-state='success'] {
+      color: $success;
+      background: $success-subtle;
+    }
+
+    &[data-state='error'] {
+      color: $danger;
+      background: $danger-subtle;
+    }
+
+    &[data-state='pending'] {
+      color: $text-tertiary;
+      background: $bg-subtle;
+    }
+  }
+
   /* ---------- nav footer ---------- */
   &__nav {
     flex-shrink: 0;
@@ -2551,103 +2661,3 @@ $shadow-md: $shadow-3;
     padding: 20px 16px 32px;
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//datasetslice.ts
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import { datasetsApi } from '../../api/endpoints/datasets';
-
-export interface Dataset {
-  id: string;
-  name: string;
-  category: string;
-  eval_type: string;
-  question_count: number;
-  schema_version: string;
-  dataset_categories: string[];
-  created_at: string;
-}
-
-interface DatasetsState {
-  items: Dataset[];
-  status: 'idle' | 'loading' | 'succeeded' | 'failed';
-  error: string | null;
-}
-
-const initialState: DatasetsState = {
-  items: [],
-  status: 'idle',
-  error: null,
-};
-
-export const fetchDatasets = createAsyncThunk('datasets/fetchAll', () => datasetsApi.list());
-
-const datasetsSlice = createSlice({
-  name: 'datasets',
-  initialState,
-  reducers: {},
-  extraReducers: (builder) => {
-    builder
-      .addCase(fetchDatasets.pending, (state) => {
-        state.status = 'loading';
-      })
-      .addCase(fetchDatasets.fulfilled, (state, action) => {
-        state.status = 'succeeded';
-        state.items = action.payload;
-      })
-      .addCase(fetchDatasets.rejected, (state, action) => {
-        state.status = 'failed';
-        state.error = action.error.message || 'Failed to load datasets';
-      });
-  },
-});
-
-export default datasetsSlice.reducer;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//datasets.ts
-import { apiClient } from '../client';
-import type { Dataset } from '../../store/slices/datasetsSlice';
-
-interface DatasetsResponse {
-  datasets: Dataset[];
-}
-
-export const datasetsApi = {
-  list: async (): Promise<Dataset[]> => {
-    const { data } = await apiClient.get<DatasetsResponse>('/datasets');
-    return data.datasets;
-  },
-};
