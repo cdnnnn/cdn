@@ -1,3 +1,4 @@
+//Newevaluation.tsx
 import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -28,6 +29,7 @@ import { useAppDispatch, useAppSelector } from '../../hooks/redux';
 import { fetchProviders } from '../../store/slices/providersSlice';
 import { fetchModels } from '../../store/slices/modelsSlice';
 import { fetchBenchmarks } from '../../store/slices/benchmarksSlice';
+import { registerDataset, resetRegistration } from '../../store/slices/datasetsSlice';
 import { fetchMetrics } from '../../store/slices/metricsSlice';
 import { launchEvaluation, setDraft } from '../../store/slices/evaluationsSlice';
 import type { CreateEvaluationRequest } from '../../types';
@@ -105,12 +107,6 @@ export default function NewEvaluation() {
   const [runSamples, setRunSamples] = useState<number>(10);
   const totalSteps = STEPS.length;
 
-  // Dataset registration (POST /benchmarks/{name}/register) — required before
-  // the user can continue past the Test Suite step.
-  const [registering, setRegistering] = useState(false);
-  const [registerError, setRegisterError] = useState<string | null>(null);
-  const [registeredDatasetId, setRegisteredDatasetId] = useState<string | null>(null);
-
   const rawDraft = useAppSelector((s) => s.evaluations.draft);
   const launching = useAppSelector((s) => s.evaluations.launching);
   const launchError = useAppSelector((s) => s.evaluations.launchError);
@@ -119,6 +115,12 @@ export default function NewEvaluation() {
   const models = useAppSelector((s) => s.models.items) ?? [];
   const benchmarks = useAppSelector((s) => s.benchmarks.items) ?? [];
   const metrics = useAppSelector((s) => s.metrics) ?? { allMetrics: [], customAgentMetrics: [] };
+
+  // Dataset registration (POST /benchmarks/{name}/register) — required before
+  // the user can continue past the Test Suite step. Lives in datasetsSlice.
+  const registering = useAppSelector((s) => s.datasets.registering);
+  const registerError = useAppSelector((s) => s.datasets.registerError);
+  const registeredDatasetId = useAppSelector((s) => s.datasets.registeredDatasetId);
 
   // Defensive defaults: guards calculations below that run on every render
   // against a draft that hasn't been fully hydrated yet.
@@ -148,9 +150,8 @@ export default function NewEvaluation() {
   // A change of benchmark or run-samples count invalidates any previous
   // registration — the user has to register again before continuing.
   useEffect(() => {
-    setRegisteredDatasetId(null);
-    setRegisterError(null);
-  }, [draft.selBenchmark, runSamples]);
+    dispatch(resetRegistration());
+  }, [dispatch, draft.selBenchmark, runSamples]);
 
   // Reset the chosen framework if the user switches away from "Agent".
   useEffect(() => {
@@ -199,26 +200,10 @@ export default function NewEvaluation() {
     };
   }, [suite, draft.selModels.length]);
 
-  // POST /benchmarks/{benchmark_name}/register?run_samples={run_samples}
-  const registerDataset = async () => {
+  // POST /benchmarks/{benchmark_name}/register?run_samples={run_samples} (datasetsSlice)
+  const handleRegister = () => {
     if (!draft.selBenchmark) return;
-    setRegistering(true);
-    setRegisterError(null);
-    try {
-      const res = await fetch(
-        `/benchmarks/${encodeURIComponent(draft.selBenchmark)}/register?run_samples=${runSamples}`,
-        { method: 'POST' }
-      );
-      if (!res.ok) throw new Error(`Failed to register dataset (${res.status})`);
-      const data = await res.json();
-      if (!data?.dataset_id) throw new Error('No dataset_id returned from registration.');
-      setRegisteredDatasetId(data.dataset_id);
-    } catch (err) {
-      setRegisteredDatasetId(null);
-      setRegisterError(err instanceof Error ? err.message : 'Failed to register dataset.');
-    } finally {
-      setRegistering(false);
-    }
+    dispatch(registerDataset({ benchmarkName: draft.selBenchmark, runSamples }));
   };
 
   const launch = async () => {
@@ -924,7 +909,7 @@ export default function NewEvaluation() {
                   <button
                     type="button"
                     className="btn btn-ghost"
-                    onClick={registerDataset}
+                    onClick={handleRegister}
                     disabled={!draft.selBenchmark || registering}
                   >
                     {registering ? (
@@ -992,21 +977,7 @@ export default function NewEvaluation() {
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+//Newevaluation.module.scss
 @use '../../styles/_variables' as *;
 
 // ---------------------------------------------------------------------------
@@ -2661,3 +2632,166 @@ $shadow-md: $shadow-3;
     padding: 20px 16px 32px;
   }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Datasetsslice.ts
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import { datasetsApi } from '../../api/endpoints/datasets';
+
+export interface Dataset {
+  id: string;
+  name: string;
+  category: string;
+  eval_type: string;
+  question_count: number;
+  schema_version: string;
+  dataset_categories: string[];
+  created_at: string;
+}
+
+export interface RegisterDatasetRequest {
+  benchmarkName: string;
+  runSamples: number;
+}
+
+export interface RegisterDatasetResponse {
+  status: string;
+  dataset_id: string;
+  benchmark_name: string;
+  eval_type: string;
+  question_count: number;
+}
+
+interface DatasetsState {
+  items: Dataset[];
+  status: 'idle' | 'loading' | 'succeeded' | 'failed';
+  error: string | null;
+
+  registering: boolean;
+  registerError: string | null;
+  registeredDatasetId: string | null;
+  registeredBenchmarkName: string | null;
+}
+
+const initialState: DatasetsState = {
+  items: [],
+  status: 'idle',
+  error: null,
+
+  registering: false,
+  registerError: null,
+  registeredDatasetId: null,
+  registeredBenchmarkName: null,
+};
+
+export const fetchDatasets = createAsyncThunk('datasets/fetchAll', () => datasetsApi.list());
+
+// POST /benchmarks/{benchmark_name}/register?run_samples={run_samples}
+export const registerDataset = createAsyncThunk(
+  'datasets/register',
+  ({ benchmarkName, runSamples }: RegisterDatasetRequest) => datasetsApi.register(benchmarkName, runSamples)
+);
+
+const datasetsSlice = createSlice({
+  name: 'datasets',
+  initialState,
+  reducers: {
+    resetRegistration: (state) => {
+      state.registering = false;
+      state.registerError = null;
+      state.registeredDatasetId = null;
+      state.registeredBenchmarkName = null;
+    },
+  },
+  extraReducers: (builder) => {
+    builder
+      .addCase(fetchDatasets.pending, (state) => {
+        state.status = 'loading';
+      })
+      .addCase(fetchDatasets.fulfilled, (state, action) => {
+        state.status = 'succeeded';
+        state.items = action.payload;
+      })
+      .addCase(fetchDatasets.rejected, (state, action) => {
+        state.status = 'failed';
+        state.error = action.error.message || 'Failed to load datasets';
+      })
+      .addCase(registerDataset.pending, (state) => {
+        state.registering = true;
+        state.registerError = null;
+        state.registeredDatasetId = null;
+        state.registeredBenchmarkName = null;
+      })
+      .addCase(registerDataset.fulfilled, (state, action) => {
+        state.registering = false;
+        state.registeredDatasetId = action.payload.dataset_id;
+        state.registeredBenchmarkName = action.payload.benchmark_name;
+      })
+      .addCase(registerDataset.rejected, (state, action) => {
+        state.registering = false;
+        state.registerError = action.error.message || 'Failed to register dataset';
+      });
+  },
+});
+
+export const { resetRegistration } = datasetsSlice.actions;
+export default datasetsSlice.reducer;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Datasets.ts
+import { apiClient } from '../client';
+import type { Dataset, RegisterDatasetResponse } from '../../store/slices/datasetsSlice';
+
+interface DatasetsResponse {
+  datasets: Dataset[];
+}
+
+export const datasetsApi = {
+  list: async (): Promise<Dataset[]> => {
+    const { data } = await apiClient.get<DatasetsResponse>('/datasets');
+    return data.datasets;
+  },
+
+  register: async (benchmarkName: string, runSamples: number): Promise<RegisterDatasetResponse> => {
+    const { data } = await apiClient.post<RegisterDatasetResponse>(
+      `/benchmarks/${encodeURIComponent(benchmarkName)}/register`,
+      null,
+      { params: { run_samples: runSamples } }
+    );
+    return data;
+  },
+};
