@@ -26,6 +26,15 @@ export default function Comparison() {
     dispatch(fetchEvaluations());
   }, [dispatch]);
 
+  // Clear any stale comparison result/error from a previous visit to this
+  // page — the redux slice otherwise persists across route changes even
+  // though local selection state (selBenchmark, selModelIds) resets.
+  useEffect(() => {
+    return () => {
+      dispatch(resetComparison());
+    };
+  }, [dispatch]);
+
   // Unique benchmark names (from evaluation history) to populate the dropdown.
   const benchmarkOptions = useMemo(() => {
     const seen = new Set<string>();
