@@ -1,55 +1,46 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  Search, Sparkles, Bot, Layers, Loader2,
-  Award, ListChecks, Clock, History as HistoryIcon, SlidersHorizontal, CalendarDays, X,
+  Search, FileText, Loader2, Download, Award, ListChecks, Clock,
+  FileBarChart, SlidersHorizontal, X,
 } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
-import {
-  fetchEvaluations, fetchEvaluationResults,
-} from '../../store/slices/evaluationsSlice';
-import type { EvaluationStatusValue } from '../../types';
-import { SkeletonListRows } from '../common/Skeleton';
-import styles from './History.module.scss';
+import { fetchReports, fetchReportDetail, downloadReport } from '../../store/slices/reportsSlice';
+import type { ReportDownloadFormat } from '../../api/endpoints/reports';
+import styles from './Reports.module.scss';
 
-const TYPE_ICON: Record<string, typeof Sparkles> = { model: Sparkles, agent: Bot, rag: Layers };
-const TYPE_LABEL: Record<string, string> = { model: 'AI Model', agent: 'Agent', rag: 'RAG' };
+const DOWNLOAD_OPTIONS: { format: ReportDownloadFormat; label: string }[] = [
+  { format: 'json', label: 'JSON' },
+  { format: 'csv', label: 'CSV' },
+  { format: 'csv_detailed', label: 'CSV (Detailed)' },
+  { format: 'pdf', label: 'PDF' },
+];
 
-// Maps a raw status to the module status-pill variant suffix.
-function statusVariant(status: EvaluationStatusValue): string {
+// Maps a raw status to the module status-pill variant suffix (mirrors History).
+function statusVariant(status: string): string {
   switch (status) {
     case 'completed': return 'completed';
     case 'running': return 'running';
     case 'pending': return 'pending';
     case 'failed': return 'failed';
-    case 'canceled': return 'canceled';
     default: return 'pending';
   }
 }
 
-function withinDateRange(iso: string, range: string): boolean {
-  if (range === 'all') return true;
-  const days = range === '7' ? 7 : 30;
-  const cutoff = Date.now() - days * 86400000;
-  return new Date(iso).getTime() >= cutoff;
-}
-
-export default function History() {
+export default function Reports() {
   const dispatch = useAppDispatch();
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedId = searchParams.get('id');
 
-  const { list, listStatus, listError, resultsByEvalId, resultsStatusByEvalId, resultsErrorByEvalId } = useAppSelector((s) => s.evaluations);
-  const models = useAppSelector((s) => s.models.items);
-  const providers = useAppSelector((s) => s.providers.items);
+  const { list, listStatus, listError, detailById, detailStatusById, detailErrorById, downloadingId } =
+    useAppSelector((s) => s.reports);
 
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('All');
-  const [dateFilter, setDateFilter] = useState('all');
-  const [activeFilter, setActiveFilter] = useState<'search' | 'type' | 'date' | null>(null);
+  const [activeFilter, setActiveFilter] = useState<'search' | 'type' | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  const toggleFilter = (key: 'search' | 'type' | 'date') => {
+  const toggleFilter = (key: 'search' | 'type') => {
     setActiveFilter((prev) => (prev === key ? null : key));
   };
 
@@ -57,49 +48,36 @@ export default function History() {
     if (activeFilter === 'search') searchInputRef.current?.focus();
   }, [activeFilter]);
 
-  const DATE_LABEL: Record<string, string> = { all: 'All time', '30': 'Last 30 days', '7': 'Last 7 days' };
-
-  // Initial load + silent 10s poll (spec §2.4) — no spinner/error disruption
-  // on background refreshes; the slice only flips listStatus when list is empty.
   useEffect(() => {
-    dispatch(fetchEvaluations());
-    const interval = setInterval(() => dispatch(fetchEvaluations()), 10000);
-    return () => clearInterval(interval);
+    dispatch(fetchReports());
   }, [dispatch]);
 
+  const types = useMemo(() => ['All', ...new Set(list.map((r) => r.eval_type))], [list]);
+
   const filtered = useMemo(() => {
-    return list.filter((e) => {
-      if (search && !e.name.toLowerCase().includes(search.toLowerCase())) return false;
-      if (typeFilter !== 'All' && e.eval_type !== typeFilter) return false;
-      if (!withinDateRange(e.created_at, dateFilter)) return false;
+    return list.filter((r) => {
+      if (search && !r.title.toLowerCase().includes(search.toLowerCase())) return false;
+      if (typeFilter !== 'All' && r.eval_type !== typeFilter) return false;
       return true;
     });
-  }, [list, search, typeFilter, dateFilter]);
+  }, [list, search, typeFilter]);
 
-  const selected = list.find((e) => e.id === selectedId) || filtered[0] || null;
+  const selected = list.find((r) => r.id === selectedId) || filtered[0] || null;
 
-  // Keyed on id + status (not the whole object) so a background poll that
-  // doesn't change either doesn't re-trigger the results fetch (spec §2.4).
   useEffect(() => {
-    if (selected && selected.status === 'completed' && !resultsByEvalId[selected.id]) {
-      dispatch(fetchEvaluationResults(selected.id));
+    if (selected && !detailById[selected.id] && detailStatusById[selected.id] !== 'loading') {
+      dispatch(fetchReportDetail(selected.id));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id, selected?.status]);
+  }, [selected?.id]);
 
   const selectRow = (id: string) => setSearchParams({ id });
 
-  const modelName = (id: string) => models.find((m) => m.id === id)?.name || id;
-  const providerName = (id: string) => {
-    const model = models.find((m) => m.id === id);
-    return providers.find((p) => p.id === model?.provider_id)?.name || model?.provider_id || '—';
-  };
+  const detail = selected ? detailById[selected.id] : undefined;
+  const detailStatus = selected ? detailStatusById[selected.id] : undefined;
+  const detailError = selected ? detailErrorById[selected.id] : undefined;
 
-  const results = selected ? resultsByEvalId[selected.id] : undefined;
-  const resultsStatus = selected ? resultsStatusByEvalId[selected.id] : undefined;
-  const resultsError = selected ? resultsErrorByEvalId[selected.id] : undefined;
-
-  const StatusBadge = ({ status }: { status: EvaluationStatusValue }) => (
+  const StatusBadge = ({ status }: { status: string }) => (
     <span className={`${styles.status} ${styles[`status--${statusVariant(status)}`]}`}>
       {status === 'running' && <span className={styles['live-dot']} />}
       {status}
@@ -108,20 +86,18 @@ export default function History() {
 
   return (
     <div className="page-enter pg-shell">
-      <div className={styles['history__header']}>
+      <div className={styles['reports__header']}>
         <div>
-          <p className={styles['history__header-eyebrow']}>Activity</p>
-          <h1>History</h1>
-          <p className={styles['history__header-sub']}>All past and in-progress evaluations</p>
+          <p className={styles['reports__header-eyebrow']}>Output</p>
+          <h1>Reports</h1>
+          <p className={styles['reports__header-sub']}>Generated reports for completed and in-progress evaluations</p>
         </div>
-        <div className={styles['history__header-meta']}>
-          <HistoryIcon size={13} />
-          {list.length} evaluation{list.length === 1 ? '' : 's'} tracked
+        <div className={styles['reports__header-meta']}>
+          <FileBarChart size={13} />
+          {list.length} report{list.length === 1 ? '' : 's'} generated
         </div>
       </div>
 
-      {/* List + detail panels scroll independently, so pg-body itself doesn't
-          scroll here — .shell fills it instead. */}
       <div className={`pg-body ${styles['pg-body-fixed']}`}>
         <div className={styles.shell}>
           {/* ---------- Sidebar list ---------- */}
@@ -148,15 +124,6 @@ export default function History() {
                   <SlidersHorizontal size={15} />
                   {typeFilter !== 'All' && <span className={styles['filter-toolbar__dot']} />}
                 </button>
-                <button
-                  type="button"
-                  className={`${styles['filter-toolbar__btn']} ${activeFilter === 'date' ? styles.on : ''}`}
-                  onClick={() => toggleFilter('date')}
-                  title="Filter by date"
-                >
-                  <CalendarDays size={15} />
-                  {dateFilter !== 'all' && <span className={styles['filter-toolbar__dot']} />}
-                </button>
 
                 <div className={styles['filter-toolbar__summary']}>
                   {search && (
@@ -167,14 +134,8 @@ export default function History() {
                   )}
                   {typeFilter !== 'All' && (
                     <span className={styles['filter-chip']}>
-                      <span>{TYPE_LABEL[typeFilter]}</span>
+                      <span>{typeFilter}</span>
                       <X size={11} onClick={() => setTypeFilter('All')} />
-                    </span>
-                  )}
-                  {dateFilter !== 'all' && (
-                    <span className={styles['filter-chip']}>
-                      <span>{DATE_LABEL[dateFilter]}</span>
-                      <X size={11} onClick={() => setDateFilter('all')} />
                     </span>
                   )}
                 </div>
@@ -187,7 +148,7 @@ export default function History() {
                       <Search size={16} />
                       <input
                         ref={searchInputRef}
-                        placeholder="Search evaluations…"
+                        placeholder="Search reports…"
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
                       />
@@ -197,7 +158,7 @@ export default function History() {
                 {activeFilter === 'type' && (
                   <div>
                     <div className={styles['panel-pills']}>
-                      {['All', 'model', 'agent', 'rag'].map((t) => (
+                      {types.map((t) => (
                         <button
                           key={t}
                           className={`${styles['panel-pill']} ${typeFilter === t ? styles.on : ''}`}
@@ -206,25 +167,7 @@ export default function History() {
                             setActiveFilter(null);
                           }}
                         >
-                          {t === 'All' ? 'All' : TYPE_LABEL[t]}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {activeFilter === 'date' && (
-                  <div>
-                    <div className={styles['panel-pills']}>
-                      {Object.entries(DATE_LABEL).map(([value, label]) => (
-                        <button
-                          key={value}
-                          className={`${styles['panel-pill']} ${dateFilter === value ? styles.on : ''}`}
-                          onClick={() => {
-                            setDateFilter(value);
-                            setActiveFilter(null);
-                          }}
-                        >
-                          {label}
+                          {t}
                         </button>
                       ))}
                     </div>
@@ -232,40 +175,38 @@ export default function History() {
                 )}
               </div>
 
+              {listStatus === 'loading' && list.length === 0 && (
+                <div className={styles.empty}><Loader2 size={16} className={styles.spin} /> Loading reports…</div>
+              )}
               {listStatus === 'failed' && list.length === 0 && (
-                <div className={styles.empty}>{listError || 'Failed to load evaluations.'}</div>
+                <div className={styles.empty}>{listError || 'Failed to load reports.'}</div>
               )}
               {listStatus !== 'loading' && filtered.length === 0 && list.length > 0 && (
-                <div className={styles.empty}>No evaluations match your filters.</div>
+                <div className={styles.empty}>No reports match your filters.</div>
               )}
             </div>
 
             <div className={styles.rows}>
-              {listStatus === 'loading' && list.length === 0 && <SkeletonListRows count={5} />}
-              {filtered.map((e) => {
-                const Icon = TYPE_ICON[e.eval_type] || Sparkles;
-                const isSelected = selected?.id === e.id;
+              {filtered.map((r) => {
+                const isSelected = selected?.id === r.id;
                 return (
                   <div
-                    key={e.id}
-                    className={`${styles.row} ${isSelected ? styles.selected : ''} ${e.status === 'running' ? styles['row--running'] : ''}`}
-                    onClick={() => selectRow(e.id)}
+                    key={r.id}
+                    className={`${styles.row} ${isSelected ? styles.selected : ''}`}
+                    onClick={() => selectRow(r.id)}
                   >
                     <div className={styles.row__top}>
-                      <div className={styles.row__icon}>
-                        <Icon size={16} />
-                      </div>
-                      <div className={styles.row__name}>{e.name}</div>
+                      <div className={styles.row__icon}><FileText size={16} /></div>
+                      <div className={styles.row__name}>{r.title}</div>
                     </div>
                     <div className={styles.row__badges}>
-                      <span className={styles['type-tag']}>{TYPE_LABEL[e.eval_type] || e.eval_type}</span>
-                      <StatusBadge status={e.status} />
+                      <span className={styles['type-tag']}>{r.eval_type}</span>
+                      <StatusBadge status={r.status} />
                     </div>
-                    <div className={styles.row__meta}>{new Date(e.created_at).toLocaleDateString()}</div>
+                    <div className={styles.row__meta}>{new Date(r.created_at).toLocaleDateString()}</div>
                     <div className={styles.row__stats}>
-                      <span>{e.top_model ? `🏆 ${e.top_model}` : '—'}</span>
-                      <span>{e.top_score != null ? `${e.top_score}%` : '—'}</span>
-                      <span>{e.model_ids.length} models</span>
+                      <span>{r.top_model ? `🏆 ${r.top_model}` : '—'}</span>
+                      <span>{r.top_score != null ? `${Math.round(r.top_score * 100)}%` : '—'}</span>
                     </div>
                   </div>
                 );
@@ -276,107 +217,114 @@ export default function History() {
           {/* ---------- Detail panel ---------- */}
           <div className={styles.detail}>
             {!selected ? (
-              <div className={styles['detail-empty']}>Select an evaluation to see its details.</div>
+              <div className={styles['detail-empty']}>Select a report to see its details.</div>
             ) : (
               <>
                 <div className={styles['detail-hdr']}>
                   <div>
                     <div className={styles['detail-hdr__badges']}>
-                      <span className={styles['type-tag']}>{TYPE_LABEL[selected.eval_type] || selected.eval_type}</span>
+                      <span className={styles['type-tag']}>{selected.eval_type}</span>
                       <StatusBadge status={selected.status} />
                     </div>
-                    <h2 className={styles['detail-hdr__name']}>{selected.name}</h2>
+                    <h2 className={styles['detail-hdr__name']}>{selected.title}</h2>
                     <div className={styles['detail-hdr__date']}>Created {new Date(selected.created_at).toLocaleString()}</div>
                   </div>
-                </div>
-
-                <div className={styles['summary-cards']}>
-                  <div className={styles['summary-card']}>
-                    <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--win']}`}>
-                      <Award size={16} />
-                    </span>
-                    <div>
-                      <div className={styles['summary-card__label']}>Winner</div>
-                      <div className={styles['summary-card__val']}>
-                        {selected.top_model || '—'}
-                        {selected.top_score != null ? ` · ${selected.top_score}%` : ''}
-                      </div>
-                    </div>
-                  </div>
-                  <div className={styles['summary-card']}>
-                    <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--info']}`}>
-                      <ListChecks size={16} />
-                    </span>
-                    <div>
-                      <div className={styles['summary-card__label']}>Questions / Models</div>
-                      <div className={styles['summary-card__val']}>
-                        {selected.total_questions.toLocaleString()} &middot; {selected.model_ids.length} models
-                      </div>
-                    </div>
-                  </div>
-                  <div className={styles['summary-card']}>
-                    <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--status']}`}>
-                      <Clock size={16} />
-                    </span>
-                    <div>
-                      <div className={styles['summary-card__label']}>Status</div>
-                      <div className={styles['summary-card__val']}>
-                        {selected.status}
-                        {selected.completed_at ? ` · ${new Date(selected.completed_at).toLocaleDateString()}` : ''}
-                      </div>
-                    </div>
+                  <div className={styles['detail-hdr__actions']}>
+                    {DOWNLOAD_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.format}
+                        className={styles['dl-btn']}
+                        disabled={selected.status !== 'completed' || downloadingId === selected.id}
+                        onClick={() => dispatch(downloadReport({ reportId: selected.id, format: opt.format, filenameHint: selected.title }))}
+                      >
+                        {downloadingId === selected.id ? <Loader2 size={12} className={styles.spin} /> : <Download size={12} />}
+                        {opt.label}
+                      </button>
+                    ))}
                   </div>
                 </div>
 
-                {selected.status === 'completed' ? (
+                {detailStatus === 'loading' && (
+                  <div className={styles.empty}><Loader2 size={16} className={styles.spin} /> Loading report…</div>
+                )}
+                {detailStatus === 'failed' && <div className={styles.empty}>{detailError}</div>}
+
+                {detail && (
                   <>
-                    {resultsStatus === 'loading' && (
-                      <div className={styles.empty}>
-                        <Loader2 size={16} className={styles.spin} /> Loading results…
+                    <div className={styles['summary-cards']}>
+                      <div className={styles['summary-card']}>
+                        <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--win']}`}>
+                          <Award size={16} />
+                        </span>
+                        <div>
+                          <div className={styles['summary-card__label']}>Top Model</div>
+                          <div className={styles['summary-card__val']}>
+                            {detail.topModel || '—'}
+                            {detail.top_score != null ? ` · ${Math.round(detail.top_score * 100)}%` : ''}
+                          </div>
+                        </div>
                       </div>
-                    )}
-                    {resultsStatus === 'failed' && <div className={styles.empty}>{resultsError}</div>}
-                    {results && (
+                      <div className={styles['summary-card']}>
+                        <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--info']}`}>
+                          <ListChecks size={16} />
+                        </span>
+                        <div>
+                          <div className={styles['summary-card__label']}>Questions</div>
+                          <div className={styles['summary-card__val']}>
+                            {detail.total_questions.toLocaleString()} &middot; {detail.passed_tests} passed &middot; {detail.failed_tests} failed
+                          </div>
+                        </div>
+                      </div>
+                      <div className={styles['summary-card']}>
+                        <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--status']}`}>
+                          <Clock size={16} />
+                        </span>
+                        <div>
+                          <div className={styles['summary-card__label']}>Status</div>
+                          <div className={styles['summary-card__val']}>
+                            {detail.status}{detail.date ? ` · ${detail.date}` : ''}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {detail.summary && <div className={styles['summary-text']}>{detail.summary}</div>}
+
+                    {detail.models.length > 0 ? (
                       <div className={styles.results}>
                         <table className={styles['results-table']}>
                           <thead>
                             <tr>
                               <th>Rank</th>
                               <th>Model</th>
-                              <th>Provider</th>
                               <th>Score</th>
-                              <th>Accuracy</th>
                               <th>Passed</th>
                               <th>Failed</th>
+                              <th>Total</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {results.results.map((r) => (
-                              <tr key={r.model_id} className={r.rank === 1 ? styles.winner : ''}>
-                                <td className={styles['cell-rank']}>
-                                  {r.rank === 1 ? '🏆 ' : ''}
-                                  {r.rank}
-                                </td>
-                                <td className={styles['cell-model']}>{modelName(r.model_id)}</td>
-                                <td className={styles['cell-provider']}>{providerName(r.model_id)}</td>
-                                <td className={styles['cell-num']}>{r.score}%</td>
-                                <td className={`${styles['cell-num']} ${styles['cell-num--muted']}`}>{r.accuracy}%</td>
-                                <td className={styles['cell-pass']}>{r.passed_tests}</td>
-                                <td className={styles['cell-fail']}>{r.failed_tests}</td>
+                            {detail.models.map((m) => (
+                              <tr key={m.model_id} className={m.rank === 1 ? styles.winner : ''}>
+                                <td className={styles['cell-rank']}>{m.rank === 1 ? '🏆 ' : ''}{m.rank}</td>
+                                <td className={styles['cell-model']}>{m.model_id}</td>
+                                <td className={styles['cell-num']}>{Math.round(m.score * 100)}%</td>
+                                <td className={styles['cell-pass']}>{m.passed}</td>
+                                <td className={styles['cell-fail']}>{m.failed}</td>
+                                <td className={`${styles['cell-num']} ${styles['cell-num--muted']}`}>{m.total}</td>
                               </tr>
                             ))}
                           </tbody>
                         </table>
                       </div>
+                    ) : (
+                      <div className={styles['status-message']}>
+                        {detail.status === 'pending' && 'This report hasn\u2019t been generated yet.'}
+                        {detail.status === 'running' && 'This report is still being generated.'}
+                        {detail.status === 'failed' && 'Report generation failed.'}
+                      </div>
                     )}
                   </>
-                ) : (
-                  <div className={styles['status-message']}>
-                    {selected.status === 'running' && 'This evaluation is still running — results will appear once it completes.'}
-                    {selected.status === 'pending' && 'This evaluation hasn\u2019t started yet.'}
-                    {selected.status === 'failed' && 'This evaluation failed to complete.'}
-                    {selected.status === 'canceled' && 'This evaluation was canceled.'}
-                  </div>
                 )}
               </>
             )}
@@ -399,21 +347,12 @@ export default function History() {
 
 
 
-
-
-
-
-
-
-
-
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
-// History — matches the Run Console / Dashboard / Providers / Model Catalog /
-// Datasets design system: ink/paper palette, ultramarine signal accent, mono
-// instrument labels, hover-lift, mono numerals. Master–detail split shell is
-// self-contained here (no dependency on global .split-shell*).
+// Reports — mirrors History.module.scss's design system exactly: ink/paper
+// palette, ultramarine signal accent, mono instrument labels, hover-lift,
+// mono numerals, self-contained master–detail shell.
 // ===========================================================================
 
 $ink:      #14161B;
@@ -449,7 +388,7 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
   text-transform: uppercase;
 }
 
-.history {
+.reports {
   &__header {
     flex-shrink: 0;
     display: flex;
@@ -457,7 +396,6 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
     justify-content: space-between;
     gap: 1rem;
     padding: 24px 32px 20px;
-    margin-bottom: 0;
     border-bottom: 1px solid $line;
     background: $card;
 
@@ -514,22 +452,12 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
   }
 }
 
-@property --angle {
-  syntax: '<angle>';
-  initial-value: 0deg;
-  inherits: false;
-}
-@keyframes history-rotate-angle {
-  to { --angle: 360deg; }
-}
-@keyframes history-live-pulse {
+@keyframes reports-live-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.5; transform: scale(1.3); }
 }
-@keyframes history-spin { to { transform: rotate(360deg); } }
+@keyframes reports-spin { to { transform: rotate(360deg); } }
 
-// Fixed-shell override: list + detail scroll independently, so pg-body
-// itself must not scroll — plain flex:1/min-height:0 pass-through.
 .pg-body-fixed {
   overflow: hidden;
   display: flex;
@@ -693,7 +621,6 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
   }
 }
 
-// ---- filter panel inner controls (self-contained search + pills) -----------
 .panel-search {
   position: relative;
 
@@ -758,7 +685,7 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
   justify-content: center;
 }
 
-// ---- evaluation list rows --------------------------------------------------
+// ---- report list rows ------------------------------------------------------
 .rows {
   flex: 1;
   min-height: 0;
@@ -781,21 +708,6 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
 }
 .row:hover { border-color: $ink-3; box-shadow: $soft; transform: translateY(-1px); }
 .row.selected { border-color: $signal; background: $wash; box-shadow: 0 0 0 1px $signal inset; }
-
-// Running-state: a light traveling around the border via rotating conic angle.
-.row--running {
-  --angle: 0deg;
-  border: 1.5px solid transparent;
-  background:
-    linear-gradient($card, $card) padding-box,
-    conic-gradient(from var(--angle), $line 0%, $signal 8%, $line 16%) border-box;
-  animation: history-rotate-angle 2.4s linear infinite;
-}
-.row--running.selected {
-  background:
-    linear-gradient($wash, $wash) padding-box,
-    conic-gradient(from var(--angle), $line 0%, $signal 8%, $line 16%) border-box;
-}
 
 .row__top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .row__icon {
@@ -862,8 +774,7 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
   &--completed { color: $ok; background: $ok-wash; &::before { background: $ok; } }
   &--running   { color: $signal; background: $wash; &::before { display: none; } }
   &--pending   { color: $amber; background: $amber-wash; &::before { background: $amber; } }
-  &--failed,
-  &--canceled  { color: $ink-3; background: $ink-wash; &::before { background: $ink-3; } }
+  &--failed    { color: $ink-3; background: $ink-wash; &::before { background: $ink-3; } }
 }
 
 .live-dot {
@@ -872,7 +783,7 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
   border-radius: 50%;
   background: currentColor;
   display: inline-block;
-  animation: history-live-pulse 1.4s ease-in-out infinite;
+  animation: reports-live-pulse 1.4s ease-in-out infinite;
 }
 
 // ---- detail panel ----------------------------------------------------------
@@ -900,6 +811,35 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
   color: $ink;
 }
 .detail-hdr__date { font-family: $mono; font-size: 0.71875rem; color: $ink-3; margin-top: 6px; }
+.detail-hdr__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dl-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 9px;
+  border: 1px solid $line;
+  background: $paper;
+  color: $ink-2;
+  font-family: $mono;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+  &:hover:not(:disabled) { border-color: $signal; color: $signal; background: $wash; }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+}
 
 .summary-cards {
   display: grid;
@@ -940,6 +880,17 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
   font-weight: 700;
   color: $ink;
   margin-top: 3px;
+}
+
+.summary-text {
+  padding: 14px 16px;
+  margin-bottom: 20px;
+  background: $paper;
+  border: 1px solid $line;
+  border-radius: 12px;
+  font-size: 0.84375rem;
+  line-height: 1.55;
+  color: $ink-2;
 }
 
 // ---- results table ---------------------------------------------------------
@@ -986,7 +937,6 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
 
 .cell-rank { font-family: $mono; font-weight: 700; color: $ink; }
 .cell-model { font-family: $display; font-weight: 700; color: $ink; }
-.cell-provider { color: $ink-2; }
 .cell-num { font-family: $mono; font-size: 0.8125rem; font-weight: 700; color: $ink; }
 .cell-num--muted { font-weight: 500; color: $ink-2; }
 .cell-pass { font-family: $mono; font-size: 0.8125rem; font-weight: 700; color: $ok; }
@@ -1002,19 +952,18 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
   font-size: 0.875rem;
 }
 
-.spin { animation: history-spin 0.8s linear infinite; }
+.spin { animation: reports-spin 0.8s linear infinite; }
 
 @media (max-width: 900px) {
   .shell { flex-direction: column; }
   .sidebar { width: 100%; }
   .summary-cards { grid-template-columns: 1fr; }
-  // Once stacked, fall back to one normal scrolling column.
   .pg-body-fixed { overflow-y: auto; }
   .sidebar, .detail { overflow-y: visible; min-height: 0; }
   .rows { overflow-y: visible; }
 }
 
 @media (max-width: 640px) {
-  .history__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
+  .reports__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
   .pg-body-fixed { padding: 16px 18px 22px; }
 }
