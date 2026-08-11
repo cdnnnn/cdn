@@ -23,11 +23,15 @@ import {
   Waypoints,
   Lightbulb,
   Wand2,
+  Upload,
+  FileText,
+  X,
 } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
 import { fetchProviders } from '../../store/slices/providersSlice';
 import { fetchModels } from '../../store/slices/modelsSlice';
-import { fetchDatasets } from '../../store/slices/datasetsSlice';
+import { fetchDatasets, uploadDataset, resetUploadStatus } from '../../store/slices/datasetsSlice';
+import { SUPPORTED_UPLOAD_EXTENSIONS } from '../../api/endpoints/datasets';
 import { fetchMetrics } from '../../store/slices/metricsSlice';
 import { launchEvaluation, setDraft } from '../../store/slices/evaluationsSlice';
 import type { CreateEvaluationRequest } from '../../types';
@@ -106,6 +110,11 @@ export default function NewEvaluation() {
   const [agentFramework, setAgentFramework] = useState<string | null>(null);
   const [selSubgroup, setSelSubgroup] = useState<string[]>([]);
   const [runSamples, setRunSamples] = useState<number>(10);
+  const [showUpload, setShowUpload] = useState(false);
+  const [uploadName, setUploadName] = useState('');
+  const [uploadDescription, setUploadDescription] = useState('');
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadFileError, setUploadFileError] = useState<string | null>(null);
   const totalSteps = STEPS.length;
 
   const rawDraft = useAppSelector((s) => s.evaluations.draft);
@@ -119,6 +128,8 @@ export default function NewEvaluation() {
   const datasets = useAppSelector((s) => s.datasets.items) ?? [];
   const datasetsLoading = useAppSelector((s) => s.datasets.status === 'loading' || s.datasets.status === 'idle');
   const datasetsError = useAppSelector((s) => s.datasets.error);
+  const datasetUploading = useAppSelector((s) => s.datasets.uploadStatus === 'loading');
+  const datasetUploadError = useAppSelector((s) => s.datasets.uploadError);
 
   // Defensive defaults: guards calculations below that run on every render
   // against a draft that hasn't been fully hydrated yet.
@@ -165,6 +176,57 @@ export default function NewEvaluation() {
 
   const toggle = (list: string[], value: string) =>
     list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
+
+  const getFileExtension = (filename: string) => {
+    const idx = filename.lastIndexOf('.');
+    return idx >= 0 ? filename.slice(idx + 1).toLowerCase() : '';
+  };
+
+  const openUploadPanel = () => {
+    dispatch(resetUploadStatus());
+    setUploadName('');
+    setUploadDescription('');
+    setUploadFile(null);
+    setUploadFileError(null);
+    setShowUpload(true);
+  };
+
+  const closeUploadPanel = () => {
+    setShowUpload(false);
+  };
+
+  const handleUploadFileChange = (file: File | null) => {
+    setUploadFile(file);
+    if (!file) {
+      setUploadFileError(null);
+      return;
+    }
+    const ext = getFileExtension(file.name);
+    if (!SUPPORTED_UPLOAD_EXTENSIONS.includes(ext)) {
+      setUploadFileError('Unsupported file type. Please choose a .json, .jsonl, .arrow, or .parquet file.');
+    } else {
+      setUploadFileError(null);
+    }
+  };
+
+  const canUpload =
+    Boolean(uploadName.trim()) && Boolean(uploadFile) && !uploadFileError && Boolean(draft.eval_type) && !datasetUploading;
+
+  const submitUpload = async () => {
+    if (!uploadFile || !canUpload) return;
+    const result = await dispatch(
+      uploadDataset({
+        file: uploadFile,
+        name: uploadName.trim(),
+        description: uploadDescription.trim(),
+        evalType: draft.eval_type.toLowerCase(),
+      })
+    );
+    if (uploadDataset.fulfilled.match(result)) {
+      dispatch(setDraft({ selBenchmark: result.payload.id }));
+      setShowUpload(false);
+    }
+  };
 
   const canGo = () => {
     if (step === 0) return Boolean(draft.name.trim());
@@ -546,8 +608,113 @@ export default function NewEvaluation() {
 
               {step === 4 && (
                 <>
-                  <h2>Pick a test suite</h2>
-                  <p className={styles['wiz-sub']}>Select the dataset to evaluate against.</p>
+                  <div className={styles['wiz__section-head']}>
+                    <div>
+                      <h2>Pick a test suite</h2>
+                      <p className={styles['wiz-sub']}>Select the dataset to evaluate against.</p>
+                    </div>
+                    {!showUpload && (
+                      <button type="button" className={styles['wiz__upload-toggle']} onClick={openUploadPanel}>
+                        <Upload size={14} strokeWidth={2.25} /> Upload custom dataset
+                      </button>
+                    )}
+                  </div>
+
+                  {showUpload && (
+                    <div className={styles['wiz__upload-panel']}>
+                      <div className={styles['wiz__upload-panel-head']}>
+                        <p className={styles['wiz__upload-panel-title']}>
+                          <Upload size={14} strokeWidth={2.25} /> Upload custom dataset
+                        </p>
+                        <button
+                          type="button"
+                          className={styles['wiz__upload-panel-close']}
+                          onClick={closeUploadPanel}
+                          disabled={datasetUploading}
+                        >
+                          <X size={15} />
+                        </button>
+                      </div>
+
+                      <div className={styles['wiz__upload-panel-body']}>
+                        <div className={styles.wiz__field} style={{ marginTop: 0 }}>
+                          <label className={styles.wiz__label}>Name</label>
+                          <input
+                            className={styles.wiz__input}
+                            placeholder="e.g. Internal QA Set v1"
+                            value={uploadName}
+                            onChange={(e) => setUploadName(e.target.value)}
+                            disabled={datasetUploading}
+                          />
+                        </div>
+
+                        <div className={styles.wiz__field}>
+                          <label className={styles.wiz__label}>
+                            Description <span className="opt">(optional)</span>
+                          </label>
+                          <input
+                            className={styles.wiz__input}
+                            placeholder="What does this dataset cover?"
+                            value={uploadDescription}
+                            onChange={(e) => setUploadDescription(e.target.value)}
+                            disabled={datasetUploading}
+                          />
+                        </div>
+
+                        <div className={styles.wiz__field}>
+                          <label className={styles.wiz__label}>Evaluation Type</label>
+                          <input className={styles.wiz__input} value={draft.eval_type || '—'} disabled readOnly />
+                        </div>
+
+                        <div className={styles.wiz__field}>
+                          <label className={styles.wiz__label}>File</label>
+                          <label className={styles['wiz__upload-dropzone']}>
+                            <input
+                              type="file"
+                              accept={SUPPORTED_UPLOAD_EXTENSIONS.map((e) => `.${e}`).join(',')}
+                              onChange={(e) => handleUploadFileChange(e.target.files?.[0] ?? null)}
+                              disabled={datasetUploading}
+                              hidden
+                            />
+                            {uploadFile ? (
+                              <span className={styles['wiz__upload-dropzone-file']}>
+                                <FileText size={15} /> {uploadFile.name}
+                              </span>
+                            ) : (
+                              <span className={styles['wiz__upload-dropzone-hint']}>
+                                <FileText size={15} /> Choose a .json, .jsonl, .arrow, or .parquet file
+                              </span>
+                            )}
+                          </label>
+                          {uploadFileError && <p className={styles.wiz__error}>{uploadFileError}</p>}
+                        </div>
+
+                        {datasetUploadError && <p className={styles.wiz__error}>{datasetUploadError}</p>}
+
+                        <div className={styles['wiz__upload-panel-actions']}>
+                          <button
+                            type="button"
+                            className="btn btn-ghost"
+                            onClick={closeUploadPanel}
+                            disabled={datasetUploading}
+                          >
+                            Cancel
+                          </button>
+                          <button type="button" className="btn btn-ind" onClick={submitUpload} disabled={!canUpload}>
+                            {datasetUploading ? (
+                              <>
+                                <Loader2 size={16} className={styles.wiz__spin} /> Uploading…
+                              </>
+                            ) : (
+                              <>
+                                <Upload size={16} /> Upload &amp; Use
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   <div className={styles['wiz__dataset-layout']}>
                     <div className={styles['wiz__dataset-grid-scroll']}>
@@ -570,6 +737,9 @@ export default function NewEvaluation() {
                                       <Database size={14} />
                                     </span>
                                     <span className={styles['wiz__dataset-name']}>{d.name}</span>
+                                    {d.dataset_type === 'custom' && (
+                                      <span className={`${styles.wiz__chip} ${styles['wiz__chip--static']}`}>Custom</span>
+                                    )}
                                   </span>
                                   {selected && (
                                     <span className={styles['wiz__card-check']} style={{ position: 'static' }}>
@@ -1914,6 +2084,127 @@ $shadow-md: $shadow-3;
     }
   }
 
+  /* ---------- test suite: header row + custom dataset upload ---------- */
+  &__section-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  &__upload-toggle {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.5rem 0.875rem;
+    border: 1.5px solid $border-default;
+    border-radius: 0.625rem;
+    background: $bg-main;
+    color: $text-secondary;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 0.14s ease, color 0.14s ease;
+    margin-top: 0.125rem;
+
+    &:hover {
+      border-color: $primary;
+      color: $primary;
+    }
+  }
+
+  &__upload-panel {
+    margin-top: 1.25rem;
+    border: 1.5px solid $border-default;
+    border-radius: 0.875rem;
+    background: $bg-subtle;
+    overflow: hidden;
+  }
+
+  &__upload-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.875rem 1.125rem;
+    border-bottom: 1px solid $border-subtle;
+  }
+
+  &__upload-panel-title {
+    display: flex;
+    align-items: center;
+    gap: 0.4375rem;
+    font-size: 0.84375rem;
+    font-weight: 700;
+    color: $text-primary;
+  }
+
+  &__upload-panel-close {
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border: none;
+    border-radius: 0.5rem;
+    background: transparent;
+    color: $text-tertiary;
+    cursor: pointer;
+
+    &:hover {
+      background: $bg-inset;
+      color: $text-primary;
+    }
+  }
+
+  &__upload-panel-body {
+    padding: 1.125rem 1.125rem 1.25rem;
+    max-width: 480px;
+  }
+
+  &__upload-dropzone {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    border: 1.5px dashed $border-strong;
+    border-radius: 0.75rem;
+    padding: 0.8125rem 0.9375rem;
+    background: $bg-main;
+    color: $text-tertiary;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: border-color 0.14s ease, color 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+      color: $primary;
+    }
+  }
+
+  &__upload-dropzone-file {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: $text-primary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__upload-dropzone-hint {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  &__upload-panel-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.625rem;
+    margin-top: 1.375rem;
+  }
+
   /* ---------- test suite: dataset grid + subgroup panel ---------- */
   &__dataset-layout {
     display: flex;
@@ -2622,57 +2913,6 @@ $shadow-md: $shadow-3;
 
 
 
-//datasetsSlice.ts
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import { datasetsApi } from '../../api/endpoints/datasets';
-
-export interface Dataset {
-  id: string;
-  name: string;
-  category: string;
-  eval_type: string;
-  question_count: number;
-  schema_version: string;
-  dataset_categories: string[];
-  created_at: string;
-}
-
-interface DatasetsState {
-  items: Dataset[];
-  status: 'idle' | 'loading' | 'succeeded' | 'failed';
-  error: string | null;
-}
-
-const initialState: DatasetsState = {
-  items: [],
-  status: 'idle',
-  error: null,
-};
-
-// GET /datasets?eval_type={type}
-export const fetchDatasets = createAsyncThunk('datasets/fetchAll', (evalType: string) => datasetsApi.list(evalType));
-
-const datasetsSlice = createSlice({
-  name: 'datasets',
-  initialState,
-  reducers: {},
-  extraReducers: (builder) => {
-    builder
-      .addCase(fetchDatasets.pending, (state) => {
-        state.status = 'loading';
-      })
-      .addCase(fetchDatasets.fulfilled, (state, action) => {
-        state.status = 'succeeded';
-        state.items = action.payload;
-      })
-      .addCase(fetchDatasets.rejected, (state, action) => {
-        state.status = 'failed';
-        state.error = action.error.message || 'Failed to load datasets';
-      });
-  },
-});
-
-export default datasetsSlice.reducer;
 
 
 
@@ -2696,10 +2936,161 @@ interface DatasetsResponse {
   total: number;
 }
 
+export interface UploadDatasetParams {
+  file: File;
+  name: string;
+  description: string;
+  evalType: string;
+}
+
+// Extensions routed to POST /datasets/upload
+const STRUCTURED_EXTENSIONS = ['json', 'arrow', 'parquet'];
+// Extension routed to POST /datasets/upload-jsonl
+const JSONL_EXTENSION = 'jsonl';
+
+export const SUPPORTED_UPLOAD_EXTENSIONS = [...STRUCTURED_EXTENSIONS, JSONL_EXTENSION];
+
+function getExtension(filename: string): string {
+  const idx = filename.lastIndexOf('.');
+  return idx >= 0 ? filename.slice(idx + 1).toLowerCase() : '';
+}
+
 export const datasetsApi = {
   // GET /datasets?eval_type={type}
   list: async (evalType: string): Promise<Dataset[]> => {
     const { data } = await apiClient.get<DatasetsResponse>('/datasets', { params: { eval_type: evalType } });
     return data.datasets;
   },
+
+  // Routes to POST /datasets/upload (.json, .arrow, .parquet) or
+  // POST /datasets/upload-jsonl (.jsonl) based on the file extension.
+  upload: async ({ file, name, description, evalType }: UploadDatasetParams): Promise<Dataset> => {
+    const ext = getExtension(file.name);
+
+    if (!SUPPORTED_UPLOAD_EXTENSIONS.includes(ext)) {
+      throw new Error('Unsupported file type. Please upload a .json, .jsonl, .arrow, or .parquet file.');
+    }
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    if (ext === JSONL_EXTENSION) {
+      // Category is set to the eval type per API contract.
+      const { data } = await apiClient.post<Dataset>('/datasets/upload-jsonl', formData, {
+        params: { name, eval_type: evalType, category: evalType, description },
+      });
+      return data;
+    }
+
+    const { data } = await apiClient.post<Dataset>('/datasets/upload', formData, {
+      params: { eval_type: evalType, name, description },
+    });
+    return data;
+  },
 };
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//datasetsSlice.ts
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import { datasetsApi, type UploadDatasetParams } from '../../api/endpoints/datasets';
+
+export interface Dataset {
+  id: string;
+  name: string;
+  category: string;
+  eval_type: string;
+  question_count: number;
+  schema_version: string;
+  dataset_categories: string[];
+  dataset_type?: string;
+  created_at: string;
+}
+
+interface DatasetsState {
+  items: Dataset[];
+  status: 'idle' | 'loading' | 'succeeded' | 'failed';
+  error: string | null;
+  uploadStatus: 'idle' | 'loading' | 'succeeded' | 'failed';
+  uploadError: string | null;
+}
+
+const initialState: DatasetsState = {
+  items: [],
+  status: 'idle',
+  error: null,
+  uploadStatus: 'idle',
+  uploadError: null,
+};
+
+// GET /datasets?eval_type={type}
+export const fetchDatasets = createAsyncThunk('datasets/fetchAll', (evalType: string) => datasetsApi.list(evalType));
+
+// POST /datasets/upload or /datasets/upload-jsonl, depending on file extension
+export const uploadDataset = createAsyncThunk(
+  'datasets/upload',
+  async (params: UploadDatasetParams, { rejectWithValue }) => {
+    try {
+      return await datasetsApi.upload(params);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to upload dataset';
+      return rejectWithValue(message);
+    }
+  }
+);
+
+const datasetsSlice = createSlice({
+  name: 'datasets',
+  initialState,
+  reducers: {
+    resetUploadStatus: (state) => {
+      state.uploadStatus = 'idle';
+      state.uploadError = null;
+    },
+  },
+  extraReducers: (builder) => {
+    builder
+      .addCase(fetchDatasets.pending, (state) => {
+        state.status = 'loading';
+      })
+      .addCase(fetchDatasets.fulfilled, (state, action) => {
+        state.status = 'succeeded';
+        state.items = action.payload;
+      })
+      .addCase(fetchDatasets.rejected, (state, action) => {
+        state.status = 'failed';
+        state.error = action.error.message || 'Failed to load datasets';
+      })
+      .addCase(uploadDataset.pending, (state) => {
+        state.uploadStatus = 'loading';
+        state.uploadError = null;
+      })
+      .addCase(uploadDataset.fulfilled, (state, action) => {
+        state.uploadStatus = 'succeeded';
+        state.items = [action.payload, ...state.items];
+      })
+      .addCase(uploadDataset.rejected, (state, action) => {
+        state.uploadStatus = 'failed';
+        state.uploadError = (action.payload as string) || action.error.message || 'Failed to upload dataset';
+      });
+  },
+});
+
+export const { resetUploadStatus } = datasetsSlice.actions;
+export default datasetsSlice.reducer;
