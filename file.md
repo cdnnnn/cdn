@@ -1,190 +1,281 @@
-import { useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import {
-  Loader2,
-  TrendingUp,
-  Play,
-  Plus,
-  GitCompare,
-  BookOpen,
-  ChevronRight,
-  Clock3,
-  AlertCircle,
-  Radar,
-  ListChecks,
-} from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Search, Check, Plus, Settings, Unlink, Loader2, Cable, Trash2, RefreshCw, Eye, ListPlus, ListFilter } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
-import { fetchProviders } from '../../store/slices/providersSlice';
-import { fetchModels } from '../../store/slices/modelsSlice';
-import { fetchEvaluations } from '../../store/slices/evaluationsSlice';
-import ScoreRing from '../common/ScoreRing';
-import Sparkline from '../common/Sparkline';
-import RadarChart from '../common/RadarChart';
-import { useCounter } from '../common/useCounter';
-import styles from './Dashboard.module.scss';
+import {
+  fetchProviders,
+  createProvider,
+  deleteProvider,
+  connectProvider,
+  disconnectProvider,
+  syncModels,
+} from '../../store/slices/providersSlice';
+import { fetchModelsByProvider, createCustomModel } from '../../store/slices/modelsSlice';
+import AddProviderDrawer from './AddProviderDrawer';
+import AddCustomModelDrawer from './AddCustomModelDrawer';
+import ProviderModelsSidebar from './ProviderModelsSidebar';
+import { SkeletonCards } from '../common/Skeleton';
+import styles from './Providers.module.scss';
+import type { Provider } from '../../types';
 
-// Signal accent + status colors, matching the evaluation Run Console.
-const SIGNAL = '#2B2BF5';
-const LEGEND_COLORS = ['#2B2BF5', '#E08600', '#0FA968'];
+type Filter = 'all' | 'connected' | 'available';
 
-export default function Dashboard() {
+const FILTERS: Filter[] = ['all', 'connected', 'available'];
+
+export default function Providers() {
   const dispatch = useAppDispatch();
-  const navigate = useNavigate();
-
-  const providers = useAppSelector((s) => s.providers.items);
-  const models = useAppSelector((s) => s.models.items);
-  const runs = useAppSelector((s) => s.evaluations.list);
+  const { items, status, mutatingId, creating, syncingId } = useAppSelector((s) => s.providers);
+  const modelsByProvider = useAppSelector((s) => s.models.byProvider);
+  const modelsByProviderStatus = useAppSelector((s) => s.models.byProviderStatus);
+  const customModelCreating = useAppSelector((s) => s.models.creating);
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState<Filter>('all');
+  const [keyPromptFor, setKeyPromptFor] = useState<string | null>(null);
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [addModelOpen, setAddModelOpen] = useState(false);
+  const [viewModelsProvider, setViewModelsProvider] = useState<Provider | null>(null);
 
   useEffect(() => {
     dispatch(fetchProviders());
-    dispatch(fetchModels());
-    dispatch(fetchEvaluations());
   }, [dispatch]);
 
-  const connectedCount = providers.filter((p) => p.status === 'connected').length;
-  const totalEvals = useCounter(runs.length, 900);
-  const connectedAnim = useCounter(connectedCount, 900);
-  const avgAccuracy = models.length
-    ? (models.reduce((sum, m) => sum + (m.accuracy_score || 0), 0) / models.length).toFixed(1)
-    : '0.0';
+  const connectedCount = items.filter((p) => p.status === 'connected').length;
 
-  const stats = [
-    { label: 'Total Evaluations', value: totalEvals, change: `${runs.length} tracked locally`, spark: [2, 4, 3, 5, 6, 5, runs.length || 1] },
-    { label: 'Models Connected', value: connectedAnim, change: `${models.length} in catalog`, spark: [1, 2, 2, 3, 3, 4, connectedCount || 1] },
-    { label: 'Avg. Accuracy', value: `${avgAccuracy}%`, change: 'Across active models', spark: [85, 86, 87, 88, 89, 90, Number(avgAccuracy) || 90] },
-  ];
+  const filtered = items.filter((p) => {
+    if (filter === 'connected' && p.status !== 'connected') return false;
+    if (filter === 'available' && p.status === 'connected') return false;
+    return !search || p.name.toLowerCase().includes(search.toLowerCase());
+  });
 
-  const radarModels = models.slice(0, 3).map((m) => ({
-    name: m.name,
-    values: [
-      (m.accuracy_score || 0) / 100,
-      0.8,
-      m.input_price ? Math.max(0, 1 - m.input_price / 10) : 0.5,
-      Math.min(1, m.context_window / 200000),
-      (m.agent_score || m.accuracy_score || 0) / 100,
-    ],
-  }));
+  const submitConnect = (providerId: string) => {
+    if (!apiKeyInput.trim()) return;
+    dispatch(connectProvider({ providerId, payload: { api_key: apiKeyInput } }));
+    setKeyPromptFor(null);
+    setApiKeyInput('');
+  };
+
+  const openModelsSidebar = (p: Provider) => {
+    setViewModelsProvider(p);
+    dispatch(fetchModelsByProvider(p.id));
+  };
+
+  const customProvider = items.find((p) => p.name === 'Custom') || null;
 
   return (
     <div className="page-enter pg-shell">
-      <div className={styles.db__header}>
+      <div className={styles.providers__header}>
         <div>
-          <p className={styles.db__eyebrow}>Overview</p>
-          <h1>Dashboard</h1>
-          <p className={styles.db__sub}>Your evaluation activity at a glance</p>
+          <p className={styles['providers__header-eyebrow']}>Integrations</p>
+          <h1>Providers</h1>
+          <p className={styles['providers__header-sub']}>Manage your AI provider connections</p>
         </div>
-        <div className={styles.db__meta}>
-          <Clock3 size={13} />
-          {runs.length} evaluation{runs.length === 1 ? '' : 's'} tracked
+        <div className={styles['providers__header-meta']}>
+          <Cable size={13} />
+          {connectedCount} of {items.length} connected
         </div>
       </div>
 
-      <div className={styles['db-body']}>
-        <div className={styles['d-stats']}>
-          {stats.map((s, i) => (
-            <div className={styles['d-stat']} key={i}>
-              <div className={styles['d-stat-top']}>
-                <div>
-                  <div className={styles['d-stat-label']}>{s.label}</div>
-                  <div className={styles['d-stat-val']}>{s.value}</div>
-                  <div className={styles['d-stat-change']}>
-                    <TrendingUp size={12} /> {s.change}
-                  </div>
-                </div>
-                <Sparkline data={s.spark} color={SIGNAL} width={72} height={32} />
-              </div>
-            </div>
-          ))}
+      <div className={styles['providers__toolbar']}>
+        <div className={styles['providers__search']}>
+          <Search size={16} />
+          <input placeholder="Search providers…" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
 
-        <div className={styles['dash__grid']}>
-          <div className={styles['dash__panel']}>
-            <div className={styles['dash__panel-hdr']}>
-              <span className={styles['dash__panel-title']}>
-                <ListChecks size={15} /> Recent Evaluations
-              </span>
-              <button className={styles['dash__link']} onClick={() => navigate('/app/history')}>
-                View All <ChevronRight size={14} />
+        <div className={styles['providers__toolbar-right']}>
+          <div className={styles['providers__filter-group']}>
+            <span className={styles['providers__toolbar-label']}>
+              <ListFilter size={11} /> Status
+            </span>
+            {FILTERS.map((f) => (
+              <button
+                key={f}
+                className={`${styles['providers__filter-pill']} ${filter === f ? styles['providers__filter-pill--on'] : ''}`}
+                onClick={() => setFilter(f)}
+              >
+                {f[0].toUpperCase() + f.slice(1)}
               </button>
-            </div>
-            {runs.length === 0 && (
-              <div className={styles['dash__empty']}>No evaluations yet — launch one from Quick Actions below.</div>
-            )}
-            {runs.slice(0, 4).map((run) => (
-              <div key={run.id} className={styles['dash__run-row']} onClick={() => navigate(`/app/history?id=${run.id}`)}>
-                <div className={styles['dash__run-main']}>
-                  {run.status === 'completed' ? (
-                    <ScoreRing score={Math.round(run.top_score ?? 0)} size={40} stroke={4} color={SIGNAL} />
-                  ) : run.status === 'failed' ? (
-                    <div className={styles['dash__fail-icon']}>
-                      <AlertCircle size={19} color="#DC2626" />
+            ))}
+          </div>
+          <span className={styles['providers__toolbar-divider']} />
+          <button className={styles['providers__add-btn']} onClick={() => setDrawerOpen(true)}>
+            <Plus size={14} /> Add Provider
+          </button>
+        </div>
+      </div>
+
+      <div className="pg-body">
+        <div className={styles['providers__grid']}>
+          {status === 'loading' && <SkeletonCards count={6} />}
+          {status !== 'loading' &&
+            filtered.map((p) => {
+              const isCustom = p.name === 'Custom';
+              return (
+                <div className={styles['providers__card']} key={p.id}>
+                  <div className={styles['providers__card-hdr']}>
+                    <div className={styles['providers__card-id']}>
+                      <div className={styles['providers__icon']}>
+                        {p.logo_url ? <img src={p.logo_url} alt={p.name} /> : p.name[0]}
+                      </div>
+                      <div style={{ minWidth: 0 }}>
+                        <div className={styles['providers__name']}>{p.name}</div>
+                        <div className={styles['providers__count']}>{p.model_count} models</div>
+                      </div>
+                    </div>
+                    <div className={styles['providers__card-top-actions']}>
+                      <button
+                        className={styles['providers__icon-btn']}
+                        onClick={() => openModelsSidebar(p)}
+                        title="View models"
+                        aria-label={`View models for ${p.name}`}
+                      >
+                        <Eye size={14} />
+                      </button>
+                      {p.status === 'connected' ? (
+                        <span className={styles['providers__badge-connected']}>
+                          <Check size={10} strokeWidth={3} /> Connected
+                        </span>
+                      ) : (
+                        <span className={styles['providers__badge-idle']}>Not connected</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className={styles['providers__desc']}>{p.description}</div>
+
+                  {keyPromptFor === p.id ? (
+                    <div className={styles['providers__key-form']}>
+                      <input
+                        className={styles['providers__key-input']}
+                        type="password"
+                        placeholder="Paste API key…"
+                        value={apiKeyInput}
+                        onChange={(e) => setApiKeyInput(e.target.value)}
+                        autoFocus
+                      />
+                      <div className={styles['providers__key-actions']}>
+                        <button
+                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--primary']}`}
+                          onClick={() => submitConnect(p.id)}
+                        >
+                          Save
+                        </button>
+                        <button
+                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--ghost']}`}
+                          onClick={() => setKeyPromptFor(null)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
                     </div>
                   ) : (
-                    <div className={styles['dash__spinner']}>
-                      <Loader2 size={17} color={SIGNAL} style={{ animation: 'spin 1.5s linear infinite' }} />
+                    <div className={styles['providers__foot-actions']}>
+                      {isCustom && (
+                        <button
+                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--accent']}`}
+                          onClick={() => setAddModelOpen(true)}
+                        >
+                          <ListPlus size={13} /> Add Model
+                        </button>
+                      )}
+                      <button
+                        className={`${styles['providers__foot-btn']} ${
+                          p.status === 'connected' ? styles['providers__foot-btn--ghost'] : styles['providers__foot-btn--primary']
+                        }`}
+                        disabled={mutatingId === p.id}
+                        onClick={() => setKeyPromptFor(p.id)}
+                      >
+                        {mutatingId === p.id ? (
+                          <Loader2 size={13} className={styles['providers__spin']} />
+                        ) : p.status === 'connected' ? (
+                          <>
+                            <Settings size={13} /> Configure
+                          </>
+                        ) : (
+                          <>
+                            <Plus size={13} /> Connect
+                          </>
+                        )}
+                      </button>
+                      {p.status === 'connected' && (
+                        <>
+                          <button
+                            className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--ghost']}`}
+                            disabled={syncingId === p.id}
+                            onClick={() => dispatch(syncModels(p.id))}
+                          >
+                            {syncingId === p.id ? (
+                              <Loader2 size={13} className={styles['providers__spin']} />
+                            ) : (
+                              <>
+                                <RefreshCw size={13} /> Sync
+                              </>
+                            )}
+                          </button>
+                          <button
+                            className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--danger']}`}
+                            disabled={mutatingId === p.id}
+                            onClick={() => dispatch(disconnectProvider(p.id))}
+                          >
+                            <Unlink size={13} /> Disconnect
+                          </button>
+                        </>
+                      )}
+                      {p.status !== 'connected' && (
+                        <button
+                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--danger']}`}
+                          disabled={mutatingId === p.id}
+                          onClick={() => {
+                            if (window.confirm(`Delete ${p.name}? This cannot be undone.`)) {
+                              dispatch(deleteProvider(p.id));
+                            }
+                          }}
+                        >
+                          <Trash2 size={13} /> Delete
+                        </button>
+                      )}
                     </div>
                   )}
-                  <div style={{ minWidth: 0 }}>
-                    <div className={styles['dash__run-name']}>{run.name}</div>
-                    <div className={styles['dash__run-meta']}>
-                      {run.benchmark || '—'} &middot; {new Date(run.created_at).toLocaleDateString()}
-                    </div>
-                  </div>
                 </div>
-                <span className={`${styles['status-pill']} ${styles[`status-pill--${run.status === 'completed' ? 'completed' : run.status === 'failed' ? 'failed' : 'running'}`]}`}>
-                  {run.status}
-                </span>
-              </div>
-            ))}
-          </div>
-
-          <div className={styles['dash__panel']} style={{ padding: 22 }}>
-            <div className={styles['section-title']}>
-              <Radar size={15} /> Top Models
-            </div>
-            <div className={styles['section-sub']}>Strength comparison across 5 dimensions</div>
-            {radarModels.length > 0 ? (
-              <>
-                <div className="radar-wrap">
-                  <RadarChart models={radarModels} size={260} />
-                </div>
-                <div className={styles['dash__legend']}>
-                  {radarModels.map((m, i) => (
-                    <span key={i}>
-                      <span className={styles['dash__dot']} style={{ background: LEGEND_COLORS[i] }} /> {m.name}
-                    </span>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <div className={styles['dash__empty']}>Connect a provider to see model comparisons.</div>
-            )}
-          </div>
-        </div>
-
-        <div className={styles['dash__panel']} style={{ padding: 22 }}>
-          <div className={styles['section-title']}>
-            <Play size={15} /> Quick Actions
-          </div>
-          <div className={styles['section-sub']}>Jump straight into your next step.</div>
-          <div className={styles['dash__actions']}>
-            {[
-              { icon: <Play size={20} />, label: 'New Evaluation', desc: 'Start a benchmark run', to: '/app/run-evaluation', cls: 'ind' },
-              { icon: <Plus size={20} />, label: 'Add Provider', desc: 'Connect an API', to: '/app/providers', cls: 'em' },
-              { icon: <GitCompare size={20} />, label: 'Compare Models', desc: 'Side-by-side analysis', to: '/app/comparison', cls: 'amb' },
-              { icon: <BookOpen size={20} />, label: 'Datasets', desc: 'Browse benchmark suites', to: '/app/datasets', cls: 'sky' },
-            ].map((a, i) => (
-              <button key={i} onClick={() => navigate(a.to)} className={`${styles['qa-btn']} ${styles[`qa-btn--${a.cls}`]}`}>
-                <div className={styles['qa-btn__icon']}>{a.icon}</div>
-                <div>
-                  <div className={styles['qa-btn__label']}>{a.label}</div>
-                  <div className={styles['qa-btn__desc']}>{a.desc}</div>
-                </div>
-              </button>
-            ))}
-          </div>
+              );
+            })}
+          {status !== 'loading' && filtered.length === 0 && (
+            <p className={styles['providers__empty']}>No providers match your search or filter.</p>
+          )}
         </div>
       </div>
+
+      {drawerOpen && (
+        <AddProviderDrawer
+          submitting={creating}
+          onClose={() => setDrawerOpen(false)}
+          onSubmit={(payload) => {
+            dispatch(createProvider(payload)).then(() => setDrawerOpen(false));
+          }}
+        />
+      )}
+
+      {addModelOpen && customProvider && (
+        <AddCustomModelDrawer
+          submitting={customModelCreating}
+          onClose={() => setAddModelOpen(false)}
+          onSubmit={(payload) => {
+            dispatch(createCustomModel(payload)).then(() => {
+              setAddModelOpen(false);
+              dispatch(fetchProviders());
+              dispatch(fetchModelsByProvider(customProvider.id));
+            });
+          }}
+        />
+      )}
+
+      {viewModelsProvider && (
+        <ProviderModelsSidebar
+          provider={viewModelsProvider}
+          models={modelsByProvider[viewModelsProvider.id] || []}
+          status={modelsByProviderStatus[viewModelsProvider.id] || 'idle'}
+          onClose={() => setViewModelsProvider(null)}
+        />
+      )}
     </div>
   );
 }
@@ -206,13 +297,13 @@ export default function Dashboard() {
 
 
 
-
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
-// Dashboard — matches the Evaluation Run Console design system:
+// Providers — matches the Run Console / Dashboard design system:
 // ink/paper palette, ultramarine signal accent, mono instrument labels,
-// hover-lift cards with a subtle inset ring on emphasis.
+// hover-lift cards. Sidebar block keys are kept stable (shared with
+// ProviderModelsSidebar) but recolored to the same tokens.
 // ===========================================================================
 
 $ink:      #14161B;
@@ -228,7 +319,6 @@ $wash:     #ECEDFF;
 $ok:       #0FA968;
 $ok-wash:  #E7F7EF;
 $amber:    #E08600;
-$amber-wash: #FDF3E3;
 $danger:   #DC2626;
 $danger-wash: #FDECEC;
 
@@ -247,10 +337,8 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
   text-transform: uppercase;
 }
 
-// ===========================================================================
-// Header
-// ===========================================================================
-.db {
+.providers {
+  // ---- header -----------------------------------------------------------
   &__header {
     flex-shrink: 0;
     display: flex;
@@ -258,7 +346,7 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
     justify-content: space-between;
     gap: 1rem;
     padding: 24px 32px 20px;
-    margin-bottom: 24px;
+    margin-bottom: 20px;
     border-bottom: 1px solid $line;
     background: $card;
 
@@ -272,7 +360,7 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
     }
   }
 
-  &__eyebrow {
+  &__header-eyebrow {
     @extend %micro;
     display: flex;
     align-items: center;
@@ -289,13 +377,13 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
     }
   }
 
-  &__sub {
+  &__header-sub {
     margin-top: 4px;
     font-size: 0.84375rem;
     color: $ink-2;
   }
 
-  &__meta {
+  &__header-meta {
     flex-shrink: 0;
     display: inline-flex;
     align-items: center;
@@ -313,356 +401,508 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
     white-space: nowrap;
     margin-bottom: 3px;
   }
-}
 
-// ===========================================================================
-// Body
-// ===========================================================================
-.db-body {
-  padding: 0 32px 32px;
-}
-
-// ---- stat cards -----------------------------------------------------------
-.d-stats {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 14px;
-  margin-bottom: 18px;
-}
-
-.d-stat {
-  position: relative;
-  background: $card;
-  border: 1px solid $line;
-  border-radius: 16px;
-  padding: 20px 22px;
-  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
-
-  &:hover {
-    border-color: $ink-3;
-    box-shadow: $lift;
-    transform: translateY(-2px);
-  }
-}
-
-.d-stat-top {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-}
-
-.d-stat-label {
-  @extend %micro;
-  font-size: 0.625rem;
-  color: $ink-3;
-}
-
-.d-stat-val {
-  font-family: $mono;
-  font-size: 2rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  line-height: 1;
-  margin-top: 10px;
-  color: $ink;
-}
-
-.d-stat-change {
-  font-size: 0.71875rem;
-  color: $ok;
-  font-weight: 600;
-  margin-top: 8px;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-
-// ---- main grid --------------------------------------------------------------
-.dash {
-  &__grid {
-    display: grid;
-    grid-template-columns: 1.2fr 1fr;
-    gap: 14px;
-    margin-bottom: 14px;
-  }
-
-  &__panel {
-    background: $card;
-    border: 1px solid $line;
-    border-radius: 16px;
-    overflow: hidden;
-  }
-
-  &__panel-hdr {
-    padding: 17px 20px;
-    border-bottom: 1px solid $line-2;
+  // ---- toolbar ------------------------------------------------------------
+  &__toolbar {
+    flex-shrink: 0;
     display: flex;
+    align-items: center;
     justify-content: space-between;
-    align-items: center;
+    gap: 14px;
+    padding: 14px 32px;
+    background: $card;
+    border-bottom: 1px solid $line;
+    flex-wrap: wrap;
   }
 
-  &__panel-title {
+  &__search {
+    position: relative;
+    flex: 1;
+    max-width: 340px;
+    min-width: 200px;
+
+    svg {
+      position: absolute;
+      top: 50%;
+      left: 13px;
+      transform: translateY(-50%);
+      color: $ink-3;
+      pointer-events: none;
+    }
+
+    input {
+      width: 100%;
+      border: 1.5px solid $line;
+      border-radius: 10px;
+      padding: 9px 12px 9px 38px;
+      font-size: 0.84375rem;
+      font-family: $sans;
+      color: $ink;
+      background: $paper;
+      transition: border-color 0.15s ease, background 0.15s ease;
+
+      &::placeholder { color: $ink-3; }
+      &:focus {
+        outline: none;
+        border-color: $signal;
+        background: $card;
+      }
+    }
+  }
+
+  &__toolbar-right {
     display: flex;
     align-items: center;
-    gap: 8px;
-    font-family: $display;
-    font-weight: 700;
-    font-size: 0.875rem;
-    color: $ink;
-
-    svg { color: $signal; }
+    gap: 14px;
+    flex-wrap: wrap;
   }
 
-  &__panel-sub {
-    font-size: 0.75rem;
-    color: $ink-3;
-    margin-top: 2px;
-  }
-
-  &__link {
+  &__filter-group {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    font-family: $sans;
+    gap: 8px;
+    padding: 4px;
+    background: $paper;
+    border: 1px solid $line;
+    border-radius: 999px;
+  }
+
+  &__toolbar-label {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px 5px 11px;
+    @extend %micro;
+    font-size: 0.625rem;
+    color: $ink-3;
+    white-space: nowrap;
+  }
+
+  &__filter-pill {
+    padding: 6px 13px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: $ink-2;
     font-size: 0.78125rem;
     font-weight: 650;
-    color: $ink-2;
-    background: transparent;
-    border: 0;
     cursor: pointer;
-    padding: 0;
-    transition: color 0.15s ease;
+    transition: all 0.15s ease;
 
-    &:hover { color: $signal; }
+    &:hover { color: $ink; }
+
+    &--on {
+      background: $card;
+      color: $signal;
+      box-shadow: $soft;
+    }
   }
 
-  &__run-row {
-    padding: 14px 20px;
-    border-bottom: 1px solid $line-2;
-    display: flex;
-    justify-content: space-between;
+  &__toolbar-divider {
+    flex-shrink: 0;
+    width: 1px;
+    height: 26px;
+    background: $line;
+  }
+
+  &__add-btn {
+    display: inline-flex;
     align-items: center;
-    gap: 14px;
+    gap: 7px;
+    padding: 9px 15px;
+    border: 0;
+    border-radius: 10px;
+    background: $ink;
+    color: #fff;
+    font-family: $sans;
+    font-size: 0.8125rem;
+    font-weight: 650;
     cursor: pointer;
-    transition: background 0.15s ease;
+    box-shadow: $soft;
+    transition: background 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
 
-    &:last-child { border-bottom: 0; }
-    &:hover { background: $paper; }
+    &:hover { background: #000; transform: translateY(-1px); box-shadow: $lift; }
   }
 
-  &__run-main {
+  // ---- provider card grid --------------------------------------------------
+  &__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 12px;
+  }
+
+  &__card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 17px 18px;
+    border: 1.5px solid $line;
+    border-radius: 16px;
+    background: $card;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+
+    &:hover {
+      border-color: $ink-3;
+      box-shadow: $lift;
+      transform: translateY(-2px);
+    }
+  }
+
+  &__card-hdr {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  &__card-id {
     display: flex;
     align-items: center;
     gap: 13px;
     min-width: 0;
   }
 
-  &__run-name {
-    font-family: $display;
-    font-weight: 700;
-    font-size: 0.84375rem;
+  &__icon {
+    flex-shrink: 0;
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    display: grid;
+    place-items: center;
+    background: $paper;
+    border: 1px solid $line;
     color: $ink;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    font-family: $display;
+    font-weight: 800;
+    font-size: 1.0625rem;
+
+    img { width: 24px; height: 24px; object-fit: contain; }
   }
 
-  &__run-meta {
-    font-size: 0.71875rem;
+  &__name {
+    font-family: $display;
+    font-size: 0.9375rem;
+    font-weight: 700;
+    color: $ink;
+    line-height: 1.25;
+  }
+
+  &__count {
+    font-size: 0.75rem;
     color: $ink-3;
     margin-top: 2px;
   }
 
-  &__spinner {
-    flex-shrink: 0;
-    width: 40px;
-    height: 40px;
-    border-radius: 11px;
-    background: $wash;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  &__fail-icon {
-    flex-shrink: 0;
-    width: 40px;
-    height: 40px;
-    border-radius: 11px;
-    background: $danger-wash;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  &__empty {
-    padding: 30px 20px;
-    text-align: center;
-    color: $ink-3;
-    font-size: 0.8125rem;
-  }
-
-  &__legend {
-    display: flex;
-    justify-content: center;
-    gap: 18px;
-    margin-top: 6px;
-    flex-wrap: wrap;
-  }
-
-  &__legend span {
+  &__card-top-actions {
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 0.71875rem;
-    font-weight: 600;
-    color: $ink-2;
+    flex-shrink: 0;
   }
 
-  &__dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    display: inline-block;
-  }
-
-  &__actions {
+  &__icon-btn {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 12px;
-  }
-}
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border: 1px solid $line;
+    border-radius: 8px;
+    background: $card;
+    color: $ink-2;
+    cursor: pointer;
+    transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
 
-// ---- status pill (mono, colored per run status) ----------------------------
-.status-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px 4px 8px;
-  border-radius: 999px;
-  font-family: $mono;
-  font-size: 0.625rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-
-  &::before {
-    content: '';
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
+    &:hover { border-color: $ink-3; color: $ink; background: $paper; }
   }
 
-  &--completed {
+  &__badge-connected {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px 4px 8px;
+    border-radius: 999px;
+    font-family: $mono;
+    font-size: 0.625rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
     color: $ok;
     background: $ok-wash;
-    &::before { background: $ok; }
+    white-space: nowrap;
+
+    &::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: $ok; }
   }
 
-  &--failed {
-    color: $danger;
-    background: $danger-wash;
-    &::before { background: $danger; }
+  &__badge-idle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 11px;
+    border-radius: 999px;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    color: $ink-3;
+    background: transparent;
+    border: 1px dashed $line;
+    white-space: nowrap;
+
+    &::before {
+      content: '';
+      flex-shrink: 0;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: $ink-3;
+      opacity: 0.7;
+    }
   }
 
-  &--running {
-    color: $signal;
-    background: $wash;
-    &::before { background: $signal; animation: db-pulse 1.1s ease-in-out infinite; }
+  &__desc {
+    flex: 1;
+    margin-top: 11px;
+    font-size: 0.8125rem;
+    color: $ink-2;
+    line-height: 1.5;
   }
-}
 
-// ---- quick action tiles -----------------------------------------------------
-.qa-btn {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  padding: 22px 18px;
-  border: 1.5px solid $line;
-  border-radius: 16px;
-  background: $card;
-  cursor: pointer;
-  text-align: center;
-  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
-
-  &:hover {
-    border-color: $ink-3;
-    box-shadow: $lift;
-    transform: translateY(-3px);
+  // ---- inline API key form -------------------------------------------------
+  &__key-form {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
   }
-}
 
-.qa-btn__icon {
-  width: 46px;
-  height: 46px;
-  border-radius: 13px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  background: $ink;
-  position: relative;
-  overflow: hidden;
+  &__key-input {
+    flex: 1;
+    border: 1.5px solid $line;
+    border-radius: 9px;
+    padding: 8px 11px;
+    font-size: 0.8125rem;
+    font-family: $sans;
+    color: $ink;
+    background: $paper;
+    transition: border-color 0.15s ease, background 0.15s ease;
 
-  &::after {
-    content: '';
-    position: absolute;
+    &::placeholder { color: $ink-3; }
+    &:focus { outline: none; border-color: $signal; background: $card; }
+  }
+
+  &__key-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  // ---- footer action row ---------------------------------------------------
+  &__foot-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 13px;
+  }
+
+  &__foot-btn {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 11px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    font-family: $sans;
+    font-size: 0.75rem;
+    font-weight: 650;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.12s ease;
+
+    &:disabled { cursor: not-allowed; opacity: 0.55; }
+
+    &--primary {
+      background: $ink;
+      color: #fff;
+      &:not(:disabled):hover { background: #000; transform: translateY(-1px); }
+    }
+
+    &--accent {
+      background: $signal;
+      color: #fff;
+      &:not(:disabled):hover { background: $signal-2; transform: translateY(-1px); }
+    }
+
+    &--ghost {
+      background: $card;
+      border-color: $line;
+      color: $ink-2;
+      &:not(:disabled):hover { border-color: $ink-3; color: $ink; background: $paper; }
+    }
+
+    &--danger {
+      background: $danger-wash;
+      color: $danger;
+      &:not(:disabled):hover { background: rgba($danger, 0.16); }
+    }
+  }
+
+  &__spin { animation: providers-spin 0.8s linear infinite; }
+
+  &__empty {
+    grid-column: 1 / -1;
+    padding: 40px 20px;
+    text-align: center;
+    color: $ink-3;
+    font-size: 0.84375rem;
+    border: 1px dashed $line;
+    border-radius: 14px;
+  }
+
+  // ===========================================================================
+  // Provider models sidebar — keys kept stable for ProviderModelsSidebar,
+  // recolored to the ink/paper/signal system.
+  // ===========================================================================
+  &__sidebar-overlay {
+    position: fixed;
     inset: 0;
-    background: linear-gradient(140deg, transparent 45%, rgba(255, 255, 255, 0.18) 140%);
+    background: rgba(20, 22, 27, 0.45);
+    z-index: 40;
   }
 
-  svg { position: relative; z-index: 1; }
+  &__sidebar {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(420px, 100vw);
+    background: $card;
+    border-left: 1px solid $line;
+    box-shadow: -20px 0 40px -16px rgba(20, 22, 27, 0.28);
+    z-index: 41;
+    display: flex;
+    flex-direction: column;
+    animation: providers-sidebar-in 0.22s cubic-bezier(0.22, 0.72, 0.16, 1);
+  }
+
+  &__sidebar-header {
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 20px 20px 16px;
+    border-bottom: 1px solid $line;
+  }
+
+  &__sidebar-title {
+    font-family: $display;
+    font-size: 1.0625rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: $ink;
+  }
+
+  &__sidebar-subtitle {
+    margin-top: 3px;
+    font-size: 0.75rem;
+    color: $ink-3;
+  }
+
+  &__sidebar-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  &__sidebar-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 48px 12px;
+    color: $ink-3;
+    font-size: 0.8125rem;
+    text-align: center;
+  }
+
+  &__model-row {
+    border: 1px solid $line;
+    border-radius: 12px;
+    padding: 14px;
+    background: $paper;
+  }
+
+  &__model-row-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  &__model-row-name {
+    font-family: $display;
+    font-weight: 700;
+    font-size: 0.875rem;
+    color: $ink;
+  }
+
+  &__model-row-tags {
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  &__model-row-meta {
+    margin-top: 10px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 12px;
+
+    > div {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      font-size: 0.8125rem;
+      color: $ink;
+    }
+  }
+
+  &__model-row-meta-label {
+    @extend %micro;
+    font-size: 0.625rem;
+    color: $ink-3;
+  }
+
+  &__model-row-url {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed $line;
+    font-family: $mono;
+    font-size: 0.75rem;
+    color: $ink-2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 
-.qa-btn--ind .qa-btn__icon { background: $signal; }
-.qa-btn--em  .qa-btn__icon { background: $ok; }
-.qa-btn--amb .qa-btn__icon { background: $amber; }
-.qa-btn--sky .qa-btn__icon { background: #0369A1; }
-
-.qa-btn__label {
-  font-size: 0.84375rem;
-  font-weight: 700;
-  font-family: $display;
-  color: $ink;
+@keyframes providers-spin {
+  to { transform: rotate(360deg); }
 }
 
-.qa-btn__desc {
-  font-size: 0.71875rem;
-  color: $ink-3;
-  margin-top: 2px;
-}
-
-// ---- panel section title used for Quick Actions card -----------------------
-.section-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-family: $display;
-  font-weight: 700;
-  font-size: 0.875rem;
-  color: $ink;
-  margin-bottom: 4px;
-
-  svg { color: $signal; }
-}
-
-.section-sub {
-  font-size: 0.75rem;
-  color: $ink-3;
-  margin-bottom: 18px;
-}
-
-@keyframes db-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(43, 43, 245, 0.5); }
-  50% { box-shadow: 0 0 0 4px rgba(43, 43, 245, 0); }
+@keyframes providers-sidebar-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
 }
 
 @media (max-width: 768px) {
-  .d-stats { grid-template-columns: repeat(2, 1fr); }
-  .dash__grid { grid-template-columns: 1fr; }
-  .dash__actions { grid-template-columns: 1fr 1fr; }
-  .db__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
-  .db-body { padding: 0 18px 24px; }
+  .providers__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
+  .providers__toolbar { padding: 12px 18px; }
+  .providers__grid { grid-template-columns: 1fr; }
 }
