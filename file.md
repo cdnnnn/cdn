@@ -1,188 +1,388 @@
-import { useEffect, useMemo, useState } from 'react';
-import { RefreshCw, Search, ExternalLink, Layers, AlertTriangle, Database, ListFilter, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import {
+  Search, Sparkles, Bot, Layers, Loader2,
+  Award, ListChecks, Clock, History as HistoryIcon, SlidersHorizontal, CalendarDays, X,
+} from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
-import { fetchBenchmarks } from '../../store/slices/benchmarksSlice';
-import type { Benchmark } from '../../types';
-import { SkeletonCards } from '../common/Skeleton';
-import styles from './Datasets.module.scss';
+import {
+  fetchEvaluations, fetchEvaluationResults,
+} from '../../store/slices/evaluationsSlice';
+import type { EvaluationStatusValue } from '../../types';
+import { SkeletonListRows } from '../common/Skeleton';
+import styles from './History.module.scss';
 
-// Deterministic color hash so the same capability always gets the same pill
-// color across cards/renders, without a hardcoded lookup table. Palette
-// matches the app's ink/paper/signal design tokens.
-const PILL_COLORS = [
-  { bg: '#ECEDFF', fg: '#2B2BF5' }, // signal
-  { bg: '#FDF3E3', fg: '#E08600' }, // amber
-  { bg: '#E7F7EF', fg: '#0FA968' }, // ok
-  { bg: '#FDECEC', fg: '#DC2626' }, // danger
-  { bg: '#E6F4FB', fg: '#0369A1' }, // sky
-  { bg: '#F1EDFB', fg: '#6D28D9' }, // violet
-];
-function hashColor(label: string) {
-  const sum = [...label].reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
-  return PILL_COLORS[sum % PILL_COLORS.length];
+const TYPE_ICON: Record<string, typeof Sparkles> = { model: Sparkles, agent: Bot, rag: Layers };
+const TYPE_LABEL: Record<string, string> = { model: 'AI Model', agent: 'Agent', rag: 'RAG' };
+
+// Maps a raw status to the module status-pill variant suffix.
+function statusVariant(status: EvaluationStatusValue): string {
+  switch (status) {
+    case 'completed': return 'completed';
+    case 'running': return 'running';
+    case 'pending': return 'pending';
+    case 'failed': return 'failed';
+    case 'canceled': return 'canceled';
+    default: return 'pending';
+  }
 }
 
-export default function Datasets() {
+function withinDateRange(iso: string, range: string): boolean {
+  if (range === 'all') return true;
+  const days = range === '7' ? 7 : 30;
+  const cutoff = Date.now() - days * 86400000;
+  return new Date(iso).getTime() >= cutoff;
+}
+
+export default function History() {
   const dispatch = useAppDispatch();
-  const { items, status, error } = useAppSelector((s) => s.benchmarks);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedId = searchParams.get('id');
+
+  const { list, listStatus, listError, resultsByEvalId, resultsStatusByEvalId, resultsErrorByEvalId } = useAppSelector((s) => s.evaluations);
+  const models = useAppSelector((s) => s.models.items);
+  const providers = useAppSelector((s) => s.providers.items);
+
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('All');
-  const [subgroupsFor, setSubgroupsFor] = useState<Benchmark | null>(null);
+  const [dateFilter, setDateFilter] = useState('all');
+  const [activeFilter, setActiveFilter] = useState<'search' | 'type' | 'date' | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const toggleFilter = (key: 'search' | 'type' | 'date') => {
+    setActiveFilter((prev) => (prev === key ? null : key));
+  };
 
   useEffect(() => {
-    dispatch(fetchBenchmarks());
+    if (activeFilter === 'search') searchInputRef.current?.focus();
+  }, [activeFilter]);
+
+  const DATE_LABEL: Record<string, string> = { all: 'All time', '30': 'Last 30 days', '7': 'Last 7 days' };
+
+  // Initial load + silent 10s poll (spec §2.4) — no spinner/error disruption
+  // on background refreshes; the slice only flips listStatus when list is empty.
+  useEffect(() => {
+    dispatch(fetchEvaluations());
+    const interval = setInterval(() => dispatch(fetchEvaluations()), 10000);
+    return () => clearInterval(interval);
   }, [dispatch]);
 
-  const types = useMemo(() => ['All', ...new Set(items.map((b) => b.type))], [items]);
-  const filtered = items.filter((b) => {
-    if (typeFilter !== 'All' && b.type !== typeFilter) return false;
-    const q = search.toLowerCase();
-    return !q || b.name.toLowerCase().includes(q) || b.description.toLowerCase().includes(q);
-  });
+  const filtered = useMemo(() => {
+    return list.filter((e) => {
+      if (search && !e.name.toLowerCase().includes(search.toLowerCase())) return false;
+      if (typeFilter !== 'All' && e.eval_type !== typeFilter) return false;
+      if (!withinDateRange(e.created_at, dateFilter)) return false;
+      return true;
+    });
+  }, [list, search, typeFilter, dateFilter]);
+
+  const selected = list.find((e) => e.id === selectedId) || filtered[0] || null;
+
+  // Keyed on id + status (not the whole object) so a background poll that
+  // doesn't change either doesn't re-trigger the results fetch (spec §2.4).
+  useEffect(() => {
+    if (selected && selected.status === 'completed' && !resultsByEvalId[selected.id]) {
+      dispatch(fetchEvaluationResults(selected.id));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id, selected?.status]);
+
+  const selectRow = (id: string) => setSearchParams({ id });
+
+  const modelName = (id: string) => models.find((m) => m.id === id)?.name || id;
+  const providerName = (id: string) => {
+    const model = models.find((m) => m.id === id);
+    return providers.find((p) => p.id === model?.provider_id)?.name || model?.provider_id || '—';
+  };
+
+  const results = selected ? resultsByEvalId[selected.id] : undefined;
+  const resultsStatus = selected ? resultsStatusByEvalId[selected.id] : undefined;
+  const resultsError = selected ? resultsErrorByEvalId[selected.id] : undefined;
+
+  const StatusBadge = ({ status }: { status: EvaluationStatusValue }) => (
+    <span className={`${styles.status} ${styles[`status--${statusVariant(status)}`]}`}>
+      {status === 'running' && <span className={styles['live-dot']} />}
+      {status}
+    </span>
+  );
 
   return (
     <div className="page-enter pg-shell">
-      <div className={styles['datasets__header']}>
+      <div className={styles['history__header']}>
         <div>
-          <p className={styles['datasets__header-eyebrow']}>Datasets</p>
-          <h1>Test Suite Library</h1>
-          <p className={styles['datasets__header-sub']}>
-            Browse every benchmark available for evaluations, independent of any single wizard run.
-          </p>
+          <p className={styles['history__header-eyebrow']}>Activity</p>
+          <h1>History</h1>
+          <p className={styles['history__header-sub']}>All past and in-progress evaluations</p>
         </div>
-        <div className={styles['datasets__header-meta']}>
-          <span className={styles['datasets__header-count']}>
-            <Database size={13} /> {items.length} suites available
-          </span>
-          <button className={styles['datasets__refresh-btn']} onClick={() => dispatch(fetchBenchmarks())}>
-            <RefreshCw size={14} /> Refresh
-          </button>
+        <div className={styles['history__header-meta']}>
+          <HistoryIcon size={13} />
+          {list.length} evaluation{list.length === 1 ? '' : 's'} tracked
         </div>
       </div>
 
-      <div className={styles['datasets__toolbar']}>
-        <div className={styles['datasets__search']}>
-          <Search size={16} />
-          <input placeholder="Search datasets…" value={search} onChange={(e) => setSearch(e.target.value)} />
-        </div>
-        <div className={styles['datasets__filters']}>
-          <span className={styles['datasets__toolbar-label']}>
-            <ListFilter size={11} />
-          </span>
-          {types.map((t) => (
-            <button
-              key={t}
-              className={`${styles['datasets__filter-pill']} ${typeFilter === t ? styles['datasets__filter-pill--on'] : ''}`}
-              onClick={() => setTypeFilter(t)}
-            >
-              {t}
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* List + detail panels scroll independently, so pg-body itself doesn't
+          scroll here — .shell fills it instead. */}
+      <div className={`pg-body ${styles['pg-body-fixed']}`}>
+        <div className={styles.shell}>
+          {/* ---------- Sidebar list ---------- */}
+          <div className={styles.sidebar}>
+            <div className={styles.filters}>
+              <div className={styles['filter-toolbar']}>
+                <span className={styles['filter-toolbar__label']}>Filters</span>
+                <div className={styles['filter-toolbar__divider']} />
+                <button
+                  type="button"
+                  className={`${styles['filter-toolbar__btn']} ${activeFilter === 'search' ? styles.on : ''}`}
+                  onClick={() => toggleFilter('search')}
+                  title="Search"
+                >
+                  <Search size={15} />
+                  {search && <span className={styles['filter-toolbar__dot']} />}
+                </button>
+                <button
+                  type="button"
+                  className={`${styles['filter-toolbar__btn']} ${activeFilter === 'type' ? styles.on : ''}`}
+                  onClick={() => toggleFilter('type')}
+                  title="Filter by type"
+                >
+                  <SlidersHorizontal size={15} />
+                  {typeFilter !== 'All' && <span className={styles['filter-toolbar__dot']} />}
+                </button>
+                <button
+                  type="button"
+                  className={`${styles['filter-toolbar__btn']} ${activeFilter === 'date' ? styles.on : ''}`}
+                  onClick={() => toggleFilter('date')}
+                  title="Filter by date"
+                >
+                  <CalendarDays size={15} />
+                  {dateFilter !== 'all' && <span className={styles['filter-toolbar__dot']} />}
+                </button>
 
-      <div className="pg-body">
-        {status === 'failed' && (
-          <div className={`${styles['datasets__state']} ${styles['datasets__state--error']}`}>
-            <AlertTriangle size={28} />
-            <div>{error || 'Failed to load datasets.'}</div>
-            <button className={styles['datasets__refresh-btn']} onClick={() => dispatch(fetchBenchmarks())}>
-              Retry
-            </button>
+                <div className={styles['filter-toolbar__summary']}>
+                  {search && (
+                    <span className={styles['filter-chip']}>
+                      <span>“{search}”</span>
+                      <X size={11} onClick={() => setSearch('')} />
+                    </span>
+                  )}
+                  {typeFilter !== 'All' && (
+                    <span className={styles['filter-chip']}>
+                      <span>{TYPE_LABEL[typeFilter]}</span>
+                      <X size={11} onClick={() => setTypeFilter('All')} />
+                    </span>
+                  )}
+                  {dateFilter !== 'all' && (
+                    <span className={styles['filter-chip']}>
+                      <span>{DATE_LABEL[dateFilter]}</span>
+                      <X size={11} onClick={() => setDateFilter('all')} />
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className={`${styles['filter-panel']} ${activeFilter ? styles['filter-panel--open'] : ''}`}>
+                {activeFilter === 'search' && (
+                  <div>
+                    <div className={styles['panel-search']}>
+                      <Search size={16} />
+                      <input
+                        ref={searchInputRef}
+                        placeholder="Search evaluations…"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                )}
+                {activeFilter === 'type' && (
+                  <div>
+                    <div className={styles['panel-pills']}>
+                      {['All', 'model', 'agent', 'rag'].map((t) => (
+                        <button
+                          key={t}
+                          className={`${styles['panel-pill']} ${typeFilter === t ? styles.on : ''}`}
+                          onClick={() => {
+                            setTypeFilter(t);
+                            setActiveFilter(null);
+                          }}
+                        >
+                          {t === 'All' ? 'All' : TYPE_LABEL[t]}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {activeFilter === 'date' && (
+                  <div>
+                    <div className={styles['panel-pills']}>
+                      {Object.entries(DATE_LABEL).map(([value, label]) => (
+                        <button
+                          key={value}
+                          className={`${styles['panel-pill']} ${dateFilter === value ? styles.on : ''}`}
+                          onClick={() => {
+                            setDateFilter(value);
+                            setActiveFilter(null);
+                          }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {listStatus === 'failed' && list.length === 0 && (
+                <div className={styles.empty}>{listError || 'Failed to load evaluations.'}</div>
+              )}
+              {listStatus !== 'loading' && filtered.length === 0 && list.length > 0 && (
+                <div className={styles.empty}>No evaluations match your filters.</div>
+              )}
+            </div>
+
+            <div className={styles.rows}>
+              {listStatus === 'loading' && list.length === 0 && <SkeletonListRows count={5} />}
+              {filtered.map((e) => {
+                const Icon = TYPE_ICON[e.eval_type] || Sparkles;
+                const isSelected = selected?.id === e.id;
+                return (
+                  <div
+                    key={e.id}
+                    className={`${styles.row} ${isSelected ? styles.selected : ''} ${e.status === 'running' ? styles['row--running'] : ''}`}
+                    onClick={() => selectRow(e.id)}
+                  >
+                    <div className={styles.row__top}>
+                      <div className={styles.row__icon}>
+                        <Icon size={16} />
+                      </div>
+                      <div className={styles.row__name}>{e.name}</div>
+                    </div>
+                    <div className={styles.row__badges}>
+                      <span className={styles['type-tag']}>{TYPE_LABEL[e.eval_type] || e.eval_type}</span>
+                      <StatusBadge status={e.status} />
+                    </div>
+                    <div className={styles.row__meta}>{new Date(e.created_at).toLocaleDateString()}</div>
+                    <div className={styles.row__stats}>
+                      <span>{e.top_model ? `🏆 ${e.top_model}` : '—'}</span>
+                      <span>{e.top_score != null ? `${e.top_score}%` : '—'}</span>
+                      <span>{e.model_ids.length} models</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
-        )}
 
-        {status === 'succeeded' && filtered.length === 0 && (
-          <div className={styles['datasets__state']}>
-            <Layers size={28} />
-            <div>No datasets match your search.</div>
-          </div>
-        )}
+          {/* ---------- Detail panel ---------- */}
+          <div className={styles.detail}>
+            {!selected ? (
+              <div className={styles['detail-empty']}>Select an evaluation to see its details.</div>
+            ) : (
+              <>
+                <div className={styles['detail-hdr']}>
+                  <div>
+                    <div className={styles['detail-hdr__badges']}>
+                      <span className={styles['type-tag']}>{TYPE_LABEL[selected.eval_type] || selected.eval_type}</span>
+                      <StatusBadge status={selected.status} />
+                    </div>
+                    <h2 className={styles['detail-hdr__name']}>{selected.name}</h2>
+                    <div className={styles['detail-hdr__date']}>Created {new Date(selected.created_at).toLocaleString()}</div>
+                  </div>
+                </div>
 
-        <div className={styles['datasets__grid']}>
-          {status === 'loading' && <SkeletonCards count={6} />}
-          {status !== 'loading' &&
-            filtered.map((b) => {
-              // Defensive per spec §3.2 / §5 — tasks & required_capabilities are
-              // normalized to [] in benchmarksApi.list(), but reads still fall
-              // back defensively here in case a consumer bypasses that layer.
-              const tasks = b.tasks ?? [];
-              const caps = b.required_capabilities ?? [];
-              return (
-                <div className={styles['datasets__card']} key={b.name}>
-                  <div className={styles['datasets__card-hdr']}>
+                <div className={styles['summary-cards']}>
+                  <div className={styles['summary-card']}>
+                    <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--win']}`}>
+                      <Award size={16} />
+                    </span>
                     <div>
-                      <div className={styles['datasets__card-name']}>{b.name}</div>
-                      <span className={styles['datasets__type-tag']}>{b.type}</span>
+                      <div className={styles['summary-card__label']}>Winner</div>
+                      <div className={styles['summary-card__val']}>
+                        {selected.top_model || '—'}
+                        {selected.top_score != null ? ` · ${selected.top_score}%` : ''}
+                      </div>
                     </div>
-                    <div className={styles['datasets__card-count']}>
-                      <div className={styles['datasets__card-count-val']}>{b.task_count.toLocaleString()}</div>
-                      <div className={styles['datasets__card-count-label']}>tasks</div>
+                  </div>
+                  <div className={styles['summary-card']}>
+                    <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--info']}`}>
+                      <ListChecks size={16} />
+                    </span>
+                    <div>
+                      <div className={styles['summary-card__label']}>Questions / Models</div>
+                      <div className={styles['summary-card__val']}>
+                        {selected.total_questions.toLocaleString()} &middot; {selected.model_ids.length} models
+                      </div>
                     </div>
                   </div>
-
-                  <div className={styles['datasets__desc']}>{b.description}</div>
-
-                  <div className={styles['datasets__stat-row']}>
-                    <span>{b.task_count.toLocaleString()} tasks</span>
-                    <span>{caps.length} capabilities</span>
-                    <span>{b.huggingface_dataset.split('/')[0]}</span>
+                  <div className={styles['summary-card']}>
+                    <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--status']}`}>
+                      <Clock size={16} />
+                    </span>
+                    <div>
+                      <div className={styles['summary-card__label']}>Status</div>
+                      <div className={styles['summary-card__val']}>
+                        {selected.status}
+                        {selected.completed_at ? ` · ${new Date(selected.completed_at).toLocaleDateString()}` : ''}
+                      </div>
+                    </div>
                   </div>
+                </div>
 
-                  <div className={styles['datasets__pill-row']}>
-                    {caps.map((c) => {
-                      const color = hashColor(c);
-                      return (
-                        <span key={c} className={styles['datasets__pill']} style={{ background: color.bg, color: color.fg }}>
-                          {c}
-                        </span>
-                      );
-                    })}
-                  </div>
-
-                  <div className={styles['datasets__foot']}>
-                    {tasks.length > 0 ? (
-                      <button className={styles['datasets__subgroups-btn']} onClick={() => setSubgroupsFor(b)}>
-                        View subgroups
-                      </button>
-                    ) : (
-                      <span className={styles['datasets__empty-foot-slot']} />
+                {selected.status === 'completed' ? (
+                  <>
+                    {resultsStatus === 'loading' && (
+                      <div className={styles.empty}>
+                        <Loader2 size={16} className={styles.spin} /> Loading results…
+                      </div>
                     )}
-                    <a
-                      className={styles['datasets__source-link']}
-                      href={`https://huggingface.co/datasets/${b.huggingface_dataset}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Source <ExternalLink size={12} />
-                    </a>
+                    {resultsStatus === 'failed' && <div className={styles.empty}>{resultsError}</div>}
+                    {results && (
+                      <div className={styles.results}>
+                        <table className={styles['results-table']}>
+                          <thead>
+                            <tr>
+                              <th>Rank</th>
+                              <th>Model</th>
+                              <th>Provider</th>
+                              <th>Score</th>
+                              <th>Accuracy</th>
+                              <th>Passed</th>
+                              <th>Failed</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {results.results.map((r) => (
+                              <tr key={r.model_id} className={r.rank === 1 ? styles.winner : ''}>
+                                <td className={styles['cell-rank']}>
+                                  {r.rank === 1 ? '🏆 ' : ''}
+                                  {r.rank}
+                                </td>
+                                <td className={styles['cell-model']}>{modelName(r.model_id)}</td>
+                                <td className={styles['cell-provider']}>{providerName(r.model_id)}</td>
+                                <td className={styles['cell-num']}>{r.score}%</td>
+                                <td className={`${styles['cell-num']} ${styles['cell-num--muted']}`}>{r.accuracy}%</td>
+                                <td className={styles['cell-pass']}>{r.passed_tests}</td>
+                                <td className={styles['cell-fail']}>{r.failed_tests}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className={styles['status-message']}>
+                    {selected.status === 'running' && 'This evaluation is still running — results will appear once it completes.'}
+                    {selected.status === 'pending' && 'This evaluation hasn\u2019t started yet.'}
+                    {selected.status === 'failed' && 'This evaluation failed to complete.'}
+                    {selected.status === 'canceled' && 'This evaluation was canceled.'}
                   </div>
-                </div>
-              );
-            })}
-        </div>
-      </div>
-
-      {subgroupsFor && (
-        <div className={styles['datasets__modal-overlay']} onClick={() => setSubgroupsFor(null)}>
-          <div className={styles['datasets__modal']} onClick={(e) => e.stopPropagation()}>
-            <div className={styles['datasets__modal-hdr']}>
-              <span>{subgroupsFor.name} — subgroups</span>
-              <button className={styles['datasets__modal-close']} onClick={() => setSubgroupsFor(null)}>
-                <X size={13} /> Close
-              </button>
-            </div>
-            <div className={styles['datasets__modal-body']}>
-              {(subgroupsFor.tasks ?? []).map((t) => (
-                <div key={t.value} className={styles['datasets__modal-row']}>
-                  <span className={styles['datasets__modal-row-name']}>{t.name}</span>
-                  <code className={styles['datasets__modal-row-code']}>{t.value}</code>
-                </div>
-              ))}
-            </div>
+                )}
+              </>
+            )}
           </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -207,17 +407,13 @@ export default function Datasets() {
 
 
 
-
-
-
-
-
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
-// Datasets (Test Suite Library) — matches the Run Console / Dashboard /
-// Providers / Model Catalog design system: ink/paper palette, ultramarine
-// signal accent, mono instrument labels, hover-lift cards.
+// History — matches the Run Console / Dashboard / Providers / Model Catalog /
+// Datasets design system: ink/paper palette, ultramarine signal accent, mono
+// instrument labels, hover-lift, mono numerals. Master–detail split shell is
+// self-contained here (no dependency on global .split-shell*).
 // ===========================================================================
 
 $ink:      #14161B;
@@ -236,6 +432,7 @@ $amber:    #E08600;
 $amber-wash: #FDF3E3;
 $danger:   #DC2626;
 $danger-wash: #FDECEC;
+$ink-wash: #EEF0F2;
 
 $mono:    $font-mono;
 $sans:    $font-body;
@@ -252,8 +449,7 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
   text-transform: uppercase;
 }
 
-.datasets {
-  // ---- header ---------------------------------------------------------------
+.history {
   &__header {
     flex-shrink: 0;
     display: flex;
@@ -261,7 +457,7 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
     justify-content: space-between;
     gap: 1rem;
     padding: 24px 32px 20px;
-    margin-bottom: 20px;
+    margin-bottom: 0;
     border-bottom: 1px solid $line;
     background: $card;
 
@@ -296,18 +492,10 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
     margin-top: 4px;
     font-size: 0.84375rem;
     color: $ink-2;
-    max-width: 52ch;
   }
 
   &__header-meta {
     flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 3px;
-  }
-
-  &__header-count {
     display: inline-flex;
     align-items: center;
     gap: 7px;
@@ -322,406 +510,511 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
     text-transform: uppercase;
     color: $ink-2;
     white-space: nowrap;
+    margin-bottom: 3px;
   }
+}
 
-  &__refresh-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 13px;
-    border: 1px solid $line;
-    border-radius: 999px;
+@property --angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes history-rotate-angle {
+  to { --angle: 360deg; }
+}
+@keyframes history-live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.3); }
+}
+@keyframes history-spin { to { transform: rotate(360deg); } }
+
+// Fixed-shell override: list + detail scroll independently, so pg-body
+// itself must not scroll — plain flex:1/min-height:0 pass-through.
+.pg-body-fixed {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 32px 24px;
+}
+
+// ---- self-contained split shell -------------------------------------------
+.shell {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 16px;
+}
+
+.sidebar {
+  flex-shrink: 0;
+  width: 380px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 16px;
+  background: $card;
+  border: 1px solid $line;
+  border-radius: 16px;
+  box-shadow: $soft;
+}
+
+.detail {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 24px;
+  background: $card;
+  border: 1px solid $line;
+  border-radius: 16px;
+  box-shadow: $soft;
+}
+
+.filters { flex-shrink: 0; }
+
+// ---- filter toolbar --------------------------------------------------------
+.filter-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  background: $paper;
+  border: 1px solid $line;
+  border-radius: 12px;
+}
+
+.filter-toolbar__label {
+  flex-shrink: 0;
+  @extend %micro;
+  font-size: 0.625rem;
+  color: $ink-3;
+  padding-left: 4px;
+}
+
+.filter-toolbar__divider {
+  flex-shrink: 0;
+  width: 1px;
+  height: 16px;
+  background: $line;
+}
+
+.filter-toolbar__btn {
+  position: relative;
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: $ink-2;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+
+  &:hover { background: $card; color: $signal; box-shadow: $soft; }
+
+  &.on {
+    border-color: $signal;
     background: $card;
-    color: $ink-2;
-    font-family: $sans;
-    font-size: 0.78125rem;
-    font-weight: 650;
-    cursor: pointer;
-    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
-
-    &:hover { border-color: $ink-3; color: $ink; background: $paper; }
-  }
-
-  // ---- toolbar ----------------------------------------------------------------
-  &__toolbar {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 14px;
-    padding: 14px 32px;
-    background: $card;
-    border-bottom: 1px solid $line;
-    flex-wrap: wrap;
-  }
-
-  &__search {
-    position: relative;
-    flex: 1;
-    max-width: 340px;
-    min-width: 200px;
-
-    svg {
-      position: absolute;
-      top: 50%;
-      left: 13px;
-      transform: translateY(-50%);
-      color: $ink-3;
-      pointer-events: none;
-    }
-
-    input {
-      width: 100%;
-      border: 1.5px solid $line;
-      border-radius: 10px;
-      padding: 9px 12px 9px 38px;
-      font-size: 0.84375rem;
-      font-family: $sans;
-      color: $ink;
-      background: $paper;
-      transition: border-color 0.15s ease, background 0.15s ease;
-
-      &::placeholder { color: $ink-3; }
-      &:focus {
-        outline: none;
-        border-color: $signal;
-        background: $card;
-      }
-    }
-  }
-
-  &__toolbar-label {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 5px 8px 5px 9px;
-    color: $ink-3;
-  }
-
-  &__filters {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 4px;
-    background: $paper;
-    border: 1px solid $line;
-    border-radius: 999px;
-    flex-wrap: wrap;
-  }
-
-  &__filter-pill {
-    padding: 6px 13px;
-    border: 0;
-    border-radius: 999px;
-    background: transparent;
-    color: $ink-2;
-    font-size: 0.78125rem;
-    font-weight: 650;
-    cursor: pointer;
-    transition: all 0.15s ease;
-
-    &:hover { color: $ink; }
-
-    &--on {
-      background: $card;
-      color: $signal;
-      box-shadow: $soft;
-    }
-  }
-
-  // ---- state banners (error / empty) -------------------------------------------
-  &__state {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    padding: 48px 24px;
-    margin-bottom: 16px;
-    border: 1px dashed $line;
-    border-radius: 16px;
-    background: $paper;
-    color: $ink-2;
-    font-size: 0.875rem;
-    text-align: center;
-
-    svg { color: $ink-3; }
-  }
-
-  &__state--error svg { color: $danger; }
-
-  // ---- card grid ----------------------------------------------------------------
-  &__grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
-    gap: 12px;
-  }
-
-  &__card {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    padding: 18px 19px;
-    border: 1.5px solid $line;
-    border-radius: 16px;
-    background: $card;
-    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
-
-    &:hover {
-      border-color: $ink-3;
-      box-shadow: $lift;
-      transform: translateY(-2px);
-    }
-  }
-
-  &__card-hdr {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  &__card-name {
-    font-family: $display;
-    font-size: 0.9375rem;
-    font-weight: 700;
-    color: $ink;
-    line-height: 1.3;
-  }
-
-  &__type-tag {
-    display: inline-flex;
-    margin-top: 7px;
-    font-family: $mono;
-    font-size: 0.625rem;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: $amber;
-    background: $amber-wash;
-    border-radius: 6px;
-    padding: 3px 8px;
-  }
-
-  &__card-count {
-    flex-shrink: 0;
-    text-align: right;
-  }
-
-  &__card-count-val {
-    font-family: $mono;
-    font-size: 1.5rem;
-    font-weight: 700;
-    color: $ink;
-    letter-spacing: -0.02em;
-    line-height: 1;
-  }
-
-  &__card-count-label {
-    font-size: 0.65625rem;
-    font-weight: 650;
-    color: $ink-3;
-    margin-top: 3px;
-  }
-
-  &__desc {
-    margin-top: 11px;
-    font-size: 0.8125rem;
-    color: $ink-2;
-    line-height: 1.5;
-  }
-
-  &__stat-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 14px;
-    margin-top: 13px;
-    padding-top: 12px;
-    border-top: 1px solid $line-2;
-    font-family: $mono;
-    font-size: 0.71875rem;
-    color: $ink-2;
-  }
-
-  &__pill-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-top: 12px;
-  }
-
-  &__pill {
-    font-family: $mono;
-    font-size: 0.65625rem;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-    border-radius: 6px;
-    padding: 3px 8px;
-    white-space: nowrap;
-  }
-
-  &__foot {
-    flex: 1;
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: 10px;
-    margin-top: 14px;
-    padding-top: 13px;
-    border-top: 1px solid $line-2;
-  }
-
-  &__subgroups-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 11px;
-    border: 1px solid $line;
-    border-radius: 8px;
-    background: $card;
-    color: $ink-2;
-    font-family: $sans;
-    font-size: 0.75rem;
-    font-weight: 650;
-    cursor: pointer;
-    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
-
-    &:hover { border-color: $ink-3; color: $ink; background: $paper; }
-  }
-
-  &__source-link {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-family: $mono;
-    font-size: 0.75rem;
-    font-weight: 650;
     color: $signal;
-    text-decoration: none;
-    transition: color 0.15s ease;
-
-    &:hover { color: $signal-2; text-decoration: underline; }
+    box-shadow: 0 0 0 3px $wash;
   }
+}
 
-  &__empty-foot-slot {
-    display: inline-block;
-  }
+.filter-toolbar__dot {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: $signal;
+  border: 1.5px solid $paper;
+}
 
-  // ---- subgroups modal ----------------------------------------------------------
-  &__modal-overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 50;
-    background: rgba(20, 22, 27, 0.5);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-    animation: datasets-fade-in 0.16s ease-out;
-  }
+.filter-toolbar__summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+  overflow: hidden;
+}
 
-  &__modal {
-    width: min(480px, 100%);
-    max-height: 80vh;
-    display: flex;
-    flex-direction: column;
-    background: $card;
-    border-radius: 18px;
-    border: 1px solid $line;
-    box-shadow: 0 24px 60px -20px rgba(20, 22, 27, 0.4);
-    overflow: hidden;
-    animation: datasets-modal-in 0.2s cubic-bezier(0.22, 0.72, 0.16, 1);
-  }
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: $mono;
+  font-size: 0.65625rem;
+  font-weight: 700;
+  color: $signal;
+  background: $wash;
+  border: 1px solid rgba($signal, 0.18);
+  border-radius: 999px;
+  padding: 4px 8px;
+  white-space: nowrap;
+  max-width: 140px;
 
-  &__modal-hdr {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 16px 18px;
-    border-bottom: 1px solid $line;
-    background: $paper;
+  span { overflow: hidden; text-overflow: ellipsis; }
 
-    span {
-      font-family: $display;
-      font-size: 0.9375rem;
-      font-weight: 700;
-      color: $ink;
-    }
-  }
-
-  &__modal-close {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 11px;
-    border: 1px solid $line;
-    border-radius: 8px;
-    background: $card;
-    color: $ink-2;
-    font-family: $sans;
-    font-size: 0.75rem;
-    font-weight: 650;
+  svg {
     cursor: pointer;
-    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
-
-    &:hover { border-color: $ink-3; color: $ink; }
+    flex-shrink: 0;
+    opacity: 0.6;
+    transition: opacity 0.15s ease;
+    &:hover { opacity: 1; }
   }
+}
 
-  &__modal-body {
-    flex: 1;
-    overflow-y: auto;
-    padding: 12px 14px 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
+// ---- collapsible filter panel ----------------------------------------------
+.filter-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 0.18s ease, opacity 0.15s ease, margin-bottom 0.18s ease;
 
-  &__modal-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 10px 12px;
-    border: 1px solid $line;
-    border-radius: 10px;
+  > * {
+    overflow: hidden;
+    min-height: 0;
     background: $paper;
-  }
-
-  &__modal-row-name {
-    font-size: 0.8125rem;
-    font-weight: 600;
-    color: $ink;
-  }
-
-  &__modal-row-code {
-    font-family: $mono;
-    font-size: 0.71875rem;
-    color: $ink-2;
-    background: $card;
     border: 1px solid $line;
-    border-radius: 6px;
-    padding: 2px 7px;
+    border-radius: 12px;
+    padding: 10px;
+  }
+
+  &--open {
+    grid-template-rows: 1fr;
+    opacity: 1;
+    margin-bottom: 8px;
+  }
+}
+
+// ---- filter panel inner controls (self-contained search + pills) -----------
+.panel-search {
+  position: relative;
+
+  svg {
+    position: absolute;
+    top: 50%;
+    left: 12px;
+    transform: translateY(-50%);
+    color: $ink-3;
+    pointer-events: none;
+  }
+
+  input {
+    width: 100%;
+    border: 1.5px solid $line;
+    border-radius: 9px;
+    padding: 8px 11px 8px 36px;
+    font-size: 0.8125rem;
+    font-family: $sans;
+    color: $ink;
+    background: $card;
+
+    &::placeholder { color: $ink-3; }
+    &:focus { outline: none; border-color: $signal; box-shadow: 0 0 0 3px $wash; }
+  }
+}
+
+.panel-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.panel-pill {
+  padding: 6px 12px;
+  border: 1px solid $line;
+  border-radius: 999px;
+  background: $card;
+  color: $ink-2;
+  font-size: 0.75rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition: all 0.14s ease;
+
+  &:hover { border-color: $ink-3; color: $ink; }
+
+  &.on {
+    border-color: $signal;
+    background: $signal;
+    color: #fff;
+  }
+}
+
+.empty {
+  padding: 24px;
+  text-align: center;
+  color: $ink-3;
+  font-size: 0.8125rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+}
+
+// ---- evaluation list rows --------------------------------------------------
+.rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+  padding-right: 2px;
+}
+
+.row {
+  position: relative;
+  border: 1.5px solid $line;
+  border-radius: 14px;
+  padding: 14px;
+  cursor: pointer;
+  background: $card;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease, background 0.15s ease;
+}
+.row:hover { border-color: $ink-3; box-shadow: $soft; transform: translateY(-1px); }
+.row.selected { border-color: $signal; background: $wash; box-shadow: 0 0 0 1px $signal inset; }
+
+// Running-state: a light traveling around the border via rotating conic angle.
+.row--running {
+  --angle: 0deg;
+  border: 1.5px solid transparent;
+  background:
+    linear-gradient($card, $card) padding-box,
+    conic-gradient(from var(--angle), $line 0%, $signal 8%, $line 16%) border-box;
+  animation: history-rotate-angle 2.4s linear infinite;
+}
+.row--running.selected {
+  background:
+    linear-gradient($wash, $wash) padding-box,
+    conic-gradient(from var(--angle), $line 0%, $signal 8%, $line 16%) border-box;
+}
+
+.row__top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.row__icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: $wash;
+  color: $signal;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.row__name {
+  font-family: $display;
+  font-weight: 700;
+  font-size: 0.875rem;
+  color: $ink;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.row__badges { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+.row__meta { font-family: $mono; font-size: 0.6875rem; color: $ink-3; margin-bottom: 8px; }
+.row__stats {
+  display: flex;
+  gap: 12px;
+  font-family: $mono;
+  font-size: 0.6875rem;
+  color: $ink-2;
+  flex-wrap: wrap;
+}
+
+// ---- type tag + status badge (shared visual grammar) -----------------------
+.type-tag {
+  display: inline-flex;
+  align-items: center;
+  font-family: $mono;
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: $signal;
+  background: $wash;
+  border-radius: 6px;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 9px;
+  border-radius: 999px;
+  font-family: $mono;
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+
+  &::before { content: ''; width: 5px; height: 5px; border-radius: 50%; }
+
+  &--completed { color: $ok; background: $ok-wash; &::before { background: $ok; } }
+  &--running   { color: $signal; background: $wash; &::before { display: none; } }
+  &--pending   { color: $amber; background: $amber-wash; &::before { background: $amber; } }
+  &--failed,
+  &--canceled  { color: $ink-3; background: $ink-wash; &::before { background: $ink-3; } }
+}
+
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  display: inline-block;
+  animation: history-live-pulse 1.4s ease-in-out infinite;
+}
+
+// ---- detail panel ----------------------------------------------------------
+.detail-empty {
+  padding: 80px 24px;
+  text-align: center;
+  color: $ink-3;
+  font-size: 0.875rem;
+}
+
+.detail-hdr {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.detail-hdr__badges { display: flex; gap: 8px; margin-bottom: 12px; }
+.detail-hdr__name {
+  font-family: $display;
+  font-size: 1.375rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: $ink;
+}
+.detail-hdr__date { font-family: $mono; font-size: 0.71875rem; color: $ink-3; margin-top: 6px; }
+
+.summary-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.summary-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 15px 16px;
+  background: $paper;
+  border: 1px solid $line;
+  border-radius: 14px;
+}
+.summary-card__icon {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  background: $card;
+  border: 1px solid $line;
+
+  &--win { color: $amber; }
+  &--info { color: $signal; }
+  &--status { color: $ok; }
+}
+.summary-card__label {
+  @extend %micro;
+  font-size: 0.5625rem;
+  color: $ink-3;
+}
+.summary-card__val {
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: $ink;
+  margin-top: 3px;
+}
+
+// ---- results table ---------------------------------------------------------
+.results {
+  border: 1px solid $line;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.results-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84375rem;
+
+  thead th {
+    text-align: left;
+    background: $paper;
+    border-bottom: 1px solid $line;
+    @extend %micro;
+    font-size: 0.5625rem;
+    color: $ink-3;
+    padding: 11px 14px;
     white-space: nowrap;
   }
+
+  tbody tr {
+    border-bottom: 1px solid $line-2;
+    transition: background 0.13s ease;
+
+    &:last-child { border-bottom: 0; }
+    &:hover { background: $paper; }
+  }
+
+  tbody tr.winner {
+    background: rgba($amber, 0.05);
+    &:hover { background: rgba($amber, 0.09); }
+  }
+
+  tbody td {
+    padding: 12px 14px;
+    color: $ink;
+  }
 }
 
-@keyframes datasets-fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
+.cell-rank { font-family: $mono; font-weight: 700; color: $ink; }
+.cell-model { font-family: $display; font-weight: 700; color: $ink; }
+.cell-provider { color: $ink-2; }
+.cell-num { font-family: $mono; font-size: 0.8125rem; font-weight: 700; color: $ink; }
+.cell-num--muted { font-weight: 500; color: $ink-2; }
+.cell-pass { font-family: $mono; font-size: 0.8125rem; font-weight: 700; color: $ok; }
+.cell-fail { font-family: $mono; font-size: 0.8125rem; font-weight: 700; color: $danger; }
+
+.status-message {
+  padding: 40px;
+  text-align: center;
+  background: $paper;
+  border: 1px dashed $line;
+  border-radius: 14px;
+  color: $ink-2;
+  font-size: 0.875rem;
 }
 
-@keyframes datasets-modal-in {
-  from { opacity: 0; transform: translateY(8px) scale(0.98); }
-  to { opacity: 1; transform: none; }
+.spin { animation: history-spin 0.8s linear infinite; }
+
+@media (max-width: 900px) {
+  .shell { flex-direction: column; }
+  .sidebar { width: 100%; }
+  .summary-cards { grid-template-columns: 1fr; }
+  // Once stacked, fall back to one normal scrolling column.
+  .pg-body-fixed { overflow-y: auto; }
+  .sidebar, .detail { overflow-y: visible; min-height: 0; }
+  .rows { overflow-y: visible; }
 }
 
-@media (max-width: 768px) {
-  .datasets__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
-  .datasets__toolbar { padding: 12px 18px; }
-  .datasets__grid { grid-template-columns: 1fr; }
+@media (max-width: 640px) {
+  .history__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
+  .pg-body-fixed { padding: 16px 18px 22px; }
 }
