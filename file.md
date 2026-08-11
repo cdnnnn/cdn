@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  Search, Copy, Trash2, FileBarChart, BrainCircuit, Bot, Layers, Loader2,
+  Search, Copy, Trash2, FileBarChart, Sparkles, Bot, Layers, Loader2,
   Award, ListChecks, Clock, History as HistoryIcon,
 } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
@@ -12,7 +12,7 @@ import type { EvaluationListItem, EvaluationStatusValue } from '../../types';
 import { SkeletonListRows } from '../common/Skeleton';
 import styles from './History.module.scss';
 
-const TYPE_ICON: Record<string, typeof BrainCircuit> = { model: BrainCircuit, agent: Bot, rag: Layers };
+const TYPE_ICON: Record<string, typeof Sparkles> = { model: Sparkles, agent: Bot, rag: Layers };
 const TYPE_LABEL: Record<string, string> = { model: 'AI Model', agent: 'Agent', rag: 'RAG' };
 
 function statusBadgeClass(status: EvaluationStatusValue): string {
@@ -144,7 +144,7 @@ export default function History() {
             <div className={styles.rows}>
               {listStatus === 'loading' && list.length === 0 && <SkeletonListRows count={5} />}
               {filtered.map((e) => {
-                const Icon = TYPE_ICON[e.eval_type] || BrainCircuit;
+                const Icon = TYPE_ICON[e.eval_type] || Sparkles;
                 const isSelected = selected?.id === e.id;
                 return (
                   <div
