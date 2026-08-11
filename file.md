@@ -262,7 +262,12 @@ export default function Providers() {
 
 
 
-//Providers.module.scss
+
+
+
+
+
+//providers.module.scss
 @use '../../styles/_variables' as *;
 
 .providers {
@@ -567,6 +572,11 @@ export default function Providers() {
 
 
 
+
+
+
+
+
 //Modelcatalog.tsx
 import { useEffect, useMemo, useState } from 'react';
 import { Search, Boxes, ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ListFilter } from 'lucide-react';
@@ -844,6 +854,11 @@ export default function ModelCatalog() {
     </div>
   );
 }
+
+
+
+
+
 
 
 
