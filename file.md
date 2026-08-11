@@ -1,4 +1,3 @@
-//History.tsx
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -134,6 +133,8 @@ export default function History() {
           <div className={`split-shell__sidebar ${styles.sidebar}`}>
             <div className={styles.filters}>
               <div className={styles['filter-toolbar']}>
+                <span className={styles['filter-toolbar__label']}>Filters</span>
+                <div className={styles['filter-toolbar__divider']} />
                 <button
                   type="button"
                   className={`${styles['filter-toolbar__btn']} ${activeFilter === 'search' ? styles.on : ''}`}
@@ -346,8 +347,6 @@ export default function History() {
 
 
 
-
-//History.module.scss
 @use '../../styles/_variables' as *;
 
 .history {
@@ -448,31 +447,53 @@ export default function History() {
 .filter-toolbar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  padding: 6px 8px;
   margin-bottom: 8px;
+  background: $surface-alt;
+  border: 1px solid $border-light;
+  border-radius: 12px;
+}
+
+.filter-toolbar__label {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: $text-muted;
+  padding-left: 4px;
+}
+
+.filter-toolbar__divider {
+  flex-shrink: 0;
+  width: 1px;
+  height: 16px;
+  background: $border;
 }
 
 .filter-toolbar__btn {
   position: relative;
   flex-shrink: 0;
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 9px;
-  border: 1px solid $border;
-  background: $surface;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
   color: $text-secondary;
   cursor: pointer;
   transition: all .15s;
 
-  &:hover { border-color: $indigo-light; color: $indigo; }
+  &:hover { background: $surface; color: $indigo; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
 
   &.on {
     border-color: $indigo;
-    background: $indigo-pale;
+    background: $surface;
     color: $indigo;
+    box-shadow: 0 1px 3px rgba(20,40,160,.12);
   }
 }
 
@@ -484,7 +505,7 @@ export default function History() {
   height: 7px;
   border-radius: 50%;
   background: $indigo;
-  border: 1.5px solid $surface;
+  border: 1.5px solid $surface-alt;
 }
 
 .filter-toolbar__summary {
@@ -504,6 +525,7 @@ export default function History() {
   font-weight: 600;
   color: $indigo;
   background: $indigo-pale;
+  border: 1px solid rgba(20,40,160,.1);
   border-radius: 999px;
   padding: 4px 8px;
   white-space: nowrap;
@@ -514,7 +536,8 @@ export default function History() {
   svg {
     cursor: pointer;
     flex-shrink: 0;
-    opacity: .7;
+    opacity: .6;
+    transition: opacity .15s;
     &:hover { opacity: 1; }
   }
 }
@@ -525,7 +548,14 @@ export default function History() {
   opacity: 0;
   transition: grid-template-rows .18s ease, opacity .15s ease, margin-bottom .18s ease;
 
-  > * { overflow: hidden; min-height: 0; }
+  > * {
+    overflow: hidden;
+    min-height: 0;
+    background: $surface-alt;
+    border: 1px solid $border-light;
+    border-radius: 12px;
+    padding: 10px;
+  }
 
   &--open {
     grid-template-rows: 1fr;
