@@ -206,10 +206,10 @@ export default function Comparison() {
           </div>
         )}
 
-        {compareStatus === 'loading' && <ComparisonSkeleton />}
+        {compareStatus === 'loading' && <div style={{ marginTop: 20 }}><ComparisonSkeleton /></div>}
 
         {compareStatus === 'failed' && (
-          <div className={`card ${styles.empty}`}>{compareError || 'Comparison failed.'}</div>
+          <div className={`card ${styles.empty}`} style={{ marginTop: 20 }}>{compareError || 'Comparison failed.'}</div>
         )}
 
         {compareStatus === 'succeeded' && result && rows.length > 0 && (
