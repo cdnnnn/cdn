@@ -1,247 +1,916 @@
-//Providers.tsx
-import { useEffect, useState } from 'react';
-import { Search, Check, Plus, Settings, Unlink, Loader2, Cable, Trash2, RefreshCw, Eye, ListPlus, ListFilter } from 'lucide-react';
-import { useAppDispatch, useAppSelector } from '../../hooks/redux';
+//Newevaluation.tsx
+import { useEffect, useMemo, useState, type ComponentType } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
-  fetchProviders,
-  createProvider,
-  deleteProvider,
-  connectProvider,
-  disconnectProvider,
-  syncModels,
-} from '../../store/slices/providersSlice';
-import { fetchModelsByProvider, createCustomModel } from '../../store/slices/modelsSlice';
-import AddProviderDrawer from './AddProviderDrawer';
-import AddCustomModelDrawer from './AddCustomModelDrawer';
-import ProviderModelsSidebar from './ProviderModelsSidebar';
-import { SkeletonCards } from '../common/Skeleton';
-import styles from './Providers.module.scss';
-import type { Provider } from '../../types';
+  ChevronLeft,
+  ChevronRight,
+  Check,
+  Cpu,
+  Bot,
+  Database,
+  Play,
+  Clock3,
+  Tag,
+  LayoutGrid,
+  Plug,
+  Target,
+  ClipboardCheck,
+  Gavel,
+  Wallet,
+  Layers,
+  Loader2,
+  Workflow,
+  Waypoints,
+  Lightbulb,
+  Wand2,
+} from 'lucide-react';
+import { useAppDispatch, useAppSelector } from '../../hooks/redux';
+import { fetchProviders } from '../../store/slices/providersSlice';
+import { fetchModels } from '../../store/slices/modelsSlice';
+import { fetchDatasets } from '../../store/slices/datasetsSlice';
+import { fetchMetrics } from '../../store/slices/metricsSlice';
+import { launchEvaluation, setDraft } from '../../store/slices/evaluationsSlice';
+import type { CreateEvaluationRequest } from '../../types';
+import styles from './NewEvaluation.module.scss';
 
-type Filter = 'all' | 'connected' | 'available';
+const STEPS = [
+  { label: 'Name', description: 'Give your evaluation a name' },
+  { label: 'Type', description: 'What kind of AI are you testing' },
+  { label: 'Providers', description: 'Choose connected providers' },
+  { label: 'Models', description: 'Pick models to compare' },
+  { label: 'Test Suite', description: 'Select a benchmark or dataset' },
+  { label: 'Metrics', description: 'Choose what to measure' },
+  { label: 'Review', description: 'Confirm and launch the run' },
+];
 
-export default function Providers() {
+const STEP_ICONS: ComponentType<{ size?: number }>[] = [Tag, LayoutGrid, Plug, Cpu, Database, Target, ClipboardCheck];
+
+const TYPE_OPTIONS = [
+  {
+    v: 'Model',
+    icon: Cpu,
+    sub: 'Benchmark a general-purpose LLM on standard tasks like reasoning, coding, and knowledge — ideal for comparing raw model quality across providers.',
+    variant: '',
+    disabled: false,
+  },
+  {
+    v: 'Agent',
+    icon: Bot,
+    sub: 'Test an autonomous agent that plans, calls tools, and completes multi-step tasks — measures task completion, not just single-turn output.',
+    variant: 'agent',
+    disabled: false,
+  },
+  {
+    v: 'RAG',
+    icon: Database,
+    sub: 'Evaluate a retrieval-augmented pipeline for grounding accuracy — checks how well answers stay faithful to your retrieved context.',
+    variant: 'rag',
+    disabled: true,
+  },
+];
+
+// Optional agent frameworks, only shown once "Agent" is selected as the type.
+const AGENT_FRAMEWORKS = [
+  { id: 'hermes', title: 'Hermes', desc: 'Lightweight tool-calling agent runtime' },
+  { id: 'langgraph', title: 'LangGraph', desc: 'Graph-based multi-step agent orchestration' },
+];
+
+const SUGGESTED_NAMES = [
+  'Q3 Model Selection',
+  'Support Bot Regression Test',
+  'RAG Accuracy Benchmark v2',
+  'GPT-4o vs Claude Comparison',
+];
+
+const NAMING_TIPS = [
+  "Include what you're testing, e.g. a model, a product feature, or a use case.",
+  'Add a date or version so you can track changes over time (e.g. "Q3", "v2").',
+  'Keep it specific enough to tell apart from similar past evaluations later.',
+];
+
+function formatContextWindow(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toLocaleString()}M tokens`;
+  if (tokens >= 1_000) return `${Math.round(tokens / 1000)}k tokens`;
+  return `${tokens} tokens`;
+}
+
+function formatPrice(price: number | null | undefined): string {
+  return price === null || price === undefined ? '—' : `$${price.toFixed(2)}`;
+}
+
+export default function NewEvaluation() {
   const dispatch = useAppDispatch();
-  const { items, status, mutatingId, creating, syncingId } = useAppSelector((s) => s.providers);
-  const modelsByProvider = useAppSelector((s) => s.models.byProvider);
-  const modelsByProviderStatus = useAppSelector((s) => s.models.byProviderStatus);
-  const customModelCreating = useAppSelector((s) => s.models.creating);
-  const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState<Filter>('all');
-  const [keyPromptFor, setKeyPromptFor] = useState<string | null>(null);
-  const [apiKeyInput, setApiKeyInput] = useState('');
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [addModelOpen, setAddModelOpen] = useState(false);
-  const [viewModelsProvider, setViewModelsProvider] = useState<Provider | null>(null);
+  const navigate = useNavigate();
+  const [step, setStep] = useState(0);
+  const [toast, setToast] = useState(false);
+  const [agentFramework, setAgentFramework] = useState<string | null>(null);
+  const [selSubgroup, setSelSubgroup] = useState<string[]>([]);
+  const [runSamples, setRunSamples] = useState<number>(10);
+  const totalSteps = STEPS.length;
+
+  const rawDraft = useAppSelector((s) => s.evaluations.draft);
+  const launching = useAppSelector((s) => s.evaluations.launching);
+  const launchError = useAppSelector((s) => s.evaluations.launchError);
+
+  const providers = useAppSelector((s) => s.providers.items) ?? [];
+  const models = useAppSelector((s) => s.models.items) ?? [];
+  const metrics = useAppSelector((s) => s.metrics) ?? { allMetrics: [], customAgentMetrics: [] };
+
+  const datasets = useAppSelector((s) => s.datasets.items) ?? [];
+  const datasetsLoading = useAppSelector((s) => s.datasets.status === 'loading' || s.datasets.status === 'idle');
+  const datasetsError = useAppSelector((s) => s.datasets.error);
+
+  // Defensive defaults: guards calculations below that run on every render
+  // against a draft that hasn't been fully hydrated yet.
+  const draft = {
+    name: '',
+    eval_type: '',
+    selProviders: [] as string[],
+    selModels: [] as string[],
+    selBenchmark: '' as string | undefined,
+    selMetrics: [] as string[],
+    judgeModelId: undefined as string | undefined,
+    ...rawDraft,
+  };
 
   useEffect(() => {
     dispatch(fetchProviders());
+    dispatch(fetchModels());
+    dispatch(fetchMetrics());
   }, [dispatch]);
 
-  const connectedCount = items.filter((p) => p.status === 'connected').length;
+  // GET /datasets?eval_type={type} — refetched whenever the chosen type changes.
+  useEffect(() => {
+    if (!draft.eval_type) return;
+    dispatch(fetchDatasets(draft.eval_type.toLowerCase()));
+  }, [dispatch, draft.eval_type]);
 
-  const filtered = items.filter((p) => {
-    if (filter === 'connected' && p.status !== 'connected') return false;
-    if (filter === 'available' && p.status === 'connected') return false;
-    return !search || p.name.toLowerCase().includes(search.toLowerCase());
-  });
+  // Reset the subgroup/task selection whenever the chosen dataset changes.
+  useEffect(() => {
+    setSelSubgroup([]);
+  }, [draft.selBenchmark]);
 
-  const submitConnect = (providerId: string) => {
-    if (!apiKeyInput.trim()) return;
-    dispatch(connectProvider({ providerId, payload: { api_key: apiKeyInput } }));
-    setKeyPromptFor(null);
-    setApiKeyInput('');
+  // Reset the chosen framework if the user switches away from "Agent".
+  useEffect(() => {
+    if (draft.eval_type !== 'Agent') setAgentFramework(null);
+  }, [draft.eval_type]);
+
+  const connectedProviders = providers.filter((p) => p.status === 'connected');
+  const availableModels = useMemo(
+    () => models.filter((m) => draft.selProviders.includes(m.provider_id)),
+    [models, draft.selProviders]
+  );
+  const activeMetricsList =
+    draft.eval_type === 'agent' ? [...metrics.allMetrics, ...metrics.customAgentMetrics] : metrics.allMetrics;
+
+  const toggle = (list: string[], value: string) =>
+    list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
+
+  const canGo = () => {
+    if (step === 0) return Boolean(draft.name.trim());
+    if (step === 1) return Boolean(draft.eval_type);
+    if (step === 2) return draft.selProviders.length > 0;
+    if (step === 3) return draft.selModels.length > 0;
+    if (step === 4) return Boolean(draft.selBenchmark);
+    return true;
   };
 
-  const openModelsSidebar = (p: Provider) => {
-    setViewModelsProvider(p);
-    dispatch(fetchModelsByProvider(p.id));
+  const goNext = () => {
+    if (!canGo()) return;
+    setStep((s) => Math.min(totalSteps - 1, s + 1));
+  };
+  const goBack = () => setStep((s) => Math.max(0, s - 1));
+  const goToStep = (target: number) => {
+    if (target < step) setStep(target);
   };
 
-  const customProvider = items.find((p) => p.name === 'Custom') || null;
+  const suite = datasets.find((d) => d.id === draft.selBenchmark);
+  const selectedModels = draft.selModels.map((id) => models.find((m) => m.id === id)).filter(Boolean) as typeof models;
+  const judgeModel = draft.judgeModelId ? models.find((m) => m.id === draft.judgeModelId) : null;
+
+  const launch = async () => {
+    const dataset = datasets.find((d) => d.id === draft.selBenchmark);
+    const judgeModelObj = draft.judgeModelId ? models.find((m) => m.id === draft.judgeModelId) : undefined;
+
+    const payload: CreateEvaluationRequest = {
+      name: draft.name,
+      eval_type: draft.eval_type.toLowerCase(),
+      dataset_id: dataset?.id || '',
+      benchmark: dataset?.name || undefined,
+      model_ids: draft.selModels,
+      selected_metrics: draft.selMetrics,
+      run_samples: runSamples,
+      selected_category: selSubgroup.length > 0 ? selSubgroup : dataset ? [dataset.category] : undefined,
+      ...(draft.judgeModelId
+        ? {
+            judge_config: {
+              model_id: draft.judgeModelId,
+              base_url: judgeModelObj?.base_url || '',
+              api_key: draft.judgeModelId,
+            },
+          }
+        : {}),
+    };
+
+    const result = await dispatch(launchEvaluation(payload));
+    if (launchEvaluation.fulfilled.match(result)) {
+      setToast(true);
+      setTimeout(() => {
+        setToast(false);
+        navigate('/app/history');
+      }, 2000);
+    }
+  };
+
+  const progressPct = Math.round((step / (totalSteps - 1)) * 100);
 
   return (
-    <div className="page-enter pg-shell">
-      <div className={styles.providers__header}>
-        <div>
-          <p className={styles['providers__header-eyebrow']}>Integrations</p>
-          <h1>Providers</h1>
-          <p className={styles['providers__header-sub']}>Manage your AI provider connections</p>
-        </div>
-        <div className={styles['providers__header-meta']}>
-          <Cable size={13} />
-          {connectedCount} of {items.length} connected
-        </div>
-      </div>
-      <div className="pg-toolbar">
-        <div className="toolbar">
-          <div className="search-box">
-            <Search size={16} color="var(--text-muted)" />
-            <input placeholder="Search providers…" value={search} onChange={(e) => setSearch(e.target.value)} />
+    <div className="page-enter" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div className={styles.page}>
+        <div className={styles.wiz__header}>
+          <div>
+            <p className={styles['wiz__header-eyebrow']}>Create evaluation</p>
+            <h1>New Evaluation</h1>
+            <p className={styles['wiz-sub']} style={{ marginBottom: 0 }}>
+              Set up and launch a structured model evaluation
+            </p>
           </div>
-          <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
-            <div className={styles['providers__filter-group']}>
-              <span className={styles['providers__toolbar-label']}>
-                <ListFilter size={11} /> Status
-              </span>
-              <div className="pills">
-                {(['all', 'connected', 'available'] as Filter[]).map((f) => (
-                  <button key={f} className={`pill ${filter === f ? 'on' : ''}`} onClick={() => setFilter(f)}>
-                    {f[0].toUpperCase() + f.slice(1)}
-                  </button>
-                ))}
+          <div className={styles['wiz__header-meta']}>
+            <Clock3 size={13} />
+            ~5 min guided setup
+          </div>
+        </div>
+
+        <div className={styles['wiz-shell']}>
+          <aside className={styles.wiz__sidebar}>
+            <div className={styles['wiz__sidebar-progress']}>
+              <div className={styles['wiz__sidebar-progress-head']}>
+                <span>
+                  Step {step + 1} of {totalSteps}
+                </span>
+                <span>{progressPct}%</span>
+              </div>
+              <div className={styles['wiz__sidebar-progress-track']}>
+                <div className={styles['wiz__sidebar-progress-fill']} style={{ width: `${progressPct}%` }} />
               </div>
             </div>
-            <span className={styles['providers__toolbar-divider']} />
-            <button className="btn btn-ind btn-sm" onClick={() => setDrawerOpen(true)}><Plus size={14} /> Add Provider</button>
+
+            {STEPS.map((s, i) => {
+              const state = i === step ? 'active' : i < step ? 'complete' : 'upcoming';
+              const Icon = STEP_ICONS[i];
+              return (
+                <button
+                  key={s.label}
+                  type="button"
+                  className={`${styles.wiz__step} ${styles[`wiz__step--${state}`]}`}
+                  onClick={() => goToStep(i)}
+                  disabled={i > step}
+                >
+                  <span className={styles['wiz__step-marker']}>
+                    {state === 'complete' ? <Check size={14} strokeWidth={3} /> : <Icon size={15} />}
+                  </span>
+                  <span className={styles['wiz__step-text']}>
+                    <span className={styles['wiz__step-label']}>{s.label}</span>
+                    <span className={styles['wiz__step-desc']}>{s.description}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </aside>
+
+          <div className={styles.wiz__content}>
+            <p className={styles['wiz__step-kicker']}>
+              Step {step + 1} of {totalSteps}
+            </p>
+
+            <div className={styles.wiz__body}>
+              {step === 0 && (
+                <>
+                  <h2>Name your evaluation</h2>
+                  <p className={styles['wiz-sub']}>Give it a recognizable name so you can find it later.</p>
+
+                  <div className={styles.wiz__field}>
+                    <label className={styles.wiz__label}>Evaluation Name</label>
+                    <div className={styles['wiz__input-icon-wrap']}>
+                      <Tag size={16} />
+                      <input
+                        className={styles.wiz__input}
+                        placeholder="e.g. Q3 Model Selection"
+                        value={draft.name}
+                        onChange={(e) => dispatch(setDraft({ name: e.target.value }))}
+                        autoFocus
+                      />
+                    </div>
+                  </div>
+
+                  <div className={styles['wiz__suggestions']}>
+                    <p className={styles['wiz__suggestions-title']}>Quick start</p>
+                    <p className={styles['wiz__suggestions-sub']}>Not sure what to call it? Start from one of these.</p>
+                    <div className={styles['wiz__suggestions-grid']}>
+                      {SUGGESTED_NAMES.map((s) => (
+                        <button
+                          key={s}
+                          type="button"
+                          className={styles['wiz__suggestion-card']}
+                          onClick={() => dispatch(setDraft({ name: s }))}
+                        >
+                          <span className={styles['wiz__suggestion-icon']}>
+                            <Wand2 size={14} />
+                          </span>
+                          <span className={styles['wiz__suggestion-text']}>{s}</span>
+                          <span className={styles['wiz__suggestion-use']}>Use</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className={styles.wiz__tips}>
+                    <div className={styles['wiz__tips-icon']}>
+                      <Lightbulb size={16} strokeWidth={2} />
+                    </div>
+                    <div>
+                      <p className={styles['wiz__tips-title']}>Tips for a good name</p>
+                      <ul className={styles['wiz__tips-list']}>
+                        {NAMING_TIPS.map((tip) => (
+                          <li key={tip}>{tip}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+
+                  <div className={styles.wiz__roadmap}>
+                    <p className={styles['wiz__roadmap-title']}>What you'll set up next</p>
+                    <p className={styles['wiz__roadmap-sub']}>A quick look at the rest of the flow before you continue.</p>
+                    <div className={styles['wiz__roadmap-grid']}>
+                      {STEPS.slice(1).map((s, i) => {
+                        const Icon = STEP_ICONS[i + 1];
+                        return (
+                          <div className={styles['wiz__roadmap-card']} key={s.label}>
+                            <span className={styles['wiz__roadmap-num']}>{String(i + 2).padStart(2, '0')}</span>
+                            <span className={styles['wiz__roadmap-icon']}>
+                              <Icon size={15} />
+                            </span>
+                            <span className={styles['wiz__roadmap-text']}>
+                              <span className={styles['wiz__roadmap-label']}>{s.label}</span>
+                              <span className={styles['wiz__roadmap-desc']}>{s.description}</span>
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {step === 1 && (
+                <>
+                  <h2>Choose evaluation type</h2>
+                  <p className={styles['wiz-sub']}>Pick what kind of AI you're testing.</p>
+
+                  <div className={styles['wiz__type-grid']}>
+                    {TYPE_OPTIONS.map((o) => {
+                      const Icon = o.icon;
+                      const selected = draft.eval_type === o.v;
+                      return (
+                        <button
+                          key={o.v}
+                          type="button"
+                          className={`${styles['wiz__type-card']} ${selected ? styles['wiz__type-card--selected'] : ''} ${
+                            o.disabled ? styles['wiz__type-card--disabled'] : ''
+                          }`}
+                          onClick={() => !o.disabled && dispatch(setDraft({ eval_type: o.v }))}
+                          disabled={o.disabled}
+                        >
+                          <span
+                            className={`${styles['wiz__type-icon']} ${o.variant ? styles[`wiz__type-icon--${o.variant}`] : ''}`}
+                          >
+                            <Icon size={18} />
+                          </span>
+                          <span className={styles['wiz__type-content']}>
+                            <span className={styles['wiz__type-title']}>
+                              {o.v}
+                              {o.disabled && <span className={styles['wiz__type-badge']}>Coming soon</span>}
+                            </span>
+                            <span className={styles['wiz__type-desc']}>{o.sub}</span>
+                          </span>
+                          {selected && (
+                            <span className={styles['wiz__type-check']}>
+                              <Check size={13} strokeWidth={2.75} />
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {draft.eval_type === 'Agent' && (
+                    <div className={styles['wiz__framework-section']}>
+                      <label className={styles.wiz__label}>
+                        <Workflow size={13} strokeWidth={2.25} />
+                        Agent Framework <span className="opt">(optional)</span>
+                      </label>
+                      <p className={styles['wiz__framework-hint']}>
+                        Tell us which framework the agent runs on, if applicable.
+                      </p>
+                      <div className={styles['wiz__framework-grid']}>
+                        {AGENT_FRAMEWORKS.map((f) => {
+                          const selected = agentFramework === f.id;
+                          return (
+                            <button
+                              key={f.id}
+                              type="button"
+                              className={`${styles['wiz__type-card']} ${styles['wiz__type-card--framework']} ${
+                                selected ? styles['wiz__type-card--selected'] : ''
+                              }`}
+                              onClick={() => setAgentFramework(selected ? null : f.id)}
+                            >
+                              <span className={styles['wiz__type-icon']}>
+                                <Waypoints size={16} />
+                              </span>
+                              <span className={styles['wiz__type-content']}>
+                                <span className={styles['wiz__type-title']}>{f.title}</span>
+                                <span className={styles['wiz__type-desc']}>{f.desc}</span>
+                              </span>
+                              {selected && (
+                                <span className={styles['wiz__type-check']}>
+                                  <Check size={12} strokeWidth={2.75} />
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {step === 2 && (
+                <>
+                  <h2>Select providers</h2>
+                  <p className={styles['wiz-sub']}>Choose which connected providers to draw models from.</p>
+                  <div className={styles['wiz__grid-scroll']}>
+                    <div className={styles.wiz__grid}>
+                      {connectedProviders.map((p) => {
+                        const selected = draft.selProviders.includes(p.id);
+                        return (
+                          <button
+                            key={p.id}
+                            type="button"
+                            className={`${styles.wiz__card} ${selected ? styles['wiz__card--selected'] : ''}`}
+                            onClick={() => dispatch(setDraft({ selProviders: toggle(draft.selProviders, p.id) }))}
+                          >
+                            <span className={styles['wiz__card-icon']}>
+                              <Plug size={15} />
+                            </span>
+                            <span className={styles['wiz__card-text']}>
+                              <span className={styles['wiz__card-name']}>{p.name}</span>
+                              <span className={styles['wiz__card-sub']}>{p.model_count} models available</span>
+                              <span className={styles['wiz__provider-status']}>Connected</span>
+                            </span>
+                            {selected && (
+                              <span className={styles['wiz__card-check']}>
+                                <Check size={11} strokeWidth={2.75} />
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                      {connectedProviders.length === 0 && (
+                        <p className={styles.wiz__empty}>No connected providers yet — connect one from the Providers page first.</p>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {step === 3 && (
+                <>
+                  <h2>Choose models</h2>
+                  <p className={styles['wiz-sub']}>Pick which models to include in this evaluation.</p>
+                  {availableModels.length > 0 ? (
+                    <div className={styles['wiz__grid-scroll']}>
+                      <div className={styles['wiz__models-grid']}>
+                        {availableModels.map((m) => {
+                          const selected = draft.selModels.includes(m.id);
+                          const caps = (m as any).capabilities as string[] | undefined;
+                          const inputPrice = (m as any).input_price as number | null | undefined;
+                          const outputPrice = (m as any).output_price as number | null | undefined;
+                          const accuracy = (m as any).accuracy_score as number | null | undefined;
+                          return (
+                            <button
+                              key={m.id}
+                              type="button"
+                              className={`${styles['wiz__model-card']} ${selected ? styles['wiz__model-card--selected'] : ''}`}
+                              onClick={() => dispatch(setDraft({ selModels: toggle(draft.selModels, m.id) }))}
+                            >
+                              <div className={styles['wiz__model-top']}>
+                                <span className={styles['wiz__model-name']}>{m.name}</span>
+                                {selected && (
+                                  <span className={styles['wiz__card-check']} style={{ position: 'static' }}>
+                                    <Check size={11} strokeWidth={2.75} />
+                                  </span>
+                                )}
+                              </div>
+                              <span className={styles['wiz__model-provider']}>
+                                {providers.find((p) => p.id === m.provider_id)?.name ?? m.provider_id}
+                              </span>
+                              {caps && caps.length > 0 && (
+                                <div className={styles['wiz__model-caps']}>
+                                  {caps.slice(0, 3).map((c) => (
+                                    <span key={c} className={styles['wiz__model-cap-chip']}>
+                                      {c}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                              <div className={styles['wiz__model-meta']}>
+                                <span>{formatContextWindow(m.context_window)}</span>
+                                {(inputPrice !== undefined || outputPrice !== undefined) && (
+                                  <span>
+                                    {formatPrice(inputPrice)} in · {formatPrice(outputPrice)} out /1M
+                                  </span>
+                                )}
+                                {accuracy !== undefined && accuracy !== null && <span>Accuracy {accuracy.toFixed(1)}%</span>}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className={styles.wiz__empty}>Select providers first to see available models.</p>
+                  )}
+                </>
+              )}
+
+              {step === 4 && (
+                <>
+                  <h2>Pick a test suite</h2>
+                  <p className={styles['wiz-sub']}>Select the dataset to evaluate against.</p>
+
+                  <div className={styles['wiz__dataset-layout']}>
+                    <div className={styles['wiz__dataset-grid-scroll']}>
+                      {datasetsLoading && <p className={styles.wiz__empty}>Loading test suites…</p>}
+                      {!datasetsLoading && datasetsError && <p className={styles.wiz__error}>{datasetsError}</p>}
+                      {!datasetsLoading && !datasetsError && (
+                        <div className={styles['wiz__dataset-grid']}>
+                          {datasets.map((d) => {
+                            const selected = draft.selBenchmark === d.id;
+                            return (
+                              <button
+                                key={d.id}
+                                type="button"
+                                className={`${styles['wiz__dataset-card']} ${selected ? styles['wiz__dataset-card--selected'] : ''}`}
+                                onClick={() => dispatch(setDraft({ selBenchmark: d.id }))}
+                              >
+                                <div className={styles['wiz__dataset-top']}>
+                                  <span className={styles['wiz__dataset-top-left']}>
+                                    <span className={styles['wiz__dataset-icon']}>
+                                      <Database size={14} />
+                                    </span>
+                                    <span className={styles['wiz__dataset-name']}>{d.name}</span>
+                                  </span>
+                                  {selected && (
+                                    <span className={styles['wiz__card-check']} style={{ position: 'static' }}>
+                                      <Check size={11} strokeWidth={2.75} />
+                                    </span>
+                                  )}
+                                </div>
+                                <div className={styles['wiz__dataset-meta']}>
+                                  <span className={`${styles.wiz__chip} ${styles['wiz__chip--static']}`}>{d.category}</span>
+                                  <span className={`${styles.wiz__chip} ${styles['wiz__chip--static']}`}>{d.eval_type}</span>
+                                  <span>{d.question_count.toLocaleString()} questions</span>
+                                </div>
+                              </button>
+                            );
+                          })}
+                          {datasets.length === 0 && <p className={styles.wiz__empty}>No test suites available.</p>}
+                        </div>
+                      )}
+                    </div>
+
+                    <aside className={styles['wiz__subgroup-panel']}>
+                      <div className={styles['wiz__subgroup-panel-head']}>
+                        <p className={styles['wiz__subgroup-panel-title']}>
+                          <Layers size={13} strokeWidth={2.25} /> Subgroups
+                        </p>
+                        <p className={styles['wiz__subgroup-panel-sub']}>
+                          {suite ? `Optionally narrow "${suite.name}" to specific categories.` : 'Select a test suite to see its subgroups.'}
+                        </p>
+                      </div>
+                      <div className={styles['wiz__subgroup-panel-scroll']}>
+                        {!suite && <p className={styles['wiz__subgroup-empty']}>No test suite selected yet.</p>}
+                        {suite && suite.dataset_categories.length === 0 && (
+                          <p className={styles['wiz__subgroup-empty']}>This test suite has no subgroups.</p>
+                        )}
+                        {suite &&
+                          suite.dataset_categories.map((cat) => {
+                            const checked = selSubgroup.includes(cat);
+                            return (
+                              <button
+                                key={cat}
+                                type="button"
+                                className={`${styles['wiz__subgroup-row']} ${checked ? styles['wiz__subgroup-row--selected'] : ''}`}
+                                onClick={() => setSelSubgroup((prev) => toggle(prev, cat))}
+                              >
+                                <span className={`${styles.wiz__checkbox} ${checked ? styles['wiz__checkbox--checked'] : ''}`}>
+                                  {checked && <Check size={11} strokeWidth={3} />}
+                                </span>
+                                <span className={styles['wiz__subgroup-row-name']}>{cat}</span>
+                              </button>
+                            );
+                          })}
+                      </div>
+                    </aside>
+                  </div>
+                </>
+              )}
+
+              {step === 5 && (
+                <>
+                  <h2>Configure metrics</h2>
+                  <p className={styles['wiz-sub']}>Choose which metrics to measure.</p>
+
+                  <div className={styles['wiz__field']} style={{ maxWidth: 220 }}>
+                    <label className={styles.wiz__label}>Run Samples</label>
+                    <input
+                      type="number"
+                      min={0}
+                      className={styles.wiz__input}
+                      value={runSamples}
+                      onChange={(e) => {
+                        const val = e.target.value === '' ? 0 : Math.max(0, Number(e.target.value));
+                        setRunSamples(Number.isNaN(val) ? 0 : val);
+                      }}
+                    />
+                  </div>
+
+                  <div className={styles['wiz__metrics-toolbar']}>
+                    <span className={styles['wiz__metrics-count']}>
+                      <strong>{draft.selMetrics.length}</strong> selected
+                    </span>
+                    <div className={styles['wiz__metrics-actions']}>
+                      <button
+                        type="button"
+                        className={styles['wiz__link-btn']}
+                        onClick={() => dispatch(setDraft({ selMetrics: [...activeMetricsList] }))}
+                      >
+                        Select all
+                      </button>
+                      <button type="button" className={styles['wiz__link-btn']} onClick={() => dispatch(setDraft({ selMetrics: [] }))}>
+                        Unselect all
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className={styles['wiz__metrics-layout']}>
+                    <div className={styles['wiz__metrics-main-scroll']}>
+                      <div className={styles['wiz__metrics-grid']}>
+                        {activeMetricsList.map((m) => {
+                          const selected = draft.selMetrics.includes(m);
+                          return (
+                            <button
+                              key={m}
+                              type="button"
+                              className={`${styles['wiz__metric-card']} ${selected ? styles['wiz__metric-card--selected'] : ''}`}
+                              onClick={() => dispatch(setDraft({ selMetrics: toggle(draft.selMetrics, m) }))}
+                            >
+                              <span className={styles['wiz__metric-name']}>{m}</span>
+                              {selected && (
+                                <span className={styles['wiz__metric-check']}>
+                                  <Check size={11} strokeWidth={2.75} />
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                        {activeMetricsList.length === 0 && <p className={styles.wiz__empty}>No metrics available.</p>}
+                      </div>
+                    </div>
+
+                    <aside className={styles['wiz__judge-panel']}>
+                      <p className={styles['wiz__judge-title']}>
+                        <Gavel size={13} strokeWidth={2.25} /> Judge Model
+                      </p>
+                      <p className={styles['wiz__judge-hint']}>Pick any available model to grade the other models' responses.</p>
+
+                      <div className={styles['wiz__judge-panel-scroll']}>
+                        {models.filter((m) => m.is_active).length === 0 ? (
+                          <div className={styles['wiz__judge-empty']}>No models are available yet.</div>
+                        ) : (
+                          models
+                            .filter((m) => m.is_active)
+                            .map((m) => {
+                              const isJudge = draft.judgeModelId === m.id;
+                              return (
+                                <button
+                                  key={m.id}
+                                  type="button"
+                                  className={`${styles['wiz__judge-row']} ${isJudge ? styles['wiz__judge-row--selected'] : ''}`}
+                                  onClick={() => dispatch(setDraft({ judgeModelId: isJudge ? undefined : m.id }))}
+                                >
+                                  <span className={`${styles.wiz__radio} ${isJudge ? styles['wiz__radio--checked'] : ''}`} />
+                                  <span className={styles['wiz__judge-row-text']}>
+                                    <span className={styles['wiz__judge-row-name']}>{m.name}</span>
+                                    <span className={styles['wiz__judge-row-meta']}>
+                                      {providers.find((p) => p.id === m.provider_id)?.name ?? m.provider_id}
+                                    </span>
+                                  </span>
+                                </button>
+                              );
+                            })
+                        )}
+                      </div>
+                    </aside>
+                  </div>
+                </>
+              )}
+
+              {step === 6 && (
+                <>
+                  <h2>Review &amp; Launch</h2>
+                  <p className={styles['wiz-sub']}>Confirm your evaluation setup.</p>
+
+                  <div className={styles['wiz__review-stats']}>
+                    <div className={styles['wiz__review-stat']}>
+                      <span className={styles['wiz__review-stat-label']}>
+                        <Wallet size={12} strokeWidth={2} style={{ marginRight: 4, verticalAlign: -2 }} />
+                        Est. Cost
+                      </span>
+                      <span className={styles['wiz__review-stat-value']}>$0</span>
+                    </div>
+                    <div className={styles['wiz__review-stat']}>
+                      <span className={styles['wiz__review-stat-label']}>
+                        <Clock3 size={12} strokeWidth={2} style={{ marginRight: 4, verticalAlign: -2 }} />
+                        Est. Time
+                      </span>
+                      <span className={styles['wiz__review-stat-value']}></span>
+                    </div>
+                    <div className={styles['wiz__review-stat']}>
+                      <span className={styles['wiz__review-stat-label']}>
+                        <Layers size={12} strokeWidth={2} style={{ marginRight: 4, verticalAlign: -2 }} />
+                        Questions
+                      </span>
+                      <span className={styles['wiz__review-stat-value']}>{suite ? suite.question_count.toLocaleString() : '—'}</span>
+                    </div>
+                  </div>
+
+                  <div className={styles['wiz__review-section']}>
+                    <p className={styles['wiz__review-section-title']}>
+                      <Tag size={11} strokeWidth={2.25} /> Overview
+                    </p>
+                    <div className={styles.wiz__review}>
+                      <div className={styles['wiz__review-row']}>
+                        <span>Name</span>
+                        <span>{draft.name || '—'}</span>
+                      </div>
+                      <div className={styles['wiz__review-row']}>
+                        <span>Type</span>
+                        <span>{draft.eval_type || '—'}</span>
+                      </div>
+                      {agentFramework && (
+                        <div className={styles['wiz__review-row']}>
+                          <span>Agent Framework</span>
+                          <span>{AGENT_FRAMEWORKS.find((f) => f.id === agentFramework)?.title}</span>
+                        </div>
+                      )}
+                      <div className={styles['wiz__review-row']}>
+                        <span>Providers</span>
+                        <span>{draft.selProviders.map((id) => providers.find((p) => p.id === id)?.name || id).join(', ') || '—'}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className={styles['wiz__review-section']}>
+                    <p className={styles['wiz__review-section-title']}>
+                      <Cpu size={11} strokeWidth={2.25} /> Models ({selectedModels.length})
+                    </p>
+                    {selectedModels.length > 0 ? (
+                      <div className={styles.wiz__grid} style={{ marginTop: '0.75rem' }}>
+                        {selectedModels.map((m) => (
+                          <div key={m!.id} className={styles.wiz__card} style={{ cursor: 'default' }}>
+                            <span className={styles['wiz__card-icon']}>
+                              <Cpu size={14} />
+                            </span>
+                            <span className={styles['wiz__card-text']}>
+                              <span className={styles['wiz__card-name']}>{m!.name}</span>
+                              <span className={styles['wiz__card-sub']}>{providers.find((p) => p.id === m!.provider_id)?.name || m!.provider_id}</span>
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className={styles.wiz__empty}>No models selected.</p>
+                    )}
+                  </div>
+
+                  <div className={styles['wiz__review-section']}>
+                    <p className={styles['wiz__review-section-title']}>
+                      <Database size={11} strokeWidth={2.25} /> Test Suite
+                    </p>
+                    <div className={styles.wiz__review}>
+                      <div className={styles['wiz__review-row']}>
+                        <span>Suite</span>
+                        <span>{suite?.name ?? '—'}</span>
+                      </div>
+                      <div className={styles['wiz__review-row']}>
+                        <span>Run Samples</span>
+                        <span>{runSamples}</span>
+                      </div>
+                      {suite?.category && (
+                        <div className={styles['wiz__review-row']}>
+                          <span>Category</span>
+                          <span>{suite.category}</span>
+                        </div>
+                      )}
+                      {selSubgroup.length > 0 && (
+                        <div className={styles['wiz__review-row']}>
+                          <span>Subgroups</span>
+                          <span>{selSubgroup.join(', ')}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className={styles['wiz__review-section']}>
+                    <p className={styles['wiz__review-section-title']}>
+                      <Target size={11} strokeWidth={2.25} /> Metrics ({draft.selMetrics.length})
+                    </p>
+                    {draft.selMetrics.length > 0 ? (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '0.75rem' }}>
+                        {draft.selMetrics.map((m) => (
+                          <span key={m} className={styles.wiz__chip}>
+                            {m}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className={styles.wiz__empty}>No metrics selected.</p>
+                    )}
+                  </div>
+
+                  {judgeModel && (
+                    <div className={styles['wiz__review-section']}>
+                      <p className={styles['wiz__review-section-title']}>
+                        <Gavel size={11} strokeWidth={2.25} /> Judge Model
+                      </p>
+                      <div className={styles.wiz__review}>
+                        <div className={styles['wiz__review-row']}>
+                          <span>Model</span>
+                          <span>{judgeModel.name}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {launchError && <p className={styles.wiz__error}>{launchError}</p>}
+                </>
+              )}
+            </div>
+
+            <div className={styles.wiz__nav}>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => (step > 0 ? goBack() : navigate('/app/dashboard'))}
+                disabled={launching}
+              >
+                <ChevronLeft size={16} /> {step === 0 ? 'Cancel' : 'Back'}
+              </button>
+
+              {step < totalSteps - 1 ? (
+                <button type="button" className="btn btn-ind" onClick={goNext} disabled={!canGo()}>
+                  Continue <ChevronRight size={16} />
+                </button>
+              ) : (
+                <button type="button" className="btn btn-ind" onClick={launch} disabled={launching}>
+                  {launching ? (
+                    <>
+                      <Loader2 size={16} className={styles.wiz__spin} /> Launching…
+                    </>
+                  ) : (
+                    <>
+                      <Play size={16} /> Launch Evaluation
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>
-      <div className="pg-body">
-        <div className="cards-grid">
-          {status === 'loading' && <SkeletonCards count={6} />}
-          {status !== 'loading' && filtered.map((p) => {
-            const isCustom = p.name === 'Custom';
-            return (
-              <div className="card" key={p.id} style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                <div className="card-hdr">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                    <div className={`card-icon ${styles['providers__icon']}`}>{p.logo_url ? <img src={p.logo_url} alt={p.name} /> : p.name[0]}</div>
-                    <div>
-                      <div className="card-title">{p.name}</div>
-                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>{p.model_count} models</div>
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <button
-                      className={`btn btn-sm btn-ghost ${styles['providers__icon-btn']}`}
-                      onClick={() => openModelsSidebar(p)}
-                      title="View models"
-                      aria-label={`View models for ${p.name}`}
-                    >
-                      <Eye size={14} />
-                    </button>
-                    {p.status === 'connected' ? (
-                      <span className="badge badge-green"><Check size={11} /> Connected</span>
-                    ) : (
-                      <span className={styles['providers__badge-idle']}>Not connected</span>
-                    )}
-                  </div>
-                </div>
-                <div className="card-desc" style={{ flex: 1 }}>{p.description}</div>
 
-                {keyPromptFor === p.id ? (
-                  <div className={styles['providers__key-form']}>
-                    <input
-                      className="fi"
-                      type="password"
-                      placeholder="Paste API key…"
-                      value={apiKeyInput}
-                      onChange={(e) => setApiKeyInput(e.target.value)}
-                      autoFocus
-                    />
-                    <div className={styles['providers__key-actions']}>
-                      <button className="btn btn-sm btn-ind" onClick={() => submitConnect(p.id)}>Save</button>
-                      <button className="btn btn-sm btn-ghost" onClick={() => setKeyPromptFor(null)}>Cancel</button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className={styles['providers__foot-actions']}>
-                    {isCustom && (
-                      <button
-                        className={`btn btn-sm btn-ind ${styles['providers__foot-btn']}`}
-                        onClick={() => setAddModelOpen(true)}
-                      >
-                        <ListPlus size={13} /> Add Model
-                      </button>
-                    )}
-                    <button
-                      className={`btn btn-sm ${p.status === 'connected' ? 'btn-ghost' : 'btn-ind'} ${styles['providers__foot-btn']}`}
-                      disabled={mutatingId === p.id}
-                      onClick={() => setKeyPromptFor(p.id)}
-                    >
-                      {mutatingId === p.id ? (
-                        <Loader2 size={13} style={{ animation: 'spin 1.5s linear infinite' }} />
-                      ) : p.status === 'connected' ? (
-                        <><Settings size={13} /> Configure</>
-                      ) : (
-                        <><Plus size={13} /> Connect</>
-                      )}
-                    </button>
-                    {p.status === 'connected' && (
-                      <>
-                        <button
-                          className={`btn btn-sm btn-ghost ${styles['providers__foot-btn']}`}
-                          disabled={syncingId === p.id}
-                          onClick={() => dispatch(syncModels(p.id))}
-                        >
-                          {syncingId === p.id ? (
-                            <Loader2 size={13} style={{ animation: 'spin 1.5s linear infinite' }} />
-                          ) : (
-                            <><RefreshCw size={13} /> Sync</>
-                          )}
-                        </button>
-                        <button
-                          className={`btn btn-sm btn-danger ${styles['providers__foot-btn']}`}
-                          disabled={mutatingId === p.id}
-                          onClick={() => dispatch(disconnectProvider(p.id))}
-                        >
-                          <Unlink size={13} /> Disconnect
-                        </button>
-                      </>
-                    )}
-                    {p.status !== 'connected' && (
-                      <button
-                        className={`btn btn-sm btn-danger ${styles['providers__foot-btn']}`}
-                        disabled={mutatingId === p.id}
-                        onClick={() => {
-                          if (window.confirm(`Delete ${p.name}? This cannot be undone.`)) {
-                            dispatch(deleteProvider(p.id));
-                          }
-                        }}
-                      >
-                        <Trash2 size={13} /> Delete
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+      {toast && (
+        <div className="toast">
+          <div className={styles['toast__icon']}>
+            <Check size={18} color="#10B981" />
+          </div>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>Evaluation launched</div>
+            <div style={{ fontSize: 12, color: '#6B7280' }}>You'll find it in Evaluations once it completes.</div>
+          </div>
         </div>
-      </div>
-
-      {drawerOpen && (
-        <AddProviderDrawer
-          submitting={creating}
-          onClose={() => setDrawerOpen(false)}
-          onSubmit={(payload) => {
-            dispatch(createProvider(payload)).then(() => setDrawerOpen(false));
-          }}
-        />
-      )}
-
-      {addModelOpen && customProvider && (
-        <AddCustomModelDrawer
-          submitting={customModelCreating}
-          onClose={() => setAddModelOpen(false)}
-          onSubmit={(payload) => {
-            dispatch(createCustomModel(payload)).then(() => {
-              setAddModelOpen(false);
-              dispatch(fetchProviders());
-              dispatch(fetchModelsByProvider(customProvider.id));
-            });
-          }}
-        />
-      )}
-
-      {viewModelsProvider && (
-        <ProviderModelsSidebar
-          provider={viewModelsProvider}
-          models={modelsByProvider[viewModelsProvider.id] || []}
-          status={modelsByProviderStatus[viewModelsProvider.id] || 'idle'}
-          onClose={() => setViewModelsProvider(null)}
-        />
       )}
     </div>
   );
@@ -258,37 +927,49 @@ export default function Providers() {
 
 
 
-
-
-
-
-
-
-
-
-
-//providers.module.scss
+//Newevaluation.module.scss
 @use '../../styles/_variables' as *;
 
-.providers {
+// ---------------------------------------------------------------------------
+// Local aliases: map this component's design tokens onto the shared theme
+// tokens defined in _variables.scss.
+// ---------------------------------------------------------------------------
+$primary: $indigo;
+$primary-hover: $indigo-dark;
+$primary-light: $indigo-pale;
+$bg-main: $surface;
+$bg-subtle: $surface-alt;
+$bg-inset: $surface-hover;
+$border-subtle: $border-light;
+$border-default: $border;
+$border-strong: rgba(17, 24, 39, 0.16);
+$text-tertiary: $text-muted;
+$danger: $red;
+$danger-subtle: $red-pale;
+$success: $emerald;
+$success-subtle: $emerald-pale;
+$shadow-sm: $shadow-2;
+$shadow-md: $shadow-3;
+
+.page {
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  padding: 28px 40px 40px;
+  display: flex;
+  flex-direction: column;
+}
+
+.wiz {
   &__header {
     flex-shrink: 0;
     display: flex;
     align-items: flex-end;
     justify-content: space-between;
     gap: 1rem;
-    padding: 24px 32px 18px;
-    margin-bottom: 24px;
-    border-bottom: 1px solid $border-light;
-
-    h1 {
-      font-family: $font-display;
-      font-size: 1.5rem;
-      font-weight: 800;
-      letter-spacing: -0.02em;
-      color: $text-primary;
-      line-height: 1.2;
-    }
+    padding-bottom: 18px;
+    margin-bottom: 20px;
+    border-bottom: 1px solid $border-subtle;
   }
 
   &__header-eyebrow {
@@ -300,7 +981,7 @@ export default function Providers() {
     font-weight: 700;
     letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: $indigo;
+    color: $primary;
     margin-bottom: 6px;
 
     &::before {
@@ -308,14 +989,8 @@ export default function Providers() {
       width: 16px;
       height: 2px;
       border-radius: 2px;
-      background: $indigo;
+      background: $primary;
     }
-  }
-
-  &__header-sub {
-    margin-top: 4px;
-    font-size: 0.875rem;
-    color: $text-secondary;
   }
 
   &__header-meta {
@@ -326,804 +1001,1705 @@ export default function Providers() {
     font-size: 0.75rem;
     font-weight: 600;
     color: $text-secondary;
-    background: $surface-alt;
-    border: 1px solid $border-light;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
     border-radius: 999px;
     padding: 7px 13px;
     white-space: nowrap;
     margin-bottom: 3px;
   }
 
-  &__loading { display: flex; align-items: center; gap: 8px; color: $text-secondary; font-size: 13px; margin-bottom: 16px; }
-  &__icon {
-    background: $indigo-pale; color: $indigo; font-size: 18px; font-weight: 700;
-    img { width: 24px; height: 24px; object-fit: contain; }
-  }
-  &__key-form { display: flex; gap: 8px; margin-top: 4px; }
-  &__key-actions { display: flex; gap: 6px; }
-
-  &__filter-group {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    padding: 5px 12px 5px 5px;
-    background: $surface-alt;
-    border: 1px solid $border-light;
-    border-radius: 999px;
+  /* ---------- wizard shell ---------- */
+  &-shell {
+    position: relative;
+    background: $bg-main;
+    border: 1px solid $border-subtle;
+    border-radius: 20px;
+    box-shadow: $shadow-md;
+    overflow: hidden;
+    display: flex;
+    flex: 1;
+    min-height: 0;
   }
 
-  &__toolbar-label {
+  /* ---------- sidebar / vertical stepper ---------- */
+  &__sidebar {
     flex-shrink: 0;
-    display: inline-flex;
+    width: 280px;
+    background: $bg-subtle;
+    border-right: 1px solid $border-subtle;
+    padding: 24px 14px 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    overflow-y: auto;
+  }
+
+  &__sidebar-progress {
+    flex-shrink: 0;
+    padding: 4px 12px 20px;
+    margin-bottom: 6px;
+    border-bottom: 1px solid $border-subtle;
+  }
+
+  &__sidebar-progress-head {
+    display: flex;
     align-items: center;
-    gap: 5px;
-    padding: 5px 10px;
-    border-radius: 999px;
-    background: $indigo-pale;
-    color: $indigo;
+    justify-content: space-between;
+    font-family: $font-mono;
     font-size: 0.6875rem;
     font-weight: 700;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    white-space: nowrap;
+    color: $text-tertiary;
+    margin-bottom: 8px;
+
+    span:last-child {
+      color: $primary;
+      font-weight: 800;
+    }
   }
 
-  &__toolbar-divider {
-    flex-shrink: 0;
-    width: 1px;
-    height: 28px;
-    background: linear-gradient(to bottom, transparent, $border-light 15%, $border-light 85%, transparent);
-  }
-
-  &__badge-idle {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 11px;
+  &__sidebar-progress-track {
+    height: 6px;
     border-radius: 999px;
-    font-size: 0.6875rem;
-    font-weight: 600;
-    color: $text-muted;
+    background: $border-subtle;
+    overflow: hidden;
+  }
+
+  &__sidebar-progress-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, $primary 0%, $primary-hover 100%);
+    transition: width 0.28s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  &__step {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    text-align: left;
+    width: 100%;
+    border: none;
     background: transparent;
-    border: 1px dashed $border-light;
-    white-space: nowrap;
+    border-radius: 0.75rem;
+    padding: 10px 12px 20px 12px;
+    cursor: pointer;
+    transition: background 0.16s ease, transform 0.16s ease;
 
     &::before {
       content: '';
-      flex-shrink: 0;
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: $text-muted;
-      opacity: 0.6;
+      position: absolute;
+      top: 40px;
+      left: 27px;
+      width: 2px;
+      height: calc(100% - 32px);
+      background: $border-default;
+      transition: background 0.2s ease;
+    }
+
+    &:last-child {
+      padding-bottom: 10px;
+
+      &::before {
+        display: none;
+      }
+    }
+
+    &:disabled {
+      cursor: default;
+    }
+
+    &:not(:disabled):hover {
+      background: $bg-inset;
     }
   }
 
-  &__icon-btn {
-    padding: 6px !important;
-    min-width: auto;
-    border-radius: 8px;
-  }
-
-  // Action row at the bottom of each provider card. Wraps so buttons never
-  // overflow the card, with tight, even spacing between them.
-  &__foot-actions {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-    margin-top: 12px;
-  }
-
-  &__foot-btn {
-    flex: 0 0 auto;
-    padding: 6px 10px !important;
-    font-size: 12.5px !important;
-    line-height: 1.2;
-    gap: 4px !important;
-    white-space: nowrap;
-  }
-
-  // --- Provider models sidebar ---
-  &__sidebar-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(15, 18, 26, 0.45);
-    z-index: 40;
-  }
-
-  &__sidebar {
-    position: fixed;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: min(420px, 100vw);
-    background: var(--surface, #fff);
-    background: var(--surface, #fff);
-    border-left: 1px solid $border-light;
-    box-shadow: -12px 0 32px rgba(15, 18, 26, 0.12);
-    z-index: 41;
-    display: flex;
-    flex-direction: column;
-    animation: providers-sidebar-in 0.2s ease-out;
-  }
-
-  &__sidebar-header {
+  &__step-marker {
+    position: relative;
+    z-index: 1;
     flex-shrink: 0;
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 20px 20px 16px;
-    border-bottom: 1px solid $border-light;
-  }
-
-  &__sidebar-title {
-    font-family: $font-display;
-    font-size: 1.05rem;
-    font-weight: 800;
-    color: $text-primary;
-  }
-
-  &__sidebar-subtitle {
-    margin-top: 3px;
-    font-size: 0.75rem;
-    color: $text-secondary;
-  }
-
-  &__sidebar-body {
-    flex: 1;
-    overflow-y: auto;
-    padding: 16px 20px 24px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  &__sidebar-empty {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding: 48px 12px;
-    color: $text-secondary;
-    font-size: 13px;
-    text-align: center;
-  }
-
-  &__model-row {
-    border: 1px solid $border-light;
-    border-radius: 12px;
-    padding: 14px;
-    background: $surface-alt;
-  }
-
-  &__model-row-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-
-  &__model-row-name {
-    font-weight: 700;
-    font-size: 0.875rem;
-    color: $text-primary;
-  }
-
-  &__model-row-tags {
-    margin-top: 8px;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
-  &__model-row-meta {
-    margin-top: 10px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px 12px;
-
-    > div {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      font-size: 0.8125rem;
-      color: $text-primary;
-    }
-  }
-
-  &__model-row-meta-label {
-    font-size: 0.6875rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: $text-secondary;
-  }
-
-  &__model-row-url {
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px dashed $border-light;
+    place-items: center;
+    background: $bg-main;
+    border: 1.5px solid $border-default;
+    color: $text-tertiary;
     font-family: $font-mono;
     font-size: 0.75rem;
+    font-weight: 700;
+    transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+  }
+
+  &__step-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-top: 4px;
+    min-width: 0;
+  }
+
+  &__step-label {
+    font-size: 0.84375rem;
+    font-weight: 700;
+    color: $text-primary;
+    transition: color 0.18s ease;
+  }
+
+  &__step-desc {
+    font-size: 0.71875rem;
+    color: $text-tertiary;
+    line-height: 1.35;
+  }
+
+  &__step--active {
+    background: $bg-main;
+    box-shadow: $shadow-sm;
+
+    .wiz__step-marker {
+      background: $primary;
+      border-color: $primary;
+      color: #fff;
+      box-shadow: 0 0 0 5px $primary-light;
+    }
+
+    .wiz__step-label {
+      color: $primary;
+    }
+  }
+
+  &__step--complete {
+    &::before {
+      background: linear-gradient(180deg, $primary 0%, $primary-hover 100%);
+    }
+
+    .wiz__step-marker {
+      background: $primary-light;
+      border-color: $primary;
+      color: $primary;
+    }
+
+    &:not(:disabled):hover {
+      background: rgba(0, 0, 0, 0.02);
+    }
+  }
+
+  &__step--upcoming {
+    .wiz__step-label {
+      color: $text-secondary;
+    }
+
+    .wiz__step-desc {
+      color: #a8b1bb;
+    }
+  }
+
+  /* ---------- content pane ---------- */
+  &__content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 28px 36px 24px;
+    min-height: 0;
+  }
+
+  &__step-kicker {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: $font-mono;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: $primary;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+
+    &::before {
+      content: '';
+      width: 16px;
+      height: 2px;
+      border-radius: 2px;
+      background: $primary;
+    }
+  }
+
+  &__body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 4px;
+    margin-right: -4px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  &__body h2 {
+    font-size: 19px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+    color: $text-primary;
+  }
+
+  &-sub {
+    margin-top: 6px;
+    font-size: 0.9375rem;
+    color: $text-secondary;
+    max-width: 608px;
+    margin-bottom: 1.5rem;
+  }
+
+  /* ---------- fields ---------- */
+  &__field {
+    max-width: 600px;
+    margin-top: 1.75rem;
+
+    &:first-child {
+      margin-top: 0;
+    }
+  }
+
+  &__input-icon-wrap {
+    position: relative;
+
+    svg {
+      position: absolute;
+      top: 50%;
+      left: 0.9375rem;
+      transform: translateY(-50%);
+      color: $text-tertiary;
+      pointer-events: none;
+    }
+
+    input {
+      padding-left: 2.5rem;
+    }
+  }
+
+  &__label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.84375rem;
+    font-weight: 600;
+    color: $text-secondary;
+    margin-bottom: 0.4375rem;
+
+    .opt {
+      color: $text-tertiary;
+      font-weight: 400;
+      font-size: 0.75rem;
+    }
+  }
+
+  &__input {
+    width: 100%;
+    border: 1.5px solid $border-default;
+    border-radius: 0.75rem;
+    padding: 0.8125rem 0.9375rem;
+    font-size: 1.0625rem;
+    font-weight: 500;
+    font-family: $font-body;
+    color: $text-primary;
+    background: $bg-main;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.03);
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+
+    &::placeholder {
+      color: #a8b1bb;
+      font-weight: 400;
+    }
+
+    &:focus {
+      outline: none;
+      border-color: $primary;
+      box-shadow: 0 0 0 0.1875rem $primary-light;
+    }
+  }
+
+  /* ---------- name step: suggestions / tips / roadmap ---------- */
+  &__suggestions {
+    margin-top: 1.75rem;
+    max-width: 600px;
+  }
+
+  &__suggestions-title {
+    font-size: 0.84375rem;
+    font-weight: 700;
+    color: $text-primary;
+  }
+
+  &__suggestions-sub {
+    font-size: 0.78125rem;
+    color: $text-tertiary;
+    margin-top: 2px;
+  }
+
+  &__suggestions-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.625rem;
+    margin-top: 0.875rem;
+  }
+
+  &__suggestion-card {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    text-align: left;
+    padding: 0.75rem 0.875rem;
+    border: 1px solid $border-default;
+    border-radius: 0.75rem;
+    background: $bg-main;
+    cursor: pointer;
+    transition: border-color 0.14s ease, background 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+      background: $primary-light;
+    }
+
+    &:hover .wiz__suggestion-use {
+      opacity: 1;
+    }
+  }
+
+  &__suggestion-icon {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    border-radius: 0.5rem;
+    display: grid;
+    place-items: center;
+    background: $bg-subtle;
+    color: $primary;
+  }
+
+  &__suggestion-text {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.8125rem;
+    font-weight: 500;
     color: $text-secondary;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-}
 
-@keyframes providers-sidebar-in {
-  from { transform: translateX(100%); }
-  to { transform: translateX(0); }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Modelcatalog.tsx
-import { useEffect, useMemo, useState } from 'react';
-import { Search, Boxes, ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ListFilter } from 'lucide-react';
-import { useAppDispatch, useAppSelector } from '../../hooks/redux';
-import { fetchModels } from '../../store/slices/modelsSlice';
-import { fetchProviders } from '../../store/slices/providersSlice';
-import { SkeletonTableRows } from '../common/Skeleton';
-import type { Model } from '../../types';
-import styles from './ModelCatalog.module.scss';
-
-type SortKey = 'name' | 'provider' | 'context_window' | 'price' | 'accuracy' | 'status';
-type SortDir = 'asc' | 'desc';
-
-const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
-
-// Builds a compact page-number list with ellipses, e.g. [1, '…', 4, 5, 6, '…', 12]
-function buildPageList(current: number, total: number): (number | '…')[] {
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
-  const pages = new Set<number>([1, total, current, current - 1, current + 1]);
-  const sorted = [...pages].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
-  const result: (number | '…')[] = [];
-  let prev = 0;
-  for (const p of sorted) {
-    if (prev && p - prev > 1) result.push('…');
-    result.push(p);
-    prev = p;
-  }
-  return result;
-}
-
-interface SortableThProps {
-  label: string;
-  sortKey: SortKey;
-  activeKey: SortKey;
-  dir: SortDir;
-  onSort: (key: SortKey) => void;
-}
-
-function SortableTh({ label, sortKey, activeKey, dir, onSort }: SortableThProps) {
-  const active = activeKey === sortKey;
-  return (
-    <th className={styles['model-catalog__sortable-th']}>
-      <button
-        type="button"
-        className={`${styles['model-catalog__sort-btn']} ${active ? styles['model-catalog__sort-btn--active'] : ''}`}
-        onClick={() => onSort(sortKey)}
-      >
-        {label}
-        {active ? (
-          dir === 'asc' ? <ChevronUp size={13} /> : <ChevronDown size={13} />
-        ) : (
-          <ChevronsUpDown size={13} className={styles['model-catalog__sort-icon-idle']} />
-        )}
-      </button>
-    </th>
-  );
-}
-
-export default function ModelCatalog() {
-  const dispatch = useAppDispatch();
-  const { items, status } = useAppSelector((s) => s.models);
-  const providers = useAppSelector((s) => s.providers.items);
-  const [search, setSearch] = useState('');
-  const [capFilter, setCapFilter] = useState('All');
-  const [sortKey, setSortKey] = useState<SortKey>('name');
-  const [sortDir, setSortDir] = useState<SortDir>('asc');
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
-
-  useEffect(() => {
-    dispatch(fetchModels());
-    dispatch(fetchProviders());
-  }, [dispatch]);
-
-  const caps = useMemo(() => ['All', ...new Set(items.flatMap((m) => m.capabilities))], [items]);
-  const providerName = (id: string) => providers.find((p) => p.id === id)?.name || id;
-
-  const filtered = useMemo(() => {
-    return items.filter((m) => {
-      if (capFilter !== 'All' && !m.capabilities.includes(capFilter)) return false;
-      const q = search.toLowerCase();
-      return !q || m.name.toLowerCase().includes(q) || providerName(m.provider_id).toLowerCase().includes(q);
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, providers, search, capFilter]);
-
-  const sorted = useMemo(() => {
-    const dir = sortDir === 'asc' ? 1 : -1;
-    const compare = (a: Model, b: Model): number => {
-      switch (sortKey) {
-        case 'name':
-          return a.name.localeCompare(b.name) * dir;
-        case 'provider':
-          return providerName(a.provider_id).localeCompare(providerName(b.provider_id)) * dir;
-        case 'context_window':
-          return (a.context_window - b.context_window) * dir;
-        case 'price':
-          return ((a.input_price ?? -1) - (b.input_price ?? -1)) * dir;
-        case 'accuracy':
-          return ((a.accuracy_score ?? -1) - (b.accuracy_score ?? -1)) * dir;
-        case 'status':
-          return (Number(a.is_active) - Number(b.is_active)) * dir;
-        default:
-          return 0;
-      }
-    };
-    return [...filtered].sort(compare);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtered, sortKey, sortDir, providers]);
-
-  const total = sorted.length;
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const safePage = Math.min(page, totalPages);
-  const startIdx = (safePage - 1) * pageSize;
-  const pageItems = sorted.slice(startIdx, startIdx + pageSize);
-  const pageList = useMemo(() => buildPageList(safePage, totalPages), [safePage, totalPages]);
-
-  useEffect(() => {
-    setPage(1);
-  }, [search, capFilter, pageSize]);
-
-  const toggleSort = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortKey(key);
-      setSortDir('asc');
-    }
-  };
-
-  return (
-    <div className="page-enter pg-shell">
-      <div className={styles['model-catalog__header']}>
-        <div>
-          <p className={styles['model-catalog__header-eyebrow']}>Catalog</p>
-          <h1>Model Catalog</h1>
-          <p className={styles['model-catalog__header-sub']}>All models across connected providers</p>
-        </div>
-        <div className={styles['model-catalog__header-meta']}>
-          <Boxes size={13} />
-          {items.length} model{items.length === 1 ? '' : 's'} listed
-        </div>
-      </div>
-      <div className="pg-toolbar">
-        <div className="toolbar">
-          <div className="search-box">
-            <Search size={16} color="var(--text-muted)" />
-            <input placeholder="Search models or providers…" value={search} onChange={(e) => setSearch(e.target.value)} />
-          </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <div className={styles['model-catalog__filter-group']}>
-              <span className={styles['model-catalog__toolbar-label']}>
-                <ListFilter size={11} /> Capability
-              </span>
-              <div className="pills">{caps.map((c) => <button key={c} className={`pill ${capFilter === c ? 'on' : ''}`} onClick={() => setCapFilter(c)}>{c}</button>)}</div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div className="pg-body">
-        <div className="tw">
-          <table className="tbl">
-            <thead>
-              <tr>
-                <SortableTh label="Model" sortKey="name" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                <SortableTh label="Provider" sortKey="provider" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                <th>Capabilities</th>
-                <SortableTh label="Context" sortKey="context_window" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                <SortableTh label="Price (in/out)" sortKey="price" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                <SortableTh label="Accuracy" sortKey="accuracy" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                <SortableTh label="Status" sortKey="status" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-              </tr>
-            </thead>
-            <tbody>
-              {status === 'loading' && <SkeletonTableRows columns={7} rows={6} />}
-              {status !== 'loading' && pageItems.map((m) => (
-                <tr key={m.id}>
-                  <td style={{ fontWeight: 700 }}>{m.name}</td>
-                  <td style={{ color: 'var(--text-secondary)' }}>{providerName(m.provider_id)}</td>
-                  <td>{m.capabilities.map((c) => <span key={c} className="tag tag-ind">{c}</span>)}</td>
-                  <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontSize: 13 }}>{m.context_window.toLocaleString()}</td>
-                  <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontSize: 13, color: 'var(--text-secondary)' }}>
-                    {m.input_price != null ? `$${m.input_price.toFixed(2)}` : '—'} / {m.output_price != null ? `$${m.output_price.toFixed(2)}` : '—'}
-                  </td>
-                  <td>
-                    <span style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontWeight: 700, color: (m.accuracy_score || 0) >= 90 ? '#10B981' : 'var(--text-primary)' }}>
-                      {m.accuracy_score != null ? `${m.accuracy_score}%` : '—'}
-                    </span>
-                  </td>
-                  <td><span className={`badge ${m.is_active ? 'badge-green' : 'badge-gray'}`}>{m.is_active ? 'Active' : 'Inactive'}</span></td>
-                </tr>
-              ))}
-              {status !== 'loading' && pageItems.length === 0 && (
-                <tr>
-                  <td colSpan={7} className={styles['model-catalog__empty']}>No models match your filters.</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-
-          {status !== 'loading' && total > 0 && (
-            <div className={styles['model-catalog__pagination']}>
-              <div className={styles['model-catalog__pagination-info']}>
-                <span>
-                  Showing <strong>{startIdx + 1}–{Math.min(startIdx + pageSize, total)}</strong> of <strong>{total}</strong> model{total === 1 ? '' : 's'}
-                </span>
-                <div className={styles['model-catalog__page-size']}>
-                  <label htmlFor="model-catalog-page-size">Rows per page</label>
-                  <select
-                    id="model-catalog-page-size"
-                    value={pageSize}
-                    onChange={(e) => setPageSize(Number(e.target.value))}
-                  >
-                    {PAGE_SIZE_OPTIONS.map((n) => (
-                      <option key={n} value={n}>{n}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className={styles['model-catalog__pager']}>
-                <button
-                  className={styles['model-catalog__page-btn']}
-                  disabled={safePage === 1}
-                  onClick={() => setPage(1)}
-                  aria-label="First page"
-                >
-                  <ChevronsLeft size={14} />
-                </button>
-                <button
-                  className={styles['model-catalog__page-btn']}
-                  disabled={safePage === 1}
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  aria-label="Previous page"
-                >
-                  <ChevronLeft size={14} />
-                </button>
-
-                {pageList.map((p, i) =>
-                  p === '…' ? (
-                    <span key={`dots-${i}`} className={styles['model-catalog__page-dots']}>…</span>
-                  ) : (
-                    <button
-                      key={p}
-                      className={`${styles['model-catalog__page-btn']} ${styles['model-catalog__page-btn--num']} ${p === safePage ? styles['model-catalog__page-btn--active'] : ''}`}
-                      onClick={() => setPage(p)}
-                      aria-current={p === safePage ? 'page' : undefined}
-                    >
-                      {p}
-                    </button>
-                  )
-                )}
-
-                <button
-                  className={styles['model-catalog__page-btn']}
-                  disabled={safePage === totalPages}
-                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                  aria-label="Next page"
-                >
-                  <ChevronRight size={14} />
-                </button>
-                <button
-                  className={styles['model-catalog__page-btn']}
-                  disabled={safePage === totalPages}
-                  onClick={() => setPage(totalPages)}
-                  aria-label="Last page"
-                >
-                  <ChevronsRight size={14} />
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Modelcatalog.module.scss
-@use '../../styles/_variables' as *;
-
-.model-catalog {
-  &__header {
+  &__suggestion-use {
     flex-shrink: 0;
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 24px 32px 18px;
-    margin-bottom: 24px;
-    border-bottom: 1px solid $border-light;
+    font-size: 0.65625rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: $primary;
+    opacity: 0;
+    transition: opacity 0.14s ease;
+  }
 
-    h1 {
-      font-family: $font-display;
-      font-size: 1.5rem;
-      font-weight: 800;
-      letter-spacing: -0.02em;
-      color: $text-primary;
-      line-height: 1.2;
+  &__tips {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    margin-top: 1.75rem;
+    padding: 1rem 1.125rem;
+    max-width: 600px;
+    border: 1px solid $border-subtle;
+    border-radius: 0.875rem;
+    background: linear-gradient(135deg, $primary-light 0%, rgba(255, 255, 255, 0) 140%);
+  }
+
+  &__tips-icon {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 0.625rem;
+    display: grid;
+    place-items: center;
+    background: $bg-main;
+    color: $primary;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+  }
+
+  &__tips-title {
+    font-size: 0.84375rem;
+    font-weight: 700;
+    color: $text-primary;
+    margin-bottom: 6px;
+  }
+
+  &__tips-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.8125rem;
+    color: $text-secondary;
+    line-height: 1.5;
+    padding-left: 1.125rem;
+
+    li {
+      list-style: disc;
     }
   }
 
-  &__header-eyebrow {
+  &__roadmap {
+    margin-top: 2rem;
+    padding-top: 1.75rem;
+    border-top: 1px solid $border-subtle;
+    max-width: 600px;
+  }
+
+  &__roadmap-title {
+    font-size: 0.9375rem;
+    font-weight: 700;
+    color: $text-primary;
+  }
+
+  &__roadmap-sub {
+    font-size: 0.8125rem;
+    color: $text-tertiary;
+    margin-top: 2px;
+  }
+
+  &__roadmap-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.625rem;
+    margin-top: 1rem;
+  }
+
+  &__roadmap-card {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.875rem 0.9375rem;
+    border: 1px solid $border-subtle;
+    border-radius: 0.75rem;
+    background: $bg-main;
+    transition: border-color 0.14s ease, background 0.14s ease;
+
+    &:hover {
+      border-color: $border-strong;
+      background: $bg-subtle;
+    }
+  }
+
+  &__roadmap-num {
+    position: absolute;
+    top: 0.625rem;
+    right: 0.75rem;
+    font-family: $font-mono;
+    font-size: 0.65625rem;
+    font-weight: 700;
+    color: $text-tertiary;
+  }
+
+  &__roadmap-icon {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 0.625rem;
+    display: grid;
+    place-items: center;
+    background: $bg-subtle;
+    color: $text-secondary;
+  }
+
+  &__roadmap-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding-top: 1px;
+    min-width: 0;
+  }
+
+  &__roadmap-label {
+    font-size: 0.8125rem;
+    font-weight: 700;
+    color: $text-primary;
+  }
+
+  &__roadmap-desc {
+    font-size: 0.71875rem;
+    color: $text-tertiary;
+    line-height: 1.4;
+  }
+
+  &__select {
+    width: 100%;
+    border: 1px solid $border-default;
+    border-radius: 0.5rem;
+    padding: 0.625rem 0.75rem;
+    font-size: 0.9375rem;
+    font-family: $font-body;
+    color: $text-primary;
+    background: $bg-main;
+    transition: border-color 0.14s ease, box-shadow 0.14s ease;
+
+    &:focus {
+      outline: none;
+      border-color: $primary;
+      box-shadow: 0 0 0 0.1875rem $primary-light;
+    }
+  }
+
+  /* ---------- type cards (Model / Agent / RAG) ---------- */
+  &__type-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    margin-top: 1.5rem;
+    max-width: 650px;
+  }
+
+  &__type-card {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.875rem;
+    text-align: left;
+    width: 100%;
+    padding: 1.125rem 3rem 1.125rem 1.125rem;
+    border: 1px solid $border-default;
+    border-radius: 0.75rem;
+    background: $bg-main;
+    cursor: pointer;
+    transition: border-color 0.14s ease, background 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+    }
+
+    &--selected {
+      border-color: $primary;
+      background: $primary-light;
+    }
+
+    &--disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+
+      &:hover {
+        border-color: $border-default;
+      }
+    }
+  }
+
+  &__type-icon {
+    width: 38px;
+    height: 38px;
+    flex-shrink: 0;
+    border-radius: 0.5rem;
+    background: $bg-subtle;
+    color: $primary;
+    display: grid;
+    place-items: center;
+  }
+
+  &__type-icon--agent {
+    color: $violet;
+  }
+
+  &__type-icon--rag {
+    color: $sky;
+  }
+
+  &__type-content {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    flex: 1;
+  }
+
+  &__type-title {
     display: flex;
     align-items: center;
     gap: 8px;
+    font-size: 1rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__type-badge {
     font-family: $font-mono;
-    font-size: 0.6875rem;
+    font-size: 0.625rem;
     font-weight: 700;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.04em;
     text-transform: uppercase;
-    color: $indigo;
-    margin-bottom: 6px;
+    color: $text-tertiary;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
+    border-radius: 999px;
+    padding: 0.125rem 0.5rem;
+  }
+
+  &__type-desc {
+    font-size: 0.875rem;
+    color: $text-secondary;
+    line-height: 1.5;
+  }
+
+  &__type-check {
+    position: absolute;
+    top: 50%;
+    right: 1.125rem;
+    transform: translateY(-50%);
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: $primary;
+    color: #fff;
+    display: grid;
+    place-items: center;
+  }
+
+  /* ---------- optional agent framework sub-section ---------- */
+  &__framework-section {
+    margin-top: 1.75rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid $border-subtle;
+    max-width: 650px;
+  }
+
+  &__framework-hint {
+    font-size: 0.8125rem;
+    color: $text-tertiary;
+    margin-bottom: 0.875rem;
+  }
+
+  &__framework-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+  }
+
+  &__type-card--framework {
+    padding: 0.875rem 2.75rem 0.875rem 0.875rem;
+    gap: 0.75rem;
+
+    .wiz__type-icon {
+      width: 32px;
+      height: 32px;
+    }
+
+    .wiz__type-title {
+      font-size: 0.9375rem;
+    }
+
+    .wiz__type-desc {
+      font-size: 0.8125rem;
+    }
+  }
+
+  /* ---------- generic selectable card grid (providers / models / metrics) ---------- */
+  &__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 0.75rem;
+    margin-top: 1.5rem;
+  }
+
+  &__models-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+    gap: 0.75rem;
+  }
+
+  &__card {
+    position: relative;
+    text-align: left;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.875rem 2.25rem 0.875rem 0.875rem;
+    border: 1px solid $border-default;
+    border-radius: 0.75rem;
+    background: $bg-main;
+    cursor: pointer;
+    transition: border-color 0.14s ease, background 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+    }
+
+    &--selected {
+      border-color: $primary;
+      background: $primary-light;
+    }
+  }
+
+  &__card-icon {
+    flex-shrink: 0;
+    width: 30px;
+    height: 30px;
+    border-radius: 0.5625rem;
+    display: grid;
+    place-items: center;
+    background: $bg-subtle;
+    color: $text-tertiary;
+    transition: background 0.16s ease, color 0.16s ease;
+  }
+
+  &__card--selected &__card-icon {
+    background: $primary;
+    color: #fff;
+  }
+
+  &__card-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  &__card-name {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: $text-primary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__card-sub {
+    font-size: 0.75rem;
+    color: $text-tertiary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__card-check {
+    position: absolute;
+    top: 50%;
+    right: 0.75rem;
+    transform: translateY(-50%);
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: $primary;
+    color: #fff;
+    flex-shrink: 0;
+  }
+
+  /* ---------- provider card status pill ---------- */
+  &__provider-status {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.65625rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: $success;
+    background: $success-subtle;
+    border-radius: 999px;
+    padding: 0.1875rem 0.5rem 0.1875rem 0.375rem;
+    margin-top: 2px;
 
     &::before {
       content: '';
-      width: 16px;
-      height: 2px;
-      border-radius: 2px;
-      background: $indigo;
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: $success;
     }
   }
 
-  &__header-sub {
-    margin-top: 4px;
-    font-size: 0.875rem;
-    color: $text-secondary;
-  }
-
-  &__header-meta {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: $text-secondary;
-    background: $surface-alt;
-    border: 1px solid $border-light;
-    border-radius: 999px;
-    padding: 7px 13px;
-    white-space: nowrap;
-    margin-bottom: 3px;
-  }
-
-  &__loading { display: flex; align-items: center; gap: 8px; color: $text-secondary; font-size: 13px; margin-bottom: 16px; }
-
-  &__filter-group {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    padding: 5px 12px 5px 5px;
-    background: $surface-alt;
-    border: 1px solid $border-light;
-    border-radius: 999px;
-  }
-
-  &__toolbar-label {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 5px 10px;
-    border-radius: 999px;
-    background: $indigo-pale;
-    color: $indigo;
-    font-size: 0.6875rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    white-space: nowrap;
-  }
-
-  // --- Sortable column headers ---
-  &__sortable-th {
-    padding: 0 !important;
-  }
-
-  &__sort-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    width: 100%;
-    padding: 12px 16px;
-    background: none;
-    border: none;
-    cursor: pointer;
-    font: inherit;
-    font-weight: 700;
-    font-size: inherit;
-    color: inherit;
+  /* ---------- richer model card ---------- */
+  &__model-card {
+    position: relative;
     text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.9375rem 1.0625rem;
+    border: 1px solid $border-default;
+    border-radius: 0.75rem;
+    background: $bg-main;
+    cursor: pointer;
+    transition: border-color 0.14s ease, background 0.14s ease;
 
     &:hover {
-      color: $indigo;
-
-      .model-catalog__sort-icon-idle { opacity: 0.7; }
+      border-color: $primary;
     }
 
-    &--active {
-      color: $indigo;
+    &--selected {
+      border-color: $primary;
+      background: $primary-light;
     }
   }
 
-  &__sort-icon-idle {
-    opacity: 0.28;
-    transition: opacity 0.15s ease;
+  &__model-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  &__model-name {
+    font-size: 0.90625rem;
+    font-weight: 700;
+    color: $text-primary;
+    line-height: 1.3;
+  }
+
+  &__model-provider {
+    font-size: 0.78125rem;
+    color: $text-tertiary;
+    margin-top: -0.25rem;
+  }
+
+  &__model-caps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3125rem;
+  }
+
+  &__model-cap-chip {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
+    border-radius: 0.375rem;
+    padding: 0.125rem 0.4375rem;
+  }
+
+  &__model-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.625rem;
+    font-size: 0.71875rem;
+    color: $text-tertiary;
+    padding-top: 0.375rem;
+    margin-top: 0.125rem;
+    border-top: 1px solid $border-subtle;
   }
 
   &__empty {
+    grid-column: 1 / -1;
+    padding: 2rem;
     text-align: center;
-    padding: 40px 16px !important;
-    color: $text-secondary;
-    font-size: 0.875rem;
+    color: $text-tertiary;
+    font-size: 0.90625rem;
+    background: $bg-subtle;
+    border-radius: 0.875rem;
   }
 
-  // --- Pagination bar ---
-  &__pagination {
+  // scrollable wrapper used for the providers / models card grids
+  &__grid-scroll {
+    flex: 1;
+    min-height: 0;
+    margin-top: 1.5rem;
+    overflow-y: auto;
+    padding: 6px 4px 6px 2px;
+    margin-right: -4px;
+
+    .wiz__grid {
+      margin-top: 0;
+    }
+  }
+
+  /* ---------- test suite: dataset grid + subgroup panel ---------- */
+  &__dataset-layout {
+    display: flex;
+    align-items: stretch;
+    gap: 1.25rem;
+    margin-top: 1.5rem;
+    flex: 1;
+    min-height: 22rem;
+  }
+
+  &__dataset-grid-scroll {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 4px 4px 4px 2px;
+    margin-right: -4px;
+  }
+
+  &__dataset-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+    gap: 0.75rem;
+  }
+
+  &__dataset-card {
+    position: relative;
+    text-align: left;
+    padding: 1rem 1.125rem;
+    border: 1px solid $border-default;
+    border-radius: 0.75rem;
+    background: $bg-main;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    transition: border-color 0.14s ease, background 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+    }
+
+    &--selected {
+      border-color: $primary;
+      background: $primary-light;
+    }
+  }
+
+  &__dataset-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  &__dataset-top-left {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    min-width: 0;
+  }
+
+  &__dataset-icon {
+    flex-shrink: 0;
+    width: 30px;
+    height: 30px;
+    border-radius: 0.5625rem;
+    display: grid;
+    place-items: center;
+    background: $bg-subtle;
+    color: $text-tertiary;
+  }
+
+  &__dataset-card--selected &__dataset-icon {
+    background: $primary;
+    color: #fff;
+  }
+
+  &__dataset-name {
+    font-size: 0.90625rem;
+    font-weight: 700;
+    color: $text-primary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__dataset-desc {
+    font-size: 0.8125rem;
+    color: $text-secondary;
+    line-height: 1.5;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  &__dataset-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.625rem;
+    font-size: 0.78125rem;
+    color: $text-tertiary;
+  }
+
+  // ---- subgroup panel (persistent column beside the dataset grid) ----
+  &__subgroup-panel {
+    flex-shrink: 0;
+    width: 320px;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid $border-subtle;
+    border-radius: 0.875rem;
+    background: $bg-subtle;
+    overflow: hidden;
+  }
+
+  &__subgroup-panel-head {
+    flex-shrink: 0;
+    padding: 14px 16px 12px;
+    border-bottom: 1px solid $border-subtle;
+  }
+
+  &__subgroup-panel-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8125rem;
+    font-weight: 800;
+    color: $text-primary;
+    letter-spacing: -0.01em;
+  }
+
+  &__subgroup-panel-sub {
+    margin-top: 3px;
+    font-size: 0.71875rem;
+    color: $text-tertiary;
+  }
+
+  &__subgroup-panel-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+  }
+
+  &__subgroup-empty {
+    padding: 1.25rem 0.75rem;
+    text-align: center;
+    border: 1px dashed $border-strong;
+    border-radius: 0.625rem;
+    font-size: 0.78125rem;
+    color: $text-tertiary;
+    margin: 10px;
+  }
+
+  &__subgroup-row {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    width: 100%;
+    text-align: left;
+    padding: 0.5625rem 0.6875rem;
+    border: 1px solid $border-default;
+    border-radius: 0.625rem;
+    background: $bg-main;
+    cursor: pointer;
+    transition: border-color 0.14s ease, background 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+    }
+
+    &--selected {
+      border-color: $primary;
+      background: $primary-light;
+    }
+  }
+
+  &__subgroup-row-name {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__checkbox {
+    flex-shrink: 0;
+    width: 17px;
+    height: 17px;
+    border-radius: 5px;
+    border: 1.5px solid $border-strong;
+    background: $bg-main;
+    display: grid;
+    place-items: center;
+    color: transparent;
+    transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+
+    &--checked {
+      background: $primary;
+      border-color: $primary;
+      color: #fff;
+    }
+  }
+
+  /* ---------- static chips / tags ---------- */
+  &__chip {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $primary;
+    background: $primary-light;
+    border-radius: 0.375rem;
+    padding: 0.1875rem 0.5rem;
+    display: inline-block;
+  }
+
+  &__chip--static {
+    color: $text-secondary;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
+    font-weight: 600;
+    font-size: 0.71875rem;
+  }
+
+  /* ---------- metrics: cards + judge panel side by side ---------- */
+  &__metrics-toolbar {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    flex-wrap: wrap;
+    gap: 1rem;
+    margin-top: 1.5rem;
+  }
+
+  &__metrics-count {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    font-size: 0.875rem;
+    color: $text-secondary;
+
+    strong {
+      font-weight: 700;
+      color: $primary;
+    }
+  }
+
+  &__metrics-actions {
+    display: flex;
+    align-items: center;
     gap: 12px;
-    padding: 14px 20px;
-    border-top: 1px solid $border-light;
-    background: $surface-alt;
   }
 
-  &__pagination-info {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 18px;
-    font-size: 0.8125rem;
-    color: $text-secondary;
-
-    strong { color: $text-primary; font-weight: 700; }
-  }
-
-  &__page-size {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-
-    label {
-      font-size: 0.75rem;
-      color: $text-secondary;
-      white-space: nowrap;
-    }
-
-    select {
-      appearance: none;
-      -webkit-appearance: none;
-      font: inherit;
-      font-size: 0.8125rem;
-      font-weight: 600;
-      color: $text-primary;
-      background: $surface;
-      border: 1px solid $border-light;
-      border-radius: 8px;
-      padding: 5px 26px 5px 10px;
-      cursor: pointer;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%236B7280' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-      background-repeat: no-repeat;
-      background-position: right 10px center;
-
-      &:hover { border-color: $indigo; }
-      &:focus { outline: none; border-color: $indigo; box-shadow: 0 0 0 3px $indigo-pale; }
-    }
-  }
-
-  &__pager {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-  }
-
-  &__page-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 30px;
-    height: 30px;
-    padding: 0 6px;
-    border-radius: 8px;
-    border: 1px solid transparent;
-    background: transparent;
-    color: $text-secondary;
+  &__link-btn {
+    font-family: $font-body;
     font-size: 0.8125rem;
     font-weight: 600;
+    color: $primary;
+    background: transparent;
+    border: none;
+    padding: 0;
     cursor: pointer;
-    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 
-    &:hover:not(:disabled) {
-      background: $indigo-pale;
-      color: $indigo;
-    }
-
-    &:disabled {
-      opacity: 0.35;
-      cursor: not-allowed;
-    }
-
-    &--num {
-      min-width: 30px;
-    }
-
-    &--active {
-      background: $indigo;
-      color: #fff;
-
-      &:hover:not(:disabled) {
-        background: $indigo;
-        color: #fff;
-      }
+    &:hover {
+      text-decoration: underline;
     }
   }
 
-  &__page-dots {
-    display: inline-flex;
+  &__metrics-layout {
+    display: grid;
+    grid-template-columns: 1fr 300px;
+    align-items: stretch;
+    gap: 1.25rem;
+    margin-top: 0.875rem;
+    flex: 1;
+    min-height: 20rem;
+  }
+
+  &__metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 0.75rem;
+  }
+
+  &__metric-card {
+    position: relative;
+    text-align: left;
+    display: flex;
     align-items: center;
-    justify-content: center;
-    min-width: 20px;
-    height: 30px;
-    color: $text-muted;
+    gap: 0.75rem;
+    padding: 0.875rem 2.25rem 0.875rem 0.875rem;
+    border: 1px solid $border-default;
+    border-radius: 0.75rem;
+    background: $bg-main;
+    cursor: pointer;
+    transition: border-color 0.14s ease, background 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+    }
+
+    &--selected {
+      border-color: $primary;
+      background: $primary-light;
+    }
+  }
+
+  &__metric-name {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: $text-primary;
+  }
+
+  &__metric-check {
+    position: absolute;
+    top: 50%;
+    right: 0.75rem;
+    transform: translateY(-50%);
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: $primary;
+    color: #fff;
+    flex-shrink: 0;
+  }
+
+  &__metrics-main-scroll {
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 4px 4px 4px 2px;
+    margin-right: -4px;
+  }
+
+  &__judge-panel {
+    flex-shrink: 0;
+    background: $bg-subtle;
+    border: 1px solid $border-subtle;
+    border-radius: 0.75rem;
+    padding: 1rem 1.125rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  &__judge-title {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-family: $font-mono;
+    font-size: 0.71875rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: $text-tertiary;
+
+    svg {
+      color: $primary;
+    }
+  }
+
+  &__judge-hint {
+    font-size: 0.75rem;
+    color: $text-tertiary;
+    line-height: 1.5;
+    margin: 0.5rem 0 0.75rem;
+    flex-shrink: 0;
+  }
+
+  &__judge-panel-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding-right: 4px;
+    margin-right: -4px;
+  }
+
+  &__judge-empty {
+    padding: 1.25rem 0.75rem;
+    text-align: center;
+    border: 1px dashed $border-strong;
+    border-radius: 0.625rem;
     font-size: 0.8125rem;
+    color: $text-tertiary;
+  }
+
+  &__judge-row {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    width: 100%;
+    text-align: left;
+    padding: 0.5625rem 0.6875rem;
+    border: 1px solid $border-default;
+    border-radius: 0.625rem;
+    background: $bg-main;
+    cursor: pointer;
+    transition: border-color 0.14s ease, background 0.14s ease;
+
+    &:hover {
+      border-color: $primary;
+    }
+
+    &--selected {
+      border-color: $primary;
+      background: $primary-light;
+    }
+  }
+
+  &__judge-row-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+
+  &__judge-row-name {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: $text-primary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__judge-row-meta {
+    font-size: 0.6875rem;
+    color: $text-tertiary;
+  }
+
+  &__radio {
+    flex-shrink: 0;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    border: 1.5px solid $border-strong;
+    background: $bg-main;
+    transition: border-color 0.14s ease;
+
+    &--checked {
+      border-color: $primary;
+      border-width: 4.5px;
+    }
+  }
+
+  /* ---------- review step ---------- */
+  &__review-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.75rem;
+    margin-top: 1.5rem;
+  }
+
+  &__review-stat {
+    padding: 0.875rem 1rem;
+    border: 1px solid $border-subtle;
+    border-radius: 0.75rem;
+    background: $bg-subtle;
+  }
+
+  &__review-stat-label {
+    display: block;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: $text-tertiary;
+    margin-bottom: 4px;
+  }
+
+  &__review-stat-value {
+    display: block;
+    font-family: $font-mono;
+    font-size: 1.375rem;
+    font-weight: 800;
+    color: $text-primary;
+    letter-spacing: -0.01em;
+  }
+
+  &__review {
+    margin-top: 0.75rem;
+    border: 1px solid $border-subtle;
+    border-radius: 0.75rem;
+    overflow: hidden;
+  }
+
+  &__review-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    font-size: 0.90625rem;
+    border-bottom: 1px solid $border-subtle;
+
+    &:last-child {
+      border-bottom: 0;
+    }
+
+    span:first-child {
+      color: $text-tertiary;
+      flex-shrink: 0;
+    }
+
+    span:last-child {
+      color: $text-primary;
+      font-weight: 500;
+      text-align: right;
+    }
+  }
+
+  &__review-section {
+    margin-top: 1.75rem;
+  }
+
+  &__review-section-title {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-family: $font-mono;
+    font-size: 0.71875rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: $text-tertiary;
+  }
+
+  &__error {
+    margin-top: 1.25rem;
+    font-size: 0.875rem;
+    color: $danger;
+    background: $danger-subtle;
+    border-radius: 0.5rem;
+    padding: 0.625rem 0.875rem;
+  }
+
+  &__register-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 1rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    padding: 0.5625rem 0.875rem;
+    border-radius: 0.5rem;
+    width: fit-content;
+
+    &[data-state='success'] {
+      color: $success;
+      background: $success-subtle;
+    }
+
+    &[data-state='error'] {
+      color: $danger;
+      background: $danger-subtle;
+    }
+
+    &[data-state='pending'] {
+      color: $text-tertiary;
+      background: $bg-subtle;
+    }
+  }
+
+  /* ---------- nav footer ---------- */
+  &__nav {
+    flex-shrink: 0;
+    margin-top: 1.5rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid $border-subtle;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  &__spin {
+    animation: wiz-spin 0.8s linear infinite;
+  }
+
+  @keyframes wiz-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 }
+
+.toast__icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: $success-subtle;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@media (max-width: 1100px) {
+  .wiz__dataset-layout {
+    flex-direction: column;
+    height: auto;
+  }
+
+  .wiz__dataset-grid-scroll {
+    max-height: 22rem;
+  }
+
+  .wiz__subgroup-panel {
+    width: 100%;
+    max-height: 18rem;
+  }
+}
+
+@media (max-width: 900px) {
+  .wiz__metrics-layout {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+
+  .wiz__metrics-main-scroll {
+    max-height: 20rem;
+  }
+
+  .wiz__judge-panel-scroll {
+    max-height: 16rem;
+  }
+
+  .wiz__framework-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .wiz__roadmap-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .wiz__suggestions-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .wiz-shell {
+    flex-direction: column;
+  }
+
+  .wiz__sidebar {
+    width: 100%;
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: none;
+    border-bottom: 1px solid $border-subtle;
+    padding: 14px;
+    gap: 6px;
+  }
+
+  .wiz__step {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: 8px 10px;
+    flex-shrink: 0;
+    width: 92px;
+
+    &::before {
+      display: none;
+    }
+  }
+
+  .wiz__step-text {
+    align-items: center;
+    padding-top: 2px;
+  }
+
+  .wiz__step-desc {
+    display: none;
+  }
+
+  .wiz__content {
+    padding: 24px 20px;
+  }
+
+  .page {
+    padding: 20px 16px 32px;
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//datasetsSlice.ts
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import { datasetsApi } from '../../api/endpoints/datasets';
+
+export interface Dataset {
+  id: string;
+  name: string;
+  category: string;
+  eval_type: string;
+  question_count: number;
+  schema_version: string;
+  dataset_categories: string[];
+  created_at: string;
+}
+
+interface DatasetsState {
+  items: Dataset[];
+  status: 'idle' | 'loading' | 'succeeded' | 'failed';
+  error: string | null;
+}
+
+const initialState: DatasetsState = {
+  items: [],
+  status: 'idle',
+  error: null,
+};
+
+// GET /datasets?eval_type={type}
+export const fetchDatasets = createAsyncThunk('datasets/fetchAll', (evalType: string) => datasetsApi.list(evalType));
+
+const datasetsSlice = createSlice({
+  name: 'datasets',
+  initialState,
+  reducers: {},
+  extraReducers: (builder) => {
+    builder
+      .addCase(fetchDatasets.pending, (state) => {
+        state.status = 'loading';
+      })
+      .addCase(fetchDatasets.fulfilled, (state, action) => {
+        state.status = 'succeeded';
+        state.items = action.payload;
+      })
+      .addCase(fetchDatasets.rejected, (state, action) => {
+        state.status = 'failed';
+        state.error = action.error.message || 'Failed to load datasets';
+      });
+  },
+});
+
+export default datasetsSlice.reducer;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Datasets.ts
+import { apiClient } from '../client';
+import type { Dataset } from '../../store/slices/datasetsSlice';
+
+interface DatasetsResponse {
+  datasets: Dataset[];
+  total: number;
+}
+
+export const datasetsApi = {
+  // GET /datasets?eval_type={type}
+  list: async (evalType: string): Promise<Dataset[]> => {
+    const { data } = await apiClient.get<DatasetsResponse>('/datasets', { params: { eval_type: evalType } });
+    return data.datasets;
+  },
+};
