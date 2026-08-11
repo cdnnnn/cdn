@@ -25,7 +25,6 @@ import {
   Wand2,
   Upload,
   FileText,
-  X,
 } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
 import { fetchProviders } from '../../store/slices/providersSlice';
@@ -110,7 +109,7 @@ export default function NewEvaluation() {
   const [agentFramework, setAgentFramework] = useState<string | null>(null);
   const [selSubgroup, setSelSubgroup] = useState<string[]>([]);
   const [runSamples, setRunSamples] = useState<number>(10);
-  const [showUpload, setShowUpload] = useState(false);
+  const [datasetTab, setDatasetTab] = useState<'browse' | 'upload'>('browse');
   const [uploadName, setUploadName] = useState('');
   const [uploadDescription, setUploadDescription] = useState('');
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -188,11 +187,7 @@ export default function NewEvaluation() {
     setUploadDescription('');
     setUploadFile(null);
     setUploadFileError(null);
-    setShowUpload(true);
-  };
-
-  const closeUploadPanel = () => {
-    setShowUpload(false);
+    setDatasetTab('upload');
   };
 
   const handleUploadFileChange = (file: File | null) => {
@@ -224,7 +219,7 @@ export default function NewEvaluation() {
     );
     if (uploadDataset.fulfilled.match(result)) {
       dispatch(setDraft({ selBenchmark: result.payload.id }));
-      setShowUpload(false);
+      setDatasetTab('browse');
     }
   };
 
@@ -608,34 +603,109 @@ export default function NewEvaluation() {
 
               {step === 4 && (
                 <>
-                  <div className={styles['wiz__section-head']}>
-                    <div>
-                      <h2>Pick a test suite</h2>
-                      <p className={styles['wiz-sub']}>Select the dataset to evaluate against.</p>
-                    </div>
-                    {!showUpload && (
-                      <button type="button" className={styles['wiz__upload-toggle']} onClick={openUploadPanel}>
-                        <Upload size={14} strokeWidth={2.25} /> Upload custom dataset
-                      </button>
-                    )}
+                  <h2>Pick a test suite</h2>
+                  <p className={styles['wiz-sub']}>Select the dataset to evaluate against, or upload your own.</p>
+
+                  <div className={styles['wiz__tabs']}>
+                    <button
+                      type="button"
+                      className={`${styles['wiz__tab']} ${datasetTab === 'browse' ? styles['wiz__tab--active'] : ''}`}
+                      onClick={() => setDatasetTab('browse')}
+                    >
+                      <LayoutGrid size={14} strokeWidth={2.25} /> Browse Datasets
+                    </button>
+                    <button
+                      type="button"
+                      className={`${styles['wiz__tab']} ${datasetTab === 'upload' ? styles['wiz__tab--active'] : ''}`}
+                      onClick={openUploadPanel}
+                    >
+                      <Upload size={14} strokeWidth={2.25} /> Upload Dataset
+                    </button>
                   </div>
 
-                  {showUpload && (
-                    <div className={styles['wiz__upload-panel']}>
-                      <div className={styles['wiz__upload-panel-head']}>
-                        <p className={styles['wiz__upload-panel-title']}>
-                          <Upload size={14} strokeWidth={2.25} /> Upload custom dataset
-                        </p>
-                        <button
-                          type="button"
-                          className={styles['wiz__upload-panel-close']}
-                          onClick={closeUploadPanel}
-                          disabled={datasetUploading}
-                        >
-                          <X size={15} />
-                        </button>
+                  {datasetTab === 'browse' && (
+                    <div className={styles['wiz__dataset-layout']}>
+                      <div className={styles['wiz__dataset-grid-scroll']}>
+                        {datasetsLoading && <p className={styles.wiz__empty}>Loading test suites…</p>}
+                        {!datasetsLoading && datasetsError && <p className={styles.wiz__error}>{datasetsError}</p>}
+                        {!datasetsLoading && !datasetsError && (
+                          <div className={styles['wiz__dataset-grid']}>
+                            {datasets.map((d) => {
+                              const selected = draft.selBenchmark === d.id;
+                              return (
+                                <button
+                                  key={d.id}
+                                  type="button"
+                                  className={`${styles['wiz__dataset-card']} ${selected ? styles['wiz__dataset-card--selected'] : ''}`}
+                                  onClick={() => dispatch(setDraft({ selBenchmark: d.id }))}
+                                >
+                                  <div className={styles['wiz__dataset-top']}>
+                                    <span className={styles['wiz__dataset-top-left']}>
+                                      <span className={styles['wiz__dataset-icon']}>
+                                        <Database size={14} />
+                                      </span>
+                                      <span className={styles['wiz__dataset-name']}>{d.name}</span>
+                                      {d.dataset_type === 'custom' && (
+                                        <span className={`${styles.wiz__chip} ${styles['wiz__chip--static']}`}>Custom</span>
+                                      )}
+                                    </span>
+                                    {selected && (
+                                      <span className={styles['wiz__card-check']} style={{ position: 'static' }}>
+                                        <Check size={11} strokeWidth={2.75} />
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className={styles['wiz__dataset-meta']}>
+                                    <span className={`${styles.wiz__chip} ${styles['wiz__chip--static']}`}>{d.category}</span>
+                                    <span className={`${styles.wiz__chip} ${styles['wiz__chip--static']}`}>{d.eval_type}</span>
+                                    <span>{d.question_count.toLocaleString()} questions</span>
+                                  </div>
+                                </button>
+                              );
+                            })}
+                            {datasets.length === 0 && <p className={styles.wiz__empty}>No test suites available.</p>}
+                          </div>
+                        )}
                       </div>
 
+                      <aside className={styles['wiz__subgroup-panel']}>
+                        <div className={styles['wiz__subgroup-panel-head']}>
+                          <p className={styles['wiz__subgroup-panel-title']}>
+                            <Layers size={13} strokeWidth={2.25} /> Subgroups
+                          </p>
+                          <p className={styles['wiz__subgroup-panel-sub']}>
+                            {suite ? `Optionally narrow "${suite.name}" to specific categories.` : 'Select a test suite to see its subgroups.'}
+                          </p>
+                        </div>
+                        <div className={styles['wiz__subgroup-panel-scroll']}>
+                          {!suite && <p className={styles['wiz__subgroup-empty']}>No test suite selected yet.</p>}
+                          {suite && suite.dataset_categories.length === 0 && (
+                            <p className={styles['wiz__subgroup-empty']}>This test suite has no subgroups.</p>
+                          )}
+                          {suite &&
+                            suite.dataset_categories.map((cat) => {
+                              const checked = selSubgroup.includes(cat);
+                              return (
+                                <button
+                                  key={cat}
+                                  type="button"
+                                  className={`${styles['wiz__subgroup-row']} ${checked ? styles['wiz__subgroup-row--selected'] : ''}`}
+                                  onClick={() => setSelSubgroup((prev) => toggle(prev, cat))}
+                                >
+                                  <span className={`${styles.wiz__checkbox} ${checked ? styles['wiz__checkbox--checked'] : ''}`}>
+                                    {checked && <Check size={11} strokeWidth={3} />}
+                                  </span>
+                                  <span className={styles['wiz__subgroup-row-name']}>{cat}</span>
+                                </button>
+                              );
+                            })}
+                        </div>
+                      </aside>
+                    </div>
+                  )}
+
+                  {datasetTab === 'upload' && (
+                    <div className={styles['wiz__upload-panel']}>
                       <div className={styles['wiz__upload-panel-body']}>
                         <div className={styles.wiz__field} style={{ marginTop: 0 }}>
                           <label className={styles.wiz__label}>Name</label>
@@ -695,7 +765,7 @@ export default function NewEvaluation() {
                           <button
                             type="button"
                             className="btn btn-ghost"
-                            onClick={closeUploadPanel}
+                            onClick={() => setDatasetTab('browse')}
                             disabled={datasetUploading}
                           >
                             Cancel
@@ -715,85 +785,6 @@ export default function NewEvaluation() {
                       </div>
                     </div>
                   )}
-
-                  <div className={styles['wiz__dataset-layout']}>
-                    <div className={styles['wiz__dataset-grid-scroll']}>
-                      {datasetsLoading && <p className={styles.wiz__empty}>Loading test suites…</p>}
-                      {!datasetsLoading && datasetsError && <p className={styles.wiz__error}>{datasetsError}</p>}
-                      {!datasetsLoading && !datasetsError && (
-                        <div className={styles['wiz__dataset-grid']}>
-                          {datasets.map((d) => {
-                            const selected = draft.selBenchmark === d.id;
-                            return (
-                              <button
-                                key={d.id}
-                                type="button"
-                                className={`${styles['wiz__dataset-card']} ${selected ? styles['wiz__dataset-card--selected'] : ''}`}
-                                onClick={() => dispatch(setDraft({ selBenchmark: d.id }))}
-                              >
-                                <div className={styles['wiz__dataset-top']}>
-                                  <span className={styles['wiz__dataset-top-left']}>
-                                    <span className={styles['wiz__dataset-icon']}>
-                                      <Database size={14} />
-                                    </span>
-                                    <span className={styles['wiz__dataset-name']}>{d.name}</span>
-                                    {d.dataset_type === 'custom' && (
-                                      <span className={`${styles.wiz__chip} ${styles['wiz__chip--static']}`}>Custom</span>
-                                    )}
-                                  </span>
-                                  {selected && (
-                                    <span className={styles['wiz__card-check']} style={{ position: 'static' }}>
-                                      <Check size={11} strokeWidth={2.75} />
-                                    </span>
-                                  )}
-                                </div>
-                                <div className={styles['wiz__dataset-meta']}>
-                                  <span className={`${styles.wiz__chip} ${styles['wiz__chip--static']}`}>{d.category}</span>
-                                  <span className={`${styles.wiz__chip} ${styles['wiz__chip--static']}`}>{d.eval_type}</span>
-                                  <span>{d.question_count.toLocaleString()} questions</span>
-                                </div>
-                              </button>
-                            );
-                          })}
-                          {datasets.length === 0 && <p className={styles.wiz__empty}>No test suites available.</p>}
-                        </div>
-                      )}
-                    </div>
-
-                    <aside className={styles['wiz__subgroup-panel']}>
-                      <div className={styles['wiz__subgroup-panel-head']}>
-                        <p className={styles['wiz__subgroup-panel-title']}>
-                          <Layers size={13} strokeWidth={2.25} /> Subgroups
-                        </p>
-                        <p className={styles['wiz__subgroup-panel-sub']}>
-                          {suite ? `Optionally narrow "${suite.name}" to specific categories.` : 'Select a test suite to see its subgroups.'}
-                        </p>
-                      </div>
-                      <div className={styles['wiz__subgroup-panel-scroll']}>
-                        {!suite && <p className={styles['wiz__subgroup-empty']}>No test suite selected yet.</p>}
-                        {suite && suite.dataset_categories.length === 0 && (
-                          <p className={styles['wiz__subgroup-empty']}>This test suite has no subgroups.</p>
-                        )}
-                        {suite &&
-                          suite.dataset_categories.map((cat) => {
-                            const checked = selSubgroup.includes(cat);
-                            return (
-                              <button
-                                key={cat}
-                                type="button"
-                                className={`${styles['wiz__subgroup-row']} ${checked ? styles['wiz__subgroup-row--selected'] : ''}`}
-                                onClick={() => setSelSubgroup((prev) => toggle(prev, cat))}
-                              >
-                                <span className={`${styles.wiz__checkbox} ${checked ? styles['wiz__checkbox--checked'] : ''}`}>
-                                  {checked && <Check size={11} strokeWidth={3} />}
-                                </span>
-                                <span className={styles['wiz__subgroup-row-name']}>{cat}</span>
-                              </button>
-                            );
-                          })}
-                      </div>
-                    </aside>
-                  </div>
                 </>
               )}
 
@@ -1085,6 +1076,15 @@ export default function NewEvaluation() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
 
 
 
@@ -2084,33 +2084,40 @@ $shadow-md: $shadow-3;
     }
   }
 
-  /* ---------- test suite: header row + custom dataset upload ---------- */
-  &__section-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 1rem;
-  }
-
-  &__upload-toggle {
-    flex-shrink: 0;
+  /* ---------- test suite: browse/upload tabs ---------- */
+  &__tabs {
     display: inline-flex;
     align-items: center;
-    gap: 0.375rem;
-    padding: 0.5rem 0.875rem;
-    border: 1.5px solid $border-default;
-    border-radius: 0.625rem;
-    background: $bg-main;
-    color: $text-secondary;
+    gap: 0.25rem;
+    margin-top: 1.375rem;
+    padding: 0.25rem;
+    border: 1px solid $border-subtle;
+    border-radius: 0.75rem;
+    background: $bg-subtle;
+  }
+
+  &__tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4375rem;
+    padding: 0.5rem 0.9375rem;
+    border: none;
+    border-radius: 0.5625rem;
+    background: transparent;
+    color: $text-tertiary;
     font-size: 0.8125rem;
     font-weight: 600;
     cursor: pointer;
-    transition: border-color 0.14s ease, color 0.14s ease;
-    margin-top: 0.125rem;
+    transition: background 0.14s ease, color 0.14s ease;
 
     &:hover {
-      border-color: $primary;
+      color: $text-secondary;
+    }
+
+    &--active {
+      background: $bg-main;
       color: $primary;
+      box-shadow: $shadow-sm;
     }
   }
 
@@ -2120,40 +2127,6 @@ $shadow-md: $shadow-3;
     border-radius: 0.875rem;
     background: $bg-subtle;
     overflow: hidden;
-  }
-
-  &__upload-panel-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0.875rem 1.125rem;
-    border-bottom: 1px solid $border-subtle;
-  }
-
-  &__upload-panel-title {
-    display: flex;
-    align-items: center;
-    gap: 0.4375rem;
-    font-size: 0.84375rem;
-    font-weight: 700;
-    color: $text-primary;
-  }
-
-  &__upload-panel-close {
-    display: grid;
-    place-items: center;
-    width: 26px;
-    height: 26px;
-    border: none;
-    border-radius: 0.5rem;
-    background: transparent;
-    color: $text-tertiary;
-    cursor: pointer;
-
-    &:hover {
-      background: $bg-inset;
-      color: $text-primary;
-    }
   }
 
   &__upload-panel-body {
@@ -2210,7 +2183,7 @@ $shadow-md: $shadow-3;
     display: flex;
     align-items: stretch;
     gap: 1.25rem;
-    margin-top: 1.5rem;
+    margin-top: 1.25rem;
     flex: 1;
     min-height: 22rem;
   }
@@ -2898,199 +2871,3 @@ $shadow-md: $shadow-3;
     padding: 20px 16px 32px;
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Datasets.ts
-import { apiClient } from '../client';
-import type { Dataset } from '../../store/slices/datasetsSlice';
-
-interface DatasetsResponse {
-  datasets: Dataset[];
-  total: number;
-}
-
-export interface UploadDatasetParams {
-  file: File;
-  name: string;
-  description: string;
-  evalType: string;
-}
-
-// Extensions routed to POST /datasets/upload
-const STRUCTURED_EXTENSIONS = ['json', 'arrow', 'parquet'];
-// Extension routed to POST /datasets/upload-jsonl
-const JSONL_EXTENSION = 'jsonl';
-
-export const SUPPORTED_UPLOAD_EXTENSIONS = [...STRUCTURED_EXTENSIONS, JSONL_EXTENSION];
-
-function getExtension(filename: string): string {
-  const idx = filename.lastIndexOf('.');
-  return idx >= 0 ? filename.slice(idx + 1).toLowerCase() : '';
-}
-
-export const datasetsApi = {
-  // GET /datasets?eval_type={type}
-  list: async (evalType: string): Promise<Dataset[]> => {
-    const { data } = await apiClient.get<DatasetsResponse>('/datasets', { params: { eval_type: evalType } });
-    return data.datasets;
-  },
-
-  // Routes to POST /datasets/upload (.json, .arrow, .parquet) or
-  // POST /datasets/upload-jsonl (.jsonl) based on the file extension.
-  upload: async ({ file, name, description, evalType }: UploadDatasetParams): Promise<Dataset> => {
-    const ext = getExtension(file.name);
-
-    if (!SUPPORTED_UPLOAD_EXTENSIONS.includes(ext)) {
-      throw new Error('Unsupported file type. Please upload a .json, .jsonl, .arrow, or .parquet file.');
-    }
-
-    const formData = new FormData();
-    formData.append('file', file);
-
-    if (ext === JSONL_EXTENSION) {
-      // Category is set to the eval type per API contract.
-      const { data } = await apiClient.post<Dataset>('/datasets/upload-jsonl', formData, {
-        params: { name, eval_type: evalType, category: evalType, description },
-      });
-      return data;
-    }
-
-    const { data } = await apiClient.post<Dataset>('/datasets/upload', formData, {
-      params: { eval_type: evalType, name, description },
-    });
-    return data;
-  },
-};
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//datasetsSlice.ts
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import { datasetsApi, type UploadDatasetParams } from '../../api/endpoints/datasets';
-
-export interface Dataset {
-  id: string;
-  name: string;
-  category: string;
-  eval_type: string;
-  question_count: number;
-  schema_version: string;
-  dataset_categories: string[];
-  dataset_type?: string;
-  created_at: string;
-}
-
-interface DatasetsState {
-  items: Dataset[];
-  status: 'idle' | 'loading' | 'succeeded' | 'failed';
-  error: string | null;
-  uploadStatus: 'idle' | 'loading' | 'succeeded' | 'failed';
-  uploadError: string | null;
-}
-
-const initialState: DatasetsState = {
-  items: [],
-  status: 'idle',
-  error: null,
-  uploadStatus: 'idle',
-  uploadError: null,
-};
-
-// GET /datasets?eval_type={type}
-export const fetchDatasets = createAsyncThunk('datasets/fetchAll', (evalType: string) => datasetsApi.list(evalType));
-
-// POST /datasets/upload or /datasets/upload-jsonl, depending on file extension
-export const uploadDataset = createAsyncThunk(
-  'datasets/upload',
-  async (params: UploadDatasetParams, { rejectWithValue }) => {
-    try {
-      return await datasetsApi.upload(params);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to upload dataset';
-      return rejectWithValue(message);
-    }
-  }
-);
-
-const datasetsSlice = createSlice({
-  name: 'datasets',
-  initialState,
-  reducers: {
-    resetUploadStatus: (state) => {
-      state.uploadStatus = 'idle';
-      state.uploadError = null;
-    },
-  },
-  extraReducers: (builder) => {
-    builder
-      .addCase(fetchDatasets.pending, (state) => {
-        state.status = 'loading';
-      })
-      .addCase(fetchDatasets.fulfilled, (state, action) => {
-        state.status = 'succeeded';
-        state.items = action.payload;
-      })
-      .addCase(fetchDatasets.rejected, (state, action) => {
-        state.status = 'failed';
-        state.error = action.error.message || 'Failed to load datasets';
-      })
-      .addCase(uploadDataset.pending, (state) => {
-        state.uploadStatus = 'loading';
-        state.uploadError = null;
-      })
-      .addCase(uploadDataset.fulfilled, (state, action) => {
-        state.uploadStatus = 'succeeded';
-        state.items = [action.payload, ...state.items];
-      })
-      .addCase(uploadDataset.rejected, (state, action) => {
-        state.uploadStatus = 'failed';
-        state.uploadError = (action.payload as string) || action.error.message || 'Failed to upload dataset';
-      });
-  },
-});
-
-export const { resetUploadStatus } = datasetsSlice.actions;
-export default datasetsSlice.reducer;
