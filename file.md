@@ -1,335 +1,318 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import {
-  Search, FileText, Loader2, Download, Award, ListChecks, Clock,
-  FileBarChart, SlidersHorizontal, X,
-} from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Layers, Check, Play, GitCompare, Sparkles, FlaskConical } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
-import { fetchReports, fetchReportDetail, downloadReport } from '../../store/slices/reportsSlice';
-import type { ReportDownloadFormat } from '../../api/endpoints/reports';
-import styles from './Reports.module.scss';
+import { fetchModels } from '../../store/slices/modelsSlice';
+import { fetchEvaluations } from '../../store/slices/evaluationsSlice';
+import { runComparison, resetComparison } from '../../store/slices/comparisonSlice';
+import RadarChart from '../common/RadarChart';
+import ScoreRing from '../common/ScoreRing';
+import Dropdown from '../common/Dropdown';
+import styles from './Comparison.module.scss';
 
-const DOWNLOAD_OPTIONS: { format: ReportDownloadFormat; label: string }[] = [
-  { format: 'json', label: 'JSON' },
-  { format: 'csv', label: 'CSV' },
-  { format: 'csv_detailed', label: 'CSV (Detailed)' },
-  { format: 'pdf', label: 'PDF' },
-];
+const COLORS = ['#2B2BF5', '#E08600', '#0FA968', '#DC2626', '#0EA5E9', '#A855F7'];
 
-// Maps a raw status to the module status-pill variant suffix (mirrors History).
-function statusVariant(status: string): string {
-  switch (status) {
-    case 'completed': return 'completed';
-    case 'running': return 'running';
-    case 'pending': return 'pending';
-    case 'failed': return 'failed';
-    default: return 'pending';
-  }
-}
-
-export default function Reports() {
+export default function Comparison() {
   const dispatch = useAppDispatch();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const selectedId = searchParams.get('id');
+  const models = useAppSelector((s) => s.models.items);
+  const evaluations = useAppSelector((s) => s.evaluations.list);
+  const { result, status: compareStatus, error: compareError } = useAppSelector((s) => s.comparison);
 
-  const { list, listStatus, listError, detailById, detailStatusById, detailErrorById, downloadingId } =
-    useAppSelector((s) => s.reports);
-
-  const [search, setSearch] = useState('');
-  const [typeFilter, setTypeFilter] = useState('All');
-  const [activeFilter, setActiveFilter] = useState<'search' | 'type' | null>(null);
-  const searchInputRef = useRef<HTMLInputElement>(null);
-
-  const toggleFilter = (key: 'search' | 'type') => {
-    setActiveFilter((prev) => (prev === key ? null : key));
-  };
+  const [selBenchmark, setSelBenchmark] = useState<string | null>(null);
+  const [selModelIds, setSelModelIds] = useState<string[]>([]);
+  const [compareErrorLocal, setCompareErrorLocal] = useState<string | null>(null);
 
   useEffect(() => {
-    if (activeFilter === 'search') searchInputRef.current?.focus();
-  }, [activeFilter]);
-
-  useEffect(() => {
-    dispatch(fetchReports());
+    dispatch(fetchModels());
+    dispatch(fetchEvaluations());
   }, [dispatch]);
 
-  const types = useMemo(() => ['All', ...new Set(list.map((r) => r.eval_type))], [list]);
-
-  const filtered = useMemo(() => {
-    return list.filter((r) => {
-      if (search && !r.title.toLowerCase().includes(search.toLowerCase())) return false;
-      if (typeFilter !== 'All' && r.eval_type !== typeFilter) return false;
-      return true;
-    });
-  }, [list, search, typeFilter]);
-
-  const selected = list.find((r) => r.id === selectedId) || filtered[0] || null;
-
+  // Clear any stale comparison result/error from a previous visit to this
+  // page — the redux slice otherwise persists across route changes even
+  // though local selection state (selBenchmark, selModelIds) resets.
   useEffect(() => {
-    if (selected && !detailById[selected.id] && detailStatusById[selected.id] !== 'loading') {
-      dispatch(fetchReportDetail(selected.id));
+    return () => {
+      dispatch(resetComparison());
+    };
+  }, [dispatch]);
+
+  // Unique benchmark names (from evaluation history) to populate the dropdown.
+  const benchmarkOptions = useMemo(() => {
+    const seen = new Set<string>();
+    return evaluations
+      .filter((e) => e.benchmark && !seen.has(e.benchmark) && seen.add(e.benchmark))
+      .map((e) => ({ value: e.benchmark, label: e.benchmark }));
+  }, [evaluations]);
+
+  // Evaluations sharing the selected benchmark -> resolve dataset_id + union of model_ids.
+  // Matched case-insensitively / trimmed, since a stray whitespace or casing
+  // difference between the dropdown value and the stored `benchmark` string
+  // would otherwise silently leave `datasetId` null.
+  const benchmarkEvals = useMemo(() => {
+    if (!selBenchmark) return [];
+    const target = selBenchmark.trim().toLowerCase();
+    return evaluations.filter((e) => e.benchmark?.trim().toLowerCase() === target);
+  }, [evaluations, selBenchmark]);
+
+  const datasetId = benchmarkEvals.find((e) => e.dataset_id)?.dataset_id ?? null;
+
+  const availableModelIds = useMemo(() => {
+    const ids = new Set<string>();
+    benchmarkEvals.forEach((e) => e.model_ids.forEach((id) => ids.add(id)));
+    return Array.from(ids);
+  }, [benchmarkEvals]);
+
+  const handleSelectBenchmark = (value: string) => {
+    setSelBenchmark(value);
+    setSelModelIds([]);
+    setCompareErrorLocal(null);
+    dispatch(resetComparison());
+  };
+
+  const toggleModel = (id: string) => {
+    setSelModelIds((prev) =>
+      prev.includes(id) ? prev.filter((m) => m !== id) : [...prev, id]
+    );
+  };
+
+  // Button enablement depends only on what the user has actually chosen —
+  // model count — not on whether `datasetId` resolved cleanly. That way a
+  // data-matching hiccup shows as a clear inline error on click instead of
+  // an inexplicably-disabled button.
+  const canCompare = selModelIds.length >= 2 && compareStatus !== 'loading';
+
+  const handleCompare = () => {
+    if (!datasetId) {
+      setCompareErrorLocal('Could not find a dataset for this benchmark. Try reselecting it from the dropdown.');
+      return;
     }
+    setCompareErrorLocal(null);
+    dispatch(runComparison({ datasetId, modelIds: selModelIds }));
+  };
+
+  const modelName = (id: string) => models.find((m) => m.id === id)?.name || id;
+
+  // Flatten each model's `metrics` array into a lookup so the table/radar
+  // can index by metric name instead of array position.
+  const rows = useMemo(() => {
+    if (!result) return [];
+    return result.comparisons.map((c) => {
+      const m: Record<string, number> = {};
+      c.metrics.forEach((met) => { m[met.metric] = met.score; });
+      return {
+        modelId: c.model_id,
+        name: modelName(c.model_id),
+        provider: c.provider,
+        status: c.status,
+        score: m.score ?? 0,
+        accuracy: m.accuracy ?? 0,
+        benchmarkAccuracy: m.benchmark_accuracy ?? 0,
+        passed: m.passed_tests ?? 0,
+        total: m.total_tests ?? 0,
+        values: [
+          m.score ?? 0,
+          m.accuracy ?? 0,
+          m.benchmark_accuracy ?? 0,
+          m.total_tests ? (m.passed_tests ?? 0) / m.total_tests : 0,
+        ],
+      };
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id]);
-
-  const selectRow = (id: string) => setSearchParams({ id });
-
-  const detail = selected ? detailById[selected.id] : undefined;
-  const detailStatus = selected ? detailStatusById[selected.id] : undefined;
-  const detailError = selected ? detailErrorById[selected.id] : undefined;
-
-  const StatusBadge = ({ status }: { status: string }) => (
-    <span className={`${styles.status} ${styles[`status--${statusVariant(status)}`]}`}>
-      {status === 'running' && <span className={styles['live-dot']} />}
-      {status}
-    </span>
-  );
+  }, [result, models]);
 
   return (
     <div className="page-enter pg-shell">
-      <div className={styles['reports__header']}>
+      <div className={styles['comparison__header']}>
         <div>
-          <p className={styles['reports__header-eyebrow']}>Output</p>
-          <h1>Reports</h1>
-          <p className={styles['reports__header-sub']}>Generated reports for completed and in-progress evaluations</p>
+          <p className={styles['comparison__header-eyebrow']}>Analysis</p>
+          <h1>Model Comparison</h1>
+          <p className={styles['comparison__header-sub']}>Compare models head-to-head on a shared benchmark</p>
         </div>
-        <div className={styles['reports__header-meta']}>
-          <FileBarChart size={13} />
-          {list.length} report{list.length === 1 ? '' : 's'} generated
+        <div className={styles['comparison__header-meta']}>
+          <Layers size={13} />
+          {rows.length} model{rows.length === 1 ? '' : 's'} compared
         </div>
       </div>
 
-      <div className={`pg-body ${styles['pg-body-fixed']}`}>
-        <div className={styles.shell}>
-          {/* ---------- Sidebar list ---------- */}
-          <div className={styles.sidebar}>
-            <div className={styles.filters}>
-              <div className={styles['filter-toolbar']}>
-                <span className={styles['filter-toolbar__label']}>Filters</span>
-                <div className={styles['filter-toolbar__divider']} />
-                <button
-                  type="button"
-                  className={`${styles['filter-toolbar__btn']} ${activeFilter === 'search' ? styles.on : ''}`}
-                  onClick={() => toggleFilter('search')}
-                  title="Search"
-                >
-                  <Search size={15} />
-                  {search && <span className={styles['filter-toolbar__dot']} />}
-                </button>
-                <button
-                  type="button"
-                  className={`${styles['filter-toolbar__btn']} ${activeFilter === 'type' ? styles.on : ''}`}
-                  onClick={() => toggleFilter('type')}
-                  title="Filter by type"
-                >
-                  <SlidersHorizontal size={15} />
-                  {typeFilter !== 'All' && <span className={styles['filter-toolbar__dot']} />}
-                </button>
+      <div className="pg-body">
+        <div className={styles['comparison__controls']}>
+          <span className={styles['comparison__label']}>Dataset:</span>
+          <Dropdown
+            value={selBenchmark ?? ''}
+            onChange={handleSelectBenchmark}
+            width={240}
+            options={benchmarkOptions}
+            placeholder="Select a Dataset"
+          />
+        </div>
 
-                <div className={styles['filter-toolbar__summary']}>
-                  {search && (
-                    <span className={styles['filter-chip']}>
-                      <span>“{search}”</span>
-                      <X size={11} onClick={() => setSearch('')} />
-                    </span>
-                  )}
-                  {typeFilter !== 'All' && (
-                    <span className={styles['filter-chip']}>
-                      <span>{typeFilter}</span>
-                      <X size={11} onClick={() => setTypeFilter('All')} />
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              <div className={`${styles['filter-panel']} ${activeFilter ? styles['filter-panel--open'] : ''}`}>
-                {activeFilter === 'search' && (
-                  <div>
-                    <div className={styles['panel-search']}>
-                      <Search size={16} />
-                      <input
-                        ref={searchInputRef}
-                        placeholder="Search reports…"
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                      />
-                    </div>
-                  </div>
-                )}
-                {activeFilter === 'type' && (
-                  <div>
-                    <div className={styles['panel-pills']}>
-                      {types.map((t) => (
-                        <button
-                          key={t}
-                          className={`${styles['panel-pill']} ${typeFilter === t ? styles.on : ''}`}
-                          onClick={() => {
-                            setTypeFilter(t);
-                            setActiveFilter(null);
-                          }}
-                        >
-                          {t}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {listStatus === 'loading' && list.length === 0 && (
-                <div className={styles.empty}><Loader2 size={16} className={styles.spin} /> Loading reports…</div>
-              )}
-              {listStatus === 'failed' && list.length === 0 && (
-                <div className={styles.empty}>{listError || 'Failed to load reports.'}</div>
-              )}
-              {listStatus !== 'loading' && filtered.length === 0 && list.length > 0 && (
-                <div className={styles.empty}>No reports match your filters.</div>
-              )}
+        {!selBenchmark && (
+          <div className={styles['empty-state']}>
+            <div className={styles['empty-state__icon']}>
+              <GitCompare size={28} />
             </div>
+            <h3>Pick a dataset to get started</h3>
+            <p>
+              Choose a dataset above and select two or more models that were evaluated
+              against it to see a side-by-side breakdown of scores, accuracy, and pass rates.
+            </p>
+            <div className={styles['empty-state__stats']}>
+              <div className={styles['empty-state__stat']}>
+                <FlaskConical size={16} />
+                <span><strong>{benchmarkOptions.length}</strong> dataset{benchmarkOptions.length === 1 ? '' : 's'} available</span>
+              </div>
+              <div className={styles['empty-state__stat']}>
+                <Sparkles size={16} />
+                <span><strong>{models.length}</strong> model{models.length === 1 ? '' : 's'} in catalog</span>
+              </div>
+            </div>
+          </div>
+        )}
 
-            <div className={styles.rows}>
-              {filtered.map((r) => {
-                const isSelected = selected?.id === r.id;
+        {selBenchmark && (
+          <div className={styles.panel}>
+            <div className={styles['comparison__panel-title']}>Select models</div>
+            <div className={styles['comparison__panel-sub']}>
+              Models evaluated against {selBenchmark}
+            </div>
+            <div className={styles['model-select-grid']}>
+              {availableModelIds.map((id) => {
+                const active = selModelIds.includes(id);
+                const colorIdx = selModelIds.indexOf(id);
                 return (
-                  <div
-                    key={r.id}
-                    className={`${styles.row} ${isSelected ? styles.selected : ''}`}
-                    onClick={() => selectRow(r.id)}
+                  <button
+                    key={id}
+                    type="button"
+                    className={`${styles['model-select-item']} ${active ? styles.active : ''}`}
+                    onClick={() => toggleModel(id)}
+                    style={active ? { borderColor: COLORS[colorIdx % COLORS.length] } : undefined}
                   >
-                    <div className={styles.row__top}>
-                      <div className={styles.row__icon}><FileText size={16} /></div>
-                      <div className={styles.row__name}>{r.title}</div>
-                    </div>
-                    <div className={styles.row__badges}>
-                      <span className={styles['type-tag']}>{r.eval_type}</span>
-                      <StatusBadge status={r.status} />
-                    </div>
-                    <div className={styles.row__meta}>{new Date(r.created_at).toLocaleDateString()}</div>
-                    <div className={styles.row__stats}>
-                      <span>{r.top_model ? `🏆 ${r.top_model}` : '—'}</span>
-                      <span>{r.top_score != null ? `${Math.round(r.top_score * 100)}%` : '—'}</span>
-                    </div>
-                  </div>
+                    <span className={styles['model-select-item__check']}>
+                      {active && <Check size={12} />}
+                    </span>
+                    {modelName(id)}
+                  </button>
                 );
               })}
+              {availableModelIds.length === 0 && (
+                <div className={styles.empty}>No models found for this benchmark.</div>
+              )}
             </div>
-          </div>
-
-          {/* ---------- Detail panel ---------- */}
-          <div className={styles.detail}>
-            {!selected ? (
-              <div className={styles['detail-empty']}>Select a report to see its details.</div>
-            ) : (
-              <>
-                <div className={styles['detail-hdr']}>
-                  <div>
-                    <div className={styles['detail-hdr__badges']}>
-                      <span className={styles['type-tag']}>{selected.eval_type}</span>
-                      <StatusBadge status={selected.status} />
-                    </div>
-                    <h2 className={styles['detail-hdr__name']}>{selected.title}</h2>
-                    <div className={styles['detail-hdr__date']}>Created {new Date(selected.created_at).toLocaleString()}</div>
-                  </div>
-                  <div className={styles['detail-hdr__actions']}>
-                    {DOWNLOAD_OPTIONS.map((opt) => (
-                      <button
-                        key={opt.format}
-                        className={styles['dl-btn']}
-                        disabled={selected.status !== 'completed' || downloadingId === selected.id}
-                        onClick={() => dispatch(downloadReport({ reportId: selected.id, format: opt.format, filenameHint: selected.title }))}
-                      >
-                        {downloadingId === selected.id ? <Loader2 size={12} className={styles.spin} /> : <Download size={12} />}
-                        {opt.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {detailStatus === 'loading' && (
-                  <div className={styles.empty}><Loader2 size={16} className={styles.spin} /> Loading report…</div>
-                )}
-                {detailStatus === 'failed' && <div className={styles.empty}>{detailError}</div>}
-
-                {detail && (
-                  <>
-                    <div className={styles['summary-cards']}>
-                      <div className={styles['summary-card']}>
-                        <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--win']}`}>
-                          <Award size={16} />
-                        </span>
-                        <div>
-                          <div className={styles['summary-card__label']}>Top Model</div>
-                          <div className={styles['summary-card__val']}>
-                            {detail.topModel || '—'}
-                            {detail.top_score != null ? ` · ${Math.round(detail.top_score * 100)}%` : ''}
-                          </div>
-                        </div>
-                      </div>
-                      <div className={styles['summary-card']}>
-                        <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--info']}`}>
-                          <ListChecks size={16} />
-                        </span>
-                        <div>
-                          <div className={styles['summary-card__label']}>Questions</div>
-                          <div className={styles['summary-card__val']}>
-                            {detail.total_questions.toLocaleString()} &middot; {detail.passed_tests} passed &middot; {detail.failed_tests} failed
-                          </div>
-                        </div>
-                      </div>
-                      <div className={styles['summary-card']}>
-                        <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--status']}`}>
-                          <Clock size={16} />
-                        </span>
-                        <div>
-                          <div className={styles['summary-card__label']}>Status</div>
-                          <div className={styles['summary-card__val']}>
-                            {detail.status}{detail.date ? ` · ${detail.date}` : ''}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {detail.summary && <div className={styles['summary-text']}>{detail.summary}</div>}
-
-                    {detail.models.length > 0 ? (
-                      <div className={styles.results}>
-                        <table className={styles['results-table']}>
-                          <thead>
-                            <tr>
-                              <th>Rank</th>
-                              <th>Model</th>
-                              <th>Score</th>
-                              <th>Passed</th>
-                              <th>Failed</th>
-                              <th>Total</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {detail.models.map((m) => (
-                              <tr key={m.model_id} className={m.rank === 1 ? styles.winner : ''}>
-                                <td className={styles['cell-rank']}>{m.rank === 1 ? '🏆 ' : ''}{m.rank}</td>
-                                <td className={styles['cell-model']}>{m.model_id}</td>
-                                <td className={styles['cell-num']}>{Math.round(m.score * 100)}%</td>
-                                <td className={styles['cell-pass']}>{m.passed}</td>
-                                <td className={styles['cell-fail']}>{m.failed}</td>
-                                <td className={`${styles['cell-num']} ${styles['cell-num--muted']}`}>{m.total}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    ) : (
-                      <div className={styles['status-message']}>
-                        {detail.status === 'pending' && 'This report hasn\u2019t been generated yet.'}
-                        {detail.status === 'running' && 'This report is still being generated.'}
-                        {detail.status === 'failed' && 'Report generation failed.'}
-                      </div>
-                    )}
-                  </>
-                )}
-              </>
+            <button
+              type="button"
+              className={styles['compare-btn']}
+              disabled={!canCompare}
+              onClick={handleCompare}
+            >
+              <Play size={14} /> Compare {selModelIds.length > 0 ? `(${selModelIds.length})` : ''}
+            </button>
+            {selModelIds.length === 1 && (
+              <div className={styles['comparison__hint']}>Select at least 2 models to compare.</div>
+            )}
+            {compareErrorLocal && (
+              <div className={`${styles['comparison__hint']} ${styles['comparison__hint--error']}`}>{compareErrorLocal}</div>
             )}
           </div>
-        </div>
+        )}
+
+        {compareStatus === 'loading' && <div className={styles['loading-wrap']}><ComparisonSkeleton /></div>}
+
+        {compareStatus === 'failed' && (
+          <div className={`${styles.panel} ${styles.empty} ${styles['loading-wrap']}`}>{compareError || 'Comparison failed.'}</div>
+        )}
+
+        {compareStatus === 'succeeded' && result && rows.length > 0 && (
+          <>
+            <div className={styles['comparison__controls']}>
+              <span className={styles['comparison__label']}>Comparing:</span>
+              {rows.map((r, i) => (
+                <span
+                  key={r.modelId}
+                  className={styles['model-chip']}
+                  style={{ borderColor: COLORS[i % COLORS.length], color: COLORS[i % COLORS.length], background: `${COLORS[i % COLORS.length]}14` }}
+                >
+                  <span className={styles['model-chip__dot']} style={{ background: COLORS[i % COLORS.length] }} /> {r.name}
+                </span>
+              ))}
+            </div>
+
+            <div className={styles['comparison__grid']}>
+              <div className={styles.panel}>
+                <div className={styles['comparison__panel-title']}>Strength Profile</div>
+                <div className={styles['comparison__panel-sub']}>Score · Accuracy · Benchmark accuracy · Pass rate</div>
+                <div className={styles['radar-wrap']}>
+                  <RadarChart models={rows} size={280} colors={COLORS} />
+                </div>
+                <div className={styles['comparison__legend']}>
+                  {rows.map((r, i) => (
+                    <span key={r.modelId}><span className={styles['comparison__dot']} style={{ background: COLORS[i % COLORS.length] }} /> {r.name}</span>
+                  ))}
+                </div>
+              </div>
+
+              <div className={`${styles.panel} ${styles['panel--flush']}`}>
+                <div className={styles['table-title']}>
+                  {result.dataset_name} — Metric Breakdown
+                </div>
+                <table className={styles['results-table']}>
+                  <thead>
+                    <tr>
+                      <th>Model</th>
+                      <th>Provider</th>
+                      <th>Score</th>
+                      <th>Accuracy</th>
+                      <th>Benchmark Acc.</th>
+                      <th>Passed</th>
+                      <th>Failed</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r, i) => (
+                      <tr key={r.modelId}>
+                        <td className={styles['cell-model']} style={{ color: COLORS[i % COLORS.length] }}>{r.name}</td>
+                        <td className={styles['cell-provider']}>{r.provider || '—'}</td>
+                        <td className={styles['cell-num']}>{(r.score * 100).toFixed(1)}%</td>
+                        <td className={`${styles['cell-num']} ${styles['cell-num--muted']}`}>{(r.accuracy * 100).toFixed(1)}%</td>
+                        <td className={`${styles['cell-num']} ${styles['cell-num--muted']}`}>{(r.benchmarkAccuracy * 100).toFixed(1)}%</td>
+                        <td className={styles['cell-pass']}>{r.passed}</td>
+                        <td className={styles['cell-fail']}>{r.total - r.passed}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className={styles.panel}>
+              <div className={`${styles['comparison__panel-title']} ${styles['panel-title--spaced']}`}>Score Comparison</div>
+              <div className={styles['comparison__scores']}>
+                {rows.map((r, i) => (
+                  <div key={r.modelId} className={styles['comparison__score-item']}>
+                    <ScoreRing score={Math.round(r.score * 100)} size={100} stroke={7} color={COLORS[i % COLORS.length]} label="SCORE" />
+                    <div className={styles['score-item__name']}>{r.name}</div>
+                    <div className={styles['score-item__meta']}>{r.passed}/{r.total} passed</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ComparisonSkeleton() {
+  return (
+    <div className={styles['comparison__grid']}>
+      <div className={styles.panel}>
+        <div className={`${styles.skeletonLine} ${styles['skeletonLine--title']}`} />
+        <div className={styles.skeletonCircle} />
+      </div>
+      <div className={styles.panel}>
+        <div className={`${styles.skeletonLine} ${styles['skeletonLine--row']}`} />
+        {[...Array(3)].map((_, i) => (
+          <div key={i} className={`${styles.skeletonLine} ${styles['skeletonLine--row']}`} />
+        ))}
       </div>
     </div>
   );
@@ -347,12 +330,29 @@ export default function Reports() {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
-// Reports — mirrors History.module.scss's design system exactly: ink/paper
-// palette, ultramarine signal accent, mono instrument labels, hover-lift,
-// mono numerals, self-contained master–detail shell.
+// Comparison — mirrors History/Reports design system: ink/paper palette,
+// ultramarine signal accent, mono instrument labels, hover-lift, mono
+// numerals, self-contained panels (no dependency on global .card/.tbl/.btn).
 // ===========================================================================
 
 $ink:      #14161B;
@@ -388,7 +388,7 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
   text-transform: uppercase;
 }
 
-.reports {
+.comparison {
   &__header {
     flex-shrink: 0;
     display: flex;
@@ -450,227 +450,204 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
     white-space: nowrap;
     margin-bottom: 3px;
   }
+
+  &__controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 20px;
+    margin-bottom: 20px;
+  }
+
+  &__label {
+    @extend %micro;
+    font-size: 0.6875rem;
+    color: $ink-3;
+  }
+
+  &__grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+
+  &__panel-title {
+    font-family: $display;
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: $ink;
+  }
+
+  &__panel-sub {
+    font-size: 0.75rem;
+    color: $ink-3;
+    margin-top: 2px;
+    margin-bottom: 16px;
+  }
+
+  &__legend {
+    display: flex;
+    gap: 14px;
+    justify-content: center;
+    margin-top: 12px;
+    font-family: $mono;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    color: $ink-2;
+  }
+
+  &__dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 5px;
+  }
+
+  &__scores {
+    display: flex;
+    gap: 32px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  &__score-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+
+  &__hint {
+    margin-top: 8px;
+    font-family: $mono;
+    font-size: 0.71875rem;
+    color: $ink-3;
+
+    &--error { color: $danger; }
+  }
 }
 
-@keyframes reports-live-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.5; transform: scale(1.3); }
-}
-@keyframes reports-spin { to { transform: rotate(360deg); } }
+.score-item__name { font-family: $display; font-weight: 700; font-size: 0.875rem; color: $ink; text-align: center; }
+.score-item__meta { font-family: $mono; font-size: 0.75rem; color: $ink-3; }
 
-.pg-body-fixed {
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  padding: 20px 32px 24px;
-}
-
-// ---- self-contained split shell -------------------------------------------
-.shell {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  gap: 16px;
-}
-
-.sidebar {
-  flex-shrink: 0;
-  width: 380px;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  padding: 16px;
+// ---- shared card/panel (replaces global .card) -----------------------------
+.panel {
+  padding: 20px 24px;
   background: $card;
   border: 1px solid $line;
   border-radius: 16px;
   box-shadow: $soft;
+
+  &--flush { padding: 0; }
 }
 
-.detail {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 24px;
-  background: $card;
-  border: 1px solid $line;
-  border-radius: 16px;
-  box-shadow: $soft;
+.panel-title--spaced { margin-bottom: 20px; }
+
+.table-title {
+  font-family: $display;
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: $ink;
+  padding: 20px 24px;
+  border-bottom: 1px solid $line;
 }
 
-.filters { flex-shrink: 0; }
+.radar-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0;
+}
 
-// ---- filter toolbar --------------------------------------------------------
-.filter-toolbar {
+.loading-wrap { margin-top: 20px; }
+
+// ---- model chips (comparing summary) ---------------------------------------
+.model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: $mono;
+  font-size: 0.71875rem;
+  font-weight: 700;
+  border: 1px solid;
+  border-radius: 999px;
+  padding: 5px 10px;
+
+  &__dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+}
+
+// ---- model select grid ------------------------------------------------------
+.model-select-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+  margin-bottom: 16px;
+}
+
+.model-select-item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px;
-  margin-bottom: 8px;
+  padding: 10px 12px;
+  border: 1.5px solid $line;
+  border-radius: 10px;
   background: $paper;
-  border: 1px solid $line;
-  border-radius: 12px;
-}
-
-.filter-toolbar__label {
-  flex-shrink: 0;
-  @extend %micro;
-  font-size: 0.625rem;
-  color: $ink-3;
-  padding-left: 4px;
-}
-
-.filter-toolbar__divider {
-  flex-shrink: 0;
-  width: 1px;
-  height: 16px;
-  background: $line;
-}
-
-.filter-toolbar__btn {
-  position: relative;
-  flex-shrink: 0;
-  width: 30px;
-  height: 30px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: $ink-2;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  color: $ink;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  text-align: left;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
 
-  &:hover { background: $card; color: $signal; box-shadow: $soft; }
+  &:hover { border-color: $ink-3; }
 
-  &.on {
-    border-color: $signal;
+  &.active {
     background: $card;
-    color: $signal;
-    box-shadow: 0 0 0 3px $wash;
+    box-shadow: $soft;
+  }
+
+  &__check {
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: 1.5px solid $line;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: inherit;
   }
 }
 
-.filter-toolbar__dot {
-  position: absolute;
-  top: -2px;
-  right: -2px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: $signal;
-  border: 1.5px solid $paper;
-}
-
-.filter-toolbar__summary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.filter-chip {
+.compare-btn {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 8px;
+  padding: 9px 16px;
+  border-radius: 10px;
+  border: 1px solid $signal;
+  background: $signal;
+  color: #fff;
   font-family: $mono;
-  font-size: 0.65625rem;
-  font-weight: 700;
-  color: $signal;
-  background: $wash;
-  border: 1px solid rgba($signal, 0.18);
-  border-radius: 999px;
-  padding: 4px 8px;
-  white-space: nowrap;
-  max-width: 140px;
-
-  span { overflow: hidden; text-overflow: ellipsis; }
-
-  svg {
-    cursor: pointer;
-    flex-shrink: 0;
-    opacity: 0.6;
-    transition: opacity 0.15s ease;
-    &:hover { opacity: 1; }
-  }
-}
-
-// ---- collapsible filter panel ----------------------------------------------
-.filter-panel {
-  display: grid;
-  grid-template-rows: 0fr;
-  opacity: 0;
-  transition: grid-template-rows 0.18s ease, opacity 0.15s ease, margin-bottom 0.18s ease;
-
-  > * {
-    overflow: hidden;
-    min-height: 0;
-    background: $paper;
-    border: 1px solid $line;
-    border-radius: 12px;
-    padding: 10px;
-  }
-
-  &--open {
-    grid-template-rows: 1fr;
-    opacity: 1;
-    margin-bottom: 8px;
-  }
-}
-
-.panel-search {
-  position: relative;
-
-  svg {
-    position: absolute;
-    top: 50%;
-    left: 12px;
-    transform: translateY(-50%);
-    color: $ink-3;
-    pointer-events: none;
-  }
-
-  input {
-    width: 100%;
-    border: 1.5px solid $line;
-    border-radius: 9px;
-    padding: 8px 11px 8px 36px;
-    font-size: 0.8125rem;
-    font-family: $sans;
-    color: $ink;
-    background: $card;
-
-    &::placeholder { color: $ink-3; }
-    &:focus { outline: none; border-color: $signal; box-shadow: 0 0 0 3px $wash; }
-  }
-}
-
-.panel-pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.panel-pill {
-  padding: 6px 12px;
-  border: 1px solid $line;
-  border-radius: 999px;
-  background: $card;
-  color: $ink-2;
   font-size: 0.75rem;
-  font-weight: 650;
+  font-weight: 700;
+  letter-spacing: 0.03em;
   cursor: pointer;
-  transition: all 0.14s ease;
+  transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
 
-  &:hover { border-color: $ink-3; color: $ink; }
+  &:hover:not(:disabled) { background: $signal-2; border-color: $signal-2; }
 
-  &.on {
-    border-color: $signal;
-    background: $signal;
-    color: #fff;
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 }
 
@@ -679,227 +656,77 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
   text-align: center;
   color: $ink-3;
   font-size: 0.8125rem;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  justify-content: center;
 }
 
-// ---- report list rows ------------------------------------------------------
-.rows {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
+// ---------------------------------------------------------------------------
+// Empty state shown before a benchmark is selected.
+// ---------------------------------------------------------------------------
+.empty-state {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin-top: 14px;
-  padding-right: 2px;
-}
-
-.row {
-  position: relative;
-  border: 1.5px solid $line;
-  border-radius: 14px;
-  padding: 14px;
-  cursor: pointer;
-  background: $card;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease, background 0.15s ease;
-}
-.row:hover { border-color: $ink-3; box-shadow: $soft; transform: translateY(-1px); }
-.row.selected { border-color: $signal; background: $wash; box-shadow: 0 0 0 1px $signal inset; }
-
-.row__top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
-.row__icon {
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
-  background: $wash;
-  color: $signal;
-  display: flex;
   align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-.row__name {
-  font-family: $display;
-  font-weight: 700;
-  font-size: 0.875rem;
-  color: $ink;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.row__badges { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
-.row__meta { font-family: $mono; font-size: 0.6875rem; color: $ink-3; margin-bottom: 8px; }
-.row__stats {
-  display: flex;
-  gap: 12px;
-  font-family: $mono;
-  font-size: 0.6875rem;
-  color: $ink-2;
-  flex-wrap: wrap;
-}
-
-// ---- type tag + status badge (shared visual grammar) -----------------------
-.type-tag {
-  display: inline-flex;
-  align-items: center;
-  font-family: $mono;
-  font-size: 0.625rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: $signal;
-  background: $wash;
-  border-radius: 6px;
-  padding: 3px 8px;
-  white-space: nowrap;
-}
-
-.status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px 3px 9px;
-  border-radius: 999px;
-  font-family: $mono;
-  font-size: 0.625rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-
-  &::before { content: ''; width: 5px; height: 5px; border-radius: 50%; }
-
-  &--completed { color: $ok; background: $ok-wash; &::before { background: $ok; } }
-  &--running   { color: $signal; background: $wash; &::before { display: none; } }
-  &--pending   { color: $amber; background: $amber-wash; &::before { background: $amber; } }
-  &--failed    { color: $ink-3; background: $ink-wash; &::before { background: $ink-3; } }
-}
-
-.live-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  display: inline-block;
-  animation: reports-live-pulse 1.4s ease-in-out infinite;
-}
-
-// ---- detail panel ----------------------------------------------------------
-.detail-empty {
-  padding: 80px 24px;
   text-align: center;
-  color: $ink-3;
-  font-size: 0.875rem;
-}
-
-.detail-hdr {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 24px;
-  flex-wrap: wrap;
-  gap: 16px;
-}
-.detail-hdr__badges { display: flex; gap: 8px; margin-bottom: 12px; }
-.detail-hdr__name {
-  font-family: $display;
-  font-size: 1.375rem;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  color: $ink;
-}
-.detail-hdr__date { font-family: $mono; font-size: 0.71875rem; color: $ink-3; margin-top: 6px; }
-.detail-hdr__actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.dl-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 12px;
-  border-radius: 9px;
-  border: 1px solid $line;
+  padding: 56px 32px;
+  border: 1px dashed $line;
+  border-radius: 16px;
   background: $paper;
-  color: $ink-2;
-  font-family: $mono;
-  font-size: 0.6875rem;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
 
-  &:hover:not(:disabled) { border-color: $signal; color: $signal; background: $wash; }
+  &__icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 16px;
+    background: $wash;
+    color: $signal;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 18px;
+  }
 
-  &:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
+  h3 {
+    font-family: $display;
+    font-size: 1rem;
+    font-weight: 700;
+    color: $ink;
+    margin-bottom: 8px;
+  }
+
+  p {
+    max-width: 420px;
+    font-size: 0.8125rem;
+    line-height: 1.6;
+    color: $ink-2;
+    margin-bottom: 24px;
+  }
+
+  &__stats {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  &__stat {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.78125rem;
+    color: $ink-2;
+    background: $card;
+    border: 1px solid $line;
+    border-radius: 999px;
+    padding: 8px 14px;
+
+    svg { color: $signal; flex-shrink: 0; }
+
+    strong {
+      color: $ink;
+      font-weight: 700;
+    }
   }
 }
 
-.summary-cards {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-  margin-bottom: 24px;
-}
-.summary-card {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 15px 16px;
-  background: $paper;
-  border: 1px solid $line;
-  border-radius: 14px;
-}
-.summary-card__icon {
-  flex-shrink: 0;
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  display: grid;
-  place-items: center;
-  background: $card;
-  border: 1px solid $line;
-
-  &--win { color: $amber; }
-  &--info { color: $signal; }
-  &--status { color: $ok; }
-}
-.summary-card__label {
-  @extend %micro;
-  font-size: 0.5625rem;
-  color: $ink-3;
-}
-.summary-card__val {
-  font-size: 0.8125rem;
-  font-weight: 700;
-  color: $ink;
-  margin-top: 3px;
-}
-
-.summary-text {
-  padding: 14px 16px;
-  margin-bottom: 20px;
-  background: $paper;
-  border: 1px solid $line;
-  border-radius: 12px;
-  font-size: 0.84375rem;
-  line-height: 1.55;
-  color: $ink-2;
-}
-
-// ---- results table ---------------------------------------------------------
-.results {
-  border: 1px solid $line;
-  border-radius: 14px;
-  overflow: hidden;
-}
-
+// ---- results table (shared visual grammar with History/Reports) -----------
 .results-table {
   width: 100%;
   border-collapse: collapse;
@@ -924,46 +751,50 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
     &:hover { background: $paper; }
   }
 
-  tbody tr.winner {
-    background: rgba($amber, 0.05);
-    &:hover { background: rgba($amber, 0.09); }
-  }
-
   tbody td {
     padding: 12px 14px;
     color: $ink;
   }
 }
 
-.cell-rank { font-family: $mono; font-weight: 700; color: $ink; }
-.cell-model { font-family: $display; font-weight: 700; color: $ink; }
+.cell-model { font-family: $display; font-weight: 700; }
+.cell-provider { color: $ink-2; }
 .cell-num { font-family: $mono; font-size: 0.8125rem; font-weight: 700; color: $ink; }
 .cell-num--muted { font-weight: 500; color: $ink-2; }
 .cell-pass { font-family: $mono; font-size: 0.8125rem; font-weight: 700; color: $ok; }
 .cell-fail { font-family: $mono; font-size: 0.8125rem; font-weight: 700; color: $danger; }
 
-.status-message {
-  padding: 40px;
-  text-align: center;
-  background: $paper;
-  border: 1px dashed $line;
-  border-radius: 14px;
-  color: $ink-2;
-  font-size: 0.875rem;
+// ---------------------------------------------------------------------------
+// Skeleton loader
+// ---------------------------------------------------------------------------
+@keyframes comparison-skeleton-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
 }
 
-.spin { animation: reports-spin 0.8s linear infinite; }
+.skeletonLine,
+.skeletonCircle {
+  background: $line-2;
+  border-radius: 8px;
+  animation: comparison-skeleton-pulse 1.3s ease-in-out infinite;
+}
+
+.skeletonLine--title { width: 40%; height: 16px; margin-bottom: 20px; }
+.skeletonLine--row { width: 100%; height: 32px; margin-bottom: 8px; }
+
+.skeletonCircle {
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  margin: 20px auto 0;
+}
 
 @media (max-width: 900px) {
-  .shell { flex-direction: column; }
-  .sidebar { width: 100%; }
-  .summary-cards { grid-template-columns: 1fr; }
-  .pg-body-fixed { overflow-y: auto; }
-  .sidebar, .detail { overflow-y: visible; min-height: 0; }
-  .rows { overflow-y: visible; }
+  .comparison__grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 640px) {
-  .reports__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
-  .pg-body-fixed { padding: 16px 18px 22px; }
+  .comparison__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
 }
