@@ -1,160 +1,5 @@
-//index.ts
-// ---------------------------------------------------------------------------
-// Append these to your existing `types.ts` (or `types/index.ts`).
-// If `EvaluationListItem` already exists, just make sure it includes
-// `dataset_id` and `benchmark` — both are used by the new Comparison page.
-// ---------------------------------------------------------------------------
-
-export interface CompareMetric {
-  metric: string;
-  score: number;
-}
-
-export interface ComparisonModelResult {
-  model_id: string;
-  provider: string | null;
-  status: string;
-  metrics: CompareMetric[];
-}
-
-export interface CompareResponse {
-  dataset_name: string;
-  comparisons: ComparisonModelResult[];
-}
-
-export interface CompareRequest {
-  model_ids: string[];
-}
-
-
-
-
-
-
-
-
-
-
-
-
-//comparisons.ts
-// Adjust this import to match wherever your configured axios/fetch client
-// lives (the same client `evaluationsApi` / `modelsApi` already use).
-import { api } from '../client';
-import type { CompareRequest, CompareResponse } from '../../types';
-
-export const comparisonsApi = {
-  compare: (datasetId: string, payload: CompareRequest) =>
-    api.post<CompareResponse>(`/datasets/${datasetId}/compare`, payload).then((r) => r.data),
-};
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//comparisonSlice.ts
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import { comparisonsApi } from '../../api/endpoints/comparisons';
-import type { CompareResponse } from '../../types';
-
-type AsyncStatus = 'idle' | 'loading' | 'succeeded' | 'failed';
-
-interface ComparisonState {
-  result: CompareResponse | null;
-  status: AsyncStatus;
-  error: string | null;
-}
-
-const initialState: ComparisonState = {
-  result: null,
-  status: 'idle',
-  error: null,
-};
-
-export const runComparison = createAsyncThunk(
-  'comparison/run',
-  ({ datasetId, modelIds }: { datasetId: string; modelIds: string[] }) =>
-    comparisonsApi.compare(datasetId, { model_ids: modelIds })
-);
-
-const comparisonSlice = createSlice({
-  name: 'comparison',
-  initialState,
-  reducers: {
-    // Called whenever the user changes the benchmark selection, so a stale
-    // result/error from a previous benchmark doesn't linger on screen.
-    resetComparison(state) {
-      state.result = null;
-      state.status = 'idle';
-      state.error = null;
-    },
-  },
-  extraReducers: (builder) => {
-    builder
-      .addCase(runComparison.pending, (state) => {
-        state.status = 'loading';
-        state.error = null;
-      })
-      .addCase(runComparison.fulfilled, (state, action) => {
-        state.status = 'succeeded';
-        state.result = action.payload;
-      })
-      .addCase(runComparison.rejected, (state, action) => {
-        state.status = 'failed';
-        state.error = action.error.message || 'Failed to compare models';
-      });
-  },
-});
-
-export const { resetComparison } = comparisonSlice.actions;
-export default comparisonSlice.reducer;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//store.ts
-Register the new slice in your root reducer (store/index.ts), alongside the
-existing evaluations / models / benchmarks / providers reducers:
-
-  import comparisonReducer from './slices/comparisonSlice';
-
-  const store = configureStore({
-    reducer: {
-      // ...existing reducers
-      comparison: comparisonReducer,
-    },
-  });
-
-
-
-
-
-
-
-
-  //Comparison.tsx
-  import { useEffect, useMemo, useState } from 'react';
-import { Layers, Check, Play } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Layers, Check, Play, GitCompare, Sparkles, FlaskConical } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
 import { fetchModels } from '../../store/slices/modelsSlice';
 import { fetchEvaluations } from '../../store/slices/evaluationsSlice';
@@ -276,6 +121,29 @@ export default function Comparison() {
             placeholder="Select a benchmark…"
           />
         </div>
+
+        {!selBenchmark && (
+          <div className={styles['empty-state']}>
+            <div className={styles['empty-state__icon']}>
+              <GitCompare size={28} />
+            </div>
+            <h3>Pick a benchmark to get started</h3>
+            <p>
+              Choose a benchmark above and select two or more models that were evaluated
+              against it to see a side-by-side breakdown of scores, accuracy, and pass rates.
+            </p>
+            <div className={styles['empty-state__stats']}>
+              <div className={styles['empty-state__stat']}>
+                <FlaskConical size={16} />
+                <span><strong>{benchmarkOptions.length}</strong> benchmark{benchmarkOptions.length === 1 ? '' : 's'} available</span>
+              </div>
+              <div className={styles['empty-state__stat']}>
+                <Sparkles size={16} />
+                <span><strong>{models.length}</strong> model{models.length === 1 ? '' : 's'} in catalog</span>
+              </div>
+            </div>
+          </div>
+        )}
 
         {selBenchmark && (
           <div className="card">
@@ -442,7 +310,8 @@ function ComparisonSkeleton() {
 
 
 
-//Comparison.module.scss
+
+
 @use '../../styles/_variables' as *;
 
 .comparison {
@@ -514,6 +383,7 @@ function ComparisonSkeleton() {
     align-items: center;
     gap: 10px;
     flex-wrap: wrap;
+    margin-top: 20px;
     margin-bottom: 20px;
   }
 
@@ -641,6 +511,74 @@ function ComparisonSkeleton() {
   text-align: center;
   color: $text-secondary;
   font-size: 13px;
+}
+
+// ---------------------------------------------------------------------------
+// Empty state shown before a benchmark is selected — replaces the blank
+// page with something inviting instead of a dropdown floating over nothing.
+// ---------------------------------------------------------------------------
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 56px 32px;
+  border: 1px dashed $border;
+  border-radius: 16px;
+  background: $surface-alt;
+
+  &__icon {
+    width: 56px;
+    height: 56px;
+    border-radius: 16px;
+    background: $indigo-pale;
+    color: $indigo;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 18px;
+  }
+
+  h3 {
+    font-size: 16px;
+    font-weight: 700;
+    color: $text-primary;
+    margin-bottom: 8px;
+  }
+
+  p {
+    max-width: 420px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: $text-secondary;
+    margin-bottom: 24px;
+  }
+
+  &__stats {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  &__stat {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12.5px;
+    color: $text-secondary;
+    background: $surface;
+    border: 1px solid $border-light;
+    border-radius: 999px;
+    padding: 8px 14px;
+
+    svg { color: $indigo; flex-shrink: 0; }
+
+    strong {
+      color: $text-primary;
+      font-weight: 700;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
