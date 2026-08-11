@@ -1,313 +1,239 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import {
-  Search, Sparkles, Bot, Layers, Loader2,
-  Award, ListChecks, Clock, History as HistoryIcon, SlidersHorizontal, CalendarDays, X,
-} from 'lucide-react';
+//Providers.tsx
+import { useEffect, useState } from 'react';
+import { Search, Check, Plus, Settings, Unlink, Loader2, Cable, Trash2, RefreshCw, Eye, ListPlus } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
 import {
-  fetchEvaluations, fetchEvaluationResults,
-} from '../../store/slices/evaluationsSlice';
-import type { EvaluationStatusValue } from '../../types';
-import { SkeletonListRows } from '../common/Skeleton';
-import styles from './History.module.scss';
+  fetchProviders,
+  createProvider,
+  deleteProvider,
+  connectProvider,
+  disconnectProvider,
+  syncModels,
+} from '../../store/slices/providersSlice';
+import { fetchModelsByProvider, createCustomModel } from '../../store/slices/modelsSlice';
+import AddProviderDrawer from './AddProviderDrawer';
+import AddCustomModelDrawer from './AddCustomModelDrawer';
+import ProviderModelsSidebar from './ProviderModelsSidebar';
+import { SkeletonCards } from '../common/Skeleton';
+import styles from './Providers.module.scss';
+import type { Provider } from '../../types';
 
-const TYPE_ICON: Record<string, typeof Sparkles> = { model: Sparkles, agent: Bot, rag: Layers };
-const TYPE_LABEL: Record<string, string> = { model: 'AI Model', agent: 'Agent', rag: 'RAG' };
+type Filter = 'all' | 'connected' | 'available';
 
-function statusBadgeClass(status: EvaluationStatusValue): string {
-  switch (status) {
-    case 'completed': return 'badge-green';
-    case 'running': return 'badge-run';
-    case 'pending': return 'badge-amber';
-    case 'failed': case 'canceled': return 'badge-gray';
-    default: return 'badge-blue';
-  }
-}
-
-function withinDateRange(iso: string, range: string): boolean {
-  if (range === 'all') return true;
-  const days = range === '7' ? 7 : 30;
-  const cutoff = Date.now() - days * 86400000;
-  return new Date(iso).getTime() >= cutoff;
-}
-
-export default function History() {
+export default function Providers() {
   const dispatch = useAppDispatch();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const selectedId = searchParams.get('id');
-
-  const { list, listStatus, listError, resultsByEvalId, resultsStatusByEvalId, resultsErrorByEvalId } = useAppSelector((s) => s.evaluations);
-  const models = useAppSelector((s) => s.models.items);
-  const providers = useAppSelector((s) => s.providers.items);
-
+  const { items, status, mutatingId, creating, syncingId } = useAppSelector((s) => s.providers);
+  const modelsByProvider = useAppSelector((s) => s.models.byProvider);
+  const modelsByProviderStatus = useAppSelector((s) => s.models.byProviderStatus);
+  const customModelCreating = useAppSelector((s) => s.models.creating);
   const [search, setSearch] = useState('');
-  const [typeFilter, setTypeFilter] = useState('All');
-  const [dateFilter, setDateFilter] = useState('all');
-  const [activeFilter, setActiveFilter] = useState<'search' | 'type' | 'date' | null>(null);
-  const searchInputRef = useRef<HTMLInputElement>(null);
-
-  const toggleFilter = (key: 'search' | 'type' | 'date') => {
-    setActiveFilter((prev) => (prev === key ? null : key));
-  };
+  const [filter, setFilter] = useState<Filter>('all');
+  const [keyPromptFor, setKeyPromptFor] = useState<string | null>(null);
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [addModelOpen, setAddModelOpen] = useState(false);
+  const [viewModelsProvider, setViewModelsProvider] = useState<Provider | null>(null);
 
   useEffect(() => {
-    if (activeFilter === 'search') searchInputRef.current?.focus();
-  }, [activeFilter]);
-
-  const DATE_LABEL: Record<string, string> = { all: 'All time', '30': 'Last 30 days', '7': 'Last 7 days' };
-
-  // Initial load + silent 10s poll (spec §2.4) — no spinner/error disruption
-  // on background refreshes; the slice only flips listStatus when list is empty.
-  useEffect(() => {
-    dispatch(fetchEvaluations());
-    const interval = setInterval(() => dispatch(fetchEvaluations()), 10000);
-    return () => clearInterval(interval);
+    dispatch(fetchProviders());
   }, [dispatch]);
 
-  const filtered = useMemo(() => {
-    return list.filter((e) => {
-      if (search && !e.name.toLowerCase().includes(search.toLowerCase())) return false;
-      if (typeFilter !== 'All' && e.eval_type !== typeFilter) return false;
-      if (!withinDateRange(e.created_at, dateFilter)) return false;
-      return true;
-    });
-  }, [list, search, typeFilter, dateFilter]);
+  const connectedCount = items.filter((p) => p.status === 'connected').length;
 
-  const selected = list.find((e) => e.id === selectedId) || filtered[0] || null;
+  const filtered = items.filter((p) => {
+    if (filter === 'connected' && p.status !== 'connected') return false;
+    if (filter === 'available' && p.status === 'connected') return false;
+    return !search || p.name.toLowerCase().includes(search.toLowerCase());
+  });
 
-  // Keyed on id + status (not the whole object) so a background poll that
-  // doesn't change either doesn't re-trigger the results fetch (spec §2.4).
-  useEffect(() => {
-    if (selected && selected.status === 'completed' && !resultsByEvalId[selected.id]) {
-      dispatch(fetchEvaluationResults(selected.id));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id, selected?.status]);
-
-  const selectRow = (id: string) => setSearchParams({ id });
-
-  const modelName = (id: string) => models.find((m) => m.id === id)?.name || id;
-  const providerName = (id: string) => {
-    const model = models.find((m) => m.id === id);
-    return providers.find((p) => p.id === model?.provider_id)?.name || model?.provider_id || '—';
+  const submitConnect = (providerId: string) => {
+    if (!apiKeyInput.trim()) return;
+    dispatch(connectProvider({ providerId, payload: { api_key: apiKeyInput } }));
+    setKeyPromptFor(null);
+    setApiKeyInput('');
   };
 
-  const results = selected ? resultsByEvalId[selected.id] : undefined;
-  const resultsStatus = selected ? resultsStatusByEvalId[selected.id] : undefined;
-  const resultsError = selected ? resultsErrorByEvalId[selected.id] : undefined;
+  const openModelsSidebar = (p: Provider) => {
+    setViewModelsProvider(p);
+    dispatch(fetchModelsByProvider(p.id));
+  };
 
   return (
     <div className="page-enter pg-shell">
-      <div className={styles['history__header']}>
+      <div className={styles.providers__header}>
         <div>
-          <p className={styles['history__header-eyebrow']}>Activity</p>
-          <h1>History</h1>
-          <p className={styles['history__header-sub']}>All past and in-progress evaluations</p>
+          <p className={styles['providers__header-eyebrow']}>Integrations</p>
+          <h1>Providers</h1>
+          <p className={styles['providers__header-sub']}>Manage your AI provider connections</p>
         </div>
-        <div className={styles['history__header-meta']}>
-          <HistoryIcon size={13} />
-          {list.length} evaluation{list.length === 1 ? '' : 's'} tracked
+        <div className={styles['providers__header-meta']}>
+          <Cable size={13} />
+          {connectedCount} of {items.length} connected
         </div>
       </div>
-      {/* This page needs the list and detail panels to scroll independently
-          of each other (spec: point 4 of the fixed-header pattern), so
-          pg-body itself doesn't scroll here — .layout fills it instead. */}
-      <div className={`pg-body ${styles['pg-body-fixed']}`}>
-        <div className="split-shell split-shell--fill">
-          {/* ---------- Sidebar list ---------- */}
-          <div className={`split-shell__sidebar ${styles.sidebar}`}>
-            <div className={styles.filters}>
-              <div className={styles['filter-toolbar']}>
-                <span className={styles['filter-toolbar__label']}>Filters</span>
-                <div className={styles['filter-toolbar__divider']} />
-                <button
-                  type="button"
-                  className={`${styles['filter-toolbar__btn']} ${activeFilter === 'search' ? styles.on : ''}`}
-                  onClick={() => toggleFilter('search')}
-                  title="Search"
-                >
-                  <Search size={15} />
-                  {search && <span className={styles['filter-toolbar__dot']} />}
+      <div className="pg-toolbar">
+        <div className="toolbar">
+          <div className="search-box">
+            <Search size={16} color="var(--text-muted)" />
+            <input placeholder="Search providers…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div className="pills">
+              {(['all', 'connected', 'available'] as Filter[]).map((f) => (
+                <button key={f} className={`pill ${filter === f ? 'on' : ''}`} onClick={() => setFilter(f)}>
+                  {f[0].toUpperCase() + f.slice(1)}
                 </button>
-                <button
-                  type="button"
-                  className={`${styles['filter-toolbar__btn']} ${activeFilter === 'type' ? styles.on : ''}`}
-                  onClick={() => toggleFilter('type')}
-                  title="Filter by type"
-                >
-                  <SlidersHorizontal size={15} />
-                  {typeFilter !== 'All' && <span className={styles['filter-toolbar__dot']} />}
-                </button>
-                <button
-                  type="button"
-                  className={`${styles['filter-toolbar__btn']} ${activeFilter === 'date' ? styles.on : ''}`}
-                  onClick={() => toggleFilter('date')}
-                  title="Filter by date"
-                >
-                  <CalendarDays size={15} />
-                  {dateFilter !== 'all' && <span className={styles['filter-toolbar__dot']} />}
-                </button>
-
-                <div className={styles['filter-toolbar__summary']}>
-                  {search && <span className={styles['filter-chip']}>“{search}”<X size={11} onClick={() => setSearch('')} /></span>}
-                  {typeFilter !== 'All' && <span className={styles['filter-chip']}>{TYPE_LABEL[typeFilter]}<X size={11} onClick={() => setTypeFilter('All')} /></span>}
-                  {dateFilter !== 'all' && <span className={styles['filter-chip']}>{DATE_LABEL[dateFilter]}<X size={11} onClick={() => setDateFilter('all')} /></span>}
+              ))}
+            </div>
+            <button className="btn btn-ind btn-sm" onClick={() => setDrawerOpen(true)}><Plus size={14} /> Add Provider</button>
+          </div>
+        </div>
+      </div>
+      <div className="pg-body">
+        <div className="cards-grid">
+          {status === 'loading' && <SkeletonCards count={6} />}
+          {status !== 'loading' && filtered.map((p) => {
+            const isCustom = p.name === 'Custom';
+            return (
+              <div className="card" key={p.id}>
+                <div className="card-hdr">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                    <div className={`card-icon ${styles['providers__icon']}`}>{p.logo_url ? <img src={p.logo_url} alt={p.name} /> : p.name[0]}</div>
+                    <div>
+                      <div className="card-title">{p.name}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>{p.model_count} models</div>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <button
+                      className={`btn btn-sm btn-ghost ${styles['providers__icon-btn']}`}
+                      onClick={() => openModelsSidebar(p)}
+                      title="View models"
+                      aria-label={`View models for ${p.name}`}
+                    >
+                      <Eye size={14} />
+                    </button>
+                    <span className={`badge ${p.status === 'connected' ? 'badge-green' : 'badge-gray'}`}>
+                      {p.status === 'connected' ? <><Check size={11} /> Connected</> : 'Not connected'}
+                    </span>
+                  </div>
                 </div>
-              </div>
+                <div className="card-desc">{p.description}</div>
 
-              <div className={`${styles['filter-panel']} ${activeFilter ? styles['filter-panel--open'] : ''}`}>
-                {activeFilter === 'search' && (
-                  <div className="search-box" style={{ minWidth: 0 }}>
-                    <Search size={16} color="var(--text-muted)" />
+                {keyPromptFor === p.id ? (
+                  <div className={styles['providers__key-form']}>
                     <input
-                      ref={searchInputRef}
-                      placeholder="Search evaluations…"
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
+                      className="fi"
+                      type="password"
+                      placeholder="Paste API key…"
+                      value={apiKeyInput}
+                      onChange={(e) => setApiKeyInput(e.target.value)}
+                      autoFocus
                     />
+                    <div className={styles['providers__key-actions']}>
+                      <button className="btn btn-sm btn-ind" onClick={() => submitConnect(p.id)}>Save</button>
+                      <button className="btn btn-sm btn-ghost" onClick={() => setKeyPromptFor(null)}>Cancel</button>
+                    </div>
                   </div>
-                )}
-                {activeFilter === 'type' && (
-                  <div className="pills">
-                    {['All', 'model', 'agent', 'rag'].map((t) => (
-                      <button key={t} className={`pill ${typeFilter === t ? 'on' : ''}`} onClick={() => { setTypeFilter(t); setActiveFilter(null); }}>
-                        {t === 'All' ? 'All' : TYPE_LABEL[t]}
+                ) : (
+                  <div className={styles['providers__foot-actions']}>
+                    {isCustom && (
+                      <button
+                        className={`btn btn-sm btn-ind ${styles['providers__foot-btn']}`}
+                        onClick={() => setAddModelOpen(true)}
+                      >
+                        <ListPlus size={13} /> Add Model
                       </button>
-                    ))}
-                  </div>
-                )}
-                {activeFilter === 'date' && (
-                  <div className="pills">
-                    {Object.entries(DATE_LABEL).map(([value, label]) => (
-                      <button key={value} className={`pill ${dateFilter === value ? 'on' : ''}`} onClick={() => { setDateFilter(value); setActiveFilter(null); }}>
-                        {label}
+                    )}
+                    <button
+                      className={`btn btn-sm ${p.status === 'connected' ? 'btn-ghost' : 'btn-ind'} ${styles['providers__foot-btn']}`}
+                      disabled={mutatingId === p.id}
+                      onClick={() => setKeyPromptFor(p.id)}
+                    >
+                      {mutatingId === p.id ? (
+                        <Loader2 size={13} style={{ animation: 'spin 1.5s linear infinite' }} />
+                      ) : p.status === 'connected' ? (
+                        <><Settings size={13} /> Configure</>
+                      ) : (
+                        <><Plus size={13} /> Connect</>
+                      )}
+                    </button>
+                    {p.status === 'connected' && (
+                      <>
+                        <button
+                          className={`btn btn-sm btn-ghost ${styles['providers__foot-btn']}`}
+                          disabled={syncingId === p.id}
+                          onClick={() => dispatch(syncModels(p.id))}
+                        >
+                          {syncingId === p.id ? (
+                            <Loader2 size={13} style={{ animation: 'spin 1.5s linear infinite' }} />
+                          ) : (
+                            <><RefreshCw size={13} /> Sync</>
+                          )}
+                        </button>
+                        <button
+                          className={`btn btn-sm btn-danger ${styles['providers__foot-btn']}`}
+                          disabled={mutatingId === p.id}
+                          onClick={() => dispatch(disconnectProvider(p.id))}
+                        >
+                          <Unlink size={13} /> Disconnect
+                        </button>
+                      </>
+                    )}
+                    {p.status !== 'connected' && (
+                      <button
+                        className={`btn btn-sm btn-danger ${styles['providers__foot-btn']}`}
+                        disabled={mutatingId === p.id}
+                        onClick={() => {
+                          if (window.confirm(`Delete ${p.name}? This cannot be undone.`)) {
+                            dispatch(deleteProvider(p.id));
+                          }
+                        }}
+                      >
+                        <Trash2 size={13} /> Delete
                       </button>
-                    ))}
+                    )}
                   </div>
                 )}
               </div>
-
-              {listStatus === 'failed' && list.length === 0 && <div className={styles.empty}>{listError || 'Failed to load evaluations.'}</div>}
-              {listStatus !== 'loading' && filtered.length === 0 && list.length > 0 && <div className={styles.empty}>No evaluations match your filters.</div>}
-            </div>
-
-            <div className={styles.rows}>
-              {listStatus === 'loading' && list.length === 0 && <SkeletonListRows count={5} />}
-              {filtered.map((e) => {
-                const Icon = TYPE_ICON[e.eval_type] || Sparkles;
-                const isSelected = selected?.id === e.id;
-                return (
-                  <div
-                    key={e.id}
-                    className={`${styles.row} ${isSelected ? styles.selected : ''} ${e.status === 'running' ? styles['row--running'] : ''}`}
-                    onClick={() => selectRow(e.id)}
-                  >
-                    <div className={styles.row__top}>
-                      <div className={styles.row__icon}><Icon size={16} /></div>
-                      <div className={styles.row__name}>{e.name}</div>
-                    </div>
-                    <div className={styles.row__badges}>
-                      <span className="tag tag-ind">{TYPE_LABEL[e.eval_type] || e.eval_type}</span>
-                      <span className={`badge ${statusBadgeClass(e.status)}`}>
-                        {e.status === 'running' && <span className={styles['live-dot']} />}
-                        {e.status}
-                      </span>
-                    </div>
-                    <div className={styles.row__meta}>{new Date(e.created_at).toLocaleDateString()}</div>
-                    <div className={styles.row__stats}>
-                      <span>{e.top_model ? `🏆 ${e.top_model}` : '—'}</span>
-                      <span>{e.top_score != null ? `${e.top_score}%` : '—'}</span>
-                      <span>{e.model_ids.length} models</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* ---------- Detail panel ---------- */}
-          <div className={`split-shell__main ${styles.detail}`}>
-            {!selected ? (
-              <div className={styles['detail-empty']}>Select an evaluation to see its details.</div>
-            ) : (
-              <>
-                <div className={styles['detail-hdr']}>
-                  <div>
-                    <div className={styles['detail-hdr__badges']}>
-                      <span className="tag tag-ind">{TYPE_LABEL[selected.eval_type] || selected.eval_type}</span>
-                      <span className={`badge ${statusBadgeClass(selected.status)}`}>
-                        {selected.status === 'running' && <span className={styles['live-dot']} />}
-                        {selected.status}
-                      </span>
-                    </div>
-                    <h2 className={styles['detail-hdr__name']}>{selected.name}</h2>
-                    <div className={styles['detail-hdr__date']}>Created {new Date(selected.created_at).toLocaleString()}</div>
-                  </div>
-                </div>
-
-                <div className={styles['summary-cards']}>
-                  <div className={styles['summary-card']}>
-                    <Award size={16} color="#F59E0B" />
-                    <div>
-                      <div className={styles['summary-card__label']}>Winner</div>
-                      <div className={styles['summary-card__val']}>{selected.top_model || '—'}{selected.top_score != null ? ` · ${selected.top_score}%` : ''}</div>
-                    </div>
-                  </div>
-                  <div className={styles['summary-card']}>
-                    <ListChecks size={16} color="#1428A0" />
-                    <div>
-                      <div className={styles['summary-card__label']}>Questions / Models</div>
-                      <div className={styles['summary-card__val']}>{selected.total_questions.toLocaleString()} &middot; {selected.model_ids.length} models</div>
-                    </div>
-                  </div>
-                  <div className={styles['summary-card']}>
-                    <Clock size={16} color="#10B981" />
-                    <div>
-                      <div className={styles['summary-card__label']}>Status</div>
-                      <div className={styles['summary-card__val']}>{selected.status}{selected.completed_at ? ` · ${new Date(selected.completed_at).toLocaleDateString()}` : ''}</div>
-                    </div>
-                  </div>
-                </div>
-
-                {selected.status === 'completed' ? (
-                  <>
-                    {resultsStatus === 'loading' && <div className={styles.empty}><Loader2 size={16} style={{ animation: 'spin 1.5s linear infinite' }} /> Loading results…</div>}
-                    {resultsStatus === 'failed' && <div className={styles.empty}>{resultsError}</div>}
-                    {results && (
-                      <div className="tw">
-                        <table className="tbl">
-                          <thead><tr><th>Rank</th><th>Model</th><th>Provider</th><th>Score</th><th>Accuracy</th><th>Passed</th><th>Failed</th></tr></thead>
-                          <tbody>
-                            {results.results.map((r) => (
-                              <tr key={r.model_id} className={r.rank === 1 ? 'winner' : ''}>
-                                <td style={{ fontWeight: 700 }}>{r.rank === 1 ? '🏆 ' : ''}{r.rank}</td>
-                                <td style={{ fontWeight: 700 }}>{modelName(r.model_id)}</td>
-                                <td style={{ color: 'var(--text-secondary)' }}>{providerName(r.model_id)}</td>
-                                <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontWeight: 700 }}>{r.score}%</td>
-                                <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif" }}>{r.accuracy}%</td>
-                                <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", color: '#10B981' }}>{r.passed_tests}</td>
-                                <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", color: '#EF4444' }}>{r.failed_tests}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className={styles['status-message']}>
-                    {selected.status === 'running' && 'This evaluation is still running — results will appear once it completes.'}
-                    {selected.status === 'pending' && 'This evaluation hasn\u2019t started yet.'}
-                    {selected.status === 'failed' && 'This evaluation failed to complete.'}
-                    {selected.status === 'canceled' && 'This evaluation was canceled.'}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+            );
+          })}
         </div>
       </div>
+
+      {drawerOpen && (
+        <AddProviderDrawer
+          submitting={creating}
+          onClose={() => setDrawerOpen(false)}
+          onSubmit={(payload) => {
+            dispatch(createProvider(payload)).then(() => setDrawerOpen(false));
+          }}
+        />
+      )}
+
+      {addModelOpen && (
+        <AddCustomModelDrawer
+          submitting={customModelCreating}
+          onClose={() => setAddModelOpen(false)}
+          onSubmit={(payload) => {
+            dispatch(createCustomModel(payload)).then(() => {
+              setAddModelOpen(false);
+              dispatch(fetchProviders());
+              const custom = items.find((p) => p.name === 'Custom');
+              if (custom) dispatch(fetchModelsByProvider(custom.id));
+            });
+          }}
+        />
+      )}
+
+      {viewModelsProvider && (
+        <ProviderModelsSidebar
+          provider={viewModelsProvider}
+          models={modelsByProvider[viewModelsProvider.id] || []}
+          status={modelsByProviderStatus[viewModelsProvider.id] || 'idle'}
+          onClose={() => setViewModelsProvider(null)}
+        />
+      )}
     </div>
   );
 }
@@ -327,9 +253,134 @@ export default function History() {
 
 
 
+
+
+
+
+//ProviderModelsSidebar.tsx
+import { X, Loader2, Inbox } from 'lucide-react';
+import type { Provider } from '../../types';
+import type { ProviderModel } from '../../api/endpoints/models';
+import styles from './Providers.module.scss';
+
+interface ProviderModelsSidebarProps {
+  provider: Provider;
+  models: ProviderModel[];
+  status: 'idle' | 'loading' | 'succeeded' | 'failed';
+  onClose: () => void;
+}
+
+export default function ProviderModelsSidebar({ provider, models, status, onClose }: ProviderModelsSidebarProps) {
+  return (
+    <>
+      <div className={styles['providers__sidebar-overlay']} onClick={onClose} />
+      <aside className={styles['providers__sidebar']}>
+        <div className={styles['providers__sidebar-header']}>
+          <div>
+            <div className={styles['providers__sidebar-title']}>{provider.name}</div>
+            <div className={styles['providers__sidebar-subtitle']}>
+              {models.length} model{models.length === 1 ? '' : 's'} available
+            </div>
+          </div>
+          <button className="btn btn-sm btn-ghost" onClick={onClose} aria-label="Close">
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className={styles['providers__sidebar-body']}>
+          {status === 'loading' && (
+            <div className={styles['providers__sidebar-empty']}>
+              <Loader2 size={18} style={{ animation: 'spin 1.5s linear infinite' }} />
+              <span>Loading models…</span>
+            </div>
+          )}
+
+          {status === 'failed' && (
+            <div className={styles['providers__sidebar-empty']}>
+              <span>Couldn't load models for this provider.</span>
+            </div>
+          )}
+
+          {status === 'succeeded' && models.length === 0 && (
+            <div className={styles['providers__sidebar-empty']}>
+              <Inbox size={18} />
+              <span>No models found for this provider yet.</span>
+            </div>
+          )}
+
+          {status === 'succeeded' && models.map((m) => (
+            <div key={m.id} className={styles['providers__model-row']}>
+              <div className={styles['providers__model-row-head']}>
+                <span className={styles['providers__model-row-name']}>{m.name}</span>
+                <span className={`badge ${m.is_active ? 'badge-green' : 'badge-gray'}`}>
+                  {m.is_active ? 'Active' : 'Inactive'}
+                </span>
+              </div>
+
+              <div className={styles['providers__model-row-tags']}>
+                {m.category && <span className="tag tag-ind">{m.category}</span>}
+                {m.capabilities.map((c) => (
+                  <span key={c} className="tag tag-ind">{c}</span>
+                ))}
+              </div>
+
+              <div className={styles['providers__model-row-meta']}>
+                <div>
+                  <span className={styles['providers__model-row-meta-label']}>Context</span>
+                  <span>{m.context_window.toLocaleString()}</span>
+                </div>
+                <div>
+                  <span className={styles['providers__model-row-meta-label']}>Price (in/out)</span>
+                  <span>
+                    {m.input_price != null ? `$${m.input_price.toFixed(2)}` : '—'} / {m.output_price != null ? `$${m.output_price.toFixed(2)}` : '—'}
+                  </span>
+                </div>
+                <div>
+                  <span className={styles['providers__model-row-meta-label']}>Accuracy</span>
+                  <span>{m.accuracy_score != null ? `${m.accuracy_score}%` : '—'}</span>
+                </div>
+                <div>
+                  <span className={styles['providers__model-row-meta-label']}>Agent Score</span>
+                  <span>{m.agent_score != null ? `${m.agent_score}%` : '—'}</span>
+                </div>
+              </div>
+
+              {m.base_url && (
+                <div className={styles['providers__model-row-url']} title={m.base_url}>
+                  {m.base_url}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </aside>
+    </>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Providers.module.scss
 @use '../../styles/_variables' as *;
 
-.history {
+.providers {
   &__header {
     flex-shrink: 0;
     display: flex;
@@ -392,220 +443,726 @@ export default function History() {
     white-space: nowrap;
     margin-bottom: 3px;
   }
-}
 
-@property --angle {
-  syntax: '<angle>';
-  initial-value: 0deg;
-  inherits: false;
-}
-@keyframes rotate-angle {
-  to { --angle: 360deg; }
-}
-@keyframes live-dot-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: .5; transform: scale(1.3); }
-}
-
-// Fixed-shell override: History's list + detail panels need to scroll
-// independently of each other, so pg-body itself must not scroll — this
-// makes it a plain flex:1/min-height:0 pass-through instead.
-.pg-body-fixed {
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-// Border/radius/background/shadow now come from the shared .split-shell /
-// .split-shell__sidebar / .split-shell__main classes in global.scss — these
-// only add width and internal padding/layout.
-.sidebar {
-  width: 380px; padding: 18px;
-}
-.filters { flex-shrink: 0; }
-
-.filter-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  margin-bottom: 8px;
-  background: $surface-alt;
-  border: 1px solid $border-light;
-  border-radius: 12px;
-}
-
-.filter-toolbar__label {
-  flex-shrink: 0;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: .06em;
-  text-transform: uppercase;
-  color: $text-muted;
-  padding-left: 4px;
-}
-
-.filter-toolbar__divider {
-  flex-shrink: 0;
-  width: 1px;
-  height: 16px;
-  background: $border;
-}
-
-.filter-toolbar__btn {
-  position: relative;
-  flex-shrink: 0;
-  width: 30px;
-  height: 30px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: $text-secondary;
-  cursor: pointer;
-  transition: all .15s;
-
-  &:hover { background: $surface; color: $indigo; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
-
-  &.on {
-    border-color: $indigo;
-    background: $surface;
-    color: $indigo;
-    box-shadow: 0 1px 3px rgba(20,40,160,.12);
+  &__loading { display: flex; align-items: center; gap: 8px; color: $text-secondary; font-size: 13px; margin-bottom: 16px; }
+  &__icon {
+    background: $indigo-pale; color: $indigo; font-size: 18px; font-weight: 700;
+    img { width: 24px; height: 24px; object-fit: contain; }
   }
-}
+  &__key-form { display: flex; gap: 8px; margin-top: 4px; }
+  &__key-actions { display: flex; gap: 6px; }
 
-.filter-toolbar__dot {
-  position: absolute;
-  top: -2px;
-  right: -2px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: $indigo;
-  border: 1.5px solid $surface-alt;
-}
+  &__icon-btn {
+    padding: 6px !important;
+    min-width: auto;
+    border-radius: 8px;
+  }
 
-.filter-toolbar__summary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  min-width: 0;
-  overflow: hidden;
-}
+  // Action row at the bottom of each provider card. Wraps so buttons never
+  // overflow the card, with tight, even spacing between them.
+  &__foot-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 12px;
+  }
 
-.filter-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  font-weight: 600;
-  color: $indigo;
-  background: $indigo-pale;
-  border: 1px solid rgba(20,40,160,.1);
-  border-radius: 999px;
-  padding: 4px 8px;
-  white-space: nowrap;
-  max-width: 140px;
+  &__foot-btn {
+    flex: 0 0 auto;
+    padding: 6px 10px !important;
+    font-size: 12.5px !important;
+    line-height: 1.2;
+    gap: 4px !important;
+    white-space: nowrap;
+  }
 
-  span { overflow: hidden; text-overflow: ellipsis; }
+  // --- Provider models sidebar ---
+  &__sidebar-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 18, 26, 0.45);
+    z-index: 40;
+  }
 
-  svg {
-    cursor: pointer;
+  &__sidebar {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(420px, 100vw);
+    background: var(--surface, #fff);
+    background: var(--surface, #fff);
+    border-left: 1px solid $border-light;
+    box-shadow: -12px 0 32px rgba(15, 18, 26, 0.12);
+    z-index: 41;
+    display: flex;
+    flex-direction: column;
+    animation: providers-sidebar-in 0.2s ease-out;
+  }
+
+  &__sidebar-header {
     flex-shrink: 0;
-    opacity: .6;
-    transition: opacity .15s;
-    &:hover { opacity: 1; }
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 20px 20px 16px;
+    border-bottom: 1px solid $border-light;
   }
-}
 
-.filter-panel {
-  display: grid;
-  grid-template-rows: 0fr;
-  opacity: 0;
-  transition: grid-template-rows .18s ease, opacity .15s ease, margin-bottom .18s ease;
+  &__sidebar-title {
+    font-family: $font-display;
+    font-size: 1.05rem;
+    font-weight: 800;
+    color: $text-primary;
+  }
 
-  > * {
-    overflow: hidden;
-    min-height: 0;
-    background: $surface-alt;
+  &__sidebar-subtitle {
+    margin-top: 3px;
+    font-size: 0.75rem;
+    color: $text-secondary;
+  }
+
+  &__sidebar-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  &__sidebar-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 48px 12px;
+    color: $text-secondary;
+    font-size: 13px;
+    text-align: center;
+  }
+
+  &__model-row {
     border: 1px solid $border-light;
     border-radius: 12px;
-    padding: 10px;
+    padding: 14px;
+    background: $surface-alt;
   }
 
-  &--open {
-    grid-template-rows: 1fr;
-    opacity: 1;
-    margin-bottom: 8px;
+  &__model-row-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  &__model-row-name {
+    font-weight: 700;
+    font-size: 0.875rem;
+    color: $text-primary;
+  }
+
+  &__model-row-tags {
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  &__model-row-meta {
+    margin-top: 10px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 12px;
+
+    > div {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      font-size: 0.8125rem;
+      color: $text-primary;
+    }
+  }
+
+  &__model-row-meta-label {
+    font-size: 0.6875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: $text-secondary;
+  }
+
+  &__model-row-url {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed $border-light;
+    font-family: $font-mono;
+    font-size: 0.75rem;
+    color: $text-secondary;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 }
-.empty { padding: 24px; text-align: center; color: $text-secondary; font-size: 13px; display: flex; align-items: center; gap: 8px; justify-content: center; }
 
-.rows { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
-
-.row {
-  border: 1px solid $border; border-radius: 14px; padding: 14px; cursor: pointer; transition: all .15s;
-  position: relative;
-}
-.row:hover { border-color: $indigo-light; }
-.row.selected { border-color: $indigo; background: $indigo-pale; }
-
-// Running-state animation: a thin light continuously traveling around the
-// card border (spec §2.2), built with a rotating conic-gradient angle.
-.row--running {
-  --angle: 0deg;
-  border: 1px solid transparent;
-  background:
-    linear-gradient($surface, $surface) padding-box,
-    conic-gradient(from var(--angle), $border 0%, $indigo 8%, $border 16%) border-box;
-  animation: rotate-angle 2.4s linear infinite;
-}
-.row--running.selected {
-  background:
-    linear-gradient($indigo-pale, $indigo-pale) padding-box,
-    conic-gradient(from var(--angle), $border 0%, $indigo 8%, $border 16%) border-box;
+@keyframes providers-sidebar-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
 }
 
-.row__top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
-.row__icon { width: 30px; height: 30px; border-radius: 9px; background: $indigo-pale; color: $indigo; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.row__name { font-weight: 700; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.row__badges { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
-.row__meta { font-size: 11px; color: $text-muted; margin-bottom: 8px; }
-.row__stats { display: flex; gap: 12px; font-size: 11px; color: $text-secondary; margin-bottom: 10px; flex-wrap: wrap; }
 
-.live-dot {
-  width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block;
-  animation: live-dot-pulse 1.4s ease-in-out infinite;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Modelcatalog.tsx
+import { useEffect, useMemo, useState } from 'react';
+import { Search, Boxes } from 'lucide-react';
+import { useAppDispatch, useAppSelector } from '../../hooks/redux';
+import { fetchModels } from '../../store/slices/modelsSlice';
+import { fetchProviders } from '../../store/slices/providersSlice';
+import { SkeletonTableRows } from '../common/Skeleton';
+import styles from './ModelCatalog.module.scss';
+
+export default function ModelCatalog() {
+  const dispatch = useAppDispatch();
+  const { items, status } = useAppSelector((s) => s.models);
+  const providers = useAppSelector((s) => s.providers.items);
+  const [search, setSearch] = useState('');
+  const [capFilter, setCapFilter] = useState('All');
+
+  useEffect(() => {
+    dispatch(fetchModels());
+    dispatch(fetchProviders());
+  }, [dispatch]);
+
+  const caps = useMemo(() => ['All', ...new Set(items.flatMap((m) => m.capabilities))], [items]);
+  const providerName = (id: string) => providers.find((p) => p.id === id)?.name || id;
+
+  const filtered = items.filter((m) => {
+    if (capFilter !== 'All' && !m.capabilities.includes(capFilter)) return false;
+    const q = search.toLowerCase();
+    return !q || m.name.toLowerCase().includes(q) || providerName(m.provider_id).toLowerCase().includes(q);
+  });
+
+  return (
+    <div className="page-enter pg-shell">
+      <div className={styles['model-catalog__header']}>
+        <div>
+          <p className={styles['model-catalog__header-eyebrow']}>Catalog</p>
+          <h1>Model Catalog</h1>
+          <p className={styles['model-catalog__header-sub']}>All models across connected providers</p>
+        </div>
+        <div className={styles['model-catalog__header-meta']}>
+          <Boxes size={13} />
+          {items.length} model{items.length === 1 ? '' : 's'} listed
+        </div>
+      </div>
+      <div className="pg-toolbar">
+        <div className="toolbar">
+          <div className="search-box">
+            <Search size={16} color="var(--text-muted)" />
+            <input placeholder="Search models or providers…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div className="pills">{caps.map((c) => <button key={c} className={`pill ${capFilter === c ? 'on' : ''}`} onClick={() => setCapFilter(c)}>{c}</button>)}</div>
+          </div>
+        </div>
+      </div>
+      <div className="pg-body">
+        <div className="tw">
+          <table className="tbl">
+            <thead>
+              <tr><th>Model</th><th>Provider</th><th>Capabilities</th><th>Context</th><th>Price (in/out)</th><th>Accuracy</th><th>Status</th></tr>
+            </thead>
+            <tbody>
+              {status === 'loading' && <SkeletonTableRows columns={7} rows={6} />}
+              {status !== 'loading' && filtered.map((m) => (
+                <tr key={m.id}>
+                  <td style={{ fontWeight: 700 }}>{m.name}</td>
+                  <td style={{ color: 'var(--text-secondary)' }}>{providerName(m.provider_id)}</td>
+                  <td>{m.capabilities.map((c) => <span key={c} className="tag tag-ind">{c}</span>)}</td>
+                  <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontSize: 13 }}>{m.context_window.toLocaleString()}</td>
+                  <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontSize: 13, color: 'var(--text-secondary)' }}>
+                    {m.input_price != null ? `$${m.input_price.toFixed(2)}` : '—'} / {m.output_price != null ? `$${m.output_price.toFixed(2)}` : '—'}
+                  </td>
+                  <td>
+                    <span style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontWeight: 700, color: (m.accuracy_score || 0) >= 90 ? '#10B981' : 'var(--text-primary)' }}>
+                      {m.accuracy_score != null ? `${m.accuracy_score}%` : '—'}
+                    </span>
+                  </td>
+                  <td><span className={`badge ${m.is_active ? 'badge-green' : 'badge-gray'}`}>{m.is_active ? 'Active' : 'Inactive'}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
 }
 
-.detail { padding: 24px; min-height: 0; overflow-y: auto; }
-.detail-empty { padding: 80px 24px; text-align: center; color: $text-secondary; font-size: 14px; }
 
-.detail-hdr { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; flex-wrap: wrap; gap: 16px; }
-.detail-hdr__badges { display: flex; gap: 8px; margin-bottom: 10px; }
-.detail-hdr__name { font-size: 22px; font-weight: 700; letter-spacing: -.3px; }
-.detail-hdr__date { font-size: 12px; color: $text-muted; margin-top: 4px; }
 
-.summary-cards { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; margin-bottom: 24px; }
-.summary-card { display: flex; align-items: center; gap: 12px; padding: 16px; background: $surface-alt; border-radius: 14px; }
-.summary-card__label { font-size: 11px; color: $text-muted; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; }
-.summary-card__val { font-size: 13px; font-weight: 700; margin-top: 2px; }
 
-.status-message { padding: 40px; text-align: center; background: $surface-alt; border-radius: 14px; color: $text-secondary; font-size: 14px; }
 
-@media (max-width: 900px) {
-  :global(.split-shell--fill) { flex-direction: column; }
-  .sidebar { width: 100%; border-right: none; border-bottom: 1px solid $border; }
-  .summary-cards { grid-template-columns: 1fr; }
-  // Independent-panel scrolling relies on the grid stretching each panel to
-  // a definite row height; once stacked to one column that no longer holds,
-  // so fall back to one normal scrolling column instead of risking clipped
-  // content under pg-body-fixed's overflow:hidden.
-  .pg-body-fixed { overflow-y: auto; }
-  .sidebar, .detail { overflow-y: visible; min-height: 0; }
-  .rows { overflow-y: visible; }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//modelsSlice.ts
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import { modelsApi, type ProviderModel } from '../../api/endpoints/models';
+import type { Model, CustomModelRequest } from '../../types';
+
+type FetchStatus = 'idle' | 'loading' | 'succeeded' | 'failed';
+
+interface ModelsState {
+  items: Model[];
+  status: FetchStatus;
+  error: string | null;
+  creating: boolean;
+  byProvider: Record<string, ProviderModel[]>;
+  byProviderStatus: Record<string, FetchStatus>;
+}
+
+const initialState: ModelsState = {
+  items: [],
+  status: 'idle',
+  error: null,
+  creating: false,
+  byProvider: {},
+  byProviderStatus: {},
+};
+
+export const fetchModels = createAsyncThunk('models/fetchAll', () => modelsApi.list());
+
+export const fetchModelsByProvider = createAsyncThunk(
+  'models/fetchByProvider',
+  async (providerId: string) => {
+    const { models } = await modelsApi.listByProvider(providerId);
+    return { providerId, models };
+  }
+);
+
+export const createCustomModel = createAsyncThunk(
+  'models/createCustom',
+  async (payload: CustomModelRequest, { dispatch }) => {
+    await modelsApi.createCustom(payload);
+    // spec: no meaningful body returned, so refetch afterwards
+    await dispatch(fetchModels());
+  }
+);
+
+const modelsSlice = createSlice({
+  name: 'models',
+  initialState,
+  reducers: {},
+  extraReducers: (builder) => {
+    builder
+      .addCase(fetchModels.pending, (state) => {
+        state.status = 'loading';
+      })
+      .addCase(fetchModels.fulfilled, (state, action) => {
+        state.status = 'succeeded';
+        state.items = action.payload;
+      })
+      .addCase(fetchModels.rejected, (state, action) => {
+        state.status = 'failed';
+        state.error = action.error.message || 'Failed to load models';
+      })
+      .addCase(createCustomModel.pending, (state) => {
+        state.creating = true;
+      })
+      .addCase(createCustomModel.fulfilled, (state) => {
+        state.creating = false;
+      })
+      .addCase(createCustomModel.rejected, (state, action) => {
+        state.creating = false;
+        state.error = action.error.message || 'Failed to register custom model';
+      })
+      .addCase(fetchModelsByProvider.pending, (state, action) => {
+        state.byProviderStatus[action.meta.arg] = 'loading';
+      })
+      .addCase(fetchModelsByProvider.fulfilled, (state, action) => {
+        state.byProviderStatus[action.payload.providerId] = 'succeeded';
+        state.byProvider[action.payload.providerId] = action.payload.models;
+      })
+      .addCase(fetchModelsByProvider.rejected, (state, action) => {
+        state.byProviderStatus[action.meta.arg] = 'failed';
+      });
+  },
+});
+
+export default modelsSlice.reducer;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Models.ts
+import api from '../axiosInstance';
+import type { Model, CustomModelRequest } from '../../types';
+
+// Shape returned by GET /models/by-provider/:providerId
+export interface ProviderModel {
+  id: string;
+  name: string;
+  provider_id: string;
+  category: string;
+  capabilities: string[];
+  context_window: number;
+  input_price: number | null;
+  output_price: number | null;
+  accuracy_score: number | null;
+  agent_score: number | null;
+  is_active: boolean;
+  base_url: string | null;
+}
+
+export const modelsApi = {
+  list: () => api.get<{ models: Model[] }>('/models').then((r) => r.data.models),
+
+  createCustom: (payload: CustomModelRequest) =>
+    api.post<void>('/models/custom', payload).then(() => undefined),
+
+  listByProvider: (providerId: string) =>
+    api
+      .get<{ models: ProviderModel[]; total: number }>(`/models/by-provider/${providerId}`)
+      .then((r) => r.data),
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//providersSlice.ts
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import { providersApi } from '../../api/endpoints/providers';
+import type { Provider, ConnectProviderRequest, CreateProviderRequest } from '../../types';
+
+interface ProvidersState {
+  items: Provider[];
+  status: 'idle' | 'loading' | 'succeeded' | 'failed';
+  error: string | null;
+  mutatingId: string | null;
+  creating: boolean;
+  syncingId: string | null;
+}
+
+const initialState: ProvidersState = {
+  items: [],
+  status: 'idle',
+  error: null,
+  mutatingId: null,
+  creating: false,
+  syncingId: null,
+};
+
+export const fetchProviders = createAsyncThunk('providers/fetchAll', () => providersApi.list());
+
+export const createProvider = createAsyncThunk(
+  'providers/create',
+  (payload: CreateProviderRequest) => providersApi.create(payload)
+);
+
+export const deleteProvider = createAsyncThunk(
+  'providers/delete',
+  async (providerId: string) => {
+    await providersApi.remove(providerId);
+    return providerId;
+  }
+);
+
+export const connectProvider = createAsyncThunk(
+  'providers/connect',
+  async ({ providerId, payload }: { providerId: string; payload: ConnectProviderRequest }) => {
+    await providersApi.connect(providerId, payload);
+    return providerId;
+  }
+);
+
+export const disconnectProvider = createAsyncThunk(
+  'providers/disconnect',
+  async (providerId: string) => {
+    await providersApi.disconnect(providerId);
+    return providerId;
+  }
+);
+
+export const syncModels = createAsyncThunk(
+  'providers/syncModels',
+  async (providerId: string) => providersApi.syncModels(providerId)
+);
+
+const providersSlice = createSlice({
+  name: 'providers',
+  initialState,
+  reducers: {},
+  extraReducers: (builder) => {
+    builder
+      .addCase(fetchProviders.pending, (state) => {
+        state.status = 'loading';
+      })
+      .addCase(fetchProviders.fulfilled, (state, action) => {
+        state.status = 'succeeded';
+        state.items = action.payload;
+      })
+      .addCase(fetchProviders.rejected, (state, action) => {
+        state.status = 'failed';
+        state.error = action.error.message || 'Failed to load providers';
+      })
+      .addCase(createProvider.pending, (state) => {
+        state.creating = true;
+      })
+      .addCase(createProvider.fulfilled, (state, action) => {
+        state.creating = false;
+        state.items.push(action.payload);
+      })
+      .addCase(createProvider.rejected, (state, action) => {
+        state.creating = false;
+        state.error = action.error.message || 'Failed to create provider';
+      })
+      .addCase(deleteProvider.pending, (state, action) => {
+        state.mutatingId = action.meta.arg;
+      })
+      .addCase(deleteProvider.fulfilled, (state, action) => {
+        state.mutatingId = null;
+        state.items = state.items.filter((i) => i.id !== action.payload);
+      })
+      .addCase(deleteProvider.rejected, (state) => {
+        state.mutatingId = null;
+      })
+      .addCase(connectProvider.pending, (state, action) => {
+        state.mutatingId = action.meta.arg.providerId;
+      })
+      .addCase(connectProvider.fulfilled, (state, action) => {
+        state.mutatingId = null;
+        const p = state.items.find((i) => i.id === action.payload);
+        if (p) p.status = 'connected';
+      })
+      .addCase(connectProvider.rejected, (state) => {
+        state.mutatingId = null;
+      })
+      .addCase(disconnectProvider.pending, (state, action) => {
+        state.mutatingId = action.meta.arg;
+      })
+      .addCase(disconnectProvider.fulfilled, (state, action) => {
+        state.mutatingId = null;
+        const p = state.items.find((i) => i.id === action.payload);
+        if (p) p.status = 'not_connected';
+      })
+      .addCase(disconnectProvider.rejected, (state) => {
+        state.mutatingId = null;
+      })
+      .addCase(syncModels.pending, (state, action) => {
+        state.syncingId = action.meta.arg;
+      })
+      .addCase(syncModels.fulfilled, (state, action) => {
+        state.syncingId = null;
+        const p = state.items.find((i) => i.id === action.payload.provider_id);
+        if (p) p.model_count = action.payload.total_available;
+      })
+      .addCase(syncModels.rejected, (state) => {
+        state.syncingId = null;
+      });
+  },
+});
+
+export default providersSlice.reducer;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Providers.ts
+import api from '../axiosInstance';
+import type {
+  Provider,
+  ConnectProviderRequest,
+  ConnectProviderResponse,
+  DisconnectProviderResponse,
+  CreateProviderRequest,
+  CreateProviderResponse,
+  DeleteProviderResponse,
+  SyncModelsResponse,
+} from '../../types';
+
+export const providersApi = {
+  list: () => api.get<{ providers: Provider[] }>('/providers').then((r) => r.data.providers),
+
+  create: (payload: CreateProviderRequest) =>
+    api.post<CreateProviderResponse>('/providers', payload).then((r) => r.data),
+
+  remove: (providerId: string) =>
+    api.delete<DeleteProviderResponse>(`/providers/${providerId}`).then((r) => r.data),
+
+  connect: (providerId: string, payload: ConnectProviderRequest) =>
+    api
+      .post<ConnectProviderResponse>(`/providers/${providerId}/connect`, payload)
+      .then((r) => r.data),
+
+  disconnect: (providerId: string) =>
+    api
+      .delete<DisconnectProviderResponse>(`/providers/${providerId}/disconnect`)
+      .then((r) => r.data),
+
+  syncModels: (providerId: string) =>
+    api
+      .post<SyncModelsResponse>(`/providers/${providerId}/sync-models`)
+      .then((r) => r.data),
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Modelcatalog.module.scss
+@use '../../styles/_variables' as *;
+
+.model-catalog {
+  &__header {
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 24px 32px 18px;
+    margin-bottom: 24px;
+    border-bottom: 1px solid $border-light;
+
+    h1 {
+      font-family: $font-display;
+      font-size: 1.5rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: $text-primary;
+      line-height: 1.2;
+    }
+  }
+
+  &__header-eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: $font-mono;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: $indigo;
+    margin-bottom: 6px;
+
+    &::before {
+      content: '';
+      width: 16px;
+      height: 2px;
+      border-radius: 2px;
+      background: $indigo;
+    }
+  }
+
+  &__header-sub {
+    margin-top: 4px;
+    font-size: 0.875rem;
+    color: $text-secondary;
+  }
+
+  &__header-meta {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $text-secondary;
+    background: $surface-alt;
+    border: 1px solid $border-light;
+    border-radius: 999px;
+    padding: 7px 13px;
+    white-space: nowrap;
+    margin-bottom: 3px;
+  }
+
+  &__loading { display: flex; align-items: center; gap: 8px; color: $text-secondary; font-size: 13px; margin-bottom: 16px; }
 }
