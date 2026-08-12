@@ -388,7 +388,7 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
   gap: 8px;
 }
 
-// ---- foot actions (fit up to 4 buttons on one line) ------------------------
+// ---- foot actions -----------------------------------------------------
 .providers__foot-actions {
   display: flex;
   flex-wrap: nowrap;
@@ -461,8 +461,6 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
   .providers__toolbar { padding: 14px 18px; }
   .providers__grid { grid-template-columns: 1fr; }
 
-  // On very narrow cards, collapse to icon-only buttons with visible label
-  // hidden — title attribute still provides the accessible name via hover.
   .providers__foot-btn {
     padding: 8px 6px;
     font-size: 0;
