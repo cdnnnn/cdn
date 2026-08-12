@@ -1,8 +1,7 @@
-//History.tsx
-import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  Search, Sparkles, Bot, Layers, Loader2, Download, ChevronDown, ChevronRight,
+  Search, Sparkles, Bot, Layers, Loader2, Download, ListTree, CheckCircle2, XCircle,
   Award, ListChecks, Clock, History as HistoryIcon, SlidersHorizontal, CalendarDays, X,
 } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
@@ -11,7 +10,7 @@ import {
 } from '../../store/slices/evaluationsSlice';
 import { downloadReport } from '../../store/slices/reportsSlice';
 import type { ReportDownloadFormat } from '../../api/endpoints/reports';
-import type { EvaluationStatusValue } from '../../types';
+import type { EvaluationStatusValue, ModelResult } from '../../types';
 import { SkeletonListRows } from '../common/Skeleton';
 import styles from './History.module.scss';
 
@@ -59,7 +58,7 @@ export default function History() {
   const [typeFilter, setTypeFilter] = useState('All');
   const [dateFilter, setDateFilter] = useState('all');
   const [activeFilter, setActiveFilter] = useState<'search' | 'type' | 'date' | null>(null);
-  const [expandedModelId, setExpandedModelId] = useState<string | null>(null);
+  const [detailsModel, setDetailsModel] = useState<ModelResult | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const toggleFilter = (key: 'search' | 'type' | 'date') => {
@@ -108,12 +107,22 @@ export default function History() {
   // eval completed), so cached data shouldn't block a manual refresh.
   const selectRow = (id: string) => {
     setSearchParams({ id });
-    setExpandedModelId(null);
+    setDetailsModel(null);
     const clicked = list.find((e) => e.id === id);
     if (clicked && clicked.status === 'completed') {
       dispatch(fetchEvaluationResults(id));
     }
   };
+
+  // Close the details drawer with Escape.
+  useEffect(() => {
+    if (!detailsModel) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDetailsModel(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [detailsModel]);
 
   const modelName = (id: string) => models.find((m) => m.id === id)?.name || id;
   const providerName = (id: string) => {
@@ -431,7 +440,6 @@ export default function History() {
                           <table className={styles['results-table']}>
                             <thead>
                               <tr>
-                                <th />
                                 <th>Rank</th>
                                 <th>Model</th>
                                 <th>Provider</th>
@@ -439,66 +447,36 @@ export default function History() {
                                 <th>Accuracy</th>
                                 <th>Passed</th>
                                 <th>Failed</th>
+                                <th />
                               </tr>
                             </thead>
                             <tbody>
-                              {results.results.map((r) => {
-                                const isExpanded = expandedModelId === r.model_id;
-                                return (
-                                  <Fragment key={r.model_id}>
-                                    <tr
-                                      className={`${r.rank === 1 ? styles.winner : ''} ${styles['row-clickable']}`}
-                                      onClick={() => setExpandedModelId(isExpanded ? null : r.model_id)}
-                                    >
-                                      <td className={styles['cell-expand']}>
-                                        {r.details?.length > 0 && (isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />)}
-                                      </td>
-                                      <td className={styles['cell-rank']}>
-                                        {r.rank === 1 ? '🏆 ' : ''}
-                                        {r.rank}
-                                      </td>
-                                      <td className={styles['cell-model']}>{modelName(r.model_id)}</td>
-                                      <td className={styles['cell-provider']}>{r.provider || providerName(r.model_id)}</td>
-                                      <td className={styles['cell-num']}>{r.score}%</td>
-                                      <td className={`${styles['cell-num']} ${styles['cell-num--muted']}`}>{r.accuracy}%</td>
-                                      <td className={styles['cell-pass']}>{r.passed_tests}</td>
-                                      <td className={styles['cell-fail']}>{r.failed_tests}</td>
-                                    </tr>
-                                    {isExpanded && r.details?.length > 0 && (
-                                      <tr className={styles['details-row']}>
-                                        <td colSpan={8}>
-                                          <table className={styles['details-table']}>
-                                            <thead>
-                                              <tr>
-                                                <th>Task</th>
-                                                <th>Input</th>
-                                                <th>Expected</th>
-                                                <th>Actual</th>
-                                                <th>Result</th>
-                                              </tr>
-                                            </thead>
-                                            <tbody>
-                                              {r.details.map((d, i) => (
-                                                <tr key={`${r.model_id}-${i}`}>
-                                                  <td>{d.task}</td>
-                                                  <td className={styles['details-cell--wrap']}>{d.input}</td>
-                                                  <td className={styles['details-cell--wrap']}>{d.expected_output}</td>
-                                                  <td className={styles['details-cell--wrap']}>{d.actual_output}</td>
-                                                  <td>
-                                                    <span className={d.passed ? styles['cell-pass'] : styles['cell-fail']}>
-                                                      {d.passed ? 'Passed' : 'Failed'}
-                                                    </span>
-                                                  </td>
-                                                </tr>
-                                              ))}
-                                            </tbody>
-                                          </table>
-                                        </td>
-                                      </tr>
+                              {results.results.map((r) => (
+                                <tr key={r.model_id} className={r.rank === 1 ? styles.winner : ''}>
+                                  <td className={styles['cell-rank']}>
+                                    {r.rank === 1 ? '🏆 ' : ''}
+                                    {r.rank}
+                                  </td>
+                                  <td className={styles['cell-model']}>{modelName(r.model_id)}</td>
+                                  <td className={styles['cell-provider']}>{r.provider || providerName(r.model_id)}</td>
+                                  <td className={styles['cell-num']}>{r.score}%</td>
+                                  <td className={`${styles['cell-num']} ${styles['cell-num--muted']}`}>{r.accuracy}%</td>
+                                  <td className={styles['cell-pass']}>{r.passed_tests}</td>
+                                  <td className={styles['cell-fail']}>{r.failed_tests}</td>
+                                  <td className={styles['cell-details']}>
+                                    {r.details?.length > 0 && (
+                                      <button
+                                        type="button"
+                                        className={styles['details-btn']}
+                                        title="View test-by-test details"
+                                        onClick={() => setDetailsModel(r)}
+                                      >
+                                        <ListTree size={14} />
+                                      </button>
                                     )}
-                                  </Fragment>
-                                );
-                              })}
+                                  </td>
+                                </tr>
+                              ))}
                             </tbody>
                           </table>
                         </div>
@@ -517,6 +495,73 @@ export default function History() {
             )}
           </div>
         </div>
+      </div>
+
+      {/* ---------- Test-detail slide-over ---------- */}
+      <div className={`${styles['drawer-overlay']} ${detailsModel ? styles['drawer-overlay--open'] : ''}`} onClick={() => setDetailsModel(null)} />
+      <div className={`${styles.drawer} ${detailsModel ? styles['drawer--open'] : ''}`} role="dialog" aria-hidden={!detailsModel}>
+        {detailsModel && (
+          <>
+            <div className={styles['drawer__header']}>
+              <div>
+                <div className={styles['drawer__eyebrow']}>Test-by-test details</div>
+                <h3 className={styles['drawer__title']}>{modelName(detailsModel.model_id)}</h3>
+                <div className={styles['drawer__sub']}>
+                  {(detailsModel.provider || providerName(detailsModel.model_id))} · {detailsModel.score}% score · {detailsModel.accuracy}% accuracy
+                </div>
+              </div>
+              <button type="button" className={styles['drawer__close']} onClick={() => setDetailsModel(null)} title="Close">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className={styles['drawer__stats']}>
+              <span className={styles['drawer__stat']}>
+                <CheckCircle2 size={13} className={styles['drawer__stat-icon--pass']} />
+                {detailsModel.passed_tests} passed
+              </span>
+              <span className={styles['drawer__stat']}>
+                <XCircle size={13} className={styles['drawer__stat-icon--fail']} />
+                {detailsModel.failed_tests} failed
+              </span>
+              {Object.entries(detailsModel.metric_scores || {}).map(([k, v]) => (
+                <span key={k} className={styles['drawer__stat']}>
+                  {k.replace(/_/g, ' ')}: {v}%
+                </span>
+              ))}
+            </div>
+
+            <div className={styles['drawer__body']}>
+              {detailsModel.details.map((d, i) => (
+                <div key={i} className={`${styles['detail-card']} ${d.passed ? styles['detail-card--pass'] : styles['detail-card--fail']}`}>
+                  <div className={styles['detail-card__hdr']}>
+                    <span className={styles['detail-card__task']}>{d.task}</span>
+                    <span className={`${styles['detail-card__badge']} ${d.passed ? styles['detail-card__badge--pass'] : styles['detail-card__badge--fail']}`}>
+                      {d.passed ? <CheckCircle2 size={12} /> : <XCircle size={12} />}
+                      {d.passed ? 'Passed' : 'Failed'}
+                    </span>
+                  </div>
+                  <div className={styles['detail-card__field']}>
+                    <span className={styles['detail-card__label']}>Input</span>
+                    <div className={styles['detail-card__text']}>{d.input}</div>
+                  </div>
+                  <div className={styles['detail-card__row']}>
+                    <div className={styles['detail-card__field']}>
+                      <span className={styles['detail-card__label']}>Expected</span>
+                      <div className={styles['detail-card__text']}>{d.expected_output}</div>
+                    </div>
+                    <div className={styles['detail-card__field']}>
+                      <span className={styles['detail-card__label']}>Actual</span>
+                      <div className={`${styles['detail-card__text']} ${!d.passed ? styles['detail-card__text--fail'] : ''}`}>
+                        {d.actual_output}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -537,224 +582,6 @@ export default function History() {
 
 
 
-//index.ts
-// ---------- Auth ----------
-export interface SsoLoginRequest {
-  token: string;
-  data: string;
-}
-export interface SsoLoginResult {
-  token: string;
-  username: string;
-  email: string;
-  language: string;
-  profile_name: string;
-}
-export interface SsoLoginResponse {
-  status: string;
-  message: string;
-  result: SsoLoginResult;
-}
-
-// ---------- Providers ----------
-export interface Provider {
-  id: string;
-  name: string;
-  description: string;
-  logo_url: string | null;
-  base_url: string | null;
-  url_template: string | null;
-  model_count: number;
-  status: 'connected' | 'not_connected' | string;
-}
-export interface ConnectProviderRequest {
-  api_key: string;
-}
-export interface ConnectProviderResponse {
-  status: 'connected';
-  provider_id: string;
-  models_synced: number;
-}
-export interface DisconnectProviderResponse {
-  status: 'disconnected';
-  provider_id: string;
-}
-
-// ---------- Models ----------
-export interface Model {
-  id: string;
-  name: string;
-  provider_id: string;
-  category: string;
-  capabilities: string[];
-  context_window: number;
-  input_price: number | null;
-  output_price: number | null;
-  accuracy_score: number | null;
-  agent_score: number | null;
-  is_active: boolean;
-  base_url: string | null;
-}
-export interface CustomModelRequest {
-  base_url: string;
-  category: string;
-  api_key: string;
-  model_id: string;
-  name: string;
-  context_window: number;
-  description: string;
-}
-
-// ---------- Benchmarks ----------
-export interface BenchmarkTask {
-  name: string;
-  value: string;
-}
-export interface Benchmark {
-  name: string;
-  description: string;
-  // ⚠️ Not always present on the real API response — normalized to [] at the
-  // fetch boundary (benchmarksApi.list), so consumers can trust these are
-  // always arrays. See spec §5 "Known data-contract gap".
-  tasks: BenchmarkTask[];
-  task_count: number;
-  required_capabilities: string[];
-  huggingface_dataset: string;
-  type: string;
-}
-export interface BenchmarksResponse {
-  benchmarks: Benchmark[];
-  total: number;
-}
-
-// ---------- Metrics ----------
-export interface MetricsResponse {
-  all_metrics: string[];
-  custom_agent_metrics: string[];
-}
-
-// ---------- Evaluations: create/start ----------
-export interface JudgeConfig {
-  model_id: string;
-  base_url: string;
-  // NOTE: populated with the judge model's own id, not a real credential —
-  // the Judge API Key field was removed from the UI entirely (spec §1.4).
-  api_key: string;
-}
-export interface CreateEvaluationRequest {
-  name: string;
-  description?: string;
-  eval_type: 'model' | 'agent' | 'rag' | string;
-  dataset_id: string;
-  benchmark?: string;
-  model_ids: string[];
-  metrics_config?: Record<string, unknown>;
-  selected_metrics: string[];
-  dataset_limit?: number;
-  run_samples: number;
-  selected_category?: string[];
-  judge_config?: JudgeConfig;
-}
-export interface CreateEvaluationResponse {
-  id?: string;
-  evaluation_id?: string;
-  [key: string]: unknown;
-}
-
-// ---------- Evaluations: list (History) ----------
-export type EvaluationStatusValue = 'pending' | 'running' | 'completed' | 'failed' | 'canceled';
-
-// Nested summary of the report generated for this evaluation, if any.
-// Only present once the backend has created a report row for the eval —
-// absent/undefined while the eval is still pending/running with no report yet.
-export interface EvaluationReportSummary {
-  report_id: string;
-  title: string;
-  status: string;
-  created_at: string;
-}
-
-export interface EvaluationListItem {
-  id: string;
-  name: string;
-  description: string;
-  eval_type: string;
-  dataset_id: string;
-  datasets_config: { dataset_id: string }[];
-  benchmark: string;
-  model_ids: string[];
-  selected_metrics: string[];
-  run_samples: number;
-  selected_category: string[];
-  status: EvaluationStatusValue;
-  progress: number;
-  total_questions: number;
-  top_model: string | null;
-  top_score: number | null;
-  created_at: string;
-  started_at: string | null;
-  completed_at: string | null;
-  // Present once a report has been generated for this evaluation (spec: new
-  // "download from History" requirement). When `report.report_id` is set,
-  // History should offer the same download options as the Reports page.
-  report?: EvaluationReportSummary | null;
-}
-export interface EvaluationsListResponse {
-  evaluations: EvaluationListItem[];
-}
-
-// ---------- Evaluations: results ----------
-export interface TestDetail {
-  task: string;
-  input: string;
-  expected_output: string;
-  actual_output: string;
-  passed: boolean;
-}
-export interface ModelResult {
-  model_id: string;
-  provider: string | null;
-  rank: number;
-  score: number;
-  accuracy: number;
-  passed_tests: number;
-  failed_tests: number;
-  // Normalized from the API's `total_test` (singular) at the fetch boundary
-  // (evaluationsApi.results) — see benchmarksApi.list for the same pattern.
-  total_tests: number;
-  metric_scores: Record<string, number>;
-  details: TestDetail[];
-}
-export interface EvaluationResultsResponse {
-  evaluation_id: string;
-  name: string;
-  eval_type: string;
-  dataset_id: string;
-  benchmark: string;
-  model_ids: string[];
-  selected_metrics: string[];
-  status: EvaluationStatusValue;
-  total_questions: number;
-  top_model: string;
-  top_score: number;
-  started_at: string | null;
-  results: ModelResult[];
-}
-
-// UI-only draft built up across the wizard's 7 steps (spec §6).
-export interface EvaluationDraft {
-  name: string;
-  type: 'model' | 'agent' | 'rag' | null;
-  providers: string[];
-  models: string[];
-  dataset: string | null;
-  subgroup: string[];
-  runSamples: number; // default 10
-  metrics: string[];
-  judgeModelId: string | null;
-  // judgeApiKey intentionally omitted — no longer collected (spec §1.4)
-  agentFramework: string | null;
-}
 
 
 
@@ -770,84 +597,6 @@ export interface EvaluationDraft {
 
 
 
-
-
-
-
-
-
-
-//Evaluations.ts
-import api from '../axiosInstance';
-import type {
-  CreateEvaluationRequest,
-  CreateEvaluationResponse,
-  EvaluationsListResponse,
-  EvaluationResultsResponse,
-  ModelResult,
-} from '../../types';
-
-export const evaluationsApi = {
-  // Populates the History sidebar list. Called on mount and every 10s
-  // (silent poll) — see History.tsx.
-  list: () => api.get<EvaluationsListResponse>('/evaluations').then((r) => r.data.evaluations),
-
-  create: (payload: CreateEvaluationRequest) =>
-    api.post<CreateEvaluationResponse>('/evaluations', payload).then((r) => r.data),
-
-  start: (evaluationId: string) =>
-    api.post<void>(`/evaluations/${evaluationId}/start`).then(() => undefined),
-
-  // Only ever called when the selected evaluation's status === 'completed'.
-  // The backend returns 400 with { detail: "Execution not completed." } if
-  // called too early — callers should surface err.response.data.detail.
-  //
-  // The API sends the per-model field as `total_test` (singular) — normalized
-  // to `total_tests` here so the rest of the app can rely on one name (same
-  // normalize-at-the-boundary pattern as benchmarksApi.list's `tasks`).
-  results: (evaluationId: string) =>
-    api.get<EvaluationResultsResponse>(`/evaluations/${evaluationId}/results`).then((r) => ({
-      ...r.data,
-      results: r.data.results.map((m) => {
-        const raw = m as unknown as ModelResult & { total_test?: number };
-        return { ...raw, total_tests: raw.total_tests ?? raw.total_test ?? 0 };
-      }),
-    })),
-
-  // Convenience helper used by the wizard's "Start Evaluation" (step 7):
-  // create, then immediately start.
-  createAndStart: async (payload: CreateEvaluationRequest) => {
-    const created = await evaluationsApi.create(payload);
-    const id = created.id || created.evaluation_id;
-    if (!id) {
-      throw new Error('Evaluation was created but no id was returned by the server.');
-    }
-    await evaluationsApi.start(id);
-    return id;
-  },
-};
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//History.module.scss
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
@@ -1449,46 +1198,207 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
   gap: 5px;
 }
 
-// ---- expandable per-model test details --------------------------------
-.row-clickable { cursor: pointer; }
-.cell-expand {
-  width: 20px;
+// ---- test-details launcher button (in results table) ------------------
+.cell-details { width: 32px; text-align: center; }
+.details-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  border: 1px solid $line;
+  background: $paper;
+  color: $ink-2;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+  &:hover { border-color: $signal; color: $signal; background: $wash; }
+}
+
+// ---- test-details slide-over drawer ------------------------------------
+.drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 22, 27, 0.32);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease;
+  z-index: 40;
+
+  &--open { opacity: 1; pointer-events: auto; }
+}
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: 480px;
+  max-width: 92vw;
+  background: $card;
+  border-left: 1px solid $line;
+  box-shadow: -18px 0 40px -20px rgba(20, 22, 27, 0.35);
+  transform: translateX(100%);
+  transition: transform 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+
+  &--open { transform: translateX(0); }
+}
+
+.drawer__header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid $line;
+}
+.drawer__eyebrow {
+  @extend %micro;
+  font-size: 0.625rem;
+  color: $signal;
+  margin-bottom: 6px;
+}
+.drawer__title {
+  font-family: $display;
+  font-size: 1.125rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: $ink;
+}
+.drawer__sub {
+  margin-top: 5px;
+  font-family: $mono;
+  font-size: 0.71875rem;
   color: $ink-3;
+}
+.drawer__close {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding-top: 14px !important;
-}
-.details-row {
+  border-radius: 8px;
+  border: 1px solid $line;
   background: $paper;
-  &:hover { background: $paper; }
-}
-.details-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.78125rem;
-  margin: 4px 0;
+  color: $ink-2;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
 
-  thead th {
-    text-align: left;
-    @extend %micro;
-    font-size: 0.5rem;
-    color: $ink-3;
-    padding: 6px 10px;
-    white-space: nowrap;
-  }
-
-  tbody tr { border-top: 1px solid $line-2; }
-  tbody td {
-    padding: 8px 10px;
-    color: $ink-2;
-    vertical-align: top;
-  }
+  &:hover { border-color: $ink-3; color: $ink; }
 }
-.details-cell--wrap {
-  max-width: 260px;
+
+.drawer__stats {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 20px;
+  border-bottom: 1px solid $line;
+  background: $paper;
+  font-family: $mono;
+  font-size: 0.71875rem;
+  font-weight: 700;
+  color: $ink-2;
+}
+.drawer__stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  text-transform: capitalize;
+}
+.drawer__stat-icon--pass { color: $ok; }
+.drawer__stat-icon--fail { color: $danger; }
+
+.drawer__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.detail-card {
+  border: 1px solid $line;
+  border-left: 3px solid $line;
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: $paper;
+
+  &--pass { border-left-color: $ok; }
+  &--fail { border-left-color: $danger; background: rgba($danger, 0.03); }
+}
+.detail-card__hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.detail-card__task {
+  font-family: $display;
+  font-weight: 700;
+  font-size: 0.8125rem;
+  color: $ink;
+}
+.detail-card__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-family: $mono;
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+
+  &--pass { color: $ok; background: $ok-wash; }
+  &--fail { color: $danger; background: $danger-wash; }
+}
+.detail-card__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 10px;
+}
+.detail-card__field {
+  min-width: 0;
+}
+.detail-card__label {
+  @extend %micro;
+  font-size: 0.5625rem;
+  color: $ink-3;
+  display: block;
+  margin-bottom: 4px;
+}
+.detail-card__text {
+  font-family: $mono;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: $ink;
   white-space: pre-wrap;
   word-break: break-word;
+  background: $card;
+  border: 1px solid $line-2;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.detail-card__text--fail { color: $danger; border-color: rgba($danger, 0.25); }
+
+@media (max-width: 640px) {
+  .drawer { width: 100%; max-width: 100vw; }
+  .detail-card__row { grid-template-columns: 1fr; }
 }
 
 // ---- results table ---------------------------------------------------------
