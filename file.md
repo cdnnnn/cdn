@@ -1,64 +1,1652 @@
-import api from '../axiosInstance';
-import type { MetricsResponse } from '../../types';
+@use '../../styles/_variables' as *;
 
-export const metricsApi = {
-  // GET /metrics?eval_type={type} — type is 'model' | 'agent' (whatever was
-  // chosen in Step 2 of the New Evaluation wizard).
-  // Response: { eval_type, metrics, all_metrics }
-  list: (evalType: string) =>
-    api.get<MetricsResponse>('/metrics', { params: { eval_type: evalType } }).then((r) => r.data),
-};
+// ===========================================================================
+// SemcoEval — Run Console
+// A precision "instrument panel" for assembling and launching an evaluation.
+// Signature: a live Run Manifest (mono spec sheet) threaded by a signal rail.
+// Header matches the History/Reports/Comparison/Sidebar design standard.
+//
+// Neutrals resolve to theme CSS vars (see _theme.scss) for dark-mode support.
+// $solid is a FIXED near-black used only for "always dark" chips/buttons
+// (option icons, the Continue button, the launch toast) — using themed
+// $ink there would turn them near-white (and invisible) in dark mode.
+// ===========================================================================
 
+$ink:      var(--ink-1);
+$ink-2:    var(--ink-2);
+$ink-3:    var(--ink-3);
+$paper:    var(--paper);
+$card:     var(--card);
+$line:     var(--line);
+$line-2:   var(--line-2);
+$signal:   #2B2BF5;
+$signal-2: #1C1CC7;
+$wash:     var(--signal-wash);
+$ok:       #0FA968;
+$ok-wash:  var(--ok-wash);
+$amber:    #E08600;
+$danger:   #DC2626;
+$danger-wash: var(--danger-wash);
 
+// fixed, non-themed — always dark, regardless of light/dark mode
+$solid:       #14161B;
+$solid-hover: #000000;
 
+$mono:    $font-mono;
+$sans:    $font-body;
+$display: $font-display;
 
+$soft:  0 1px 2px rgba(20, 22, 27, 0.05);
+$lift:  0 14px 30px -14px rgba(20, 22, 27, 0.22);
+$ring:  0 0 0 3px rgba(43, 43, 245, 0.16);
 
-
-
-
-
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import { metricsApi } from '../../api/endpoints/metrics';
-
-interface MetricsState {
-  allMetrics: string[];
-  status: 'idle' | 'loading' | 'succeeded' | 'failed';
-  error: string | null;
+%micro {
+  font-family: $mono;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
 }
 
-const initialState: MetricsState = {
-  allMetrics: [],
-  status: 'idle',
-  error: null,
-};
+// ===========================================================================
+// Header — matches History / Reports / Comparison / Sidebar header pattern
+// ===========================================================================
+.ev__header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 24px 32px 20px;
+  border-bottom: 1px solid $line;
+  background: $card;
 
-// GET /metrics?eval_type={type} — dispatched only once the user picks a
-// type in Step 2 of the New Evaluation wizard (never on mount), and
-// re-dispatched whenever the type changes.
-export const fetchMetrics = createAsyncThunk('metrics/fetchAll', (evalType: string) =>
-  metricsApi.list(evalType)
-);
+  h1 {
+    font-family: $display;
+    font-size: 1.5rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: $ink;
+    line-height: 1.2;
+  }
+}
 
-const metricsSlice = createSlice({
-  name: 'metrics',
-  initialState,
-  reducers: {},
-  extraReducers: (builder) => {
-    builder
-      .addCase(fetchMetrics.pending, (state) => {
-        state.status = 'loading';
-      })
-      .addCase(fetchMetrics.fulfilled, (state, action) => {
-        state.status = 'succeeded';
-        // Only `all_metrics` from the response is retained — `metrics` is
-        // intentionally not stored/used.
-        state.allMetrics = action.payload.all_metrics;
-      })
-      .addCase(fetchMetrics.rejected, (state, action) => {
-        state.status = 'failed';
-        state.error = action.error.message || 'Failed to load metrics';
-      });
-  },
-});
+.ev__header-eyebrow {
+  @extend %micro;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: $signal;
+  margin-bottom: 6px;
 
-export default metricsSlice.reducer;
+  &::before {
+    content: '';
+    width: 16px;
+    height: 2px;
+    border-radius: 2px;
+    background: $signal;
+  }
+}
+
+.ev__header-sub {
+  margin-top: 4px;
+  font-size: 0.84375rem;
+  color: $ink-2;
+}
+
+.ev__header-meta {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 3px;
+}
+
+.ev__header-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 13px;
+  border-radius: 999px;
+  border: 1px solid $line;
+  background: $paper;
+  font-family: $mono;
+  font-size: 0.71875rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: $ink-2;
+  white-space: nowrap;
+
+  &::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: $ink-3;
+  }
+
+  &[data-state='draft']::before { background: $signal; box-shadow: 0 0 0 3px $wash; }
+  &[data-state='live'] { color: $signal; border-color: rgba($signal, 0.35); background: $wash; }
+  &[data-state='live']::before { background: $signal; animation: ev-pulse 1.1s ease-in-out infinite; }
+}
+
+.ev__header-eta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: $ink-3;
+  white-space: nowrap;
+}
+
+.page {
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  padding: 22px 30px 26px;
+  display: flex;
+  flex-direction: column;
+  background: $paper;
+}
+
+// ===========================================================================
+// Root
+// ===========================================================================
+.ev {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+
+  // ---- shell (manifest + stage) ------------------------------------------
+  &__shell {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 288px 1fr;
+    gap: 16px;
+  }
+
+  // ========================================================================
+  // SIGNATURE: Run Manifest
+  // ========================================================================
+  &__manifest {
+    background: $card;
+    border: 1px solid $line;
+    border-radius: 16px;
+    box-shadow: $soft;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  &__manifest-head {
+    flex-shrink: 0;
+    padding: 18px 20px 16px;
+    border-bottom: 1px solid $line-2;
+  }
+
+  &__manifest-eyebrow {
+    @extend %micro;
+    color: $ink-3;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  &__manifest-pct {
+    color: $signal;
+    font-size: 0.75rem;
+    letter-spacing: 0.06em;
+  }
+
+  &__manifest-title {
+    margin-top: 8px;
+    font-family: $display;
+    font-size: 1rem;
+    font-weight: 800;
+    letter-spacing: -0.015em;
+    color: $ink;
+    line-height: 1.15;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+
+    &[data-empty='true'] { color: $ink-3; font-style: normal; }
+  }
+
+  &__meter {
+    margin-top: 12px;
+    height: 4px;
+    border-radius: 999px;
+    background: $line;
+    overflow: hidden;
+  }
+
+  &__meter-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, $signal, $signal-2);
+    transition: width 0.4s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  // ---- the spec list (each row = a step, with its live value) -------------
+  &__spec {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 14px 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  &__spec-row {
+    position: relative;
+    display: grid;
+    grid-template-columns: 30px 1fr;
+    align-items: start;
+    gap: 12px;
+    width: 100%;
+    text-align: left;
+    border: 0;
+    background: transparent;
+    padding: 12px 12px 12px 4px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+
+    &::before {
+      content: '';
+      position: absolute;
+      left: 18px;
+      top: 38px;
+      bottom: -4px;
+      width: 2px;
+      background: $line;
+      transition: background 0.2s ease;
+    }
+    &:last-child::before { display: none; }
+
+    &:disabled { cursor: default; }
+    &:not(:disabled):hover { background: $paper; }
+  }
+
+  &__spec-tick {
+    position: relative;
+    z-index: 1;
+    width: 28px;
+    height: 28px;
+    border-radius: 9px;
+    display: grid;
+    place-items: center;
+    background: $card;
+    border: 1.5px solid $line;
+    color: $ink-3;
+    font-family: $mono;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    transition: all 0.18s ease;
+  }
+
+  &__spec-body {
+    min-width: 0;
+    padding-top: 1px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  &__spec-label {
+    @extend %micro;
+    font-size: 0.625rem;
+    color: $ink-3;
+    transition: color 0.18s ease;
+  }
+
+  &__spec-value {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: $ink;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    &[data-empty='true'] {
+      color: $ink-3;
+      font-weight: 500;
+      font-family: $mono;
+    }
+  }
+
+  &__spec-row--done {
+    &::before { background: $signal; }
+    .ev__spec-tick { background: $signal; border-color: $signal; color: #fff; }
+    .ev__spec-label { color: $ink-3; }
+  }
+
+  &__spec-row--active {
+    background: $wash;
+    .ev__spec-tick {
+      background: $card;
+      border-color: $signal;
+      color: $signal;
+      box-shadow: 0 0 0 4px rgba($signal, 0.14);
+    }
+    .ev__spec-label { color: $signal; }
+    &:not(:disabled):hover { background: $wash; }
+  }
+
+  &__spec-row--todo { opacity: 0.9; }
+
+  // ========================================================================
+  // Stage (the working area for the current step)
+  // ========================================================================
+  &__stage {
+    background: $card;
+    border: 1px solid $line;
+    border-radius: 16px;
+    box-shadow: $soft;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  &__stage-head {
+    flex-shrink: 0;
+    padding: 22px 28px 18px;
+    border-bottom: 1px solid $line-2;
+  }
+
+  &__crumb {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    @extend %micro;
+    color: $ink-3;
+
+    b { color: $signal; font-weight: 700; }
+
+    span:first-child {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: $signal;
+    }
+  }
+
+  &__crumb-sep {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: $ink-3;
+  }
+
+  &__stage-title {
+    margin-top: 12px;
+    font-family: $display;
+    font-size: 1.375rem;
+    font-weight: 800;
+    letter-spacing: -0.025em;
+    color: $ink;
+    line-height: 1.1;
+  }
+
+  &__stage-sub {
+    margin-top: 6px;
+    font-size: 0.84375rem;
+    color: $ink-2;
+    line-height: 1.5;
+    max-width: 60ch;
+  }
+
+  &__stage-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 22px 28px 26px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  &__anim {
+    animation: ev-rise 0.34s cubic-bezier(0.22, 0.72, 0.16, 1) both;
+  }
+
+  // ---- footer nav ---------------------------------------------------------
+  &__footer {
+    flex-shrink: 0;
+    padding: 16px 28px;
+    border-top: 1px solid $line-2;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  &__hint {
+    font-size: 0.75rem;
+    color: $ink-3;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+
+    kbd {
+      font-family: $mono;
+      font-size: 0.6875rem;
+      color: $ink-2;
+      background: $paper;
+      border: 1px solid $line;
+      border-bottom-width: 2px;
+      border-radius: 5px;
+      padding: 1px 6px;
+    }
+  }
+
+  &__btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: $sans;
+    font-size: 0.84375rem;
+    font-weight: 650;
+    border-radius: 10px;
+    padding: 10px 16px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease, transform 0.12s ease;
+
+    &:disabled { cursor: not-allowed; opacity: 0.5; }
+
+    &--ghost {
+      background: transparent;
+      border-color: $line;
+      color: $ink-2;
+      &:not(:disabled):hover { border-color: $ink-3; color: $ink; background: $paper; }
+    }
+
+    // fixed-dark chip — do NOT switch to $ink here, it would go near-white
+    // (and invisible) in dark mode since $ink is theme-aware.
+    &--primary {
+      background: $solid;
+      color: #fff;
+      box-shadow: $soft;
+      &:not(:disabled):hover { background: $solid-hover; transform: translateY(-1px); box-shadow: $lift; }
+    }
+
+    &--launch {
+      background: $signal;
+      color: #fff;
+      box-shadow: 0 8px 20px -8px rgba($signal, 0.7);
+      &:not(:disabled):hover { background: $signal-2; transform: translateY(-1px); }
+    }
+  }
+
+  // ========================================================================
+  // Shared field primitives
+  // ========================================================================
+  &__field {
+    max-width: 620px;
+
+    & + & { margin-top: 20px; }
+  }
+
+  &__label {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    @extend %micro;
+    font-size: 0.6875rem;
+    color: $ink-2;
+    margin-bottom: 9px;
+
+    .opt {
+      font-family: $sans;
+      letter-spacing: 0;
+      text-transform: none;
+      font-weight: 500;
+      font-size: 0.75rem;
+      color: $ink-3;
+    }
+  }
+
+  &__input {
+    width: 100%;
+    border: 1.5px solid $line;
+    border-radius: 11px;
+    padding: 12px 14px;
+    font-size: 0.9375rem;
+    font-weight: 500;
+    font-family: $sans;
+    color: $ink;
+    background: $card;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+
+    &::placeholder { color: $ink-3; font-weight: 400; }
+    &:focus { outline: none; border-color: $signal; box-shadow: $ring; }
+    &:disabled { background: $paper; color: $ink-2; }
+  }
+
+  &__input-wrap {
+    position: relative;
+    svg {
+      position: absolute;
+      top: 50%;
+      left: 15px;
+      transform: translateY(-50%);
+      color: $ink-3;
+      pointer-events: none;
+    }
+    input { padding-left: 42px; }
+  }
+
+  // ---- big "name your run" input -----------------------------------------
+  &__name-input {
+    width: 100%;
+    border: 0;
+    border-bottom: 2px solid $line;
+    border-radius: 0;
+    padding: 8px 2px 12px;
+    background: transparent;
+    font-family: $display;
+    font-size: 1.75rem;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    color: $ink;
+    transition: border-color 0.16s ease;
+
+    &::placeholder { color: $ink-3; font-weight: 700; }
+    &:focus { outline: none; border-color: $signal; }
+  }
+
+  &__name-caption {
+    margin-top: 10px;
+    font-size: 0.78125rem;
+    color: $ink-3;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  // ---- quick-start presets (mono chips) ----------------------------------
+  &__quick {
+    margin-top: 30px;
+    max-width: 620px;
+  }
+
+  &__quick-head {
+    @extend %micro;
+    font-size: 0.625rem;
+    color: $ink-3;
+    margin-bottom: 11px;
+  }
+
+  &__quick-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  &__preset {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px 8px 11px;
+    border: 1px solid $line;
+    border-radius: 999px;
+    background: $card;
+    cursor: pointer;
+    font-family: $mono;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: $ink-2;
+    transition: all 0.15s ease;
+
+    svg { color: $ink-3; transition: color 0.15s ease; }
+
+    &:hover {
+      border-color: $ink;
+      color: $ink;
+      transform: translateY(-1px);
+      svg { color: $signal; }
+    }
+
+    &--on {
+      border-color: $signal;
+      background: $wash;
+      color: $signal;
+      svg { color: $signal; }
+    }
+  }
+
+  // ---- tips note ----------------------------------------------------------
+  &__note {
+    margin-top: 28px;
+    max-width: 620px;
+    display: flex;
+    gap: 12px;
+    padding: 14px 16px;
+    border: 1px solid $line;
+    border-left: 2.5px solid $signal;
+    border-radius: 12px;
+    background: $card;
+  }
+
+  &__note-icon {
+    flex-shrink: 0;
+    color: $signal;
+    margin-top: 1px;
+  }
+
+  &__note-title {
+    font-size: 0.8125rem;
+    font-weight: 700;
+    color: $ink;
+    margin-bottom: 6px;
+  }
+
+  &__note-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    font-size: 0.78125rem;
+    color: $ink-2;
+    line-height: 1.5;
+
+    li { display: flex; gap: 8px; }
+    li::before {
+      content: '—';
+      color: $signal;
+      flex-shrink: 0;
+    }
+  }
+
+  // ========================================================================
+  // Option rows (Type step) & framework
+  // ========================================================================
+  &__options {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-width: 720px;
+  }
+
+  &__option {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    width: 100%;
+    text-align: left;
+    padding: 16px 52px 16px 16px;
+    border: 1.5px solid $line;
+    border-radius: 14px;
+    background: $card;
+    cursor: pointer;
+    transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease, background 0.18s ease;
+
+    &:hover {
+      border-color: $ink-3;
+      box-shadow: $lift;
+      transform: translateY(-2px);
+    }
+
+    &--on {
+      border-color: $signal;
+      background: $wash;
+      &:hover { border-color: $signal; }
+    }
+
+    &--off {
+      opacity: 0.55;
+      cursor: not-allowed;
+      &:hover { border-color: $line; box-shadow: none; transform: none; }
+    }
+  }
+
+  // fixed-dark chip — icon glyph is always white-on-dark regardless of theme
+  &__option-icon {
+    flex-shrink: 0;
+    width: 48px;
+    height: 48px;
+    border-radius: 13px;
+    display: grid;
+    place-items: center;
+    background: $solid;
+    color: #fff;
+    position: relative;
+    overflow: hidden;
+
+    &::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(140deg, transparent 45%, rgba(255,255,255,0.16) 140%);
+    }
+    svg { position: relative; z-index: 1; }
+  }
+  &__option-icon--agent { background: #6D28D9; }
+  &__option-icon--rag   { background: #0369A1; }
+
+  &__option-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  &__option-name {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-family: $display;
+    font-size: 0.9375rem;
+    font-weight: 700;
+    color: $ink;
+  }
+
+  &__badge {
+    @extend %micro;
+    font-size: 0.5625rem;
+    color: $ink-3;
+    background: $paper;
+    border: 1px solid $line;
+    border-radius: 999px;
+    padding: 2px 8px;
+  }
+
+  &__option-desc {
+    font-size: 0.8125rem;
+    color: $ink-2;
+    line-height: 1.5;
+  }
+
+  // selection marker (shared)
+  &__mark {
+    position: absolute;
+    top: 50%;
+    right: 16px;
+    transform: translateY(-50%);
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: $signal;
+    color: #fff;
+    box-shadow: 0 2px 6px rgba($signal, 0.4);
+  }
+
+  &__section {
+    margin-top: 26px;
+    padding-top: 22px;
+    border-top: 1px solid $line-2;
+    max-width: 720px;
+  }
+
+  &__section-hint {
+    font-size: 0.78125rem;
+    color: $ink-3;
+    margin: 4px 0 14px;
+  }
+
+  &__fw-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
+  &__fw {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    text-align: left;
+    padding: 13px 42px 13px 13px;
+    border: 1.5px solid $line;
+    border-radius: 12px;
+    background: $card;
+    cursor: pointer;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
+
+    &:hover { border-color: $ink-3; transform: translateY(-2px); box-shadow: $lift; }
+    &--on { border-color: $signal; background: $wash; }
+  }
+
+  &__fw-icon {
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    display: grid;
+    place-items: center;
+    background: $wash;
+    color: $signal;
+  }
+
+  &__fw-name { font-family: $display; font-size: 0.84375rem; font-weight: 700; color: $ink; }
+  &__fw-desc { font-size: 0.75rem; color: $ink-2; margin-top: 2px; line-height: 1.4; }
+
+  // ========================================================================
+  // Card grids (providers / models / datasets)
+  // ========================================================================
+  &__scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    margin: 0 -6px;
+    padding: 4px 6px;
+  }
+
+  &__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(258px, 1fr));
+    gap: 12px;
+  }
+
+  &__grid--wide {
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  }
+
+  // ---- provider card ------------------------------------------------------
+  &__pcard {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 13px;
+    text-align: left;
+    padding: 15px 42px 15px 15px;
+    border: 1.5px solid $line;
+    border-radius: 14px;
+    background: $card;
+    cursor: pointer;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
+
+    &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
+    &--on { border-color: $signal; background: $wash; &:hover { border-color: $signal; } }
+  }
+
+  &__pcard-icon {
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    border-radius: 11px;
+    display: grid;
+    place-items: center;
+    background: $paper;
+    border: 1px solid $line;
+    color: $ink;
+    font-family: $display;
+    font-weight: 800;
+    font-size: 1rem;
+    transition: all 0.16s ease;
+  }
+  &__pcard--on &__pcard-icon { background: $signal; border-color: $signal; color: #fff; }
+
+  &__pcard-body { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  &__pcard-name { font-family: $display; font-size: 0.875rem; font-weight: 700; color: $ink; }
+  &__pcard-meta { font-size: 0.75rem; color: $ink-3; }
+
+  &__pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 4px;
+    width: fit-content;
+    font-family: $mono;
+    font-size: 0.625rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: $ok;
+    background: $ok-wash;
+    border-radius: 999px;
+    padding: 3px 8px 3px 6px;
+
+    &::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: $ok; }
+  }
+
+  // ---- model card ---------------------------------------------------------
+  &__mcard {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    text-align: left;
+    padding: 15px 16px;
+    border: 1.5px solid $line;
+    border-radius: 14px;
+    background: $card;
+    cursor: pointer;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
+
+    &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
+    &--on { border-color: $signal; background: $wash; &:hover { border-color: $signal; } }
+  }
+
+  // locked = provider chosen but health not yet confirmed successful;
+  // dims the interaction affordance so it doesn't read as clickable-to-select.
+  &__mcard--locked {
+    cursor: default;
+    &:hover { border-color: $line; box-shadow: none; transform: none; }
+  }
+
+  &__mcard-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  &__mcard-name { font-family: $display; font-size: 0.90625rem; font-weight: 700; color: $ink; line-height: 1.25; }
+  &__mcard-provider { font-size: 0.71875rem; color: $ink-3; }
+
+  // ---- provider row + manual health check (Step 3) -------------------------
+  &__mcard-provider-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 2px;
+  }
+
+  &__mcard-hint {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed $line-2;
+    font-size: 0.71875rem;
+    color: $ink-3;
+    line-height: 1.4;
+  }
+
+  &__health-badge {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    font-family: $mono;
+    font-size: 0.625rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+
+    &--success {
+      color: $ok;
+      background: $ok-wash;
+    }
+
+    &--failed {
+      color: $danger;
+      background: $danger-wash;
+      cursor: pointer;
+      border: 0;
+      &:hover { background: rgba($danger, 0.16); }
+    }
+
+    &--loading {
+      color: $ink-3;
+      background: $paper;
+    }
+  }
+
+  &__health-check-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    border: 1px solid $signal;
+    background: $card;
+    color: $signal;
+    font-family: $mono;
+    font-size: 0.625rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+
+    &:hover { background: $wash; }
+  }
+
+  &__mcard-mark {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: $signal;
+    color: #fff;
+  }
+
+  &__caps { display: flex; flex-wrap: wrap; gap: 5px; }
+  &__cap {
+    font-family: $mono;
+    font-size: 0.625rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: $ink-2;
+    background: $paper;
+    border: 1px solid $line;
+    border-radius: 6px;
+    padding: 2px 7px;
+  }
+
+  &__mcard-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    padding-top: 10px;
+    border-top: 1px solid $line-2;
+  }
+
+  &__stat { display: flex; flex-direction: column; gap: 1px; }
+  &__stat-k { @extend %micro; font-size: 0.5625rem; color: $ink-3; }
+  &__stat-v { font-family: $mono; font-size: 0.78125rem; font-weight: 700; color: $ink; letter-spacing: -0.01em; }
+
+  // ========================================================================
+  // Test-suite step: tabs, dataset grid, subgroup rail, upload
+  // ========================================================================
+  &__tabs {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px;
+    border: 1px solid $line;
+    border-radius: 12px;
+    background: $paper;
+    margin-bottom: 18px;
+  }
+
+  &__tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: $ink-2;
+    font-family: $sans;
+    font-size: 0.8125rem;
+    font-weight: 650;
+    cursor: pointer;
+    transition: all 0.16s ease;
+
+    &:hover { color: $ink; }
+    &--on { background: $card; color: $signal; box-shadow: $soft; }
+  }
+
+  &__suite {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 1fr 300px;
+    gap: 16px;
+  }
+
+  &__suite-scroll {
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    margin: 0 -6px;
+    padding: 2px 6px 6px;
+  }
+
+  &__dgrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+  }
+
+  &__dcard {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 11px;
+    text-align: left;
+    padding: 15px 16px;
+    border: 1.5px solid $line;
+    border-radius: 14px;
+    background: $card;
+    cursor: pointer;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
+
+    &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
+    &--on { border-color: $signal; background: $wash; &:hover { border-color: $signal; } }
+  }
+
+  &__dcard-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  &__dcard-id { display: flex; align-items: center; gap: 11px; min-width: 0; }
+
+  &__dcard-icon {
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    display: grid;
+    place-items: center;
+    background: $paper;
+    border: 1px solid $line;
+    color: $ink;
+    transition: all 0.16s ease;
+  }
+  &__dcard--on &__dcard-icon { background: $signal; border-color: $signal; color: #fff; }
+
+  &__dcard-name { font-family: $display; font-size: 0.875rem; font-weight: 700; color: $ink; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  &__dcard-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+
+  &__tag {
+    font-family: $mono;
+    font-size: 0.625rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: $ink-2;
+    background: $paper;
+    border: 1px solid $line;
+    border-radius: 6px;
+    padding: 2px 7px;
+  }
+  &__tag--custom { color: $signal; background: $wash; border-color: rgba($signal, 0.25); }
+  &__tag--count { border: 0; background: transparent; color: $ink-3; padding-left: 0; }
+
+  // ---- subgroup rail ------------------------------------------------------
+  &__rail {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid $line;
+    border-radius: 14px;
+    background: $paper;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  &__rail-head { flex-shrink: 0; padding: 15px 16px 13px; border-bottom: 1px solid $line; }
+  &__rail-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-family: $display;
+    font-size: 0.8125rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: $ink;
+    svg { color: $signal; }
+  }
+  &__rail-sub { margin-top: 4px; font-size: 0.71875rem; color: $ink-3; line-height: 1.45; }
+
+  &__rail-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  &__rail-empty {
+    margin: 10px;
+    padding: 18px 12px;
+    text-align: center;
+    border: 1px dashed $line;
+    border-radius: 10px;
+    font-size: 0.75rem;
+    color: $ink-3;
+  }
+
+  &__check-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    text-align: left;
+    padding: 9px 11px;
+    border: 1px solid $line;
+    border-radius: 10px;
+    background: $card;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+
+    &:hover { border-color: $ink-3; }
+    &--on { border-color: $signal; background: $wash; }
+  }
+
+  &__check {
+    flex-shrink: 0;
+    width: 17px;
+    height: 17px;
+    border-radius: 5px;
+    border: 1.5px solid $ink-3;
+    background: $card;
+    display: grid;
+    place-items: center;
+    color: transparent;
+    transition: all 0.14s ease;
+
+    &--on { background: $signal; border-color: $signal; color: #fff; }
+  }
+
+  &__check-label { font-size: 0.8125rem; font-weight: 600; color: $ink; }
+
+  // ---- upload panel -------------------------------------------------------
+  &__upload {
+    border: 1.5px solid $line;
+    border-radius: 14px;
+    background: $paper;
+    padding: 20px;
+    max-width: 560px;
+  }
+
+  &__drop {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    width: 100%;
+    border: 1.5px dashed $ink-3;
+    border-radius: 12px;
+    padding: 16px;
+    background: $card;
+    color: $ink-3;
+    font-size: 0.84375rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+    &:hover { border-color: $signal; color: $signal; background: $wash; }
+
+    svg { flex-shrink: 0; }
+  }
+  &__drop-file { color: $ink; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  &__drop--has { border-style: solid; border-color: $signal; color: $ink; }
+
+  &__upload-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 20px;
+  }
+
+  // ========================================================================
+  // Metrics step: chips + judge rail
+  // ========================================================================
+  &__metrics {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 1fr 300px;
+    gap: 16px;
+  }
+
+  &__metrics-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+
+  &__samples {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+  &__samples .ev__field { max-width: 150px; margin: 0; }
+  &__samples-note { font-size: 0.75rem; color: $ink-3; padding-bottom: 12px; line-height: 1.4; max-width: 240px; }
+
+  &__metrics-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  &__metrics-count {
+    font-family: $mono;
+    font-size: 0.78125rem;
+    color: $ink-2;
+    b { color: $signal; font-weight: 700; }
+  }
+
+  &__metrics-actions { display: flex; gap: 14px; }
+
+  &__link {
+    font-family: $sans;
+    font-size: 0.78125rem;
+    font-weight: 600;
+    color: $signal;
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    &:hover { text-decoration: underline; }
+  }
+
+  &__chips {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    margin: 0 -6px;
+    padding: 4px 6px;
+    align-content: flex-start;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  &__chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 14px;
+    border: 1.5px solid $line;
+    border-radius: 999px;
+    background: $card;
+    color: $ink-2;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    height: fit-content;
+
+    &:hover { border-color: $ink-3; color: $ink; }
+
+    &--on {
+      border-color: $signal;
+      background: $signal;
+      color: #fff;
+    }
+  }
+
+  &__chip-tick {
+    display: grid;
+    place-items: center;
+    width: 14px;
+    height: 14px;
+  }
+
+  // ---- judge rail ---------------------------------------------------------
+  &__judge {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid $line;
+    border-radius: 14px;
+    background: $paper;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  &__judge-head { flex-shrink: 0; padding: 15px 16px 13px; border-bottom: 1px solid $line; }
+  &__judge-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-family: $display;
+    font-size: 0.8125rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: $ink;
+    svg { color: $signal; }
+  }
+  &__judge-sub { margin-top: 4px; font-size: 0.71875rem; color: $ink-3; line-height: 1.45; }
+
+  &__judge-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  &__judge-empty {
+    margin: 10px;
+    padding: 18px 12px;
+    text-align: center;
+    border: 1px dashed $line;
+    border-radius: 10px;
+    font-size: 0.75rem;
+    color: $ink-3;
+  }
+
+  &__judge-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    text-align: left;
+    padding: 10px 11px;
+    border: 1px solid $line;
+    border-radius: 10px;
+    background: $card;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+
+    &:hover { border-color: $ink-3; }
+    &--on { border-color: $signal; background: $wash; }
+  }
+
+  &__radio {
+    flex-shrink: 0;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    border: 1.5px solid $ink-3;
+    background: $card;
+    transition: border-width 0.14s ease, border-color 0.14s ease;
+    &--on { border-color: $signal; border-width: 5px; }
+  }
+
+  &__judge-name { font-size: 0.8125rem; font-weight: 600; color: $ink; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  &__judge-meta { font-size: 0.6875rem; color: $ink-3; }
+
+  // ========================================================================
+  // Review step
+  // ========================================================================
+  &__summary {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+  }
+
+  &__summary-cell {
+    padding: 16px;
+    border: 1px solid $line;
+    border-radius: 14px;
+    background: $paper;
+  }
+
+  &__summary-k {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    @extend %micro;
+    font-size: 0.5625rem;
+    color: $ink-3;
+    margin-bottom: 8px;
+    svg { color: $signal; }
+  }
+
+  &__summary-v { font-family: $mono; font-size: 1.5rem; font-weight: 700; color: $ink; letter-spacing: -0.02em; line-height: 1; }
+  &__summary-v--muted { color: $ink-3; }
+
+  &__block { margin-top: 26px; }
+
+  &__block-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    @extend %micro;
+    font-size: 0.625rem;
+    color: $ink-2;
+    margin-bottom: 12px;
+    svg { color: $signal; }
+    b { color: $ink-3; font-weight: 700; }
+  }
+
+  &__rows {
+    border: 1px solid $line;
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  &__row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 15px;
+    border-bottom: 1px solid $line-2;
+    font-size: 0.84375rem;
+
+    &:last-child { border-bottom: 0; }
+
+    span:first-child { @extend %micro; font-size: 0.625rem; color: $ink-3; }
+    span:last-child { color: $ink; font-weight: 600; text-align: right; }
+  }
+
+  &__review-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 10px;
+  }
+
+  &__review-card {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    padding: 12px 14px;
+    border: 1px solid $line;
+    border-radius: 12px;
+    background: $paper;
+  }
+  &__review-card-icon {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+    display: grid;
+    place-items: center;
+    background: $card;
+    border: 1px solid $line;
+    color: $signal;
+  }
+  &__review-card-name { font-family: $display; font-size: 0.8125rem; font-weight: 700; color: $ink; }
+  &__review-card-sub { font-size: 0.71875rem; color: $ink-3; margin-top: 1px; }
+
+  &__metric-tags { display: flex; flex-wrap: wrap; gap: 7px; }
+  &__metric-tag {
+    font-size: 0.78125rem;
+    font-weight: 600;
+    color: $signal;
+    background: $wash;
+    border: 1px solid rgba($signal, 0.2);
+    border-radius: 8px;
+    padding: 5px 11px;
+  }
+
+  &__empty {
+    padding: 20px;
+    text-align: center;
+    border: 1px dashed $line;
+    border-radius: 12px;
+    background: $paper;
+    color: $ink-3;
+    font-size: 0.84375rem;
+  }
+
+  &__error {
+    margin-top: 18px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: $danger;
+    background: $danger-wash;
+    border: 1px solid rgba($danger, 0.2);
+    border-radius: 10px;
+    padding: 11px 14px;
+  }
+
+  &__spin { animation: ev-spin 0.8s linear infinite; }
+}
+
+// ---- toast (fixed-dark chip, same reasoning as .ev__btn--primary) ---------
+.ev-toast {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px 14px 14px;
+  background: $solid;
+  color: #fff;
+  border-radius: 14px;
+  box-shadow: 0 20px 40px -16px rgba(0, 0, 0, 0.5);
+  animation: ev-toast-in 0.32s cubic-bezier(0.22, 0.72, 0.16, 1) both;
+
+  &__icon {
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    display: grid;
+    place-items: center;
+    background: rgba(15, 169, 104, 0.2);
+    color: #34D399;
+  }
+  &__title { font-family: $display; font-weight: 700; font-size: 0.84375rem; }
+  &__sub { font-size: 0.75rem; color: rgba(255, 255, 255, 0.6); margin-top: 1px; }
+}
+
+// ---- keyframes ------------------------------------------------------------
+@keyframes ev-spin { to { transform: rotate(360deg); } }
+@keyframes ev-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(43, 43, 245, 0.5); }
+  50% { box-shadow: 0 0 0 4px rgba(43, 43, 245, 0); }
+}
+@keyframes ev-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes ev-toast-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+// ---- responsive -----------------------------------------------------------
+@media (max-width: 1040px) {
+  .ev__shell { grid-template-columns: 1fr; }
+  .ev__manifest { display: none; }
+  .ev__suite, .ev__metrics { grid-template-columns: 1fr; }
+  .ev__rail, .ev__judge { max-height: 15rem; }
+}
+
+@media (max-width: 640px) {
+  .ev__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
+  .page { padding: 16px 14px 22px; }
+  .ev__stage-head { padding: 18px 18px 15px; }
+  .ev__stage-body { padding: 18px; }
+  .ev__footer { padding: 14px 18px; }
+  .ev__fw-grid { grid-template-columns: 1fr; }
+  .ev__summary { grid-template-columns: 1fr; }
+  .ev__hint { display: none; }
+  .ev__name-input { font-size: 1.375rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ev *, .ev-toast { animation: none !important; transition: none !important; }
+}
