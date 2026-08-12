@@ -1,139 +1,9 @@
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { ArrowRight, Play, Award, Link2, Cpu, FlaskConical, BarChart3, GitCompare, Shield } from 'lucide-react';
-import Footer from '../layout/Footer';
-import ThemeToggle from '../common/ThemeToggle';
-import styles from './Landing.module.scss';
-
-const features = [
-  { icon: <Link2 size={22} />, cls: 'signal', title: 'Provider Hub', desc: 'Connect any AI provider with API keys. Manage credentials, monitor status, and see available models instantly.' },
-  { icon: <Cpu size={22} />, cls: 'amber', title: 'Model Catalog', desc: 'Browse all models across providers. Filter by capability, compare pricing, and register custom endpoints.' },
-  { icon: <FlaskConical size={22} />, cls: 'ok', title: 'Guided Evaluations', desc: 'A step-by-step wizard for model selection, test suite choice, and metric configuration.' },
-  { icon: <BarChart3 size={22} />, cls: 'sky', title: 'Results & History', desc: 'Every evaluation stored with full breakdowns. Duplicate past runs, track trends, export findings.' },
-  { icon: <GitCompare size={22} />, cls: 'rose', title: 'Visual Comparison', desc: 'Radar charts and metric tables make it obvious where each model excels or falls short.' },
-  { icon: <Shield size={22} />, cls: 'signal', title: 'SSO & Security', desc: 'Enterprise-grade sign-in. API keys encrypted and isolated to your environment.' },
-];
-
-export default function Landing() {
-  const [animated, setAnimated] = useState(false);
-  const navigate = useNavigate();
-
-  useEffect(() => {
-    const t = setTimeout(() => setAnimated(true), 200);
-    return () => clearTimeout(t);
-  }, []);
-
-  // Landing is now gated by AuthGuard (wrapping "/"), so by the time this
-  // page renders the user is already authenticated — these buttons are
-  // plain navigation into the app, not sign-in triggers.
-  const goToDashboard = () => navigate('/app/dashboard');
-
-  const bars = [
-    { label: 'Claude Sonnet 4', pct: animated ? 94 : 0, cls: 'primary' },
-    { label: 'GPT-4o', pct: animated ? 91 : 0, cls: 'warm' },
-    { label: 'Gemini 2.5 Pro', pct: animated ? 89 : 0, cls: 'cool' },
-    { label: 'Mistral Large', pct: animated ? 85 : 0, cls: 'gray' },
-  ];
-
-  return (
-    <div className={styles.landing}>
-      <nav className={styles['l-nav']}>
-        <div className={styles['l-logo']}><div className={styles.mark}>&#9670;</div>SemcoEval</div>
-        <ThemeToggle />
-      </nav>
-
-      <section className={styles['hero-section']}>
-        <div className={styles['hero-bg-grid']} />
-        <div className={styles['hero-bg-glow']} />
-        <div className={styles['hero-content']}>
-          <div className={styles['hero-badge']}><div className={styles['badge-dot']} /> Now supporting 40+ models</div>
-          <h1>Evaluate AI models<br />with <span className={styles.grad}>measured evidence</span></h1>
-          <p>Stop guessing which model fits your use case. Run structured benchmarks, compare results side-by-side, and make selection decisions backed by real data.</p>
-          <div className={styles['hero-actions']}>
-            <button className={styles['btn-primary']} onClick={goToDashboard}>Open Dashboard <ArrowRight size={16} /></button>
-            <button className={styles['btn-secondary']}><Play size={16} /> Watch Demo</button>
-          </div>
-        </div>
-        <div className={styles['hero-visual']}>
-          <div className={styles['hero-card']}>
-            <div className={styles['hero-card-hdr']}>
-              <span className={styles['hero-card-title']}>Live Benchmark</span>
-              <span className={styles['hero-card-badge']}><div className={styles['pulse-dot']} /> Running</span>
-            </div>
-            {bars.map((b, i) => (
-              <div className={styles['hero-bar']} key={i}>
-                <span className={styles['hero-bar-label']}>{b.label}</span>
-                <div className={styles['hero-bar-track']}>
-                  <div className={`${styles['hero-bar-fill']} ${styles[`hero-bar-fill--${b.cls}`]}`} style={{ width: `${b.pct}%`, transitionDelay: `${i * 250}ms` }}>
-                    {b.pct > 0 && <span>{b.pct}%</span>}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className={`${styles['float-badge']} ${styles.tr}`}><Award size={16} className={styles['float-badge__icon']} /><span>Winner: <strong>Claude Sonnet 4</strong></span></div>
-          <div className={`${styles['float-badge']} ${styles.bl}`}><div className={styles['pulse-dot']} /><span>3 evaluations running</span></div>
-        </div>
-      </section>
-
-      <section className={styles.features}>
-        <div className={styles['feat-header']}><h2>Everything you need to decide</h2><p>From connecting providers to comparing results — a complete evaluation workflow</p></div>
-        <div className={styles['feat-grid']}>
-          {features.map((f, i) => (
-            <div className={styles['feat-card']} key={i}>
-              <div className={`${styles['feat-icon']} ${styles[`feat-icon--${f.cls}`]}`}>{f.icon}</div>
-              <h3>{f.title}</h3>
-              <p>{f.desc}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className={styles['stats-section']}>
-        {[{ v: '40+', l: 'Models supported' }, { v: '6', l: 'Benchmark suites' }, { v: '12K+', l: 'Evaluation tasks' }, { v: '<5min', l: 'Average eval time' }].map((s, i) => (
-          <div className={styles['stat-box']} key={i}><div className={styles['stat-val']}>{s.v}</div><div className={styles['stat-lbl']}>{s.l}</div></div>
-        ))}
-      </section>
-
-      <section className={styles['cta-section']}>
-        <div className={styles['cta-box']}>
-          <h2>Ready to evaluate with confidence?</h2>
-          <p>Connect your first provider and run a benchmark in under five minutes.</p>
-          <button className={styles['btn-primary']} onClick={goToDashboard}>Get Started Free <ArrowRight size={16} /></button>
-        </div>
-      </section>
-
-      <Footer />
-    </div>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
-// Landing — mirrors the ink/paper/signal design system used across History,
-// Reports, Comparison, New Evaluation and Sidebar. Gradients replaced with
-// the flat ultramarine signal accent; mono numerals for stats/benchmarks.
-// Neutrals resolve to theme CSS vars so the page is dark-mode aware.
+// Providers — matches the History/Reports/Comparison/Sidebar design system:
+// ink/paper palette, ultramarine signal accent, mono instrument labels,
+// hover-lift cards. Neutrals resolve to theme CSS vars for dark mode.
 // ===========================================================================
 
 $ink:      var(--ink-1);
@@ -153,10 +23,6 @@ $amber-wash: var(--amber-wash);
 $danger:   #DC2626;
 $danger-wash: var(--danger-wash);
 $ink-wash: var(--ink-wash);
-$sky:      #0369A1;
-$sky-wash: var(--sky-wash);
-$rose:     #DB2777;
-$rose-wash: var(--rose-wash);
 
 $mono:    $font-mono;
 $sans:    $font-body;
@@ -164,202 +30,444 @@ $display: $font-display;
 
 $soft: 0 1px 2px rgba(20, 22, 27, 0.05);
 $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
-$lift-lg: 0 26px 50px -20px rgba(20, 22, 27, 0.28);
 
-.landing { min-height: 100vh; background: $card; overflow-x: hidden; }
-
-.l-error {
-  max-width: 1440px; margin: 0 auto; padding: 0 48px;
-  color: $danger; font-size: 13px; font-weight: 600;
+%micro {
+  font-family: $mono;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
 }
 
-.l-nav {
-  display: flex; align-items: center; justify-content: space-between; padding: 18px 48px;
-  max-width: 1440px; margin: 0 auto; position: relative; z-index: 10;
+// ---- header -----------------------------------------------------------
+.providers__header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 24px 32px 20px;
+  border-bottom: 1px solid $line;
+  background: $card;
+
+  h1 {
+    font-family: $display;
+    font-size: 1.5rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: $ink;
+    line-height: 1.2;
+  }
 }
-.l-logo {
-  font-family: $display; font-size: 22px; font-weight: 800; letter-spacing: -0.02em;
-  display: flex; align-items: center; gap: 10px; color: $ink;
 
-  .mark {
-    width: 34px; height: 34px; background: $ink; border-radius: 10px;
-    display: flex; align-items: center; justify-content: center; color: #fff; font-size: 18px;
-    position: relative; overflow: hidden;
+.providers__header-eyebrow {
+  @extend %micro;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: $signal;
+  margin-bottom: 6px;
 
-    &::after {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(140deg, transparent 40%, rgba($signal, 0.9) 140%);
+  &::before {
+    content: '';
+    width: 16px;
+    height: 2px;
+    border-radius: 2px;
+    background: $signal;
+  }
+}
+
+.providers__header-sub {
+  margin-top: 4px;
+  font-size: 0.84375rem;
+  color: $ink-2;
+}
+
+.providers__header-meta {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 13px;
+  border-radius: 999px;
+  border: 1px solid $line;
+  background: $paper;
+  font-family: $mono;
+  font-size: 0.71875rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: $ink-2;
+  white-space: nowrap;
+  margin-bottom: 3px;
+}
+
+// ---- toolbar ------------------------------------------------------------
+.providers__toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 16px 32px;
+  border-bottom: 1px solid $line;
+  background: $card;
+}
+
+.providers__search {
+  position: relative;
+  flex: 1;
+  min-width: 220px;
+  max-width: 320px;
+
+  svg {
+    position: absolute;
+    top: 50%;
+    left: 12px;
+    transform: translateY(-50%);
+    color: $ink-3;
+    pointer-events: none;
+  }
+
+  input {
+    width: 100%;
+    border: 1.5px solid $line;
+    border-radius: 10px;
+    padding: 9px 12px 9px 36px;
+    font-size: 0.8125rem;
+    font-family: $sans;
+    color: $ink;
+    background: $paper;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+
+    &::placeholder { color: $ink-3; }
+    &:focus {
+      outline: none;
+      border-color: $signal;
+      background: $card;
+      box-shadow: 0 0 0 3px $wash;
     }
   }
 }
-.l-links {
-  display: flex; gap: 32px; align-items: center;
-  a { color: $ink-2; text-decoration: none; font-size: 14px; font-weight: 500; transition: color 0.2s; cursor: pointer; }
-  a:hover { color: $ink; }
+
+.providers__toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
 }
 
-.btn-primary {
-  display: inline-flex; align-items: center; gap: 8px; background: $signal; color: #fff; border: none;
-  padding: 14px 28px; border-radius: 14px; font-size: 15px; font-weight: 700; cursor: pointer; transition: all 0.2s ease;
-  font-family: $display; box-shadow: 0 8px 20px -8px rgba($signal, 0.65);
-}
-.btn-primary:hover { background: $signal-2; transform: translateY(-2px); box-shadow: 0 12px 26px -8px rgba($signal, 0.7); }
-.btn-primary:disabled { opacity: 0.6; cursor: default; transform: none; }
-
-.btn-secondary {
-  display: inline-flex; align-items: center; gap: 8px; background: $card; color: $ink;
-  border: 1.5px solid $line; padding: 14px 28px; border-radius: 14px; font-size: 15px; font-weight: 700;
-  cursor: pointer; transition: all 0.2s ease; font-family: $display;
-}
-.btn-secondary:hover { border-color: $signal; color: $signal; background: $wash; box-shadow: $soft; }
-
-.hero-section {
-  position: relative; max-width: 1440px; margin: 0 auto; padding: 64px 48px 80px;
-  display: grid; grid-template-columns: 1fr 1fr; gap: 80px; align-items: center;
+.providers__filter-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-// Fine line grid with a radial fade-out mask — the grid is crisp behind the
-// headline and dissolves toward the edges so it never competes with content.
-.hero-bg-grid {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 1;
-  background-image:
-    linear-gradient(to right, $line 1px, transparent 1px),
-    linear-gradient(to bottom, $line 1px, transparent 1px);
-  background-size: 44px 44px;
-  -webkit-mask-image: radial-gradient(115% 115% at 20% 0%, #000 30%, transparent 72%);
-  mask-image: radial-gradient(115% 115% at 20% 0%, #000 30%, transparent 72%);
-  opacity: 0.7;
+.providers__toolbar-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  @extend %micro;
+  font-size: 0.625rem;
+  color: $ink-3;
+  padding-right: 4px;
 }
 
-// Soft signal-tinted glow behind the headline, sitting over the grid.
-.hero-bg-glow {
-  position: absolute;
-  top: -10%;
-  left: 8%;
-  width: 460px;
-  height: 460px;
-  pointer-events: none;
-  z-index: 1;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba($signal, 0.14), transparent 68%);
-  filter: blur(20px);
+.providers__filter-pill {
+  padding: 6px 12px;
+  border: 1px solid $line;
+  border-radius: 999px;
+  background: $card;
+  color: $ink-2;
+  font-size: 0.75rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition: all 0.14s ease;
+
+  &:hover { border-color: $ink-3; color: $ink; }
+
+  &--on {
+    border-color: $signal;
+    background: $signal;
+    color: #fff;
+  }
 }
 
-.hero-content { position: relative; z-index: 2; }
-.hero-badge {
-  display: inline-flex; align-items: center; gap: 8px; background: $wash;
-  border: 1px solid rgba($signal, 0.18); border-radius: 100px; padding: 6px 16px 6px 8px;
-  font-size: 13px; color: $signal; margin-bottom: 28px; font-weight: 700;
-  font-family: $mono; letter-spacing: 0.01em;
-
-  .badge-dot { width: 8px; height: 8px; border-radius: 50%; background: $signal; animation: pulse 2s infinite; }
+.providers__toolbar-divider {
+  width: 1px;
+  height: 20px;
+  background: $line;
 }
-.hero-content h1 {
-  font-family: $display;
-  font-size: 54px; font-weight: 800; line-height: 1.08; letter-spacing: -0.045em; margin-bottom: 24px;
+
+.providers__add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 15px;
+  border-radius: 10px;
+  border: 1px solid $signal;
+  background: $signal;
+  color: #fff;
+  font-family: $sans;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
+
+  &:hover { background: $signal-2; border-color: $signal-2; transform: translateY(-1px); }
+}
+
+// ---- grid -----------------------------------------------------------------
+.providers__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 12px;
+}
+
+.providers__empty {
+  grid-column: 1 / -1;
+  padding: 40px;
+  text-align: center;
+  color: $ink-3;
+  font-size: 0.8125rem;
+}
+
+// ---- provider card ----------------------------------------------------
+.providers__card {
+  display: flex;
+  flex-direction: column;
+  padding: 18px;
+  background: $card;
+  border: 1.5px solid $line;
+  border-radius: 16px;
+  box-shadow: $soft;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+
+  &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
+}
+
+.providers__card-hdr {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.providers__card-id {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.providers__icon {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: $paper;
+  border: 1px solid $line;
   color: $ink;
-  .grad { color: $signal; }
-}
-.hero-content > p { font-size: 17px; color: $ink-2; line-height: 1.7; margin-bottom: 40px; max-width: 480px; }
-.hero-actions { display: flex; gap: 14px; }
+  font-family: $display;
+  font-weight: 800;
+  font-size: 1rem;
+  overflow: hidden;
 
-.hero-visual { position: relative; z-index: 2; }
-.hero-card { background: $card; border: 1px solid $line; border-radius: 20px; padding: 28px; box-shadow: $lift-lg; }
-.hero-card-hdr { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-.hero-card-title {
-  font-family: $mono; font-size: 0.6875rem; font-weight: 700; color: $ink-3;
-  text-transform: uppercase; letter-spacing: 0.14em;
-}
-.hero-card-badge {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-family: $mono; font-size: 0.625rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
-  color: $ok; background: $ok-wash; border-radius: 999px; padding: 4px 10px 4px 8px;
-}
-.hero-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.hero-bar:last-child { margin-bottom: 0; }
-.hero-bar-label { font-size: 13px; color: $ink-2; width: 120px; flex-shrink: 0; font-weight: 650; }
-.hero-bar-track { flex: 1; height: 34px; background: $paper; border-radius: 10px; overflow: hidden; }
-.hero-bar-fill {
-  height: 100%; border-radius: 10px; display: flex; align-items: center; justify-content: flex-end; padding: 0 14px;
-  font-family: $mono; font-size: 12px; font-weight: 700; color: #fff; transition: width 1.8s cubic-bezier(0.16, 1, 0.3, 1);
-
-  &--primary { background: $signal; }
-  &--warm    { background: $amber; }
-  &--cool    { background: $sky; }
-  &--gray    { background: $ink-3; }
+  img { width: 100%; height: 100%; object-fit: contain; }
 }
 
-.float-badge {
-  position: absolute; background: $card; border: 1px solid $line; border-radius: 14px;
-  padding: 12px 18px; display: flex; align-items: center; gap: 10px; box-shadow: $lift;
-  z-index: 3; animation: float 4s ease infinite; font-size: 13px; color: $ink-2; font-weight: 550;
-  strong { color: $ink; font-weight: 700; }
-}
-.float-badge__icon { color: $amber; }
-.float-badge.tr { top: -24px; right: -16px; animation-delay: 0.5s; }
-.float-badge.bl { bottom: -20px; left: -16px; animation-delay: 1.5s; }
-.pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: $ok; animation: pulse 2s infinite; }
-
-.features { max-width: 1440px; margin: 0 auto; padding: 96px 48px; background: $paper; }
-.feat-header { text-align: center; margin-bottom: 72px; }
-.feat-header h2 { font-family: $display; font-size: 38px; font-weight: 800; letter-spacing: -0.03em; margin-bottom: 14px; color: $ink; }
-.feat-header p { color: $ink-2; font-size: 16px; max-width: 460px; margin: 0 auto; line-height: 1.6; }
-.feat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
-.feat-card {
-  background: $card; border: 1px solid $line; border-radius: 18px; padding: 32px;
-  transition: all 0.25s ease; cursor: default; position: relative; overflow: hidden;
-
-  &::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: $signal; opacity: 0; transition: opacity 0.25s ease; }
-  &:hover { border-color: transparent; box-shadow: $lift; transform: translateY(-6px); }
-  &:hover::before { opacity: 1; }
-  h3 { font-family: $display; font-size: 17px; font-weight: 700; margin-bottom: 8px; letter-spacing: -0.01em; color: $ink; }
-  p { font-size: 14px; color: $ink-2; line-height: 1.65; }
-}
-.feat-icon {
-  width: 50px; height: 50px; border-radius: 14px; display: flex; align-items: center; justify-content: center; margin-bottom: 22px;
-  &--signal { background: $wash; color: $signal; }
-  &--amber  { background: $amber-wash; color: $amber; }
-  &--ok     { background: $ok-wash; color: $ok; }
-  &--sky    { background: $sky-wash; color: $sky; }
-  &--rose   { background: $rose-wash; color: $rose; }
+.providers__name {
+  font-family: $display;
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: $ink;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.stats-section {
-  max-width: 1440px; margin: 0 auto; padding: 64px 48px; display: grid; grid-template-columns: repeat(4, 1fr);
-  gap: 24px; background: $card; border-top: 1px solid $line; border-bottom: 1px solid $line;
-}
-.stat-box { text-align: center; padding: 16px; }
-.stat-val { font-family: $mono; font-size: 44px; font-weight: 700; letter-spacing: -0.03em; color: $signal; }
-.stat-lbl { font-size: 14px; color: $ink-2; margin-top: 4px; font-weight: 600; }
-
-.cta-section { max-width: 1440px; margin: 0 auto; padding: 96px 48px; text-align: center; background: $paper; }
-.cta-box {
-  background: $card; border: 1px solid $line; border-radius: 28px; padding: 72px;
-  position: relative; overflow: hidden; box-shadow: $lift;
-  &::before { content: ''; position: absolute; inset: -2px; background: $signal; border-radius: 30px; z-index: -1; opacity: 0.12; }
-  h2 { font-family: $display; font-size: 38px; font-weight: 800; letter-spacing: -0.03em; margin-bottom: 14px; color: $ink; }
-  p { color: $ink-2; font-size: 16px; margin-bottom: 36px; line-height: 1.6; }
+.providers__count {
+  font-family: $mono;
+  font-size: 0.71875rem;
+  color: $ink-3;
+  margin-top: 2px;
 }
 
-.l-footer { text-align: center; padding: 32px 48px; color: $ink-3; font-size: 13px; border-top: 1px solid $line; background: $card; }
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.5; transform: scale(1.3); }
-}
-@keyframes float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-8px); }
+.providers__card-top-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-@media (max-width: 768px) {
-  .hero-section { grid-template-columns: 1fr; padding: 48px 24px; gap: 40px; }
-  .hero-content h1 { font-size: 36px; }
-  .feat-grid { grid-template-columns: 1fr; }
-  .stats-section { grid-template-columns: repeat(2, 1fr); }
+.providers__icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid $line;
+  background: $card;
+  color: $ink-2;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+  &:hover { border-color: $signal; color: $signal; background: $wash; }
+}
+
+.providers__badge-connected {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px 4px 7px;
+  border-radius: 999px;
+  font-family: $mono;
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: $ok;
+  background: $ok-wash;
+  white-space: nowrap;
+}
+
+.providers__badge-idle {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-family: $mono;
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: $ink-3;
+  background: $ink-wash;
+  white-space: nowrap;
+}
+
+.providers__desc {
+  font-size: 0.8125rem;
+  color: $ink-2;
+  line-height: 1.55;
+  margin-bottom: 14px;
+  flex: 1;
+}
+
+// ---- key entry form -------------------------------------------------------
+.providers__key-form {
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+.providers__key-input {
+  width: 100%;
+  border: 1.5px solid $line;
+  border-radius: 9px;
+  padding: 9px 11px;
+  font-size: 0.8125rem;
+  font-family: $mono;
+  color: $ink;
+  background: $paper;
+  margin-bottom: 8px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+
+  &::placeholder { color: $ink-3; font-family: $sans; }
+  &:focus { outline: none; border-color: $signal; box-shadow: 0 0 0 3px $wash; }
+}
+
+.providers__key-actions {
+  display: flex;
+  gap: 8px;
+}
+
+// ---- foot actions (fit up to 4 buttons on one line) ------------------------
+.providers__foot-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+.providers__foot-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 8px 8px;
+  border-radius: 8px;
+  border: 1px solid $line;
+  background: $card;
+  color: $ink-2;
+  font-family: $sans;
+  font-size: 0.71875rem;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+  svg { flex-shrink: 0; }
+
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  &--primary {
+    border-color: $signal;
+    background: $signal;
+    color: #fff;
+    &:hover:not(:disabled) { background: $signal-2; border-color: $signal-2; }
+  }
+
+  &--accent {
+    border-color: $signal;
+    color: $signal;
+    background: $wash;
+    &:hover:not(:disabled) { background: rgba(43, 43, 245, 0.14); }
+  }
+
+  &--ghost {
+    &:hover:not(:disabled) { border-color: $ink-3; color: $ink; background: $paper; }
+  }
+
+  &--danger {
+    color: $danger;
+    border-color: rgba(220, 38, 38, 0.25);
+    &:hover:not(:disabled) { background: $danger-wash; }
+  }
+}
+
+.providers__spin {
+  animation: providers-spin 0.8s linear infinite;
+}
+
+@keyframes providers-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 640px) {
+  .providers__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
+  .providers__toolbar { padding: 14px 18px; }
+  .providers__grid { grid-template-columns: 1fr; }
+
+  // On very narrow cards, collapse to icon-only buttons with visible label
+  // hidden — title attribute still provides the accessible name via hover.
+  .providers__foot-btn {
+    padding: 8px 6px;
+    font-size: 0;
+    gap: 0;
+
+    svg { font-size: initial; }
+  }
 }
