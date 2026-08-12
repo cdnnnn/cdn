@@ -5,23 +5,27 @@
 // ink/paper palette, ultramarine signal accent, mono instrument labels,
 // hover-lift cards. Sidebar block keys are kept stable (shared with
 // ProviderModelsSidebar) but recolored to the same tokens.
+//
+// Neutrals now resolve to theme CSS vars (see _theme.scss) so this page
+// responds to the dark-mode toggle. Accent colors (signal/ok/amber/danger)
+// stay constant across themes.
 // ===========================================================================
 
-$ink: #14161B;
-$ink-2: #565B66;
-$ink-3: #8A909B;
-$paper: #F5F6F8;
-$card: #FFFFFF;
-$line: #E6E8EC;
-$line-2: #EEF0F3;
+$ink: var(--ink-1);
+$ink-2: var(--ink-2);
+$ink-3: var(--ink-3);
+$paper: var(--paper);
+$card: var(--card);
+$line: var(--line);
+$line-2: var(--line-2);
 $signal: #2B2BF5;
 $signal-2: #1C1CC7;
-$wash: #ECEDFF;
+$wash: var(--signal-wash);
 $ok: #0FA968;
-$ok-wash: #E7F7EF;
+$ok-wash: var(--ok-wash);
 $amber: #E08600;
 $danger: #DC2626;
-$danger-wash: #FDECEC;
+$danger-wash: var(--danger-wash);
 
 $mono: $font-mono;
 $sans: $font-body;
