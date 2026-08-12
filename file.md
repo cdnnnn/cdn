@@ -33,7 +33,12 @@ import { fetchModels, checkModelHealth } from '../../store/slices/modelsSlice';
 import { fetchDatasets, uploadDataset, resetUploadStatus } from '../../store/slices/datasetsSlice';
 import { SUPPORTED_UPLOAD_EXTENSIONS } from '../../api/endpoints/datasets';
 import { fetchMetrics } from '../../store/slices/metricsSlice';
-import { launchEvaluation, setDraft } from '../../store/slices/evaluationsSlice';
+import {
+  launchEvaluation,
+  runAgentBenchmark,
+  runAgentBenchmarkMulti,
+  setDraft,
+} from '../../store/slices/evaluationsSlice';
 import type { CreateEvaluationRequest } from '../../types';
 import styles from './NewEvaluation.module.scss';
 
@@ -43,8 +48,7 @@ import styles from './NewEvaluation.module.scss';
 // metricsSlice:
 //   - fetchMetrics(evalType: string) — GET /metrics?eval_type={type}
 //     Response: { eval_type, metrics: string[], all_metrics: string[] }
-//   - state.metrics: { metrics: string[], allMetrics: string[],
-//                       status: 'idle'|'loading'|'succeeded'|'failed', error }
+//   - state.metrics: { allMetrics: string[], status, error }
 //   - dispatched only once the user picks a type in Step 2 (not on mount).
 //
 // modelsSlice:
@@ -53,6 +57,29 @@ import styles from './NewEvaluation.module.scss';
 //   - state.models.healthById: Record<string, 'idle'|'loading'|'success'|'failed'>
 //   - NEVER dispatched automatically — only in response to the user
 //     explicitly clicking "Check health" on a model card.
+//
+// datasetsSlice:
+//   - fetchDatasets(type: string) — GET /datasets?type={type}
+//     `type` is one of: 'model' | 'rag' | 'agent_benchmark' | 'agent_custom'
+//     (the last two both represent the "Agent" eval type, distinguished by
+//     whether an Agent Framework has been picked in Step 2).
+//   - Dataset items are expected to carry a `dataset_type` field, used to
+//     detect "custom" datasets (see modelHidesMetrics below) and a
+//     `dataset_categories: string[]` field for the subgroup rail.
+//
+// evaluationsSlice — THREE separate launch thunks depending on type/framework:
+//   - launchEvaluation(payload) — POST /evaluations
+//     Used for eval_type 'Model' or 'RAG'.
+//   - runAgentBenchmark(payload) — POST /agent-benchmark/run
+//     Request: { dataset_id, model_ids, evaluation_name, run_samples }
+//     Used when eval_type is 'Agent' and NO Agent Framework was selected.
+//   - runAgentBenchmarkMulti(payload) — POST /agent-benchmark/run-multi
+//     Request: { dataset_id, model_ids, evaluation_name, selected_metrics,
+//                 selected_categories, run_samples }
+//     Used when eval_type is 'Agent' AND an Agent Framework was selected.
+//   All three are assumed to share `state.evaluations.launching` /
+//   `launchError`, and to resolve/reject the same way launchEvaluation did
+//   (i.e. `<thunk>.fulfilled.match(result)` works for all three).
 // ─────────────────────────────────────────────────────────────────────────
 
 const STEPS = [
@@ -101,10 +128,9 @@ const TYPE_OPTIONS = [
   },
 ];
 
-// Optional agent frameworks, only shown once "Agent" is selected as the type.
+// Only Hermes remains as a selectable framework once "Agent" is chosen.
 const AGENT_FRAMEWORKS = [
   { id: 'hermes', title: 'Hermes', desc: 'Lightweight tool-calling agent runtime' },
-  { id: 'langgraph', title: 'LangGraph', desc: 'Graph-based multi-step agent orchestration' },
 ];
 
 const SUGGESTED_NAMES = [
@@ -163,7 +189,7 @@ export default function NewEvaluation() {
 
   const metricsState = useAppSelector((s) => s.metrics) ?? { allMetrics: [], status: 'idle' as const, error: null };
   // Only `all_metrics` from the API response is used — it's the full
-  // catalog rendered as selectable chips. The `metrics` field is ignored.
+  // catalog rendered as selectable chips.
   const metricsCatalog: string[] = (metricsState as any).allMetrics ?? [];
   const metricsLoading = (metricsState as any).status === 'loading';
 
@@ -191,17 +217,37 @@ export default function NewEvaluation() {
     dispatch(fetchModels());
   }, [dispatch]);
 
-  // GET /datasets?eval_type={type} — refetched whenever the chosen type changes.
+  // ---- (1) dataset "type" query param, split for Agent by framework -------
+  // Model/RAG: type = eval_type.toLowerCase()
+  // Agent, no framework chosen:  type = 'agent_benchmark'
+  // Agent, framework chosen:     type = 'agent_custom'
+  const datasetType = useMemo(() => {
+    if (!draft.eval_type) return '';
+    if (draft.eval_type === 'Agent') {
+      return agentFramework ? 'agent_custom' : 'agent_benchmark';
+    }
+    return draft.eval_type.toLowerCase();
+  }, [draft.eval_type, agentFramework]);
+
+  // GET /datasets?type={type} — refetched whenever type/framework changes.
   useEffect(() => {
-    if (!draft.eval_type) return;
-    dispatch(fetchDatasets(draft.eval_type.toLowerCase()));
-  }, [dispatch, draft.eval_type]);
+    if (!datasetType) return;
+    dispatch(fetchDatasets(datasetType));
+  }, [dispatch, datasetType]);
+
+  // Any previously chosen dataset is invalid once the dataset "type" changes
+  // (different type/framework combination = different dataset pool).
+  useEffect(() => {
+    if (!datasetType) return;
+    dispatch(setDraft({ selBenchmark: '' }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [datasetType]);
 
   // GET /metrics?eval_type={type} — fetched only once a type is chosen in
   // Step 2, and re-fetched whenever the user changes type. Any metrics
   // selected under the previous type are cleared, since they may not be
-  // valid for the new type. Only the response's `all_metrics` field is
-  // consumed (see metricsCatalog above) — `metrics` is ignored entirely.
+  // valid for the new type. Only `all_metrics` is consumed (see
+  // metricsCatalog above) — `metrics` is ignored entirely.
   useEffect(() => {
     if (!draft.eval_type) return;
     dispatch(fetchMetrics(draft.eval_type.toLowerCase()));
@@ -209,10 +255,17 @@ export default function NewEvaluation() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dispatch, draft.eval_type]);
 
-  // Reset the subgroup/task selection whenever the chosen dataset changes.
+  const suite = datasets.find((d) => d.id === draft.selBenchmark);
+
+  // ---- (6) auto-select every subgroup on dataset pick ----------------------
   useEffect(() => {
-    setSelSubgroup([]);
+    const cats = (suite as any)?.dataset_categories ?? [];
+    setSelSubgroup(cats);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft.selBenchmark]);
+
+  const selectAllSubgroups = () => setSelSubgroup((suite as any)?.dataset_categories ?? []);
+  const clearAllSubgroups = () => setSelSubgroup([]);
 
   // Reset the chosen framework if the user switches away from "Agent".
   useEffect(() => {
@@ -272,7 +325,7 @@ export default function NewEvaluation() {
         file: uploadFile,
         name: uploadName.trim(),
         description: uploadDescription.trim(),
-        evalType: draft.eval_type.toLowerCase(),
+        evalType: datasetType,
       })
     );
     if (uploadDataset.fulfilled.match(result)) {
@@ -281,13 +334,52 @@ export default function NewEvaluation() {
     }
   };
 
+  // ---- (5) Model type + non-custom dataset ⇒ hide metrics & judge ---------
+  const isCustomDataset = (suite as any)?.dataset_type === 'custom';
+  const modelHidesMetrics = draft.eval_type === 'Model' && Boolean(suite) && !isCustomDataset;
+
+  // Clear any selected metrics the moment this simplified mode kicks in, so
+  // neither the manifest nor the launch payload carries stale selections.
+  useEffect(() => {
+    if (modelHidesMetrics && draft.selMetrics.length > 0) {
+      dispatch(setDraft({ selMetrics: [] }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modelHidesMetrics]);
+
+  const selectedModels = draft.selModels.map((id) => models.find((m) => m.id === id)).filter(Boolean) as typeof models;
+  const judgeModel = draft.judgeModelId ? models.find((m) => m.id === draft.judgeModelId) : null;
+
+  // The Judge Model panel — and picking a judge at all — is only relevant
+  // when the LLM_Judge metric has been selected (and metrics aren't hidden
+  // entirely per the rule above). In every other case judge_config must be
+  // sent as {} on launch.
+  const requiresJudge = !modelHidesMetrics && draft.selMetrics.includes('LLM_Judge');
+
+  // If the user deselects LLM_Judge after having picked a judge, clear the
+  // stale selection so it doesn't silently linger in the manifest/payload.
+  useEffect(() => {
+    if (!requiresJudge && draft.judgeModelId) {
+      dispatch(setDraft({ judgeModelId: undefined }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requiresJudge]);
+
+  const isModelSelectable = (modelId: string) => healthById?.[modelId] === 'success';
+
+  const toggleModel = (modelId: string) => {
+    const alreadySelected = draft.selModels.includes(modelId);
+    if (!alreadySelected && !isModelSelectable(modelId)) return;
+    dispatch(setDraft({ selModels: toggle(draft.selModels, modelId) }));
+  };
+
   const canGo = () => {
     if (step === 0) return Boolean(draft.name.trim());
     if (step === 1) return Boolean(draft.eval_type);
     if (step === 2) return draft.selProviders.length > 0;
     if (step === 3) return draft.selModels.length > 0;
     if (step === 4) return Boolean(draft.selBenchmark);
-    if (step === 5) return !requiresJudge || Boolean(draft.judgeModelId);
+    if (step === 5) return modelHidesMetrics || !requiresJudge || Boolean(draft.judgeModelId);
     return true;
   };
 
@@ -300,61 +392,66 @@ export default function NewEvaluation() {
     if (target < step) setStep(target);
   };
 
-  const suite = datasets.find((d) => d.id === draft.selBenchmark);
-  const selectedModels = draft.selModels.map((id) => models.find((m) => m.id === id)).filter(Boolean) as typeof models;
-  const judgeModel = draft.judgeModelId ? models.find((m) => m.id === draft.judgeModelId) : null;
-
-  // The Judge Model panel — and picking a judge at all — is only relevant
-  // when the LLM_Judge metric has been selected. In every other case
-  // judge_config must be sent as {} on launch.
-  const requiresJudge = draft.selMetrics.includes('LLM_Judge');
-
-  // If the user deselects LLM_Judge after having picked a judge, clear the
-  // stale selection so it doesn't silently linger in the manifest/payload.
-  useEffect(() => {
-    if (!requiresJudge && draft.judgeModelId) {
-      dispatch(setDraft({ judgeModelId: undefined }));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [requiresJudge]);
-
-  // A model can only be added to the run once the user has manually run a
-  // health check on it AND it came back successful.
-  const isModelSelectable = (modelId: string) => healthById?.[modelId] === 'success';
-
-  const toggleModel = (modelId: string) => {
-    const alreadySelected = draft.selModels.includes(modelId);
-    if (!alreadySelected && !isModelSelectable(modelId)) return;
-    dispatch(setDraft({ selModels: toggle(draft.selModels, modelId) }));
-  };
-
+  // ---- (3) & (4) launch: three different endpoints depending on type ------
   const launch = async () => {
     const dataset = datasets.find((d) => d.id === draft.selBenchmark);
     const judgeModelObj = draft.judgeModelId ? models.find((m) => m.id === draft.judgeModelId) : undefined;
 
-    const payload: CreateEvaluationRequest = {
-      name: draft.name,
-      eval_type: draft.eval_type.toLowerCase(),
-      dataset_id: dataset?.id || '',
-      benchmark: dataset?.name || undefined,
-      model_ids: draft.selModels,
-      selected_metrics: draft.selMetrics,
-      run_samples: runSamples,
-      selected_category: selSubgroup.length > 0 ? selSubgroup : dataset ? [dataset.category] : undefined,
-      // Only populated when the LLM_Judge metric is selected AND a judge
-      // model has been chosen — every other case sends an empty object.
-      judge_config:
-        requiresJudge && draft.judgeModelId
-          ? {
-              model_id: draft.judgeModelId,
-              base_url: judgeModelObj?.base_url || '',
-              api_key: draft.judgeModelId,
-            }
-          : {},
-    };
+    let result: any;
 
-    const result = await dispatch(launchEvaluation(payload));
-    if (launchEvaluation.fulfilled.match(result)) {
+    if (draft.eval_type === 'Agent' && !agentFramework) {
+      // POST /agent-benchmark/run
+      result = await dispatch(
+        runAgentBenchmark({
+          dataset_id: dataset?.id || '',
+          model_ids: draft.selModels,
+          evaluation_name: draft.name,
+          run_samples: runSamples,
+        })
+      );
+    } else if (draft.eval_type === 'Agent' && agentFramework) {
+      // POST /agent-benchmark/run-multi
+      result = await dispatch(
+        runAgentBenchmarkMulti({
+          dataset_id: dataset?.id || '',
+          model_ids: draft.selModels,
+          evaluation_name: draft.name,
+          selected_metrics: draft.selMetrics,
+          selected_categories: selSubgroup,
+          run_samples: runSamples,
+        })
+      );
+    } else {
+      // POST /evaluations — Model or RAG
+      const payload: CreateEvaluationRequest = {
+        name: draft.name,
+        eval_type: draft.eval_type.toLowerCase(),
+        dataset_id: dataset?.id || '',
+        benchmark: dataset?.name || undefined,
+        model_ids: draft.selModels,
+        selected_metrics: modelHidesMetrics ? [] : draft.selMetrics,
+        run_samples: runSamples,
+        selected_category: selSubgroup.length > 0 ? selSubgroup : dataset ? [dataset.category] : undefined,
+        // Only populated when the LLM_Judge metric is selected AND a judge
+        // model has been chosen — every other case sends an empty object.
+        judge_config:
+          requiresJudge && draft.judgeModelId
+            ? {
+                model_id: draft.judgeModelId,
+                base_url: judgeModelObj?.base_url || '',
+                api_key: draft.judgeModelId,
+              }
+            : {},
+      };
+      result = await dispatch(launchEvaluation(payload));
+    }
+
+    const succeeded =
+      launchEvaluation.fulfilled.match(result) ||
+      runAgentBenchmark.fulfilled.match(result) ||
+      runAgentBenchmarkMulti.fulfilled.match(result);
+
+    if (succeeded) {
       setToast(true);
       setTimeout(() => {
         setToast(false);
@@ -375,14 +472,16 @@ export default function NewEvaluation() {
     mf(draft.selProviders.length === 1 ? providerNames[0] : `${draft.selProviders.length} providers`, draft.selProviders.length > 0),
     mf(`${draft.selModels.length} models`, draft.selModels.length > 0),
     mf(suite?.name || '', Boolean(suite)),
-    mf(`${draft.selMetrics.length} metrics`, draft.selMetrics.length > 0),
+    mf(modelHidesMetrics ? 'Not required' : `${draft.selMetrics.length} metrics`, modelHidesMetrics || draft.selMetrics.length > 0),
     mf(
-      judgeModel
+      modelHidesMetrics
+        ? 'Ready to launch'
+        : judgeModel
         ? `Judge · ${judgeModel.name}`
         : requiresJudge
         ? 'Judge required'
         : 'Ready to launch',
-      !requiresJudge || Boolean(judgeModel)
+      modelHidesMetrics || !requiresJudge || Boolean(judgeModel)
     ),
   ];
 
@@ -574,7 +673,10 @@ export default function NewEvaluation() {
                           <label className={styles.ev__label}>
                             <Waypoints size={13} /> Agent framework <span className="opt">optional</span>
                           </label>
-                          <p className={styles['ev__section-hint']}>Tell us which framework the agent runs on, if applicable.</p>
+                          <p className={styles['ev__section-hint']}>
+                            Tell us which framework the agent runs on, if applicable. This also determines which test
+                            suites are available in the next steps.
+                          </p>
                           <div className={styles['ev__fw-grid']}>
                             {AGENT_FRAMEWORKS.map((f) => {
                               const on = agentFramework === f.id;
@@ -656,7 +758,7 @@ export default function NewEvaluation() {
                             const providerName = providers.find((p) => p.id === m.provider_id)?.name ?? m.provider_id;
 
                             return (
-                              // Not a <button> — it now contains a nested "Check health"
+                              // Not a <button> — it contains a nested "Check health"
                               // control, so it's a clickable div with keyboard support
                               // instead (nested interactive elements aren't valid HTML).
                               <div
@@ -846,20 +948,34 @@ export default function NewEvaluation() {
 
                           <aside className={styles.ev__rail}>
                             <div className={styles['ev__rail-head']}>
-                              <p className={styles['ev__rail-title']}>
-                                <Layers size={13} /> Subgroups
-                              </p>
+                              <div className={styles['ev__rail-head-row']}>
+                                <p className={styles['ev__rail-title']}>
+                                  <Layers size={13} /> Subgroups
+                                </p>
+                                {suite && (suite as any).dataset_categories?.length > 0 && (
+                                  <div className={styles['ev__rail-actions']}>
+                                    <button type="button" className={styles.ev__link} onClick={selectAllSubgroups}>
+                                      Select all
+                                    </button>
+                                    <button type="button" className={styles.ev__link} onClick={clearAllSubgroups}>
+                                      Unselect all
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
                               <p className={styles['ev__rail-sub']}>
-                                {suite ? `Narrow "${suite.name}" to specific categories.` : 'Select a suite to see its subgroups.'}
+                                {suite
+                                  ? `All of "${suite.name}"'s categories are selected by default — narrow as needed.`
+                                  : 'Select a suite to see its subgroups.'}
                               </p>
                             </div>
                             <div className={styles['ev__rail-scroll']}>
                               {!suite && <p className={styles['ev__rail-empty']}>No suite selected yet.</p>}
-                              {suite && suite.dataset_categories.length === 0 && (
+                              {suite && (suite as any).dataset_categories?.length === 0 && (
                                 <p className={styles['ev__rail-empty']}>This suite has no subgroups.</p>
                               )}
                               {suite &&
-                                suite.dataset_categories.map((cat) => {
+                                ((suite as any).dataset_categories ?? []).map((cat: string) => {
                                   const on = selSubgroup.includes(cat);
                                   return (
                                     <button
@@ -964,115 +1080,139 @@ export default function NewEvaluation() {
 
                   {/* STEP 5 — METRICS */}
                   {step === 5 && (
-                    <div className={`${styles.ev__metrics} ${!requiresJudge ? styles['ev__metrics--single'] : ''}`}>
-                      <div className={styles['ev__metrics-main']}>
-                        <div className={styles.ev__samples}>
-                          <div className={styles.ev__field}>
-                            <label className={styles.ev__label}>Run samples</label>
-                            <input
-                              type="number"
-                              min={0}
-                              className={styles.ev__input}
-                              value={runSamples}
-                              onChange={(e) => {
-                                const val = e.target.value === '' ? 0 : Math.max(0, Number(e.target.value));
-                                setRunSamples(Number.isNaN(val) ? 0 : val);
-                              }}
-                            />
-                          </div>
-                          <p className={styles['ev__samples-note']}>Questions sampled from the suite for each model.</p>
+                    <>
+                      {modelHidesMetrics ? (
+                        // (5) Model type + non-custom dataset: metrics & judge model
+                        // are not applicable — only run samples is configurable.
+                        <div className={styles.ev__field} style={{ maxWidth: 300 }}>
+                          <label className={styles.ev__label}>Run samples</label>
+                          <input
+                            type="number"
+                            min={0}
+                            className={styles.ev__input}
+                            value={runSamples}
+                            onChange={(e) => {
+                              const val = e.target.value === '' ? 0 : Math.max(0, Number(e.target.value));
+                              setRunSamples(Number.isNaN(val) ? 0 : val);
+                            }}
+                          />
+                          <p className={styles['ev__samples-note']}>
+                            Questions sampled from the suite. Metrics and a judge model aren\u2019t configurable for
+                            standard (non-custom) model benchmarks.
+                          </p>
                         </div>
+                      ) : (
+                        <div className={`${styles.ev__metrics} ${!requiresJudge ? styles['ev__metrics--single'] : ''}`}>
+                          <div className={styles['ev__metrics-main']}>
+                            <div className={styles.ev__samples}>
+                              <div className={styles.ev__field}>
+                                <label className={styles.ev__label}>Run samples</label>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  className={styles.ev__input}
+                                  value={runSamples}
+                                  onChange={(e) => {
+                                    const val = e.target.value === '' ? 0 : Math.max(0, Number(e.target.value));
+                                    setRunSamples(Number.isNaN(val) ? 0 : val);
+                                  }}
+                                />
+                              </div>
+                              <p className={styles['ev__samples-note']}>Questions sampled from the suite for each model.</p>
+                            </div>
 
-                        <div className={styles['ev__metrics-bar']}>
-                          <span className={styles['ev__metrics-count']}>
-                            <b>{draft.selMetrics.length}</b> of {metricsCatalog.length} selected
-                          </span>
-                          <div className={styles['ev__metrics-actions']}>
-                            <button
-                              type="button"
-                              className={styles.ev__link}
-                              onClick={() => dispatch(setDraft({ selMetrics: [...metricsCatalog] }))}
-                            >
-                              Select all
-                            </button>
-                            <button type="button" className={styles.ev__link} onClick={() => dispatch(setDraft({ selMetrics: [] }))}>
-                              Clear
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className={styles.ev__chips}>
-                          {metricsLoading && <p className={styles.ev__empty}>Loading metrics for {draft.eval_type || 'this type'}…</p>}
-                          {!metricsLoading &&
-                            metricsCatalog.map((name: string) => {
-                              const on = draft.selMetrics.includes(name);
-                              return (
+                            <div className={styles['ev__metrics-bar']}>
+                              <span className={styles['ev__metrics-count']}>
+                                <b>{draft.selMetrics.length}</b> of {metricsCatalog.length} selected
+                              </span>
+                              <div className={styles['ev__metrics-actions']}>
                                 <button
-                                  key={name}
                                   type="button"
-                                  className={`${styles.ev__chip} ${on ? styles['ev__chip--on'] : ''}`}
-                                  onClick={() => dispatch(setDraft({ selMetrics: toggle(draft.selMetrics, name) }))}
+                                  className={styles.ev__link}
+                                  onClick={() => dispatch(setDraft({ selMetrics: [...metricsCatalog] }))}
                                 >
-                                  {on && (
-                                    <span className={styles['ev__chip-tick']}>
-                                      <Check size={12} strokeWidth={3} />
-                                    </span>
-                                  )}
-                                  {name}
+                                  Select all
                                 </button>
-                              );
-                            })}
-                          {!metricsLoading && metricsCatalog.length === 0 && (
-                            <p className={styles.ev__empty}>No metrics available for this type.</p>
-                          )}
-                        </div>
-                      </div>
+                                <button type="button" className={styles.ev__link} onClick={() => dispatch(setDraft({ selMetrics: [] }))}>
+                                  Clear
+                                </button>
+                              </div>
+                            </div>
 
-                      {requiresJudge && (
-                        <aside className={styles.ev__judge}>
-                          <div className={styles['ev__judge-head']}>
-                            <p className={styles['ev__judge-title']}>
-                              <Gavel size={13} /> Judge model
-                            </p>
-                            <p className={styles['ev__judge-sub']}>
-                              Required — the LLM_Judge metric needs a model to grade open-ended answers.
-                            </p>
-                          </div>
-                          <div className={styles['ev__judge-scroll']}>
-                            {models.filter((m) => m.is_active).length === 0 ? (
-                              <div className={styles['ev__judge-empty']}>No models available yet.</div>
-                            ) : (
-                              models
-                                .filter((m) => m.is_active)
-                                .map((m) => {
-                                  const on = draft.judgeModelId === m.id;
+                            <div className={styles.ev__chips}>
+                              {metricsLoading && <p className={styles.ev__empty}>Loading metrics for {draft.eval_type || 'this type'}…</p>}
+                              {!metricsLoading &&
+                                metricsCatalog.map((name: string) => {
+                                  const on = draft.selMetrics.includes(name);
                                   return (
                                     <button
-                                      key={m.id}
+                                      key={name}
                                       type="button"
-                                      className={`${styles['ev__judge-row']} ${on ? styles['ev__judge-row--on'] : ''}`}
-                                      onClick={() => dispatch(setDraft({ judgeModelId: on ? undefined : m.id }))}
+                                      className={`${styles.ev__chip} ${on ? styles['ev__chip--on'] : ''}`}
+                                      onClick={() => dispatch(setDraft({ selMetrics: toggle(draft.selMetrics, name) }))}
                                     >
-                                      <span className={`${styles.ev__radio} ${on ? styles['ev__radio--on'] : ''}`} />
-                                      <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
-                                        <span className={styles['ev__judge-name']}>{m.name}</span>
-                                        <span className={styles['ev__judge-meta']}>
-                                          {providers.find((p) => p.id === m.provider_id)?.name ?? m.provider_id}
+                                      {on && (
+                                        <span className={styles['ev__chip-tick']}>
+                                          <Check size={12} strokeWidth={3} />
                                         </span>
-                                      </span>
+                                      )}
+                                      {name}
                                     </button>
                                   );
-                                })
-                            )}
+                                })}
+                              {!metricsLoading && metricsCatalog.length === 0 && (
+                                <p className={styles.ev__empty}>No metrics available for this type.</p>
+                              )}
+                            </div>
                           </div>
-                          {!draft.judgeModelId && (
-                            <p className={styles['ev__judge-required']}>
-                              Select a judge model to continue — it's mandatory when LLM_Judge is selected.
-                            </p>
+
+                          {requiresJudge && (
+                            <aside className={styles.ev__judge}>
+                              <div className={styles['ev__judge-head']}>
+                                <p className={styles['ev__judge-title']}>
+                                  <Gavel size={13} /> Judge model
+                                </p>
+                                <p className={styles['ev__judge-sub']}>
+                                  Required — the LLM_Judge metric needs a model to grade open-ended answers.
+                                </p>
+                              </div>
+                              <div className={styles['ev__judge-scroll']}>
+                                {models.filter((m) => m.is_active).length === 0 ? (
+                                  <div className={styles['ev__judge-empty']}>No models available yet.</div>
+                                ) : (
+                                  models
+                                    .filter((m) => m.is_active)
+                                    .map((m) => {
+                                      const on = draft.judgeModelId === m.id;
+                                      return (
+                                        <button
+                                          key={m.id}
+                                          type="button"
+                                          className={`${styles['ev__judge-row']} ${on ? styles['ev__judge-row--on'] : ''}`}
+                                          onClick={() => dispatch(setDraft({ judgeModelId: on ? undefined : m.id }))}
+                                        >
+                                          <span className={`${styles.ev__radio} ${on ? styles['ev__radio--on'] : ''}`} />
+                                          <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+                                            <span className={styles['ev__judge-name']}>{m.name}</span>
+                                            <span className={styles['ev__judge-meta']}>
+                                              {providers.find((p) => p.id === m.provider_id)?.name ?? m.provider_id}
+                                            </span>
+                                          </span>
+                                        </button>
+                                      );
+                                    })
+                                )}
+                              </div>
+                              {!draft.judgeModelId && (
+                                <p className={styles['ev__judge-required']}>
+                                  Select a judge model to continue — it's mandatory when LLM_Judge is selected.
+                                </p>
+                              )}
+                            </aside>
                           )}
-                        </aside>
+                        </div>
                       )}
-                    </div>
+                    </>
                   )}
 
                   {/* STEP 6 — REVIEW */}
@@ -1097,7 +1237,7 @@ export default function NewEvaluation() {
                           <div className={styles['ev__summary-k']}>
                             <Target size={11} /> Metrics
                           </div>
-                          <div className={styles['ev__summary-v']}>{draft.selMetrics.length}</div>
+                          <div className={styles['ev__summary-v']}>{modelHidesMetrics ? '—' : draft.selMetrics.length}</div>
                         </div>
                       </div>
 
@@ -1180,22 +1320,24 @@ export default function NewEvaluation() {
                         </div>
                       </div>
 
-                      <div className={styles.ev__block}>
-                        <p className={styles['ev__block-title']}>
-                          <Target size={11} /> Metrics <b>({draft.selMetrics.length})</b>
-                        </p>
-                        {draft.selMetrics.length > 0 ? (
-                          <div className={styles['ev__metric-tags']}>
-                            {draft.selMetrics.map((m) => (
-                              <span key={m} className={styles['ev__metric-tag']}>
-                                {m}
-                              </span>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className={styles.ev__empty}>No metrics selected.</p>
-                        )}
-                      </div>
+                      {!modelHidesMetrics && (
+                        <div className={styles.ev__block}>
+                          <p className={styles['ev__block-title']}>
+                            <Target size={11} /> Metrics <b>({draft.selMetrics.length})</b>
+                          </p>
+                          {draft.selMetrics.length > 0 ? (
+                            <div className={styles['ev__metric-tags']}>
+                              {draft.selMetrics.map((m) => (
+                                <span key={m} className={styles['ev__metric-tag']}>
+                                  {m}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className={styles.ev__empty}>No metrics selected.</p>
+                          )}
+                        </div>
+                      )}
 
                       {requiresJudge && (
                         <div className={styles.ev__block}>
@@ -1272,6 +1414,14 @@ export default function NewEvaluation() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
 
 
 
@@ -2474,6 +2624,12 @@ $ring:  0 0 0 3px rgba(43, 43, 245, 0.16);
   }
 
   &__rail-head { flex-shrink: 0; padding: 15px 16px 13px; border-bottom: 1px solid $line; }
+  &__rail-head-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
   &__rail-title {
     display: flex;
     align-items: center;
@@ -2484,6 +2640,11 @@ $ring:  0 0 0 3px rgba(43, 43, 245, 0.16);
     letter-spacing: -0.01em;
     color: $ink;
     svg { color: $signal; }
+  }
+  &__rail-actions {
+    flex-shrink: 0;
+    display: flex;
+    gap: 10px;
   }
   &__rail-sub { margin-top: 4px; font-size: 0.71875rem; color: $ink-3; line-height: 1.45; }
 
