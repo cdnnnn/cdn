@@ -432,22 +432,23 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
     display: flex;
     flex-wrap: nowrap;
     align-items: center;
+    justify-content: flex-start;
     gap: 6px;
     margin-top: 13px;
   }
 
   &__foot-btn {
-    flex: 1 1 0;
-    min-width: 0;
+    flex: 0 0 auto;
+    width: 82px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 5px;
-    padding: 6px 8px;
+    gap: 4px;
+    padding: 6px 4px;
     border-radius: 8px;
     border: 1px solid transparent;
     font-family: $sans;
-    font-size: 0.75rem;
+    font-size: 0.71875rem;
     font-weight: 650;
     white-space: nowrap;
     overflow: hidden;
