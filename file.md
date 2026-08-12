@@ -25,7 +25,6 @@ import {
   HeartPulse,
   ShieldCheck,
   ShieldAlert,
-  Sparkles,
   type LucideIcon,
 } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
@@ -162,13 +161,10 @@ export default function NewEvaluation() {
   const models = useAppSelector((s) => s.models.items) ?? [];
   const healthById = useAppSelector((s) => (s.models as any).healthById) as Record<string, HealthStatus> | undefined;
 
-  const metricsState = useAppSelector((s) => s.metrics) ?? { metrics: [], allMetrics: [], status: 'idle' as const, error: null };
-  // `allMetrics` (from the API's `all_metrics`) is the FULL catalog and is
-  // what gets rendered as selectable chips. `metrics` (from the API's
-  // `metrics`) is the type's recommended subset — used only to pre-select
-  // defaults and to badge those chips as "Recommended".
+  const metricsState = useAppSelector((s) => s.metrics) ?? { allMetrics: [], status: 'idle' as const, error: null };
+  // Only `all_metrics` from the API response is used — it's the full
+  // catalog rendered as selectable chips. The `metrics` field is ignored.
   const metricsCatalog: string[] = (metricsState as any).allMetrics ?? [];
-  const suggestedMetrics: string[] = (metricsState as any).metrics ?? [];
   const metricsLoading = (metricsState as any).status === 'loading';
 
   const datasets = useAppSelector((s) => s.datasets.items) ?? [];
@@ -203,26 +199,13 @@ export default function NewEvaluation() {
 
   // GET /metrics?eval_type={type} — fetched only once a type is chosen in
   // Step 2, and re-fetched whenever the user changes type. Any metrics
-  // selected under the previous type are cleared first, then re-seeded
-  // with the API's `metrics` (recommended) subset once the fetch resolves —
-  // the user can still add/remove from the full `all_metrics` catalog.
+  // selected under the previous type are cleared, since they may not be
+  // valid for the new type. Only the response's `all_metrics` field is
+  // consumed (see metricsCatalog above) — `metrics` is ignored entirely.
   useEffect(() => {
     if (!draft.eval_type) return;
+    dispatch(fetchMetrics(draft.eval_type.toLowerCase()));
     dispatch(setDraft({ selMetrics: [] }));
-
-    let cancelled = false;
-    (async () => {
-      const result = await dispatch(fetchMetrics(draft.eval_type.toLowerCase()));
-      if (cancelled) return;
-      if (fetchMetrics.fulfilled.match(result)) {
-        const recommended = (result.payload as any)?.metrics ?? [];
-        dispatch(setDraft({ selMetrics: recommended }));
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dispatch, draft.eval_type]);
 
@@ -1000,25 +983,17 @@ export default function NewEvaluation() {
                           {!metricsLoading &&
                             metricsCatalog.map((name: string) => {
                               const on = draft.selMetrics.includes(name);
-                              const recommended = suggestedMetrics.includes(name);
                               return (
                                 <button
                                   key={name}
                                   type="button"
                                   className={`${styles.ev__chip} ${on ? styles['ev__chip--on'] : ''}`}
                                   onClick={() => dispatch(setDraft({ selMetrics: toggle(draft.selMetrics, name) }))}
-                                  title={recommended ? 'Recommended for this evaluation type' : undefined}
                                 >
-                                  {on ? (
+                                  {on && (
                                     <span className={styles['ev__chip-tick']}>
                                       <Check size={12} strokeWidth={3} />
                                     </span>
-                                  ) : (
-                                    recommended && (
-                                      <span className={styles['ev__chip-tick']}>
-                                        <Sparkles size={12} />
-                                      </span>
-                                    )
                                   )}
                                   {name}
                                 </button>
