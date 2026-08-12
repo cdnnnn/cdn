@@ -1,8 +1,8 @@
 //History.tsx
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  Search, Sparkles, Bot, Layers, Loader2, Download,
+  Search, Sparkles, Bot, Layers, Loader2, Download, ChevronDown, ChevronRight,
   Award, ListChecks, Clock, History as HistoryIcon, SlidersHorizontal, CalendarDays, X,
 } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
@@ -59,6 +59,7 @@ export default function History() {
   const [typeFilter, setTypeFilter] = useState('All');
   const [dateFilter, setDateFilter] = useState('all');
   const [activeFilter, setActiveFilter] = useState<'search' | 'type' | 'date' | null>(null);
+  const [expandedModelId, setExpandedModelId] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const toggleFilter = (key: 'search' | 'type' | 'date') => {
@@ -90,8 +91,11 @@ export default function History() {
 
   const selected = list.find((e) => e.id === selectedId) || filtered[0] || null;
 
-  // Keyed on id + status (not the whole object) so a background poll that
-  // doesn't change either doesn't re-trigger the results fetch (spec §2.4).
+  // Handles the initial/default selection (mount, or URL navigation to an
+  // id we haven't fetched yet). Explicit row clicks trigger their own fetch
+  // in selectRow below regardless of cache, so this only needs to cover the
+  // "selection changed without a click" case — hence the cache guard stays
+  // here, but not in selectRow.
   useEffect(() => {
     if (selected && selected.status === 'completed' && !resultsByEvalId[selected.id]) {
       dispatch(fetchEvaluationResults(selected.id));
@@ -99,7 +103,17 @@ export default function History() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id, selected?.status]);
 
-  const selectRow = (id: string) => setSearchParams({ id });
+  // Re-fetches on every click, including re-clicking the already-selected
+  // row — results can change server-side (e.g. a report finishing after the
+  // eval completed), so cached data shouldn't block a manual refresh.
+  const selectRow = (id: string) => {
+    setSearchParams({ id });
+    setExpandedModelId(null);
+    const clicked = list.find((e) => e.id === id);
+    if (clicked && clicked.status === 'completed') {
+      dispatch(fetchEvaluationResults(id));
+    }
+  };
 
   const modelName = (id: string) => models.find((m) => m.id === id)?.name || id;
   const providerName = (id: string) => {
@@ -372,44 +386,123 @@ export default function History() {
 
                 {selected.status === 'completed' ? (
                   <>
-                    {resultsStatus === 'loading' && (
+                    {resultsStatus === 'loading' && !results && (
                       <div className={styles.empty}>
                         <Loader2 size={16} className={styles.spin} /> Loading results…
                       </div>
                     )}
-                    {resultsStatus === 'failed' && <div className={styles.empty}>{resultsError}</div>}
+                    {resultsStatus === 'failed' && !results && <div className={styles.empty}>{resultsError}</div>}
                     {results && (
-                      <div className={styles.results}>
-                        <table className={styles['results-table']}>
-                          <thead>
-                            <tr>
-                              <th>Rank</th>
-                              <th>Model</th>
-                              <th>Provider</th>
-                              <th>Score</th>
-                              <th>Accuracy</th>
-                              <th>Passed</th>
-                              <th>Failed</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {results.results.map((r) => (
-                              <tr key={r.model_id} className={r.rank === 1 ? styles.winner : ''}>
-                                <td className={styles['cell-rank']}>
-                                  {r.rank === 1 ? '🏆 ' : ''}
-                                  {r.rank}
-                                </td>
-                                <td className={styles['cell-model']}>{modelName(r.model_id)}</td>
-                                <td className={styles['cell-provider']}>{providerName(r.model_id)}</td>
-                                <td className={styles['cell-num']}>{r.score}%</td>
-                                <td className={`${styles['cell-num']} ${styles['cell-num--muted']}`}>{r.accuracy}%</td>
-                                <td className={styles['cell-pass']}>{r.passed_tests}</td>
-                                <td className={styles['cell-fail']}>{r.failed_tests}</td>
+                      <>
+                        {/* Extra fields from GET /evaluations/{id}/results — benchmark,
+                            dataset, metrics tested, and when the run actually started. */}
+                        <div className={styles['meta-strip']}>
+                          {results.benchmark && (
+                            <div className={styles['meta-strip__item']}>
+                              <span className={styles['meta-strip__label']}>Benchmark</span>
+                              <span className={styles['meta-strip__val']}>{results.benchmark}</span>
+                            </div>
+                          )}
+                          {results.dataset_id && (
+                            <div className={styles['meta-strip__item']}>
+                              <span className={styles['meta-strip__label']}>Dataset</span>
+                              <span className={styles['meta-strip__val']}>{results.dataset_id}</span>
+                            </div>
+                          )}
+                          {results.started_at && (
+                            <div className={styles['meta-strip__item']}>
+                              <span className={styles['meta-strip__label']}>Started</span>
+                              <span className={styles['meta-strip__val']}>{new Date(results.started_at).toLocaleString()}</span>
+                            </div>
+                          )}
+                          {results.selected_metrics.length > 0 && (
+                            <div className={styles['meta-strip__item']}>
+                              <span className={styles['meta-strip__label']}>Metrics tested</span>
+                              <span className={styles['meta-strip__chips']}>
+                                {results.selected_metrics.map((m) => (
+                                  <span key={m} className={styles['type-tag']}>{m}</span>
+                                ))}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className={styles.results}>
+                          <table className={styles['results-table']}>
+                            <thead>
+                              <tr>
+                                <th />
+                                <th>Rank</th>
+                                <th>Model</th>
+                                <th>Provider</th>
+                                <th>Score</th>
+                                <th>Accuracy</th>
+                                <th>Passed</th>
+                                <th>Failed</th>
                               </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
+                            </thead>
+                            <tbody>
+                              {results.results.map((r) => {
+                                const isExpanded = expandedModelId === r.model_id;
+                                return (
+                                  <Fragment key={r.model_id}>
+                                    <tr
+                                      className={`${r.rank === 1 ? styles.winner : ''} ${styles['row-clickable']}`}
+                                      onClick={() => setExpandedModelId(isExpanded ? null : r.model_id)}
+                                    >
+                                      <td className={styles['cell-expand']}>
+                                        {r.details?.length > 0 && (isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />)}
+                                      </td>
+                                      <td className={styles['cell-rank']}>
+                                        {r.rank === 1 ? '🏆 ' : ''}
+                                        {r.rank}
+                                      </td>
+                                      <td className={styles['cell-model']}>{modelName(r.model_id)}</td>
+                                      <td className={styles['cell-provider']}>{r.provider || providerName(r.model_id)}</td>
+                                      <td className={styles['cell-num']}>{r.score}%</td>
+                                      <td className={`${styles['cell-num']} ${styles['cell-num--muted']}`}>{r.accuracy}%</td>
+                                      <td className={styles['cell-pass']}>{r.passed_tests}</td>
+                                      <td className={styles['cell-fail']}>{r.failed_tests}</td>
+                                    </tr>
+                                    {isExpanded && r.details?.length > 0 && (
+                                      <tr className={styles['details-row']}>
+                                        <td colSpan={8}>
+                                          <table className={styles['details-table']}>
+                                            <thead>
+                                              <tr>
+                                                <th>Task</th>
+                                                <th>Input</th>
+                                                <th>Expected</th>
+                                                <th>Actual</th>
+                                                <th>Result</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody>
+                                              {r.details.map((d, i) => (
+                                                <tr key={`${r.model_id}-${i}`}>
+                                                  <td>{d.task}</td>
+                                                  <td className={styles['details-cell--wrap']}>{d.input}</td>
+                                                  <td className={styles['details-cell--wrap']}>{d.expected_output}</td>
+                                                  <td className={styles['details-cell--wrap']}>{d.actual_output}</td>
+                                                  <td>
+                                                    <span className={d.passed ? styles['cell-pass'] : styles['cell-fail']}>
+                                                      {d.passed ? 'Passed' : 'Failed'}
+                                                    </span>
+                                                  </td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </Fragment>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </>
                     )}
                   </>
                 ) : (
@@ -436,6 +529,303 @@ export default function History() {
 
 
 
+
+
+
+
+
+
+
+
+//index.ts
+// ---------- Auth ----------
+export interface SsoLoginRequest {
+  token: string;
+  data: string;
+}
+export interface SsoLoginResult {
+  token: string;
+  username: string;
+  email: string;
+  language: string;
+  profile_name: string;
+}
+export interface SsoLoginResponse {
+  status: string;
+  message: string;
+  result: SsoLoginResult;
+}
+
+// ---------- Providers ----------
+export interface Provider {
+  id: string;
+  name: string;
+  description: string;
+  logo_url: string | null;
+  base_url: string | null;
+  url_template: string | null;
+  model_count: number;
+  status: 'connected' | 'not_connected' | string;
+}
+export interface ConnectProviderRequest {
+  api_key: string;
+}
+export interface ConnectProviderResponse {
+  status: 'connected';
+  provider_id: string;
+  models_synced: number;
+}
+export interface DisconnectProviderResponse {
+  status: 'disconnected';
+  provider_id: string;
+}
+
+// ---------- Models ----------
+export interface Model {
+  id: string;
+  name: string;
+  provider_id: string;
+  category: string;
+  capabilities: string[];
+  context_window: number;
+  input_price: number | null;
+  output_price: number | null;
+  accuracy_score: number | null;
+  agent_score: number | null;
+  is_active: boolean;
+  base_url: string | null;
+}
+export interface CustomModelRequest {
+  base_url: string;
+  category: string;
+  api_key: string;
+  model_id: string;
+  name: string;
+  context_window: number;
+  description: string;
+}
+
+// ---------- Benchmarks ----------
+export interface BenchmarkTask {
+  name: string;
+  value: string;
+}
+export interface Benchmark {
+  name: string;
+  description: string;
+  // ⚠️ Not always present on the real API response — normalized to [] at the
+  // fetch boundary (benchmarksApi.list), so consumers can trust these are
+  // always arrays. See spec §5 "Known data-contract gap".
+  tasks: BenchmarkTask[];
+  task_count: number;
+  required_capabilities: string[];
+  huggingface_dataset: string;
+  type: string;
+}
+export interface BenchmarksResponse {
+  benchmarks: Benchmark[];
+  total: number;
+}
+
+// ---------- Metrics ----------
+export interface MetricsResponse {
+  all_metrics: string[];
+  custom_agent_metrics: string[];
+}
+
+// ---------- Evaluations: create/start ----------
+export interface JudgeConfig {
+  model_id: string;
+  base_url: string;
+  // NOTE: populated with the judge model's own id, not a real credential —
+  // the Judge API Key field was removed from the UI entirely (spec §1.4).
+  api_key: string;
+}
+export interface CreateEvaluationRequest {
+  name: string;
+  description?: string;
+  eval_type: 'model' | 'agent' | 'rag' | string;
+  dataset_id: string;
+  benchmark?: string;
+  model_ids: string[];
+  metrics_config?: Record<string, unknown>;
+  selected_metrics: string[];
+  dataset_limit?: number;
+  run_samples: number;
+  selected_category?: string[];
+  judge_config?: JudgeConfig;
+}
+export interface CreateEvaluationResponse {
+  id?: string;
+  evaluation_id?: string;
+  [key: string]: unknown;
+}
+
+// ---------- Evaluations: list (History) ----------
+export type EvaluationStatusValue = 'pending' | 'running' | 'completed' | 'failed' | 'canceled';
+
+// Nested summary of the report generated for this evaluation, if any.
+// Only present once the backend has created a report row for the eval —
+// absent/undefined while the eval is still pending/running with no report yet.
+export interface EvaluationReportSummary {
+  report_id: string;
+  title: string;
+  status: string;
+  created_at: string;
+}
+
+export interface EvaluationListItem {
+  id: string;
+  name: string;
+  description: string;
+  eval_type: string;
+  dataset_id: string;
+  datasets_config: { dataset_id: string }[];
+  benchmark: string;
+  model_ids: string[];
+  selected_metrics: string[];
+  run_samples: number;
+  selected_category: string[];
+  status: EvaluationStatusValue;
+  progress: number;
+  total_questions: number;
+  top_model: string | null;
+  top_score: number | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  // Present once a report has been generated for this evaluation (spec: new
+  // "download from History" requirement). When `report.report_id` is set,
+  // History should offer the same download options as the Reports page.
+  report?: EvaluationReportSummary | null;
+}
+export interface EvaluationsListResponse {
+  evaluations: EvaluationListItem[];
+}
+
+// ---------- Evaluations: results ----------
+export interface TestDetail {
+  task: string;
+  input: string;
+  expected_output: string;
+  actual_output: string;
+  passed: boolean;
+}
+export interface ModelResult {
+  model_id: string;
+  provider: string | null;
+  rank: number;
+  score: number;
+  accuracy: number;
+  passed_tests: number;
+  failed_tests: number;
+  // Normalized from the API's `total_test` (singular) at the fetch boundary
+  // (evaluationsApi.results) — see benchmarksApi.list for the same pattern.
+  total_tests: number;
+  metric_scores: Record<string, number>;
+  details: TestDetail[];
+}
+export interface EvaluationResultsResponse {
+  evaluation_id: string;
+  name: string;
+  eval_type: string;
+  dataset_id: string;
+  benchmark: string;
+  model_ids: string[];
+  selected_metrics: string[];
+  status: EvaluationStatusValue;
+  total_questions: number;
+  top_model: string;
+  top_score: number;
+  started_at: string | null;
+  results: ModelResult[];
+}
+
+// UI-only draft built up across the wizard's 7 steps (spec §6).
+export interface EvaluationDraft {
+  name: string;
+  type: 'model' | 'agent' | 'rag' | null;
+  providers: string[];
+  models: string[];
+  dataset: string | null;
+  subgroup: string[];
+  runSamples: number; // default 10
+  metrics: string[];
+  judgeModelId: string | null;
+  // judgeApiKey intentionally omitted — no longer collected (spec §1.4)
+  agentFramework: string | null;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Evaluations.ts
+import api from '../axiosInstance';
+import type {
+  CreateEvaluationRequest,
+  CreateEvaluationResponse,
+  EvaluationsListResponse,
+  EvaluationResultsResponse,
+  ModelResult,
+} from '../../types';
+
+export const evaluationsApi = {
+  // Populates the History sidebar list. Called on mount and every 10s
+  // (silent poll) — see History.tsx.
+  list: () => api.get<EvaluationsListResponse>('/evaluations').then((r) => r.data.evaluations),
+
+  create: (payload: CreateEvaluationRequest) =>
+    api.post<CreateEvaluationResponse>('/evaluations', payload).then((r) => r.data),
+
+  start: (evaluationId: string) =>
+    api.post<void>(`/evaluations/${evaluationId}/start`).then(() => undefined),
+
+  // Only ever called when the selected evaluation's status === 'completed'.
+  // The backend returns 400 with { detail: "Execution not completed." } if
+  // called too early — callers should surface err.response.data.detail.
+  //
+  // The API sends the per-model field as `total_test` (singular) — normalized
+  // to `total_tests` here so the rest of the app can rely on one name (same
+  // normalize-at-the-boundary pattern as benchmarksApi.list's `tasks`).
+  results: (evaluationId: string) =>
+    api.get<EvaluationResultsResponse>(`/evaluations/${evaluationId}/results`).then((r) => ({
+      ...r.data,
+      results: r.data.results.map((m) => {
+        const raw = m as unknown as ModelResult & { total_test?: number };
+        return { ...raw, total_tests: raw.total_tests ?? raw.total_test ?? 0 };
+      }),
+    })),
+
+  // Convenience helper used by the wizard's "Start Evaluation" (step 7):
+  // create, then immediately start.
+  createAndStart: async (payload: CreateEvaluationRequest) => {
+    const created = await evaluationsApi.create(payload);
+    const id = created.id || created.evaluation_id;
+    if (!id) {
+      throw new Error('Evaluation was created but no id was returned by the server.');
+    }
+    await evaluationsApi.start(id);
+    return id;
+  },
+};
 
 
 
@@ -1022,6 +1412,85 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
   margin-top: 3px;
 }
 
+// ---- results metadata strip (benchmark / dataset / started / metrics) ------
+.meta-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  background: $paper;
+  border: 1px solid $line;
+  border-radius: 12px;
+}
+.meta-strip__item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.meta-strip__label {
+  @extend %micro;
+  font-size: 0.5625rem;
+  color: $ink-3;
+}
+.meta-strip__val {
+  font-family: $mono;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: $ink;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meta-strip__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+// ---- expandable per-model test details --------------------------------
+.row-clickable { cursor: pointer; }
+.cell-expand {
+  width: 20px;
+  color: $ink-3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 14px !important;
+}
+.details-row {
+  background: $paper;
+  &:hover { background: $paper; }
+}
+.details-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78125rem;
+  margin: 4px 0;
+
+  thead th {
+    text-align: left;
+    @extend %micro;
+    font-size: 0.5rem;
+    color: $ink-3;
+    padding: 6px 10px;
+    white-space: nowrap;
+  }
+
+  tbody tr { border-top: 1px solid $line-2; }
+  tbody td {
+    padding: 8px 10px;
+    color: $ink-2;
+    vertical-align: top;
+  }
+}
+.details-cell--wrap {
+  max-width: 260px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 // ---- results table ---------------------------------------------------------
 .results {
   border: 1px solid $line;
@@ -1097,234 +1566,4 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
 @media (max-width: 640px) {
   .history__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
   .pg-body-fixed { padding: 16px 18px 22px; }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//index.ts
-// ---------- Auth ----------
-export interface SsoLoginRequest {
-  token: string;
-  data: string;
-}
-export interface SsoLoginResult {
-  token: string;
-  username: string;
-  email: string;
-  language: string;
-  profile_name: string;
-}
-export interface SsoLoginResponse {
-  status: string;
-  message: string;
-  result: SsoLoginResult;
-}
-
-// ---------- Providers ----------
-export interface Provider {
-  id: string;
-  name: string;
-  description: string;
-  logo_url: string | null;
-  base_url: string | null;
-  url_template: string | null;
-  model_count: number;
-  status: 'connected' | 'not_connected' | string;
-}
-export interface ConnectProviderRequest {
-  api_key: string;
-}
-export interface ConnectProviderResponse {
-  status: 'connected';
-  provider_id: string;
-  models_synced: number;
-}
-export interface DisconnectProviderResponse {
-  status: 'disconnected';
-  provider_id: string;
-}
-
-// ---------- Models ----------
-export interface Model {
-  id: string;
-  name: string;
-  provider_id: string;
-  category: string;
-  capabilities: string[];
-  context_window: number;
-  input_price: number | null;
-  output_price: number | null;
-  accuracy_score: number | null;
-  agent_score: number | null;
-  is_active: boolean;
-  base_url: string | null;
-}
-export interface CustomModelRequest {
-  base_url: string;
-  category: string;
-  api_key: string;
-  model_id: string;
-  name: string;
-  context_window: number;
-  description: string;
-}
-
-// ---------- Benchmarks ----------
-export interface BenchmarkTask {
-  name: string;
-  value: string;
-}
-export interface Benchmark {
-  name: string;
-  description: string;
-  // ⚠️ Not always present on the real API response — normalized to [] at the
-  // fetch boundary (benchmarksApi.list), so consumers can trust these are
-  // always arrays. See spec §5 "Known data-contract gap".
-  tasks: BenchmarkTask[];
-  task_count: number;
-  required_capabilities: string[];
-  huggingface_dataset: string;
-  type: string;
-}
-export interface BenchmarksResponse {
-  benchmarks: Benchmark[];
-  total: number;
-}
-
-// ---------- Metrics ----------
-export interface MetricsResponse {
-  all_metrics: string[];
-  custom_agent_metrics: string[];
-}
-
-// ---------- Evaluations: create/start ----------
-export interface JudgeConfig {
-  model_id: string;
-  base_url: string;
-  // NOTE: populated with the judge model's own id, not a real credential —
-  // the Judge API Key field was removed from the UI entirely (spec §1.4).
-  api_key: string;
-}
-export interface CreateEvaluationRequest {
-  name: string;
-  description?: string;
-  eval_type: 'model' | 'agent' | 'rag' | string;
-  dataset_id: string;
-  benchmark?: string;
-  model_ids: string[];
-  metrics_config?: Record<string, unknown>;
-  selected_metrics: string[];
-  dataset_limit?: number;
-  run_samples: number;
-  selected_category?: string[];
-  judge_config?: JudgeConfig;
-}
-export interface CreateEvaluationResponse {
-  id?: string;
-  evaluation_id?: string;
-  [key: string]: unknown;
-}
-
-// ---------- Evaluations: list (History) ----------
-export type EvaluationStatusValue = 'pending' | 'running' | 'completed' | 'failed' | 'canceled';
-
-// Nested summary of the report generated for this evaluation, if any.
-// Only present once the backend has created a report row for the eval —
-// absent/undefined while the eval is still pending/running with no report yet.
-export interface EvaluationReportSummary {
-  report_id: string;
-  title: string;
-  status: string;
-  created_at: string;
-}
-
-export interface EvaluationListItem {
-  id: string;
-  name: string;
-  description: string;
-  eval_type: string;
-  dataset_id: string;
-  datasets_config: { dataset_id: string }[];
-  benchmark: string;
-  model_ids: string[];
-  selected_metrics: string[];
-  run_samples: number;
-  selected_category: string[];
-  status: EvaluationStatusValue;
-  progress: number;
-  total_questions: number;
-  top_model: string | null;
-  top_score: number | null;
-  created_at: string;
-  started_at: string | null;
-  completed_at: string | null;
-  // Present once a report has been generated for this evaluation (spec: new
-  // "download from History" requirement). When `report.report_id` is set,
-  // History should offer the same download options as the Reports page.
-  report?: EvaluationReportSummary | null;
-}
-export interface EvaluationsListResponse {
-  evaluations: EvaluationListItem[];
-}
-
-// ---------- Evaluations: results ----------
-export interface TestDetail {
-  test_id: string;
-  input: string;
-  output: string;
-  expected: string;
-  latency_seconds: number;
-  passed: boolean;
-  score: number;
-  metric_scores: Record<string, number>;
-}
-export interface ModelResult {
-  model_id: string;
-  provider: string;
-  rank: number;
-  score: number;
-  accuracy: number;
-  passed_tests: number;
-  failed_tests: number;
-  total_tests: number;
-  metric_scores: Record<string, number>;
-  details: TestDetail[];
-}
-export interface EvaluationResultsResponse {
-  evaluation_id: string;
-  status: EvaluationStatusValue;
-  top_model: string;
-  top_score: number;
-  results: ModelResult[];
-}
-
-// UI-only draft built up across the wizard's 7 steps (spec §6).
-export interface EvaluationDraft {
-  name: string;
-  type: 'model' | 'agent' | 'rag' | null;
-  providers: string[];
-  models: string[];
-  dataset: string | null;
-  subgroup: string[];
-  runSamples: number; // default 10
-  metrics: string[];
-  judgeModelId: string | null;
-  // judgeApiKey intentionally omitted — no longer collected (spec §1.4)
-  agentFramework: string | null;
 }
