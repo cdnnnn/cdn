@@ -1,294 +1,232 @@
-import { useEffect, useState } from 'react';
-import { Search, Check, Plus, Settings, Unlink, Loader2, Cable, Trash2, RefreshCw, Eye, ListPlus, ListFilter } from 'lucide-react';
-import { useAppDispatch, useAppSelector } from '../../hooks/redux';
-import {
-  fetchProviders,
-  createProvider,
-  deleteProvider,
-  connectProvider,
-  disconnectProvider,
-  syncModels,
-} from '../../store/slices/providersSlice';
-import { fetchModelsByProvider, createCustomModel } from '../../store/slices/modelsSlice';
-import AddProviderDrawer from './AddProviderDrawer';
-import AddCustomModelDrawer from './AddCustomModelDrawer';
-import ProviderModelsSidebar from './ProviderModelsSidebar';
-import { SkeletonCards } from '../common/Skeleton';
-import styles from './Providers.module.scss';
-import type { Provider } from '../../types';
+//Evaluationsslice.ts
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import type { PayloadAction } from '@reduxjs/toolkit';
+import { evaluationsApi } from '../../api/endpoints/evaluations';
+import type { AgentBenchmarkRunMultiRequest, AgentBenchmarkRunRequest } from '../../api/endpoints/evaluations';
+import type {
+  CreateEvaluationRequest,
+  EvaluationDraft,
+  EvaluationListItem,
+  EvaluationResultsResponse,
+} from '../../types';
 
-type Filter = 'all' | 'connected' | 'available';
+type AsyncStatus = 'idle' | 'loading' | 'succeeded' | 'failed';
 
-const FILTERS: Filter[] = ['all', 'connected', 'available'];
+interface EvaluationsState {
+  draft: EvaluationDraft;
 
-export default function Providers() {
-  const dispatch = useAppDispatch();
-  const { items, status, mutatingId, creating, syncingId } = useAppSelector((s) => s.providers);
-  const modelsByProvider = useAppSelector((s) => s.models.byProvider);
-  const modelsByProviderStatus = useAppSelector((s) => s.models.byProviderStatus);
-  const customModelCreating = useAppSelector((s) => s.models.creating);
-  const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState<Filter>('all');
-  const [keyPromptFor, setKeyPromptFor] = useState<string | null>(null);
-  const [apiKeyInput, setApiKeyInput] = useState('');
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [addModelOpen, setAddModelOpen] = useState(false);
-  const [viewModelsProvider, setViewModelsProvider] = useState<Provider | null>(null);
+  // History list (GET /evaluations) — silently re-fetched every 10s from
+  // History.tsx. `listStatus` only gates the *initial* loading/error UI;
+  // components should check `list.length === 0` alongside it so a failed
+  // background poll never shows a spinner/error over existing data (spec §2.4).
+  list: EvaluationListItem[];
+  listStatus: AsyncStatus;
+  listError: string | null;
 
-  useEffect(() => {
-    dispatch(fetchProviders());
-  }, [dispatch]);
+  // Per-evaluation results (GET /evaluations/{id}/results), fetched lazily
+  // and only once status === 'completed' (spec §2.3).
+  resultsByEvalId: Record<string, EvaluationResultsResponse>;
+  resultsStatusByEvalId: Record<string, AsyncStatus>;
+  resultsErrorByEvalId: Record<string, string | null>;
 
-  const connectedCount = items.filter((p) => p.status === 'connected').length;
+  launching: boolean;
+  launchError: string | null;
+}
 
-  const filtered = items.filter((p) => {
-    if (filter === 'connected' && p.status !== 'connected') return false;
-    if (filter === 'available' && p.status === 'connected') return false;
-    return !search || p.name.toLowerCase().includes(search.toLowerCase());
-  });
+const initialDraft: EvaluationDraft = {
+  name: '',
+  type: null,
+  providers: [],
+  models: [],
+  dataset: null,
+  subgroup: [],
+  runSamplesMode: 'custom',
+  runSamples: 10,
+  metrics: [],
+  judgeModelId: null,
+  agentFramework: null,
+};
 
-  const submitConnect = (providerId: string) => {
-    if (!apiKeyInput.trim()) return;
-    dispatch(connectProvider({ providerId, payload: { api_key: apiKeyInput } }));
-    setKeyPromptFor(null);
-    setApiKeyInput('');
-  };
+const initialState: EvaluationsState = {
+  draft: initialDraft,
+  list: [],
+  listStatus: 'idle',
+  listError: null,
+  resultsByEvalId: {},
+  resultsStatusByEvalId: {},
+  resultsErrorByEvalId: {},
+  launching: false,
+  launchError: null,
+};
 
-  const openModelsSidebar = (p: Provider) => {
-    setViewModelsProvider(p);
-    dispatch(fetchModelsByProvider(p.id));
-  };
+export const fetchEvaluations = createAsyncThunk('evaluations/fetchList', () => evaluationsApi.list());
 
-  const customProvider = items.find((p) => p.name === 'Custom') || null;
+export const fetchEvaluationResults = createAsyncThunk(
+  'evaluations/fetchResults',
+  async (evaluationId: string, { rejectWithValue }) => {
+    try {
+      const data = await evaluationsApi.results(evaluationId);
+      return { evaluationId, data };
+    } catch (err) {
+      const detail =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        (err as Error)?.message ||
+        'Failed to load results';
+      return rejectWithValue({ evaluationId, message: detail });
+    }
+  }
+);
 
+// Shared across all three launch thunks below (and fetchEvaluationResults
+// above) — the backend's error body on 4xx responses is { detail: string },
+// so that's what should end up in state.launchError, not axios's generic
+// "Request failed with status code 400".
+function extractErrorDetail(err: unknown, fallback: string): string {
   return (
-    <div className="page-enter pg-shell">
-      <div className={styles.providers__header}>
-        <div>
-          <p className={styles['providers__header-eyebrow']}>Integrations</p>
-          <h1>Providers</h1>
-          <p className={styles['providers__header-sub']}>Manage your AI provider connections</p>
-        </div>
-        <div className={styles['providers__header-meta']}>
-          <Cable size={13} />
-          {connectedCount} of {items.length} connected
-        </div>
-      </div>
-
-      <div className={styles['providers__toolbar']}>
-        <div className={styles['providers__search']}>
-          <Search size={16} />
-          <input placeholder="Search providers…" value={search} onChange={(e) => setSearch(e.target.value)} />
-        </div>
-
-        <div className={styles['providers__toolbar-right']}>
-          <div className={styles['providers__filter-group']}>
-            <span className={styles['providers__toolbar-label']}>
-              <ListFilter size={11} /> Status
-            </span>
-            {FILTERS.map((f) => (
-              <button
-                key={f}
-                className={`${styles['providers__filter-pill']} ${filter === f ? styles['providers__filter-pill--on'] : ''}`}
-                onClick={() => setFilter(f)}
-              >
-                {f[0].toUpperCase() + f.slice(1)}
-              </button>
-            ))}
-          </div>
-          <span className={styles['providers__toolbar-divider']} />
-          <button className={styles['providers__add-btn']} onClick={() => setDrawerOpen(true)}>
-            <Plus size={14} /> Add Provider
-          </button>
-        </div>
-      </div>
-
-      <div className="pg-body">
-        <div className={styles['providers__grid']}>
-          {status === 'loading' && <SkeletonCards count={6} />}
-          {status !== 'loading' &&
-            filtered.map((p) => {
-              const isCustom = p.name === 'Custom';
-              return (
-                <div className={styles['providers__card']} key={p.id}>
-                  <div className={styles['providers__card-hdr']}>
-                    <div className={styles['providers__card-id']}>
-                      <div className={styles['providers__icon']}>
-                        {p.logo_url ? <img src={p.logo_url} alt={p.name} /> : p.name[0]}
-                      </div>
-                      <div style={{ minWidth: 0 }}>
-                        <div className={styles['providers__name']}>{p.name}</div>
-                        <div className={styles['providers__count']}>{p.model_count} models</div>
-                      </div>
-                    </div>
-                    <div className={styles['providers__card-top-actions']}>
-                      <button
-                        className={styles['providers__icon-btn']}
-                        onClick={() => openModelsSidebar(p)}
-                        title="View models"
-                        aria-label={`View models for ${p.name}`}
-                      >
-                        <Eye size={14} />
-                      </button>
-                      {p.status === 'connected' ? (
-                        <span className={styles['providers__badge-connected']}>
-                          <Check size={10} strokeWidth={3} /> Connected
-                        </span>
-                      ) : (
-                        <span className={styles['providers__badge-idle']}>Not connected</span>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className={styles['providers__desc']}>{p.description}</div>
-
-                  {keyPromptFor === p.id ? (
-                    <div className={styles['providers__key-form']}>
-                      <input
-                        className={styles['providers__key-input']}
-                        type="password"
-                        placeholder="Paste API key…"
-                        value={apiKeyInput}
-                        onChange={(e) => setApiKeyInput(e.target.value)}
-                        autoFocus
-                      />
-                      <div className={styles['providers__key-actions']}>
-                        <button
-                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--primary']}`}
-                          onClick={() => submitConnect(p.id)}
-                        >
-                          Save
-                        </button>
-                        <button
-                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--ghost']}`}
-                          onClick={() => setKeyPromptFor(null)}
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className={styles['providers__foot-actions']}>
-                      {isCustom && (
-                        <button
-                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--accent']}`}
-                          onClick={() => setAddModelOpen(true)}
-                        >
-                          <ListPlus size={13} /> Add Model
-                        </button>
-                      )}
-                      {p.status !== 'connected' && (
-                        <button
-                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--primary']}`}
-                          disabled={mutatingId === p.id}
-                          onClick={() => setKeyPromptFor(p.id)}
-                        >
-                          {mutatingId === p.id ? (
-                            <Loader2 size={13} className={styles['providers__spin']} />
-                          ) : (
-                            <>
-                              <Plus size={13} /> Connect
-                            </>
-                          )}
-                        </button>
-                      )}
-                      {/* Configure button temporarily disabled per request
-                      {p.status === 'connected' && (
-                        <button
-                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--ghost']}`}
-                          disabled={mutatingId === p.id}
-                          onClick={() => setKeyPromptFor(p.id)}
-                        >
-                          {mutatingId === p.id ? (
-                            <Loader2 size={13} className={styles['providers__spin']} />
-                          ) : (
-                            <>
-                              <Settings size={13} /> Configure
-                            </>
-                          )}
-                        </button>
-                      )}
-                      */}
-                      {p.status === 'connected' && (
-                        <>
-                          <button
-                            className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--ghost']}`}
-                            disabled={syncingId === p.id}
-                            onClick={() => dispatch(syncModels(p.id))}
-                          >
-                            {syncingId === p.id ? (
-                              <Loader2 size={13} className={styles['providers__spin']} />
-                            ) : (
-                              <>
-                                <RefreshCw size={13} /> Sync
-                              </>
-                            )}
-                          </button>
-                          <button
-                            className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--danger']}`}
-                            disabled={mutatingId === p.id}
-                            onClick={() => dispatch(disconnectProvider(p.id))}
-                          >
-                            <Unlink size={13} /> Disconnect
-                          </button>
-                        </>
-                      )}
-                      {p.status !== 'connected' && (
-                        <button
-                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--danger']}`}
-                          disabled={mutatingId === p.id}
-                          onClick={() => {
-                            if (window.confirm(`Delete ${p.name}? This cannot be undone.`)) {
-                              dispatch(deleteProvider(p.id));
-                            }
-                          }}
-                        >
-                          <Trash2 size={13} /> Delete
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          {status !== 'loading' && filtered.length === 0 && (
-            <p className={styles['providers__empty']}>No providers match your search or filter.</p>
-          )}
-        </div>
-      </div>
-
-      {drawerOpen && (
-        <AddProviderDrawer
-          submitting={creating}
-          onClose={() => setDrawerOpen(false)}
-          onSubmit={(payload) => {
-            dispatch(createProvider(payload)).then(() => setDrawerOpen(false));
-          }}
-        />
-      )}
-
-      {addModelOpen && customProvider && (
-        <AddCustomModelDrawer
-          submitting={customModelCreating}
-          onClose={() => setAddModelOpen(false)}
-          onSubmit={(payload) => {
-            dispatch(createCustomModel(payload)).then(() => {
-              setAddModelOpen(false);
-              dispatch(fetchProviders());
-              dispatch(fetchModelsByProvider(customProvider.id));
-            });
-          }}
-        />
-      )}
-
-      {viewModelsProvider && (
-        <ProviderModelsSidebar
-          provider={viewModelsProvider}
-          models={modelsByProvider[viewModelsProvider.id] || []}
-          status={modelsByProviderStatus[viewModelsProvider.id] || 'idle'}
-          onClose={() => setViewModelsProvider(null)}
-        />
-      )}
-    </div>
+    (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+    (err as Error)?.message ||
+    fallback
   );
 }
+
+// POST /evaluations then /evaluations/{id}/start — draft.type 'model' | 'rag'.
+export const launchEvaluation = createAsyncThunk(
+  'evaluations/launch',
+  async (payload: CreateEvaluationRequest, { rejectWithValue }) => {
+    try {
+      return await evaluationsApi.createAndStart(payload);
+    } catch (err) {
+      return rejectWithValue(extractErrorDetail(err, 'Failed to launch evaluation'));
+    }
+  }
+);
+
+// POST /agent-benchmark/run — draft.type 'agent', no agentFramework selected.
+export const runAgentBenchmark = createAsyncThunk(
+  'evaluations/runAgentBenchmark',
+  async (payload: AgentBenchmarkRunRequest, { rejectWithValue }) => {
+    try {
+      return await evaluationsApi.runAgentBenchmark(payload);
+    } catch (err) {
+      return rejectWithValue(extractErrorDetail(err, 'Failed to launch agent benchmark'));
+    }
+  }
+);
+
+// POST /agent-benchmark/run-multi — draft.type 'agent', agentFramework selected.
+export const runAgentBenchmarkMulti = createAsyncThunk(
+  'evaluations/runAgentBenchmarkMulti',
+  async (payload: AgentBenchmarkRunMultiRequest, { rejectWithValue }) => {
+    try {
+      return await evaluationsApi.runAgentBenchmarkMulti(payload);
+    } catch (err) {
+      return rejectWithValue(extractErrorDetail(err, 'Failed to launch agent benchmark'));
+    }
+  }
+);
+
+const evaluationsSlice = createSlice({
+  name: 'evaluations',
+  initialState,
+  reducers: {
+    setDraft(state, action: PayloadAction<Partial<EvaluationDraft>>) {
+      state.draft = { ...state.draft, ...action.payload };
+    },
+    // Step 2: changing type clears any previously selected metrics (spec §1.2).
+    setDraftType(state, action: PayloadAction<EvaluationDraft['type']>) {
+      state.draft.type = action.payload;
+      state.draft.metrics = [];
+      if (action.payload !== 'agent') {
+        state.draft.agentFramework = null;
+      }
+    },
+    resetDraft(state) {
+      state.draft = initialDraft;
+    },
+    // Local-only removal — no DELETE /evaluations/{id} endpoint exists yet
+    // (spec §4.6). Does not persist; a background poll will bring it back
+    // if the backend still has it.
+    removeEvaluationLocal(state, action: PayloadAction<string>) {
+      state.list = state.list.filter((e) => e.id !== action.payload);
+    },
+  },
+  extraReducers: (builder) => {
+    builder
+      .addCase(fetchEvaluations.pending, (state) => {
+        if (state.list.length === 0) state.listStatus = 'loading';
+      })
+      .addCase(fetchEvaluations.fulfilled, (state, action) => {
+        state.listStatus = 'succeeded';
+        state.listError = null;
+        state.list = action.payload;
+      })
+      .addCase(fetchEvaluations.rejected, (state, action) => {
+        // Background polls fail silently (spec §2.4) — only surface the
+        // error state when we have nothing on screen yet.
+        if (state.list.length === 0) {
+          state.listStatus = 'failed';
+          state.listError = action.error.message || 'Failed to load evaluations';
+        }
+      })
+      .addCase(fetchEvaluationResults.pending, (state, action) => {
+        state.resultsStatusByEvalId[action.meta.arg] = 'loading';
+        state.resultsErrorByEvalId[action.meta.arg] = null;
+      })
+      .addCase(fetchEvaluationResults.fulfilled, (state, action) => {
+        const { evaluationId, data } = action.payload;
+        state.resultsStatusByEvalId[evaluationId] = 'succeeded';
+        state.resultsByEvalId[evaluationId] = data;
+      })
+      .addCase(fetchEvaluationResults.rejected, (state, action) => {
+        const payload = action.payload as { evaluationId: string; message: string } | undefined;
+        const id = payload?.evaluationId ?? action.meta.arg;
+        state.resultsStatusByEvalId[id] = 'failed';
+        state.resultsErrorByEvalId[id] = payload?.message || 'Failed to load results';
+      })
+
+      // ---- launch: three thunks (Model/RAG, Agent-benchmark, Agent-multi) ---
+      // all share the same launching/launchError flags and all clear the
+      // draft on success, exactly like the original launchEvaluation did.
+      .addCase(launchEvaluation.pending, (state) => {
+        state.launching = true;
+        state.launchError = null;
+      })
+      .addCase(launchEvaluation.fulfilled, (state) => {
+        state.launching = false;
+        state.draft = initialDraft;
+      })
+      .addCase(launchEvaluation.rejected, (state, action) => {
+        state.launching = false;
+        state.launchError = (action.payload as string) || action.error.message || 'Failed to launch evaluation';
+      })
+
+      .addCase(runAgentBenchmark.pending, (state) => {
+        state.launching = true;
+        state.launchError = null;
+      })
+      .addCase(runAgentBenchmark.fulfilled, (state) => {
+        state.launching = false;
+        state.draft = initialDraft;
+      })
+      .addCase(runAgentBenchmark.rejected, (state, action) => {
+        state.launching = false;
+        state.launchError = (action.payload as string) || action.error.message || 'Failed to launch agent benchmark';
+      })
+
+      .addCase(runAgentBenchmarkMulti.pending, (state) => {
+        state.launching = true;
+        state.launchError = null;
+      })
+      .addCase(runAgentBenchmarkMulti.fulfilled, (state) => {
+        state.launching = false;
+        state.draft = initialDraft;
+      })
+      .addCase(runAgentBenchmarkMulti.rejected, (state, action) => {
+        state.launching = false;
+        state.launchError = (action.payload as string) || action.error.message || 'Failed to launch agent benchmark';
+      });
+  },
+});
+
+export const { setDraft, setDraftType, resetDraft, removeEvaluationLocal } = evaluationsSlice.actions;
+export default evaluationsSlice.reducer;
