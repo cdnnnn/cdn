@@ -196,6 +196,19 @@ function providerInitials(name: string): string {
 
 type HealthStatus = 'idle' | 'loading' | 'success' | 'failed';
 
+// Pulls a displayable message out of a rejected createAsyncThunk action,
+// regardless of whether that slice uses rejectWithValue (payload is a
+// string, or an object with a `message`) or lets RTK's default serializer
+// handle it (action.error.message).
+function getThunkErrorMessage(action: any, fallback: string): string {
+  const payload = action?.payload;
+  if (typeof payload === 'string' && payload) return payload;
+  if (payload && typeof payload === 'object' && typeof payload.message === 'string' && payload.message) {
+    return payload.message;
+  }
+  return action?.error?.message || fallback;
+}
+
 // Preview slider (Change-2): user picks how many sample questions to pull,
 // clamped server-side-friendly at 1–20 inclusive.
 const PREVIEW_LIMIT_MIN = 1;
@@ -238,6 +251,12 @@ export default function NewEvaluation() {
   const [modelsLoading, setModelsLoading] = useState(false);
   const [datasetsRefreshing, setDatasetsRefreshing] = useState(false);
   const [metricsRefreshing, setMetricsRefreshing] = useState(false);
+  // Tracked locally rather than read from the datasets slice's own `error`
+  // field — that field wasn't reliably cleared on a subsequent successful
+  // fetch, so a stale error from an earlier failed attempt kept showing
+  // even after Refresh (or renavigating) succeeded. Deriving this purely
+  // from the outcome of our own dispatch calls below fixes that.
+  const [datasetsErrorLocal, setDatasetsErrorLocal] = useState<string | null>(null);
 
   // ---- Test Suite: All/Custom/Deepeval filter (Change-1) -----------------
   const [datasetTypeFilter, setDatasetTypeFilter] = useState<DatasetTypeFilter>('all');
@@ -261,13 +280,12 @@ export default function NewEvaluation() {
 
   const metricsState = useAppSelector((s) => s.metrics) ?? { allMetrics: [], status: 'idle' as const, error: null };
   // Only `all_metrics` from the API response is used — it's the full
-  // catalog rendered as selectable chips.
+  // catalog rendered as selectable chips. Loading state for this step is
+  // tracked locally (metricsRefreshing) rather than read from
+  // metricsState.status, for the same staleness reason as datasets below.
   const metricsCatalog: string[] = (metricsState as any).allMetrics ?? [];
-  const metricsLoading = (metricsState as any).status === 'loading';
 
   const datasets = useAppSelector((s) => s.datasets.items) ?? [];
-  const datasetsLoading = useAppSelector((s) => s.datasets.status === 'loading' || s.datasets.status === 'idle');
-  const datasetsError = useAppSelector((s) => s.datasets.error);
   const datasetUploading = useAppSelector((s) => s.datasets.uploadStatus === 'loading');
   const datasetUploadError = useAppSelector((s) => s.datasets.uploadError);
 
@@ -343,6 +361,9 @@ export default function NewEvaluation() {
       setDatasetsRefreshing(false);
       if (fetchDatasets.rejected.match(result)) {
         datasetsFetchedForTypeRef.current = null;
+        setDatasetsErrorLocal(getThunkErrorMessage(result, 'Failed to load test suites'));
+      } else {
+        setDatasetsErrorLocal(null);
       }
     })();
   }, [step, datasetType, dispatch]);
@@ -356,6 +377,7 @@ export default function NewEvaluation() {
     dispatch(setDraft({ dataset: null }));
     setDatasetSearch('');
     setDatasetTypeFilter('all');
+    setDatasetsErrorLocal(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [datasetType]);
 
@@ -449,15 +471,27 @@ export default function NewEvaluation() {
   const refreshDatasets = async () => {
     if (!datasetType) return;
     setDatasetsRefreshing(true);
-    await dispatch(fetchDatasets(datasetType));
+    const result = await dispatch(fetchDatasets(datasetType));
     setDatasetsRefreshing(false);
+    if (fetchDatasets.rejected.match(result)) {
+      datasetsFetchedForTypeRef.current = null;
+      setDatasetsErrorLocal(getThunkErrorMessage(result, 'Failed to load test suites'));
+    } else {
+      datasetsFetchedForTypeRef.current = datasetType;
+      setDatasetsErrorLocal(null);
+    }
   };
 
   const refreshMetrics = async () => {
     if (!draft.type) return;
     setMetricsRefreshing(true);
-    await dispatch(fetchMetrics(draft.type));
+    const result = await dispatch(fetchMetrics(draft.type));
     setMetricsRefreshing(false);
+    if (fetchMetrics.rejected.match(result)) {
+      metricsFetchedForTypeRef.current = null;
+    } else {
+      metricsFetchedForTypeRef.current = draft.type;
+    }
   };
 
   // ---- preview slider (Change-2): GET /datasets/{id}/preview?limit=N -----
@@ -1305,14 +1339,12 @@ export default function NewEvaluation() {
                             </div>
 
                             {(() => {
-                              // Covers both sources of "a datasets fetch is in
-                              // flight": the redux thunk status (drives the
-                              // lazy navigation-triggered fetch) and the local
-                              // flag the Refresh button sets directly. Either
-                              // one showing loading should render the skeleton.
-                              const datasetsBusy = datasetsLoading || datasetsRefreshing;
-
-                              if (datasetsBusy) {
+                              // Both the busy flag and the error message are
+                              // tracked locally (set from the outcome of our
+                              // own dispatch calls) rather than read from the
+                              // datasets slice's own status/error fields —
+                              // see datasetsErrorLocal above for why.
+                              if (datasetsRefreshing) {
                                 return (
                                   <div className={styles.ev__dgrid} aria-busy="true" aria-label="Loading test suites">
                                     {Array.from({ length: SKELETON_CARD_COUNT }).map((_, i) => (
@@ -1332,8 +1364,8 @@ export default function NewEvaluation() {
                                 );
                               }
 
-                              if (datasetsError) {
-                                return <p className={styles.ev__error}>{datasetsError}</p>;
+                              if (datasetsErrorLocal) {
+                                return <p className={styles.ev__error}>{datasetsErrorLocal}</p>;
                               }
 
                               return (
@@ -1609,7 +1641,7 @@ export default function NewEvaluation() {
                               </button>
                             </div>
 
-                            {metricsLoading || metricsRefreshing ? (
+                            {metricsRefreshing ? (
                               <div className={styles.ev__chips} aria-busy="true" aria-label="Loading metrics">
                                 {Array.from({ length: SKELETON_CHIP_COUNT }).map((_, i) => (
                                   <span
