@@ -1,675 +1,441 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+//Datasets.tsx
+import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import {
-  Search, Sparkles, Bot, Layers, Loader2, Download, ListTree, Gauge, CheckCircle2, XCircle,
-  Award, ListChecks, Clock, History as HistoryIcon, SlidersHorizontal, CalendarDays, X,
+  RefreshCw, Search, ExternalLink, Layers, AlertTriangle, Database, ListFilter, X,
+  Copy, Check, Boxes, Hash, ArrowRight, Filter, ChevronsUpDown, CornerDownLeft,
 } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
-import {
-  fetchEvaluations, fetchEvaluationResults,
-} from '../../store/slices/evaluationsSlice';
-import { downloadReport } from '../../store/slices/reportsSlice';
-import type { ReportDownloadFormat } from '../../api/endpoints/reports';
-import type { EvaluationStatusValue, ModelResult } from '../../types';
-import { SkeletonListRows } from '../common/Skeleton';
-import styles from './History.module.scss';
+import { fetchBenchmarks } from '../../store/slices/benchmarksSlice';
+import type { Benchmark } from '../../types';
+import styles from './Datasets.module.scss';
 
-const TYPE_ICON: Record<string, typeof Sparkles> = { model: Sparkles, agent: Bot, rag: Layers };
-const TYPE_LABEL: Record<string, string> = { model: 'AI Model', agent: 'Agent', rag: 'RAG' };
-
-// Mirrors Reports.tsx — same four formats, same download endpoint.
-const DOWNLOAD_OPTIONS: { format: ReportDownloadFormat; label: string }[] = [
-  { format: 'json', label: 'JSON' },
-  { format: 'csv', label: 'CSV' },
-  { format: 'csv_detailed', label: 'CSV (Detailed)' },
-  { format: 'pdf', label: 'PDF' },
+// Deterministic color hash so the same capability/type always gets the same
+// pill color across renders, without a hardcoded lookup table. Palette matches
+// the app's ink/paper/signal design tokens.
+const PILL_COLORS = [
+  { bg: '#ECEDFF', fg: '#2B2BF5' }, // signal
+  { bg: '#FDF3E3', fg: '#C56A00' }, // amber
+  { bg: '#E7F7EF', fg: '#0B8F58' }, // ok
+  { bg: '#FDECEC', fg: '#C81E1E' }, // danger
+  { bg: '#E6F4FB', fg: '#0369A1' }, // sky
+  { bg: '#F1EDFB', fg: '#6D28D9' }, // violet
+  { bg: '#EAF6EC', fg: '#3F7D20' }, // moss
 ];
-
-// Maps a raw status to the module status-pill variant suffix.
-function statusVariant(status: EvaluationStatusValue): string {
-  switch (status) {
-    case 'completed': return 'completed';
-    case 'running': return 'running';
-    case 'pending': return 'pending';
-    case 'failed': return 'failed';
-    case 'canceled': return 'canceled';
-    default: return 'pending';
-  }
+function hashColor(label: string) {
+  const sum = [...label].reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+  return PILL_COLORS[sum % PILL_COLORS.length];
 }
 
-function withinDateRange(iso: string, range: string): boolean {
-  if (range === 'all') return true;
-  const days = range === '7' ? 7 : 30;
-  const cutoff = Date.now() - days * 86400000;
-  return new Date(iso).getTime() >= cutoff;
-}
-
-export default function History() {
+export default function Datasets() {
   const dispatch = useAppDispatch();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const selectedId = searchParams.get('id');
-
-  const { list, listStatus, listError, resultsByEvalId, resultsStatusByEvalId, resultsErrorByEvalId } = useAppSelector((s) => s.evaluations);
-  const models = useAppSelector((s) => s.models.items);
-  const providers = useAppSelector((s) => s.providers.items);
-  const downloadingId = useAppSelector((s) => s.reports.downloadingId);
+  const { items, status, error } = useAppSelector((s) => s.benchmarks);
 
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('All');
-  const [dateFilter, setDateFilter] = useState('all');
-  const [statusFilter, setStatusFilter] = useState('All');
-  const [activeFilter, setActiveFilter] = useState<'search' | 'type' | 'date' | 'status' | null>(null);
-  const [detailsModel, setDetailsModel] = useState<ModelResult | null>(null);
-  const [drawerView, setDrawerView] = useState<'tests' | 'metrics'>('tests');
-  const searchInputRef = useRef<HTMLInputElement>(null);
-
-  const toggleFilter = (key: 'search' | 'type' | 'date' | 'status') => {
-    setActiveFilter((prev) => (prev === key ? null : key));
-  };
+  const [capFilter, setCapFilter] = useState<string[]>([]);      // active capability facets
+  const [selectedName, setSelectedName] = useState<string | null>(null);
+  const [subQuery, setSubQuery] = useState('');                  // subgroup filter inside detail
+  const [copied, setCopied] = useState<string | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (activeFilter === 'search') searchInputRef.current?.focus();
-  }, [activeFilter]);
-
-  const DATE_LABEL: Record<string, string> = { all: 'All time', '30': 'Last 30 days', '7': 'Last 7 days' };
-  const STATUS_LABEL: Record<string, string> = {
-    All: 'All',
-    completed: 'Completed',
-    running: 'Running',
-    pending: 'Pending',
-    failed: 'Failed',
-  };
-
-  // Initial load + silent 10s poll (spec §2.4) — no spinner/error disruption
-  // on background refreshes; the slice only flips listStatus when list is empty.
-  useEffect(() => {
-    dispatch(fetchEvaluations());
-    const interval = setInterval(() => dispatch(fetchEvaluations()), 10000);
-    return () => clearInterval(interval);
+    dispatch(fetchBenchmarks());
   }, [dispatch]);
 
+  const types = useMemo(() => ['All', ...new Set(items.map((b) => b.type))], [items]);
+  const maxCount = useMemo(() => items.reduce((m, b) => Math.max(m, b.task_count), 1), [items]);
+
   const filtered = useMemo(() => {
-    return list.filter((e) => {
-      if (search && !e.name.toLowerCase().includes(search.toLowerCase())) return false;
-      if (typeFilter !== 'All' && e.eval_type !== typeFilter) return false;
-      if (statusFilter !== 'All' && e.status !== statusFilter) return false;
-      if (!withinDateRange(e.created_at, dateFilter)) return false;
-      return true;
+    const q = search.trim().toLowerCase();
+    return items.filter((b) => {
+      if (typeFilter !== 'All' && b.type !== typeFilter) return false;
+      const caps = b.required_capabilities ?? [];
+      if (capFilter.length && !capFilter.some((c) => caps.includes(c))) return false;
+      if (!q) return true;
+      return b.name.toLowerCase().includes(q) || b.description.toLowerCase().includes(q);
     });
-  }, [list, search, typeFilter, dateFilter, statusFilter]);
+  }, [items, search, typeFilter, capFilter]);
 
-  const selected = list.find((e) => e.id === selectedId) || filtered[0] || null;
-
-  // Handles the initial/default selection (mount, or URL navigation to an
-  // id we haven't fetched yet). Explicit row clicks trigger their own fetch
-  // in selectRow below regardless of cache, so this only needs to cover the
-  // "selection changed without a click" case — hence the cache guard stays
-  // here, but not in selectRow.
+  // Keep a valid selection as the filtered set changes.
   useEffect(() => {
-    if (selected && selected.status === 'completed' && !resultsByEvalId[selected.id]) {
-      dispatch(fetchEvaluationResults(selected.id));
+    if (!filtered.length) return;
+    if (!filtered.some((b) => b.name === selectedName)) setSelectedName(filtered[0].name);
+  }, [filtered, selectedName]);
+
+  const selected = items.find((b) => b.name === selectedName) ?? null;
+
+  const toggleCap = useCallback((c: string) => {
+    setCapFilter((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
+  }, []);
+
+  const copyValue = useCallback(async (value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      /* clipboard unavailable — no-op */
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id, selected?.status]);
+    setCopied(value);
+    setTimeout(() => setCopied((c) => (c === value ? null : c)), 1100);
+  }, []);
 
-  // Re-fetches on every click, including re-clicking the already-selected
-  // row — results can change server-side (e.g. a report finishing after the
-  // eval completed), so cached data shouldn't block a manual refresh.
-  const selectRow = (id: string) => {
-    setSearchParams({ id });
-    setDetailsModel(null);
-    const clicked = list.find((e) => e.id === id);
-    if (clicked && clicked.status === 'completed') {
-      dispatch(fetchEvaluationResults(id));
-    }
-  };
-
-  // Opens the details drawer for a model in a given view — reused by both
-  // the "test details" and "metric scores" icon buttons in the results table.
-  const openDrawer = (model: ModelResult, view: 'tests' | 'metrics') => {
-    setDetailsModel(model);
-    setDrawerView(view);
-  };
-
-  // Close the details drawer with Escape.
+  // Keyboard: ↑/↓ walk the list, "/" focuses search.
   useEffect(() => {
-    if (!detailsModel) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setDetailsModel(null);
+      const el = document.activeElement as HTMLElement | null;
+      const typing = el?.tagName === 'INPUT' || el?.tagName === 'TEXTAREA';
+      if (e.key === '/' && !typing) {
+        e.preventDefault();
+        searchRef.current?.focus();
+        return;
+      }
+      if (typing || (e.key !== 'ArrowDown' && e.key !== 'ArrowUp')) return;
+      e.preventDefault();
+      const idx = filtered.findIndex((b) => b.name === selectedName);
+      if (idx === -1) {
+        if (filtered[0]) setSelectedName(filtered[0].name);
+        return;
+      }
+      const next = e.key === 'ArrowDown'
+        ? Math.min(idx + 1, filtered.length - 1)
+        : Math.max(idx - 1, 0);
+      setSelectedName(filtered[next].name);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [detailsModel]);
+  }, [filtered, selectedName]);
 
-  const modelName = (id: string) => models.find((m) => m.id === id)?.name || id;
-  const providerName = (id: string) => {
-    const model = models.find((m) => m.id === id);
-    return providers.find((p) => p.id === model?.provider_id)?.name || model?.provider_id || '—';
-  };
-
-  const results = selected ? resultsByEvalId[selected.id] : undefined;
-  const resultsStatus = selected ? resultsStatusByEvalId[selected.id] : undefined;
-  const resultsError = selected ? resultsErrorByEvalId[selected.id] : undefined;
-
-  const StatusBadge = ({ status }: { status: EvaluationStatusValue }) => (
-    <span className={`${styles.status} ${styles[`status--${statusVariant(status)}`]}`}>
-      {status === 'running' && <span className={styles['live-dot']} />}
-      {status}
-    </span>
+  // Defensive per spec §3.2 / §5 — normalized to [] in benchmarksApi.list(),
+  // but reads still fall back defensively here.
+  const subgroups = selected?.tasks ?? [];
+  const selCaps = selected?.required_capabilities ?? [];
+  const shownSubgroups = subgroups.filter(
+    (t) =>
+      !subQuery ||
+      t.name.toLowerCase().includes(subQuery.toLowerCase()) ||
+      t.value.toLowerCase().includes(subQuery.toLowerCase())
   );
 
   return (
     <div className="page-enter pg-shell">
-      <div className={styles['history__header']}>
+      {/* ---- header (unchanged) ------------------------------------------- */}
+      <div className={styles['datasets__header']}>
         <div>
-          <p className={styles['history__header-eyebrow']}>Activity</p>
-          <h1>History</h1>
-          <p className={styles['history__header-sub']}>All past and in-progress evaluations</p>
+          <p className={styles['datasets__header-eyebrow']}>Datasets</p>
+          <h1>Test Suite Library</h1>
+          <p className={styles['datasets__header-sub']}>
+            Browse every benchmark available for evaluations, independent of any single wizard run.
+          </p>
         </div>
-        <div className={styles['history__header-meta']}>
-          <HistoryIcon size={13} />
-          {list.length} evaluation{list.length === 1 ? '' : 's'} tracked
-        </div>
-      </div>
-
-      {/* List + detail panels scroll independently, so pg-body itself doesn't
-          scroll here — .shell fills it instead. */}
-      <div className={`pg-body ${styles['pg-body-fixed']}`}>
-        <div className={styles.shell}>
-          {/* ---------- Sidebar list ---------- */}
-          <div className={styles.sidebar}>
-            <div className={styles.filters}>
-              <div className={styles['filter-toolbar']}>
-                <span className={styles['filter-toolbar__label']}>Filters</span>
-                <div className={styles['filter-toolbar__divider']} />
-                <button
-                  type="button"
-                  className={`${styles['filter-toolbar__btn']} ${activeFilter === 'search' ? styles.on : ''}`}
-                  onClick={() => toggleFilter('search')}
-                  title="Search"
-                >
-                  <Search size={15} />
-                  {search && <span className={styles['filter-toolbar__dot']} />}
-                </button>
-                <button
-                  type="button"
-                  className={`${styles['filter-toolbar__btn']} ${activeFilter === 'type' ? styles.on : ''}`}
-                  onClick={() => toggleFilter('type')}
-                  title="Filter by type"
-                >
-                  <SlidersHorizontal size={15} />
-                  {typeFilter !== 'All' && <span className={styles['filter-toolbar__dot']} />}
-                </button>
-                <button
-                  type="button"
-                  className={`${styles['filter-toolbar__btn']} ${activeFilter === 'date' ? styles.on : ''}`}
-                  onClick={() => toggleFilter('date')}
-                  title="Filter by date"
-                >
-                  <CalendarDays size={15} />
-                  {dateFilter !== 'all' && <span className={styles['filter-toolbar__dot']} />}
-                </button>
-                <button
-                  type="button"
-                  className={`${styles['filter-toolbar__btn']} ${activeFilter === 'status' ? styles.on : ''}`}
-                  onClick={() => toggleFilter('status')}
-                  title="Filter by status"
-                >
-                  <ListChecks size={15} />
-                  {statusFilter !== 'All' && <span className={styles['filter-toolbar__dot']} />}
-                </button>
-
-                <div className={styles['filter-toolbar__summary']}>
-                  {search && (
-                    <span className={styles['filter-chip']}>
-                      <span>“{search}”</span>
-                      <X size={11} onClick={() => setSearch('')} />
-                    </span>
-                  )}
-                  {typeFilter !== 'All' && (
-                    <span className={styles['filter-chip']}>
-                      <span>{TYPE_LABEL[typeFilter]}</span>
-                      <X size={11} onClick={() => setTypeFilter('All')} />
-                    </span>
-                  )}
-                  {dateFilter !== 'all' && (
-                    <span className={styles['filter-chip']}>
-                      <span>{DATE_LABEL[dateFilter]}</span>
-                      <X size={11} onClick={() => setDateFilter('all')} />
-                    </span>
-                  )}
-                  {statusFilter !== 'All' && (
-                    <span className={styles['filter-chip']}>
-                      <span>{STATUS_LABEL[statusFilter]}</span>
-                      <X size={11} onClick={() => setStatusFilter('All')} />
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              <div className={`${styles['filter-panel']} ${activeFilter ? styles['filter-panel--open'] : ''}`}>
-                {activeFilter === 'search' && (
-                  <div>
-                    <div className={styles['panel-search']}>
-                      <Search size={16} />
-                      <input
-                        ref={searchInputRef}
-                        placeholder="Search evaluations…"
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                      />
-                    </div>
-                  </div>
-                )}
-                {activeFilter === 'type' && (
-                  <div>
-                    <div className={styles['panel-pills']}>
-                      {['All', 'model', 'agent', 'rag'].map((t) => (
-                        <button
-                          key={t}
-                          className={`${styles['panel-pill']} ${typeFilter === t ? styles.on : ''}`}
-                          onClick={() => {
-                            setTypeFilter(t);
-                            setActiveFilter(null);
-                          }}
-                        >
-                          {t === 'All' ? 'All' : TYPE_LABEL[t]}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {activeFilter === 'date' && (
-                  <div>
-                    <div className={styles['panel-pills']}>
-                      {Object.entries(DATE_LABEL).map(([value, label]) => (
-                        <button
-                          key={value}
-                          className={`${styles['panel-pill']} ${dateFilter === value ? styles.on : ''}`}
-                          onClick={() => {
-                            setDateFilter(value);
-                            setActiveFilter(null);
-                          }}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {activeFilter === 'status' && (
-                  <div>
-                    <div className={styles['panel-pills']}>
-                      {Object.entries(STATUS_LABEL).map(([value, label]) => (
-                        <button
-                          key={value}
-                          className={`${styles['panel-pill']} ${statusFilter === value ? styles.on : ''}`}
-                          onClick={() => {
-                            setStatusFilter(value);
-                            setActiveFilter(null);
-                          }}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {listStatus === 'failed' && list.length === 0 && (
-                <div className={styles.empty}>{listError || 'Failed to load evaluations.'}</div>
-              )}
-              {listStatus !== 'loading' && filtered.length === 0 && list.length > 0 && (
-                <div className={styles.empty}>No evaluations match your filters.</div>
-              )}
-            </div>
-
-            <div className={styles.rows}>
-              {listStatus === 'loading' && list.length === 0 && <SkeletonListRows count={5} />}
-              {filtered.map((e) => {
-                const Icon = TYPE_ICON[e.eval_type] || Sparkles;
-                const isSelected = selected?.id === e.id;
-                return (
-                  <div
-                    key={e.id}
-                    className={`${styles.row} ${isSelected ? styles.selected : ''} ${e.status === 'running' ? styles['row--running'] : ''}`}
-                    onClick={() => selectRow(e.id)}
-                  >
-                    <div className={styles.row__top}>
-                      <div className={styles.row__icon}>
-                        <Icon size={16} />
-                      </div>
-                      <div className={styles.row__name}>{e.name}</div>
-                    </div>
-                    <div className={styles.row__badges}>
-                      <span className={styles['type-tag']}>{TYPE_LABEL[e.eval_type] || e.eval_type}</span>
-                      <StatusBadge status={e.status} />
-                    </div>
-                    <div className={styles.row__meta}>{new Date(e.created_at).toLocaleDateString()}</div>
-                    <div className={styles.row__stats}>
-                      <span>{e.top_model ? `🏆 ${e.top_model}` : '—'}</span>
-                      <span>{e.top_score != null ? `${e.top_score}%` : '—'}</span>
-                      <span>{e.model_ids.length} models</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* ---------- Detail panel ---------- */}
-          <div className={styles.detail}>
-            {!selected ? (
-              <div className={styles['detail-empty']}>Select an evaluation to see its details.</div>
-            ) : (
-              <>
-                <div className={styles['detail-hdr']}>
-                  <div>
-                    <div className={styles['detail-hdr__badges']}>
-                      <span className={styles['type-tag']}>{TYPE_LABEL[selected.eval_type] || selected.eval_type}</span>
-                      <StatusBadge status={selected.status} />
-                    </div>
-                    <h2 className={styles['detail-hdr__name']}>{selected.name}</h2>
-                    <div className={styles['detail-hdr__date']}>Created {new Date(selected.created_at).toLocaleString()}</div>
-                  </div>
-                  {/* Only offered once the backend has generated a report row
-                      for this evaluation (selected.report.report_id present) —
-                      same options/behavior as the Reports page. */}
-                  {selected.report?.report_id && (
-                    <div className={styles['detail-hdr__actions']}>
-                      {DOWNLOAD_OPTIONS.map((opt) => (
-                        <button
-                          key={opt.format}
-                          className={styles['dl-btn']}
-                          disabled={downloadingId === selected.report!.report_id}
-                          onClick={() =>
-                            dispatch(
-                              downloadReport({
-                                reportId: selected.report!.report_id,
-                                format: opt.format,
-                                filenameHint: selected.report!.title || selected.name,
-                              })
-                            )
-                          }
-                        >
-                          {downloadingId === selected.report.report_id ? (
-                            <Loader2 size={12} className={styles.spin} />
-                          ) : (
-                            <Download size={12} />
-                          )}
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className={styles['summary-cards']}>
-                  <div className={styles['summary-card']}>
-                    <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--win']}`}>
-                      <Award size={16} />
-                    </span>
-                    <div>
-                      <div className={styles['summary-card__label']}>Winner</div>
-                      <div className={styles['summary-card__val']}>
-                        {selected.top_model || '—'}
-                        {selected.top_score != null ? ` · ${selected.top_score}%` : ''}
-                      </div>
-                    </div>
-                  </div>
-                  <div className={styles['summary-card']}>
-                    <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--info']}`}>
-                      <ListChecks size={16} />
-                    </span>
-                    <div>
-                      <div className={styles['summary-card__label']}>Questions / Models</div>
-                      <div className={styles['summary-card__val']}>
-                        {selected.total_questions.toLocaleString()} &middot; {selected.model_ids.length} models
-                      </div>
-                    </div>
-                  </div>
-                  <div className={styles['summary-card']}>
-                    <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--status']}`}>
-                      <Clock size={16} />
-                    </span>
-                    <div>
-                      <div className={styles['summary-card__label']}>Status</div>
-                      <div className={styles['summary-card__val']}>
-                        {selected.status}
-                        {selected.completed_at ? ` · ${new Date(selected.completed_at).toLocaleDateString()}` : ''}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {selected.status === 'completed' ? (
-                  <>
-                    {resultsStatus === 'loading' && !results && (
-                      <div className={styles.empty}>
-                        <Loader2 size={16} className={styles.spin} /> Loading results…
-                      </div>
-                    )}
-                    {resultsStatus === 'failed' && !results && <div className={styles.empty}>{resultsError}</div>}
-                    {results && (
-                      <>
-                        {/* Extra fields from GET /evaluations/{id}/results — benchmark,
-                            dataset, metrics tested, and when the run actually started. */}
-                        <div className={styles['meta-strip']}>
-                          {results.benchmark && (
-                            <div className={styles['meta-strip__item']}>
-                              <span className={styles['meta-strip__label']}>Benchmark</span>
-                              <span className={styles['meta-strip__val']}>{results.benchmark}</span>
-                            </div>
-                          )}
-                          {results.dataset_id && (
-                            <div className={styles['meta-strip__item']}>
-                              <span className={styles['meta-strip__label']}>Dataset</span>
-                              <span className={styles['meta-strip__val']}>{results.dataset_id}</span>
-                            </div>
-                          )}
-                          {results.started_at && (
-                            <div className={styles['meta-strip__item']}>
-                              <span className={styles['meta-strip__label']}>Started</span>
-                              <span className={styles['meta-strip__val']}>{new Date(results.started_at).toLocaleString()}</span>
-                            </div>
-                          )}
-                          {results.selected_metrics.length > 0 && (
-                            <div className={styles['meta-strip__item']}>
-                              <span className={styles['meta-strip__label']}>Metrics tested</span>
-                              <span className={styles['meta-strip__chips']}>
-                                {results.selected_metrics.map((m) => (
-                                  <span key={m} className={styles['type-tag']}>{m}</span>
-                                ))}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-
-                        <div className={styles.results}>
-                          <table className={styles['results-table']}>
-                            <thead>
-                              <tr>
-                                <th>Rank</th>
-                                <th>Model</th>
-                                <th>Provider</th>
-                                <th>Score</th>
-                                <th>Accuracy</th>
-                                <th>Passed</th>
-                                <th>Failed</th>
-                                <th />
-                                <th />
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {results.results.map((r) => (
-                                <tr key={r.model_id} className={r.rank === 1 ? styles.winner : ''}>
-                                  <td className={styles['cell-rank']}>
-                                    {r.rank === 1 ? '🏆 ' : ''}
-                                    {r.rank}
-                                  </td>
-                                  <td className={styles['cell-model']}>{modelName(r.model_id)}</td>
-                                  <td className={styles['cell-provider']}>{r.provider || providerName(r.model_id)}</td>
-                                  <td className={styles['cell-num']}>{r.score}%</td>
-                                  <td className={`${styles['cell-num']} ${styles['cell-num--muted']}`}>{r.accuracy}%</td>
-                                  <td className={styles['cell-pass']}>{r.passed_tests}</td>
-                                  <td className={styles['cell-fail']}>{r.failed_tests}</td>
-                                  <td className={styles['cell-details']}>
-                                    {r.details?.length > 0 && (
-                                      <button
-                                        type="button"
-                                        className={styles['details-btn']}
-                                        title="View test-by-test details"
-                                        onClick={() => openDrawer(r, 'tests')}
-                                      >
-                                        <ListTree size={14} />
-                                      </button>
-                                    )}
-                                  </td>
-                                  <td className={styles['cell-details']}>
-                                    {Object.keys(r.metric_scores || {}).length > 0 && (
-                                      <button
-                                        type="button"
-                                        className={styles['details-btn']}
-                                        title="View metric scores"
-                                        onClick={() => openDrawer(r, 'metrics')}
-                                      >
-                                        <Gauge size={14} />
-                                      </button>
-                                    )}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </>
-                    )}
-                  </>
-                ) : (
-                  <div className={styles['status-message']}>
-                    {selected.status === 'running' && 'This evaluation is still running — results will appear once it completes.'}
-                    {selected.status === 'pending' && 'This evaluation hasn\u2019t started yet.'}
-                    {selected.status === 'failed' && 'This evaluation failed to complete.'}
-                    {selected.status === 'canceled' && 'This evaluation was canceled.'}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+        <div className={styles['datasets__header-meta']}>
+          <span className={styles['datasets__header-count']}>
+            <Database size={13} /> {items.length} suites available
+          </span>
+          <button className={styles['datasets__refresh-btn']} onClick={() => dispatch(fetchBenchmarks())}>
+            <RefreshCw size={14} /> Refresh
+          </button>
         </div>
       </div>
 
-      {/* ---------- Test-detail / metric-score slide-over ---------- */}
-      <div className={`${styles['drawer-overlay']} ${detailsModel ? styles['drawer-overlay--open'] : ''}`} onClick={() => setDetailsModel(null)} />
-      <div className={`${styles.drawer} ${detailsModel ? styles['drawer--open'] : ''}`} role="dialog" aria-hidden={!detailsModel}>
-        {detailsModel && (
+      {/* ---- toolbar (unchanged) ------------------------------------------ */}
+      <div className={styles['datasets__toolbar']}>
+        <div className={styles['datasets__search']}>
+          <Search size={16} />
+          <input
+            ref={searchRef}
+            placeholder="Search datasets…  (press /)"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        <div className={styles['datasets__filters']}>
+          <span className={styles['datasets__toolbar-label']}>
+            <ListFilter size={11} />
+          </span>
+          {types.map((t) => (
+            <button
+              key={t}
+              className={`${styles['datasets__filter-pill']} ${typeFilter === t ? styles['datasets__filter-pill--on'] : ''}`}
+              onClick={() => setTypeFilter(t)}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ---- active capability facets ------------------------------------- */}
+      {capFilter.length > 0 && (
+        <div className={styles['datasets__facets']}>
+          <Filter size={12} />
+          <span className={styles['datasets__facets-lead']}>Showing suites tagged</span>
+          {capFilter.map((c) => {
+            const col = hashColor(c);
+            return (
+              <button
+                key={c}
+                className={styles['datasets__facet']}
+                style={{ background: col.bg, color: col.fg }}
+                onClick={() => toggleCap(c)}
+              >
+                {c} <X size={11} />
+              </button>
+            );
+          })}
+          <button className={styles['datasets__facets-clear']} onClick={() => setCapFilter([])}>
+            Clear all
+          </button>
+        </div>
+      )}
+
+      {/* ---- body: master / detail ---------------------------------------- */}
+      <div className={styles['datasets__body']}>
+        {status === 'failed' && (
+          <div
+            className={`${styles['datasets__state']} ${styles['datasets__state--error']}`}
+            style={{ gridColumn: '1 / -1' }}
+          >
+            <AlertTriangle size={28} />
+            <div>{error || 'Failed to load datasets.'}</div>
+            <button className={styles['datasets__refresh-btn']} onClick={() => dispatch(fetchBenchmarks())}>
+              Retry
+            </button>
+          </div>
+        )}
+
+        {status !== 'failed' && (
           <>
-            <div className={styles['drawer__header']}>
-              <div>
-                <div className={styles['drawer__eyebrow']}>
-                  {drawerView === 'tests' ? 'Test-by-test details' : 'Metric scores'}
-                </div>
-                <h3 className={styles['drawer__title']}>{modelName(detailsModel.model_id)}</h3>
-                <div className={styles['drawer__sub']}>
-                  {(detailsModel.provider || providerName(detailsModel.model_id))} · {detailsModel.score}% score · {detailsModel.accuracy}% accuracy
-                </div>
-              </div>
-              <button type="button" className={styles['drawer__close']} onClick={() => setDetailsModel(null)} title="Close">
-                <X size={16} />
-              </button>
-            </div>
-
-            {/* Tabs let you flip between the two views without closing the drawer. */}
-            <div className={styles['drawer__tabs']}>
-              <button
-                type="button"
-                className={`${styles['drawer__tab']} ${drawerView === 'tests' ? styles.on : ''}`}
-                onClick={() => setDrawerView('tests')}
-                disabled={!detailsModel.details?.length}
-              >
-                <ListTree size={13} /> Test details
-              </button>
-              <button
-                type="button"
-                className={`${styles['drawer__tab']} ${drawerView === 'metrics' ? styles.on : ''}`}
-                onClick={() => setDrawerView('metrics')}
-                disabled={!Object.keys(detailsModel.metric_scores || {}).length}
-              >
-                <Gauge size={13} /> Metric scores
-              </button>
-            </div>
-
-            {drawerView === 'tests' && (
-              <div className={styles['drawer__stats']}>
-                <span className={styles['drawer__stat']}>
-                  <CheckCircle2 size={13} className={styles['drawer__stat-icon--pass']} />
-                  {detailsModel.passed_tests} passed
-                </span>
-                <span className={styles['drawer__stat']}>
-                  <XCircle size={13} className={styles['drawer__stat-icon--fail']} />
-                  {detailsModel.failed_tests} failed
+            {/* LIST RAIL — the scale-spine lives here */}
+            <aside className={styles['datasets__rail']}>
+              <div className={styles['datasets__rail-head']}>
+                <span>{filtered.length} of {items.length}</span>
+                <span className={styles['datasets__rail-hint']}>
+                  <ChevronsUpDown size={11} /> ↑ ↓ to move
                 </span>
               </div>
-            )}
+              <div className={styles['datasets__rail-scroll']}>
+                {status === 'loading' &&
+                  Array.from({ length: 7 }).map((_, i) => (
+                    <div className={styles['datasets__skel-row']} key={i}>
+                      <span className={styles['datasets__skel']} style={{ width: '55%' }} />
+                      <span className={styles['datasets__skel']} style={{ width: '100%', height: 3 }} />
+                      <span className={styles['datasets__skel']} style={{ width: '35%' }} />
+                    </div>
+                  ))}
 
-            <div className={styles['drawer__body']}>
-              {drawerView === 'tests' &&
-                detailsModel.details.map((d, i) => (
-                  <div key={i} className={`${styles['detail-card']} ${d.passed ? styles['detail-card--pass'] : styles['detail-card--fail']}`}>
-                    <div className={styles['detail-card__hdr']}>
-                      <span className={styles['detail-card__task']}>{d.task}</span>
-                      <span className={`${styles['detail-card__badge']} ${d.passed ? styles['detail-card__badge--pass'] : styles['detail-card__badge--fail']}`}>
-                        {d.passed ? <CheckCircle2 size={12} /> : <XCircle size={12} />}
-                        {d.passed ? 'Passed' : 'Failed'}
-                      </span>
-                    </div>
-                    <div className={styles['detail-card__field']}>
-                      <span className={styles['detail-card__label']}>Input</span>
-                      <div className={styles['detail-card__text']}>{d.input}</div>
-                    </div>
-                    <div className={styles['detail-card__row']}>
-                      <div className={styles['detail-card__field']}>
-                        <span className={styles['detail-card__label']}>Expected</span>
-                        <div className={styles['detail-card__text']}>{d.expected_output}</div>
-                      </div>
-                      <div className={styles['detail-card__field']}>
-                        <span className={styles['detail-card__label']}>Actual</span>
-                        <div className={`${styles['detail-card__text']} ${!d.passed ? styles['detail-card__text--fail'] : ''}`}>
-                          {d.actual_output}
-                        </div>
-                      </div>
-                    </div>
+                {status !== 'loading' && filtered.length === 0 && (
+                  <div className={styles['datasets__empty-rail']}>
+                    <Layers size={22} />
+                    <p>No suites match.<br />Loosen a filter to see more.</p>
                   </div>
-                ))}
+                )}
 
-              {/* Metric-scores view — one bar per metric (e.g. Answer
-                  Relevancy, Toxicity, Bias), values are 0-100. */}
-              {drawerView === 'metrics' &&
-                Object.entries(detailsModel.metric_scores || {}).map(([label, value]) => {
-                  const pct = Math.max(0, Math.min(100, value));
-                  const tier = pct >= 80 ? 'good' : pct >= 50 ? 'mid' : 'low';
-                  return (
-                    <div key={label} className={styles['metric-card']}>
-                      <div className={styles['metric-card__hdr']}>
-                        <span className={styles['metric-card__label']}>{label}</span>
-                        <span className={`${styles['metric-card__value']} ${styles[`metric-card__value--${tier}`]}`}>
-                          {value}%
-                        </span>
-                      </div>
-                      <div className={styles['metric-card__track']}>
-                        <div
-                          className={`${styles['metric-card__fill']} ${styles[`metric-card__fill--${tier}`]}`}
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-            </div>
+                {status !== 'loading' &&
+                  filtered.map((b) => {
+                    const on = b.name === selectedName;
+                    const accent = hashColor(b.type);
+                    const caps = b.required_capabilities ?? [];
+                    const w = Math.max(4, (b.task_count / maxCount) * 100);
+                    return (
+                      <button
+                        key={b.name}
+                        className={`${styles['datasets__row']} ${on ? styles['datasets__row--on'] : ''}`}
+                        onClick={() => setSelectedName(b.name)}
+                      >
+                        <span className={styles['datasets__row-accent']} style={{ background: accent.fg }} />
+                        <div className={styles['datasets__row-top']}>
+                          <span className={styles['datasets__row-name']}>{b.name}</span>
+                          <span className={styles['datasets__row-count']}>{b.task_count.toLocaleString()}</span>
+                        </div>
+                        {/* scale-spine: instant sense of dataset size across the whole library */}
+                        <div className={styles['datasets__spine']}>
+                          <span style={{ width: `${w}%`, background: accent.fg }} />
+                        </div>
+                        <div className={styles['datasets__row-foot']}>
+                          <span className={styles['datasets__row-type']} style={{ color: accent.fg }}>
+                            {b.type}
+                          </span>
+                          <span className={styles['datasets__row-dots']}>
+                            {caps.slice(0, 4).map((c) => (
+                              <i key={c} style={{ background: hashColor(c).fg }} title={c} />
+                            ))}
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })}
+              </div>
+            </aside>
+
+            {/* DETAIL — everything the modal used to hide, now first-class */}
+            <section className={styles['datasets__detail']}>
+              {status === 'loading' ? (
+                <div className={styles['datasets__detail-scroll']}>
+                  <span className={styles['datasets__skel']} style={{ width: 120, height: 34, marginBottom: 22 }} />
+                  <span className={styles['datasets__skel']} style={{ width: '90%', marginBottom: 8 }} />
+                  <span className={styles['datasets__skel']} style={{ width: '70%' }} />
+                </div>
+              ) : !selected ? (
+                <div className={styles['datasets__detail-empty']}>
+                  <Boxes size={30} />
+                  <p>Select a suite to inspect its subgroups, capabilities, and source.</p>
+                </div>
+              ) : (
+                <DetailView
+                  benchmark={selected}
+                  subgroups={subgroups}
+                  shownSubgroups={shownSubgroups}
+                  caps={selCaps}
+                  capFilter={capFilter}
+                  toggleCap={toggleCap}
+                  subQuery={subQuery}
+                  setSubQuery={setSubQuery}
+                  copied={copied}
+                  copyValue={copyValue}
+                />
+              )}
+            </section>
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+interface DetailViewProps {
+  benchmark: Benchmark;
+  subgroups: NonNullable<Benchmark['tasks']>;
+  shownSubgroups: NonNullable<Benchmark['tasks']>;
+  caps: string[];
+  capFilter: string[];
+  toggleCap: (c: string) => void;
+  subQuery: string;
+  setSubQuery: (v: string) => void;
+  copied: string | null;
+  copyValue: (v: string) => void;
+}
+
+function DetailView({
+  benchmark: b, subgroups, shownSubgroups, caps, capFilter, toggleCap, subQuery, setSubQuery, copied, copyValue,
+}: DetailViewProps) {
+  const accent = hashColor(b.type);
+  return (
+    <div className={styles['datasets__detail-scroll']} key={b.name}>
+      <div className={styles['datasets__hero']}>
+        <span className={styles['datasets__hero-bar']} style={{ background: accent.fg }} />
+        <div className={styles['datasets__hero-top']}>
+          <div>
+            <span className={styles['datasets__hero-type']} style={{ color: accent.fg }}>{b.type}</span>
+            <h2>{b.name}</h2>
+          </div>
+          <a
+            className={styles['datasets__source']}
+            href={`https://huggingface.co/datasets/${b.huggingface_dataset}`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {b.huggingface_dataset} <ExternalLink size={13} />
+          </a>
+        </div>
+        <p className={styles['datasets__hero-desc']}>{b.description}</p>
+      </div>
+
+      <div className={styles['datasets__stats']}>
+        <Stat label="Tasks" value={b.task_count.toLocaleString()} />
+        <Stat label="Subgroups" value={subgroups.length || '—'} />
+        <Stat label="Capabilities" value={caps.length} />
+        <Stat label="Publisher" value={b.huggingface_dataset.split('/')[0]} mono />
+      </div>
+
+      <div className={styles['datasets__section']}>
+        <div className={styles['datasets__section-head']}>
+          <h3>Capabilities</h3>
+          <span className={styles['datasets__section-hint']}>
+            click to find similar suites <ArrowRight size={11} />
+          </span>
+        </div>
+        <div className={styles['datasets__caps']}>
+          {caps.map((c) => {
+            const col = hashColor(c);
+            const active = capFilter.includes(c);
+            return (
+              <button
+                key={c}
+                className={`${styles['datasets__cap']} ${active ? styles['datasets__cap--active'] : ''}`}
+                style={active
+                  ? { background: col.fg, color: '#fff', borderColor: col.fg }
+                  : { background: col.bg, color: col.fg, borderColor: 'transparent' }}
+                onClick={() => toggleCap(c)}
+              >
+                {c}{active && <Check size={12} />}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className={styles['datasets__section']}>
+        <div className={styles['datasets__section-head']}>
+          <h3>Subgroups {subgroups.length > 0 && <em>{subgroups.length}</em>}</h3>
+          {subgroups.length > 6 && (
+            <div className={styles['datasets__subsearch']}>
+              <Search size={13} />
+              <input placeholder="Filter subgroups…" value={subQuery} onChange={(e) => setSubQuery(e.target.value)} />
+            </div>
+          )}
+        </div>
+
+        {subgroups.length === 0 ? (
+          <div className={styles['datasets__single']}>
+            <Hash size={15} />
+            <div>
+              <strong>Runs as a single group.</strong>
+              <span>All {b.task_count.toLocaleString()} tasks execute together — no subset selection needed.</span>
+            </div>
+          </div>
+        ) : (
+          <div className={styles['datasets__subgrid']}>
+            {shownSubgroups.map((t) => (
+              <div key={t.value} className={styles['datasets__sub']}>
+                <span className={styles['datasets__sub-name']}>{t.name}</span>
+                <button className={styles['datasets__sub-code']} onClick={() => copyValue(t.value)} title="Copy value">
+                  <code>{t.value}</code>
+                  {copied === t.value ? <Check size={12} /> : <Copy size={12} />}
+                </button>
+              </div>
+            ))}
+            {shownSubgroups.length === 0 && (
+              <p className={styles['datasets__sub-none']}>No subgroup matches “{subQuery}”.</p>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className={styles['datasets__cta-row']}>
+        <button className={styles['datasets__primary']}>
+          Add to evaluation <CornerDownLeft size={14} />
+        </button>
+        <a
+          className={styles['datasets__secondary']}
+          href={`https://huggingface.co/datasets/${b.huggingface_dataset}`}
+          target="_blank"
+          rel="noreferrer"
+        >
+          View on Hugging Face <ExternalLink size={13} />
+        </a>
+      </div>
+    </div>
+  );
+}
+
+function Stat({ label, value, mono }: { label: string; value: string | number; mono?: boolean }) {
+  return (
+    <div className={styles['datasets__stat']}>
+      <span className={`${styles['datasets__stat-val']} ${mono ? styles['datasets__stat-val--mono'] : ''}`}>
+        {value}
+      </span>
+      <span className={styles['datasets__stat-label']}>{label}</span>
     </div>
   );
 }
@@ -691,14 +457,15 @@ export default function History() {
 
 
 
-
+//Datasets.module.scss
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
-// History — matches the Run Console / Dashboard / Providers / Model Catalog /
-// Datasets design system: ink/paper palette, ultramarine signal accent, mono
-// instrument labels, hover-lift, mono numerals. Master–detail split shell is
-// self-contained here (no dependency on global .split-shell*).
+// Datasets (Test Suite Library) — master/detail library browser.
+// Header + toolbar are unchanged from the original. The body below replaces
+// the card grid + modal with a scrollable list rail and a rich detail pane.
+// Uses the app's existing font variables ($font-mono / $font-body /
+// $font-display) — no font-family is introduced or overridden here.
 // ===========================================================================
 
 $ink:      #14161B;
@@ -712,19 +479,15 @@ $signal:   #2B2BF5;
 $signal-2: #1C1CC7;
 $wash:     #ECEDFF;
 $ok:       #0FA968;
-$ok-wash:  #E7F7EF;
 $amber:    #E08600;
 $amber-wash: #FDF3E3;
 $danger:   #DC2626;
-$danger-wash: #FDECEC;
-$ink-wash: #EEF0F2;
 
 $mono:    $font-mono;
 $sans:    $font-body;
 $display: $font-display;
 
 $soft: 0 1px 2px rgba(20, 22, 27, 0.05);
-$lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
 
 %micro {
   font-family: $mono;
@@ -734,7 +497,8 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
   text-transform: uppercase;
 }
 
-.history {
+.datasets {
+  // ---- header (unchanged) ---------------------------------------------------
   &__header {
     flex-shrink: 0;
     display: flex;
@@ -742,7 +506,6 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
     justify-content: space-between;
     gap: 1rem;
     padding: 24px 32px 20px;
-    margin-bottom: 0;
     border-bottom: 1px solid $line;
     background: $card;
 
@@ -777,10 +540,18 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
     margin-top: 4px;
     font-size: 0.84375rem;
     color: $ink-2;
+    max-width: 52ch;
   }
 
   &__header-meta {
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 3px;
+  }
+
+  &__header-count {
     display: inline-flex;
     align-items: center;
     gap: 7px;
@@ -795,883 +566,697 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
     text-transform: uppercase;
     color: $ink-2;
     white-space: nowrap;
-    margin-bottom: 3px;
   }
-}
 
-@property --angle {
-  syntax: '<angle>';
-  initial-value: 0deg;
-  inherits: false;
-}
-@keyframes history-rotate-angle {
-  to { --angle: 360deg; }
-}
-@keyframes history-live-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.5; transform: scale(1.3); }
-}
-@keyframes history-spin { to { transform: rotate(360deg); } }
-
-// Fixed-shell override: list + detail scroll independently, so pg-body
-// itself must not scroll — plain flex:1/min-height:0 pass-through.
-.pg-body-fixed {
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  padding: 20px 32px 24px;
-}
-
-// ---- self-contained split shell -------------------------------------------
-.shell {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  gap: 16px;
-}
-
-.sidebar {
-  flex-shrink: 0;
-  width: 380px;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  padding: 16px;
-  background: $card;
-  border: 1px solid $line;
-  border-radius: 16px;
-  box-shadow: $soft;
-}
-
-.detail {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 24px;
-  background: $card;
-  border: 1px solid $line;
-  border-radius: 16px;
-  box-shadow: $soft;
-}
-
-.filters { flex-shrink: 0; }
-
-// ---- filter toolbar --------------------------------------------------------
-.filter-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  margin-bottom: 8px;
-  background: $paper;
-  border: 1px solid $line;
-  border-radius: 12px;
-}
-
-.filter-toolbar__label {
-  flex-shrink: 0;
-  @extend %micro;
-  font-size: 0.625rem;
-  color: $ink-3;
-  padding-left: 4px;
-}
-
-.filter-toolbar__divider {
-  flex-shrink: 0;
-  width: 1px;
-  height: 16px;
-  background: $line;
-}
-
-.filter-toolbar__btn {
-  position: relative;
-  flex-shrink: 0;
-  width: 30px;
-  height: 30px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: $ink-2;
-  cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
-
-  &:hover { background: $card; color: $signal; box-shadow: $soft; }
-
-  &.on {
-    border-color: $signal;
+  &__refresh-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 13px;
+    border: 1px solid $line;
+    border-radius: 999px;
     background: $card;
-    color: $signal;
-    box-shadow: 0 0 0 3px $wash;
-  }
-}
-
-.filter-toolbar__dot {
-  position: absolute;
-  top: -2px;
-  right: -2px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: $signal;
-  border: 1.5px solid $paper;
-}
-
-.filter-toolbar__summary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.filter-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-family: $mono;
-  font-size: 0.65625rem;
-  font-weight: 700;
-  color: $signal;
-  background: $wash;
-  border: 1px solid rgba($signal, 0.18);
-  border-radius: 999px;
-  padding: 4px 8px;
-  white-space: nowrap;
-  max-width: 140px;
-
-  span { overflow: hidden; text-overflow: ellipsis; }
-
-  svg {
+    color: $ink-2;
+    font-family: $sans;
+    font-size: 0.78125rem;
+    font-weight: 650;
     cursor: pointer;
-    flex-shrink: 0;
-    opacity: 0.6;
-    transition: opacity 0.15s ease;
-    &:hover { opacity: 1; }
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+    &:hover { border-color: $ink-3; color: $ink; background: $paper; }
   }
-}
 
-// ---- collapsible filter panel ----------------------------------------------
-.filter-panel {
-  display: grid;
-  grid-template-rows: 0fr;
-  opacity: 0;
-  transition: grid-template-rows 0.18s ease, opacity 0.15s ease, margin-bottom 0.18s ease;
+  // ---- toolbar (unchanged) --------------------------------------------------
+  &__toolbar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 14px 32px;
+    background: $card;
+    border-bottom: 1px solid $line;
+    flex-wrap: wrap;
+  }
 
-  > * {
-    overflow: hidden;
-    min-height: 0;
+  &__search {
+    position: relative;
+    flex: 1;
+    max-width: 360px;
+    min-width: 200px;
+
+    svg {
+      position: absolute;
+      top: 50%;
+      left: 13px;
+      transform: translateY(-50%);
+      color: $ink-3;
+      pointer-events: none;
+    }
+
+    input {
+      width: 100%;
+      border: 1.5px solid $line;
+      border-radius: 10px;
+      padding: 9px 12px 9px 38px;
+      font-size: 0.84375rem;
+      font-family: $sans;
+      color: $ink;
+      background: $paper;
+      transition: border-color 0.15s ease, background 0.15s ease;
+
+      &::placeholder { color: $ink-3; }
+      &:focus { outline: none; border-color: $signal; background: $card; }
+    }
+  }
+
+  &__toolbar-label {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 8px 5px 9px;
+    color: $ink-3;
+  }
+
+  &__filters {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px;
     background: $paper;
     border: 1px solid $line;
-    border-radius: 12px;
-    padding: 10px;
+    border-radius: 999px;
+    flex-wrap: wrap;
   }
 
-  &--open {
-    grid-template-rows: 1fr;
-    opacity: 1;
-    margin-bottom: 8px;
-  }
-}
+  &__filter-pill {
+    padding: 6px 13px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: $ink-2;
+    font-size: 0.78125rem;
+    font-weight: 650;
+    cursor: pointer;
+    transition: all 0.15s ease;
 
-// ---- filter panel inner controls (self-contained search + pills) -----------
-.panel-search {
-  position: relative;
+    &:hover { color: $ink; }
 
-  svg {
-    position: absolute;
-    top: 50%;
-    left: 12px;
-    transform: translateY(-50%);
-    color: $ink-3;
-    pointer-events: none;
-  }
-
-  input {
-    width: 100%;
-    border: 1.5px solid $line;
-    border-radius: 9px;
-    padding: 8px 11px 8px 36px;
-    font-size: 0.8125rem;
-    font-family: $sans;
-    color: $ink;
-    background: $card;
-
-    &::placeholder { color: $ink-3; }
-    &:focus { outline: none; border-color: $signal; box-shadow: 0 0 0 3px $wash; }
-  }
-}
-
-.panel-pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.panel-pill {
-  padding: 6px 12px;
-  border: 1px solid $line;
-  border-radius: 999px;
-  background: $card;
-  color: $ink-2;
-  font-size: 0.75rem;
-  font-weight: 650;
-  cursor: pointer;
-  transition: all 0.14s ease;
-
-  &:hover { border-color: $ink-3; color: $ink; }
-
-  &.on {
-    border-color: $signal;
-    background: $signal;
-    color: #fff;
-  }
-}
-
-.empty {
-  padding: 24px;
-  text-align: center;
-  color: $ink-3;
-  font-size: 0.8125rem;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  justify-content: center;
-}
-
-// ---- evaluation list rows --------------------------------------------------
-.rows {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: 14px;
-  padding-right: 2px;
-}
-
-.row {
-  position: relative;
-  border: 1.5px solid $line;
-  border-radius: 14px;
-  padding: 14px;
-  cursor: pointer;
-  background: $card;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease, background 0.15s ease;
-}
-.row:hover { border-color: $ink-3; box-shadow: $soft; transform: translateY(-1px); }
-.row.selected { border-color: $signal; background: $wash; box-shadow: 0 0 0 1px $signal inset; }
-
-// Running-state: a multi-color light traveling around the border via a
-// rotating conic angle.
-.row--running {
-  --angle: 0deg;
-  border: 1.5px solid transparent;
-  background:
-    linear-gradient($card, $card) padding-box,
-    conic-gradient(
-      from var(--angle),
-      $line 0%,
-      $signal 4%,
-      #8B5CF6 8%,
-      #EC4899 12%,
-      $line 18%
-    ) border-box;
-  animation: history-rotate-angle 2.4s linear infinite;
-}
-.row--running.selected {
-  background:
-    linear-gradient($wash, $wash) padding-box,
-    conic-gradient(
-      from var(--angle),
-      $line 0%,
-      $signal 4%,
-      #8B5CF6 8%,
-      #EC4899 12%,
-      $line 18%
-    ) border-box;
-}
-
-
-.row__top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
-.row__icon {
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
-  background: $wash;
-  color: $signal;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-.row__name {
-  font-family: $display;
-  font-weight: 700;
-  font-size: 0.875rem;
-  color: $ink;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.row__badges { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
-.row__meta { font-family: $mono; font-size: 0.6875rem; color: $ink-3; margin-bottom: 8px; }
-.row__stats {
-  display: flex;
-  gap: 12px;
-  font-family: $mono;
-  font-size: 0.6875rem;
-  color: $ink-2;
-  flex-wrap: wrap;
-}
-
-// ---- type tag + status badge (shared visual grammar) -----------------------
-.type-tag {
-  display: inline-flex;
-  align-items: center;
-  font-family: $mono;
-  font-size: 0.625rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: $signal;
-  background: $wash;
-  border-radius: 6px;
-  padding: 3px 8px;
-  white-space: nowrap;
-}
-
-.status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px 3px 9px;
-  border-radius: 999px;
-  font-family: $mono;
-  font-size: 0.625rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-
-  &::before { content: ''; width: 5px; height: 5px; border-radius: 50%; }
-
-  &--completed { color: $ok; background: $ok-wash; &::before { background: $ok; } }
-  &--running   { color: $signal; background: $wash; &::before { display: none; } }
-  &--pending   { color: $amber; background: $amber-wash; &::before { background: $amber; } }
-  &--failed,
-  &--canceled  { color: $ink-3; background: $ink-wash; &::before { background: $ink-3; } }
-}
-
-.live-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  display: inline-block;
-  animation: history-live-pulse 1.4s ease-in-out infinite;
-}
-
-// ---- detail panel ----------------------------------------------------------
-.detail-empty {
-  padding: 80px 24px;
-  text-align: center;
-  color: $ink-3;
-  font-size: 0.875rem;
-}
-
-.detail-hdr {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 24px;
-  flex-wrap: wrap;
-  gap: 16px;
-}
-.detail-hdr__badges { display: flex; gap: 8px; margin-bottom: 12px; }
-.detail-hdr__name {
-  font-family: $display;
-  font-size: 1.375rem;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  color: $ink;
-}
-.detail-hdr__date { font-family: $mono; font-size: 0.71875rem; color: $ink-3; margin-top: 6px; }
-.detail-hdr__actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.dl-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 12px;
-  border-radius: 9px;
-  border: 1px solid $line;
-  background: $paper;
-  color: $ink-2;
-  font-family: $mono;
-  font-size: 0.6875rem;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
-
-  &:hover:not(:disabled) { border-color: $signal; color: $signal; background: $wash; }
-
-  &:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-  }
-}
-
-.summary-cards {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-  margin-bottom: 24px;
-}
-.summary-card {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 15px 16px;
-  background: $paper;
-  border: 1px solid $line;
-  border-radius: 14px;
-}
-.summary-card__icon {
-  flex-shrink: 0;
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  display: grid;
-  place-items: center;
-  background: $card;
-  border: 1px solid $line;
-
-  &--win { color: $amber; }
-  &--info { color: $signal; }
-  &--status { color: $ok; }
-}
-.summary-card__label {
-  @extend %micro;
-  font-size: 0.5625rem;
-  color: $ink-3;
-}
-.summary-card__val {
-  font-size: 0.8125rem;
-  font-weight: 700;
-  color: $ink;
-  margin-top: 3px;
-}
-
-// ---- results metadata strip (benchmark / dataset / started / metrics) ------
-.meta-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 20px;
-  padding: 12px 16px;
-  margin-bottom: 16px;
-  background: $paper;
-  border: 1px solid $line;
-  border-radius: 12px;
-}
-.meta-strip__item {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-.meta-strip__label {
-  @extend %micro;
-  font-size: 0.5625rem;
-  color: $ink-3;
-}
-.meta-strip__val {
-  font-family: $mono;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: $ink;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.meta-strip__chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
-// ---- test-details launcher button (in results table) ------------------
-.cell-details { width: 32px; text-align: center; }
-.details-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
-  border: 1px solid $line;
-  background: $paper;
-  color: $ink-2;
-  cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
-
-  &:hover { border-color: $signal; color: $signal; background: $wash; }
-}
-
-// ---- test-details slide-over drawer ------------------------------------
-.drawer-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(20, 22, 27, 0.32);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.22s ease;
-  z-index: 40;
-
-  &--open { opacity: 1; pointer-events: auto; }
-}
-
-.drawer {
-  position: fixed;
-  top: 0;
-  right: 0;
-  height: 100%;
-  width: 480px;
-  max-width: 92vw;
-  background: $card;
-  border-left: 1px solid $line;
-  box-shadow: -18px 0 40px -20px rgba(20, 22, 27, 0.35);
-  transform: translateX(100%);
-  transition: transform 0.26s cubic-bezier(0.22, 1, 0.36, 1);
-  z-index: 41;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-
-  &--open { transform: translateX(0); }
-}
-
-.drawer__header {
-  flex-shrink: 0;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 20px 20px 16px;
-  border-bottom: 1px solid $line;
-}
-.drawer__eyebrow {
-  @extend %micro;
-  font-size: 0.625rem;
-  color: $signal;
-  margin-bottom: 6px;
-}
-.drawer__title {
-  font-family: $display;
-  font-size: 1.125rem;
-  font-weight: 800;
-  letter-spacing: -0.01em;
-  color: $ink;
-}
-.drawer__sub {
-  margin-top: 5px;
-  font-family: $mono;
-  font-size: 0.71875rem;
-  color: $ink-3;
-}
-.drawer__close {
-  flex-shrink: 0;
-  width: 30px;
-  height: 30px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px;
-  border: 1px solid $line;
-  background: $paper;
-  color: $ink-2;
-  cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
-
-  &:hover { border-color: $ink-3; color: $ink; }
-}
-
-// ---- tab switcher (test details vs metric scores) --------------------
-.drawer__tabs {
-  flex-shrink: 0;
-  display: flex;
-  gap: 6px;
-  padding: 10px 20px 0;
-  border-bottom: 1px solid $line;
-  background: $card;
-}
-.drawer__tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  border: 1px solid transparent;
-  border-bottom: 2px solid transparent;
-  border-radius: 8px 8px 0 0;
-  background: transparent;
-  color: $ink-3;
-  font-family: $mono;
-  font-size: 0.71875rem;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  cursor: pointer;
-  transition: color 0.15s ease, border-color 0.15s ease;
-  margin-bottom: -1px;
-
-  &:hover:not(:disabled) { color: $ink-2; }
-
-  &.on {
-    color: $signal;
-    border-bottom-color: $signal;
+    &--on {
+      background: $card;
+      color: $signal;
+      box-shadow: $soft;
+    }
   }
 
-  &:disabled {
-    opacity: 0.35;
-    cursor: not-allowed;
-  }
-}
-
-.drawer__stats {
-  flex-shrink: 0;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 14px;
-  padding: 12px 20px;
-  border-bottom: 1px solid $line;
-  background: $paper;
-  font-family: $mono;
-  font-size: 0.71875rem;
-  font-weight: 700;
-  color: $ink-2;
-}
-.drawer__stat {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  text-transform: capitalize;
-}
-.drawer__stat-icon--pass { color: $ok; }
-.drawer__stat-icon--fail { color: $danger; }
-
-.drawer__body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 16px 20px 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-// ---- metric-score bars (Answer Relevancy, Toxicity, Bias, ...) -------
-.metric-card {
-  border: 1px solid $line;
-  border-radius: 12px;
-  padding: 13px 16px;
-  background: $paper;
-}
-.metric-card__hdr {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 9px;
-}
-.metric-card__label {
-  font-family: $display;
-  font-weight: 700;
-  font-size: 0.8125rem;
-  color: $ink;
-  text-transform: capitalize;
-}
-.metric-card__value {
-  font-family: $mono;
-  font-size: 0.8125rem;
-  font-weight: 800;
-  flex-shrink: 0;
-
-  &--good { color: $ok; }
-  &--mid  { color: $amber; }
-  &--low  { color: $danger; }
-}
-.metric-card__track {
-  height: 7px;
-  border-radius: 999px;
-  background: $line-2;
-  overflow: hidden;
-}
-.metric-card__fill {
-  height: 100%;
-  border-radius: 999px;
-  transition: width 0.3s ease;
-
-  &--good { background: $ok; }
-  &--mid  { background: $amber; }
-  &--low  { background: $danger; }
-}
-
-.detail-card {
-  border: 1px solid $line;
-  border-left: 3px solid $line;
-  border-radius: 12px;
-  padding: 14px 16px;
-  background: $paper;
-
-  &--pass { border-left-color: $ok; }
-  &--fail { border-left-color: $danger; background: rgba($danger, 0.03); }
-}
-.detail-card__hdr {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-.detail-card__task {
-  font-family: $display;
-  font-weight: 700;
-  font-size: 0.8125rem;
-  color: $ink;
-}
-.detail-card__badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-family: $mono;
-  font-size: 0.625rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  flex-shrink: 0;
-
-  &--pass { color: $ok; background: $ok-wash; }
-  &--fail { color: $danger; background: $danger-wash; }
-}
-.detail-card__row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  margin-top: 10px;
-}
-.detail-card__field {
-  min-width: 0;
-}
-.detail-card__label {
-  @extend %micro;
-  font-size: 0.5625rem;
-  color: $ink-3;
-  display: block;
-  margin-bottom: 4px;
-}
-.detail-card__text {
-  font-family: $mono;
-  font-size: 0.75rem;
-  line-height: 1.5;
-  color: $ink;
-  white-space: pre-wrap;
-  word-break: break-word;
-  background: $card;
-  border: 1px solid $line-2;
-  border-radius: 8px;
-  padding: 8px 10px;
-}
-.detail-card__text--fail { color: $danger; border-color: rgba($danger, 0.25); }
-
-@media (max-width: 640px) {
-  .drawer { width: 100%; max-width: 100vw; }
-  .detail-card__row { grid-template-columns: 1fr; }
-}
-
-// ---- results table ---------------------------------------------------------
-.results {
-  border: 1px solid $line;
-  border-radius: 14px;
-  overflow: hidden;
-}
-
-.results-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.84375rem;
-
-  thead th {
-    text-align: left;
-    background: $paper;
+  // ---- capability facet bar -------------------------------------------------
+  &__facets {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 10px 32px;
+    background: $wash;
     border-bottom: 1px solid $line;
-    @extend %micro;
-    font-size: 0.5625rem;
-    color: $ink-3;
-    padding: 11px 14px;
-    white-space: nowrap;
+    color: $signal-2;
   }
 
-  tbody tr {
+  &__facets-lead {
+    font-size: 0.75rem;
+    font-weight: 650;
+    color: $ink-2;
+  }
+
+  &__facet {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 6px 4px 10px;
+    border: 0;
+    border-radius: 999px;
+    font-family: $mono;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: filter 0.12s ease;
+
+    &:hover { filter: brightness(0.96); }
+  }
+
+  &__facets-clear {
+    margin-left: 2px;
+    border: 0;
+    background: none;
+    color: $signal;
+    font-family: $sans;
+    font-size: 0.75rem;
+    font-weight: 700;
+    cursor: pointer;
+
+    &:hover { text-decoration: underline; }
+  }
+
+  // ---- body split -----------------------------------------------------------
+  // NOTE: relies on the page shell (.pg-shell) being a flex column that gives
+  // this element the remaining height. If your shell differs, set a height /
+  // min-height on &__body instead of flex:1.
+  &__body {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(300px, 360px) 1fr;
+  }
+
+  // ---- list rail ------------------------------------------------------------
+  &__rail {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-right: 1px solid $line;
+    background: $card;
+  }
+
+  &__rail-head {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 18px;
     border-bottom: 1px solid $line-2;
+    font-family: $mono;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: $ink-3;
+  }
+
+  &__rail-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  &__rail-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  &__row {
+    position: relative;
+    text-align: left;
+    width: 100%;
+    border: 0;
+    cursor: pointer;
+    background: transparent;
+    border-radius: 12px;
+    padding: 11px 13px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-family: $sans;
     transition: background 0.13s ease;
 
-    &:last-child { border-bottom: 0; }
     &:hover { background: $paper; }
+
+    &--on { background: $wash; }
   }
 
-  tbody tr.winner {
-    background: rgba($amber, 0.05);
-    &:hover { background: rgba($amber, 0.09); }
+  &__row-accent {
+    position: absolute;
+    left: 3px;
+    top: 12px;
+    bottom: 12px;
+    width: 3px;
+    border-radius: 2px;
+    opacity: 0;
+    transition: opacity 0.13s ease;
+
+    .datasets__row--on & { opacity: 1; }
   }
 
-  tbody td {
-    padding: 12px 14px;
+  &__row-top {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  &__row-name {
+    font-family: $display;
+    font-size: 0.9375rem;
+    font-weight: 600;
     color: $ink;
   }
+
+  &__row-count {
+    font-family: $mono;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: $ink-3;
+  }
+
+  &__spine {
+    height: 3px;
+    border-radius: 2px;
+    background: $line-2;
+    overflow: hidden;
+
+    span { display: block; height: 100%; border-radius: 2px; opacity: 0.85; }
+  }
+
+  &__row-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  &__row-type {
+    font-family: $mono;
+    font-size: 0.625rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  &__row-dots {
+    display: inline-flex;
+    gap: 4px;
+
+    i { width: 6px; height: 6px; border-radius: 99px; display: block; }
+  }
+
+  &__empty-rail {
+    margin: auto;
+    text-align: center;
+    color: $ink-3;
+    padding: 40px 16px;
+
+    svg { margin-bottom: 8px; }
+    p { font-size: 0.8125rem; line-height: 1.5; margin: 0; }
+  }
+
+  // ---- loading skeleton -----------------------------------------------------
+  &__skel-row {
+    padding: 11px 13px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  &__skel {
+    display: block;
+    height: 10px;
+    border-radius: 6px;
+    background: linear-gradient(90deg, $line-2 25%, $paper 50%, $line-2 75%);
+    background-size: 200% 100%;
+    animation: datasets-shimmer 1.2s ease-in-out infinite;
+  }
+
+  // ---- detail ---------------------------------------------------------------
+  &__detail {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  &__detail-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 26px 30px 40px;
+    max-width: 760px;
+    animation: datasets-detail-in 0.22s ease;
+  }
+
+  &__detail-empty {
+    margin: auto;
+    text-align: center;
+    color: $ink-3;
+    max-width: 280px;
+
+    svg { margin-bottom: 10px; }
+    p { font-size: 0.875rem; line-height: 1.5; }
+  }
+
+  &__hero {
+    position: relative;
+    padding-left: 18px;
+    margin-bottom: 22px;
+  }
+
+  &__hero-bar {
+    position: absolute;
+    left: 0;
+    top: 4px;
+    bottom: 4px;
+    width: 4px;
+    border-radius: 3px;
+  }
+
+  &__hero-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  &__hero-type {
+    font-family: $mono;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  &__hero {
+    h2 {
+      font-family: $display;
+      font-size: 1.875rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin: 5px 0 0;
+      line-height: 1.1;
+      color: $ink;
+    }
+  }
+
+  &__hero-desc {
+    margin: 14px 0 0;
+    font-size: 0.9375rem;
+    line-height: 1.6;
+    color: $ink-2;
+  }
+
+  &__source {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: $mono;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: $signal;
+    text-decoration: none;
+    padding: 5px 10px;
+    border: 1px solid $line;
+    border-radius: 8px;
+    background: $card;
+    white-space: nowrap;
+    transition: border-color 0.15s ease, background 0.15s ease;
+
+    &:hover { border-color: $signal; background: $wash; }
+  }
+
+  &__stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: $line;
+    border: 1px solid $line;
+    border-radius: 14px;
+    overflow: hidden;
+    margin-bottom: 26px;
+  }
+
+  &__stat {
+    background: $card;
+    padding: 15px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  &__stat-val {
+    font-family: $display;
+    font-size: 1.375rem;
+    font-weight: 700;
+    color: $ink;
+    letter-spacing: -0.02em;
+    line-height: 1;
+
+    &--mono { font-family: $mono; font-size: 0.9375rem; font-weight: 700; }
+  }
+
+  &__stat-label {
+    font-family: $mono;
+    font-size: 0.625rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: $ink-3;
+  }
+
+  &__section {
+    margin-bottom: 26px;
+  }
+
+  &__section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+
+    h3 {
+      font-family: $display;
+      font-size: 0.9375rem;
+      font-weight: 700;
+      color: $ink;
+      margin: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+
+      em {
+        font-family: $mono;
+        font-style: normal;
+        font-size: 0.6875rem;
+        font-weight: 700;
+        color: $ink-3;
+        background: $paper;
+        border: 1px solid $line;
+        border-radius: 99px;
+        padding: 2px 8px;
+      }
+    }
+  }
+
+  &__section-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.71875rem;
+    color: $ink-3;
+  }
+
+  &__caps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  &__cap {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border: 1px solid;
+    border-radius: 8px;
+    font-family: $mono;
+    font-size: 0.71875rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.13s ease;
+
+    &:hover { transform: translateY(-1px); }
+
+    &--active { box-shadow: $soft; }
+  }
+
+  &__subsearch {
+    position: relative;
+
+    svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: $ink-3; }
+
+    input {
+      width: 190px;
+      border: 1.5px solid $line;
+      border-radius: 8px;
+      padding: 6px 10px 6px 30px;
+      font-size: 0.78125rem;
+      font-family: $sans;
+      background: $paper;
+      color: $ink;
+      transition: border-color 0.15s ease, background 0.15s ease;
+
+      &:focus { outline: none; border-color: $signal; background: $card; }
+    }
+  }
+
+  &__subgrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 6px;
+  }
+
+  &__sub {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 9px 11px;
+    border: 1px solid $line;
+    border-radius: 10px;
+    background: $card;
+    transition: border-color 0.13s ease;
+
+    &:hover { border-color: $ink-3; }
+  }
+
+  &__sub-name {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: $ink;
+    text-transform: capitalize;
+  }
+
+  &__sub-code {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid $line;
+    background: $paper;
+    border-radius: 6px;
+    padding: 2px 6px;
+    cursor: pointer;
+    color: $ink-3;
+    transition: border-color 0.13s ease, color 0.13s ease;
+
+    code { font-family: $mono; font-size: 0.6875rem; color: $ink-2; }
+
+    &:hover { border-color: $signal; color: $signal; }
+    &:hover code { color: $signal; }
+  }
+
+  &__sub-none {
+    grid-column: 1 / -1;
+    font-size: 0.8125rem;
+    color: $ink-3;
+  }
+
+  &__single {
+    display: flex;
+    gap: 11px;
+    align-items: flex-start;
+    padding: 14px 16px;
+    border: 1px dashed $line;
+    border-radius: 12px;
+    background: $paper;
+    color: $ink-3;
+
+    strong { display: block; font-size: 0.8125rem; color: $ink; font-weight: 650; }
+    span { display: block; font-size: 0.78125rem; color: $ink-2; margin-top: 2px; }
+  }
+
+  &__cta-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding-top: 20px;
+    border-top: 1px solid $line-2;
+  }
+
+  &__primary {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 18px;
+    border: 0;
+    border-radius: 10px;
+    background: $signal;
+    color: #fff;
+    font-family: $sans;
+    font-size: 0.84375rem;
+    font-weight: 650;
+    cursor: pointer;
+    box-shadow: 0 6px 16px -8px rgba(43, 43, 245, 0.7);
+    transition: background 0.15s ease;
+
+    &:hover { background: $signal-2; }
+  }
+
+  &__secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 10px 16px;
+    border: 1px solid $line;
+    border-radius: 10px;
+    background: $card;
+    color: $ink-2;
+    font-family: $sans;
+    font-size: 0.84375rem;
+    font-weight: 650;
+    text-decoration: none;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+    &:hover { border-color: $ink-3; color: $ink; background: $paper; }
+  }
+
+  // ---- state banner (error) -------------------------------------------------
+  &__state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 48px 24px;
+    margin: 24px 32px;
+    border: 1px dashed $line;
+    border-radius: 16px;
+    background: $paper;
+    color: $ink-2;
+    font-size: 0.875rem;
+    text-align: center;
+
+    svg { color: $ink-3; }
+  }
+
+  &__state--error svg { color: $danger; }
 }
 
-.cell-rank { font-family: $mono; font-weight: 700; color: $ink; }
-.cell-model { font-family: $display; font-weight: 700; color: $ink; }
-.cell-provider { color: $ink-2; }
-.cell-num { font-family: $mono; font-size: 0.8125rem; font-weight: 700; color: $ink; }
-.cell-num--muted { font-weight: 500; color: $ink-2; }
-.cell-pass { font-family: $mono; font-size: 0.8125rem; font-weight: 700; color: $ok; }
-.cell-fail { font-family: $mono; font-size: 0.8125rem; font-weight: 700; color: $danger; }
-
-.status-message {
-  padding: 40px;
-  text-align: center;
-  background: $paper;
-  border: 1px dashed $line;
-  border-radius: 14px;
-  color: $ink-2;
-  font-size: 0.875rem;
+@keyframes datasets-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
 }
 
-.spin { animation: history-spin 0.8s linear infinite; }
-
-@media (max-width: 900px) {
-  .shell { flex-direction: column; }
-  .sidebar { width: 100%; }
-  .summary-cards { grid-template-columns: 1fr; }
-  // Once stacked, fall back to one normal scrolling column.
-  .pg-body-fixed { overflow-y: auto; }
-  .sidebar, .detail { overflow-y: visible; min-height: 0; }
-  .rows { overflow-y: visible; }
+@keyframes datasets-detail-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
 }
 
-@media (max-width: 640px) {
-  .history__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
-  .pg-body-fixed { padding: 16px 18px 22px; }
+@media (max-width: 820px) {
+  .datasets__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
+  .datasets__toolbar { padding: 12px 18px; }
+  .datasets__facets { padding: 10px 18px; }
+  .datasets__body { grid-template-columns: 1fr; grid-template-rows: minmax(180px, 34vh) 1fr; }
+  .datasets__rail { border-right: 0; border-bottom: 1px solid $line; }
+  .datasets__detail-scroll { padding: 20px 18px 32px; }
+  .datasets__stats { grid-template-columns: repeat(2, 1fr); }
+  .datasets__hero h2 { font-size: 1.5rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .datasets__skel,
+  .datasets__detail-scroll { animation: none; }
+  .datasets__row,
+  .datasets__cap,
+  .datasets__sub { transition: none; }
 }
