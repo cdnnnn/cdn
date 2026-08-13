@@ -37,10 +37,12 @@ import { useAppDispatch, useAppSelector } from '../../hooks/redux';
 import { fetchProviders } from '../../store/slices/providersSlice';
 import { fetchModels, checkModelHealth } from '../../store/slices/modelsSlice';
 import { fetchDatasets, uploadDataset, resetUploadStatus } from '../../store/slices/datasetsSlice';
-// `datasetsApi.preview` — GET /datasets/{id}/preview?limit={limit} — is a
-// thin, one-off read used only by the preview slider below, so it's called
-// directly from the API module rather than round-tripped through Redux.
-import { SUPPORTED_UPLOAD_EXTENSIONS, datasetsApi } from '../../api/endpoints/datasets';
+import { SUPPORTED_UPLOAD_EXTENSIONS } from '../../api/endpoints/datasets';
+// `evaluationsApi.previewDataset` — GET /datasets/{id}/preview?limit={limit} —
+// is a thin, one-off read used only by the Test Suite preview slider below.
+// It lives in the evaluations API module (not datasets) and is called
+// directly rather than round-tripped through Redux.
+import { evaluationsApi } from '../../api/endpoints/evaluations';
 import { fetchMetrics } from '../../store/slices/metricsSlice';
 import {
   launchEvaluation,
@@ -410,7 +412,7 @@ export default function NewEvaluation() {
     setPreviewLoading(true);
     setPreviewError(null);
     try {
-      const data = await datasetsApi.preview(previewDatasetId, previewLimit);
+      const data = await evaluationsApi.previewDataset(previewDatasetId, previewLimit);
       setPreviewData(data);
     } catch (err) {
       const detail =
@@ -1899,6 +1901,94 @@ export default function NewEvaluation() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Evaluations.ts
+//Evaluations.ts
+import api from '../axiosInstance';
+import type {
+  AgentBenchmarkRunMultiRequest,
+  AgentBenchmarkRunRequest,
+  CreateEvaluationRequest,
+  CreateEvaluationResponse,
+  DatasetPreviewResponse,
+  EvaluationsListResponse,
+  EvaluationResultsResponse,
+} from '../../types';
+
+// Re-exported for convenience so existing imports of these two request
+// types from this module (e.g. in evaluationsSlice.ts) keep working —
+// the canonical definitions now live in ../../types.
+export type { AgentBenchmarkRunRequest, AgentBenchmarkRunMultiRequest };
+
+export const evaluationsApi = {
+  // Populates the History sidebar list. Called on mount and every 10s
+  // (silent poll) — see History.tsx.
+  list: () => api.get<EvaluationsListResponse>('/evaluations').then((r) => r.data.evaluations),
+
+  create: (payload: CreateEvaluationRequest) =>
+    api.post<CreateEvaluationResponse>('/evaluations', payload).then((r) => r.data),
+
+  start: (evaluationId: string) =>
+    api.post<void>(`/evaluations/${evaluationId}/start`).then(() => undefined),
+
+  // Only ever called when the selected evaluation's status === 'completed'.
+  // The backend returns 400 with { detail: "Execution not completed." } if
+  // called too early — callers should surface err.response.data.detail.
+  results: (evaluationId: string) =>
+    api.get<EvaluationResultsResponse>(`/evaluations/${evaluationId}/results`).then((r) => r.data),
+
+  // Convenience helper used by the wizard's "Start Evaluation" (step 7):
+  // create, then immediately start. Only for draft.type 'model' | 'rag'.
+  createAndStart: async (payload: CreateEvaluationRequest) => {
+    const created = await evaluationsApi.create(payload);
+    const id = created.id || created.evaluation_id;
+    if (!id) {
+      throw new Error('Evaluation was created but no id was returned by the server.');
+    }
+    await evaluationsApi.start(id);
+    return id;
+  },
+
+  // POST /agent-benchmark/run — draft.type === 'agent', no framework selected.
+  // 200 OK response means successful submission; no meaningful body is relied upon.
+  runAgentBenchmark: (payload: AgentBenchmarkRunRequest) =>
+    api.post<void>('/agent-benchmark/run', payload).then(() => undefined),
+
+  // POST /agent-benchmark/run-multi — draft.type === 'agent', framework selected.
+  // 200 OK response means successful submission; no meaningful body is relied upon.
+  runAgentBenchmarkMulti: (payload: AgentBenchmarkRunMultiRequest) =>
+    api.post<void>('/agent-benchmark/run-multi', payload).then(() => undefined),
+
+  // GET /datasets/{id}/preview?limit={limit} — lives here (not in the
+  // datasets API module) since it's only ever used from the evaluation
+  // wizard's Test Suite step preview slider. `limit` is caller-clamped to
+  // 1–20 (see NewEvaluation.tsx) before this is called.
+  previewDataset: (datasetId: string, limit: number) =>
+    api
+      .get<DatasetPreviewResponse>(`/datasets/${datasetId}/preview`, { params: { limit } })
+      .then((r) => r.data),
+};
+
+
+
+
+
+
 
 
 
@@ -4083,16 +4173,6 @@ $ring:  0 0 0 3px rgba(43, 43, 245, 0.16);
 @media (prefers-reduced-motion: reduce) {
   .ev *, .ev-toast { animation: none !important; transition: none !important; }
 }
-
-
-
-
-
-
-
-
-
-
 
 
 
