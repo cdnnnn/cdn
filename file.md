@@ -1,28 +1,16 @@
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
-// Providers — matches the History/Reports/Comparison/Sidebar design system:
+// Providers — matches the Run Console / Dashboard design system:
 // ink/paper palette, ultramarine signal accent, mono instrument labels,
-// hover-lift cards. Neutrals resolve to theme CSS vars for dark mode.
+// hover-lift cards. Sidebar block keys are kept stable (shared with
+// ProviderModelsSidebar) but recolored to the same tokens.
+//
+// Neutral/status tokens ($ink, $paper, $card, $line, $signal, $wash, $ok,
+// $danger, etc.) now come from the shared "ink" block in _variables.scss
+// (theme-aware via _theme.scss custom properties) — only font aliases and
+// shadow tokens specific to this file are declared locally below.
 // ===========================================================================
-
-$ink:      var(--ink-1);
-$ink-2:    var(--ink-2);
-$ink-3:    var(--ink-3);
-$paper:    var(--paper);
-$card:     var(--card);
-$line:     var(--line);
-$line-2:   var(--line-2);
-$signal:   #2B2BF5;
-$signal-2: #1C1CC7;
-$wash:     var(--signal-wash);
-$ok:       #0FA968;
-$ok-wash:  var(--ok-wash);
-$amber:    #E08600;
-$amber-wash: var(--amber-wash);
-$danger:   #DC2626;
-$danger-wash: var(--danger-wash);
-$ink-wash: var(--ink-wash);
 
 $mono:    $font-mono;
 $sans:    $font-body;
@@ -39,435 +27,572 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
   text-transform: uppercase;
 }
 
-// ---- header -----------------------------------------------------------
-.providers__header {
-  flex-shrink: 0;
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 24px 32px 20px;
-  border-bottom: 1px solid $line;
-  background: $card;
+.providers {
+  // ---- header -----------------------------------------------------------
+  &__header {
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 24px 32px 20px;
+    margin-bottom: 20px;
+    border-bottom: 1px solid $line;
+    background: $card;
 
-  h1 {
-    font-family: $display;
-    font-size: 1.5rem;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    color: $ink;
-    line-height: 1.2;
+    h1 {
+      font-family: $display;
+      font-size: 1.5rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: $ink;
+      line-height: 1.2;
+    }
   }
-}
 
-.providers__header-eyebrow {
-  @extend %micro;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: $signal;
-  margin-bottom: 6px;
+  &__header-eyebrow {
+    @extend %micro;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: $signal;
+    margin-bottom: 6px;
 
-  &::before {
-    content: '';
-    width: 16px;
-    height: 2px;
-    border-radius: 2px;
-    background: $signal;
+    &::before {
+      content: '';
+      width: 16px;
+      height: 2px;
+      border-radius: 2px;
+      background: $signal;
+    }
   }
-}
 
-.providers__header-sub {
-  margin-top: 4px;
-  font-size: 0.84375rem;
-  color: $ink-2;
-}
+  &__header-sub {
+    margin-top: 4px;
+    font-size: 0.84375rem;
+    color: $ink-2;
+  }
 
-.providers__header-meta {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 7px 13px;
-  border-radius: 999px;
-  border: 1px solid $line;
-  background: $paper;
-  font-family: $mono;
-  font-size: 0.71875rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: $ink-2;
-  white-space: nowrap;
-  margin-bottom: 3px;
-}
+  &__header-meta {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 13px;
+    border-radius: 999px;
+    border: 1px solid $line;
+    background: $paper;
+    font-family: $mono;
+    font-size: 0.71875rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: $ink-2;
+    white-space: nowrap;
+    margin-bottom: 3px;
+  }
 
-// ---- toolbar ------------------------------------------------------------
-.providers__toolbar {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-  padding: 16px 32px;
-  border-bottom: 1px solid $line;
-  background: $card;
-}
+  // ---- toolbar ------------------------------------------------------------
+  &__toolbar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 14px 32px;
+    background: $card;
+    border-bottom: 1px solid $line;
+    flex-wrap: wrap;
+  }
 
-.providers__search {
-  position: relative;
-  flex: 1;
-  min-width: 220px;
-  max-width: 320px;
+  &__search {
+    position: relative;
+    flex: 1;
+    max-width: 340px;
+    min-width: 200px;
 
-  svg {
-    position: absolute;
-    top: 50%;
-    left: 12px;
-    transform: translateY(-50%);
+    svg {
+      position: absolute;
+      top: 50%;
+      left: 13px;
+      transform: translateY(-50%);
+      color: $ink-3;
+      pointer-events: none;
+    }
+
+    input {
+      width: 100%;
+      border: 1.5px solid $line;
+      border-radius: 10px;
+      padding: 9px 12px 9px 38px;
+      font-size: 0.84375rem;
+      font-family: $sans;
+      color: $ink;
+      background: $paper;
+      transition: border-color 0.15s ease, background 0.15s ease;
+
+      &::placeholder { color: $ink-3; }
+      &:focus {
+        outline: none;
+        border-color: $signal;
+        background: $card;
+      }
+    }
+  }
+
+  &__toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+
+  &__filter-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px;
+    background: $paper;
+    border: 1px solid $line;
+    border-radius: 999px;
+  }
+
+  &__toolbar-label {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px 5px 11px;
+    @extend %micro;
+    font-size: 0.625rem;
     color: $ink-3;
-    pointer-events: none;
+    white-space: nowrap;
   }
 
-  input {
-    width: 100%;
-    border: 1.5px solid $line;
+  &__filter-pill {
+    padding: 6px 13px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: $ink-2;
+    font-size: 0.78125rem;
+    font-weight: 650;
+    cursor: pointer;
+    transition: all 0.15s ease;
+
+    &:hover { color: $ink; }
+
+    &--on {
+      background: $card;
+      color: $signal;
+      box-shadow: $soft;
+    }
+  }
+
+  &__toolbar-divider {
+    flex-shrink: 0;
+    width: 1px;
+    height: 26px;
+    background: $line;
+  }
+
+  &__add-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 9px 15px;
+    border: 0;
     border-radius: 10px;
-    padding: 9px 12px 9px 36px;
+    background: $ink;
+    color: #fff;
+    font-family: $sans;
+    font-size: 0.8125rem;
+    font-weight: 650;
+    cursor: pointer;
+    box-shadow: $soft;
+    transition: background 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
+
+    &:hover { background: #000; transform: translateY(-1px); box-shadow: $lift; }
+  }
+
+  // ---- provider card grid --------------------------------------------------
+  &__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 12px;
+  }
+
+  &__card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 17px 18px;
+    border: 1.5px solid $line;
+    border-radius: 16px;
+    background: $card;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+
+    &:hover {
+      border-color: $ink-3;
+      box-shadow: $lift;
+      transform: translateY(-2px);
+    }
+  }
+
+  &__card-hdr {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  &__card-id {
+    display: flex;
+    align-items: center;
+    gap: 13px;
+    min-width: 0;
+  }
+
+  &__icon {
+    flex-shrink: 0;
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    display: grid;
+    place-items: center;
+    background: $paper;
+    border: 1px solid $line;
+    color: $ink;
+    font-family: $display;
+    font-weight: 800;
+    font-size: 1.0625rem;
+
+    img { width: 24px; height: 24px; object-fit: contain; }
+  }
+
+  &__name {
+    font-family: $display;
+    font-size: 0.9375rem;
+    font-weight: 700;
+    color: $ink;
+    line-height: 1.25;
+  }
+
+  &__count {
+    font-size: 0.75rem;
+    color: $ink-3;
+    margin-top: 2px;
+  }
+
+  &__card-top-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  &__icon-btn {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border: 1px solid $line;
+    border-radius: 8px;
+    background: $card;
+    color: $ink-2;
+    cursor: pointer;
+    transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+
+    &:hover { border-color: $ink-3; color: $ink; background: $paper; }
+  }
+
+  &__badge-connected {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px 4px 8px;
+    border-radius: 999px;
+    font-family: $mono;
+    font-size: 0.625rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: $ok;
+    background: $ok-wash;
+    white-space: nowrap;
+
+    &::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: $ok; }
+  }
+
+  &__badge-idle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 11px;
+    border-radius: 999px;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    color: $ink-3;
+    background: transparent;
+    border: 1px dashed $line;
+    white-space: nowrap;
+
+    &::before {
+      content: '';
+      flex-shrink: 0;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: $ink-3;
+      opacity: 0.7;
+    }
+  }
+
+  &__desc {
+    flex: 1;
+    margin-top: 11px;
+    font-size: 0.8125rem;
+    color: $ink-2;
+    line-height: 1.5;
+  }
+
+  // ---- inline API key form -------------------------------------------------
+  &__key-form {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  &__key-input {
+    flex: 1;
+    border: 1.5px solid $line;
+    border-radius: 9px;
+    padding: 8px 11px;
     font-size: 0.8125rem;
     font-family: $sans;
     color: $ink;
     background: $paper;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+    transition: border-color 0.15s ease, background 0.15s ease;
 
     &::placeholder { color: $ink-3; }
-    &:focus {
-      outline: none;
-      border-color: $signal;
+    &:focus { outline: none; border-color: $signal; background: $card; }
+  }
+
+  &__key-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  // ---- footer action row ---------------------------------------------------
+  &__foot-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 13px;
+  }
+
+  &__foot-btn {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 11px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    font-family: $sans;
+    font-size: 0.75rem;
+    font-weight: 650;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.12s ease;
+
+    &:disabled { cursor: not-allowed; opacity: 0.55; }
+
+    &--primary {
+      background: $ink;
+      color: #fff;
+      &:not(:disabled):hover { background: #000; transform: translateY(-1px); }
+    }
+
+    &--accent {
+      background: $signal;
+      color: #fff;
+      &:not(:disabled):hover { background: $signal-2; transform: translateY(-1px); }
+    }
+
+    &--ghost {
       background: $card;
-      box-shadow: 0 0 0 3px $wash;
+      border-color: $line;
+      color: $ink-2;
+      &:not(:disabled):hover { border-color: $ink-3; color: $ink; background: $paper; }
+    }
+
+    &--danger {
+      background: $danger-wash;
+      color: $danger;
+      &:not(:disabled):hover { background: rgba($danger, 0.16); }
     }
   }
-}
 
-.providers__toolbar-right {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-}
+  &__spin { animation: providers-spin 0.8s linear infinite; }
 
-.providers__filter-group {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.providers__toolbar-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  @extend %micro;
-  font-size: 0.625rem;
-  color: $ink-3;
-  padding-right: 4px;
-}
-
-.providers__filter-pill {
-  padding: 6px 12px;
-  border: 1px solid $line;
-  border-radius: 999px;
-  background: $card;
-  color: $ink-2;
-  font-size: 0.75rem;
-  font-weight: 650;
-  cursor: pointer;
-  transition: all 0.14s ease;
-
-  &:hover { border-color: $ink-3; color: $ink; }
-
-  &--on {
-    border-color: $signal;
-    background: $signal;
-    color: #fff;
-  }
-}
-
-.providers__toolbar-divider {
-  width: 1px;
-  height: 20px;
-  background: $line;
-}
-
-.providers__add-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 9px 15px;
-  border-radius: 10px;
-  border: 1px solid $signal;
-  background: $signal;
-  color: #fff;
-  font-family: $sans;
-  font-size: 0.8125rem;
-  font-weight: 700;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
-
-  &:hover { background: $signal-2; border-color: $signal-2; transform: translateY(-1px); }
-}
-
-// ---- grid -----------------------------------------------------------------
-.providers__grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-  gap: 12px;
-}
-
-.providers__empty {
-  grid-column: 1 / -1;
-  padding: 40px;
-  text-align: center;
-  color: $ink-3;
-  font-size: 0.8125rem;
-}
-
-// ---- provider card ----------------------------------------------------
-.providers__card {
-  display: flex;
-  flex-direction: column;
-  padding: 18px;
-  background: $card;
-  border: 1.5px solid $line;
-  border-radius: 16px;
-  box-shadow: $soft;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
-
-  &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
-}
-
-.providers__card-hdr {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-
-.providers__card-id {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-
-.providers__icon {
-  flex-shrink: 0;
-  width: 40px;
-  height: 40px;
-  border-radius: 11px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: $paper;
-  border: 1px solid $line;
-  color: $ink;
-  font-family: $display;
-  font-weight: 800;
-  font-size: 1rem;
-  overflow: hidden;
-
-  img { width: 100%; height: 100%; object-fit: contain; }
-}
-
-.providers__name {
-  font-family: $display;
-  font-size: 0.9375rem;
-  font-weight: 700;
-  color: $ink;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.providers__count {
-  font-family: $mono;
-  font-size: 0.71875rem;
-  color: $ink-3;
-  margin-top: 2px;
-}
-
-.providers__card-top-actions {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.providers__icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  border: 1px solid $line;
-  background: $card;
-  color: $ink-2;
-  cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
-
-  &:hover { border-color: $signal; color: $signal; background: $wash; }
-}
-
-.providers__badge-connected {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 9px 4px 7px;
-  border-radius: 999px;
-  font-family: $mono;
-  font-size: 0.625rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: $ok;
-  background: $ok-wash;
-  white-space: nowrap;
-}
-
-.providers__badge-idle {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 9px;
-  border-radius: 999px;
-  font-family: $mono;
-  font-size: 0.625rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: $ink-3;
-  background: $ink-wash;
-  white-space: nowrap;
-}
-
-.providers__desc {
-  font-size: 0.8125rem;
-  color: $ink-2;
-  line-height: 1.55;
-  margin-bottom: 14px;
-  flex: 1;
-}
-
-// ---- key entry form -------------------------------------------------------
-.providers__key-form {
-  margin-top: auto;
-  padding-top: 4px;
-}
-
-.providers__key-input {
-  width: 100%;
-  border: 1.5px solid $line;
-  border-radius: 9px;
-  padding: 9px 11px;
-  font-size: 0.8125rem;
-  font-family: $mono;
-  color: $ink;
-  background: $paper;
-  margin-bottom: 8px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-
-  &::placeholder { color: $ink-3; font-family: $sans; }
-  &:focus { outline: none; border-color: $signal; box-shadow: 0 0 0 3px $wash; }
-}
-
-.providers__key-actions {
-  display: flex;
-  gap: 8px;
-}
-
-// ---- foot actions (fit up to 4 buttons on one line) ------------------------
-.providers__foot-actions {
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: 6px;
-  margin-top: auto;
-  padding-top: 6px;
-}
-
-.providers__foot-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  flex: 1 1 0;
-  min-width: 0;
-  padding: 8px 8px;
-  border-radius: 8px;
-  border: 1px solid $line;
-  background: $card;
-  color: $ink-2;
-  font-family: $sans;
-  font-size: 0.71875rem;
-  font-weight: 650;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
-
-  svg { flex-shrink: 0; }
-
-  &:disabled { opacity: 0.5; cursor: not-allowed; }
-
-  &--primary {
-    border-color: $signal;
-    background: $signal;
-    color: #fff;
-    &:hover:not(:disabled) { background: $signal-2; border-color: $signal-2; }
+  &__empty {
+    grid-column: 1 / -1;
+    padding: 40px 20px;
+    text-align: center;
+    color: $ink-3;
+    font-size: 0.84375rem;
+    border: 1px dashed $line;
+    border-radius: 14px;
   }
 
-  &--accent {
-    border-color: $signal;
-    color: $signal;
-    background: $wash;
-    &:hover:not(:disabled) { background: rgba(43, 43, 245, 0.14); }
+  // ===========================================================================
+  // Provider models sidebar — keys kept stable for ProviderModelsSidebar,
+  // recolored to the ink/paper/signal system.
+  // ===========================================================================
+  &__sidebar-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(20, 22, 27, 0.45);
+    z-index: 40;
   }
 
-  &--ghost {
-    &:hover:not(:disabled) { border-color: $ink-3; color: $ink; background: $paper; }
+  &__sidebar {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(420px, 100vw);
+    background: $card;
+    border-left: 1px solid $line;
+    box-shadow: -20px 0 40px -16px rgba(20, 22, 27, 0.28);
+    z-index: 41;
+    display: flex;
+    flex-direction: column;
+    animation: providers-sidebar-in 0.22s cubic-bezier(0.22, 0.72, 0.16, 1);
   }
 
-  &--danger {
-    color: $danger;
-    border-color: rgba(220, 38, 38, 0.25);
-    &:hover:not(:disabled) { background: $danger-wash; }
+  &__sidebar-header {
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 20px 20px 16px;
+    border-bottom: 1px solid $line;
   }
-}
 
-.providers__spin {
-  animation: providers-spin 0.8s linear infinite;
+  &__sidebar-title {
+    font-family: $display;
+    font-size: 1.0625rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: $ink;
+  }
+
+  &__sidebar-subtitle {
+    margin-top: 3px;
+    font-size: 0.75rem;
+    color: $ink-3;
+  }
+
+  &__sidebar-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  &__sidebar-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 48px 12px;
+    color: $ink-3;
+    font-size: 0.8125rem;
+    text-align: center;
+  }
+
+  &__model-row {
+    border: 1px solid $line;
+    border-radius: 12px;
+    padding: 14px;
+    background: $paper;
+  }
+
+  &__model-row-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  &__model-row-name {
+    font-family: $display;
+    font-weight: 700;
+    font-size: 0.875rem;
+    color: $ink;
+  }
+
+  &__model-row-tags {
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  &__model-row-meta {
+    margin-top: 10px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 12px;
+
+    > div {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      font-size: 0.8125rem;
+      color: $ink;
+    }
+  }
+
+  &__model-row-meta-label {
+    @extend %micro;
+    font-size: 0.625rem;
+    color: $ink-3;
+  }
+
+  &__model-row-url {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed $line;
+    font-family: $mono;
+    font-size: 0.75rem;
+    color: $ink-2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 
 @keyframes providers-spin {
   to { transform: rotate(360deg); }
 }
 
-@media (max-width: 640px) {
+@keyframes providers-sidebar-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+@media (max-width: 768px) {
   .providers__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
-  .providers__toolbar { padding: 14px 18px; }
+  .providers__toolbar { padding: 12px 18px; }
   .providers__grid { grid-template-columns: 1fr; }
-
-  // On very narrow cards, collapse to icon-only buttons with visible label
-  // hidden — title attribute still provides the accessible name via hover.
-  .providers__foot-btn {
-    padding: 8px 6px;
-    font-size: 0;
-    gap: 0;
-
-    svg { font-size: initial; }
-  }
 }
