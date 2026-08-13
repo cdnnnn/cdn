@@ -1,103 +1,3 @@
-//testSuitesSlice.ts
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import { testSuitesApi } from '../../api/endpoints/testSuites';
-
-// Matches GET /datasets response exactly.
-export interface TestSuite {
-  id: string;
-  name: string;
-  description: string;
-  category: string;
-  eval_type: string;
-  dataset_type: string;
-  question_count: number;
-  dataset_categories: string[];
-}
-
-interface TestSuitesState {
-  items: TestSuite[];
-  status: 'idle' | 'loading' | 'succeeded' | 'failed';
-  error: string | null;
-}
-
-const initialState: TestSuitesState = {
-  items: [],
-  status: 'idle',
-  error: null,
-};
-
-// GET /datasets
-export const fetchTestSuites = createAsyncThunk('testSuites/fetchAll', () => testSuitesApi.list());
-
-const testSuitesSlice = createSlice({
-  name: 'testSuites',
-  initialState,
-  reducers: {},
-  extraReducers: (builder) => {
-    builder
-      .addCase(fetchTestSuites.pending, (state) => {
-        state.status = 'loading';
-      })
-      .addCase(fetchTestSuites.fulfilled, (state, action) => {
-        state.status = 'succeeded';
-        state.items = action.payload;
-      })
-      .addCase(fetchTestSuites.rejected, (state, action) => {
-        state.status = 'failed';
-        state.error = action.error.message || 'Failed to load test suites';
-      });
-  },
-});
-
-export default testSuitesSlice.reducer;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//testSuites.ts
-import { apiClient } from '../client';
-import type { TestSuite } from '../../store/slices/testSuitesSlice';
-
-interface TestSuitesResponse {
-  datasets: TestSuite[];
-}
-
-export const testSuitesApi = {
-  // GET /datasets
-  list: async (): Promise<TestSuite[]> => {
-    const { data } = await apiClient.get<TestSuitesResponse>('/datasets');
-    return data.datasets;
-  },
-};
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Datasets.tsx
 //Datasets.tsx
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import {
@@ -307,7 +207,7 @@ export default function Datasets() {
                 {status !== 'loading' &&
                   filtered.map((d) => {
                     const on = d.id === selectedId;
-                    const accent = hashColor(d.category);
+                    const accent = hashColor(d.dataset_type);
                     const tags = d.dataset_categories ?? [];
                     return (
                       <button
@@ -321,11 +221,8 @@ export default function Datasets() {
                           <span className={styles['datasets__row-count']}>{d.question_count.toLocaleString()}</span>
                         </div>
                         <div className={styles['datasets__row-foot']}>
-                          <span className={styles['datasets__row-tags']}>
-                            <span className={styles['datasets__row-type']} style={{ color: accent.fg }}>
-                              {d.category}
-                            </span>
-                            <span className={styles['datasets__row-badge']}>{d.dataset_type}</span>
+                          <span className={styles['datasets__row-type']} style={{ color: accent.fg }}>
+                            {d.dataset_type}
                           </span>
                           <span className={styles['datasets__row-dots']}>
                             {tags.slice(0, 4).map((t) => (
@@ -467,7 +364,19 @@ function Stat({ label, value, mono }: { label: string; value: string | number; m
 
 
 
-//Datasets.module.scss
+
+
+
+
+
+
+
+
+
+
+
+
+
 //Datasets.module.scss
 @use '../../styles/_variables' as *;
 
@@ -836,36 +745,12 @@ $soft: 0 1px 2px rgba(20, 22, 27, 0.05);
     gap: 8px;
   }
 
-  &__row-tags {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-  }
-
   &__row-type {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
     font-family: $mono;
     font-size: 0.625rem;
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-  }
-
-  &__row-badge {
-    font-family: $mono;
-    font-size: 0.5625rem;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: $ink-3;
-    background: $paper;
-    border: 1px solid $line;
-    border-radius: 999px;
-    padding: 2px 7px;
-    white-space: nowrap;
   }
 
   &__row-dots {
