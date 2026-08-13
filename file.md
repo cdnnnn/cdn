@@ -169,7 +169,7 @@ const SUGGESTED_NAMES = [
   'Q3 Model Selection',
   'Support Bot Regression',
   'RAG Accuracy v2',
-  'GPT-4o vs Claude',
+  'GLM-4.6 vs Claude',
 ];
 
 const NAMING_TIPS = [
