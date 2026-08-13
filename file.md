@@ -105,13 +105,13 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
   }
 }
 
-@keyframes history-row-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba($signal, 0.16); }
-  50% { box-shadow: 0 0 0 5px rgba($signal, 0.08); }
+@property --angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
 }
-@keyframes history-row-sheen {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+@keyframes history-rotate-angle {
+  to { --angle: 360deg; }
 }
 @keyframes history-live-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
@@ -373,27 +373,34 @@ $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
 .row:hover { border-color: $ink-3; box-shadow: $soft; transform: translateY(-1px); }
 .row.selected { border-color: $signal; background: $wash; box-shadow: 0 0 0 1px $signal inset; }
 
-// Running-state: soft pulsing border + a light sheen sweeping across the
-// card, so an in-progress evaluation reads as "in progress" at a glance —
-// on top of whatever "Running…" badge text/dot is already shown.
+// Running-state: a multi-color light traveling around the border via a
+// rotating conic angle.
 .row--running {
-  position: relative;
-  overflow: hidden;
-  border-color: rgba($signal, 0.35);
-  animation: history-row-pulse 1.6s ease-in-out infinite;
-
-  &::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(100deg, transparent 30%, rgba($signal, 0.08) 50%, transparent 70%);
-    background-size: 200% 100%;
-    animation: history-row-sheen 1.6s ease-in-out infinite;
-    pointer-events: none;
-  }
+  --angle: 0deg;
+  border: 1.5px solid transparent;
+  background:
+    linear-gradient($card, $card) padding-box,
+    conic-gradient(
+      from var(--angle),
+      $line 0%,
+      $signal 4%,
+      #8B5CF6 8%,
+      #EC4899 12%,
+      $line 18%
+    ) border-box;
+  animation: history-rotate-angle 2.4s linear infinite;
 }
 .row--running.selected {
-  background: $wash;
+  background:
+    linear-gradient($wash, $wash) padding-box,
+    conic-gradient(
+      from var(--angle),
+      $line 0%,
+      $signal 4%,
+      #8B5CF6 8%,
+      #EC4899 12%,
+      $line 18%
+    ) border-box;
 }
 
 
