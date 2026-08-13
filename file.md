@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import {
   RefreshCw, Search, ExternalLink, Layers, AlertTriangle, Database, ListFilter, X,
-  Copy, Check, Boxes, Hash, ArrowRight, Filter, ChevronsUpDown, CornerDownLeft,
+  Check, Boxes, Hash, ArrowRight, Filter, ChevronsUpDown,
 } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
 import { fetchBenchmarks } from '../../store/slices/benchmarksSlice';
@@ -35,7 +35,6 @@ export default function Datasets() {
   const [capFilter, setCapFilter] = useState<string[]>([]);      // active capability facets
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [subQuery, setSubQuery] = useState('');                  // subgroup filter inside detail
-  const [copied, setCopied] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -66,16 +65,6 @@ export default function Datasets() {
 
   const toggleCap = useCallback((c: string) => {
     setCapFilter((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
-  }, []);
-
-  const copyValue = useCallback(async (value: string) => {
-    try {
-      await navigator.clipboard.writeText(value);
-    } catch {
-      /* clipboard unavailable — no-op */
-    }
-    setCopied(value);
-    setTimeout(() => setCopied((c) => (c === value ? null : c)), 1100);
   }, []);
 
   // Keyboard: ↑/↓ walk the list, "/" focuses search.
@@ -289,8 +278,6 @@ export default function Datasets() {
                   toggleCap={toggleCap}
                   subQuery={subQuery}
                   setSubQuery={setSubQuery}
-                  copied={copied}
-                  copyValue={copyValue}
                 />
               )}
             </section>
@@ -312,12 +299,10 @@ interface DetailViewProps {
   toggleCap: (c: string) => void;
   subQuery: string;
   setSubQuery: (v: string) => void;
-  copied: string | null;
-  copyValue: (v: string) => void;
 }
 
 function DetailView({
-  benchmark: b, subgroups, shownSubgroups, caps, capFilter, toggleCap, subQuery, setSubQuery, copied, copyValue,
+  benchmark: b, subgroups, shownSubgroups, caps, capFilter, toggleCap, subQuery, setSubQuery,
 }: DetailViewProps) {
   const accent = hashColor(b.type);
   return (
@@ -381,7 +366,20 @@ function DetailView({
           {subgroups.length > 6 && (
             <div className={styles['datasets__subsearch']}>
               <Search size={13} />
-              <input placeholder="Filter subgroups…" value={subQuery} onChange={(e) => setSubQuery(e.target.value)} />
+              <input
+                placeholder="Filter subgroups…"
+                value={subQuery}
+                onChange={(e) => setSubQuery(e.target.value)}
+              />
+              {subQuery && (
+                <button
+                  className={styles['datasets__subsearch-clear']}
+                  onClick={() => setSubQuery('')}
+                  aria-label="Clear filter"
+                >
+                  <X size={12} />
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -397,13 +395,10 @@ function DetailView({
         ) : (
           <div className={styles['datasets__subgrid']}>
             {shownSubgroups.map((t) => (
-              <div key={t.value} className={styles['datasets__sub']}>
-                <span className={styles['datasets__sub-name']}>{t.name}</span>
-                <button className={styles['datasets__sub-code']} onClick={() => copyValue(t.value)} title="Copy value">
-                  <code>{t.value}</code>
-                  {copied === t.value ? <Check size={12} /> : <Copy size={12} />}
-                </button>
-              </div>
+              <span key={t.value} className={styles['datasets__sub']}>
+                <i className={styles['datasets__sub-dot']} style={{ background: accent.fg }} />
+                {t.name}
+              </span>
             ))}
             {shownSubgroups.length === 0 && (
               <p className={styles['datasets__sub-none']}>No subgroup matches “{subQuery}”.</p>
@@ -413,9 +408,6 @@ function DetailView({
       </div>
 
       <div className={styles['datasets__cta-row']}>
-        <button className={styles['datasets__primary']}>
-          Add to evaluation <CornerDownLeft size={14} />
-        </button>
         <a
           className={styles['datasets__secondary']}
           href={`https://huggingface.co/datasets/${b.huggingface_dataset}`}
@@ -439,6 +431,9 @@ function Stat({ label, value, mono }: { label: string; value: string | number; m
     </div>
   );
 }
+
+
+
 
 
 
@@ -506,6 +501,7 @@ $soft: 0 1px 2px rgba(20, 22, 27, 0.05);
     justify-content: space-between;
     gap: 1rem;
     padding: 24px 32px 20px;
+    margin-bottom: 20px;
     border-bottom: 1px solid $line;
     background: $card;
 
@@ -891,7 +887,6 @@ $soft: 0 1px 2px rgba(20, 22, 27, 0.05);
     flex: 1;
     overflow-y: auto;
     padding: 26px 30px 40px;
-    max-width: 760px;
     animation: datasets-detail-in 0.22s ease;
   }
 
@@ -1082,71 +1077,100 @@ $soft: 0 1px 2px rgba(20, 22, 27, 0.05);
 
   &__subsearch {
     position: relative;
+    display: inline-flex;
+    align-items: center;
 
-    svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: $ink-3; }
+    > svg {
+      position: absolute;
+      left: 13px;
+      color: $ink-3;
+      pointer-events: none;
+    }
 
     input {
-      width: 190px;
+      width: 220px;
+      max-width: 46vw;
       border: 1.5px solid $line;
-      border-radius: 8px;
-      padding: 6px 10px 6px 30px;
+      border-radius: 999px;
+      padding: 8px 32px 8px 34px;
       font-size: 0.78125rem;
       font-family: $sans;
       background: $paper;
       color: $ink;
-      transition: border-color 0.15s ease, background 0.15s ease;
+      transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
 
-      &:focus { outline: none; border-color: $signal; background: $card; }
+      &::placeholder { color: $ink-3; }
+      &:focus {
+        outline: none;
+        border-color: $signal;
+        background: $card;
+        box-shadow: 0 0 0 3px rgba(43, 43, 245, 0.13);
+      }
     }
   }
 
+  &__subsearch-clear {
+    position: absolute;
+    right: 7px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 19px;
+    height: 19px;
+    padding: 0;
+    border: 0;
+    border-radius: 99px;
+    background: $line-2;
+    color: $ink-2;
+    cursor: pointer;
+    transition: background 0.13s ease, color 0.13s ease;
+
+    &:hover { background: $ink-3; color: #fff; }
+  }
+
+  // Subgroups are chips that size to their own label — no fixed columns,
+  // so a two-word subset and a long one both sit comfortably on the row.
   &__subgrid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 6px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
   }
 
   &__sub {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 9px 11px;
-    border: 1px solid $line;
-    border-radius: 10px;
-    background: $card;
-    transition: border-color 0.13s ease;
-
-    &:hover { border-color: $ink-3; }
-  }
-
-  &__sub-name {
-    font-size: 0.8125rem;
-    font-weight: 600;
-    color: $ink;
-    text-transform: capitalize;
-  }
-
-  &__sub-code {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
+    padding: 7px 15px 7px 12px;
     border: 1px solid $line;
-    background: $paper;
-    border-radius: 6px;
-    padding: 2px 6px;
-    cursor: pointer;
-    color: $ink-3;
-    transition: border-color 0.13s ease, color 0.13s ease;
+    border-radius: 999px;
+    background: $card;
+    font-family: $sans;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: $ink-2;
+    text-transform: capitalize;
+    transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease,
+      transform 0.14s ease, box-shadow 0.14s ease;
 
-    code { font-family: $mono; font-size: 0.6875rem; color: $ink-2; }
+    &:hover {
+      border-color: $ink-3;
+      color: $ink;
+      background: $paper;
+      transform: translateY(-1px);
+      box-shadow: $soft;
+    }
+  }
 
-    &:hover { border-color: $signal; color: $signal; }
-    &:hover code { color: $signal; }
+  &__sub-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 99px;
+    flex-shrink: 0;
+    opacity: 0.9;
   }
 
   &__sub-none {
-    grid-column: 1 / -1;
+    width: 100%;
     font-size: 0.8125rem;
     color: $ink-3;
   }
@@ -1171,25 +1195,6 @@ $soft: 0 1px 2px rgba(20, 22, 27, 0.05);
     flex-wrap: wrap;
     padding-top: 20px;
     border-top: 1px solid $line-2;
-  }
-
-  &__primary {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 18px;
-    border: 0;
-    border-radius: 10px;
-    background: $signal;
-    color: #fff;
-    font-family: $sans;
-    font-size: 0.84375rem;
-    font-weight: 650;
-    cursor: pointer;
-    box-shadow: 0 6px 16px -8px rgba(43, 43, 245, 0.7);
-    transition: background 0.15s ease;
-
-    &:hover { background: $signal-2; }
   }
 
   &__secondary {
