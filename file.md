@@ -5,7 +5,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
-import { updateFilePrompts, patchFilePromptTemplate, type ServerFile } from '../../store/uploadSlice';
+import { updateFilePrompts, patchFilePromptTemplate } from '../../store/uploadSlice';
 import { addToast } from '../../store/toastSlice';
 import api from '../../services/api';
 import styles from './PromptTemplateAssociationModal.module.scss';
@@ -30,17 +30,15 @@ const PromptTemplateAssociationModal: React.FC<Props> = ({ open, onClose }) => {
     const dispatch = useAppDispatch();
     const { t } = useTranslation();
     // dateFrom/dateTo are the app's shared date-range filter (used below for
-    // the "Associate ALL in range" bar). The file *list* itself, though, is
-    // fetched independently here rather than read from state.upload.serverFiles
-    // — that list is only populated while the Upload & Manage tab is the
-    // active one (FilePanel clears it to [] whenever it isn't), so relying
-    // on it left this modal empty whenever it was opened from anywhere else,
-    // like the Inference tab's "Map prompt template" button.
-    const { dateFrom, dateTo } = useAppSelector(s => s.upload);
-
-    const [serverFiles, setServerFiles] = useState<ServerFile[]>([]);
-    const [filesLoading, setFilesLoading] = useState(false);
-    const [filesError, setFilesError] = useState<string | null>(null);
+    // the "Associate ALL in range" bar). The file *list* itself is read from
+    // state.upload.selectFiles rather than state.upload.serverFiles or a
+    // fresh fetch of our own — selectFiles is exactly what the Inference
+    // tab's file-picker sidebar (FileSidebar, mode="select") already fetched
+    // via /files/by-date/ and dispatched to redux, so reusing it here avoids
+    // a redundant duplicate network call. (serverFiles was the wrong choice
+    // because FilePanel clears it to [] whenever the Upload & Manage tab
+    // isn't the active one — this modal is opened from the Inference tab.)
+    const { dateFrom, dateTo, selectFiles: serverFiles } = useAppSelector(s => s.upload);
 
     const [templates, setTemplates] = useState<PromptTemplateListItem[]>([]);
     const [templatesLoading, setTemplatesLoading] = useState(false);
@@ -61,12 +59,15 @@ const PromptTemplateAssociationModal: React.FC<Props> = ({ open, onClose }) => {
 
     useEffect(() => {
         if (!open) return;
+        const init: Record<number, number> = {};
+        serverFiles.forEach(f => { init[f.id] = f.prompt_template_id ?? NO_TEMPLATE; });
+        setSelection(init);
+        initialSelectionRef.current = init;
         setBulkValue(NO_TEMPLATE);
         setDetailTemplateId(null); setDetailData(null); setDetailError(null);
         setAssociateAllError(null);
 
         let cancelled = false;
-
         (async () => {
             setTemplatesLoading(true); setTemplatesError(null);
             try {
@@ -77,31 +78,6 @@ const PromptTemplateAssociationModal: React.FC<Props> = ({ open, onClose }) => {
                 if (!cancelled) setTemplatesError(t('uploadInfer.templateModal.loadFail'));
             } finally { if (!cancelled) setTemplatesLoading(false); }
         })();
-
-        (async () => {
-            setFilesLoading(true); setFilesError(null);
-            try {
-                const res = await api.post('/files/by-date/', {
-                    start_date: dateFrom,
-                    end_date: dateTo,
-                    page: 1,
-                    page_size: 500,
-                    sort_by: 'original_name',
-                    sort_order: 'asc',
-                });
-                const d = (res.data as any)?.data ?? {};
-                const list: ServerFile[] = d.data ?? [];
-                if (cancelled) return;
-                setServerFiles(list);
-                const init: Record<number, number> = {};
-                list.forEach(f => { init[f.id] = f.prompt_template_id ?? NO_TEMPLATE; });
-                setSelection(init);
-                initialSelectionRef.current = init;
-            } catch {
-                if (!cancelled) setFilesError(t('uploadInfer.templateModal.loadFail'));
-            } finally { if (!cancelled) setFilesLoading(false); }
-        })();
-
         return () => { cancelled = true; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open]);
@@ -269,11 +245,11 @@ const PromptTemplateAssociationModal: React.FC<Props> = ({ open, onClose }) => {
                     <span className={styles.bulkLabel}>{t('uploadInfer.templateModal.applyToAll')}</span>
                     <select className={styles.bulkSelect} value={bulkValue}
                         onChange={e => setBulkValue(Number(e.target.value))}
-                        disabled={saving || templatesLoading || filesLoading || serverFiles.length === 0}>
+                        disabled={saving || templatesLoading || serverFiles.length === 0}>
                         <option value={NO_TEMPLATE}>{t('uploadInfer.templateModal.noneOption')}</option>
                         {templates.map(tmpl => <option key={tmpl.id} value={tmpl.id}>{tmpl.name}</option>)}
                     </select>
-                    <button className={styles.bulkApplyBtn} onClick={handleApplyToAll} disabled={saving || filesLoading || serverFiles.length === 0}>
+                    <button className={styles.bulkApplyBtn} onClick={handleApplyToAll} disabled={saving || serverFiles.length === 0}>
                         {t('uploadInfer.templateModal.applyBtn')}
                     </button>
                     <span className={styles.bulkHint}>
@@ -308,18 +284,17 @@ const PromptTemplateAssociationModal: React.FC<Props> = ({ open, onClose }) => {
                             <div className={styles.colActions} />
                         </div>
 
-                        {(templatesLoading || filesLoading) && (
+                        {templatesLoading && (
                             <div className={styles.listState}>
                                 <div className={styles.spinner} /><span>{t('uploadInfer.templateModal.loadingTemplates')}</span>
                             </div>
                         )}
                         {templatesError && <div className={`${styles.listState} ${styles.errorState}`}>{templatesError}</div>}
-                        {filesError && <div className={`${styles.listState} ${styles.errorState}`}>{filesError}</div>}
-                        {!templatesLoading && !filesLoading && !filesError && serverFiles.length === 0 && (
+                        {!templatesLoading && serverFiles.length === 0 && (
                             <div className={styles.listState}>{t('uploadInfer.templateModal.noFiles')}</div>
                         )}
 
-                        {!templatesLoading && !filesLoading && !templatesError && !filesError && serverFiles.map(f => {
+                        {!templatesLoading && !templatesError && serverFiles.map(f => {
                             const current = selection[f.id] ?? NO_TEMPLATE;
                             const initial = initialSelectionRef.current[f.id] ?? NO_TEMPLATE;
                             const rowDirty = current !== initial;
