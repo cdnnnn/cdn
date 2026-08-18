@@ -20,21 +20,9 @@
 // system convention — see _theme.scss's header comment.
 // ===========================================================================
 
-$ink:      var(--ink-1);
-$ink-2:    var(--ink-2);
-$ink-3:    var(--ink-3);
-$paper:    var(--paper);
-$card:     var(--card);
-$line:     var(--line);
-$line-2:   var(--line-2);
-$signal:   #2B2BF5;
-$signal-2: #1C1CC7;
-$wash:     var(--signal-wash);
-$ok:       #0FA968;
-$ok-wash:  var(--ok-wash);
-$amber:    #E08600;
-$danger:   #DC2626;
-$danger-wash: var(--danger-wash);
+// $ink, $ink-2, $ink-3, $paper, $card, $line, $line-2, $signal, $signal-2,
+// $wash, $ok, $ok-wash, $danger, $danger-wash all come from _variables.scss
+// via the @use above — no need to redeclare them here.
 
 $mono:    $font-mono;
 $sans:    $font-body;
