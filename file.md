@@ -328,13 +328,13 @@ $ev-base-font: 0.8125rem;
 
   &__spec-label {
     @extend %micro;
-    font-size: 0.7692em; // 0.625rem / 0.8125rem
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
     color: $ink-3;
     transition: color 0.18s ease;
   }
 
   &__spec-value {
-    font-size: 1em; // 0.8125rem / 0.8125rem (base)
+    font-size: 1.1538em; // 0.9375rem / 0.8125rem
     font-weight: 600;
     color: $ink;
     overflow: hidden;
@@ -770,7 +770,7 @@ $ev-base-font: 0.8125rem;
     align-items: center;
     gap: 9px;
     font-family: $display;
-    font-size: 1.1538em; // 0.9375rem / 0.8125rem
+    font-size: 1.2308em; // 1rem / 0.8125rem
     font-weight: 700;
     color: $ink;
   }
@@ -786,7 +786,7 @@ $ev-base-font: 0.8125rem;
   }
 
   &__option-desc {
-    font-size: 1em; // 0.8125rem / 0.8125rem (base)
+    font-size: 1.0769em; // 0.875rem / 0.8125rem
     color: $ink-2;
     line-height: 1.5;
   }
@@ -1099,8 +1099,8 @@ $ev-base-font: 0.8125rem;
   &__pcard--on &__pcard-icon { background: $signal; border-color: $signal; color: #fff; }
 
   &__pcard-body { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-  &__pcard-name { font-family: $display; font-size: 1.0769em; font-weight: 700; color: $ink; } // 0.875rem / 0.8125rem
-  &__pcard-meta { font-size: 0.9231em; color: $ink-3; } // 0.75rem / 0.8125rem
+  &__pcard-name { font-family: $display; font-size: 1.2308em; font-weight: 700; color: $ink; } // 1rem / 0.8125rem
+  &__pcard-meta { font-size: 1.0769em; color: $ink-3; } // 0.875rem / 0.8125rem
 
   &__pill {
     display: inline-flex;
@@ -1700,13 +1700,13 @@ $ev-base-font: 0.8125rem;
     align-items: center;
     gap: 7px;
     font-family: $display;
-    font-size: 1em; // 0.8125rem / 0.8125rem (base)
+    font-size: 1.0769em; // 0.875rem / 0.8125rem
     font-weight: 800;
     letter-spacing: -0.01em;
     color: $ink;
     svg { color: $signal; }
   }
-  &__judge-sub { margin-top: 4px; font-size: 0.8846em; color: $ink-3; line-height: 1.45; } // 0.71875rem / 0.8125rem
+  &__judge-sub { margin-top: 4px; font-size: 0.9615em; color: $ink-3; line-height: 1.45; } // 0.78125rem / 0.8125rem
 
   // Shown at the bottom of the judge rail while it's mandatory (LLM_Judge
   // selected) but no judge model has been picked yet.
@@ -1766,8 +1766,8 @@ $ev-base-font: 0.8125rem;
     &--on { border-color: $signal; border-width: 5px; }
   }
 
-  &__judge-name { font-size: 1em; font-weight: 600; color: $ink; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } // 0.8125rem / 0.8125rem (base)
-  &__judge-meta { font-size: 0.8462em; color: $ink-3; } // 0.6875rem / 0.8125rem
+  &__judge-name { font-size: 1.0769em; font-weight: 600; color: $ink; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } // 0.875rem / 0.8125rem
+  &__judge-meta { font-size: 0.9231em; color: $ink-3; } // 0.75rem / 0.8125rem
 
   // ========================================================================
   // Review step
