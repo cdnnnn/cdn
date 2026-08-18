@@ -58,7 +58,14 @@ export default function Sidebar() {
             <div className={styles['sidebar__user-name']}>{user?.profileName || user?.username || 'Guest'}</div>
             <div className={styles['sidebar__user-email']}>{user?.email || ''}</div>
           </div>
-          <LogOut size={16} style={{ color: 'var(--text-muted)', cursor: 'pointer' }} onClick={() => dispatch(logout())} />
+          <button
+            type="button"
+            className={styles['sidebar__logout']}
+            onClick={() => dispatch(logout())}
+            title="Log out"
+          >
+            <LogOut size={16} />
+          </button>
         </div>
       </div>
     </div>
@@ -85,52 +92,93 @@ export default function Sidebar() {
 
 
 
-
-
 @use '../../styles/_variables' as *;
+
+// ===========================================================================
+// Sidebar — matches History / Reports / Comparison / New Evaluation design
+// system: ink/paper palette, ultramarine signal accent, mono instrument
+// labels, hover-lift.
+// ===========================================================================
+
+$ink:      #14161B;
+$ink-2:    #565B66;
+$ink-3:    #8A909B;
+$paper:    #F5F6F8;
+$card:     #FFFFFF;
+$line:     #E6E8EC;
+$line-2:   #EEF0F3;
+$signal:   #2B2BF5;
+$signal-2: #1C1CC7;
+$wash:     #ECEDFF;
+$danger:   #DC2626;
+$danger-wash: #FDECEC;
+
+$mono:    $font-mono;
+$sans:    $font-body;
+$display: $font-display;
+
+$soft: 0 1px 2px rgba(20, 22, 27, 0.05);
+
+%micro {
+  font-family: $mono;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
 
 .sidebar {
   width: 256px;
-  background: $surface;
-  border-right: 1px solid $border;
+  background: $card;
+  border-right: 1px solid $line;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
 
   &__logo {
-    padding: 24px;
+    padding: 22px 24px;
     display: flex;
     align-items: center;
-    gap: 10px;
-    font-family: $font-display;
-    font-size: 18px;
-    font-weight: 700;
-    color: $text-primary;
-    border-bottom: 1px solid $border-light;
+    gap: 11px;
+    font-family: $display;
+    font-size: 1.0625rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: $ink;
+    border-bottom: 1px solid $line;
     text-decoration: none;
     cursor: pointer;
-    transition: opacity .15s;
-  }
+    transition: opacity 0.15s ease;
 
-  &__logo:hover {
-    opacity: .8;
+    &:hover { opacity: 0.82; }
   }
 
   &__mark {
+    flex-shrink: 0;
     width: 30px;
     height: 30px;
-    background: $grad-primary;
     border-radius: 9px;
     display: flex;
     align-items: center;
     justify-content: center;
     color: #fff;
-    font-size: 14px;
-    box-shadow: 0 2px 8px rgba(20, 40, 160, .25);
+    background: $ink;
+    font-size: 0.875rem;
+    position: relative;
+    overflow: hidden;
+
+    &::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(140deg, transparent 40%, rgba($signal, 0.9) 140%);
+    }
   }
 
   &__nav {
     flex: 1;
+    min-height: 0;
+    overflow-y: auto;
     padding: 14px 12px;
     display: flex;
     flex-direction: column;
@@ -138,18 +186,16 @@ export default function Sidebar() {
   }
 
   &__section {
-    font-size: 11px;
-    font-weight: 700;
-    color: $text-muted;
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
+    @extend %micro;
+    font-size: 0.625rem;
+    color: $ink-3;
     padding: 20px 14px 8px;
-    font-family: $font-display;
   }
 
   &__foot {
+    flex-shrink: 0;
     padding: 16px;
-    border-top: 1px solid $border-light;
+    border-top: 1px solid $line;
   }
 
   &__theme-row {
@@ -157,51 +203,89 @@ export default function Sidebar() {
     align-items: center;
     justify-content: space-between;
     padding: 6px 4px 14px;
-    font-size: 12px;
-    font-weight: 600;
-    color: $text-secondary;
+    font-size: 0.75rem;
+    font-weight: 650;
+    color: $ink-2;
   }
 
   &__user {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 10px;
+    padding: 9px 10px;
     border-radius: 12px;
-    transition: background .15s;
-    cursor: pointer;
-  }
+    border: 1px solid transparent;
+    transition: background 0.15s ease, border-color 0.15s ease;
 
-  &__user:hover {
-    background: $surface-alt;
+    &:hover { background: $paper; border-color: $line; }
   }
 
   &__avatar {
+    flex-shrink: 0;
     width: 36px;
     height: 36px;
     border-radius: 10px;
-    background: $grad-primary;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 14px;
-    font-weight: 700;
+    background: $ink;
     color: #fff;
+    font-family: $display;
+    font-size: 0.8125rem;
+    font-weight: 700;
+    position: relative;
+    overflow: hidden;
+
+    &::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(140deg, transparent 40%, rgba($signal, 0.9) 140%);
+    }
   }
 
   &__user-info {
     flex: 1;
+    min-width: 0;
   }
 
   &__user-name {
-    font-size: 13px;
-    font-weight: 600;
-    color: $text-primary;
+    font-size: 0.8125rem;
+    font-weight: 700;
+    color: $ink;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   &__user-email {
-    font-size: 11px;
-    color: $text-muted;
+    font-family: $mono;
+    font-size: 0.6875rem;
+    color: $ink-3;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__logout {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: $ink-3;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+
+    &:hover {
+      background: $danger-wash;
+      border-color: rgba($danger, 0.2);
+      color: $danger;
+    }
   }
 }
 
@@ -209,38 +293,37 @@ export default function Sidebar() {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 11px 14px;
-  border-radius: 12px;
-  font-size: 14px;
-  font-weight: 500;
-  color: $text-secondary;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 0.84375rem;
+  font-weight: 550;
+  color: $ink-2;
   cursor: pointer;
-  transition: all .2s;
+  transition: color 0.15s ease, background 0.15s ease;
   border: none;
   background: none;
   width: 100%;
   text-align: left;
   text-decoration: none;
-}
 
-.nav-item:hover {
-  color: $text-primary;
-  background: $surface-alt;
-}
+  svg { flex-shrink: 0; color: $ink-3; transition: color 0.15s ease; }
 
-.nav-item.active {
-  color: $indigo;
-  background: $indigo-pale;
-  font-weight: 600;
-  box-shadow: inset 3px 0 0 $indigo;
+  &:hover {
+    color: $ink;
+    background: $paper;
+    svg { color: $ink-2; }
+  }
 
-  svg {
-    color: $indigo;
+  &.active {
+    color: $signal;
+    background: $wash;
+    font-weight: 700;
+    box-shadow: inset 2.5px 0 0 $signal;
+
+    svg { color: $signal; }
   }
 }
 
 @media (max-width: 768px) {
-  .sidebar {
-    display: none;
-  }
+  .sidebar { display: none; }
 }
