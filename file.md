@@ -1,1466 +1,2211 @@
-// ═══════════════════════════════════════════════
-// pages/UploadInfer/FilePanel.tsx
-// Content Analytics · Step-1 upload + uploaded files list
-// ═══════════════════════════════════════════════
-import React, { useRef, useState, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react';
-import { useTranslation } from 'react-i18next';
-import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import { Component, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
-  setDateFrom, setDateTo, setStatusFilter,
-  serverFilesLoading, serverFilesSuccess, serverFilesFailure,
-  setFilesPage, setFilesPageSize, setFilesSort, setFilesSearch,
-  toggleServerFileSelection, toggleSelectAllServerFiles, clearServerSelection,
-  type FilesSortBy, type SortOrder, type FileStatus, type ServerFile,
-} from '../../store/uploadSlice';
-import api from '../../services/api';
-import styles from './FilePanel.module.scss';
-import DictionaryAssociationModal from './DictionaryAssociationModal';
+  ChevronLeft,
+  ChevronRight,
+  Check,
+  Cpu,
+  Bot,
+  Database,
+  Play,
+  Clock3,
+  Tag,
+  LayoutGrid,
+  Plug,
+  Target,
+  ClipboardCheck,
+  Gavel,
+  Layers,
+  Loader2,
+  Waypoints,
+  Lightbulb,
+  Plus,
+  Upload,
+  FileText,
+  HeartPulse,
+  ShieldCheck,
+  ShieldAlert,
+  RefreshCw,
+  Search,
+  Eye,
+  X,
+  AlertTriangle,
+  type LucideIcon,
+} from 'lucide-react';
+import { useAppDispatch, useAppSelector } from '../../hooks/redux';
+import { fetchProviders } from '../../store/slices/providersSlice';
+import { fetchModels, checkModelHealth } from '../../store/slices/modelsSlice';
+import { fetchDatasets, uploadDataset, resetUploadStatus } from '../../store/slices/datasetsSlice';
+import { SUPPORTED_UPLOAD_EXTENSIONS } from '../../api/endpoints/datasets';
+// `evaluationsApi.previewDataset` — GET /datasets/{id}/preview?limit={limit} —
+// is a thin, one-off read used only by the Test Suite preview slider below.
+// It lives in the evaluations API module (not datasets) and is called
+// directly rather than round-tripped through Redux.
+import { evaluationsApi } from '../../api/endpoints/evaluations';
+import { fetchMetrics } from '../../store/slices/metricsSlice';
+import {
+  launchEvaluation,
+  runAgentBenchmark,
+  runAgentBenchmarkMulti,
+  setDraft,
+  setDraftType,
+} from '../../store/slices/evaluationsSlice';
+import type { CreateEvaluationRequest, EvaluationDraft, DatasetPreviewResponse } from '../../types';
+import styles from './NewEvaluation.module.scss';
 
-// Module-scope (not component-instance) dedupe for /files/by-date/ — this
-// is what actually survives a genuine remount. A useRef-based guard resets
-// to its initial value every time the component mounts fresh, so it can
-// only catch duplicate calls from the SAME instance (e.g. two effects
-// firing moments apart, or React StrictMode's synchronous double-invoke of
-// a mount effect). It can't catch two full mounts of FilePanel happening
-// close together — which is exactly the "only on first navigation to the
-// route" symptom this was still showing: tab switches re-render the same
-// instance (caught fine by the ref guard), but the very first navigation
-// mounts a fresh instance, sometimes twice in quick succession (e.g. a dev
-// server's initial double-mount), each with its own fresh, unlinked refs.
-let lastFilesFetchGlobal: { sig: string; at: number } | null = null;
-let filesFetchInFlightGlobal = false;
+// ─────────────────────────────────────────────────────────────────────────
+// This component is built against the REAL evaluationsSlice draft shape:
+//   { name, type, providers, models, dataset, subgroup, runSamplesMode,
+//     runSamples, metrics, judgeModelId, agentFramework }
+// `type` is lowercase: 'model' | 'agent' | 'rag' | null.
+// setDraftType(type) — clears metrics, and clears agentFramework unless
+// type === 'agent' (handled in the slice itself).
+// runSamplesMode is 'custom' (default) or 'full' — see runSamplesControl
+// below and the `launch` function for how 'full' maps to run_samples: 0.
+//
+// Other slice assumptions this component depends on:
+//
+// providersSlice / modelsSlice / datasetsSlice / metricsSlice — lazy fetch:
+//   - fetchProviders() is dispatched once, the first time Step 2 is opened.
+//   - fetchModels() is dispatched once, the first time Step 3 is opened.
+//   - fetchDatasets(type) is dispatched the first time Step 4 is opened for
+//     a given dataset type/framework combination.
+//   - fetchMetrics(evalType) — GET /metrics?eval_type={type} — is
+//     dispatched the first time Step 5 is opened for a given draft.type.
+//     Response: { eval_type, metrics: string[], all_metrics: string[] }.
+//     Only `all_metrics` is consumed (see metricsCatalog below).
+//   - None of the above fire on mount or the instant their prerequisite
+//     (e.g. draft.type) is set — only on actually navigating to the step.
+//     Each step's "refresh" button bypasses this and calls the thunk
+//     directly, any time it's clicked.
+//
+// modelsSlice — health checks:
+//   - checkModelHealth(modelId: string) — GET /models/health/{model_id}
+//     Response: { success, message, model_id, response }
+//   - state.models.healthById: Record<string, 'idle'|'loading'|'success'|'failed'>
+//   - Fired automatically, in parallel, for every model in the current
+//     provider selection as soon as Step 3's model list is available (see
+//     the auto health-check effect below) — a model can't be selected
+//     until its check resolves to 'success'. The manual "Check health"
+//     button on each card still works too, e.g. to retry a failure.
+//
+// datasetsSlice:
+//   - fetchDatasets(type: string) — GET /datasets?type={type}
+//     `type` is one of: 'model' | 'rag' | 'agent_benchmark' | 'agent_custom'
+//     (the last two both represent draft.type === 'agent', distinguished by
+//     whether draft.agentFramework is set).
+//   - Dataset items carry `dataset_type` (used to detect "custom" datasets)
+//     and `dataset_categories: string[]` (used for the subgroup rail).
+//
+// Search (client-side only, no new endpoints):
+//   - Providers/Models/Test Suite/Metrics steps each get a small toolbar
+//     with a search box that filters the already-fetched list by name, and
+//     a refresh button that re-dispatches that step's existing fetch thunk.
+// ─────────────────────────────────────────────────────────────────────────
 
-// ── Types ────────────────────────────────────────
-type UploadStatus = 'pending' | 'uploading' | 'success' | 'failed';
-type PanelView = 'dropzone' | 'preview' | 'uploading';
-
-interface BrowsedFile {
-  id: string;
-  file: File;
-  name: string;
-  size: string;
-  ext: 'vtt' | 'srt';
-  status: UploadStatus;
-  error?: string;
-}
-
-// ── Helpers ──────────────────────────────────────
-const ALLOWED = ['.vtt', '.srt'];
-const isAllowed = (n: string) => ALLOWED.some(e => n.toLowerCase().endsWith(e));
-const getExt = (n: string): 'vtt' | 'srt' => n.toLowerCase().endsWith('.srt') ? 'srt' : 'vtt';
-const uid = () => Math.random().toString(36).slice(2);
-const formatSize = (b: number) => b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
-
-// ── Status badge metadata (covers every value /files/by-date/ can return) ──
-const STATUS_META: Record<FileStatus, { labelKey: string; cls: string }> = {
-  waiting: { labelKey: 'uploadInfer.filePanel.statusWaiting', cls: 'bWaiting' },
-  running: { labelKey: 'uploadInfer.filePanel.statusRunning', cls: 'bRunning' },
-  completed: { labelKey: 'uploadInfer.filePanel.inferenced', cls: 'bInferred' },
-  error: { labelKey: 'uploadInfer.filePanel.statusErrorBadge', cls: 'bError' },
-  tbd: { labelKey: 'uploadInfer.filePanel.notInferenced', cls: 'bNotInferred' },
-  queued: { labelKey: 'uploadInfer.filePanel.statusQueued', cls: 'bQueued' },
-};
-
-const STATUS_FILTER_OPTIONS: { value: FileStatus | ''; labelKey: string }[] = [
-  { value: '', labelKey: 'uploadInfer.filePanel.statusAll' },
-  { value: 'waiting', labelKey: 'uploadInfer.filePanel.statusWaiting' },
-  { value: 'queued', labelKey: 'uploadInfer.filePanel.statusQueued' },
-  { value: 'running', labelKey: 'uploadInfer.filePanel.statusRunning' },
-  { value: 'completed', labelKey: 'uploadInfer.filePanel.inferenced' },
-  { value: 'error', labelKey: 'uploadInfer.filePanel.statusError' },
-  { value: 'tbd', labelKey: 'uploadInfer.filePanel.statusTbd' },
+const STEPS = [
+  { label: 'Name' },
+  { label: 'Type' },
+  { label: 'Providers' },
+  { label: 'Models' },
+  { label: 'Test Suite' },
+  { label: 'Metrics' },
+  { label: 'Review' },
 ];
 
-// ── Which of the 5 content prompts are customized for this file ──
-const PROMPT_FIELDS: { key: keyof ServerFile; letter: string; labelKey: string; icon: string; tourId: string }[] = [
-  { key: 'summary_prompt', letter: 'S', labelKey: 'uploadInfer.inferencePanel.summaryPrompt', icon: 'M3 2.5h7.5a1.5 1.5 0 011.5 1.5v9a.5.5 0 01-.5.5H4a1 1 0 01-1-1V2.5zM5.5 5.5h5M5.5 8h5M5.5 10.5h3', tourId: 'upload-card-icon-summary' },
-  { key: 'keywords_prompt', letter: 'K', labelKey: 'uploadInfer.inferencePanel.keywordPrompt', icon: 'M2 8l4.5-4.5H12v5.5L7.5 13.5 2 8z M9.5 5.5h.01', tourId: 'upload-card-icon-keywords' },
-  { key: 'faq_prompt', letter: 'Q', labelKey: 'uploadInfer.inferencePanel.questionPrompt', icon: 'M8 2.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM6.2 6.3a1.8 1.8 0 013.4.7c0 1.2-1.6 1.4-1.6 2.6 M8 11.3v.1', tourId: 'upload-card-icon-questions' },
-  // Speech-bubble-with-lines — reads as "a short written reply", distinct from the summary document icon above.
-  { key: 'short_answer_prompt', letter: 'A', labelKey: 'uploadInfer.inferencePanel.shortAnswerPrompt', icon: 'M2.5 3.5h11a1 1 0 011 1v6a1 1 0 01-1 1H6.5L3.5 14.5V11.5h-1a1 1 0 01-1-1v-6a1 1 0 011-1z M5 7h6M5 9h3.5', tourId: 'upload-card-icon-answer' },
-  // Toggle switch — a direct visual metaphor for a binary True/False choice, distinct from a generic "done" checkmark.
-  { key: 'true_false_prompt', letter: 'T', labelKey: 'uploadInfer.inferencePanel.trueFalsePrompt', icon: 'M5.5 4h5a4 4 0 010 8h-5a4 4 0 010-8z M10.6 8a1.25 1.25 0 102.5 0 1.25 1.25 0 00-2.5 0z', tourId: 'upload-card-icon-truefalse' },
+const STAGE = [
+  { title: 'Name your run', sub: 'A recognizable name makes this run easy to find later in your history.' },
+  { title: 'What are you evaluating?', sub: 'The system under test shapes which datasets and metrics you can pick.' },
+  { title: 'Select providers', sub: 'Choose which connected providers to draw candidate models from.' },
+  { title: 'Choose models', sub: 'Check a model\u2019s health before selecting it — only models that pass the check can be added to the run.' },
+  { title: 'Pick a test suite', sub: 'Select a dataset to evaluate against, or upload your own.' },
+  { title: 'Configure metrics', sub: 'Choose what to measure, and optionally a model to judge open-ended answers.' },
+  { title: 'Review & launch', sub: 'Confirm the run manifest, then launch.' },
 ];
 
-const filesToBrowsed = (files: File[]): BrowsedFile[] =>
-  files.filter(f => isAllowed(f.name)).map(f => ({
-    id: uid(), file: f, name: f.name, size: formatSize(f.size), ext: getExt(f.name), status: 'pending' as UploadStatus,
-  }));
+const STEP_ICONS: LucideIcon[] = [Tag, LayoutGrid, Plug, Cpu, Database, Target, ClipboardCheck];
 
-// Fixed 4-button sliding window around the current page — e.g. current=57,
-// total=200 → [56, 57, 58, 59]. Keeps the row compact and predictable
-// instead of a variable count with ellipsis gaps.
-const PAGE_WINDOW = 4;
-const getPageNumbers = (current: number, total: number): number[] => {
-  if (total <= PAGE_WINDOW) return Array.from({ length: total }, (_, i) => i + 1);
-  const start = Math.max(1, Math.min(current - 1, total - PAGE_WINDOW + 1));
-  return Array.from({ length: PAGE_WINDOW }, (_, i) => start + i);
-};
+// `value` matches draft.type exactly (lowercase); `label` is for display.
+const TYPE_OPTIONS: {
+  value: EvaluationDraft['type'];
+  label: string;
+  icon: LucideIcon;
+  sub: string;
+  variant: string;
+  disabled: boolean;
+}[] = [
+  {
+    value: 'model',
+    label: 'Model',
+    icon: Cpu,
+    sub: 'Benchmark a general-purpose LLM on standard tasks like reasoning, coding, and knowledge — ideal for comparing raw model quality across providers.',
+    variant: '',
+    disabled: false,
+  },
+  {
+    value: 'agent',
+    label: 'Agent',
+    icon: Bot,
+    sub: 'Test an autonomous agent that plans, calls tools, and completes multi-step tasks — measures task completion, not just single-turn output.',
+    variant: 'agent',
+    disabled: false,
+  },
+  {
+    value: 'rag',
+    label: 'RAG',
+    icon: Database,
+    sub: 'Evaluate a retrieval-augmented pipeline for grounding accuracy — checks how well answers stay faithful to your retrieved context.',
+    variant: 'rag',
+    disabled: true,
+  },
+];
 
-// ── Icons ────────────────────────────────────────
-const IconPending: React.FC = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" strokeDasharray="2 2" /></svg>;
-const IconUploading: React.FC = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" strokeOpacity="0.2" /><path d="M8 2a6 6 0 016 6" /></svg>;
-const IconSuccess: React.FC = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="8" r="6" /><path d="M5.5 8l2 2 3-3" /></svg>;
-const IconFailed: React.FC = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" /><path d="M6 6l4 4M10 6l-4 4" /></svg>;
-const IconClose: React.FC = () => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>;
+// Only Hermes remains as a selectable framework once "Agent" is chosen.
+const AGENT_FRAMEWORKS = [
+  { id: 'hermes', title: 'Hermes', desc: 'Lightweight tool-calling agent runtime' },
+];
 
-// ── Checkbox ─────────────────────────────────────
-interface CbProps { checked: boolean; indeterminate?: boolean; onChange: () => void; disabled?: boolean; }
-const Checkbox: React.FC<CbProps> = ({ checked, indeterminate, onChange, disabled }) => {
-  const ref = useRef<HTMLDivElement>(null);
-  return (
-    <div
-      ref={ref}
-      className={`${styles.cb} ${checked ? styles.cbChecked : ''} ${indeterminate ? styles.cbIndet : ''} ${disabled ? styles.cbDisabled : ''}`}
-      onClick={e => { e.stopPropagation(); if (!disabled) onChange(); }}
-      role="checkbox" aria-checked={indeterminate ? 'mixed' : checked} tabIndex={0}
-      onKeyDown={e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); if (!disabled) onChange(); } }}
-    />
-  );
-};
+const SUGGESTED_NAMES = [
+  'Q3 Model Selection',
+  'Support Bot Regression',
+  'RAG Accuracy v2',
+  'GLM-4.6 vs Claude',
+];
 
-// ── FilePanel ────────────────────────────────────
-type SortKey = 'id' | 'name' | 'date' | 'status';
-type SortDir = 'asc' | 'desc';
+const NAMING_TIPS = [
+  "Include what you're testing — a model, a product feature, or a use case.",
+  'Add a date or version so you can track changes over time (e.g. "Q3", "v2").',
+  'Keep it specific enough to tell apart from similar past runs later.',
+];
 
-interface FilePanelProps {
-  selectMode: boolean;
-  onEnterSelectMode: () => void;
-  onExitSelectMode: () => void;
-  onDeleteComplete: (deletedIds: number[], all?: boolean) => void;
-  // Whether the Upload tab is the one currently showing — triggers a
-  // fresh fetch each time it becomes active, and clears stale state
-  // when navigating away so a return visit doesn't flash old data.
-  active: boolean;
-  // Optional — lets the host switch to the Run inference tab once files
-  // are picked here. FilePanel works fine without it (just no shortcut).
-  onGoToInfer?: () => void;
+function formatContextWindow(tokens: number | null | undefined): string {
+  if (tokens === null || tokens === undefined || Number.isNaN(tokens)) return '—';
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toLocaleString()}M`;
+  if (tokens >= 1_000) return `${Math.round(tokens / 1000)}k`;
+  return `${tokens}`;
 }
 
-// Exposed to the parent so the guided tour can programmatically open the
-// actions popover for its "here's everything in here" step, without
-// lifting actionsOpen into Redux just for that one use.
-export interface FilePanelHandle {
-  openActionsMenu: () => void;
-  closeActionsMenu: () => void;
+function formatPrice(price: number | null | undefined): string {
+  return price === null || price === undefined || Number.isNaN(price) ? '—' : `$${price.toFixed(2)}`;
 }
 
-const FilePanel = forwardRef<FilePanelHandle, FilePanelProps>(({ selectMode, onEnterSelectMode, onExitSelectMode, onDeleteComplete, active, onGoToInfer }, ref) => {
-  const { t } = useTranslation();
+function providerInitials(name: string | null | undefined): string {
+  const safeName = name?.trim() || '';
+  if (!safeName) return '??';
+  const parts = safeName.replace(/[^a-zA-Z0-9 ]/g, '').split(' ').filter(Boolean);
+  const letters = parts.slice(0, 2).map((w) => w[0]).join('');
+  return (letters || safeName.slice(0, 2)).toUpperCase();
+}
+
+type HealthStatus = 'idle' | 'loading' | 'success' | 'failed';
+
+// Pulls a displayable message out of a rejected createAsyncThunk action,
+// regardless of whether that slice uses rejectWithValue (payload is a
+// string, or an object with a `message`) or lets RTK's default serializer
+// handle it (action.error.message).
+function getThunkErrorMessage(action: any, fallback: string): string {
+  const payload = action?.payload;
+  if (typeof payload === 'string' && payload) return payload;
+  if (payload && typeof payload === 'object' && typeof payload.message === 'string' && payload.message) {
+    return payload.message;
+  }
+  return action?.error?.message || fallback;
+}
+
+// Preview slider (Change-2): user picks how many sample questions to pull,
+// clamped server-side-friendly at 1–20 inclusive.
+// Preview slider (Change-2, later moved to offset-based pagination): fixed
+// page size of 20 questions per page, starting at offset 0. Total page
+// count is derived from the selected dataset's own `question_count`
+// (surfaced in the /datasets list) rather than from the preview response.
+const PREVIEW_PAGE_SIZE = 20;
+
+type DatasetTypeFilter = 'all' | 'custom' | 'deepeval';
+
+const DATASET_TYPE_FILTERS: { value: DatasetTypeFilter; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'custom', label: 'Custom' },
+  { value: 'deepeval', label: 'Deepeval' },
+];
+
+// Skeleton placeholder counts — just enough to plausibly fill the grid
+// while a refresh is in flight, not meant to match the real result count.
+const SKELETON_CARD_COUNT = 6;
+const SKELETON_CHIP_COUNT = 8;
+
+// ---------------------------------------------------------------------------
+// StepErrorBoundary — catches render-time exceptions thrown while rendering
+// a single wizard step (e.g. an unexpected null/undefined field from the
+// API) and shows a small recoverable card in place of just that step's
+// content, instead of the whole page going blank. Must be a class component
+// — React only supports error boundaries via getDerivedStateFromError /
+// componentDidCatch, there's no hook equivalent.
+//
+// Rendered with `key={step}-${retryKey}` by the caller, so navigating to a
+// different step (or clicking "Try again", which bumps retryKey) always
+// remounts a fresh instance with hasError reset — no manual reset wiring
+// needed here.
+// ---------------------------------------------------------------------------
+interface StepErrorBoundaryProps {
+  children: ReactNode;
+  onRetry: () => void;
+  onBack: () => void;
+  canGoBack: boolean;
+}
+interface StepErrorBoundaryState {
+  hasError: boolean;
+}
+class StepErrorBoundary extends Component<StepErrorBoundaryProps, StepErrorBoundaryState> {
+  state: StepErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): StepErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    // eslint-disable-next-line no-console
+    console.error('[NewEvaluation] step failed to render:', error, info.componentStack);
+  }
+
+  render() {
+    if (!this.state.hasError) return this.props.children;
+    return (
+      <div className={styles.ev__error} style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <AlertTriangle size={16} />
+          <strong>This step hit an unexpected error.</strong>
+        </div>
+        <p style={{ margin: 0, fontWeight: 400 }}>
+          Your progress on earlier steps is safe. Try again, or go back and retry from there.
+        </p>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button type="button" className={`${styles.ev__btn} ${styles['ev__btn--primary']}`} onClick={this.props.onRetry}>
+            Try again
+          </button>
+          {this.props.canGoBack && (
+            <button type="button" className={`${styles.ev__btn} ${styles['ev__btn--ghost']}`} onClick={this.props.onBack}>
+              Back
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+}
+
+export default function NewEvaluation() {
   const dispatch = useAppDispatch();
-  const {
-    serverFiles,
-    serverFilesLoading: filesLoading, serverFilesError: filesError,
-    selectedServerIds, isBatchRunning,
-    dateFrom, dateTo, statusFilter,
-    lastBatchFinishedAt,
-    filesPage, filesPageSize, filesTotal, filesTotalPages,
-    filesSortBy, filesSortOrder, filesSearch,
-  } = useAppSelector(s => s.upload);
+  const navigate = useNavigate();
+  const [step, setStep] = useState(0);
+  // Bumped by StepErrorBoundary's "Try again" button to force a fresh
+  // remount of the current step's content without changing `step` itself.
+  const [stepRetryKey, setStepRetryKey] = useState(0);
+  const [toast, setToast] = useState(false);
+  const [datasetTab, setDatasetTab] = useState<'browse' | 'upload'>('browse');
+  const [uploadName, setUploadName] = useState('');
+  const [uploadDescription, setUploadDescription] = useState('');
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadFileError, setUploadFileError] = useState<string | null>(null);
+  const totalSteps = STEPS.length;
 
-  const [view, setView] = useState<PanelView>('dropzone');
-  const [browsed, setBrowsed] = useState<BrowsedFile[]>([]);
-  const [isDragOver, setIsDragOver] = useState(false);
+  // ---- search (client-side filter) + refresh (re-fetch) state, one pair
+  // per searchable step: Providers, Models, Test Suite, Metrics. ----------
+  const [providerSearch, setProviderSearch] = useState('');
+  const [modelSearch, setModelSearch] = useState('');
+  const [datasetSearch, setDatasetSearch] = useState('');
+  const [metricSearch, setMetricSearch] = useState('');
 
-  // ── Delete mode ──────────────────────────────
-  const [deleteMode, setDeleteMode] = useState(false);
-  const [deleteSelectedIds, setDeleteSelectedIds] = useState<number[]>([]);
-  const [isDeleting, setIsDeleting] = useState(false);
+  const [providersLoading, setProvidersLoading] = useState(false);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [datasetsRefreshing, setDatasetsRefreshing] = useState(false);
+  const [metricsRefreshing, setMetricsRefreshing] = useState(false);
+  // Tracked locally rather than read from the datasets slice's own `error`
+  // field — that field wasn't reliably cleared on a subsequent successful
+  // fetch, so a stale error from an earlier failed attempt kept showing
+  // even after Refresh (or renavigating) succeeded. Deriving this purely
+  // from the outcome of our own dispatch calls below fixes that.
+  const [datasetsErrorLocal, setDatasetsErrorLocal] = useState<string | null>(null);
 
-  // ── Delete ALL (danger zone — wipes every file on the account) ──
-  const [deleteAllConfirmOpen, setDeleteAllConfirmOpen] = useState(false);
-  const [isDeletingAll, setIsDeletingAll] = useState(false);
-  const [deleteAllError, setDeleteAllError] = useState<string | null>(null);
+  // ---- Test Suite: All/Custom/Deepeval filter (Change-1) -----------------
+  const [datasetTypeFilter, setDatasetTypeFilter] = useState<DatasetTypeFilter>('all');
 
-  // ── Export mode ──────────────────────────────
-  const [exportMode, setExportMode] = useState(false);
-  const [exportSelectedIds, setExportSelectedIds] = useState<number[]>([]);
-  const [isExporting, setIsExporting] = useState(false);
+  // ---- Test Suite: preview slider (Change-2, now paginated) --------------
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewDatasetId, setPreviewDatasetId] = useState<string | null>(null);
+  const [previewDatasetName, setPreviewDatasetName] = useState<string>('');
+  // Total known question count for the dataset being previewed — comes
+  // from the dataset card (Dataset.question_count), not from the preview
+  // response itself. Used only to compute how many pages to offer.
+  const [previewQuestionCount, setPreviewQuestionCount] = useState(0);
+  const [previewOffset, setPreviewOffset] = useState(0);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewData, setPreviewData] = useState<DatasetPreviewResponse | null>(null);
 
-  // ── Search ───────────────────────────────────
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const searchInputRef = useRef<HTMLInputElement>(null);
+  const draft = useAppSelector((s) => s.evaluations.draft);
+  const launching = useAppSelector((s) => s.evaluations.launching);
+  const launchError = useAppSelector((s) => s.evaluations.launchError);
 
-  // ── Actions row (dictionary / template / search / export / delete) ──
-  // Now always rendered inline rather than behind a popover. `actionsOpen`
-  // is kept only so FilePanelHandle stays backward compatible with the
-  // guided tour's openActionsMenu/closeActionsMenu calls — it's now inert.
-  const [actionsOpen, setActionsOpen] = useState(false);
+  const providers = useAppSelector((s) => s.providers.items) ?? [];
+  const models = useAppSelector((s) => s.models.items) ?? [];
+  const healthById = useAppSelector((s) => (s.models as any).healthById) as Record<string, HealthStatus> | undefined;
 
-  useImperativeHandle(ref, () => ({
-    openActionsMenu: () => setActionsOpen(true),
-    closeActionsMenu: () => setActionsOpen(false),
-  }), []);
+  const metricsState = useAppSelector((s) => s.metrics) ?? { allMetrics: [], status: 'idle' as const, error: null };
+  // Only `all_metrics` from the API response is used — it's the full
+  // catalog rendered as selectable chips. Loading state for this step is
+  // tracked locally (metricsRefreshing) rather than read from
+  // metricsState.status, for the same staleness reason as datasets below.
+  const metricsCatalog: string[] = (metricsState as any).allMetrics ?? [];
 
-  // ── Dictionary association modal ─────────────
-  const [dictModalOpen, setDictModalOpen] = useState(false);
+  const datasets = useAppSelector((s) => s.datasets.items) ?? [];
+  const datasetUploading = useAppSelector((s) => s.datasets.uploadStatus === 'loading');
+  const datasetUploadError = useAppSelector((s) => s.datasets.uploadError);
 
-  // ── Per-file prompt viewer popup (opened from a card's prompt icons) ──
-  const [promptViewer, setPromptViewer] = useState<{ file: ServerFile; fieldIdx: number } | null>(null);
+  // ---- lazy fetch guards: each API is only called the first time the
+  // user actually navigates to the step that needs it, not on mount and
+  // not the moment its prerequisite (e.g. draft.type) is set. Refresh
+  // buttons bypass these guards entirely (they call the thunk directly).
+  const providersFetchedRef = useRef(false);
+  const modelsFetchedRef = useRef(false);
+  const datasetsFetchedForTypeRef = useRef<string | null>(null);
+  const metricsFetchedForTypeRef = useRef<string | null>(null);
 
-  const openSearch = () => {
-    setSearchOpen(true);
-    setTimeout(() => searchInputRef.current?.focus(), 50);
-  };
-  const closeSearch = () => {
-    setSearchOpen(false);
-    setSearchQuery('');
-  };
-
-  const enterDeleteMode = () => { setDeleteMode(true); setDeleteSelectedIds([]); };
-  const exitDeleteMode = () => { setDeleteMode(false); setDeleteSelectedIds([]); closeDeleteAllConfirm(); };
-
-  const toggleDeleteSelection = (id: number) => {
-    setDeleteSelectedIds(prev =>
-      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-    );
-  };
-
-  // Checked/indeterminate reflect only the CURRENT PAGE's files — a file
-  // selected on another page doesn't count toward "all selected" here.
-  const pageDeleteSelectedCount = serverFiles.filter(f => deleteSelectedIds.includes(f.id)).length;
-  const allDeleteSelected = serverFiles.length > 0 && pageDeleteSelectedCount === serverFiles.length;
-  const someDeleteSelected = pageDeleteSelectedCount > 0 && !allDeleteSelected;
-
-  const toggleDeleteSelectAll = () => {
-    const pageIds = serverFiles.map(f => f.id);
-    setDeleteSelectedIds(prev => {
-      if (allDeleteSelected) {
-        // Unchecking here only removes THIS page's ids — selections made on
-        // other pages are left untouched.
-        const pageIdSet = new Set(pageIds);
-        return prev.filter(id => !pageIdSet.has(id));
+  // GET /providers — fetched once, the first time Step 2 is reached. If
+  // that fetch fails, the marker is rolled back so leaving and coming back
+  // to Step 2 retries it automatically, instead of silently reusing a
+  // failed attempt forever (the Refresh button already bypasses this).
+  useEffect(() => {
+    if (step !== 2 || providersFetchedRef.current) return;
+    providersFetchedRef.current = true;
+    (async () => {
+      setProvidersLoading(true);
+      const result = await dispatch(fetchProviders());
+      setProvidersLoading(false);
+      if (fetchProviders.rejected.match(result)) {
+        providersFetchedRef.current = false;
       }
-      // Checking here adds THIS page's ids on top of whatever's already
-      // selected elsewhere, without duplicating.
-      const existing = new Set(prev);
-      return [...prev, ...pageIds.filter(id => !existing.has(id))];
-    });
-  };
+    })();
+  }, [step, dispatch]);
 
-  const handleConfirmDelete = async () => {
-    if (!deleteSelectedIds.length) return;
-    setIsDeleting(true);
-    try {
-      const res = await api.post('/files/delete', { fileID: deleteSelectedIds, all: false });
-      if ((res.data as any)?.status === 'success' || res.status === 200) {
-        const deleted = [...deleteSelectedIds];
-        dispatch(clearServerSelection());
-        await fetchFiles();
-        exitDeleteMode();
-        onDeleteComplete(deleted);
+  // GET /models — fetched once, the first time Step 3 is reached (by then
+  // providers are already selected, since Step 2 requires it to advance).
+  // Same retry-on-failure behavior as providers above.
+  useEffect(() => {
+    if (step !== 3 || modelsFetchedRef.current) return;
+    modelsFetchedRef.current = true;
+    (async () => {
+      setModelsLoading(true);
+      const result = await dispatch(fetchModels());
+      setModelsLoading(false);
+      if (fetchModels.rejected.match(result)) {
+        modelsFetchedRef.current = false;
       }
-    } catch {
-      // silently ignore — stay in delete mode so user can retry
-    } finally {
-      setIsDeleting(false);
+    })();
+  }, [step, dispatch]);
+
+  // ---- (1) dataset "type" query param, split for Agent by framework -------
+  // Model/RAG: type = draft.type
+  // Agent, no framework chosen:  type = 'agent_benchmark'
+  // Agent, framework chosen:     type = 'agent_custom'
+  const datasetType = useMemo(() => {
+    if (!draft.type) return '';
+    if (draft.type === 'agent') {
+      return draft.agentFramework ? 'agent_custom' : 'agent_benchmark';
     }
-  };
+    return draft.type;
+  }, [draft.type, draft.agentFramework]);
 
-  // ── Delete ALL — wipes every file on the account, ignores fileID ──
-  const openDeleteAllConfirm = () => {
-    setDeleteAllError(null);
-    setDeleteAllConfirmOpen(true);
-  };
-  const closeDeleteAllConfirm = () => {
-    setDeleteAllConfirmOpen(false);
-    setDeleteAllError(null);
-  };
-  const handleConfirmDeleteAll = async () => {
-    setIsDeletingAll(true);
-    setDeleteAllError(null);
-    try {
-      const res = await api.post('/files/delete', {
-        all: true,
-        start_date: dateFrom,
-        end_date: dateTo,
-      });
-      if ((res.data as any)?.status === 'success' || res.status === 200) {
-        dispatch(clearServerSelection());
-        closeDeleteAllConfirm();
-        exitDeleteMode();
-        await fetchFiles({ page: 1 });
-        onDeleteComplete([], true);
+  // GET /datasets?type={type} — fetched the first time Step 4 is reached
+  // for a given type/framework combination. If the user goes back and
+  // changes type/framework, the pool is stale, so a different datasetType
+  // triggers one refetch the next time Step 4 is (re)entered. If the fetch
+  // itself fails, the marker is rolled back so re-selecting the *same*
+  // type and coming back to Step 4 retries automatically — previously a
+  // failed attempt permanently "used up" the marker for that type, so
+  // going back and forward again silently reused the failure.
+  useEffect(() => {
+    if (step !== 4 || !datasetType) return;
+    if (datasetsFetchedForTypeRef.current === datasetType) return;
+    datasetsFetchedForTypeRef.current = datasetType;
+    (async () => {
+      setDatasetsRefreshing(true);
+      const result = await dispatch(fetchDatasets(datasetType));
+      setDatasetsRefreshing(false);
+      if (fetchDatasets.rejected.match(result)) {
+        datasetsFetchedForTypeRef.current = null;
+        setDatasetsErrorLocal(getThunkErrorMessage(result, 'Failed to load test suites'));
       } else {
-        setDeleteAllError(t('uploadInfer.filePanel.deleteAllFailed'));
+        setDatasetsErrorLocal(null);
       }
-    } catch (err) {
-      setDeleteAllError(err instanceof Error ? err.message : t('uploadInfer.filePanel.deleteAllFailed'));
-    } finally {
-      setIsDeletingAll(false);
-    }
-  };
+    })();
+  }, [step, datasetType, dispatch]);
 
-  // ── Export handlers ───────────────────────────
-  const enterExportMode = () => { setExportMode(true); setExportSelectedIds([]); setExportAllError(null); };
-  const exitExportMode = () => { setExportMode(false); setExportSelectedIds([]); setExportAllError(null); };
+  // Any previously chosen dataset is invalid once the dataset "type" changes
+  // (different type/framework combination = different dataset pool). Also
+  // clear any in-progress dataset search since it applied to the old pool.
+  // This is a pure UI-state reset, independent of the fetch timing above.
+  useEffect(() => {
+    if (!datasetType) return;
+    dispatch(setDraft({ dataset: null }));
+    setDatasetSearch('');
+    setDatasetTypeFilter('all');
+    setDatasetsErrorLocal(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [datasetType]);
 
-  const toggleExportSelection = (id: number) => {
-    setExportSelectedIds(prev =>
-      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
-    );
-  };
-
-  // Checked/indeterminate reflect only the CURRENT PAGE's files — a file
-  // selected on another page doesn't count toward "all selected" here.
-  const pageExportSelectedCount = serverFiles.filter(f => exportSelectedIds.includes(f.id)).length;
-  const allExportSelected = serverFiles.length > 0 && pageExportSelectedCount === serverFiles.length;
-  const someExportSelected = pageExportSelectedCount > 0 && !allExportSelected;
-
-  const toggleExportSelectAll = () => {
-    const pageIds = serverFiles.map(f => f.id);
-    setExportSelectedIds(prev => {
-      if (allExportSelected) {
-        const pageIdSet = new Set(pageIds);
-        return prev.filter(id => !pageIdSet.has(id));
+  // GET /metrics?eval_type={type} — fetched the first time Step 5 is
+  // reached for a given draft.type. Only `all_metrics` is consumed (see
+  // metricsCatalog below) — `metrics` is ignored entirely. Same
+  // retry-on-failure rollback as datasets above.
+  useEffect(() => {
+    if (step !== 5 || !draft.type) return;
+    if (metricsFetchedForTypeRef.current === draft.type) return;
+    metricsFetchedForTypeRef.current = draft.type;
+    (async () => {
+      setMetricsRefreshing(true);
+      const result = await dispatch(fetchMetrics(draft.type));
+      setMetricsRefreshing(false);
+      if (fetchMetrics.rejected.match(result)) {
+        metricsFetchedForTypeRef.current = null;
       }
-      const existing = new Set(prev);
-      return [...prev, ...pageIds.filter(id => !existing.has(id))];
-    });
-  };
+    })();
+  }, [step, draft.type, dispatch]);
 
-  const handleConfirmExport = async () => {
-    if (!exportSelectedIds.length) return;
-    setIsExporting(true);
-    try {
-      const res = await api.post(
-        '/export_excel',
-        { file_ids: exportSelectedIds, all: false },
-        { responseType: 'blob' },
-      );
+  const suite = datasets.find((d) => d?.id === draft.dataset);
 
-      // Use the original file name (without extension) + .xlsx
-      // For a single file: "CS401_Week03.vtt" → "CS401_Week03.xlsx"
-      // For multiple files: "export_2026-05-07.xlsx"
-      let filename: string;
-      if (exportSelectedIds.length === 1) {
-        const f = serverFiles.find(sf => sf.id === exportSelectedIds[0]);
-        const base = f ? f.original_name.replace(/\.[^.]+$/, '') : String(exportSelectedIds[0]);
-        filename = `${base}.xlsx`;
-      } else {
-        const today = new Date().toISOString().slice(0, 10);
-        filename = `export_${today}.xlsx`;
-      }
-
-      const url = URL.createObjectURL(new Blob([res.data]));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-
-      exitExportMode();
-    } catch {
-      // silently ignore — stay in export mode so user can retry
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
-  // ── Export ALL — every file in the current date range, ignores file_ids ──
-  const [isExportingAll, setIsExportingAll] = useState(false);
-  const [exportAllError, setExportAllError] = useState<string | null>(null);
-
-  const handleExportAll = async () => {
-    setIsExportingAll(true);
-    setExportAllError(null);
-    try {
-      const res = await api.post(
-        '/export_excel',
-        { all: true, start_date: dateFrom, end_date: dateTo },
-        { responseType: 'blob' },
-      );
-
-      const filename = `export_all_${dateFrom}_${dateTo}.xlsx`;
-      const url = URL.createObjectURL(new Blob([res.data]));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-
-      exitExportMode();
-    } catch (err) {
-      setExportAllError(err instanceof Error ? err.message : t('uploadInfer.filePanel.exportAllFailed'));
-    } finally {
-      setIsExportingAll(false);
-    }
-  };
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const folderInputRef = useRef<HTMLInputElement>(null);
-
-  // ── Fetch server files (paginated, sorted, searched) ──
-  // Any param not passed in `opts` falls back to the current redux value, so
-  // callers only need to specify what's actually changing (e.g. just `page`).
-  // In-flight guard: set synchronously before the await, so a second
-  // overlapping call (e.g. StrictMode's intentional double mount-effect
-  // invocation in dev, or two effects both wanting a fresh fetch at once)
-  // bails out instead of firing a second real /files/by-date/ request.
-  // Extra guard for the non-overlapping case: two mounts (or two effects)
-  // can each fire a fetch with identical params moments apart, which the
-  // in-flight flag alone won't catch once the first one has finished. Skip
-  // a repeat of the exact same request if it was made very recently.
-  // Both guards live at module scope (see top of file) rather than as
-  // component-instance refs, since a genuine remount gets fresh refs but
-  // shares the same module.
-  const fetchFiles = useCallback(async (opts?: {
-    from?: string; to?: string;
-    page?: number; pageSize?: number;
-    sortBy?: FilesSortBy; sortOrder?: SortOrder;
-    search?: string;
-    statusFilter?: FileStatus | '';
-  }) => {
-    if (filesFetchInFlightGlobal) return;
-    const from = opts?.from ?? dateFrom;
-    const to = opts?.to ?? dateTo;
-    const page = opts?.page ?? filesPage;
-    const pageSize = opts?.pageSize ?? filesPageSize;
-    const sortBy = opts?.sortBy ?? filesSortBy;
-    const sortOrder = opts?.sortOrder ?? filesSortOrder;
-    const search = opts?.search ?? filesSearch;
-    const statusF = opts?.statusFilter ?? statusFilter;
-
-    const sig = JSON.stringify({ from, to, page, pageSize, sortBy, sortOrder, search, statusF });
-    const now = Date.now();
-    if (lastFilesFetchGlobal && lastFilesFetchGlobal.sig === sig && now - lastFilesFetchGlobal.at < 1500) {
-      return;
-    }
-    lastFilesFetchGlobal = { sig, at: now };
-    filesFetchInFlightGlobal = true;
-
-    dispatch(serverFilesLoading());
-    try {
-      const res = await api.post('/files/by-date/', {
-        start_date: from,
-        end_date: to,
-        page,
-        page_size: pageSize,
-        sort_by: sortBy,
-        sort_order: sortOrder,
-        ...(search ? { search } : {}),
-        ...(statusF ? { status_filter: statusF } : {}),
-      });
-      const d = (res.data as any)?.data ?? {};
-      dispatch(serverFilesSuccess({
-        files: d.data ?? [],
-        total: d.total ?? 0,
-        page: d.page ?? page,
-        pageSize: d.page_size ?? pageSize,
-        totalPages: d.total_pages ?? 1,
-        sortBy, sortOrder, search,
-      }));
-    } catch (err) {
-      dispatch(serverFilesFailure(err instanceof Error ? err.message : 'Failed to load files.'));
-    } finally {
-      filesFetchInFlightGlobal = false;
-    }
-  }, [dispatch, dateFrom, dateTo, filesPage, filesPageSize, filesSortBy, filesSortOrder, filesSearch, statusFilter]);
-
-  // Re-fetch /by-date/ whenever a batch finishes so completed statuses are up to date
+  // ---- (6) auto-select every subgroup on dataset pick ----------------------
   useEffect(() => {
-    if (lastBatchFinishedAt !== null) {
-      fetchFiles();
-    }
-  }, [lastBatchFinishedAt]); // eslint-disable-line
+    const cats = (suite as any)?.dataset_categories ?? [];
+    dispatch(setDraft({ subgroup: cats }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft.dataset]);
 
-  // ── Pagination / page-size handlers ──
-  const goToPage = useCallback((p: number) => {
-    if (p < 1 || p > filesTotalPages || p === filesPage || filesLoading) return;
-    fetchFiles({ page: p });
-  }, [filesTotalPages, filesPage, filesLoading, fetchFiles]);
+  const selectAllSubgroups = () => dispatch(setDraft({ subgroup: (suite as any)?.dataset_categories ?? [] }));
+  const clearAllSubgroups = () => dispatch(setDraft({ subgroup: [] }));
 
-  const handlePageSizeChange = useCallback((size: number) => {
-    dispatch(setFilesPageSize(size));
-    fetchFiles({ pageSize: size, page: 1 });
-  }, [dispatch, fetchFiles]);
+  const connectedProviders = providers.filter((p) => p?.status === 'connected');
+  const filteredProviders = useMemo(
+    () => connectedProviders.filter((p) => (p?.name ?? '').toLowerCase().includes(providerSearch.trim().toLowerCase())),
+    [connectedProviders, providerSearch]
+  );
 
-  // ── Browse / drop ────────────────────────────
-  const handleFiles = useCallback((files: File[]) => {
-    const valid = filesToBrowsed(files);
-    if (!valid.length) return;
-    setBrowsed(valid);
-    setView('preview');
-  }, []);
+  const availableModels = useMemo(
+    () => models.filter((m) => draft.providers.includes(m?.provider_id)),
+    [models, draft.providers]
+  );
+  const filteredModels = useMemo(
+    () => availableModels.filter((m) => (m?.name ?? '').toLowerCase().includes(modelSearch.trim().toLowerCase())),
+    [availableModels, modelSearch]
+  );
 
-  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) handleFiles(Array.from(e.target.files));
-    e.target.value = '';
+  // Counts per dataset_type, for the filter chip labels — computed off the
+  // full (unsearched, unfiltered) list so the counts don't shift as the
+  // user types in the search box.
+  const datasetTypeCounts = useMemo(
+    () => ({
+      all: datasets.length,
+      custom: datasets.filter((d) => (d as any)?.dataset_type === 'custom').length,
+      deepeval: datasets.filter((d) => (d as any)?.dataset_type === 'deepeval').length,
+    }),
+    [datasets]
+  );
+
+  const filteredDatasets = useMemo(
+    () =>
+      datasets.filter((d) => {
+        const matchesSearch = (d?.name ?? '').toLowerCase().includes(datasetSearch.trim().toLowerCase());
+        const matchesType = datasetTypeFilter === 'all' || (d as any)?.dataset_type === datasetTypeFilter;
+        return matchesSearch && matchesType;
+      }),
+    [datasets, datasetSearch, datasetTypeFilter]
+  );
+
+  const filteredMetrics = useMemo(
+    () => metricsCatalog.filter((m) => (m ?? '').toLowerCase().includes(metricSearch.trim().toLowerCase())),
+    [metricsCatalog, metricSearch]
+  );
+
+  // ---- refresh handlers: re-dispatch each step's existing fetch thunk ----
+  // Each sets its own `*Refreshing` flag so the step can swap its grid for
+  // skeleton placeholders while the request is in flight (Change-3).
+  const refreshProviders = async () => {
+    setProvidersLoading(true);
+    await dispatch(fetchProviders());
+    setProvidersLoading(false);
   };
 
-  const onDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDragOver(true); };
-  const onDragLeave = () => setIsDragOver(false);
-  const onDrop = (e: React.DragEvent) => {
-    e.preventDefault(); setIsDragOver(false);
-    const files: File[] = [];
-    if (e.dataTransfer.items) {
-      const traverse = (entry: FileSystemEntry) => {
-        if (entry.isFile) (entry as FileSystemFileEntry).file(f => { if (isAllowed(f.name)) files.push(f); });
-        else if (entry.isDirectory) { const r = (entry as FileSystemDirectoryEntry).createReader(); r.readEntries(es => es.forEach(traverse)); }
-      };
-      Array.from(e.dataTransfer.items).forEach(item => { const e = item.webkitGetAsEntry?.(); if (e) traverse(e); });
-      setTimeout(() => { if (files.length) handleFiles(files); }, 200);
-    } else handleFiles(Array.from(e.dataTransfer.files));
+  const refreshModels = async () => {
+    setModelsLoading(true);
+    await dispatch(fetchModels());
+    setModelsLoading(false);
   };
 
-  // ── Upload actions ───────────────────────────
-  const removeFile = (id: string) => { const n = browsed.filter(f => f.id !== id); setBrowsed(n); if (!n.length) setView('dropzone'); };
-  const handleCancel = () => { setBrowsed([]); setView('dropzone'); };
-
-  const handleUpload = async () => {
-    setView('uploading');
-    for (const bf of browsed) {
-      setBrowsed(prev => prev.map(f => f.id === bf.id ? { ...f, status: 'uploading' } : f));
-      try {
-        const fd = new FormData(); fd.append('file', bf.file);
-        const res = await api.post('/upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-        const ok = res.status === 200 && (res.data as any)?.status === 'Success';
-        setBrowsed(prev => prev.map(f => f.id === bf.id ? { ...f, status: ok ? 'success' : 'failed', error: ok ? undefined : 'Upload failed' } : f));
-      } catch (err: any) {
-        const apiMessage = err?.response?.data?.details?.result;
-        const errorMsg = err?.response?.status === 403 && apiMessage
-          ? apiMessage
-          : err instanceof Error ? err.message : 'Upload failed';
-        setBrowsed(prev => prev.map(f => f.id === bf.id ? { ...f, status: 'failed', error: errorMsg } : f));
-      }
-    }
-  };
-
-  useEffect(() => {
-    if (view !== 'uploading') return;
-    if (!browsed.every(f => f.status === 'success' || f.status === 'failed')) return;
-    fetchFiles({ page: 1 });
-    const allOk = browsed.every(f => f.status === 'success');
-    if (allOk) {
-      // All files uploaded successfully — clear immediately
-      setBrowsed([]);
-      setView('dropzone');
-      return;
-    }
-    // Some failed — leave the list visible briefly so the user can read the error
-    const t = setTimeout(() => { setBrowsed([]); setView('dropzone'); }, 2500);
-    return () => clearTimeout(t);
-  }, [browsed, view]); // eslint-disable-line
-
-  const handleApply = () => fetchFiles({ page: 1 });
-  const handleStatusFilterChange = (value: FileStatus | '') => {
-    dispatch(setStatusFilter(value));
-    fetchFiles({ page: 1, statusFilter: value });
-  };
-
-  // Select-all state for uploaded files (scoped to the current page)
-  // Checked/indeterminate reflect only the CURRENT PAGE's files — files
-  // selected on other pages (kept in redux) don't affect this checkbox.
-  const pageSelectedCount = serverFiles.filter(f => selectedServerIds.includes(f.id)).length;
-  const allSelected = serverFiles.length > 0 && pageSelectedCount === serverFiles.length;
-  const someSelected = pageSelectedCount > 0 && !allSelected;
-
-  // ── Sort (server-side — maps UI key to the API's sort_by values) ──────
-  const SORT_KEY_TO_API: Record<SortKey, FilesSortBy> = {
-    id: 'id', name: 'original_name', date: 'inserted_at', status: 'status',
-  };
-  const API_TO_SORT_KEY: Record<FilesSortBy, SortKey> = {
-    id: 'id', original_name: 'name', inserted_at: 'date', status: 'status',
-  };
-  const sort = { key: API_TO_SORT_KEY[filesSortBy], dir: filesSortOrder as SortDir };
-
-  // ── exitSelectMode — clears selections then notifies parent ──
-  const exitSelectMode = useCallback(() => {
-    dispatch(clearServerSelection());
-    onExitSelectMode();
-  }, [dispatch, onExitSelectMode]);
-
-  const handleSort = useCallback((key: SortKey) => {
-    const apiKey = SORT_KEY_TO_API[key];
-    const dir: SortDir = filesSortBy === apiKey ? (filesSortOrder === 'asc' ? 'desc' : 'asc') : 'asc';
-    dispatch(setFilesSort({ sortBy: apiKey, sortOrder: dir }));
-    fetchFiles({ sortBy: apiKey, sortOrder: dir, page: 1 });
-  }, [filesSortBy, filesSortOrder, dispatch, fetchFiles]); // eslint-disable-line
-
-  // ── Search (debounced, server-side) ──────────────────────────────────
-  const skipNextSearchEffect = useRef(true);
-  useEffect(() => {
-    if (skipNextSearchEffect.current) { skipNextSearchEffect.current = false; return; }
-    const q = searchQuery.trim();
-    const handle = setTimeout(() => {
-      dispatch(setFilesSearch(q));
-      fetchFiles({ search: q, page: 1 });
-    }, 400);
-    return () => clearTimeout(handle);
-  }, [searchQuery]); // eslint-disable-line
-
-  // Own fresh fetch every time the Upload tab becomes active — and when
-  // it goes inactive (navigated away from), clear the list and reset
-  // search/sort/status-filter/page so a return visit shows a clean
-  // loading state instead of the previous stale results. Also reset any
-  // in-progress delete/export/select-files action, so switching tabs and
-  // coming back never leaves a stale selection or an open confirm panel
-  // behind.
-  useEffect(() => {
-    if (active) {
-      fetchFiles({ page: 1 });
+  const refreshDatasets = async () => {
+    if (!datasetType) return;
+    setDatasetsRefreshing(true);
+    const result = await dispatch(fetchDatasets(datasetType));
+    setDatasetsRefreshing(false);
+    if (fetchDatasets.rejected.match(result)) {
+      datasetsFetchedForTypeRef.current = null;
+      setDatasetsErrorLocal(getThunkErrorMessage(result, 'Failed to load test suites'));
     } else {
-      skipNextSearchEffect.current = true;
-      setSearchQuery('');
-      dispatch(setStatusFilter(''));
-      dispatch(serverFilesSuccess({
-        files: [], total: 0, page: 1, pageSize: filesPageSize, totalPages: 1,
-        sortBy: 'id', sortOrder: 'desc', search: '',
-      }));
+      datasetsFetchedForTypeRef.current = datasetType;
+      setDatasetsErrorLocal(null);
+    }
+  };
 
-      setDeleteMode(false);
-      setDeleteSelectedIds([]);
+  const refreshMetrics = async () => {
+    if (!draft.type) return;
+    setMetricsRefreshing(true);
+    const result = await dispatch(fetchMetrics(draft.type));
+    setMetricsRefreshing(false);
+    if (fetchMetrics.rejected.match(result)) {
+      metricsFetchedForTypeRef.current = null;
+    } else {
+      metricsFetchedForTypeRef.current = draft.type;
+    }
+  };
 
-      setExportMode(false);
-      setExportSelectedIds([]);
+  // ---- preview slider (Change-2, paginated): GET /datasets/{id}/preview?
+  // limit=20&offset={offset} ---------------------------------------------
+  const previewTotalPages = Math.max(1, Math.ceil(previewQuestionCount / PREVIEW_PAGE_SIZE));
+  const previewCurrentPage = Math.floor(previewOffset / PREVIEW_PAGE_SIZE) + 1;
+  const previewHasPrevPage = previewOffset > 0;
+  const previewHasNextPage = previewCurrentPage < previewTotalPages;
 
-      dispatch(clearServerSelection());
-      if (selectMode) onExitSelectMode?.();
+  const openPreview = (datasetId: string, datasetName: string, questionCount: number) => {
+    setPreviewDatasetId(datasetId);
+    setPreviewDatasetName(datasetName);
+    setPreviewQuestionCount(questionCount || 0);
+    setPreviewOffset(0);
+    setPreviewData(null);
+    setPreviewError(null);
+    setPreviewOpen(true);
+  };
+
+  const closePreview = () => {
+    setPreviewOpen(false);
+  };
+
+  const goToPreviewPrevPage = () => {
+    setPreviewOffset((o) => Math.max(0, o - PREVIEW_PAGE_SIZE));
+  };
+
+  const goToPreviewNextPage = () => {
+    setPreviewOffset((o) => {
+      const maxOffset = Math.max(0, (previewTotalPages - 1) * PREVIEW_PAGE_SIZE);
+      return Math.min(maxOffset, o + PREVIEW_PAGE_SIZE);
+    });
+  };
+
+  // Fetches whatever page `previewOffset` currently points at. Called both
+  // by the auto-fetch effect below (on open / page change) and by the
+  // manual reload button (same page, fresh data).
+  const fetchPreviewPage = async (datasetId: string, offset: number) => {
+    setPreviewLoading(true);
+    setPreviewError(null);
+    try {
+      const data = await evaluationsApi.previewDataset(datasetId, PREVIEW_PAGE_SIZE, offset);
+      setPreviewData(data);
+    } catch (err) {
+      const detail =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        (err as Error)?.message ||
+        'Failed to load preview';
+      setPreviewError(detail);
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  // Auto-loads a page whenever the slider opens or the page changes — no
+  // separate "Load preview" click needed, Prev/Next just work.
+  useEffect(() => {
+    if (!previewOpen || !previewDatasetId) return;
+    fetchPreviewPage(previewDatasetId, previewOffset);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewOpen, previewDatasetId, previewOffset]);
+
+
+  // Manual, single-model health check — still available via the "Check
+  // health" button on each card, alongside the automatic parallel check
+  // below.
+  const runHealthCheck = (modelId: string) => {
+    dispatch(checkModelHealth(modelId));
+  };
+
+  // Auto health-check: as soon as the models list for the currently
+  // selected providers is available (and while Step 3 is open), fire a
+  // parallel health check for every visible model — the user isn't
+  // expected to click "Check health" one by one. Guarded on the raw
+  // `models` array reference so it re-runs once per fresh fetch (initial
+  // navigation-triggered fetch, or a manual refresh) rather than on every
+  // render or on unrelated state changes like typing in the search box.
+  const autoHealthCheckedForModelsRef = useRef<typeof models | null>(null);
+  useEffect(() => {
+    if (step !== 3 || availableModels.length === 0) return;
+    if (autoHealthCheckedForModelsRef.current === models) return;
+    autoHealthCheckedForModelsRef.current = models;
+    availableModels.forEach((m) => dispatch(checkModelHealth(m.id)));
+  }, [step, models, availableModels, dispatch]);
+
+  const toggle = (list: string[], value: string) =>
+    list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
+
+  const getFileExtension = (filename: string) => {
+    const idx = filename.lastIndexOf('.');
+    return idx >= 0 ? filename.slice(idx + 1).toLowerCase() : '';
+  };
+
+  const openUploadPanel = () => {
+    dispatch(resetUploadStatus());
+    setUploadName('');
+    setUploadDescription('');
+    setUploadFile(null);
+    setUploadFileError(null);
+    setDatasetTab('upload');
+  };
+
+  const handleUploadFileChange = (file: File | null) => {
+    setUploadFile(file);
+    if (!file) {
+      setUploadFileError(null);
+      return;
+    }
+    const ext = getFileExtension(file.name);
+    if (!SUPPORTED_UPLOAD_EXTENSIONS.includes(ext)) {
+      setUploadFileError('Unsupported file type. Please choose a .json, .jsonl, .arrow, or .parquet file.');
+    } else {
+      setUploadFileError(null);
+    }
+  };
+
+  const canUpload =
+    Boolean(uploadName.trim()) && Boolean(uploadFile) && !uploadFileError && Boolean(draft.type) && !datasetUploading;
+
+  const submitUpload = async () => {
+    if (!uploadFile || !canUpload) return;
+    const result = await dispatch(
+      uploadDataset({
+        file: uploadFile,
+        name: uploadName.trim(),
+        description: uploadDescription.trim(),
+        evalType: datasetType,
+      })
+    );
+    if (uploadDataset.fulfilled.match(result)) {
+      dispatch(setDraft({ dataset: result.payload.id }));
+      setDatasetTab('browse');
+    }
+  };
+
+  // ---- (5) Model type + non-custom dataset ⇒ hide metrics & judge ---------
+  const isCustomDataset = (suite as any)?.dataset_type === 'custom';
+  const modelHidesMetrics = draft.type === 'model' && Boolean(suite) && !isCustomDataset;
+
+  // Agent type with no framework selected (draft.agentFramework null) maps
+  // to POST /agent-benchmark/run, which only ever accepts dataset_id,
+  // model_ids, evaluation_name, run_samples — there's no metrics or judge
+  // concept for this path at all, so the Metrics step (and the Test
+  // Suite step's Upload tab, further below) simplify down the same way
+  // the Model + standard-dataset case does.
+  const isAgentBenchmarkNoFramework = draft.type === 'agent' && !draft.agentFramework;
+  const hideMetricsStep = modelHidesMetrics || isAgentBenchmarkNoFramework;
+
+  // The Upload tab isn't offered for Agent benchmarks with no framework
+  // selected (see Test Suite step below) — if the user had it open and
+  // then goes back and clears the framework, snap back to Browse so
+  // there's no dangling reference to a hidden tab.
+  useEffect(() => {
+    if (isAgentBenchmarkNoFramework && datasetTab === 'upload') {
+      setDatasetTab('browse');
+    }
+  }, [isAgentBenchmarkNoFramework, datasetTab]);
+
+  // Clear any selected metrics the moment this simplified mode kicks in, so
+  // neither the manifest nor the launch payload carries stale selections.
+  useEffect(() => {
+    if (hideMetricsStep && draft.metrics.length > 0) {
+      dispatch(setDraft({ metrics: [] }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active]);
+  }, [hideMetricsStep]);
 
-  const displayedFiles = serverFiles;
+  const selectedModels = draft.models.map((id) => models.find((m) => m?.id === id)).filter(Boolean) as typeof models;
+  const judgeModel = draft.judgeModelId ? models.find((m) => m?.id === draft.judgeModelId) : null;
 
-  const done = browsed.filter(f => f.status === 'success').length;
-  const failed = browsed.filter(f => f.status === 'failed').length;
-  const finished = done + failed;
+  // Agent type WITH a framework selected (draft.agentFramework truthy, e.g.
+  // Hermes) maps to POST /agent-benchmark/run-multi — a judge model is
+  // mandatory for this path regardless of which metrics were picked, unlike
+  // the Model/RAG flow where it's only required when LLM_Judge is selected.
+  const isAgentWithFramework = draft.type === 'agent' && Boolean(draft.agentFramework);
+
+  // The Judge Model panel — and picking a judge at all — is required when
+  // either the LLM_Judge metric has been selected, or the run is an Agent
+  // benchmark with a framework selected (mandatory there regardless of
+  // metrics). Metrics being hidden entirely (see hideMetricsStep) overrides
+  // both. In every other case judge_config must be sent as {} on launch.
+  const requiresJudge = !hideMetricsStep && (draft.metrics.includes('LLM_Judge') || isAgentWithFramework);
+
+  // If the user deselects LLM_Judge after having picked a judge, clear the
+  // stale selection so it doesn't silently linger in the manifest/payload.
+  // (Doesn't fire for the Agent+framework case since requiresJudge stays
+  // true there regardless of the metrics selection.)
+  useEffect(() => {
+    if (!requiresJudge && draft.judgeModelId) {
+      dispatch(setDraft({ judgeModelId: null }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requiresJudge]);
+
+  const isModelSelectable = (modelId: string) => healthById?.[modelId] === 'success';
+
+  const toggleModel = (modelId: string) => {
+    const alreadySelected = draft.models.includes(modelId);
+    if (!alreadySelected && !isModelSelectable(modelId)) return;
+    dispatch(setDraft({ models: toggle(draft.models, modelId) }));
+  };
+
+  const canGo = () => {
+    if (step === 0) return Boolean(draft.name.trim());
+    if (step === 1) return Boolean(draft.type);
+    if (step === 2) return draft.providers.length > 0;
+    if (step === 3) return draft.models.length > 0;
+    if (step === 4) return Boolean(draft.dataset);
+    if (step === 5) return hideMetricsStep || !requiresJudge || Boolean(draft.judgeModelId);
+    return true;
+  };
+
+  const goNext = () => {
+    if (!canGo()) return;
+    setStep((s) => Math.min(totalSteps - 1, s + 1));
+  };
+  const goBack = () => setStep((s) => Math.max(0, s - 1));
+  const goToStep = (target: number) => {
+    if (target < step) setStep(target);
+  };
+
+  // ---- (3) & (4) launch: three different endpoints depending on type ------
+  const launch = async () => {
+    const dataset = datasets.find((d) => d?.id === draft.dataset);
+    const judgeModelObj = draft.judgeModelId ? models.find((m) => m?.id === draft.judgeModelId) : undefined;
+    // Change: "Full" mode means "use the whole dataset" — for the agent
+    // benchmark endpoints the backend contract for that is run_samples: 0.
+    const effectiveRunSamples = draft.runSamplesMode === 'full' ? 0 : draft.runSamples;
+    // For POST /evaluations (Model/RAG) specifically, "Full" instead sends
+    // the selected dataset's total category count (dataset_categories.length
+    // from the Test Suite step) rather than 0 — falls back to 0 if the
+    // dataset has no categories or wasn't found.
+    const fullModeCategoryCount = (dataset as any)?.dataset_categories?.length ?? 0;
+    const createEvalRunSamples = draft.runSamplesMode === 'full' ? fullModeCategoryCount : draft.runSamples;
+
+    let result: any;
+
+    if (draft.type === 'agent' && !draft.agentFramework) {
+      // POST /agent-benchmark/run
+      result = await dispatch(
+        runAgentBenchmark({
+          dataset_id: dataset?.id || '',
+          model_ids: draft.models,
+          evaluation_name: draft.name,
+          run_samples: effectiveRunSamples,
+        })
+      );
+    } else if (draft.type === 'agent' && draft.agentFramework) {
+      // POST /agent-benchmark/run-multi
+      result = await dispatch(
+        runAgentBenchmarkMulti({
+          dataset_id: dataset?.id || '',
+          model_ids: draft.models,
+          evaluation_name: draft.name,
+          selected_metrics: draft.metrics,
+          selected_categories: draft.subgroup,
+          run_samples: effectiveRunSamples,
+        })
+      );
+    } else {
+      // POST /evaluations then /evaluations/{id}/start — Model or RAG
+      const payload: CreateEvaluationRequest = {
+        name: draft.name,
+        eval_type: draft.type || '',
+        dataset_id: dataset?.id || '',
+        benchmark: dataset?.name || undefined,
+        model_ids: draft.models,
+        selected_metrics: hideMetricsStep ? [] : draft.metrics,
+        run_samples: createEvalRunSamples,
+        selected_category: draft.subgroup.length > 0 ? draft.subgroup : dataset ? [dataset.category] : undefined,
+        // Only populated when the LLM_Judge metric is selected AND a judge
+        // model has been chosen — every other case sends an empty object.
+        judge_config:
+          requiresJudge && draft.judgeModelId
+            ? {
+                model_id: draft.judgeModelId,
+                base_url: judgeModelObj?.base_url || '',
+                api_key: draft.judgeModelId,
+              }
+            : {},
+      };
+      result = await dispatch(launchEvaluation(payload));
+    }
+
+    const succeeded =
+      launchEvaluation.fulfilled.match(result) ||
+      runAgentBenchmark.fulfilled.match(result) ||
+      runAgentBenchmarkMulti.fulfilled.match(result);
+
+    if (succeeded) {
+      setToast(true);
+      setTimeout(() => {
+        setToast(false);
+        navigate('/app/history');
+      }, 2000);
+    }
+  };
+
+  const progressPct = Math.round((step / (totalSteps - 1)) * 100);
+
+  // ---- live Run Manifest values (one per step) ----------------------------
+  const providerNames = draft.providers.map((id) => providers.find((p) => p?.id === id)?.name || id);
+  const mf = (value: string, filled: boolean) => ({ value: filled ? value : '—', empty: !filled });
+  const typeLabel = TYPE_OPTIONS.find((o) => o.value === draft.type)?.label ?? '';
+  const frameworkTitle = draft.agentFramework ? AGENT_FRAMEWORKS.find((f) => f.id === draft.agentFramework)?.title : null;
+  const manifest = [
+    mf(draft.name, Boolean(draft.name)),
+    mf(frameworkTitle ? `${typeLabel} · ${frameworkTitle}` : typeLabel, Boolean(draft.type)),
+    mf(draft.providers.length === 1 ? providerNames[0] : `${draft.providers.length} providers`, draft.providers.length > 0),
+    mf(`${draft.models.length} models`, draft.models.length > 0),
+    mf(suite?.name || '', Boolean(suite)),
+    mf(hideMetricsStep ? 'Not required' : `${draft.metrics.length} metrics`, hideMetricsStep || draft.metrics.length > 0),
+    mf(
+      hideMetricsStep
+        ? 'Ready to launch'
+        : judgeModel
+        ? `Judge · ${judgeModel.name || 'Unnamed model'}`
+        : requiresJudge
+        ? 'Judge required'
+        : 'Ready to launch',
+      hideMetricsStep || !requiresJudge || Boolean(judgeModel)
+    ),
+  ];
+
+  const CrumbIcon = STEP_ICONS[step];
+
+  // ---- shared "Run samples" control (Custom / Full) ------------------------
+  // Used by both branches of Step 5 (the simplified model-benchmark view and
+  // the full metrics view) so the toggle behaves identically in either.
+  // 'full' means "use the whole dataset" — run_samples is sent as 0 in that
+  // case (see `launch` below), regardless of whatever number was last typed
+  // into the Custom field.
+  const runSamplesControl = (
+    <div className={`${styles.ev__field} ${styles['ev__field--samples']}`}>
+      <label className={styles.ev__label}>Run samples</label>
+      <div className={styles['ev__radio-row']}>
+        <button
+          type="button"
+          className={`${styles['ev__radio-opt']} ${draft.runSamplesMode === 'custom' ? styles['ev__radio-opt--on'] : ''}`}
+          onClick={() => dispatch(setDraft({ runSamplesMode: 'custom' }))}
+        >
+          <span className={`${styles.ev__radio} ${draft.runSamplesMode === 'custom' ? styles['ev__radio--on'] : ''}`} />
+          Custom
+        </button>
+        <button
+          type="button"
+          className={`${styles['ev__radio-opt']} ${draft.runSamplesMode === 'full' ? styles['ev__radio-opt--on'] : ''}`}
+          onClick={() => dispatch(setDraft({ runSamplesMode: 'full' }))}
+        >
+          <span className={`${styles.ev__radio} ${draft.runSamplesMode === 'full' ? styles['ev__radio--on'] : ''}`} />
+          Full
+        </button>
+      </div>
+      {draft.runSamplesMode === 'custom' ? (
+        <input
+          type="number"
+          min={0}
+          className={styles.ev__input}
+          style={{ marginTop: 10 }}
+          value={draft.runSamples}
+          onChange={(e) => {
+            const val = e.target.value === '' ? 0 : Math.max(0, Number(e.target.value));
+            dispatch(setDraft({ runSamples: Number.isNaN(val) ? 0 : val }));
+          }}
+        />
+      ) : (
+        <p className={styles['ev__radio-full-note']}>Every question in the suite will be used — no count needed.</p>
+      )}
+    </div>
+  );
 
   return (
-    <div className={styles.panel}>
-      <input ref={fileInputRef} type="file" accept=".vtt,.srt" multiple style={{ display: 'none' }} onChange={onFileChange} />
-      <input ref={folderInputRef} type="file" accept=".vtt,.srt" multiple style={{ display: 'none' }} onChange={onFileChange} {...{ webkitdirectory: 'true' }} />
-
-      {/* ══ SECTION 1: Step-1 ══ */}
-      <div className={styles.step1} data-tour="upload-dropzone">
-        <div className={styles.step1Card}>
-        <div className={styles.step1Bar}>
-          <span className={styles.slbl}>{t('uploadInfer.filePanel.step1Label')}</span>
-          {(view === 'preview' || view === 'uploading') && (
-            <span className={`${styles.badge} ${styles.bInfo}`}>{t('uploadInfer.filePanel.selected', { count: browsed.length })}</span>
-          )}
+    <div className="page-enter" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      {/* ---- header (matches History/Reports/Comparison/Sidebar pattern) ---- */}
+      <div className={styles['ev__header']}>
+        <div>
+          <p className={styles['ev__header-eyebrow']}>Evaluation console</p>
+          <h1>New run</h1>
+          <p className={styles['ev__header-sub']}>Assemble and launch a new evaluation run</p>
         </div>
-
-        <div className={styles.step1Content}>
-          {view === 'dropzone' && (
-            <div className={`${styles.dropzone} ${isDragOver ? styles.dragOver : ''}`}
-              onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}
-              onClick={() => fileInputRef.current?.click()}>
-              <div className={styles.dzIc}>
-                <svg viewBox="0 0 18 18" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" stroke="var(--blue)">
-                  <path d="M9 12V4M6 7l3-3 3 3" /><path d="M2 15h14" />
-                </svg>
-              </div>
-              <div className={styles.dzTitle}>{isDragOver ? t('uploadInfer.filePanel.dropTitle') : t('uploadInfer.filePanel.dropTitleDefault')}</div>
-              <div className={styles.dzSub}>{t('uploadInfer.filePanel.dropSub')}</div>
-              <div className={styles.dzActions} onClick={e => e.stopPropagation()}>
-                <button className={`${styles.btn} ${styles.btnP} ${styles.btnSm}`} onClick={() => fileInputRef.current?.click()}>{t('uploadInfer.filePanel.browseFiles')}</button>
-                <button className={`${styles.btn} ${styles.btnSm}`} onClick={() => folderInputRef.current?.click()}>{t('uploadInfer.filePanel.folder')}</button>
-              </div>
-            </div>
-          )}
-
-          {(view === 'preview' || view === 'uploading') && (
-            <div className={styles.previewWrap}>
-              <div className={styles.previewList}>
-                {browsed.map(bf => (
-                  <div key={bf.id} className={`${styles.fileCard} ${styles[bf.status]}`}>
-                    <div className={`${styles.extBadge} ${styles[bf.ext]}`}>{bf.ext.toUpperCase()}</div>
-                    <div className={styles.fileInfo}>
-                      <div className={styles.fileName}>{bf.name}</div>
-                      <div className={styles.fileMeta}>
-                        <span className={styles.fileSizeChip}>{bf.size}</span>
-                        {bf.status === 'failed' && bf.error && <span className={styles.fileError}>{bf.error}</span>}
-                        {bf.status === 'pending' && <span className={styles.fileStatusText}>{t('uploadInfer.filePanel.fileStatus.ready')}</span>}
-                        {bf.status === 'uploading' && <span className={styles.fileStatusText}>{t('uploadInfer.filePanel.fileStatus.uploading')}</span>}
-                        {bf.status === 'success' && <span className={styles.fileStatusTextSuccess}>{t('uploadInfer.filePanel.fileStatus.uploaded')}</span>}
-                      </div>
-                    </div>
-                    <div className={`${styles.statusIc} ${styles[bf.status]}`}>
-                      {bf.status === 'pending' && <IconPending />}
-                      {bf.status === 'uploading' && <IconUploading />}
-                      {bf.status === 'success' && <IconSuccess />}
-                      {bf.status === 'failed' && <IconFailed />}
-                    </div>
-                    {view === 'preview' && <button className={styles.removeBtn} onClick={() => removeFile(bf.id)}><IconClose /></button>}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* ── Fixed footer — stays put once files are browsed, doesn't scroll away with the list ── */}
-        {view === 'preview' && (
-          <div className={styles.step1Footer}>
-            <button className={`${styles.btn} ${styles.btnP} ${styles.step1FooterBtn}`} onClick={handleUpload}>
-              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                <path d="M8 11V4M5 7l3-3 3 3" /><path d="M2.5 13.5h11" />
-              </svg>
-              {t('uploadInfer.filePanel.uploadBtn', { count: browsed.length })}
-            </button>
-            <button className={`${styles.btn} ${styles.btnDanger}`} onClick={handleCancel}>{t('uploadInfer.filePanel.cancelBtn')}</button>
-          </div>
-        )}
-        {view === 'uploading' && (
-          <div className={styles.step1Footer}>
-            <div className={styles.uploadSummary}>
-              <div className={styles.uploadProgressBar}>
-                <div className={styles.uploadProgressFill} style={{ width: `${browsed.length ? (finished / browsed.length) * 100 : 0}%` }} />
-              </div>
-              <div className={styles.uploadProgressLabel}>
-                {t('uploadInfer.filePanel.complete', { finished, total: browsed.length })}
-                {failed > 0 && <span className={styles.failCount}>{t('uploadInfer.filePanel.failed', { count: failed })}</span>}
-              </div>
-            </div>
-          </div>
-        )}
+        <div className={styles['ev__header-meta']}>
+          <span className={styles['ev__header-status']} data-state={launching ? 'live' : 'draft'}>
+            {launching ? 'Launching' : 'Draft'}
+          </span>
+          <span className={styles['ev__header-eta']}>
+            <Clock3 size={13} /> ~5 min
+          </span>
         </div>
       </div>
 
-      {/* ══ SECTION 2: Uploaded files ══ */}
-      <div className={styles.section2}>
-
-        {/* Header */}
-        <div className={styles.section2Header}>
-
-          {/* ── Title row (always visible) ── */}
-          <div className={styles.section2TitleRow}>
-            {/* Select-all checkbox — inference mode */}
-            {selectMode && !isBatchRunning && (
-              <Checkbox
-                checked={allSelected}
-                indeterminate={someSelected}
-                onChange={() => dispatch(toggleSelectAllServerFiles(serverFiles.map(f => f.id)))}
-                disabled={filesTotal === 0}
-              />
-            )}
-
-            {/* Select-all checkbox — export mode */}
-            {exportMode && !isBatchRunning && (
-              <Checkbox
-                checked={allExportSelected}
-                indeterminate={someExportSelected}
-                onChange={toggleExportSelectAll}
-                disabled={filesTotal === 0}
-              />
-            )}
-
-            {/* Select-all checkbox — delete mode */}
-            {deleteMode && !isBatchRunning && (
-              <Checkbox
-                checked={allDeleteSelected}
-                indeterminate={someDeleteSelected}
-                onChange={toggleDeleteSelectAll}
-                disabled={filesTotal === 0}
-              />
-            )}
-
-            <div className={styles.section2Title}>
-              {t('uploadInfer.filePanel.uploadedFiles')}
-              {!filesLoading && filesTotal > 0 && (
-                <span className={styles.filesCount}>{filesTotal}</span>
-              )}
-              {selectMode && !isBatchRunning && selectedServerIds.length > 0 && (
-                <span className={styles.selectedTotalHint}>
-                  {t('uploadInfer.filePanel.selectedTotal', { count: selectedServerIds.length, total: filesTotal })}
-                </span>
-              )}
-              {deleteMode && !isBatchRunning && deleteSelectedIds.length > 0 && (
-                <span className={styles.selectedTotalHint}>
-                  {t('uploadInfer.filePanel.selectedTotal', { count: deleteSelectedIds.length, total: filesTotal })}
-                </span>
-              )}
-              {exportMode && !isBatchRunning && exportSelectedIds.length > 0 && (
-                <span className={styles.selectedTotalHint}>
-                  {t('uploadInfer.filePanel.selectedTotal', { count: exportSelectedIds.length, total: filesTotal })}
-                </span>
-              )}
-            </div>
-
-            <div className={styles.sortHeader} data-tour="upload-sort">
-              <span className={styles.sortHeaderLabel}>
-                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                  <path d="M2 4h10M4 7h6M6 10h2" />
-                </svg>
-                {t('uploadInfer.filePanel.sortBy')}
-              </span>
-              <div className={styles.sortCols}>
-                {([
-                  { key: 'id' as SortKey, label: t('uploadInfer.filePanel.sortId') },
-                  { key: 'name' as SortKey, label: t('uploadInfer.filePanel.sortName') },
-                  { key: 'date' as SortKey, label: t('uploadInfer.filePanel.sortDate') },
-                  { key: 'status' as SortKey, label: t('uploadInfer.filePanel.sortStatus') },
-                ]).map(({ key, label }) => (
-                  <button
-                    key={key}
-                    className={`${styles.sortCol} ${sort.key === key ? styles.sortColActive : ''}`}
-                    onClick={() => handleSort(key)}
-                  >
-                    {label}
-                    <svg viewBox="0 0 10 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
-                      className={sort.key === key ? (sort.dir === 'asc' ? styles.sortAsc : styles.sortDesc) : styles.sortInactive}>
-                      <path d="M5 1v10M2 8l3 3 3-3" />
-                    </svg>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <span className={styles.vSep} aria-hidden="true" />
-
-            {/* ── Date filter — moved here so it's always visible, not just in a filter row ── */}
-            <div className={styles.dateFilter} data-tour="upload-date-filter">
-              <svg className={styles.dateIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="2" y="3" width="12" height="11" rx="1.5" />
-                <path d="M2 6.5h12M5 2v2.5M11 2v2.5" />
-              </svg>
-              <span className={styles.filterBarLabel}>{t('uploadInfer.filePanel.dateRangeLabel', 'Date Range')}</span>
-              <input type="date" className={styles.dateInput} value={dateFrom} max={dateTo}
-                disabled={isBatchRunning}
-                aria-label={t('uploadInfer.filePanel.dateFrom')}
-                onChange={e => dispatch(setDateFrom(e.target.value))} />
-              <span className={styles.dateSep}>–</span>
-              <input type="date" className={styles.dateInput} value={dateTo} min={dateFrom}
-                disabled={isBatchRunning}
-                aria-label={t('uploadInfer.filePanel.dateTo')}
-                onChange={e => dispatch(setDateTo(e.target.value))} />
-              <button className={styles.applyBtn} onClick={handleApply} disabled={filesLoading || isBatchRunning}>{t('uploadInfer.filePanel.applyDate')}</button>
-            </div>
-
-            {/* Search stays in title row for select mode only; export/delete have their own row */}
-            {selectMode && !isBatchRunning && (
-              <div className={styles.headerActions}>
-                <button
-                  className={`${styles.searchIconBtn} ${searchOpen ? styles.searchIconBtnActive : ''}`}
-                  onClick={openSearch}
-                  title={t('uploadInfer.filePanel.searchBtn')}
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="6.5" cy="6.5" r="4" />
-                    <path d="M11 11l2.5 2.5" />
-                  </svg>
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* ── Export mode action row ── */}
-          {exportMode && !isBatchRunning && (
-            <div className={styles.modeActionsRow}>
-              <div className={styles.modeActionsLeft}>
-                <button
-                  className={`${styles.modeTile} ${styles.modeTileSearch} ${searchOpen ? styles.modeTileSearchActive : ''}`}
-                  onClick={openSearch}
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="6.5" cy="6.5" r="4" />
-                    <path d="M11 11l2.5 2.5" />
-                  </svg>
-                  {t('uploadInfer.filePanel.searchBtn')}
-                </button>
-                <button
-                  className={styles.modeTileExportAll}
-                  onClick={handleExportAll}
-                  disabled={filesTotal === 0 || isExportingAll || isExporting}
-                  title={t('uploadInfer.filePanel.exportAllBtn')}
-                >
-                  {isExportingAll ? (
-                    <div className={styles.miniSpinnerGreen} />
-                  ) : (
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6z" />
-                      <path d="M9 2v4h4" />
-                      <path d="M6 9.5l1.5 2 2.5-3" />
-                    </svg>
-                  )}
-                  {t('uploadInfer.filePanel.exportAllBtn')}
-                </button>
-                {exportAllError && <span className={styles.modeActionsError}>{exportAllError}</span>}
-              </div>
-              <div className={styles.modeActionsRight}>
-                <button
-                  className={`${styles.modeTile} ${styles.modeTileConfirmExport} ${exportSelectedIds.length === 0 ? styles.modeTileDisabled : ''}`}
-                  onClick={handleConfirmExport}
-                  disabled={exportSelectedIds.length === 0 || isExporting}
-                >
-                  {isExporting ? (
-                    <div className={styles.miniSpinnerGreen} />
-                  ) : (
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6z" />
-                      <path d="M9 2v4h4" />
-                      <path d="M6 9.5l1.5 2 2.5-3" />
-                    </svg>
-                  )}
-                  {exportSelectedIds.length > 0
-                    ? t('uploadInfer.filePanel.exportCount', { count: exportSelectedIds.length })
-                    : t('uploadInfer.filePanel.exportBtn')}
-                </button>
-                <button
-                  className={`${styles.modeTile} ${styles.modeTileCancel}`}
-                  onClick={exitExportMode}
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                    <path d="M4 4l8 8M12 4l-8 8" />
-                  </svg>
-                  {t('uploadInfer.filePanel.cancelBtn')}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* ── Select mode action row (choosing files for inference) ── */}
-          {selectMode && !isBatchRunning && (
-            <div className={styles.modeActionsRow}>
-              <div className={styles.modeActionsLeft}>
-                <button
-                  className={`${styles.modeTile} ${styles.modeTileSearch} ${searchOpen ? styles.modeTileSearchActive : ''}`}
-                  onClick={openSearch}
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="6.5" cy="6.5" r="4" />
-                    <path d="M11 11l2.5 2.5" />
-                  </svg>
-                  {t('uploadInfer.filePanel.searchBtn')}
-                </button>
-              </div>
-              <div className={styles.modeActionsRight}>
-                <button
-                  className={`${styles.modeTile} ${styles.modeTileConfirmExport} ${selectedServerIds.length === 0 ? styles.modeTileDisabled : ''}`}
-                  onClick={onGoToInfer}
-                  disabled={selectedServerIds.length === 0 || !onGoToInfer}
-                >
-                  <svg viewBox="0 0 16 16" fill="currentColor" stroke="none" width="12" height="12">
-                    <path d="M8 1l1.8 4.4L14 6.2l-3.3 2.5 1.2 4.3L8 10.8 4.1 13l1.2-4.3L2 6.2l4.2-.8z" />
-                  </svg>
-                  {selectedServerIds.length > 0
-                    ? t('uploadInfer.filePanel.continueToInferCount', { count: selectedServerIds.length })
-                    : t('uploadInfer.filePanel.continueToInfer')}
-                </button>
-                <button
-                  className={`${styles.modeTile} ${styles.modeTileCancel}`}
-                  onClick={exitSelectMode}
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                    <path d="M4 4l8 8M12 4l-8 8" />
-                  </svg>
-                  {t('uploadInfer.filePanel.cancelBtn')}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* ── Delete mode action row ── */}
-          {deleteMode && !isBatchRunning && (
-            <div className={styles.modeActionsRow}>
-              <div className={styles.modeActionsLeft}>
-                <button
-                  className={`${styles.modeTile} ${styles.modeTileSearch} ${searchOpen ? styles.modeTileSearchActive : ''}`}
-                  onClick={openSearch}
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="6.5" cy="6.5" r="4" />
-                    <path d="M11 11l2.5 2.5" />
-                  </svg>
-                  {t('uploadInfer.filePanel.searchBtn')}
-                </button>
-                <button
-                  className={styles.modeTileDeleteAll}
-                  onClick={openDeleteAllConfirm}
-                  disabled={filesTotal === 0}
-                  title={t('uploadInfer.filePanel.deleteAllBtn')}
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M8 1.5l6.5 11.5h-13z" />
-                    <path d="M8 6v3.5M8 12v.1" />
-                  </svg>
-                  {t('uploadInfer.filePanel.deleteAllBtn')}
-                </button>
-              </div>
-              <div className={styles.modeActionsRight}>
-                <button
-                  className={`${styles.modeTile} ${styles.modeTileConfirmDelete} ${deleteSelectedIds.length === 0 ? styles.modeTileDisabled : ''}`}
-                  onClick={handleConfirmDelete}
-                  disabled={deleteSelectedIds.length === 0 || isDeleting}
-                >
-                  {isDeleting ? (
-                    <div className={styles.miniSpinner} />
-                  ) : (
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M3 4h10M6 4V3h4v1" />
-                      <path d="M5 4l.5 8h5l.5-8" />
-                      <path d="M7 7v3M9 7v3" />
-                    </svg>
-                  )}
-                  {deleteSelectedIds.length > 0
-                    ? t('uploadInfer.filePanel.deleteCount', { count: deleteSelectedIds.length })
-                    : t('uploadInfer.filePanel.deleteBtn')}
-                </button>
-                <button
-                  className={`${styles.modeTile} ${styles.modeTileCancel}`}
-                  onClick={exitDeleteMode}
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                    <path d="M4 4l8 8M12 4l-8 8" />
-                  </svg>
-                  {t('uploadInfer.filePanel.cancelBtn')}
-                </button>
-              </div>
-            </div>
-          )}
-
-        </div>
-
-        <div className={styles.filterSortRow}>
-          <div className={styles.filterBarRow}>
-            {/* ── Status filter + Actions ── */}
-            <div className={styles.filterBarRight}>
-              <div className={styles.statusFilterWrap} data-tour="upload-status-filter">
-                <svg className={styles.dateIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M2 4h12M4.5 8h7M7 12h2" />
-                </svg>
-                <span className={styles.filterBarLabel}>{t('uploadInfer.filePanel.statusLabel', 'Status')}</span>
-                <select
-                  className={styles.statusFilterSelect}
-                  value={statusFilter}
-                  disabled={filesLoading || isBatchRunning}
-                  onChange={e => handleStatusFilterChange(e.target.value as FileStatus | '')}
-                >
-                  {STATUS_FILTER_OPTIONS.map(opt => (
-                    <option key={opt.value || 'all'} value={opt.value}>{t(opt.labelKey)}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* ── Actions — shown inline as a labeled button row, only in normal (idle) mode ── */}
-              {!selectMode && !deleteMode && !exportMode && !isBatchRunning && (
-                <>
-                  <span className={styles.vSep} aria-hidden="true" />
-                <div className={styles.actionsInlineWrap} data-tour="upload-actions">
-                  <span className={styles.filterBarLabel}>{t('uploadInfer.filePanel.actionsLabel')}</span>
-
-                  {/* Dictionary */}
-                  <button
-                    data-tour="upload-action-dictionary"
-                    className={`${styles.actionTile} ${styles.actionTileDictionary}`}
-                    onClick={() => setDictModalOpen(true)}
-                    disabled={filesTotal === 0}
-                    title={t('uploadInfer.filePanel.dictionaryBtn')}
-                  >
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                      strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M3 2.5h7.5a1.5 1.5 0 011.5 1.5v9a.5.5 0 01-.5.5H4a1 1 0 01-1-1V2.5z" />
-                      <path d="M3 11.5a1 1 0 011-1h8" />
-                      <path d="M6 5.5h3" />
-                    </svg>
-                    <span className={styles.actionTileLabel}>{t('uploadInfer.filePanel.dictionaryBtn')}</span>
-                  </button>
-
-                  {/* Search */}
-                  <button
-                    data-tour="upload-action-search"
-                    className={`${styles.actionTile} ${styles.actionTileSearch} ${searchOpen ? styles.actionTileActive : ''}`}
-                    onClick={openSearch}
-                    title={t('uploadInfer.filePanel.searchBtn')}
-                  >
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="6.5" cy="6.5" r="4" />
-                      <path d="M11 11l2.5 2.5" />
-                    </svg>
-                    <span className={styles.actionTileLabel}>{t('uploadInfer.filePanel.searchBtn')}</span>
-                  </button>
-
-                  {/* Export */}
-                  <button
-                    data-tour="upload-action-export"
-                    className={`${styles.actionTile} ${styles.actionTileExport}`}
-                    onClick={enterExportMode}
-                    disabled={filesTotal === 0}
-                    title={t('uploadInfer.filePanel.exportBtn')}
-                  >
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                      strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6z" />
-                      <path d="M9 2v4h4" />
-                      <path d="M6 9.5l1.5 2 2.5-3" />
-                    </svg>
-                    <span className={styles.actionTileLabel}>{t('uploadInfer.filePanel.exportBtn')}</span>
-                  </button>
-
-                  {/* Delete */}
-                  <button
-                    data-tour="upload-action-delete"
-                    className={`${styles.actionTile} ${styles.actionTileDelete}`}
-                    onClick={enterDeleteMode}
-                    disabled={filesTotal === 0}
-                    title={t('uploadInfer.filePanel.deleteBtn')}
-                  >
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                      strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M3 4h10M6 4V3h4v1" />
-                      <path d="M5 4l.5 8h5l.5-8" />
-                      <path d="M7 7v3M9 7v3" />
-                    </svg>
-                    <span className={styles.actionTileLabel}>{t('uploadInfer.filePanel.deleteBtn')}</span>
-                  </button>
+      <div className={styles.page}>
+        <div className={styles.ev}>
+          {/* ---- shell ---- */}
+          <div className={styles.ev__shell}>
+            {/* SIGNATURE: Run Manifest */}
+            <aside className={styles.ev__manifest}>
+              <div className={styles['ev__manifest-head']}>
+                <div className={styles['ev__manifest-eyebrow']}>
+                  <span>Run manifest</span>
+                  <span className={styles['ev__manifest-pct']}>{progressPct}%</span>
                 </div>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Search bar */}
-        <div className={`${styles.searchBar} ${searchOpen ? styles.searchBarOpen : ''}`}>
-          <div className={styles.searchBarRow}>
-            <div className={styles.searchInner}>
-              <svg className={styles.searchBarIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="6.5" cy="6.5" r="4" />
-                <path d="M11 11l2.5 2.5" />
-              </svg>
-              <input
-                ref={searchInputRef}
-                type="text"
-                className={styles.searchInput}
-                placeholder={t('uploadInfer.filePanel.searchPlaceholder')}
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-              />
-              {filesSearch && (
-                <span className={styles.searchCount}>
-                  {t('uploadInfer.filePanel.matchCount', { count: filesTotal })}
-                </span>
-              )}
-            </div>
-            <button className={styles.searchCloseBtn} onClick={closeSearch} title={t('uploadInfer.filePanel.searchBtn')}>
-              <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <path d="M2 2l8 8M10 2l-8 8" />
-              </svg>
-            </button>
-          </div>
-        </div>
-
-        {/* File list */}
-        <div className={styles.uploadedBody} data-tour={filesTotal === 0 ? 'upload-cards' : undefined}>
-          {filesLoading && (
-            <div className={styles.listState}><div className={styles.spinner} /><span>{t('uploadInfer.filePanel.loadingFiles')}</span></div>
-          )}
-          {!filesLoading && filesError && (
-            <div className={`${styles.listState} ${styles.errorState}`}>
-              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                <circle cx="8" cy="8" r="6" /><path d="M8 5v3M8 11v.5" />
-              </svg>
-              {filesError}
-            </div>
-          )}
-          {!filesLoading && !filesError && filesTotal === 0 && !filesSearch && (
-            <div className={styles.listState}>
-              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="2" y="2" width="12" height="12" rx="2" /><path d="M5 8h6M5 5.5h4M5 10.5h6" />
-              </svg>
-              {t('uploadInfer.filePanel.noFilesRange')}
-            </div>
-          )}
-          {!filesLoading && !filesError && filesTotal === 0 && filesSearch && (
-            <div className={styles.listState}>
-              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="6.5" cy="6.5" r="4" /><path d="M11 11l2.5 2.5" />
-              </svg>
-              {t('uploadInfer.filePanel.noFilesMatch', { query: filesSearch })}
-            </div>
-          )}
-          {!filesLoading && !filesError && displayedFiles.map((f, idx) => {
-            const ext = getExt(f.original_name);
-            const isChecked = selectedServerIds.includes(f.id);
-            const isDeleteChecked = deleteSelectedIds.includes(f.id);
-            const isExportChecked = exportSelectedIds.includes(f.id);
-            const selectable = selectMode && !isBatchRunning;
-            const deletable = deleteMode && !isBatchRunning;
-            const exportable = exportMode && !isBatchRunning;
-            const checked = selectable ? isChecked : deletable ? isDeleteChecked : exportable ? isExportChecked : false;
-            const toggle = () => {
-              if (selectable) dispatch(toggleServerFileSelection(f.id));
-              else if (deletable) toggleDeleteSelection(f.id);
-              else if (exportable) toggleExportSelection(f.id);
-              // No mode active — cards are no longer clickable to view results;
-              // that navigation now only happens from the Workspace tab's own list.
-            };
-            const statusMeta = STATUS_META[f.status] ?? STATUS_META.tbd;
-            const isFirstCard = idx === 0;
-            const hasLinks = !!f.dictionary_id || !!f.prompt_template_id;
-            return (
-              <div
-                key={f.id}
-                data-tour={idx === 0 ? 'upload-cards' : undefined}
-                className={`${styles.fcard} ${styles[`fcardBar_${statusMeta.cls}`] ?? ''}
-                  ${selectable ? (isChecked ? styles.fcardActive : '') : ''}
-                  ${deletable ? (isDeleteChecked ? styles.fcardActiveDelete : '') : ''}
-                  ${exportable ? (isExportChecked ? styles.fcardActiveExport : '') : ''}
-                  ${!selectable && !deletable && !exportable ? styles.fcardStatic : ''}
-                `}
-                onClick={toggle}
-                title={f.original_name}
-              >
-                <div className={styles.fcardSweep} aria-hidden="true" />
-
-                {(selectable || deletable || exportable) && (
-                  <div className={styles.fcardCheck}>
-                    <Checkbox checked={checked} onChange={toggle} />
-                  </div>
-                )}
-
-                <div className={`${styles.fcardIcon} ${styles[ext]}`}>
-                  {ext.toUpperCase()}
+                <div className={styles['ev__manifest-title']} data-empty={!draft.name}>
+                  {draft.name || 'Untitled run'}
                 </div>
+                <div className={styles.ev__meter}>
+                  <div className={styles['ev__meter-fill']} style={{ width: `${progressPct}%` }} />
+                </div>
+              </div>
+              <div className={styles.ev__spec}>
+                {STEPS.map((s, i) => {
+                  const state = i === step ? 'active' : i < step ? 'done' : 'todo';
+                  const Icon = STEP_ICONS[i];
+                  const row = manifest[i];
+                  return (
+                    <button
+                      key={s.label}
+                      type="button"
+                      className={`${styles['ev__spec-row']} ${styles[`ev__spec-row--${state}`]}`}
+                      onClick={() => goToStep(i)}
+                      disabled={i > step}
+                    >
+                      <span className={styles['ev__spec-tick']}>
+                        {state === 'done' ? <Check size={13} strokeWidth={3} /> : <Icon size={14} />}
+                      </span>
+                      <span className={styles['ev__spec-body']}>
+                        <span className={styles['ev__spec-label']}>{s.label}</span>
+                        <span className={styles['ev__spec-value']} data-empty={row.empty}>
+                          {row.value}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </aside>
 
-                <div className={styles.fcardInfo}>
-                  <div className={styles.fcardNameRow}>
-                    <div className={styles.fcardName}>{f.original_name}</div>
-                    {hasLinks && (
-                      <div className={styles.fcardLinks}>
-                        {f.dictionary_id && (
-                          <span className={`${styles.fcardLinkIcon} ${styles.fcardLinkIconDict}`} title={t('uploadInfer.filePanel.dictionaryLinked')}>
-                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M8 3.7c-1.2-.9-2.9-1.2-4.7-.9v9c1.8-.3 3.5-.1 4.7.9 1.2-.9 2.9-1.2 4.7-.9v-9c-1.8-.3-3.5-.1-4.7.9z" />
-                              <path d="M8 3.7v9" />
-                            </svg>
-                          </span>
-                        )}
-                        {f.prompt_template_id && (
-                          <span className={`${styles.fcardLinkIcon} ${styles.fcardLinkIconTemplate}`} title={t('uploadInfer.filePanel.templateLinked')}>
-                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M5.5 2.5h5v2h-5z" />
-                              <path d="M4.5 4h7a1 1 0 011 1v8a1 1 0 01-1 1h-7a1 1 0 01-1-1V5a1 1 0 011-1z" />
-                              <path d="M6 8.3l1.3 1.3L10.2 7" />
-                            </svg>
-                          </span>
+            {/* STAGE */}
+            <section className={styles.ev__stage}>
+              <div className={styles['ev__stage-head']}>
+                <div className={styles.ev__crumb}>
+                  <span>
+                    <CrumbIcon size={13} /> Step
+                  </span>
+                  <span className={styles['ev__crumb-sep']} />
+                  <span>
+                    <b>{String(step + 1).padStart(2, '0')}</b> / {String(totalSteps).padStart(2, '0')}
+                  </span>
+                  <span className={styles['ev__crumb-sep']} />
+                  <span>{STEPS[step].label}</span>
+                </div>
+                <h2 className={styles['ev__stage-title']}>{STAGE[step].title}</h2>
+                <p className={styles['ev__stage-sub']}>{STAGE[step].sub}</p>
+              </div>
+
+              <div className={styles['ev__stage-body']}>
+                <StepErrorBoundary
+                  key={`${step}-${stepRetryKey}`}
+                  onRetry={() => setStepRetryKey((k) => k + 1)}
+                  onBack={goBack}
+                  canGoBack={step > 0}
+                >
+                <div className={styles.ev__anim} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                  {/* STEP 0 — NAME */}
+                  {step === 0 && (
+                    <>
+                      <div className={styles.ev__field} style={{ maxWidth: 620 }}>
+                        <label className={styles.ev__label}>Run name</label>
+                        <input
+                          className={styles['ev__name-input']}
+                          placeholder="Untitled run"
+                          value={draft.name}
+                          onChange={(e) => dispatch(setDraft({ name: e.target.value }))}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && canGo()) goNext();
+                          }}
+                          autoFocus
+                        />
+                        <p className={styles['ev__name-caption']}>
+                          <Tag size={13} /> This is how the run appears in your history.
+                        </p>
+                      </div>
+
+                      <div className={styles.ev__quick}>
+                        <p className={styles['ev__quick-head']}>Presets</p>
+                        <div className={styles['ev__quick-row']}>
+                          {SUGGESTED_NAMES.map((s) => {
+                            const on = draft.name === s;
+                            return (
+                              <button
+                                key={s}
+                                type="button"
+                                className={`${styles.ev__preset} ${on ? styles['ev__preset--on'] : ''}`}
+                                onClick={() => dispatch(setDraft({ name: s }))}
+                              >
+                                {on ? <Check size={13} strokeWidth={3} /> : <Plus size={13} strokeWidth={2.5} />} {s}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className={styles.ev__note}>
+                        <span className={styles['ev__note-icon']}>
+                          <Lightbulb size={16} />
+                        </span>
+                        <div>
+                          <p className={styles['ev__note-title']}>What makes a good name</p>
+                          <ul className={styles['ev__note-list']}>
+                            {NAMING_TIPS.map((tip) => (
+                              <li key={tip}>{tip}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {/* STEP 1 — TYPE */}
+                  {step === 1 && (
+                    <>
+                      <div className={styles.ev__options}>
+                        {TYPE_OPTIONS.map((o) => {
+                          const Icon = o.icon;
+                          const on = draft.type === o.value;
+                          return (
+                            <button
+                              key={o.value}
+                              type="button"
+                              className={`${styles.ev__option} ${on ? styles['ev__option--on'] : ''} ${
+                                o.disabled ? styles['ev__option--off'] : ''
+                              }`}
+                              onClick={() => !o.disabled && dispatch(setDraftType(o.value))}
+                              disabled={o.disabled}
+                            >
+                              <span
+                                className={`${styles['ev__option-icon']} ${
+                                  o.variant ? styles[`ev__option-icon--${o.variant}`] : ''
+                                }`}
+                              >
+                                <Icon size={20} />
+                              </span>
+                              <span className={styles['ev__option-main']}>
+                                <span className={styles['ev__option-name']}>
+                                  {o.label}
+                                  {o.disabled && <span className={styles.ev__badge}>Soon</span>}
+                                </span>
+                                <span className={styles['ev__option-desc']}>{o.sub}</span>
+                              </span>
+                              {on && (
+                                <span className={styles.ev__mark}>
+                                  <Check size={13} strokeWidth={3} />
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {draft.type === 'agent' && (
+                        <div className={styles.ev__section}>
+                          <label className={styles.ev__label}>
+                            <Waypoints size={13} /> Agent framework <span className="opt">optional</span>
+                          </label>
+                          <p className={styles['ev__section-hint']}>
+                            Tell us which framework the agent runs on, if applicable. This also determines which test
+                            suites are available in the next steps.
+                          </p>
+                          <div className={styles['ev__fw-grid']}>
+                            {AGENT_FRAMEWORKS.map((f) => {
+                              const on = draft.agentFramework === f.id;
+                              return (
+                                <button
+                                  key={f.id}
+                                  type="button"
+                                  className={`${styles.ev__fw} ${on ? styles['ev__fw--on'] : ''}`}
+                                  onClick={() => dispatch(setDraft({ agentFramework: on ? null : f.id }))}
+                                >
+                                  <span className={styles['ev__fw-icon']}>
+                                    <Waypoints size={16} />
+                                  </span>
+                                  <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                                    <span className={styles['ev__fw-name']}>{f.title}</span>
+                                    <span className={styles['ev__fw-desc']}>{f.desc}</span>
+                                  </span>
+                                  {on && (
+                                    <span className={styles.ev__mark}>
+                                      <Check size={12} strokeWidth={3} />
+                                    </span>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {/* STEP 2 — PROVIDERS */}
+                  {step === 2 && (
+                    <div className={styles.ev__scroll}>
+                      <div className={styles['ev__step-toolbar']}>
+                        <div className={styles['ev__toolbar-search']}>
+                          <Search size={14} />
+                          <input
+                            placeholder="Search providers…"
+                            value={providerSearch}
+                            onChange={(e) => setProviderSearch(e.target.value)}
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          className={styles['ev__toolbar-refresh']}
+                          onClick={refreshProviders}
+                          disabled={providersLoading}
+                          title="Refresh providers"
+                        >
+                          <RefreshCw size={14} className={providersLoading ? styles.ev__spin : ''} />
+                        </button>
+                      </div>
+                      {providersLoading ? (
+                        <div className={styles.ev__grid} aria-busy="true" aria-label="Refreshing providers">
+                          {Array.from({ length: SKELETON_CARD_COUNT }).map((_, i) => (
+                            <div key={i} className={styles['ev__skel-pcard']}>
+                              <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--icon']}`} />
+                              <span className={styles['ev__skel-lines']}>
+                                <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '70%' }} />
+                                <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '45%' }} />
+                                <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--pill']}`} />
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className={styles.ev__grid}>
+                          {filteredProviders.map((p) => {
+                            const on = draft.providers.includes(p.id);
+                            return (
+                              <button
+                                key={p.id}
+                                type="button"
+                                className={`${styles.ev__pcard} ${on ? styles['ev__pcard--on'] : ''}`}
+                                onClick={() => dispatch(setDraft({ providers: toggle(draft.providers, p.id) }))}
+                              >
+                                <span className={styles['ev__pcard-icon']}>{providerInitials(p.name)}</span>
+                                <span className={styles['ev__pcard-body']}>
+                                  <span className={styles['ev__pcard-name']}>{p.name || 'Unnamed provider'}</span>
+                                  <span className={styles['ev__pcard-meta']}>{p.model_count ?? 0} models available</span>
+                                  <span className={styles.ev__pill}>Connected</span>
+                                </span>
+                                {on && (
+                                  <span className={styles.ev__mark}>
+                                    <Check size={12} strokeWidth={3} />
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                          {connectedProviders.length === 0 && (
+                            <p className={styles.ev__empty}>No connected providers yet. Connect one from the Providers page to continue.</p>
+                          )}
+                          {connectedProviders.length > 0 && filteredProviders.length === 0 && (
+                            <p className={styles.ev__empty}>No providers match "{providerSearch}".</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* STEP 3 — MODELS */}
+                  {step === 3 &&
+                    (availableModels.length > 0 ? (
+                      <div className={styles.ev__scroll}>
+                        <div className={styles['ev__step-toolbar']}>
+                          <div className={styles['ev__toolbar-search']}>
+                            <Search size={14} />
+                            <input
+                              placeholder="Search models…"
+                              value={modelSearch}
+                              onChange={(e) => setModelSearch(e.target.value)}
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            className={styles['ev__toolbar-refresh']}
+                            onClick={refreshModels}
+                            disabled={modelsLoading}
+                            title="Refresh models"
+                          >
+                            <RefreshCw size={14} className={modelsLoading ? styles.ev__spin : ''} />
+                          </button>
+                        </div>
+                        {modelsLoading ? (
+                          <div className={`${styles.ev__grid} ${styles['ev__grid--wide']}`} aria-busy="true" aria-label="Refreshing models">
+                            {Array.from({ length: SKELETON_CARD_COUNT }).map((_, i) => (
+                              <div key={i} className={styles['ev__skel-mcard']}>
+                                <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '60%', height: 14 }} />
+                                <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '35%' }} />
+                                <span className={styles['ev__skel-caps']}>
+                                  <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--tag']}`} />
+                                  <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--tag']}`} />
+                                </span>
+                                <span className={styles['ev__skel-stats']}>
+                                  <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--stat']}`} />
+                                  <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--stat']}`} />
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                        <div className={`${styles.ev__grid} ${styles['ev__grid--wide']}`}>
+                          {filteredModels.map((m) => {
+                            const on = draft.models.includes(m.id);
+                            const health: HealthStatus = healthById?.[m.id] ?? 'idle';
+                            const selectable = health === 'success';
+                            const caps = (m as any).capabilities as string[] | undefined;
+                            const inputPrice = (m as any).input_price as number | null | undefined;
+                            const outputPrice = (m as any).output_price as number | null | undefined;
+                            const accuracy = (m as any).accuracy_score as number | null | undefined;
+                            const providerName = providers.find((p) => p?.id === m.provider_id)?.name ?? m.provider_id;
+
+                            return (
+                              // Not a <button> — it contains a nested "Check health"
+                              // control, so it's a clickable div with keyboard support
+                              // instead (nested interactive elements aren't valid HTML).
+                              <div
+                                key={m.id}
+                                role="button"
+                                tabIndex={0}
+                                className={`${styles.ev__mcard} ${on ? styles['ev__mcard--on'] : ''} ${
+                                  !selectable && !on ? styles['ev__mcard--locked'] : ''
+                                } ${health === 'loading' ? styles['ev__mcard--checking'] : ''}`}
+                                onClick={() => toggleModel(m.id)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    toggleModel(m.id);
+                                  }
+                                }}
+                                aria-pressed={on}
+                                aria-disabled={!selectable && !on}
+                              >
+                                <div className={styles['ev__mcard-top']}>
+                                  <div className={styles['ev__mcard-name']}>{m.name || 'Unnamed model'}</div>
+                                  {on && (
+                                    <span className={styles['ev__mcard-mark']}>
+                                      <Check size={12} strokeWidth={3} />
+                                    </span>
+                                  )}
+                                </div>
+
+                                {/* Provider name + health badge, same line, badge on the right */}
+                                <div className={styles['ev__mcard-provider-row']}>
+                                  <span className={styles['ev__mcard-provider']}>{providerName}</span>
+
+                                  {health === 'success' && (
+                                    <span className={`${styles['ev__health-badge']} ${styles['ev__health-badge--success']}`}>
+                                      <ShieldCheck size={12} /> Available
+                                    </span>
+                                  )}
+
+                                  {health === 'failed' && (
+                                    <button
+                                      type="button"
+                                      className={`${styles['ev__health-badge']} ${styles['ev__health-badge--failed']}`}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        runHealthCheck(m.id);
+                                      }}
+                                      title="Retry health check"
+                                    >
+                                      <ShieldAlert size={12} /> Unavailable
+                                    </button>
+                                  )}
+
+                                  {health === 'loading' && (
+                                    <span className={`${styles['ev__health-badge']} ${styles['ev__health-badge--loading']}`}>
+                                      <Loader2 size={12} className={styles.ev__spin} /> Checking…
+                                    </span>
+                                  )}
+
+                                  {health === 'idle' && (
+                                    <button
+                                      type="button"
+                                      className={styles['ev__health-check-btn']}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        runHealthCheck(m.id);
+                                      }}
+                                    >
+                                      <HeartPulse size={12} /> Check health
+                                    </button>
+                                  )}
+                                </div>
+
+                                {caps && caps.length > 0 && (
+                                  <div className={styles.ev__caps}>
+                                    {caps.slice(0, 3).map((c) => (
+                                      <span key={c} className={styles.ev__cap}>
+                                        {c}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                                <div className={styles['ev__mcard-stats']}>
+                                  <span className={styles.ev__stat}>
+                                    <span className={styles['ev__stat-k']}>Context</span>
+                                    <span className={styles['ev__stat-v']}>{formatContextWindow(m.context_window)}</span>
+                                  </span>
+                                  {(inputPrice !== undefined || outputPrice !== undefined) && (
+                                    <span className={styles.ev__stat}>
+                                      <span className={styles['ev__stat-k']}>Price /1M</span>
+                                      <span className={styles['ev__stat-v']}>
+                                        {formatPrice(inputPrice)}/{formatPrice(outputPrice)}
+                                      </span>
+                                    </span>
+                                  )}
+                                  {typeof accuracy === 'number' && Number.isFinite(accuracy) && (
+                                    <span className={styles.ev__stat}>
+                                      <span className={styles['ev__stat-k']}>Accuracy</span>
+                                      <span className={styles['ev__stat-v']}>{accuracy.toFixed(1)}%</span>
+                                    </span>
+                                  )}
+                                </div>
+
+                                {!selectable && !on && (
+                                  <p className={styles['ev__mcard-hint']}>
+                                    {health === 'idle' && 'Run a health check to enable selection.'}
+                                    {health === 'loading' && 'Waiting for health check to complete…'}
+                                    {health === 'failed' && 'This model failed its health check and can\u2019t be selected.'}
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })}
+                          {filteredModels.length === 0 && (
+                            <p className={styles.ev__empty}>No models match "{modelSearch}".</p>
+                          )}
+                        </div>
                         )}
                       </div>
-                    )}
-                  </div>
+                    ) : (
+                      <p className={styles.ev__empty}>Select providers first to see their available models.</p>
+                    ))}
 
-                  <div className={styles.fcardMeta}>
-                    <span>{f.inserted_at} · #{f.id}</span>
-                    <span
-                      className={`${styles.badge} ${styles.fcardBadge} ${isChecked ? styles.bSelected :
-                        isDeleteChecked ? styles.bDelete :
-                          isExportChecked ? styles.bExport :
-                            styles[statusMeta.cls]
-                        }`}
-                      title={!isChecked && !isDeleteChecked && !isExportChecked ? t(statusMeta.labelKey) : undefined}
-                    >
-                      {isChecked ? (
-                        <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="10" height="10">
-                          <path d="M2 6l3 3 5-5" />
-                        </svg>
-                      ) : isDeleteChecked ? (
-                        <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" width="10" height="10">
-                          <path d="M2 2l8 8M10 2l-8 8" />
-                        </svg>
-                      ) : isExportChecked ? (
+                  {/* STEP 4 — TEST SUITE */}
+                  {step === 4 && (
+                    <>
+                      {/* Upload isn't offered for Agent benchmarks with no
+                          framework selected (POST /agent-benchmark/run only
+                          accepts existing datasets) — so there's nothing to
+                          switch between and the tab bar itself is hidden,
+                          not just the Upload button. */}
+                      {!isAgentBenchmarkNoFramework && (
+                        <div className={styles.ev__tabs}>
+                          <button
+                            type="button"
+                            className={`${styles.ev__tab} ${datasetTab === 'browse' ? styles['ev__tab--on'] : ''}`}
+                            onClick={() => setDatasetTab('browse')}
+                          >
+                            <LayoutGrid size={14} /> Browse
+                          </button>
+                          <button
+                            type="button"
+                            className={`${styles.ev__tab} ${datasetTab === 'upload' ? styles['ev__tab--on'] : ''}`}
+                            onClick={openUploadPanel}
+                          >
+                            <Upload size={14} /> Upload
+                          </button>
+                        </div>
+                      )}
+
+                      {datasetTab === 'browse' && (
+                        <div className={styles.ev__suite}>
+                          <div className={styles['ev__suite-scroll']}>
+                            <div className={styles['ev__step-toolbar']}>
+                              <div className={styles['ev__toolbar-search']}>
+                                <Search size={14} />
+                                <input
+                                  placeholder="Search test suites…"
+                                  value={datasetSearch}
+                                  onChange={(e) => setDatasetSearch(e.target.value)}
+                                />
+                              </div>
+                              <button
+                                type="button"
+                                className={styles['ev__toolbar-refresh']}
+                                onClick={refreshDatasets}
+                                disabled={datasetsRefreshing}
+                                title="Refresh test suites"
+                              >
+                                <RefreshCw size={14} className={datasetsRefreshing ? styles.ev__spin : ''} />
+                              </button>
+                            </div>
+
+                            {/* Change-1: All / Custom / Deepeval filter */}
+                            <div className={styles['ev__filter-row']}>
+                              {DATASET_TYPE_FILTERS.map((f) => {
+                                const on = datasetTypeFilter === f.value;
+                                const count = datasetTypeCounts[f.value];
+                                return (
+                                  <button
+                                    key={f.value}
+                                    type="button"
+                                    className={`${styles['ev__filter-chip']} ${on ? styles['ev__filter-chip--on'] : ''}`}
+                                    onClick={() => setDatasetTypeFilter(f.value)}
+                                  >
+                                    {f.label}
+                                    <span className={styles['ev__filter-chip-count']}>{count}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+
+                            {(() => {
+                              // Both the busy flag and the error message are
+                              // tracked locally (set from the outcome of our
+                              // own dispatch calls) rather than read from the
+                              // datasets slice's own status/error fields —
+                              // see datasetsErrorLocal above for why.
+                              if (datasetsRefreshing) {
+                                return (
+                                  <div className={styles.ev__dgrid} aria-busy="true" aria-label="Loading test suites">
+                                    {Array.from({ length: SKELETON_CARD_COUNT }).map((_, i) => (
+                                      <div key={i} className={styles['ev__skel-dcard']}>
+                                        <span className={styles['ev__skel-dcard-top']}>
+                                          <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--icon-sm']}`} />
+                                          <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '55%' }} />
+                                        </span>
+                                        <span className={styles['ev__skel-caps']}>
+                                          <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--tag']}`} />
+                                          <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--tag']}`} />
+                                          <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--tag']}`} />
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                );
+                              }
+
+                              if (datasetsErrorLocal) {
+                                return <p className={styles.ev__error}>{datasetsErrorLocal}</p>;
+                              }
+
+                              return (
+                                <div className={styles.ev__dgrid}>
+                                  {filteredDatasets.map((d) => {
+                                    const on = draft.dataset === d.id;
+                                    const isCustom = (d as any)?.dataset_type === 'custom';
+                                    const isDeepeval = (d as any)?.dataset_type === 'deepeval';
+                                    return (
+                                      // Not a <button> — it now contains a nested "Preview"
+                                      // control, so it's a clickable div with keyboard
+                                      // support instead (mirrors the model card pattern;
+                                      // nested interactive elements aren't valid HTML).
+                                      <div
+                                        key={d.id}
+                                        role="button"
+                                        tabIndex={0}
+                                        className={`${styles.ev__dcard} ${on ? styles['ev__dcard--on'] : ''}`}
+                                        onClick={() => dispatch(setDraft({ dataset: d.id }))}
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter' || e.key === ' ') {
+                                            e.preventDefault();
+                                            dispatch(setDraft({ dataset: d.id }));
+                                          }
+                                        }}
+                                        aria-pressed={on}
+                                      >
+                                        <div className={styles['ev__dcard-top']}>
+                                          <div className={styles['ev__dcard-id']}>
+                                            <span className={styles['ev__dcard-icon']}>
+                                              <Database size={15} />
+                                            </span>
+                                            <span className={styles['ev__dcard-name']}>{d.name || 'Untitled dataset'}</span>
+                                          </div>
+                                          <div className={styles['ev__dcard-actions']}>
+                                            <button
+                                              type="button"
+                                              className={styles['ev__dcard-preview-btn']}
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                openPreview(d.id, d.name, d.question_count ?? 0);
+                                              }}
+                                              title="Preview sample questions"
+                                            >
+                                              <Eye size={13} /> Preview
+                                            </button>
+                                            {on && (
+                                              <span className={styles['ev__mcard-mark']}>
+                                                <Check size={12} strokeWidth={3} />
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                        <div className={styles['ev__dcard-tags']}>
+                                          {d.category && <span className={styles.ev__tag}>{d.category}</span>}
+                                          {d.eval_type && <span className={styles.ev__tag}>{d.eval_type}</span>}
+                                          {/* Change-1: both dataset_type values now get a tag —
+                                              previously only 'custom' rendered one. */}
+                                          {isCustom && (
+                                            <span className={`${styles.ev__tag} ${styles['ev__tag--custom']}`}>Custom</span>
+                                          )}
+                                          {isDeepeval && (
+                                            <span className={`${styles.ev__tag} ${styles['ev__tag--deepeval']}`}>Deepeval</span>
+                                          )}
+                                          <span className={`${styles.ev__tag} ${styles['ev__tag--count']}`}>
+                                            {(d.question_count ?? 0).toLocaleString()} questions
+                                          </span>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                  {datasets.length === 0 && (
+                                    <p className={styles.ev__empty}>No test suites available for this type yet.</p>
+                                  )}
+                                  {datasets.length > 0 && filteredDatasets.length === 0 && (
+                                    <p className={styles.ev__empty}>
+                                      No test suites match {datasetSearch ? `"${datasetSearch}"` : 'this filter'}.
+                                    </p>
+                                  )}
+                                </div>
+                              );
+                            })()}
+                          </div>
+
+                          <aside className={styles.ev__rail}>
+                            <div className={styles['ev__rail-head']}>
+                              <div className={styles['ev__rail-head-row']}>
+                                <p className={styles['ev__rail-title']}>
+                                  <Layers size={13} /> Subgroups
+                                </p>
+                                {suite && (suite as any).dataset_categories?.length > 0 && (
+                                  <div className={styles['ev__rail-actions']}>
+                                    <button type="button" className={styles.ev__link} onClick={selectAllSubgroups}>
+                                      Select all
+                                    </button>
+                                    <button type="button" className={styles.ev__link} onClick={clearAllSubgroups}>
+                                      Unselect all
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                              <p className={styles['ev__rail-sub']}>
+                                {suite
+                                  ? `All of "${suite.name}"'s categories are selected by default — narrow as needed.`
+                                  : 'Select a suite to see its subgroups.'}
+                              </p>
+                            </div>
+                            <div className={styles['ev__rail-scroll']}>
+                              {!suite && <p className={styles['ev__rail-empty']}>No suite selected yet.</p>}
+                              {suite && (suite as any).dataset_categories?.length === 0 && (
+                                <p className={styles['ev__rail-empty']}>This suite has no subgroups.</p>
+                              )}
+                              {suite &&
+                                ((suite as any).dataset_categories ?? []).map((cat: string) => {
+                                  const on = draft.subgroup.includes(cat);
+                                  return (
+                                    <button
+                                      key={cat}
+                                      type="button"
+                                      className={`${styles['ev__check-row']} ${on ? styles['ev__check-row--on'] : ''}`}
+                                      onClick={() => dispatch(setDraft({ subgroup: toggle(draft.subgroup, cat) }))}
+                                    >
+                                      <span className={`${styles.ev__check} ${on ? styles['ev__check--on'] : ''}`}>
+                                        {on && <Check size={11} strokeWidth={3} />}
+                                      </span>
+                                      <span className={styles['ev__check-label']}>{cat}</span>
+                                    </button>
+                                  );
+                                })}
+                            </div>
+                          </aside>
+                        </div>
+                      )}
+
+                      {datasetTab === 'upload' && !isAgentBenchmarkNoFramework && (
+                        <div className={styles.ev__upload}>
+                          <div className={styles.ev__field}>
+                            <label className={styles.ev__label}>Name</label>
+                            <input
+                              className={styles.ev__input}
+                              placeholder="e.g. Internal QA set v1"
+                              value={uploadName}
+                              onChange={(e) => setUploadName(e.target.value)}
+                              disabled={datasetUploading}
+                            />
+                          </div>
+                          <div className={styles.ev__field}>
+                            <label className={styles.ev__label}>
+                              Description <span className="opt">optional</span>
+                            </label>
+                            <input
+                              className={styles.ev__input}
+                              placeholder="What does this dataset cover?"
+                              value={uploadDescription}
+                              onChange={(e) => setUploadDescription(e.target.value)}
+                              disabled={datasetUploading}
+                            />
+                          </div>
+                          <div className={styles.ev__field}>
+                            <label className={styles.ev__label}>Evaluation type</label>
+                            <input className={styles.ev__input} value={draft.type || '—'} disabled readOnly />
+                          </div>
+                          <div className={styles.ev__field}>
+                            <label className={styles.ev__label}>File</label>
+                            <label className={`${styles.ev__drop} ${uploadFile ? styles['ev__drop--has'] : ''}`}>
+                              <input
+                                type="file"
+                                accept={SUPPORTED_UPLOAD_EXTENSIONS.map((e) => `.${e}`).join(',')}
+                                onChange={(e) => handleUploadFileChange(e.target.files?.[0] ?? null)}
+                                disabled={datasetUploading}
+                                hidden
+                              />
+                              {uploadFile ? (
+                                <span className={styles['ev__drop-file']}>
+                                  <FileText size={15} /> {uploadFile.name}
+                                </span>
+                              ) : (
+                                <>
+                                  <FileText size={15} /> Choose a .json, .jsonl, .arrow or .parquet file
+                                </>
+                              )}
+                            </label>
+                            {uploadFileError && <p className={styles.ev__error}>{uploadFileError}</p>}
+                          </div>
+                          {datasetUploadError && <p className={styles.ev__error}>{datasetUploadError}</p>}
+                          <div className={styles['ev__upload-actions']}>
+                            <button
+                              type="button"
+                              className={`${styles.ev__btn} ${styles['ev__btn--ghost']}`}
+                              onClick={() => setDatasetTab('browse')}
+                              disabled={datasetUploading}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              className={`${styles.ev__btn} ${styles['ev__btn--primary']}`}
+                              onClick={submitUpload}
+                              disabled={!canUpload}
+                            >
+                              {datasetUploading ? (
+                                <>
+                                  <Loader2 size={15} className={styles.ev__spin} /> Uploading…
+                                </>
+                              ) : (
+                                <>
+                                  <Upload size={15} /> Upload &amp; use
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {/* STEP 5 — METRICS */}
+                  {step === 5 && (
+                    <>
+                      {hideMetricsStep ? (
+                        // (5) Metrics & judge model aren't applicable in two cases:
+                        //   - Model type + non-custom (standard) dataset
+                        //   - Agent type with no framework selected (maps to
+                        //     POST /agent-benchmark/run, which has no metrics
+                        //     or judge concept at all)
+                        // Only run samples is configurable either way.
+                        <div style={{ maxWidth: 300 }}>
+                          {runSamplesControl}
+                          <p className={styles['ev__samples-note']}>
+                            {isAgentBenchmarkNoFramework
+                              ? "Metrics and a judge model aren\u2019t configurable for agent benchmarks without a selected framework."
+                              : 'Metrics and a judge model aren\u2019t configurable for standard (non-custom) model benchmarks.'}
+                          </p>
+                        </div>
+                      ) : (
+                        <div className={`${styles.ev__metrics} ${!requiresJudge ? styles['ev__metrics--single'] : ''}`}>
+                          <div className={styles['ev__metrics-main']}>
+                            <div className={styles.ev__samples}>
+                              {runSamplesControl}
+                              <p className={styles['ev__samples-note']}>Questions sampled from the suite for each model.</p>
+                            </div>
+
+                            <div className={styles['ev__metrics-bar']}>
+                              <span className={styles['ev__metrics-count']}>
+                                <b>{draft.metrics.length}</b> of {metricsCatalog.length} selected
+                              </span>
+                              <div className={styles['ev__metrics-actions']}>
+                                <button
+                                  type="button"
+                                  className={styles.ev__link}
+                                  onClick={() => dispatch(setDraft({ metrics: [...metricsCatalog] }))}
+                                >
+                                  Select all
+                                </button>
+                                <button type="button" className={styles.ev__link} onClick={() => dispatch(setDraft({ metrics: [] }))}>
+                                  Clear
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className={styles['ev__step-toolbar']}>
+                              <div className={styles['ev__toolbar-search']}>
+                                <Search size={14} />
+                                <input
+                                  placeholder="Search metrics…"
+                                  value={metricSearch}
+                                  onChange={(e) => setMetricSearch(e.target.value)}
+                                />
+                              </div>
+                              <button
+                                type="button"
+                                className={styles['ev__toolbar-refresh']}
+                                onClick={refreshMetrics}
+                                disabled={metricsRefreshing}
+                                title="Refresh metrics"
+                              >
+                                <RefreshCw size={14} className={metricsRefreshing ? styles.ev__spin : ''} />
+                              </button>
+                            </div>
+
+                            {metricsRefreshing ? (
+                              <div className={styles.ev__chips} aria-busy="true" aria-label="Loading metrics">
+                                {Array.from({ length: SKELETON_CHIP_COUNT }).map((_, i) => (
+                                  <span
+                                    key={i}
+                                    className={`${styles['ev__skel-block']} ${styles['ev__skel-block--chip']}`}
+                                    style={{ width: 64 + ((i * 37) % 90) }}
+                                  />
+                                ))}
+                              </div>
+                            ) : (
+                              <div className={styles.ev__chips}>
+                                {filteredMetrics.map((name: string) => {
+                                  const on = draft.metrics.includes(name);
+                                  return (
+                                    <button
+                                      key={name}
+                                      type="button"
+                                      className={`${styles.ev__chip} ${on ? styles['ev__chip--on'] : ''}`}
+                                      onClick={() => dispatch(setDraft({ metrics: toggle(draft.metrics, name) }))}
+                                    >
+                                      {on && (
+                                        <span className={styles['ev__chip-tick']}>
+                                          <Check size={12} strokeWidth={3} />
+                                        </span>
+                                      )}
+                                      {name}
+                                    </button>
+                                  );
+                                })}
+                                {metricsCatalog.length === 0 && (
+                                  <p className={styles.ev__empty}>No metrics available for this type.</p>
+                                )}
+                                {metricsCatalog.length > 0 && filteredMetrics.length === 0 && (
+                                  <p className={styles.ev__empty}>No metrics match "{metricSearch}".</p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          {requiresJudge && (
+                            <aside className={styles.ev__judge}>
+                              <div className={styles['ev__judge-head']}>
+                                <p className={styles['ev__judge-title']}>
+                                  <Gavel size={13} /> Judge model
+                                </p>
+                                <p className={styles['ev__judge-sub']}>
+                                  {isAgentWithFramework
+                                    ? 'Required — agent benchmarks with a selected framework always need a judge model.'
+                                    : 'Required — the LLM_Judge metric needs a model to grade open-ended answers.'}
+                                </p>
+                              </div>
+                              <div className={styles['ev__judge-scroll']}>
+                                {models.filter((m) => m?.is_active).length === 0 ? (
+                                  <div className={styles['ev__judge-empty']}>No models available yet.</div>
+                                ) : (
+                                  models
+                                    .filter((m) => m?.is_active)
+                                    .map((m) => {
+                                      const on = draft.judgeModelId === m.id;
+                                      return (
+                                        <button
+                                          key={m.id}
+                                          type="button"
+                                          className={`${styles['ev__judge-row']} ${on ? styles['ev__judge-row--on'] : ''}`}
+                                          onClick={() => dispatch(setDraft({ judgeModelId: on ? null : m.id }))}
+                                        >
+                                          <span className={`${styles.ev__radio} ${on ? styles['ev__radio--on'] : ''}`} />
+                                          <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+                                            <span className={styles['ev__judge-name']}>{m.name || 'Unnamed model'}</span>
+                                            <span className={styles['ev__judge-meta']}>
+                                              {providers.find((p) => p?.id === m.provider_id)?.name ?? m.provider_id}
+                                            </span>
+                                          </span>
+                                        </button>
+                                      );
+                                    })
+                                )}
+                              </div>
+                              {!draft.judgeModelId && (
+                                <p className={styles['ev__judge-required']}>
+                                  Select a judge model to continue — it's mandatory when LLM_Judge is selected.
+                                </p>
+                              )}
+                            </aside>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {/* STEP 6 — REVIEW */}
+                  {step === 6 && (
+                    <>
+                      <div className={styles.ev__summary}>
+                        <div className={styles['ev__summary-cell']}>
+                          <div className={styles['ev__summary-k']}>
+                            <Layers size={11} /> Questions
+                          </div>
+                          <div className={`${styles['ev__summary-v']} ${suite ? '' : styles['ev__summary-v--muted']}`}>
+                            {suite ? (suite.question_count ?? 0).toLocaleString() : '—'}
+                          </div>
+                        </div>
+                        <div className={styles['ev__summary-cell']}>
+                          <div className={styles['ev__summary-k']}>
+                            <Cpu size={11} /> Models
+                          </div>
+                          <div className={styles['ev__summary-v']}>{selectedModels.length}</div>
+                        </div>
+                        <div className={styles['ev__summary-cell']}>
+                          <div className={styles['ev__summary-k']}>
+                            <Target size={11} /> Metrics
+                          </div>
+                          <div className={styles['ev__summary-v']}>{hideMetricsStep ? '—' : draft.metrics.length}</div>
+                        </div>
+                      </div>
+
+                      <div className={styles.ev__block}>
+                        <p className={styles['ev__block-title']}>
+                          <Tag size={11} /> Overview
+                        </p>
+                        <div className={styles.ev__rows}>
+                          <div className={styles.ev__row}>
+                            <span>Name</span>
+                            <span>{draft.name || '—'}</span>
+                          </div>
+                          <div className={styles.ev__row}>
+                            <span>Type</span>
+                            <span>{typeLabel || '—'}</span>
+                          </div>
+                          {draft.agentFramework && (
+                            <div className={styles.ev__row}>
+                              <span>Framework</span>
+                              <span>{AGENT_FRAMEWORKS.find((f) => f.id === draft.agentFramework)?.title}</span>
+                            </div>
+                          )}
+                          <div className={styles.ev__row}>
+                            <span>Providers</span>
+                            <span>{draft.providers.map((id) => providers.find((p) => p?.id === id)?.name || id).join(', ') || '—'}</span>
+                          </div>
+                          <div className={styles.ev__row}>
+                            <span>Run samples</span>
+                            <span>{draft.runSamplesMode === 'full' ? 'Full dataset' : draft.runSamples}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className={styles.ev__block}>
+                        <p className={styles['ev__block-title']}>
+                          <Cpu size={11} /> Models <b>({selectedModels.length})</b>
+                        </p>
+                        {selectedModels.length > 0 ? (
+                          <div className={styles['ev__review-grid']}>
+                            {selectedModels.map((m) => (
+                              <div key={m!.id} className={styles['ev__review-card']}>
+                                <span className={styles['ev__review-card-icon']}>
+                                  <Cpu size={15} />
+                                </span>
+                                <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+                                  <span className={styles['ev__review-card-name']}>{m!.name || 'Unnamed model'}</span>
+                                  <span className={styles['ev__review-card-sub']}>
+                                    {providers.find((p) => p?.id === m!.provider_id)?.name || m!.provider_id}
+                                  </span>
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className={styles.ev__empty}>No models selected.</p>
+                        )}
+                      </div>
+
+                      <div className={styles.ev__block}>
+                        <p className={styles['ev__block-title']}>
+                          <Database size={11} /> Test suite
+                        </p>
+                        <div className={styles.ev__rows}>
+                          <div className={styles.ev__row}>
+                            <span>Suite</span>
+                            <span>{suite?.name ?? '—'}</span>
+                          </div>
+                          {suite?.category && (
+                            <div className={styles.ev__row}>
+                              <span>Category</span>
+                              <span>{suite.category}</span>
+                            </div>
+                          )}
+                          {draft.subgroup.length > 0 && (
+                            <div className={styles.ev__row}>
+                              <span>Subgroups</span>
+                              <span>{draft.subgroup.join(', ')}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {!hideMetricsStep && (
+                        <div className={styles.ev__block}>
+                          <p className={styles['ev__block-title']}>
+                            <Target size={11} /> Metrics <b>({draft.metrics.length})</b>
+                          </p>
+                          {draft.metrics.length > 0 ? (
+                            <div className={styles['ev__metric-tags']}>
+                              {draft.metrics.map((m) => (
+                                <span key={m} className={styles['ev__metric-tag']}>
+                                  {m}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className={styles.ev__empty}>No metrics selected.</p>
+                          )}
+                        </div>
+                      )}
+
+                      {requiresJudge && (
+                        <div className={styles.ev__block}>
+                          <p className={styles['ev__block-title']}>
+                            <Gavel size={11} /> Judge model
+                          </p>
+                          <div className={styles.ev__rows}>
+                            <div className={styles.ev__row}>
+                              <span>Model</span>
+                              <span>{judgeModel ? judgeModel.name || 'Unnamed model' : '—'}</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {launchError && <p className={styles.ev__error}>{launchError}</p>}
+                    </>
+                  )}
+                </div>
+                </StepErrorBoundary>
+              </div>
+
+              {/* ---- footer nav ---- */}
+              <div className={styles.ev__footer}>
+                <button
+                  type="button"
+                  className={`${styles.ev__btn} ${styles['ev__btn--ghost']}`}
+                  onClick={() => (step > 0 ? goBack() : navigate('/app/dashboard'))}
+                  disabled={launching}
+                >
+                  <ChevronLeft size={16} /> {step === 0 ? 'Cancel' : 'Back'}
+                </button>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                  {step === 0 && canGo() && (
+                    <span className={styles.ev__hint}>
+                      <kbd>↵</kbd> Enter to continue
+                    </span>
+                  )}
+                  {step < totalSteps - 1 ? (
+                    <button type="button" className={`${styles.ev__btn} ${styles['ev__btn--primary']}`} onClick={goNext} disabled={!canGo()}>
+                      Continue <ChevronRight size={16} />
+                    </button>
+                  ) : (
+                    <button type="button" className={`${styles.ev__btn} ${styles['ev__btn--launch']}`} onClick={launch} disabled={launching}>
+                      {launching ? (
                         <>
-                          <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="9" height="9">
-                            <path d="M6 1v6M3.5 4.5L6 7l2.5-2.5" /><path d="M2 10h8" />
-                          </svg>
-                          {t('uploadInfer.filePanel.export')}
+                          <Loader2 size={16} className={styles.ev__spin} /> Launching…
                         </>
                       ) : (
                         <>
-                          {f.status === 'completed' && (
-                            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="9" height="9">
-                              <path d="M2 6l3 3 5-5" />
-                            </svg>
-                          )}
-                          {(f.status === 'running' || f.status === 'queued') && (
-                            <span className={styles.fcardBadgeDot} />
-                          )}
-                          {t(statusMeta.labelKey)}
+                          <Play size={16} /> Launch run
                         </>
                       )}
-                    </span>
-                  </div>
-
-                  <div className={styles.fcardPrompts} onClick={e => e.stopPropagation()}>
-                    {PROMPT_FIELDS.map(({ key, labelKey, icon, tourId }, fieldIdx) => {
-                      const set = !!(f[key] as string)?.trim();
-                      return (
-                        <button
-                          key={key}
-                          type="button"
-                          data-tour={isFirstCard ? tourId : undefined}
-                          className={`${styles.fcardPromptDot} ${set ? styles.fcardPromptDotSet : ''}`}
-                          title={`${t(labelKey)}${set ? ' — ' + t('uploadInfer.filePanel.promptCustomized') : ' — ' + t('uploadInfer.filePanel.promptDefault')}`}
-                          onClick={() => setPromptViewer({ file: f, fieldIdx })}
-                        >
-                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                            <path d={icon} />
-                          </svg>
-                        </button>
-                      );
-                    })}
-                  </div>
+                    </button>
+                  )}
                 </div>
               </div>
-            );
-          })}
-        </div>
-
-        {/* Pagination footer */}
-        {!filesLoading && !filesError && filesTotal > 0 && (
-          <div className={styles.paginationBar}>
-            <div className={styles.paginationTopRow}>
-              <div className={styles.pageSizeGroup}>
-                <span className={styles.pageSizeLabel}>{t('uploadInfer.filePanel.perPage')}</span>
-                <select
-                  className={styles.pageSizeSelect}
-                  value={filesPageSize}
-                  onChange={e => handlePageSizeChange(Number(e.target.value))}
-                >
-                  {[50, 75, 100].map(size => (
-                    <option key={size} value={size}>{size}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className={styles.pageNav}>
-                <button
-                  className={styles.pageNavBtn}
-                  onClick={() => goToPage(filesPage - 1)}
-                  disabled={filesPage <= 1}
-                  aria-label="Previous page"
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                    <path d="M10 3L6 8l4 5" />
-                  </svg>
-                </button>
-
-                {(() => {
-                  const pageWindow = getPageNumbers(filesPage, filesTotalPages);
-                  const showFirst = pageWindow[0] > 1;
-                  const showLast = pageWindow[pageWindow.length - 1] < filesTotalPages;
-                  return (
-                    <>
-                      {showFirst && (
-                        <>
-                          <button className={styles.pageNumBtn} onClick={() => goToPage(1)}>1</button>
-                          {pageWindow[0] > 2 && <span className={styles.pageEllipsis}>…</span>}
-                        </>
-                      )}
-                      {pageWindow.map(p => (
-                        <button
-                          key={p}
-                          className={`${styles.pageNumBtn} ${p === filesPage ? styles.pageNumBtnActive : ''}`}
-                          onClick={() => goToPage(p)}
-                        >
-                          {p}
-                        </button>
-                      ))}
-                      {showLast && (
-                        <>
-                          {pageWindow[pageWindow.length - 1] < filesTotalPages - 1 && <span className={styles.pageEllipsis}>…</span>}
-                          <button className={styles.pageNumBtn} onClick={() => goToPage(filesTotalPages)}>{filesTotalPages}</button>
-                        </>
-                      )}
-                    </>
-                  );
-                })()}
-
-                <button
-                  className={styles.pageNavBtn}
-                  onClick={() => goToPage(filesPage + 1)}
-                  disabled={filesPage >= filesTotalPages}
-                  aria-label="Next page"
-                >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                    <path d="M6 3l4 5-4 5" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-
-            <div className={styles.pageInfo}>
-              {t('uploadInfer.filePanel.pageInfo', { page: filesPage, totalPages: filesTotalPages, total: filesTotal })}
-            </div>
+            </section>
           </div>
-        )}
+        </div>
       </div>
 
-      <DictionaryAssociationModal
-        open={dictModalOpen}
-        onClose={() => setDictModalOpen(false)}
-      />
-
-      {/* ── Per-file prompt viewer — opened from a card's prompt icons ── */}
-      {promptViewer && (
-        <div className={styles.dangerOverlay} onClick={() => setPromptViewer(null)}>
-          <div className={styles.promptViewerModal} onClick={e => e.stopPropagation()}>
-            <div className={styles.promptViewerHead}>
-              <div>
-                <div className={styles.promptViewerTitle}>{t(PROMPT_FIELDS[promptViewer.fieldIdx].labelKey)}</div>
-                <div className={styles.promptViewerFile}>{promptViewer.file.original_name}</div>
+      {/* Change-2: dataset preview slider — right-to-left panel showing
+          GET /datasets/{id}/preview?limit={limit} for the clicked suite. */}
+      {previewOpen && (
+        <div className={styles['ev-preview-overlay']} onClick={closePreview}>
+          <aside
+            className={styles['ev-preview-panel']}
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Preview ${previewDatasetName}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className={styles['ev-preview-head']}>
+              <div className={styles['ev-preview-head-main']}>
+                <p className={styles['ev-preview-eyebrow']}>Test suite preview</p>
+                <h3 className={styles['ev-preview-title']}>{previewDatasetName || 'Dataset'}</h3>
               </div>
-              <button className={styles.promptViewerClose} onClick={() => setPromptViewer(null)} aria-label="Close">
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                  <path d="M4 4l8 8M12 4l-8 8" />
-                </svg>
+              <button type="button" className={styles['ev-preview-close']} onClick={closePreview} title="Close preview">
+                <X size={16} />
               </button>
             </div>
-            <div className={styles.promptViewerBody}>
-              {(promptViewer.file[PROMPT_FIELDS[promptViewer.fieldIdx].key] as string)?.trim()
-                ? (promptViewer.file[PROMPT_FIELDS[promptViewer.fieldIdx].key] as string)
-                : <span className={styles.promptViewerEmpty}>{t('uploadInfer.filePanel.promptDefaultFull')}</span>}
+
+            <div className={styles['ev-preview-controls']}>
+              <div className={styles['ev-preview-limit']}>
+                <label className={styles['ev-preview-limit-label']}>
+                  Page {previewCurrentPage} of {previewTotalPages}
+                  <span className={styles['ev-preview-limit-range']}>
+                    {' '}
+                    ({PREVIEW_PAGE_SIZE} per page
+                    {previewQuestionCount > 0 ? `, ${previewQuestionCount.toLocaleString()} total` : ''})
+                  </span>
+                </label>
+                <div className={styles['ev-preview-limit-controls']}>
+                  <button
+                    type="button"
+                    className={styles['ev-preview-stepper-btn']}
+                    onClick={goToPreviewPrevPage}
+                    disabled={previewLoading || !previewHasPrevPage}
+                    aria-label="Previous page"
+                    title="Previous page"
+                  >
+                    <ChevronLeft size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    className={styles['ev-preview-stepper-btn']}
+                    onClick={goToPreviewNextPage}
+                    disabled={previewLoading || !previewHasNextPage}
+                    aria-label="Next page"
+                    title="Next page"
+                  >
+                    <ChevronRight size={14} />
+                  </button>
+                </div>
+              </div>
+              <button
+                type="button"
+                className={`${styles.ev__btn} ${styles['ev__btn--primary']}`}
+                onClick={() => previewDatasetId && fetchPreviewPage(previewDatasetId, previewOffset)}
+                disabled={previewLoading}
+                title="Reload this page"
+              >
+                {previewLoading ? (
+                  <>
+                    <Loader2 size={15} className={styles.ev__spin} /> Loading…
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw size={15} /> Reload
+                  </>
+                )}
+              </button>
             </div>
-          </div>
+
+            <div className={styles['ev-preview-body']}>
+              {previewError && <p className={styles.ev__error}>{previewError}</p>}
+
+              {previewLoading && (
+                <div className={styles['ev-preview-skel-list']} aria-busy="true" aria-label="Loading preview">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <div key={i} className={styles['ev-preview-skel-card']}>
+                      <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '85%' }} />
+                      <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '60%' }} />
+                      <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '40%' }} />
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {!previewLoading &&
+                !previewError &&
+                previewData &&
+                (() => {
+                  // Guard against `questions` being missing/non-array on the
+                  // response — accessing .length/.map directly on that would
+                  // throw if the API ever omits or nulls the field.
+                  const previewQuestions = Array.isArray(previewData.questions) ? previewData.questions : [];
+
+                  if (previewQuestions.length === 0) {
+                    return <p className={styles.ev__empty}>This suite returned no sample questions.</p>;
+                  }
+
+                  return (
+                    <div className={styles['ev-preview-list']}>
+                      {previewQuestions.map((q, i) => (
+                        <div key={q?.id ?? i} className={styles['ev-preview-q']}>
+                          <div className={styles['ev-preview-q-head']}>
+                            <span className={styles['ev-preview-q-index']}>Q{previewOffset + i + 1}</span>
+                            {q?.category && <span className={styles['ev-preview-q-cat']}>{q.category}</span>}
+                          </div>
+                          {q?.input?.prompt && <p className={styles['ev-preview-q-prompt']}>{String(q.input.prompt)}</p>}
+                          {Array.isArray(q?.choices) && q.choices.length > 0 && (
+                            <ul className={styles['ev-preview-q-choices']}>
+                              {q.choices.map((c, ci) => (
+                                <li key={ci}>{String(c)}</li>
+                              ))}
+                            </ul>
+                          )}
+                          {q?.expected?.answer !== undefined && q?.expected?.answer !== null && (
+                            <p className={styles['ev-preview-q-answer']}>
+                              <span>Expected</span> {String(q.expected.answer)}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+            </div>
+          </aside>
         </div>
       )}
 
-      {/* ── Delete ALL confirmation — wipes every file on the account ── */}
-      {deleteAllConfirmOpen && (
-        <div className={styles.dangerOverlay} onClick={() => !isDeletingAll && closeDeleteAllConfirm()}>
-          <div className={styles.dangerModal} onClick={e => e.stopPropagation()}>
-            <div className={styles.dangerIcon}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 2l10 18H2z" />
-                <path d="M12 9v5M12 17v.1" />
-              </svg>
-            </div>
-            <div className={styles.dangerTitle}>{t('uploadInfer.filePanel.deleteAllConfirmTitle')}</div>
-            <div className={styles.dangerBody}>
-              {t('uploadInfer.filePanel.deleteAllConfirmBody', { from: dateFrom, to: dateTo })}
-            </div>
-            {deleteAllError && <div className={styles.dangerError}>{deleteAllError}</div>}
-            <div className={styles.dangerActions}>
-              <button
-                className={`${styles.btn} ${styles.btnFull}`}
-                onClick={closeDeleteAllConfirm}
-                disabled={isDeletingAll}
-              >
-                {t('uploadInfer.filePanel.cancelBtn')}
-              </button>
-              <button
-                type="button"
-                className={`${styles.btn} ${styles.btnDanger} ${styles.btnFull}`}
-                onClick={handleConfirmDeleteAll}
-                disabled={isDeletingAll}
-                aria-disabled={isDeletingAll}
-              >
-                {isDeletingAll ? <div className={styles.miniSpinner} /> : t('uploadInfer.filePanel.deleteAllConfirmBtn')}
-              </button>
-            </div>
+      {toast && (
+        <div className={styles['ev-toast']}>
+          <div className={styles['ev-toast__icon']}>
+            <Check size={18} />
+          </div>
+          <div>
+            <div className={styles['ev-toast__title']}>Run launched</div>
+            <div className={styles['ev-toast__sub']}>You'll find it in your history once it completes.</div>
           </div>
         </div>
       )}
     </div>
   );
-});
-
-FilePanel.displayName = 'FilePanel';
-
-export default FilePanel;
+}
