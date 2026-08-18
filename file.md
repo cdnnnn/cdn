@@ -1,103 +1,14 @@
-import { Link, NavLink } from 'react-router-dom';
-import { Home, Link2, Cpu, BookOpen, Play, FlaskConical, GitCompare, FileText, LogOut } from 'lucide-react';
-import { useAppDispatch, useAppSelector } from '../../hooks/redux';
-import { logout } from '../../store/slices/authSlice';
-import ThemeToggle from '../common/ThemeToggle';
-import styles from './Sidebar.module.scss';
-
-const navItems = [
-  { to: '/app/dashboard', icon: <Home size={18} />, label: 'Dashboard' },
-  { to: '/app/providers', icon: <Link2 size={18} />, label: 'Providers' },
-  { to: '/app/models', icon: <Cpu size={18} />, label: 'Models' },
-  { to: '/app/datasets', icon: <BookOpen size={18} />, label: 'Datasets' },
-];
-
-const workflowItems = [
-  { to: '/app/run-evaluation', icon: <Play size={18} />, label: 'New Evaluation' },
-  { to: '/app/history', icon: <FlaskConical size={18} />, label: 'History' },
-  { to: '/app/comparison', icon: <GitCompare size={18} />, label: 'Comparison' },
-  { to: '/app/reports', icon: <FileText size={18} />, label: 'Reports' },
-];
-
-export default function Sidebar() {
-  const dispatch = useAppDispatch();
-  const user = useAppSelector((s) => s.auth.user);
-
-  const navLinkClass = ({ isActive }: { isActive: boolean }) =>
-    `${styles['nav-item']} ${isActive ? styles.active : ''}`;
-
-  return (
-    <div className={styles.sidebar}>
-      <Link to="/" className={styles['sidebar__logo']}>
-        <div className={styles['sidebar__mark']}>&#9670;</div>
-        SemcoEval
-      </Link>
-      <nav className={styles['sidebar__nav']}>
-        {navItems.map((item) => (
-          <NavLink key={item.to} to={item.to} className={navLinkClass}>
-            {item.icon}
-            {item.label}
-          </NavLink>
-        ))}
-        <div className={styles['sidebar__section']}>Workflow</div>
-        {workflowItems.map((item) => (
-          <NavLink key={item.to} to={item.to} className={navLinkClass}>
-            {item.icon}
-            {item.label}
-          </NavLink>
-        ))}
-      </nav>
-      <div className={styles['sidebar__foot']}>
-        <div className={styles['sidebar__theme-row']}>
-          <span>Theme</span>
-          <ThemeToggle />
-        </div>
-        <div className={styles['sidebar__user']}>
-          <div className={styles['sidebar__avatar']}>{(user?.username || 'U').slice(0, 2).toUpperCase()}</div>
-          <div className={styles['sidebar__user-info']}>
-            <div className={styles['sidebar__user-name']}>{user?.profileName || user?.username || 'Guest'}</div>
-            <div className={styles['sidebar__user-email']}>{user?.email || ''}</div>
-          </div>
-          <button
-            type="button"
-            className={styles['sidebar__logout']}
-            onClick={() => dispatch(logout())}
-            title="Log out"
-          >
-            <LogOut size={16} />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
 // Sidebar — matches History / Reports / Comparison / New Evaluation design
 // system: ink/paper palette, ultramarine signal accent, mono instrument
 // labels, hover-lift.
+//
+// Font scaling: `.sidebar` sets a single base font-size. All descendant
+// font-sizes are expressed in `em` (relative to that base), so bumping
+// `.sidebar`'s font-size (e.g. on wide screens) scales the whole component
+// proportionally from one place.
 // ===========================================================================
 
 $ink:      #14161B;
@@ -119,9 +30,11 @@ $display: $font-display;
 
 $soft: 0 1px 2px rgba(20, 22, 27, 0.05);
 
+// base font-size the sidebar's internal `em` scale is built on
+$sidebar-base-font: 0.875rem;
+
 %micro {
   font-family: $mono;
-  font-size: 0.6875rem;
   font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -135,13 +48,20 @@ $soft: 0 1px 2px rgba(20, 22, 27, 0.05);
   flex-direction: column;
   flex-shrink: 0;
 
+  // master scale control — every em-based font-size below responds to this
+  font-size: $sidebar-base-font;
+
+  @media (min-width: 1800px) {
+    font-size: 1rem;
+  }
+
   &__logo {
     padding: 22px 24px;
     display: flex;
     align-items: center;
     gap: 11px;
     font-family: $display;
-    font-size: 1.0625rem;
+    font-size: 1.2143em; // 1.0625rem / 0.875rem
     font-weight: 800;
     letter-spacing: -0.01em;
     color: $ink;
@@ -163,7 +83,7 @@ $soft: 0 1px 2px rgba(20, 22, 27, 0.05);
     justify-content: center;
     color: #fff;
     background: $ink;
-    font-size: 0.875rem;
+    font-size: 0.9286em; // 0.875rem / 0.875rem base → matches original 0.875rem abs size
     position: relative;
     overflow: hidden;
 
@@ -187,7 +107,7 @@ $soft: 0 1px 2px rgba(20, 22, 27, 0.05);
 
   &__section {
     @extend %micro;
-    font-size: 0.625rem;
+    font-size: 0.7143em; // 0.625rem / 0.875rem
     color: $ink-3;
     padding: 20px 14px 8px;
   }
@@ -203,7 +123,7 @@ $soft: 0 1px 2px rgba(20, 22, 27, 0.05);
     align-items: center;
     justify-content: space-between;
     padding: 6px 4px 14px;
-    font-size: 0.75rem;
+    font-size: 0.8571em; // 0.75rem / 0.875rem
     font-weight: 650;
     color: $ink-2;
   }
@@ -231,7 +151,7 @@ $soft: 0 1px 2px rgba(20, 22, 27, 0.05);
     background: $ink;
     color: #fff;
     font-family: $display;
-    font-size: 0.8125rem;
+    font-size: 0.9286em; // 0.8125rem / 0.875rem
     font-weight: 700;
     position: relative;
     overflow: hidden;
@@ -250,7 +170,7 @@ $soft: 0 1px 2px rgba(20, 22, 27, 0.05);
   }
 
   &__user-name {
-    font-size: 0.8125rem;
+    font-size: 0.9286em; // 0.8125rem / 0.875rem
     font-weight: 700;
     color: $ink;
     overflow: hidden;
@@ -260,7 +180,7 @@ $soft: 0 1px 2px rgba(20, 22, 27, 0.05);
 
   &__user-email {
     font-family: $mono;
-    font-size: 0.6875rem;
+    font-size: 0.7857em; // 0.6875rem / 0.875rem
     color: $ink-3;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -295,7 +215,7 @@ $soft: 0 1px 2px rgba(20, 22, 27, 0.05);
   gap: 12px;
   padding: 10px 14px;
   border-radius: 10px;
-  font-size: 0.84375rem;
+  font-size: 0.9643em; // 0.84375rem / 0.875rem
   font-weight: 550;
   color: $ink-2;
   cursor: pointer;
