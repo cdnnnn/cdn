@@ -11,7 +11,8 @@
 // Font scaling: `.datasets` sets a single base font-size. All descendant
 // font-sizes are expressed in `em` (relative to that base), so bumping
 // `.datasets`'s font-size (e.g. on wide screens) scales the whole component
-// proportionally from one place.
+// proportionally from one place — same convention as Sidebar, Providers,
+// and Model Catalog.
 // ===========================================================================
 
 $ink:      #14161B;
@@ -36,11 +37,11 @@ $display: $font-display;
 $soft: 0 1px 2px rgba(20, 22, 27, 0.05);
 
 // base font-size the datasets component's internal `em` scale is built on
-$datasets-base-font: 0.875rem;
+$datasets-base-font: 0.8125rem;
 
 %micro {
   font-family: $mono;
-  font-size: 0.7857em; // 0.6875rem / 0.875rem base
+  font-size: 0.8462em; // 0.6875rem / 0.8125rem
   font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -68,7 +69,7 @@ $datasets-base-font: 0.875rem;
 
     h1 {
       font-family: $display;
-      font-size: 1.7143em; // 1.5rem / 0.875rem base
+      font-size: 1.8462em; // 1.5rem / 0.8125rem
       font-weight: 800;
       letter-spacing: -0.02em;
       color: $ink;
@@ -95,7 +96,7 @@ $datasets-base-font: 0.875rem;
 
   &__header-sub {
     margin-top: 4px;
-    font-size: 0.9643em; // 0.84375rem / 0.875rem base
+    font-size: 1.0385em; // 0.84375rem / 0.8125rem
     color: $ink-2;
     max-width: 52ch;
   }
@@ -117,7 +118,7 @@ $datasets-base-font: 0.875rem;
     border: 1px solid $line;
     background: $paper;
     font-family: $mono;
-    font-size: 0.8214em; // 0.71875rem / 0.875rem base
+    font-size: 0.8846em; // 0.71875rem / 0.8125rem
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -135,7 +136,7 @@ $datasets-base-font: 0.875rem;
     background: $card;
     color: $ink-2;
     font-family: $sans;
-    font-size: 0.8929em; // 0.78125rem / 0.875rem base
+    font-size: 0.9615em; // 0.78125rem / 0.8125rem
     font-weight: 650;
     cursor: pointer;
     transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
@@ -176,7 +177,7 @@ $datasets-base-font: 0.875rem;
       border: 1.5px solid $line;
       border-radius: 10px;
       padding: 9px 12px 9px 38px;
-      font-size: 0.9643em; // 0.84375rem / 0.875rem base
+      font-size: 1.0385em; // 0.84375rem / 0.8125rem
       font-family: $sans;
       color: $ink;
       background: $paper;
@@ -213,7 +214,7 @@ $datasets-base-font: 0.875rem;
     border-radius: 999px;
     background: transparent;
     color: $ink-2;
-    font-size: 0.8929em; // 0.78125rem / 0.875rem base
+    font-size: 0.9615em; // 0.78125rem / 0.8125rem
     font-weight: 650;
     cursor: pointer;
     transition: all 0.15s ease;
@@ -241,7 +242,7 @@ $datasets-base-font: 0.875rem;
   }
 
   &__facets-lead {
-    font-size: 0.8571em; // 0.75rem / 0.875rem base
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
     font-weight: 650;
     color: $ink-2;
   }
@@ -254,7 +255,7 @@ $datasets-base-font: 0.875rem;
     border: 0;
     border-radius: 999px;
     font-family: $mono;
-    font-size: 0.7857em; // 0.6875rem / 0.875rem base
+    font-size: 0.8462em; // 0.6875rem / 0.8125rem
     font-weight: 700;
     cursor: pointer;
     transition: filter 0.12s ease;
@@ -268,7 +269,7 @@ $datasets-base-font: 0.875rem;
     background: none;
     color: $signal;
     font-family: $sans;
-    font-size: 0.8571em; // 0.75rem / 0.875rem base
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
     font-weight: 700;
     cursor: pointer;
 
@@ -303,7 +304,7 @@ $datasets-base-font: 0.875rem;
     padding: 12px 18px;
     border-bottom: 1px solid $line-2;
     font-family: $mono;
-    font-size: 0.7857em; // 0.6875rem / 0.875rem base
+    font-size: 0.8462em; // 0.6875rem / 0.8125rem
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -362,14 +363,14 @@ $datasets-base-font: 0.875rem;
 
   &__row-name {
     font-family: $display;
-    font-size: 1.0714em; // 0.9375rem / 0.875rem base
+    font-size: 1.1538em; // 0.9375rem / 0.8125rem
     font-weight: 600;
     color: $ink;
   }
 
   &__row-count {
     font-family: $mono;
-    font-size: 0.8571em; // 0.75rem / 0.875rem base
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
     font-weight: 700;
     color: $ink-3;
   }
@@ -383,7 +384,7 @@ $datasets-base-font: 0.875rem;
 
   &__row-type {
     font-family: $mono;
-    font-size: 0.7143em; // 0.625rem / 0.875rem base
+    font-size: 0.7692em; // 0.625rem / 0.8125rem
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -404,7 +405,7 @@ $datasets-base-font: 0.875rem;
     padding: 40px 16px;
 
     svg { margin-bottom: 8px; }
-    p { font-size: 0.9286em; line-height: 1.5; margin: 0; } // 0.8125rem / 0.875rem base
+    p { font-size: 1em; line-height: 1.5; margin: 0; } // 0.8125rem / 0.8125rem (base)
   }
 
   // ---- loading skeleton -----------------------------------------------------
@@ -445,7 +446,7 @@ $datasets-base-font: 0.875rem;
     max-width: 280px;
 
     svg { margin-bottom: 10px; }
-    p { font-size: 1em; line-height: 1.5; } // 0.875rem / 0.875rem base
+    p { font-size: 1.0769em; line-height: 1.5; } // 0.875rem / 0.8125rem
   }
 
   &__hero {
@@ -472,7 +473,7 @@ $datasets-base-font: 0.875rem;
 
   &__hero-type {
     font-family: $mono;
-    font-size: 0.7857em; // 0.6875rem / 0.875rem base
+    font-size: 0.8462em; // 0.6875rem / 0.8125rem
     font-weight: 700;
     letter-spacing: 0.1em;
     text-transform: uppercase;
@@ -481,7 +482,7 @@ $datasets-base-font: 0.875rem;
   &__hero {
     h2 {
       font-family: $display;
-      font-size: 2.1429em; // 1.875rem / 0.875rem base
+      font-size: 2.3077em; // 1.875rem / 0.8125rem
       font-weight: 700;
       letter-spacing: -0.02em;
       margin: 5px 0 0;
@@ -492,7 +493,7 @@ $datasets-base-font: 0.875rem;
 
   &__hero-desc {
     margin: 14px 0 0;
-    font-size: 1.0714em; // 0.9375rem / 0.875rem base
+    font-size: 1.1538em; // 0.9375rem / 0.8125rem
     line-height: 1.6;
     color: $ink-2;
   }
@@ -502,7 +503,7 @@ $datasets-base-font: 0.875rem;
     display: inline-flex;
     align-items: center;
     font-family: $mono;
-    font-size: 0.7857em; // 0.6875rem / 0.875rem base
+    font-size: 0.8462em; // 0.6875rem / 0.8125rem
     font-weight: 700;
     letter-spacing: 0.04em;
     text-transform: uppercase;
@@ -535,18 +536,18 @@ $datasets-base-font: 0.875rem;
 
   &__stat-val {
     font-family: $display;
-    font-size: 1.5714em; // 1.375rem / 0.875rem base
+    font-size: 1.6923em; // 1.375rem / 0.8125rem
     font-weight: 700;
     color: $ink;
     letter-spacing: -0.02em;
     line-height: 1;
 
-    &--mono { font-family: $mono; font-size: 1.0714em; font-weight: 700; } // 0.9375rem / 0.875rem base
+    &--mono { font-family: $mono; font-size: 1.1538em; font-weight: 700; } // 0.9375rem / 0.8125rem
   }
 
   &__stat-label {
     font-family: $mono;
-    font-size: 0.7143em; // 0.625rem / 0.875rem base
+    font-size: 0.7692em; // 0.625rem / 0.8125rem
     font-weight: 700;
     letter-spacing: 0.1em;
     text-transform: uppercase;
@@ -566,7 +567,7 @@ $datasets-base-font: 0.875rem;
 
     h3 {
       font-family: $display;
-      font-size: 1.0714em; // 0.9375rem / 0.875rem base
+      font-size: 1.1538em; // 0.9375rem / 0.8125rem
       font-weight: 700;
       color: $ink;
       margin: 0;
@@ -577,7 +578,7 @@ $datasets-base-font: 0.875rem;
       em {
         font-family: $mono;
         font-style: normal;
-        font-size: 0.7857em; // 0.6875rem / 0.875rem base
+        font-size: 0.8462em; // 0.6875rem / 0.8125rem
         font-weight: 700;
         color: $ink-3;
         background: $paper;
@@ -592,7 +593,7 @@ $datasets-base-font: 0.875rem;
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    font-size: 0.8214em; // 0.71875rem / 0.875rem base
+    font-size: 0.8846em; // 0.71875rem / 0.8125rem
     color: $ink-3;
   }
 
@@ -610,7 +611,7 @@ $datasets-base-font: 0.875rem;
     border: 1px solid;
     border-radius: 8px;
     font-family: $mono;
-    font-size: 0.8214em; // 0.71875rem / 0.875rem base
+    font-size: 0.8846em; // 0.71875rem / 0.8125rem
     font-weight: 700;
     cursor: pointer;
     transition: transform 0.13s ease;
@@ -630,8 +631,8 @@ $datasets-base-font: 0.875rem;
     background: $paper;
     color: $ink-3;
 
-    strong { display: block; font-size: 0.9286em; color: $ink; font-weight: 650; } // 0.8125rem / 0.875rem base
-    span { display: block; font-size: 0.8929em; color: $ink-2; margin-top: 2px; } // 0.78125rem / 0.875rem base
+    strong { display: block; font-size: 1em; color: $ink; font-weight: 650; } // 0.8125rem / 0.8125rem (base)
+    span { display: block; font-size: 0.9615em; color: $ink-2; margin-top: 2px; } // 0.78125rem / 0.8125rem
   }
 
   // ---- state banner (error) -------------------------------------------------
@@ -647,7 +648,7 @@ $datasets-base-font: 0.875rem;
     border-radius: 16px;
     background: $paper;
     color: $ink-2;
-    font-size: 1em; // 0.875rem / 0.875rem base
+    font-size: 1.0769em; // 0.875rem / 0.8125rem
     text-align: center;
 
     svg { color: $ink-3; }
@@ -674,7 +675,7 @@ $datasets-base-font: 0.875rem;
   .datasets__rail { border-right: 0; border-bottom: 1px solid $line; }
   .datasets__detail-scroll { padding: 20px 18px 32px; }
   .datasets__stats { grid-template-columns: repeat(2, 1fr); }
-  .datasets__hero h2 { font-size: 1.7143em; } // 1.5rem / 0.875rem base
+  .datasets__hero h2 { font-size: 1.8462em; } // 1.5rem / 0.8125rem
 }
 
 @media (prefers-reduced-motion: reduce) {
