@@ -1,509 +1,1052 @@
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
-// Sidebar — matches History / Reports / Comparison / New Evaluation design
-// system: ink/paper palette, ultramarine signal accent, mono instrument
-// labels, hover-lift.
-//
-// All neutral/surface/border colors now come from the shared "ink" design
-// system tokens in _variables.scss (which resolve to the CSS custom
-// properties in _theme.scss), so the sidebar is dark-mode aware without any
-// local hex values. Only $signal/$signal-2 (brand accent) and $danger
-// (status accent) remain — those are already flat constants shared across
-// themes, sourced from _variables.scss rather than redeclared here.
-//
-// Font scaling: `.sidebar` sets a single base font-size. All descendant
-// font-sizes are expressed in `em` (relative to that base), so bumping
-// `.sidebar`'s font-size (e.g. on wide screens) scales the whole component
-// proportionally from one place.
+// History — matches the Run Console / Dashboard / Providers / Model Catalog /
+// Datasets design system: ink/paper palette, ultramarine signal accent, mono
+// instrument labels, hover-lift, mono numerals. Master–detail split shell is
+// self-contained here (no dependency on global .split-shell*).
 // ===========================================================================
 
-// base font-size the sidebar's internal `em` scale is built on
-$sidebar-base-font: 0.875rem;
+// $ink, $ink-2, $ink-3, $paper, $card, $line, $line-2, $signal, $signal-2,
+// $wash, $ok, $ok-wash, $danger, $danger-wash, $ink-wash all come from
+// _variables.scss (imported above via `@use ... as *`) — they already
+// resolve to theme-aware CSS custom properties, so History picks up dark
+// mode automatically without redeclaring anything here.
+//
+// $amber / $amber-wash aren't part of the shared "ink" names (the shared
+// tokens use $amber-ink / $amber-ink-wash to avoid clashing with the
+// brand-palette $amber further up _variables.scss), so alias them locally
+// rather than renaming every usage in this file.
+$amber:      $amber-ink;
+$amber-wash: $amber-ink-wash;
+
+// $soft/$lift now point at the shared theme-aware shadow tokens instead of
+// a hardcoded ink-black rgba — so card shadows get properly darker in
+// dark mode instead of staying a flat, barely-visible tint.
+$soft: $shadow-2;
+$lift: $shadow-3;
+
+// Base font-size the whole History component's internal `em` scale is built
+// on. All descendant font-sizes in this file are expressed in `em` relative
+// to this, so bumping it (e.g. on wide screens below) scales the whole
+// component proportionally from one place — same convention as Model
+// Catalog / Sidebar / Providers.
+$history-base-font: 0.8125rem;
 
 %micro {
   font-family: $font-mono;
+  font-size: 0.8462em; // 0.6875rem / 0.8125rem
   font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;
 }
 
-.sidebar {
-  width: $sidebar-width;
-  background: $card;
-  border-right: 1px solid $line;
-  display: flex;
-  flex-direction: column;
-  flex-shrink: 0;
-
+.history {
   // master scale control — every em-based font-size below responds to this
-  font-size: $sidebar-base-font;
+  font-size: $history-base-font;
 
   @media (min-width: 1800px) {
     font-size: 1rem;
   }
 
-  &__logo {
-    padding: 22px 24px;
-    display: flex;
-    align-items: center;
-    gap: 11px;
-    font-family: $font-display;
-    font-size: 1.2143em; // 1.0625rem / 0.875rem
-    font-weight: 800;
-    letter-spacing: -0.01em;
-    color: $ink;
-    border-bottom: 1px solid $line;
-    text-decoration: none;
-    cursor: pointer;
-    transition: opacity 0.15s ease;
-
-    &:hover { opacity: 0.82; }
-  }
-
-  &__mark {
+  &__header {
     flex-shrink: 0;
-    width: 30px;
-    height: 30px;
-    border-radius: 9px;
     display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #fff;
-    background: $ink-solid;
-    font-size: 0.9286em; // 0.875rem / 0.875rem base → matches original abs size
-    position: relative;
-    overflow: hidden;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 24px 32px 20px;
+    margin-bottom: 0;
+    border-bottom: 1px solid $line;
+    background: $card;
 
-    &::after {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(140deg, transparent 40%, rgba($signal, 0.9) 140%);
+    h1 {
+      font-family: $font-display;
+      font-size: 1.8462em; // 1.5rem / 0.8125rem
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: $ink;
+      line-height: 1.2;
     }
   }
 
-  &__nav {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 14px 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  &__section {
+  &__header-eyebrow {
     @extend %micro;
-    font-size: 0.7143em; // 0.625rem / 0.875rem
-    color: $ink-3;
-    padding: 20px 14px 8px;
-  }
-
-  &__foot {
-    flex-shrink: 0;
-    padding: 16px;
-    border-top: 1px solid $line;
-  }
-
-  &__theme-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 6px 4px 14px;
-    font-size: 0.8571em; // 0.75rem / 0.875rem
-    font-weight: 650;
+    gap: 8px;
+    color: $signal;
+    margin-bottom: 6px;
+
+    &::before {
+      content: '';
+      width: 16px;
+      height: 2px;
+      border-radius: 2px;
+      background: $signal;
+    }
+  }
+
+  &__header-sub {
+    margin-top: 4px;
+    font-size: 1.0385em; // 0.84375rem / 0.8125rem
     color: $ink-2;
   }
 
-  &__user {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 9px 10px;
-    border-radius: 12px;
-    border: 1px solid transparent;
-    transition: background 0.15s ease, border-color 0.15s ease;
-
-    &:hover { background: $paper; border-color: $line; }
-  }
-
-  &__avatar {
-    flex-shrink: 0;
-    width: 36px;
-    height: 36px;
-    border-radius: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: $ink-solid;
-    color: #fff;
-    font-family: $font-display;
-    font-size: 0.9286em; // 0.8125rem / 0.875rem
-    font-weight: 700;
-    position: relative;
-    overflow: hidden;
-
-    &::after {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(140deg, transparent 40%, rgba($signal, 0.9) 140%);
-    }
-  }
-
-  &__user-info {
-    flex: 1;
-    min-width: 0;
-  }
-
-  &__user-name {
-    font-size: 0.9286em; // 0.8125rem / 0.875rem
-    font-weight: 700;
-    color: $ink;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__user-email {
-    font-family: $font-mono;
-    font-size: 0.7857em; // 0.6875rem / 0.875rem
-    color: $ink-3;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__logout {
+  &__header-meta {
     flex-shrink: 0;
     display: inline-flex;
     align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 8px;
-    border: 1px solid transparent;
-    background: transparent;
-    color: $ink-3;
-    cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
-
-    &:hover {
-      background: $danger-wash;
-      border-color: rgba($danger, 0.2);
-      color: $danger;
-    }
+    gap: 7px;
+    padding: 7px 13px;
+    border-radius: 999px;
+    border: 1px solid $line;
+    background: $paper;
+    font-family: $font-mono;
+    font-size: 0.8846em; // 0.71875rem / 0.8125rem
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: $ink-2;
+    white-space: nowrap;
+    margin-bottom: 3px;
   }
 }
 
-.nav-item {
+@property --angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes history-rotate-angle {
+  to { --angle: 360deg; }
+}
+@keyframes history-live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.3); }
+}
+@keyframes history-spin { to { transform: rotate(360deg); } }
+
+// Fixed-shell override: list + detail scroll independently, so pg-body
+// itself must not scroll — plain flex:1/min-height:0 pass-through.
+.pg-body-fixed {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 32px 24px;
+}
+
+// ---- self-contained split shell -------------------------------------------
+.shell {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 16px;
+}
+
+.sidebar {
+  flex-shrink: 0;
+  width: 380px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 16px;
+  background: $card;
+  border: 1px solid $line;
+  border-radius: 16px;
+  box-shadow: $soft;
+}
+
+.detail {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 24px;
+  background: $card;
+  border: 1px solid $line;
+  border-radius: 16px;
+  box-shadow: $soft;
+}
+
+.filters { flex-shrink: 0; }
+
+// ---- filter toolbar --------------------------------------------------------
+.filter-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  background: $paper;
+  border: 1px solid $line;
+  border-radius: 12px;
+}
+
+.filter-toolbar__label {
+  flex-shrink: 0;
+  @extend %micro;
+  font-size: 0.7692em; // 0.625rem / 0.8125rem
+  color: $ink-3;
+  padding-left: 4px;
+}
+
+.filter-toolbar__divider {
+  flex-shrink: 0;
+  width: 1px;
+  height: 16px;
+  background: $line;
+}
+
+.filter-toolbar__btn {
+  position: relative;
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: $ink-2;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+
+  &:hover { background: $card; color: $signal; box-shadow: $soft; }
+
+  &.on {
+    border-color: $signal;
+    background: $card;
+    color: $signal;
+    box-shadow: 0 0 0 3px $wash;
+  }
+}
+
+.filter-toolbar__dot {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: $signal;
+  border: 1.5px solid $paper;
+}
+
+.filter-toolbar__summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: $font-mono;
+  font-size: 0.8077em; // 0.65625rem / 0.8125rem
+  font-weight: 700;
+  color: $signal;
+  background: $wash;
+  border: 1px solid rgba($signal, 0.18);
+  border-radius: 999px;
+  padding: 4px 8px;
+  white-space: nowrap;
+  max-width: 140px;
+
+  span { overflow: hidden; text-overflow: ellipsis; }
+
+  svg {
+    cursor: pointer;
+    flex-shrink: 0;
+    opacity: 0.6;
+    transition: opacity 0.15s ease;
+    &:hover { opacity: 1; }
+  }
+}
+
+// ---- collapsible filter panel ----------------------------------------------
+.filter-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 0.18s ease, opacity 0.15s ease, margin-bottom 0.18s ease;
+
+  > * {
+    overflow: hidden;
+    min-height: 0;
+    background: $paper;
+    border: 1px solid $line;
+    border-radius: 12px;
+    padding: 10px;
+  }
+
+  &--open {
+    grid-template-rows: 1fr;
+    opacity: 1;
+    margin-bottom: 8px;
+  }
+}
+
+// ---- filter panel inner controls (self-contained search + pills) -----------
+.panel-search {
+  position: relative;
+
+  svg {
+    position: absolute;
+    top: 50%;
+    left: 12px;
+    transform: translateY(-50%);
+    color: $ink-3;
+    pointer-events: none;
+  }
+
+  input {
+    width: 100%;
+    border: 1.5px solid $line;
+    border-radius: 9px;
+    padding: 8px 11px 8px 36px;
+    font-size: 1em; // 0.8125rem / 0.8125rem
+    font-family: $font-body;
+    color: $ink;
+    background: $card;
+
+    &::placeholder { color: $ink-3; }
+    &:focus { outline: none; border-color: $signal; box-shadow: 0 0 0 3px $wash; }
+  }
+}
+
+.panel-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.panel-pill {
+  padding: 6px 12px;
+  border: 1px solid $line;
+  border-radius: 999px;
+  background: $card;
+  color: $ink-2;
+  font-size: 0.9231em; // 0.75rem / 0.8125rem
+  font-weight: 650;
+  cursor: pointer;
+  transition: all 0.14s ease;
+
+  &:hover { border-color: $ink-3; color: $ink; }
+
+  &.on {
+    border-color: $signal;
+    background: $signal;
+    color: #fff;
+  }
+}
+
+.empty {
+  padding: 24px;
+  text-align: center;
+  color: $ink-3;
+  font-size: 1em; // 0.8125rem / 0.8125rem
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+}
+
+// ---- true empty state (no evaluations at all yet) --------------------
+.sidebar-empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 4px;
+  padding: 40px 24px;
+}
+.sidebar-empty__icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: $wash;
+  color: $signal;
+  margin-bottom: 14px;
+}
+.sidebar-empty__title {
+  font-family: $font-display;
+  font-size: 1.1538em; // 0.9375rem / 0.8125rem
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: $ink;
+}
+.sidebar-empty__sub {
+  max-width: 240px;
+  margin-top: 6px;
+  font-size: 0.9615em; // 0.78125rem / 0.8125rem
+  line-height: 1.55;
+  color: $ink-3;
+}
+.sidebar-empty__cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 18px;
+  padding: 9px 16px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: $signal;
+  color: #fff;
+  font-family: $font-mono;
+  font-size: 0.8846em; // 0.71875rem / 0.8125rem
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.15s ease;
+
+  &:hover { background: $signal-2; transform: translateY(-1px); }
+}
+
+// ---- evaluation list rows --------------------------------------------------
+.rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+  padding-right: 2px;
+}
+
+.row {
+  position: relative;
+  border: 1.5px solid $line;
+  border-radius: 14px;
+  padding: 14px;
+  cursor: pointer;
+  background: $card;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease, background 0.15s ease;
+}
+.row:hover { border-color: $ink-3; box-shadow: $soft; transform: translateY(-1px); }
+.row.selected { border-color: $signal; background: $wash; box-shadow: 0 0 0 1px $signal inset; }
+
+// Running-state: a multi-color light traveling around the border via a
+// rotating conic angle.
+.row--running {
+  --angle: 0deg;
+  border: 1.5px solid transparent;
+  background:
+    linear-gradient($card, $card) padding-box,
+    conic-gradient(
+      from var(--angle),
+      $line 0%,
+      $signal 4%,
+      $violet-ink 8%,
+      $rose-ink 12%,
+      $line 18%
+    ) border-box;
+  animation: history-rotate-angle 2.4s linear infinite;
+}
+.row--running.selected {
+  background:
+    linear-gradient($wash, $wash) padding-box,
+    conic-gradient(
+      from var(--angle),
+      $line 0%,
+      $signal 4%,
+      $violet-ink 8%,
+      $rose-ink 12%,
+      $line 18%
+    ) border-box;
+}
+
+
+.row__top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.row__icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: $wash;
+  color: $signal;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.row__name {
+  font-family: $font-display;
+  font-weight: 700;
+  font-size: 1.0769em; // 0.875rem / 0.8125rem
+  color: $ink;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.row__badges { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+.row__meta { font-family: $font-mono; font-size: 0.8462em; /* 0.6875rem / 0.8125rem */ color: $ink-3; margin-bottom: 8px; }
+.row__stats {
+  display: flex;
+  gap: 12px;
+  font-family: $font-mono;
+  font-size: 0.8462em; // 0.6875rem / 0.8125rem
+  color: $ink-2;
+  flex-wrap: wrap;
+}
+
+// ---- type tag + status badge (shared visual grammar) -----------------------
+.type-tag {
+  display: inline-flex;
+  align-items: center;
+  font-family: $font-mono;
+  font-size: 0.7692em; // 0.625rem / 0.8125rem
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: $signal;
+  background: $wash;
+  border-radius: 6px;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 9px;
+  border-radius: 999px;
+  font-family: $font-mono;
+  font-size: 0.7692em; // 0.625rem / 0.8125rem
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+
+  &::before { content: ''; width: 5px; height: 5px; border-radius: 50%; }
+
+  &--completed { color: $ok; background: $ok-wash; &::before { background: $ok; } }
+  &--running   { color: $signal; background: $wash; &::before { display: none; } }
+  &--pending   { color: $amber; background: $amber-wash; &::before { background: $amber; } }
+  &--failed,
+  &--canceled  { color: $ink-3; background: $ink-wash; &::before { background: $ink-3; } }
+}
+
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  display: inline-block;
+  animation: history-live-pulse 1.4s ease-in-out infinite;
+}
+
+// ---- detail panel ----------------------------------------------------------
+.detail-empty {
+  padding: 80px 24px;
+  text-align: center;
+  color: $ink-3;
+  font-size: 1.0769em; // 0.875rem / 0.8125rem
+}
+
+.detail-hdr {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.detail-hdr__badges { display: flex; gap: 8px; margin-bottom: 12px; }
+.detail-hdr__name {
+  font-family: $font-display;
+  font-size: 1.6923em; // 1.375rem / 0.8125rem
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: $ink;
+}
+.detail-hdr__date { font-family: $font-mono; font-size: 0.8846em; /* 0.71875rem / 0.8125rem */ color: $ink-3; margin-top: 6px; }
+.detail-hdr__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dl-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 9px;
+  border: 1px solid $line;
+  background: $paper;
+  color: $ink-2;
+  font-family: $font-mono;
+  font-size: 0.8462em; // 0.6875rem / 0.8125rem
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+  &:hover:not(:disabled) { border-color: $signal; color: $signal; background: $wash; }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+}
+
+.summary-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.summary-card {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 14px;
+  padding: 15px 16px;
+  background: $paper;
+  border: 1px solid $line;
+  border-radius: 14px;
+}
+.summary-card__icon {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
   border-radius: 10px;
-  font-size: 0.9643em; // 0.84375rem / 0.875rem
-  font-weight: 550;
+  display: grid;
+  place-items: center;
+  background: $card;
+  border: 1px solid $line;
+
+  &--win { color: $amber; }
+  &--info { color: $signal; }
+  &--status { color: $ok; }
+}
+.summary-card__label {
+  @extend %micro;
+  font-size: 0.6923em; // 0.5625rem / 0.8125rem
+  color: $ink-3;
+}
+.summary-card__val {
+  font-size: 1em; // 0.8125rem / 0.8125rem
+  font-weight: 700;
+  color: $ink;
+  margin-top: 3px;
+}
+
+// ---- results metadata strip (benchmark / dataset / started / metrics) ------
+.meta-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  background: $paper;
+  border: 1px solid $line;
+  border-radius: 12px;
+}
+.meta-strip__item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.meta-strip__label {
+  @extend %micro;
+  font-size: 0.6923em; // 0.5625rem / 0.8125rem
+  color: $ink-3;
+}
+.meta-strip__val {
+  font-family: $font-mono;
+  font-size: 0.9231em; // 0.75rem / 0.8125rem
+  font-weight: 600;
+  color: $ink;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.meta-strip__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+// ---- test-details launcher button (in results table) ------------------
+.cell-details { width: 32px; text-align: center; }
+.details-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  border: 1px solid $line;
+  background: $paper;
   color: $ink-2;
   cursor: pointer;
-  transition: color 0.15s ease, background 0.15s ease;
-  border: none;
-  background: none;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+  &:hover { border-color: $signal; color: $signal; background: $wash; }
+}
+
+// ---- test-details slide-over drawer ------------------------------------
+.drawer-overlay {
+  position: fixed;
+  inset: 0;
+  // Deliberately hardcoded, not themed: an overlay scrim must stay dark
+  // in both themes (same "always dark" reasoning as $ink-solid in
+  // _theme.scss) — using the themed $ink here would go near-white, and
+  // invisible, in dark mode.
+  background: rgba(20, 22, 27, 0.32);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease;
+  z-index: 40;
+
+  &--open { opacity: 1; pointer-events: auto; }
+}
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: 480px;
+  max-width: 92vw;
+  background: $card;
+  border-left: 1px solid $line;
+  box-shadow: -18px 0 40px -20px rgba(20, 22, 27, 0.35);
+  transform: translateX(100%);
+  transition: transform 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+
+  &--open { transform: translateX(0); }
+}
+
+.drawer__header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid $line;
+}
+.drawer__eyebrow {
+  @extend %micro;
+  font-size: 0.7692em; // 0.625rem / 0.8125rem
+  color: $signal;
+  margin-bottom: 6px;
+}
+.drawer__title {
+  font-family: $font-display;
+  font-size: 1.3846em; // 1.125rem / 0.8125rem
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: $ink;
+}
+.drawer__sub {
+  margin-top: 5px;
+  font-family: $font-mono;
+  font-size: 0.8846em; // 0.71875rem / 0.8125rem
+  color: $ink-3;
+}
+.drawer__close {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid $line;
+  background: $paper;
+  color: $ink-2;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+  &:hover { border-color: $ink-3; color: $ink; }
+}
+
+// ---- tab switcher (test details vs metric scores) --------------------
+.drawer__tabs {
+  flex-shrink: 0;
+  display: flex;
+  gap: 6px;
+  padding: 10px 20px 0;
+  border-bottom: 1px solid $line;
+  background: $card;
+}
+.drawer__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-bottom: 2px solid transparent;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: $ink-3;
+  font-family: $font-mono;
+  font-size: 0.8846em; // 0.71875rem / 0.8125rem
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+  margin-bottom: -1px;
+
+  &:hover:not(:disabled) { color: $ink-2; }
+
+  &.on {
+    color: $signal;
+    border-bottom-color: $signal;
+  }
+
+  &:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+}
+
+.drawer__stats {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 20px;
+  border-bottom: 1px solid $line;
+  background: $paper;
+  font-family: $font-mono;
+  font-size: 0.8846em; // 0.71875rem / 0.8125rem
+  font-weight: 700;
+  color: $ink-2;
+}
+.drawer__stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  text-transform: capitalize;
+}
+.drawer__stat-icon--pass { color: $ok; }
+.drawer__stat-icon--fail { color: $danger; }
+
+.drawer__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+// ---- metric-score bars (Answer Relevancy, Toxicity, Bias, ...) -------
+.metric-card {
+  border: 1px solid $line;
+  border-radius: 12px;
+  padding: 13px 16px;
+  background: $paper;
+}
+.metric-card__hdr {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 9px;
+}
+.metric-card__label {
+  font-family: $font-display;
+  font-weight: 700;
+  font-size: 1em; // 0.8125rem / 0.8125rem
+  color: $ink;
+  text-transform: capitalize;
+}
+.metric-card__value {
+  font-family: $font-mono;
+  font-size: 1em; // 0.8125rem / 0.8125rem
+  font-weight: 800;
+  flex-shrink: 0;
+
+  &--good { color: $ok; }
+  &--mid  { color: $amber; }
+  &--low  { color: $danger; }
+}
+.metric-card__track {
+  height: 7px;
+  border-radius: 999px;
+  background: $line-2;
+  overflow: hidden;
+}
+.metric-card__fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+
+  &--good { background: $ok; }
+  &--mid  { background: $amber; }
+  &--low  { background: $danger; }
+}
+
+.detail-card {
+  border: 1px solid $line;
+  border-left: 3px solid $line;
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: $paper;
+
+  &--pass { border-left-color: $ok; }
+  &--fail { border-left-color: $danger; background: rgba($danger, 0.03); }
+}
+.detail-card__hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.detail-card__task {
+  font-family: $font-display;
+  font-weight: 700;
+  font-size: 1em; // 0.8125rem / 0.8125rem
+  color: $ink;
+}
+.detail-card__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-family: $font-mono;
+  font-size: 0.7692em; // 0.625rem / 0.8125rem
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+
+  &--pass { color: $ok; background: $ok-wash; }
+  &--fail { color: $danger; background: $danger-wash; }
+}
+.detail-card__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 10px;
+}
+.detail-card__field {
+  min-width: 0;
+}
+.detail-card__label {
+  @extend %micro;
+  font-size: 0.6923em; // 0.5625rem / 0.8125rem
+  color: $ink-3;
+  display: block;
+  margin-bottom: 4px;
+}
+.detail-card__text {
+  font-family: $font-mono;
+  font-size: 0.9231em; // 0.75rem / 0.8125rem
+  line-height: 1.5;
+  color: $ink;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: $card;
+  border: 1px solid $line-2;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.detail-card__text--fail { color: $danger; border-color: rgba($danger, 0.25); }
+
+@media (max-width: 640px) {
+  .drawer { width: 100%; max-width: 100vw; }
+  .detail-card__row { grid-template-columns: 1fr; }
+}
+
+// ---- results table ---------------------------------------------------------
+.results {
+  border: 1px solid $line;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.results-table {
   width: 100%;
-  text-align: left;
-  text-decoration: none;
+  border-collapse: collapse;
+  font-size: 1.0385em; // 0.84375rem / 0.8125rem
 
-  svg { flex-shrink: 0; color: $ink-3; transition: color 0.15s ease; }
-
-  &:hover {
-    color: $ink;
+  thead th {
+    text-align: left;
     background: $paper;
-    svg { color: $ink-2; }
+    border-bottom: 1px solid $line;
+    @extend %micro;
+    font-size: 0.6923em; // 0.5625rem / 0.8125rem
+    color: $ink-3;
+    padding: 11px 14px;
+    white-space: nowrap;
   }
 
-  &.active {
-    color: $signal-active;
-    background: $wash;
-    font-weight: 700;
-    box-shadow: inset 2.5px 0 0 $signal-active;
+  tbody tr {
+    border-bottom: 1px solid $line-2;
+    transition: background 0.13s ease;
 
-    svg { color: $signal-active; }
+    &:last-child { border-bottom: 0; }
+    &:hover { background: $paper; }
+  }
+
+  tbody tr.winner {
+    background: rgba($amber, 0.05);
+    &:hover { background: rgba($amber, 0.09); }
+  }
+
+  tbody td {
+    padding: 12px 14px;
+    color: $ink;
   }
 }
 
-@media (max-width: 768px) {
-  .sidebar { display: none; }
+.cell-rank { font-family: $font-mono; font-weight: 700; color: $ink; }
+.cell-model { font-family: $font-display; font-weight: 700; color: $ink; }
+.cell-provider { color: $ink-2; }
+.cell-num { font-family: $font-mono; font-size: 1em; /* 0.8125rem / 0.8125rem */ font-weight: 700; color: $ink; }
+.cell-num--muted { font-weight: 500; color: $ink-2; }
+.cell-pass { font-family: $font-mono; font-size: 1em; /* 0.8125rem / 0.8125rem */ font-weight: 700; color: $ok; }
+.cell-fail { font-family: $font-mono; font-size: 1em; /* 0.8125rem / 0.8125rem */ font-weight: 700; color: $danger; }
+
+.status-message {
+  padding: 40px;
+  text-align: center;
+  background: $paper;
+  border: 1px dashed $line;
+  border-radius: 14px;
+  color: $ink-2;
+  font-size: 1.0769em; // 0.875rem / 0.8125rem
 }
 
+.spin { animation: history-spin 0.8s linear infinite; }
 
-
-
-
-
-
-
-
-
-
-
-//theme.scss
-//_theme.scss
-// ─────────────────────────────────────────────────────────────────────────
-// Theme tokens, exposed as CSS custom properties rather than SCSS variables
-// so they can respond to a runtime dark-mode toggle (SCSS variables are
-// resolved once at build time and can't change afterward).
-//
-// Every component already consumes these indirectly via the SCSS
-// variables in _variables.scss (`$bg`, `$surface`, `$text-primary`, etc.),
-// which now just point at `var(--bg)`, `var(--surface)`, etc. — so the
-// whole app becomes theme-aware without touching individual component
-// stylesheets. Only the neutral/background/text/border/shadow tokens and
-// the "pale" badge-background tints are themed; brand accent colors
-// (indigo, emerald, amber, red, sky, rose) stay constant across both
-// themes since they already have enough contrast against both.
-//
-// The "ink" design system used by History/Reports/Comparison/New
-// Evaluation/Sidebar/Landing/Dashboard/Datasets/Model Catalog/Providers
-// follows the same convention: neutrals (--ink-1/2/3, --paper, --card,
-// --line, --line-2) and status washes are themed here; the flat accent
-// colors (signal, ok, amber, danger, sky, rose) stay constant and are
-// declared locally in each component's SCSS as plain hex.
-//
-// --ink-solid / --ink-solid-hover / --ink-solid-ok are a special case:
-// they back "always dark" surfaces (option-type icon chips, primary
-// buttons, toast notifications) that must stay legible against content
-// that itself changes color with the theme — using the themed --ink-1
-// there would go near-white (and invisible) in dark mode. They're still
-// expressed as CSS custom properties for the same centralization reason
-// as everything else here, but deliberately hold the *same* value in
-// both the light and dark blocks below — that's intentional, not a
-// missed override.
-//
-// --signal-active is a similar special case, but the reverse: it's the
-// accent color used for "active/selected" state (e.g. Sidebar nav-item).
-// Unlike other accents it is NOT identical across themes — flat $signal
-// (#2B2BF5) reads fine on light surfaces but loses contrast/legibility on
-// dark ones, so dark mode gets a brightened tint instead. --signal-wash
-// (the pale background behind the active state) is bumped in dark mode
-// for the same reason — the light-mode alpha is too faint to read against
-// a dark card.
-// ─────────────────────────────────────────────────────────────────────────
-
-:root {
-  --bg: #F7F8FC;
-  --surface: #FFFFFF;
-  --surface-alt: #F1F4F9;
-  --surface-hover: #F8F9FD;
-
-  --border: #E5E7EB;
-  --border-light: #F3F4F6;
-
-  --text-primary: #111827;
-  --text-secondary: #6B7280;
-  --text-muted: #9CA3AF;
-
-  --indigo-pale: #E9EBF8;
-  --amber-pale: #FFFBEB;
-  --emerald-pale: #ECFDF5;
-  --red-pale: #FEF2F2;
-  --sky-pale: #F0F9FF;
-  --rose-pale: #FFF1F2;
-
-  --shadow-2: 0 2px 8px rgba(0, 0, 0, .06), 0 1px 2px rgba(0, 0, 0, .04);
-  --shadow-3: 0 8px 24px rgba(0, 0, 0, .08), 0 2px 6px rgba(0, 0, 0, .04);
-  --shadow-4: 0 16px 48px rgba(0, 0, 0, .1), 0 4px 12px rgba(0, 0, 0, .05);
-
-  // ---- "ink" design system (History/Reports/Comparison/Sidebar/etc.) -----
-  --ink-1: #14161B;
-  --ink-2: #565B66;
-  --ink-3: #8A909B;
-  --paper: #F5F6F8;
-  --card: #FFFFFF;
-  --line: #E6E8EC;
-  --line-2: #EEF0F3;
-
-  // status washes (near-white in light mode)
-  --ok-wash: #E7F7EF;
-  --amber-wash: #FDF3E3;
-  --danger-wash: #FDECEC;
-  --sky-wash: #E6F3FB;
-  --rose-wash: #FCE7F3;
-  --ink-wash: #EEF0F2;
-  --signal-wash: #ECEDFF;
-
-  // "always dark" surfaces — same value in both themes, see note above
-  --ink-solid: #14161B;
-  --ink-solid-hover: #000000;
-  --ink-solid-ok: #34D399;
-
-  // active/selected-state accent — same as brand signal in light mode, but
-  // brightened in dark mode where flat $signal reads dull against dark
-  // surfaces (used for active nav item text/icon/indicator)
-  --signal-active: #2B2BF5;
+@media (max-width: 900px) {
+  .shell { flex-direction: column; }
+  .sidebar { width: 100%; }
+  .summary-cards { grid-template-columns: 1fr; }
+  // Once stacked, fall back to one normal scrolling column.
+  .pg-body-fixed { overflow-y: auto; }
+  .sidebar, .detail { overflow-y: visible; min-height: 0; }
+  .rows { overflow-y: visible; }
 }
 
-[data-theme='dark'] {
-  --bg: #0B0F1A;
-  --surface: #131826;
-  --surface-alt: #1B2136;
-  --surface-hover: #1F2540;
-
-  --border: #262D42;
-  --border-light: #1E2438;
-
-  --text-primary: #F3F4F6;
-  --text-secondary: #A7ADC0;
-  --text-muted: #7C859B;
-
-  // Subtle tinted overlays instead of near-white washes, so badge/tag
-  // backgrounds read correctly against a dark surface.
-  --indigo-pale: rgba(76, 99, 199, .18);
-  --amber-pale: rgba(245, 158, 11, .16);
-  --emerald-pale: rgba(16, 185, 129, .16);
-  --red-pale: rgba(239, 68, 68, .16);
-  --sky-pale: rgba(14, 165, 233, .16);
-  --rose-pale: rgba(244, 63, 94, .16);
-
-  --shadow-2: 0 2px 8px rgba(0, 0, 0, .5), 0 1px 2px rgba(0, 0, 0, .4);
-  --shadow-3: 0 8px 24px rgba(0, 0, 0, .55), 0 2px 6px rgba(0, 0, 0, .4);
-  --shadow-4: 0 16px 48px rgba(0, 0, 0, .6), 0 4px 12px rgba(0, 0, 0, .45);
-
-  // ---- "ink" design system, dark ------------------------------------------
-  --ink-1: #ECEDF2;
-  --ink-2: #A7ADC0;
-  --ink-3: #7C859B;
-  --paper: #0F1420;
-  --card: #161B2A;
-  --line: #262D42;
-  --line-2: #1E2438;
-
-  // tinted overlays instead of near-white washes
-  --ok-wash: rgba(15, 169, 104, 0.16);
-  --amber-wash: rgba(224, 134, 0, 0.16);
-  --danger-wash: rgba(220, 38, 38, 0.18);
-  --sky-wash: rgba(3, 105, 161, 0.18);
-  --rose-wash: rgba(219, 39, 119, 0.18);
-  --ink-wash: rgba(138, 144, 155, 0.14);
-  // bumped from 0.18 — the light-mode alpha was too faint to read as an
-  // active-state background against a dark card
-  --signal-wash: rgba(43, 43, 245, 0.28);
-
-  // "always dark" surfaces — intentionally identical to :root above
-  --ink-solid: #14161B;
-  --ink-solid-hover: #000000;
-  --ink-solid-ok: #34D399;
-
-  // brightened tint of $signal — flat #2B2BF5 loses legibility/contrast on
-  // dark surfaces (used for active nav item text/icon/indicator)
-  --signal-active: #6C6CFF;
+@media (max-width: 640px) {
+  .history__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
+  .pg-body-fixed { padding: 16px 18px 22px; }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//variables.scss
-// Design tokens. Neutral/surface/text/border/shadow/pale tokens resolve to
-// CSS custom properties (defined in _theme.scss) so they respond to the
-// runtime dark-mode toggle; brand accent colors stay constant across
-// themes since they already contrast well against both.
-$bg: var(--bg);
-$surface: var(--surface);
-$surface-alt: var(--surface-alt);
-$surface-hover: var(--surface-hover);
-$indigo: #1428A0;
-$indigo-light: #4C63C7;
-$indigo-dark: #0E1C74;
-$violet: #2B45C9;
-$indigo-pale: var(--indigo-pale);
-$amber: #F59E0B;
-$amber-dark: #D97706;
-$amber-pale: var(--amber-pale);
-$emerald: #10B981;
-$emerald-dark: #059669;
-$emerald-pale: var(--emerald-pale);
-$red: #EF4444;
-$red-pale: var(--red-pale);
-$sky: #0EA5E9;
-$sky-pale: var(--sky-pale);
-$rose: #F43F5E;
-$rose-pale: var(--rose-pale);
-$border: var(--border);
-$border-light: var(--border-light);
-$text-primary: var(--text-primary);
-$text-secondary: var(--text-secondary);
-$text-muted: var(--text-muted);
-$shadow-2: var(--shadow-2);
-$shadow-3: var(--shadow-3);
-$shadow-4: var(--shadow-4);
-$footer-height: 44px;
-$sidebar-width: 256px;
-// Small gap reclaimed above the fixed footer when a page's scroll shell
-// pulls back the workspace content wrapper's bottom padding — see
-// .pg-shell in global.scss.
-$page-bottom-reclaim: 0.75rem;
-$grad-primary: linear-gradient(135deg, #1428A0, #2B45C9);
-$grad-warm: linear-gradient(135deg, #F59E0B, #F97316);
-$grad-cool: linear-gradient(135deg, #10B981, #0EA5E9);
-$font-display: 'Segoe UI', Roboto, Arial, sans-serif;
-$font-body: 'Segoe UI', Roboto, Arial, sans-serif;
-$font-mono: 'Segoe UI', Roboto, Arial, sans-serif;
-// ---------------------------------------------------------------------------
-// "Ink" design system tokens — used by History, Reports, Comparison,
-// New Evaluation, Sidebar, Landing, Dashboard, Datasets, Model Catalog,
-// and Providers. Neutrals are theme-aware (via _theme.scss CSS vars);
-// accent colors are flat constants shared across light/dark.
-//
-// These are provided here as a convenience — components that already
-// declare their own local $ink/$paper/etc. block don't need to import
-// this section, but new components can use these directly instead of
-// redeclaring the block.
-// ---------------------------------------------------------------------------
-$ink:      var(--ink-1);
-$ink-2:    var(--ink-2);
-$ink-3:    var(--ink-3);
-$paper:    var(--paper);
-$card:     var(--card);
-$line:     var(--line);
-$line-2:   var(--line-2);
-$signal:   #2B2BF5;
-$signal-2: #1C1CC7;
-$wash:     var(--signal-wash);
-// Active/selected-state accent — brand $signal in light mode, brightened
-// in dark mode where flat $signal loses contrast against dark surfaces.
-// Use this (not $signal) for active nav items, selected tabs, etc.
-$signal-active: var(--signal-active);
-$ok:       #0FA968;
-$ok-wash:  var(--ok-wash);
-$amber-ink: #E08600;
-$amber-ink-wash: var(--amber-wash);
-$danger:   #DC2626;
-$danger-wash: var(--danger-wash);
-$ink-wash: var(--ink-wash);
-$sky-ink:  #0369A1;
-$sky-ink-wash: var(--sky-wash);
-$rose-ink: #DB2777;
-$rose-ink-wash: var(--rose-wash);
-// Violet accent — currently used by New Evaluation's Agent-type icon chip
-// (&__option-icon--agent). Added here alongside $sky-ink/$rose-ink rather
-// than staying hardcoded locally, following the same flat-constant
-// convention (brand accents don't vary by theme).
-$violet-ink: #6D28D9;
-// "Always dark" surfaces — see the note in _theme.scss above these CSS
-// vars. Used where content must stay legible against a background that
-// intentionally does NOT invert with the theme (primary buttons, "always
-// dark" icon chips, toast notifications) — using the themed $ink there
-// would go near-white (and invisible) in dark mode.
-$ink-solid:       var(--ink-solid);
-$ink-solid-hover: var(--ink-solid-hover);
-$ink-solid-ok:    var(--ink-solid-ok);
