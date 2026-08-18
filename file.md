@@ -1,21 +1,30 @@
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
-// Providers — matches the Run Console / Dashboard design system:
-// ink/paper palette, ultramarine signal accent, mono instrument labels,
-// hover-lift cards. Sidebar block keys are kept stable (shared with
-// ProviderModelsSidebar) but recolored to the same tokens.
+// Model Catalog — matches the Run Console / Dashboard / Providers design
+// system: ink/paper palette, ultramarine signal accent, mono instrument
+// labels, hover-lift cards, mono numerals for data-dense cells.
 //
-// Neutral/status tokens ($ink, $paper, $card, $line, $signal, $wash, $ok,
-// $danger, etc.) now come from the shared "ink" block in _variables.scss
-// (theme-aware via _theme.scss custom properties) — only font aliases and
-// shadow tokens specific to this file are declared locally below.
-//
-// Font scaling: `.providers` sets a single base font-size. All descendant
-// font-sizes are expressed in `em` (relative to that base), so bumping
-// `.providers`'s font-size (e.g. on wide screens) scales the whole
-// component proportionally from one place — same convention as Sidebar.
+// Font scaling: `.model-catalog` sets a single base font-size. All
+// descendant font-sizes are expressed in `em` (relative to that base), so
+// bumping `.model-catalog`'s font-size (e.g. on wide screens) scales the
+// whole component proportionally from one place — same convention as
+// Sidebar and Providers.
 // ===========================================================================
+
+$ink:      #14161B;
+$ink-2:    #565B66;
+$ink-3:    #8A909B;
+$paper:    #F5F6F8;
+$card:     #FFFFFF;
+$line:     #E6E8EC;
+$line-2:   #EEF0F3;
+$signal:   #2B2BF5;
+$signal-2: #1C1CC7;
+$wash:     #ECEDFF;
+$ok:       #0FA968;
+$ok-wash:  #E7F7EF;
+$ink-wash: #EEF0F2;
 
 $mono:    $font-mono;
 $sans:    $font-body;
@@ -24,8 +33,8 @@ $display: $font-display;
 $soft: 0 1px 2px rgba(20, 22, 27, 0.05);
 $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
 
-// base font-size the providers page's internal `em` scale is built on
-$providers-base-font: 0.8125rem;
+// base font-size the model catalog's internal `em` scale is built on
+$model-catalog-base-font: 0.8125rem;
 
 %micro {
   font-family: $mono;
@@ -35,15 +44,15 @@ $providers-base-font: 0.8125rem;
   text-transform: uppercase;
 }
 
-.providers {
+.model-catalog {
   // master scale control — every em-based font-size below responds to this
-  font-size: $providers-base-font;
+  font-size: $model-catalog-base-font;
 
   @media (min-width: 1800px) {
     font-size: 1rem;
   }
 
-  // ---- header -----------------------------------------------------------
+  // ---- header -------------------------------------------------------------
   &__header {
     flex-shrink: 0;
     display: flex;
@@ -107,7 +116,7 @@ $providers-base-font: 0.8125rem;
     margin-bottom: 3px;
   }
 
-  // ---- toolbar ------------------------------------------------------------
+  // ---- toolbar --------------------------------------------------------------
   &__toolbar {
     flex-shrink: 0;
     display: flex;
@@ -155,13 +164,6 @@ $providers-base-font: 0.8125rem;
     }
   }
 
-  &__toolbar-right {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    flex-wrap: wrap;
-  }
-
   &__filter-group {
     display: inline-flex;
     align-items: center;
@@ -170,6 +172,7 @@ $providers-base-font: 0.8125rem;
     background: $paper;
     border: 1px solid $line;
     border-radius: 999px;
+    flex-wrap: wrap;
   }
 
   &__toolbar-label {
@@ -204,411 +207,291 @@ $providers-base-font: 0.8125rem;
     }
   }
 
-  &__toolbar-divider {
-    flex-shrink: 0;
-    width: 1px;
-    height: 26px;
-    background: $line;
-  }
-
-  &__add-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    padding: 9px 15px;
-    border: 1px solid $signal;
-    border-radius: 10px;
-    background: $signal;
-    color: #fff;
-    font-family: $sans;
-    font-size: 1em; // 0.8125rem / 0.8125rem (base)
-    font-weight: 650;
-    cursor: pointer;
-    box-shadow: $soft;
-    transition: background 0.16s ease, border-color 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
-
-    &:hover { background: $signal-2; border-color: $signal-2; transform: translateY(-1px); box-shadow: $lift; }
-  }
-
-  // ---- provider card grid --------------------------------------------------
-  &__grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-    gap: 12px;
-  }
-
-  &__card {
-    position: relative;
+  &__loading {
     display: flex;
-    flex-direction: column;
-    height: 100%;
-    padding: 17px 18px;
-    border: 1.5px solid $line;
+    align-items: center;
+    gap: 8px;
+    color: $ink-2;
+    font-size: 1em; // 0.8125rem / 0.8125rem (base)
+    margin-bottom: 16px;
+  }
+
+  // ---- table shell ----------------------------------------------------------
+  &__table-wrap {
+    border: 1px solid $line;
     border-radius: 16px;
     background: $card;
-    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+    overflow: hidden;
+  }
 
-    &:hover {
-      border-color: $ink-3;
-      box-shadow: $lift;
-      transform: translateY(-2px);
+  &__table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 1.0385em; // 0.84375rem / 0.8125rem
+
+    thead th {
+      text-align: left;
+      background: $paper;
+      border-bottom: 1px solid $line;
+      @extend %micro;
+      font-size: 0.7692em; // 0.625rem / 0.8125rem
+      color: $ink-3;
+      padding: 12px 16px;
+      white-space: nowrap;
+    }
+
+    tbody tr {
+      border-bottom: 1px solid $line-2;
+      transition: background 0.13s ease;
+
+      &:last-child { border-bottom: 0; }
+      &:hover { background: $paper; }
+    }
+
+    tbody td {
+      padding: 13px 16px;
+      color: $ink;
+      vertical-align: middle;
     }
   }
 
-  &__card-hdr {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 10px;
-  }
-
-  &__card-id {
-    display: flex;
-    align-items: center;
-    gap: 13px;
-    min-width: 0;
-  }
-
-  &__icon {
-    flex-shrink: 0;
-    width: 42px;
-    height: 42px;
-    border-radius: 12px;
-    display: grid;
-    place-items: center;
-    background: $paper;
-    border: 1px solid $line;
-    color: $ink;
+  &__name-cell {
     font-family: $display;
-    font-weight: 800;
-    font-size: 1.3077em; // 1.0625rem / 0.8125rem
-
-    img { width: 24px; height: 24px; object-fit: contain; }
-  }
-
-  &__name {
-    font-family: $display;
-    font-size: 1.1538em; // 0.9375rem / 0.8125rem
     font-weight: 700;
     color: $ink;
-    line-height: 1.25;
   }
 
-  &__count {
-    font-size: 0.9231em; // 0.75rem / 0.8125rem
-    color: $ink-3;
-    margin-top: 2px;
-  }
-
-  &__card-top-actions {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-
-  &__icon-btn {
-    display: grid;
-    place-items: center;
-    width: 28px;
-    height: 28px;
-    border: 1px solid $line;
-    border-radius: 8px;
-    background: $card;
+  &__provider-cell {
     color: $ink-2;
-    cursor: pointer;
-    transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
-
-    &:hover { border-color: $ink-3; color: $ink; background: $paper; }
   }
 
-  &__badge-connected {
+  &__caps-cell {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+
+  &__tag {
+    font-family: $mono;
+    font-size: 0.8077em; // 0.65625rem / 0.8125rem
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: $ink-2;
+    background: $paper;
+    border: 1px solid $line;
+    border-radius: 6px;
+    padding: 2px 7px;
+    white-space: nowrap;
+  }
+
+  &__mono-cell {
+    font-family: $mono;
+    font-size: 1em; // 0.8125rem / 0.8125rem (base)
+    color: $ink;
+  }
+
+  &__mono-cell--muted {
+    color: $ink-2;
+  }
+
+  &__accuracy {
+    font-family: $mono;
+    font-weight: 700;
+    font-size: 1em; // 0.8125rem / 0.8125rem (base)
+    color: $ink;
+
+    &--high { color: $ok; }
+  }
+
+  &__status {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 4px 10px 4px 8px;
+    padding: 3px 10px 3px 8px;
     border-radius: 999px;
     font-family: $mono;
     font-size: 0.7692em; // 0.625rem / 0.8125rem
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: $ok;
-    background: $ok-wash;
-    white-space: nowrap;
 
-    &::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: $ok; }
-  }
+    &::before { content: ''; width: 5px; height: 5px; border-radius: 50%; }
 
-  &__badge-idle {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 11px;
-    border-radius: 999px;
-    font-size: 0.8462em; // 0.6875rem / 0.8125rem
-    font-weight: 600;
-    color: $ink-3;
-    background: transparent;
-    border: 1px dashed $line;
-    white-space: nowrap;
+    &--active {
+      color: $ok;
+      background: $ok-wash;
+      &::before { background: $ok; }
+    }
 
-    &::before {
-      content: '';
-      flex-shrink: 0;
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: $ink-3;
-      opacity: 0.7;
+    &--inactive {
+      color: $ink-3;
+      background: $ink-wash;
+      &::before { background: $ink-3; }
     }
   }
 
-  &__desc {
-    flex: 1;
-    margin-top: 11px;
-    font-size: 1em; // 0.8125rem / 0.8125rem (base)
-    color: $ink-2;
-    line-height: 1.5;
+  // --- sortable column headers ----------------------------------------------
+  &__sortable-th {
+    padding: 0 !important;
   }
 
-  // ---- inline API key form -------------------------------------------------
-  &__key-form {
-    display: flex;
-    gap: 8px;
-    margin-top: 12px;
-  }
-
-  &__key-input {
-    flex: 1;
-    border: 1.5px solid $line;
-    border-radius: 9px;
-    padding: 8px 11px;
-    font-size: 1em; // 0.8125rem / 0.8125rem (base)
-    font-family: $sans;
-    color: $ink;
-    background: $paper;
-    transition: border-color 0.15s ease, background 0.15s ease;
-
-    &::placeholder { color: $ink-3; }
-    &:focus { outline: none; border-color: $signal; background: $card; }
-  }
-
-  &__key-actions {
-    display: flex;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-
-  // ---- footer action row ---------------------------------------------------
-  &__foot-actions {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-    margin-top: 13px;
-  }
-
-  &__foot-btn {
-    flex: 0 0 auto;
+  &__sort-btn {
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    padding: 6px 11px;
-    border-radius: 8px;
-    border: 1px solid transparent;
-    font-family: $sans;
-    font-size: 0.9231em; // 0.75rem / 0.8125rem
-    font-weight: 650;
-    white-space: nowrap;
+    width: 100%;
+    padding: 12px 16px;
+    background: none;
+    border: none;
     cursor: pointer;
-    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.12s ease;
+    font: inherit;
+    font-family: $mono;
+    font-weight: 700;
+    font-size: 0.7692em; // 0.625rem / 0.8125rem
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: $ink-3;
+    text-align: left;
+    transition: color 0.15s ease;
 
-    &:disabled { cursor: not-allowed; opacity: 0.55; }
+    &:hover {
+      color: $ink;
 
-    &--primary {
-      border-color: $signal;
-      background: $signal;
-      color: #fff;
-      &:not(:disabled):hover { background: $signal-2; border-color: $signal-2; transform: translateY(-1px); }
+      .model-catalog__sort-icon-idle { opacity: 0.7; }
     }
 
-    &--accent {
-      background: $signal;
-      color: #fff;
-      &:not(:disabled):hover { background: $signal-2; transform: translateY(-1px); }
-    }
-
-    &--ghost {
-      background: $card;
-      border-color: $line;
-      color: $ink-2;
-      &:not(:disabled):hover { border-color: $ink-3; color: $ink; background: $paper; }
-    }
-
-    &--danger {
-      background: $danger-wash;
-      color: $danger;
-      &:not(:disabled):hover { background: rgba($danger, 0.16); }
+    &--active {
+      color: $signal;
     }
   }
 
-  &__spin { animation: providers-spin 0.8s linear infinite; }
+  &__sort-icon-idle {
+    opacity: 0.28;
+    transition: opacity 0.15s ease;
+  }
 
   &__empty {
-    grid-column: 1 / -1;
-    padding: 40px 20px;
     text-align: center;
+    padding: 44px 16px !important;
     color: $ink-3;
     font-size: 1.0385em; // 0.84375rem / 0.8125rem
-    border: 1px dashed $line;
-    border-radius: 14px;
   }
 
-  // ===========================================================================
-  // Provider models sidebar — keys kept stable for ProviderModelsSidebar,
-  // recolored to the ink/paper/signal system.
-  // ===========================================================================
-  &__sidebar-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(20, 22, 27, 0.45);
-    z-index: 40;
-  }
-
-  &__sidebar {
-    position: fixed;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: min(420px, 100vw);
-    background: $card;
-    border-left: 1px solid $line;
-    box-shadow: -20px 0 40px -16px rgba(20, 22, 27, 0.28);
-    z-index: 41;
+  // --- pagination bar ---------------------------------------------------------
+  &__pagination {
     display: flex;
-    flex-direction: column;
-    animation: providers-sidebar-in 0.22s cubic-bezier(0.22, 0.72, 0.16, 1);
-  }
-
-  &__sidebar-header {
-    flex-shrink: 0;
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 20px 20px 16px;
-    border-bottom: 1px solid $line;
-  }
-
-  &__sidebar-title {
-    font-family: $display;
-    font-size: 1.3077em; // 1.0625rem / 0.8125rem
-    font-weight: 800;
-    letter-spacing: -0.01em;
-    color: $ink;
-  }
-
-  &__sidebar-subtitle {
-    margin-top: 3px;
-    font-size: 0.9231em; // 0.75rem / 0.8125rem
-    color: $ink-3;
-  }
-
-  &__sidebar-body {
-    flex: 1;
-    overflow-y: auto;
-    padding: 16px 20px 24px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  &__sidebar-empty {
-    display: flex;
-    flex-direction: column;
     align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding: 48px 12px;
-    color: $ink-3;
-    font-size: 1em; // 0.8125rem / 0.8125rem (base)
-    text-align: center;
-  }
-
-  &__model-row {
-    border: 1px solid $line;
-    border-radius: 12px;
-    padding: 14px;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 14px 20px;
+    border-top: 1px solid $line;
     background: $paper;
   }
 
-  &__model-row-head {
+  &__pagination-info {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-
-  &__model-row-name {
-    font-family: $display;
-    font-weight: 700;
-    font-size: 1.0769em; // 0.875rem / 0.8125rem
-    color: $ink;
-  }
-
-  &__model-row-tags {
-    margin-top: 8px;
-    display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 18px;
+    font-size: 0.9615em; // 0.78125rem / 0.8125rem
+    color: $ink-2;
+
+    strong { color: $ink; font-weight: 700; }
   }
 
-  &__model-row-meta {
-    margin-top: 10px;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px 12px;
+  &__page-size {
+    display: flex;
+    align-items: center;
+    gap: 8px;
 
-    > div {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      font-size: 1em; // 0.8125rem / 0.8125rem (base)
+    label {
+      font-size: 0.8846em; // 0.71875rem / 0.8125rem
+      color: $ink-3;
+      white-space: nowrap;
+    }
+
+    select {
+      appearance: none;
+      -webkit-appearance: none;
+      font: inherit;
+      font-size: 0.9615em; // 0.78125rem / 0.8125rem
+      font-weight: 650;
       color: $ink;
+      background: $card;
+      border: 1px solid $line;
+      border-radius: 8px;
+      padding: 5px 26px 5px 10px;
+      cursor: pointer;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23565B66' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+
+      &:hover { border-color: $ink-3; }
+      &:focus { outline: none; border-color: $signal; box-shadow: 0 0 0 3px $wash; }
     }
   }
 
-  &__model-row-meta-label {
-    @extend %micro;
-    font-size: 0.7692em; // 0.625rem / 0.8125rem
-    color: $ink-3;
+  &__pager {
+    display: flex;
+    align-items: center;
+    gap: 4px;
   }
 
-  &__model-row-url {
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px dashed $line;
-    font-family: $mono;
-    font-size: 0.9231em; // 0.75rem / 0.8125rem
+  &__page-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 30px;
+    height: 30px;
+    padding: 0 6px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: transparent;
     color: $ink-2;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    font-family: $mono;
+    font-size: 0.9615em; // 0.78125rem / 0.8125rem
+    font-weight: 650;
+    cursor: pointer;
+    transition: background 0.14s ease, color 0.14s ease;
+
+    &:hover:not(:disabled) {
+      background: $wash;
+      color: $signal;
+    }
+
+    &:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+
+    &--num {
+      min-width: 30px;
+    }
+
+    &--active {
+      background: $signal;
+      color: #fff;
+
+      &:hover:not(:disabled) {
+        background: $signal;
+        color: #fff;
+      }
+    }
   }
-}
 
-@keyframes providers-spin {
-  to { transform: rotate(360deg); }
-}
-
-@keyframes providers-sidebar-in {
-  from { transform: translateX(100%); }
-  to { transform: translateX(0); }
+  &__page-dots {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 30px;
+    color: $ink-3;
+    font-size: 0.9615em; // 0.78125rem / 0.8125rem
+  }
 }
 
 @media (max-width: 768px) {
-  .providers__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
-  .providers__toolbar { padding: 12px 18px; }
-  .providers__grid { grid-template-columns: 1fr; }
+  .model-catalog__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
+  .model-catalog__toolbar { padding: 12px 18px; }
 }
