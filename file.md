@@ -1,1147 +1,2190 @@
-// ═══════════════════════════════════════════════
-// pages/UploadInfer/InferencePanel.tsx
-// Content Analytics · Inference configuration + batch status
-// ═══════════════════════════════════════════════
-import React, { useEffect, useRef, useCallback, useState } from 'react';
-import { useTranslation } from 'react-i18next';
-import { useAppDispatch, useAppSelector } from '../../store/hooks';
-import {
-  inferenceStatusSuccess, updateRunningProgress,
-  updateSummaryPrompt, updateKeywordPrompt, updateQuestionPrompt,
-  updateShortAnswerPrompt, updateTrueFalsePrompt, updateSettings,
-  modelsLoading, modelsSuccess, modelsFailure, setSelectedModel,
-  updateFilePrompts,
-  type ServerFile, type ServerFilesData, type TimeInterval,
-} from '../../store/uploadSlice';
-import api from '../../services/api';
-import styles from './InferencePanel.module.scss';
-import { addToast } from '../../store/toastSlice';
-import PromptTemplateAssociationModal from './PromptTemplateAssociationModal';
+//Custommetricsdashboard.tsx
+import { useNavigate } from 'react-router-dom';
+import { Gauge, X } from 'lucide-react';
+import styles from './CustomMetrics.module.scss';
+import { SAVED_METRICS, SAVED_DATASETS } from './mockData';
 
-// ── Batch status columns ──────────────────────────
-const StatusCard: React.FC<{ file: ServerFile; variant: 'queued' | 'running' | 'completed'; onStop?: (id: number) => void; stopping?: boolean }> = ({ file, variant, onStop, stopping }) => {
-  const { t } = useTranslation();
-  const ext = file.original_name.toLowerCase().endsWith('.srt') ? 'srt' : 'vtt';
+export default function CustomMetricsDashboard() {
+  const navigate = useNavigate();
+
+  const typeBadgeClass = (type: string) =>
+    `${styles.badge} ${styles[`badge--${type}`] || ''}`;
+
   return (
-    <div className={`${styles.statusCardWrap} ${styles[variant + 'Wrap']}`}>
-      <div className={`${styles.statusCard} ${styles[variant]}`}>
+    <div className={`page-enter pg-shell ${styles.cm}`}>
+      <div className={styles['cm__header']}>
+        <div>
+          <p className={styles['cm__header-eyebrow']}>Custom Metrics</p>
+          <h1>Dashboard</h1>
+          <p className={styles['cm__header-sub']}>Saved metrics and datasets for evaluation</p>
+        </div>
+      </div>
 
-        {/* Left icon — ext badge for queued/running, green check for completed */}
-        {variant === 'completed' ? (
-          <div className={styles.completedCheck}>
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 8l3.5 3.5L13 5" />
-            </svg>
+      <div className={`pg-body ${styles['pg-body-scroll']}`}>
+        <div className={styles['cards-row']}>
+          <div className={styles.card}>
+            <div className={styles['card-header']}>
+              <h3>Saved Metrics</h3>
+              <button
+                type="button"
+                className={`${styles.btn} ${styles['btn-sm']}`}
+                onClick={() => navigate('/app/custom-metrics/create')}
+              >
+                + New
+              </button>
+            </div>
+            <div className={styles['card-body']}>
+              {SAVED_METRICS.length === 0 ? (
+                <div className={styles.empty}>No metrics saved yet.</div>
+              ) : (
+                <div className={styles['table-wrap']}>
+                  <table className={styles.table}>
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Type</th>
+                        <th>Created</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {SAVED_METRICS.map((m) => (
+                        <tr key={m.id}>
+                          <td>{m.name}</td>
+                          <td><span className={typeBadgeClass(m.type)}>{m.type === 'code' ? 'Code' : 'Visual'}</span></td>
+                          <td>{m.created}</td>
+                          <td>
+                            <button type="button" className={styles['btn-icon']} title="Delete">
+                              <X size={13} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </div>
-        ) : (
-          <div className={`${styles.statusExt} ${styles[ext]}`}>{ext.toUpperCase()}</div>
-        )}
 
-        <div className={styles.statusInfo}>
-          <div className={styles.statusNameRow}>
-            <span className={`${styles.statusIdBadge} ${styles['statusIdBadge_' + variant]}`}>#{file.id}</span>
-            <div className={styles.statusName}>{file.original_name}</div>
+          <div className={styles.card}>
+            <div className={styles['card-header']}>
+              <h3>Saved Datasets</h3>
+              <button
+                type="button"
+                className={`${styles.btn} ${styles['btn-sm']}`}
+                onClick={() => navigate('/app/custom-metrics/upload')}
+              >
+                + Upload
+              </button>
+            </div>
+            <div className={styles['card-body']}>
+              {SAVED_DATASETS.length === 0 ? (
+                <div className={styles.empty}>No datasets uploaded yet.</div>
+              ) : (
+                <div className={styles['table-wrap']}>
+                  <table className={styles.table}>
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Type</th>
+                        <th>Rows</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {SAVED_DATASETS.map((d) => (
+                        <tr key={d.id}>
+                          <td>{d.name}</td>
+                          <td><span className={typeBadgeClass(d.type)}>{d.type.toUpperCase()}</span></td>
+                          <td>{d.rows}</td>
+                          <td>
+                            <button type="button" className={styles['btn-icon']} title="Delete">
+                              <X size={13} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </div>
-
-          {variant === 'running' && typeof file.progress === 'number' && (
-            <div className={styles.statusProgress}>
-              <div className={styles.statusBar}>
-                <div className={styles.statusFill} style={{ width: `${file.progress}%` }} />
-              </div>
-              <span className={styles.statusPct}>{file.progress}%</span>
-            </div>
-          )}
-
-          {variant === 'running' && (file.elapsed_time || file.eta) && (
-            <div className={styles.statusTimeMeta}>
-              {file.elapsed_time && (
-                <span className={styles.statusTimeItem}>
-                  <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="6" cy="6" r="4.75" /><path d="M6 3.5V6l1.8 1" />
-                  </svg>
-                  {t('uploadInfer.inferencePanel.elapsedTime')} {file.elapsed_time}
-                </span>
-              )}
-              {file.eta && (
-                <span className={styles.statusTimeItem}>
-                  <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M6 1.5v2M6 8.5v2M1.5 6h2M8.5 6h2" /><circle cx="6" cy="6" r="3" />
-                  </svg>
-                  {t('uploadInfer.inferencePanel.eta')} {file.eta}
-                </span>
-              )}
-            </div>
-          )}
-
-          {variant === 'queued' && (
-            <div className={styles.queuedMeta}>
-              <span className={styles.queuedDot} />
-              {t('uploadInfer.inferencePanel.waitingQueue')}
-              {file.elapsed_time && (
-                <span className={styles.statusTimeItem}>
-                  <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="6" cy="6" r="4.75" /><path d="M6 3.5V6l1.8 1" />
-                  </svg>
-                  {t('uploadInfer.inferencePanel.elapsedTime')} {file.elapsed_time}
-                </span>
-              )}
-            </div>
-          )}
-
-          {variant === 'completed' && (
-            <div className={styles.completedMeta}>{file.inserted_at}</div>
-          )}
-
-          {variant === 'running' && typeof file.progress !== 'number' && (
-            <div className={styles.statusDate}>{file.inserted_at}</div>
-          )}
         </div>
 
-        {/* Stop button — queued and running files */}
-        {(variant === 'queued' || variant === 'running') && onStop && (
-          <button
-            className={styles.stopBtn}
-            onClick={() => onStop(file.id)}
-            disabled={stopping}
-            title={t('uploadInfer.inferencePanel.stopFile')}
-          >
-            {stopping ? (
-              <span className={styles.stopSpinner} />
-            ) : (
-              <svg viewBox="0 0 16 16" fill="currentColor" stroke="none">
-                <rect x="4" y="4" width="8" height="8" rx="1.5" />
-              </svg>
-            )}
-          </button>
+        {SAVED_METRICS.length === 0 && SAVED_DATASETS.length === 0 && (
+          <div className={styles.empty}>
+            <Gauge size={16} /> Nothing here yet — create a metric or upload a dataset to get started.
+          </div>
         )}
-
       </div>
     </div>
   );
-};
-
-// ── InferencePanel ───────────────────────────────
-interface InferencePanelProps {
-  onClose?: () => void;
-  minimized?: boolean;
-  onToggleMinimize?: () => void;
 }
 
-const InferencePanel: React.FC<InferencePanelProps> = ({ onClose, minimized = false, onToggleMinimize }) => {
-  const { t } = useTranslation();
-  const dispatch = useAppDispatch();
-  const {
-    settings,
-    selectedServerIds, isBatchRunning,
-    selectFiles,
-    models, modelsLoading: mlLoading, selectedModel,
-    dateFrom, dateTo,
-  } = useAppSelector(s => s.upload);
 
-  const [running, setRunning] = React.useState(false);
-  const [stoppingIds, setStoppingIds] = React.useState<Set<number>>(new Set());
 
-  // ── Prompt template association modal — moved here from the Upload &
-  // Manage tab, since mapping a template is something you'd do right
-  // before running inference. ──
-  const [templateModalOpen, setTemplateModalOpen] = useState(false);
 
-  // ── Prompt save state ──────────────────────────
-  const [promptSaving, setPromptSaving] = useState(false);
-  const [promptSaveError, setPromptSaveError] = useState<string | null>(null);
-  const promptSnapshot = useRef({ summary: '', keyword: '', question: '', shortAnswer: '', trueFalse: '' });
-  const promptsDirty =
-    settings.summaryPromptOverride !== promptSnapshot.current.summary ||
-    settings.keywordPromptOverride !== promptSnapshot.current.keyword ||
-    settings.questionPromptOverride !== promptSnapshot.current.question ||
-    settings.shortAnswerPromptOverride !== promptSnapshot.current.shortAnswer ||
-    settings.trueFalsePromptOverride !== promptSnapshot.current.trueFalse;
 
-  const emptyBatch: ServerFilesData = { queued: [], running: [], completed: [], pending: [] };
-  const [batchData, setBatchData] = React.useState<ServerFilesData>(emptyBatch);
-  const [countdown, setCountdown] = React.useState(10);
-  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const n = selectedServerIds.length;
-  // When nothing is selected, every generation checkbox should read as
-  // unchecked and be non-interactive — there's nothing to configure yet.
-  // Settings themselves aren't reset (so a prior selection is restored if
-  // the user re-selects the same files), only the display/interaction is.
-  const noFilesSelected = n === 0;
-  const isChecked = (v: boolean) => v && !noFilesSelected;
-  const canRunInference = n > 0 && !isBatchRunning && !!selectedModel;
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // ── Fetch models ────────────────────────────
-  // In-flight guard: set synchronously before the await, so a second
-  // overlapping call (e.g. StrictMode's intentional double mount-effect
-  // invocation in dev) bails out instead of firing a second real request.
-  const modelsFetchInFlightRef = useRef(false);
-  const fetchModels = useCallback(async () => {
-    if (modelsFetchInFlightRef.current) return;
-    modelsFetchInFlightRef.current = true;
-    dispatch(modelsLoading());
-    try {
-      const res = await api.get('/get_models');
-      const result = (res.data as any)?.result ?? [];
-      dispatch(modelsSuccess(result));
-    } catch {
-      dispatch(modelsFailure());
-    } finally {
-      modelsFetchInFlightRef.current = false;
-    }
-  }, [dispatch]); // eslint-disable-line
 
-  useEffect(() => { fetchModels(); }, []); // eslint-disable-line
 
-  // ── Polling helper ───────────────────────────
-  // Same in-flight guard as fetchModels — this is the one that's called
-  // from two different mount-time effects (the isBatchRunning effect and
-  // the bootstrap effect below), so it's the most exposed to duplicate
-  // overlapping calls.
-  const pollFetchInFlightRef = useRef(false);
-  const fetchFilesForPolling = useCallback(async () => {
-    // IMPORTANT: this must NOT return false here. `false` means "confirmed
-    // nothing is running" to every caller (they call stopPolling() on it).
-    // A guard bail-out is not a confirmation of anything — it just means
-    // another call is already talking to the server. Returning `true`
-    // instead simply lets polling continue until the NEXT cycle gets a
-    // real answer, which is what actually fixes the "polling silently
-    // stops while files are still queued/running" bug: if a single
-    // /files/by-progress/ round trip ever takes longer than the 10s
-    // interval, the next tick fires while the previous call is still in
-    // flight, hits this guard, and — with the old `return false` — was
-    // read as "batch finished" and killed polling outright, even though
-    // the server still had running/queued files.
-    if (pollFetchInFlightRef.current) return true;
-    pollFetchInFlightRef.current = true;
-    try {
-      const statusRes = await api.post('/files/by-progress/', { start_date: dateFrom, end_date: dateTo });
-      const d = (statusRes.data as any)?.data;
-      const data: ServerFilesData = {
-        queued: d?.queued ?? [],
-        completed: d?.completed ?? [],
-        pending: d?.pending ?? [],
-        running: d?.running ?? [],
-      };
-      dispatch(inferenceStatusSuccess(data));
-      setBatchData(data);
 
-      const stillRunning = data.running.length > 0 || data.queued.length > 0;
 
-      if (data.running.length > 0) {
-        const runningIds = data.running.map(f => f.id);
-        try {
-          const progressRes = await api.post('/files/progress/', { file_ids: runningIds });
-          const progressMap = (progressRes.data as any)?.result ?? {};
-          dispatch(updateRunningProgress(progressMap));
-          setBatchData(prev => ({
-            ...prev,
-            running: prev.running.map(f => {
-              const raw = progressMap[String(f.id)];
-              if (raw === undefined) return f;
-              const pct = typeof raw === 'string' ? parseFloat(raw) : raw;
-              return { ...f, progress: isNaN(pct) ? f.progress : Math.min(100, Math.max(0, pct)) };
-            }),
-          }));
-        } catch {
-          // progress fetch failing is non-critical — silently ignore
-        }
-      }
 
-      if (!stillRunning) setBatchData(emptyBatch);
-      return stillRunning;
-    } catch {
-      // A failed request tells us nothing about whether the batch is still
-      // running — treat it the same as the in-flight guard above: keep
-      // polling rather than reading a transient network/server error as
-      // "confirmed finished".
-      return true;
-    } finally {
-      pollFetchInFlightRef.current = false;
-    }
-  }, [dispatch, dateFrom, dateTo]);
 
-  const stopCountdown = useCallback(() => {
-    if (countdownRef.current) {
-      clearInterval(countdownRef.current);
-      countdownRef.current = null;
-    }
-  }, []);
 
-  const startCountdown = useCallback(() => {
-    stopCountdown();
-    setCountdown(10);
-    countdownRef.current = setInterval(() => {
-      setCountdown(prev => (prev <= 1 ? 10 : prev - 1));
-    }, 1000);
-  }, [stopCountdown]);
 
-  const stopPolling = useCallback(() => {
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-    }
-    stopCountdown();
-    setCountdown(10);
-  }, [stopCountdown]);
 
-  const startPolling = useCallback(() => {
-    stopPolling();
-    startCountdown();
-    pollingRef.current = setInterval(async () => {
-      const stillRunning = await fetchFilesForPolling();
-      if (!stillRunning) stopPolling();
-      else startCountdown();
-    }, 10000);
-  }, [fetchFilesForPolling, stopPolling, startCountdown]);
+//Createmetric.tsx
+import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Loader2, Plus, X } from 'lucide-react';
+import styles from './CustomMetrics.module.scss';
+import { useToast } from './useToast';
+import {
+  EVAL_TYPES, EvalType, METRIC_TEMPLATES, RULE_FIELDS, RULE_OPERATORS,
+  CODE_TEMPLATE, VALIDATION_DATASETS, VALIDATION_ROWS,
+} from './mockData';
 
-  useEffect(() => {
-    if (isBatchRunning) {
-      fetchFilesForPolling().then(stillRunning => {
-        if (stillRunning) startPolling();
-        else stopPolling();
-      });
-    } else {
-      stopPolling();
-    }
-    return stopPolling;
-  }, [isBatchRunning]); // eslint-disable-line
+type CompareType = 'literal' | 'field';
 
-  // ── One-time bootstrap check on mount ──
-  // /files/by-date/ is now paginated and no longer tells us whether a batch
-  // is running (a running/queued file may simply be on another page), so we
-  // can't rely on its response to seed isBatchRunning like before. Ask
-  // /files/by-progress/ directly once on mount to catch a batch that was
-  // already running before this page loaded (e.g. after a refresh).
-  useEffect(() => {
-    fetchFilesForPolling().then(stillRunning => { if (stillRunning) startPolling(); });
-  }, []); // eslint-disable-line
+interface Rule {
+  id: number;
+  field: string;
+  operator: string;
+  compareType: CompareType;
+  value: string;
+}
 
-  // ── Stop a queued file ───────────────────────
-  const handleStop = useCallback(async (fileId: number) => {
-    setStoppingIds(prev => new Set(prev).add(fileId));
-    try {
-      await api.patch('/files/stop', { fileID: [fileId] });
-    } catch (err: any) {
-      if (err?.response?.status === 403) {
-        dispatch(addToast(t('uploadInfer.inferencePanel.stopAlready'), 'error'));
-      } else {
-        console.error('Stop file failed:', err);
-      }
-    } finally {
-      await fetchFilesForPolling();
-      setStoppingIds(prev => { const s = new Set(prev); s.delete(fileId); return s; });
-    }
-  }, [fetchFilesForPolling]);
+let ruleSeq = 2;
 
-  // ── Run inference ────────────────────────────
-  const handleRun = async () => {
-    if (!canRunInference) return;
-    setRunning(true);
-    try {
-      await api.post('/batch_process', {
-        all: false, // always false for now — file_ids-driven runs only
-        file_ids: selectedServerIds,
-        start_date: dateFrom,
-        end_date: dateTo,
-        model_name: selectedModel,
-        summary_prompt: settings.summaryPromptOverride,
-        faq_prompt: settings.questionPromptOverride,
-        keywords_prompt: settings.keywordPromptOverride,
-        short_answers_prompt: settings.shortAnswerPromptOverride,
-        true_false_prompt: settings.trueFalsePromptOverride,
-        generate_summary: settings.generateSummary,
-        generate_keywords: settings.generateKeywords,
-        generate_faq: settings.generateQuestions,
-        generate_short_answer: settings.generateShortAnswer,
-        generate_true_false: settings.generateTrueFalse,
-        // Only meaningful — and only ever sent true — when Keywords itself is on.
-        generate_keyword_insights: settings.generateKeywords && settings.generateKeywordInsights,
-        timestamped_summary: settings.timestampedSummary,
-        time_interval: settings.timeInterval,
-      });
-      const stillRunning = await fetchFilesForPolling();
-      if (stillRunning) startPolling();
-      dispatch(addToast(t('uploadInfer.inferencePanel.inferenceStarted'), 'success'));
-    } catch (err) {
-      console.error('Batch process failed:', err);
-    } finally {
-      setRunning(false);
-    }
+export default function CreateMetric() {
+  const navigate = useNavigate();
+  const { showToast, ToastEl } = useToast();
+
+  const [name, setName] = useState('');
+  const [evalType, setEvalType] = useState<EvalType>('model');
+  const [metricMode, setMetricMode] = useState<'visual' | 'code'>('visual');
+  const [selectedTemplate, setSelectedTemplate] = useState(METRIC_TEMPLATES.model[0].id);
+  const [rules, setRules] = useState<Rule[]>([
+    { id: 1, field: 'actual_output', operator: 'contains', compareType: 'field', value: 'expected_output' },
+  ]);
+  const [gate, setGate] = useState<'AND' | 'OR'>('AND');
+  const [threshold, setThreshold] = useState(0.5);
+  const [code, setCode] = useState(CODE_TEMPLATE);
+  const [validationDataset, setValidationDataset] = useState('');
+  const [validating, setValidating] = useState(false);
+  const [showResults, setShowResults] = useState(false);
+
+  const handleEvalType = (t: EvalType) => {
+    setEvalType(t);
+    setSelectedTemplate(METRIC_TEMPLATES[t][0].id);
   };
 
-  // ── Run button sub-label ─────────────────────
-  const runBtnSubLabel = (() => {
-    if (n === 0) return t('uploadInfer.inferencePanel.selectFilesFirst');
-    if (!selectedModel) return t('uploadInfer.inferencePanel.noModelSelected');
-    return `${n} file${n !== 1 ? 's' : ''} ready`;
-  })();
-
-  // ── Auto-fill prompts when exactly 1 file is selected ────────────
-  // Keyed off the *actual selected file id* (or a stable "multi"/"none"
-  // marker), not the selection count and not the selectedServerIds array
-  // reference. Redux can hand us a brand-new array reference for the same
-  // underlying selection on unrelated updates — keying off the array (or
-  // count alone) made this effect refire and stomp on prompt edits the
-  // user was still mid-typing, even though the selection hadn't changed.
-  const singleSelectedId = n === 1 ? selectedServerIds[0] : null;
-  const selectionKey = n === 1 ? `one:${singleSelectedId}` : n === 0 ? 'none' : 'multi';
-  const prevSelectionKey = useRef<string | null>(null);
-  useEffect(() => {
-    if (selectionKey === prevSelectionKey.current) return;
-    prevSelectionKey.current = selectionKey;
-
-    if (n === 1) {
-      const file = selectFiles.find(f => f.id === singleSelectedId);
-      if (file) {
-        const s = file.summary_prompt ?? '';
-        const k = file.keywords_prompt ?? '';
-        const q = file.faq_prompt ?? '';
-        const sa = file.short_answer_prompt ?? '';
-        const tf = file.true_false_prompt ?? '';
-        dispatch(updateSummaryPrompt(s));
-        dispatch(updateKeywordPrompt(k));
-        dispatch(updateQuestionPrompt(q));
-        dispatch(updateShortAnswerPrompt(sa));
-        dispatch(updateTrueFalsePrompt(tf));
-        promptSnapshot.current = { summary: s, keyword: k, question: q, shortAnswer: sa, trueFalse: tf };
-      }
-    } else {
-      dispatch(updateSummaryPrompt(''));
-      dispatch(updateKeywordPrompt(''));
-      dispatch(updateQuestionPrompt(''));
-      dispatch(updateShortAnswerPrompt(''));
-      dispatch(updateTrueFalsePrompt(''));
-      promptSnapshot.current = { summary: '', keyword: '', question: '', shortAnswer: '', trueFalse: '' };
-    }
-    setPromptSaveError(null);
-  }, [selectionKey]); // eslint-disable-line
-
-  // ── Per-file prompt preview expand/collapse ──
-  const [summaryExpanded, setSummaryExpanded] = useState(false);
-  const [keywordExpanded, setKeywordExpanded] = useState(false);
-  const [questionExpanded, setQuestionExpanded] = useState(false);
-  const [shortAnswerExpanded, setShortAnswerExpanded] = useState(false);
-  const [trueFalseExpanded, setTrueFalseExpanded] = useState(false);
-
-  const prevSelectedCount = useRef(selectedServerIds.length);
-  useEffect(() => {
-    if (selectedServerIds.length !== prevSelectedCount.current) {
-      prevSelectedCount.current = selectedServerIds.length;
-      setSummaryExpanded(false);
-      setKeywordExpanded(false);
-      setQuestionExpanded(false);
-      setShortAnswerExpanded(false);
-      setTrueFalseExpanded(false);
-    }
-  });
-
-  const selectedFiles = selectFiles.filter(f => selectedServerIds.includes(f.id));
-
-  const handlePromptCancel = () => {
-    dispatch(updateSummaryPrompt(promptSnapshot.current.summary));
-    dispatch(updateKeywordPrompt(promptSnapshot.current.keyword));
-    dispatch(updateQuestionPrompt(promptSnapshot.current.question));
-    dispatch(updateShortAnswerPrompt(promptSnapshot.current.shortAnswer));
-    dispatch(updateTrueFalsePrompt(promptSnapshot.current.trueFalse));
-    setPromptSaveError(null);
+  const addRule = () => {
+    ruleSeq += 1;
+    setRules((r) => [...r, { id: ruleSeq, field: 'input', operator: 'contains', compareType: 'literal', value: '' }]);
   };
 
-  const handlePromptSave = async () => {
-    setPromptSaving(true);
-    setPromptSaveError(null);
-    try {
-      const payload: Record<string, unknown> = {
-        file_ids: selectedServerIds,
-      };
-      if (settings.generateSummary) payload.summary_prompt = settings.summaryPromptOverride;
-      if (settings.generateKeywords) payload.keywords_prompt = settings.keywordPromptOverride;
-      if (settings.generateQuestions) payload.faq_prompt = settings.questionPromptOverride;
-      if (settings.generateShortAnswer) payload.short_answers_prompt = settings.shortAnswerPromptOverride;
-      if (settings.generateTrueFalse) payload.true_false_prompt = settings.trueFalsePromptOverride;
+  const removeRule = (id: number) => {
+    setRules((r) => (r.length > 1 ? r.filter((rule) => rule.id !== id) : r));
+  };
 
-      await api.post('/prompt_update', payload);
+  const updateRule = (id: number, patch: Partial<Rule>) => {
+    setRules((r) => r.map((rule) => (rule.id === id ? { ...rule, ...patch } : rule)));
+  };
 
-      dispatch(updateFilePrompts({
-        fileIds: selectedServerIds,
-        ...(settings.generateSummary && { summaryPrompt: settings.summaryPromptOverride }),
-        ...(settings.generateKeywords && { keywordsPrompt: settings.keywordPromptOverride }),
-        ...(settings.generateQuestions && { faqPrompt: settings.questionPromptOverride }),
-        ...(settings.generateShortAnswer && { shortAnswerPrompt: settings.shortAnswerPromptOverride }),
-        ...(settings.generateTrueFalse && { trueFalsePrompt: settings.trueFalsePromptOverride }),
-      }));
+  const generatedLogic = useMemo(() => {
+    const opLabel: Record<string, string> = {
+      contains: 'contains', not_contains: 'not contains', equals: '==',
+      starts_with: 'starts with', ends_with: 'ends with',
+      length_gt: 'length >', length_lt: 'length <', regex: 'matches',
+    };
+    return rules
+      .map((r) => `${r.field} ${opLabel[r.operator] || r.operator} ${r.compareType === 'field' ? r.value || '<field>' : `"${r.value || '…'}"`}`)
+      .join(` ${gate} `);
+  }, [rules, gate]);
 
-      promptSnapshot.current = {
-        summary: settings.summaryPromptOverride,
-        keyword: settings.keywordPromptOverride,
-        question: settings.questionPromptOverride,
-        shortAnswer: settings.shortAnswerPromptOverride,
-        trueFalse: settings.trueFalsePromptOverride,
-      };
-    } catch {
-      setPromptSaveError(t('uploadInfer.inferencePanel.promptSaveFail'));
-    } finally {
-      setPromptSaving(false);
+  const runValidation = () => {
+    if (!validationDataset) {
+      showToast('Select a dataset to validate against', 'error');
+      return;
     }
+    setValidating(true);
+    setShowResults(false);
+    setTimeout(() => {
+      setValidating(false);
+      setShowResults(true);
+    }, 700);
+  };
+
+  const avgScore = useMemo(
+    () => (VALIDATION_ROWS.reduce((sum, r) => sum + r.score, 0) / VALIDATION_ROWS.length).toFixed(2),
+    [],
+  );
+  const passRate = useMemo(
+    () => Math.round((VALIDATION_ROWS.filter((r) => r.score >= threshold).length / VALIDATION_ROWS.length) * 100),
+    [threshold],
+  );
+
+  const saveMetric = () => {
+    if (!name.trim()) {
+      showToast('Give the metric a name first', 'error');
+      return;
+    }
+    showToast(`Metric "${name}" saved`, 'ok');
+    setTimeout(() => navigate('/app/custom-metrics/dashboard'), 700);
   };
 
   return (
-    <div className={`${styles.infpanel} ${minimized ? styles.infpanelMinimized : ''}`}>
+    <div className={`page-enter pg-shell ${styles.cm}`}>
+      <div className={styles['cm__header']}>
+        <div>
+          <p className={styles['cm__header-eyebrow']}>Custom Metrics</p>
+          <h1>Create Custom Metric</h1>
+          <p className={styles['cm__header-sub']}>Build a scoring rule with the visual builder, or write your own DeepEval metric</p>
+        </div>
+      </div>
 
-      {/* ── Minimized rail ── */}
-      {minimized ? (
-        <button
-          type="button"
-          className={styles.minRail}
-          onClick={onToggleMinimize}
-          title={t('uploadInfer.inferencePanel.expandStep2')}
-          aria-label={t('uploadInfer.inferencePanel.expandStep2')}
-        >
-          <span className={styles.minRailIcon}>
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-              strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M6 4l4 4-4 4" />
-            </svg>
-          </span>
-          <span className={styles.minRailLabel}>
-            {t('uploadInfer.inferencePanel.step2Label').replace('Configuration', '').replace('2 —', '2 —')}
-            {isBatchRunning && <span className={styles.minRailDot} />}
-          </span>
-        </button>
-      ) : (
-        <>
+      <div className={`pg-body ${styles['pg-body-scroll']}`}>
+        <div className={styles.panel}>
+          <div className={styles['form-group']}>
+            <label>Metric Name</label>
+            <input
+              className={styles.input}
+              placeholder="e.g., Keyword Accuracy"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
 
-          {/* ── Header ── */}
-          <div className={styles.infpanelHead}>
-            <div>
-              <div className={styles.slbl}>
-                {isBatchRunning ? (
-                  <span className={styles.inferenceRunningLabel}>{t('uploadInfer.inferencePanel.step2Running')}</span>
-                ) : t('uploadInfer.inferencePanel.step2Label')}
-              </div>
-              <div className={styles.selSummary}>
-                {t('uploadInfer.inferencePanel.filesSelected', { count: n })}
-                {isBatchRunning && <span className={styles.batchRunPill}><span className={styles.batchRunDot} />{t('uploadInfer.inferencePanel.batchRunPill')}</span>}
-              </div>
-            </div>
-            <div className={styles.headActions}>
-              {!isBatchRunning && (
-                <>
-                  {/* ── Run Inference button — large, self-describing ── */}
-                  <button
-                    className={`${styles.runBtn} ${canRunInference ? styles.runBtnReady : styles.runBtnDisabled}`}
-                    onClick={handleRun}
-                    disabled={!canRunInference}
-                    data-tour="infer-run"
-                    aria-label={`Run inference on ${n} file${n !== 1 ? 's' : ''}`}
-                  >
-                    <span className={styles.runBtnIconWrap}>
-                      <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
-                        <path d="M5 3l8 5-8 5V3z" fill="currentColor" />
-                      </svg>
-                    </span>
-                    <span className={styles.runBtnText}>
-                      <span className={styles.runBtnTitle}>Run inference</span>
-                      <span className={styles.runBtnSub}>{runBtnSubLabel}</span>
-                    </span>
-                  </button>
-
-                  {onToggleMinimize && (
-                    <button
-                      className={styles.minimizeStepBtn}
-                      onClick={onToggleMinimize}
-                      title={t('uploadInfer.inferencePanel.minimizeStep2')}
-                      aria-label={t('uploadInfer.inferencePanel.minimizeStep2')}
-                    >
-                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                        strokeWidth="1.6" strokeLinecap="round">
-                        <path d="M3 8h10" />
-                      </svg>
-                    </button>
-                  )}
-                  {onClose && (
-                    <button
-                      className={styles.closeStepBtn}
-                      onClick={onClose}
-                      title={t('uploadInfer.inferencePanel.closeStep2')}
-                    >
-                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-                        <path d="M4 4l8 8M12 4l-8 8" />
-                      </svg>
-                    </button>
-                  )}
-                </>
-              )}
-              {isBatchRunning && onToggleMinimize && (
+          <div className={styles['form-group']}>
+            <label>Evaluation Type</label>
+            <div className={styles['btn-group']}>
+              {EVAL_TYPES.map((t) => (
                 <button
-                  className={styles.minimizeStepBtn}
-                  onClick={onToggleMinimize}
-                  title={t('uploadInfer.inferencePanel.minimizeStep2')}
-                  aria-label={t('uploadInfer.inferencePanel.minimizeStep2')}
+                  key={t.key}
+                  type="button"
+                  className={`${styles['btn-toggle']} ${evalType === t.key ? styles.active : ''}`}
+                  onClick={() => handleEvalType(t.key)}
                 >
-                  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                    strokeWidth="1.6" strokeLinecap="round">
-                    <path d="M3 8h10" />
-                  </svg>
+                  {t.label}
                 </button>
-              )}
+              ))}
             </div>
           </div>
 
-
-          {/* ── Main body ── */}
-          <div className={`${styles.infpanelBody} ${isBatchRunning ? styles.infpanelBodyRunning : styles.infpanelBodyConfig}`}>
-
-            {/* ── Submitting overlay — shown while awaiting /batch_process ── */}
-            {running && (
-              <div className={styles.submittingOverlay}>
-                <div className={styles.submittingCard}>
-                  <div className={styles.submittingSpinner} />
-                  <div className={styles.submittingTitle}>{t('uploadInfer.inferencePanel.submitting')}</div>
-                  <div className={styles.submittingDesc}>
-                    {t('uploadInfer.inferencePanel.submittingDesc', { count: n }).split('\n').map((line, i) => <React.Fragment key={i}>{line}{i === 0 && <br />}</React.Fragment>)}
-                  </div>
-                  <div className={styles.submittingFiles}>
-                    {selectedServerIds.slice(0, 5).map((id, i) => {
-                      const f = selectFiles.find(sf => sf.id === id);
-                      return f ? (
-                        <div key={id} className={styles.submittingFile}>
-                          <span className={styles.submittingDot} style={{ animationDelay: `${i * 0.15}s` }} />
-                          {f.original_name}
-                        </div>
-                      ) : null;
-                    })}
-                    {selectedServerIds.length > 5 && (
-                      <div className={styles.submittingMore}>+{selectedServerIds.length - 5} more</div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Selection banner — hidden while batch running or submitting */}
-            {!isBatchRunning && !running && <div className={styles.selBanner}>
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="var(--blue)" strokeWidth="1.5" strokeLinecap="round">
-                <path d="M2 8h12M8 3l5 5-5 5" />
-              </svg>
-              <span className={styles.selCt}>{n} file{n !== 1 ? 's' : ''}</span>
-              <span className={styles.selNm}>
-                {n === 0 ? t('uploadInfer.inferencePanel.selBannerEmpty') : `${n} file${n !== 1 ? 's' : ''} selected for inference`}
-              </span>
+          <div className={styles['form-group']}>
+            <label>Metric Type</label>
+            <div className={styles['toggle-container']}>
               <button
                 type="button"
-                data-tour="infer-action-template"
-                className={styles.mapTemplateBtn}
-                onClick={() => setTemplateModalOpen(true)}
-                title={t('uploadInfer.filePanel.templateBtn')}
+                className={`${styles['toggle-btn']} ${metricMode === 'visual' ? styles.active : ''}`}
+                onClick={() => setMetricMode('visual')}
               >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                  strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 2.5h10v11H3z" />
-                  <path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3" />
-                </svg>
-                {t('uploadInfer.filePanel.templateBtn')}
+                Visual Builder
               </button>
-            </div>}
+              <button
+                type="button"
+                className={`${styles['toggle-btn']} ${metricMode === 'code' ? styles.active : ''}`}
+                onClick={() => setMetricMode('code')}
+              >
+                Code Editor
+              </button>
+            </div>
+          </div>
 
-            {/* ── Settings — hidden while batch running or submitting ── */}
-            {!isBatchRunning && !running && <div className={styles.infSettingsWrap} data-tour="infer-settings">
-              <div className={styles.settingsGrid}>
+          {metricMode === 'visual' ? (
+            <>
+              <p className={styles.hint}>Select a pre-built metric template based on evaluation type</p>
 
-                {/* Generate content card */}
-                <div className={styles.card}>
-                  <div className={styles.cardT}>{t('uploadInfer.inferencePanel.generateContent')}</div>
-
-                  {/* Model dropdown — moved to the top; deliberately narrow rather than spanning the row */}
-                  <div className={styles.modelFieldTop} data-tour="infer-model">
-                    <div className={styles.fg}>
-                      <div className={styles.modelLabelRow}>
-                        <label className={styles.fl}>
-                          {t('uploadInfer.inferencePanel.modelLabel')} {mlLoading && <span className={styles.loadingDot}>…</span>}
-                        </label>
-                        <button
-                          className={styles.refreshBtn}
-                          onClick={fetchModels}
-                          disabled={mlLoading}
-                          title={t('uploadInfer.inferencePanel.refreshModels')}
-                        >
-                          <svg
-                            viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                            strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"
-                            className={mlLoading ? styles.spinning : undefined}
-                          >
-                            <path d="M13.5 8A5.5 5.5 0 1 1 10 3.07" />
-                            <path d="M10 2v3h3" />
-                          </svg>
-                          Refresh
-                        </button>
-                      </div>
-                      <select className={styles.fc} value={selectedModel}
-                        onChange={e => dispatch(setSelectedModel(e.target.value))}
-                        disabled={mlLoading || models.length === 0}>
-                        {models.length === 0
-                          ? <option value="">{t('uploadInfer.inferencePanel.noModelsOption')}</option>
-                          : models.map(m => <option key={m} value={m}>{m}</option>)
-                        }
-                      </select>
-                      {!mlLoading && models.length === 0 && (
-                        <div className={styles.modelWarn}>
-                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                            <path d="M8 2L14 13H2L8 2z" /><path d="M8 7v3M8 11.5v.1" />
-                          </svg>
-                          {t('uploadInfer.inferencePanel.noModels')}
-                        </div>
-                      )}
-                      {!mlLoading && models.length > 0 && (
-                        <div className={styles.modelOk}>
-                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                            <circle cx="8" cy="8" r="5.5" /><path d="M5.5 8l2 2 3-3" />
-                          </svg>
-                          {t('uploadInfer.inferencePanel.modelsAvailable', { count: models.length })}
-                        </div>
-                      )}
+              <div className={styles['metric-templates']}>
+                {METRIC_TEMPLATES[evalType].map((tpl) => (
+                  <div
+                    key={tpl.id}
+                    className={`${styles['metric-card']} ${selectedTemplate === tpl.id ? styles.selected : ''}`}
+                    onClick={() => setSelectedTemplate(tpl.id)}
+                  >
+                    <div className={styles['metric-card-header']}>
+                      <input
+                        type="radio"
+                        name={`metric-${evalType}`}
+                        checked={selectedTemplate === tpl.id}
+                        onChange={() => setSelectedTemplate(tpl.id)}
+                      />
+                      <strong>{tpl.name}</strong>
                     </div>
+                    <p>{tpl.desc}</p>
+                    <code>{tpl.code}</code>
                   </div>
-
-                  <div className={styles.genContentCols}>
-
-                  {/* ── Left column: all checkboxes ── */}
-                  <div className={styles.checkboxCol}>
-
-                    <div data-tour="infer-check-summary"
-                      className={`${styles.cr} ${isChecked(settings.generateSummary) ? styles.ck : ''} ${styles.mb8} ${noFilesSelected ? styles.crDisabled : ''}`}
-                      onClick={() => { if (noFilesSelected) return; dispatch(updateSettings({ generateSummary: !settings.generateSummary })); }}
-                    >
-                      <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateSummary')}</label>
-                    </div>
-
-                    <div data-tour="infer-check-keywords"
-                      className={`${styles.cr} ${isChecked(settings.generateKeywords) ? styles.ck : ''} ${styles.mb8} ${noFilesSelected ? styles.crDisabled : ''}`}
-                      onClick={() => {
-                        if (noFilesSelected) return;
-                        dispatch(updateSettings({
-                          generateKeywords: !settings.generateKeywords,
-                          // Force the nested toggle off when the parent turns off,
-                          // so a stale "on" state can never leak into the request.
-                          ...(settings.generateKeywords ? { generateKeywordInsights: false } : {}),
-                        }));
-                      }}
-                    >
-                      <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateKeywords')}</label>
-                    </div>
-                    {isChecked(settings.generateKeywords) && (
-                      <div
-                        className={`${styles.crNested} ${isChecked(settings.generateKeywordInsights) ? styles.ck : ''} ${styles.mb8}`}
-                        onClick={(e) => { e.stopPropagation(); if (noFilesSelected) return; dispatch(updateSettings({ generateKeywordInsights: !settings.generateKeywordInsights })); }}
-                      >
-                        <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateKeywordInsights')}</label>
-                      </div>
-                    )}
-
-                    <div data-tour="infer-check-questions"
-                      className={`${styles.cr} ${isChecked(settings.generateQuestions) ? styles.ck : ''} ${styles.mb8} ${noFilesSelected ? styles.crDisabled : ''}`}
-                      onClick={() => { if (noFilesSelected) return; dispatch(updateSettings({ generateQuestions: !settings.generateQuestions })); }}
-                    >
-                      <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateQuestions')}</label>
-                    </div>
-
-                    <div data-tour="infer-check-shortanswer"
-                      className={`${styles.cr} ${isChecked(settings.generateShortAnswer) ? styles.ck : ''} ${styles.mb8} ${noFilesSelected ? styles.crDisabled : ''}`}
-                      onClick={() => { if (noFilesSelected) return; dispatch(updateSettings({ generateShortAnswer: !settings.generateShortAnswer })); }}
-                    >
-                      <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateShortAnswer')}</label>
-                    </div>
-
-                    <div data-tour="infer-check-truefalse"
-                      className={`${styles.cr} ${isChecked(settings.generateTrueFalse) ? styles.ck : ''} ${styles.mb8} ${noFilesSelected ? styles.crDisabled : ''}`}
-                      onClick={() => { if (noFilesSelected) return; dispatch(updateSettings({ generateTrueFalse: !settings.generateTrueFalse })); }}
-                    >
-                      <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.generateTrueFalse')}</label>
-                    </div>
-
-                    <div data-tour="infer-check-timestamped"
-                      className={`${styles.cr} ${isChecked(settings.timestampedSummary) ? styles.ck : ''} ${styles.mb8} ${noFilesSelected ? styles.crDisabled : ''}`}
-                      onClick={() => { if (noFilesSelected) return; dispatch(updateSettings({ timestampedSummary: !settings.timestampedSummary })); }}
-                    >
-                      <div className={styles.cb} /><label>{t('uploadInfer.inferencePanel.timestampedSummary')}</label>
-                    </div>
-                    {isChecked(settings.timestampedSummary) && (
-                      <div className={styles.nestedField} onClick={(e) => e.stopPropagation()}>
-                        <label>{t('uploadInfer.inferencePanel.timeInterval')}</label>
-                        <select
-                          className={styles.fc}
-                          value={settings.timeInterval}
-                          onChange={e => dispatch(updateSettings({ timeInterval: Number(e.target.value) as TimeInterval }))}
-                        >
-                          {([5, 10, 15, 20, 30, 45, 60] as const).map(min => (
-                            <option key={min} value={min}>{t('uploadInfer.inferencePanel.minutesOption', { count: min })}</option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-
-                  </div>
-
-                  {/* ── Right column: prompt panel for whichever checkboxes are on ── */}
-                  <div className={styles.promptCol}>
-
-                    {!isChecked(settings.generateSummary) && !isChecked(settings.generateKeywords)
-                      && !isChecked(settings.generateQuestions) && !isChecked(settings.generateShortAnswer)
-                      && !isChecked(settings.generateTrueFalse) && (
-                      <div className={styles.noPromptHint}>
-                        {noFilesSelected
-                          ? t('uploadInfer.inferencePanel.selBannerEmpty')
-                          : t('uploadInfer.inferencePanel.noPromptHint', 'Check an option on the left to set its prompt')}
-                      </div>
-                    )}
-
-                    {isChecked(settings.generateSummary) && (
-                      <div className={styles.promptCard}>
-                        <div className={styles.fg}>
-                          <div className={styles.flRow}>
-                            <label className={styles.fl}>
-                              {t('uploadInfer.inferencePanel.summaryPrompt')} <span className={styles.optTag}>{t('uploadInfer.inferencePanel.optional')}</span>
-                            </label>
-                            {n > 1 && (
-                              <button
-                                className={`${styles.perFileBtn} ${summaryExpanded ? styles.perFileBtnActive : ''}`}
-                                onClick={(e) => { e.stopPropagation(); setSummaryExpanded(v => !v); }}
-                                title={summaryExpanded ? 'Collapse per-file prompts' : 'View per-file prompts'}
-                              >
-                                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                  <rect x="1.5" y="2" width="11" height="10" rx="2" />
-                                  <path d="M4 5h6M4 7.5h4" />
-                                </svg>
-                                {summaryExpanded ? 'Hide' : t('uploadInfer.inferencePanel.perFile')}
-                                <svg className={`${styles.perFileChevron} ${summaryExpanded ? styles.perFileChevronOpen : ''}`} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                                  <path d="M2 3.5l3 3 3-3" />
-                                </svg>
-                              </button>
-                            )}
-                          </div>
-                          <div className={`${styles.perFilePanel} ${summaryExpanded ? styles.perFilePanelOpen : ''}`}>
-                            <div className={styles.perFilePanelInner}>
-                              {selectedFiles.map(f => (
-                                <div key={f.id} className={styles.perFileRow}>
-                                  <div className={styles.perFileName}>{f.original_name}</div>
-                                  <div className={styles.perFilePrompt}>{f.summary_prompt || <span className={styles.perFileEmpty}>{t('uploadInfer.inferencePanel.noPromptSet')}</span>}</div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                          <textarea className={styles.fc} rows={3}
-                            value={settings.summaryPromptOverride}
-                            placeholder={n === 1 ? t('uploadInfer.inferencePanel.autofillPlaceholder') : t('uploadInfer.inferencePanel.manualPlaceholder')}
-                            onChange={e => dispatch(updateSummaryPrompt(e.target.value))} />
-                        </div>
-                      </div>
-                    )}
-
-                    {isChecked(settings.generateKeywords) && (
-                      <div className={styles.promptCard}>
-                        <div className={styles.fg}>
-                          <div className={styles.flRow}>
-                            <label className={styles.fl}>
-                              {t('uploadInfer.inferencePanel.keywordPrompt')} <span className={styles.optTag}>{t('uploadInfer.inferencePanel.optional')}</span>
-                            </label>
-                            {n > 1 && (
-                              <button
-                                className={`${styles.perFileBtn} ${keywordExpanded ? styles.perFileBtnActive : ''}`}
-                                onClick={(e) => { e.stopPropagation(); setKeywordExpanded(v => !v); }}
-                                title={keywordExpanded ? 'Collapse per-file prompts' : 'View per-file prompts'}
-                              >
-                                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                  <rect x="1.5" y="2" width="11" height="10" rx="2" />
-                                  <path d="M4 5h6M4 7.5h4" />
-                                </svg>
-                                {keywordExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.perFile')}
-                                <svg className={`${styles.perFileChevron} ${keywordExpanded ? styles.perFileChevronOpen : ''}`} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                                  <path d="M2 3.5l3 3 3-3" />
-                                </svg>
-                              </button>
-                            )}
-                          </div>
-                          <div className={`${styles.perFilePanel} ${keywordExpanded ? styles.perFilePanelOpen : ''}`}>
-                            <div className={styles.perFilePanelInner}>
-                              {selectedFiles.map(f => (
-                                <div key={f.id} className={styles.perFileRow}>
-                                  <div className={styles.perFileName}>{f.original_name}</div>
-                                  <div className={styles.perFilePrompt}>{f.keywords_prompt || <span className={styles.perFileEmpty}>No prompt set</span>}</div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                          <textarea className={styles.fc} rows={3}
-                            value={settings.keywordPromptOverride}
-                            placeholder={n === 1 ? 'Autofilled from file — edit to override…' : 'Leave blank to use per-file prompts…'}
-                            onChange={e => dispatch(updateKeywordPrompt(e.target.value))} />
-                        </div>
-                      </div>
-                    )}
-
-                    {isChecked(settings.generateQuestions) && (
-                      <div className={styles.promptCard}>
-                        <div className={styles.fg}>
-                          <div className={styles.flRow}>
-                            <label className={styles.fl}>
-                              {t('uploadInfer.inferencePanel.questionPrompt')} <span className={styles.optTag}>{t('uploadInfer.inferencePanel.optional')}</span>
-                            </label>
-                            {n > 1 && (
-                              <button
-                                className={`${styles.perFileBtn} ${questionExpanded ? styles.perFileBtnActive : ''}`}
-                                onClick={(e) => { e.stopPropagation(); setQuestionExpanded(v => !v); }}
-                                title={questionExpanded ? 'Collapse per-file prompts' : 'View per-file prompts'}
-                              >
-                                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                  <rect x="1.5" y="2" width="11" height="10" rx="2" />
-                                  <path d="M4 5h6M4 7.5h4" />
-                                </svg>
-                                {questionExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.perFile')}
-                                <svg className={`${styles.perFileChevron} ${questionExpanded ? styles.perFileChevronOpen : ''}`} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                                  <path d="M2 3.5l3 3 3-3" />
-                                </svg>
-                              </button>
-                            )}
-                          </div>
-                          <div className={`${styles.perFilePanel} ${questionExpanded ? styles.perFilePanelOpen : ''}`}>
-                            <div className={styles.perFilePanelInner}>
-                              {selectedFiles.map(f => (
-                                <div key={f.id} className={styles.perFileRow}>
-                                  <div className={styles.perFileName}>{f.original_name}</div>
-                                  <div className={styles.perFilePrompt}>{f.faq_prompt || <span className={styles.perFileEmpty}>No prompt set</span>}</div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                          <textarea className={styles.fc} rows={3}
-                            value={settings.questionPromptOverride}
-                            placeholder={n === 1 ? 'Autofilled from file — edit to override…' : 'Leave blank to use per-file prompts…'}
-                            onChange={e => dispatch(updateQuestionPrompt(e.target.value))} />
-                        </div>
-                      </div>
-                    )}
-
-                    {isChecked(settings.generateShortAnswer) && (
-                      <div className={styles.promptCard}>
-                        <div className={styles.fg}>
-                          <div className={styles.flRow}>
-                            <label className={styles.fl}>
-                              {t('uploadInfer.inferencePanel.shortAnswerPrompt')} <span className={styles.optTag}>{t('uploadInfer.inferencePanel.optional')}</span>
-                            </label>
-                            {n > 1 && (
-                              <button
-                                className={`${styles.perFileBtn} ${shortAnswerExpanded ? styles.perFileBtnActive : ''}`}
-                                onClick={(e) => { e.stopPropagation(); setShortAnswerExpanded(v => !v); }}
-                                title={shortAnswerExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.viewPerFile')}
-                              >
-                                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                  <rect x="1.5" y="2" width="11" height="10" rx="2" />
-                                  <path d="M4 5h6M4 7.5h4" />
-                                </svg>
-                                {shortAnswerExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.perFile')}
-                                <svg className={`${styles.perFileChevron} ${shortAnswerExpanded ? styles.perFileChevronOpen : ''}`} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                                  <path d="M2 3.5l3 3 3-3" />
-                                </svg>
-                              </button>
-                            )}
-                          </div>
-                          <div className={`${styles.perFilePanel} ${shortAnswerExpanded ? styles.perFilePanelOpen : ''}`}>
-                            <div className={styles.perFilePanelInner}>
-                              {selectedFiles.map(f => (
-                                <div key={f.id} className={styles.perFileRow}>
-                                  <div className={styles.perFileName}>{f.original_name}</div>
-                                  <div className={styles.perFilePrompt}>{f.short_answer_prompt || <span className={styles.perFileEmpty}>{t('uploadInfer.inferencePanel.noPromptSet')}</span>}</div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                          <textarea className={styles.fc} rows={3}
-                            value={settings.shortAnswerPromptOverride}
-                            placeholder={n === 1 ? t('uploadInfer.inferencePanel.autofillPlaceholder') : t('uploadInfer.inferencePanel.manualPlaceholder')}
-                            onChange={e => dispatch(updateShortAnswerPrompt(e.target.value))} />
-                        </div>
-                      </div>
-                    )}
-
-                    {isChecked(settings.generateTrueFalse) && (
-                      <div className={styles.promptCard}>
-                        <div className={styles.fg}>
-                          <div className={styles.flRow}>
-                            <label className={styles.fl}>
-                              {t('uploadInfer.inferencePanel.trueFalsePrompt')} <span className={styles.optTag}>{t('uploadInfer.inferencePanel.optional')}</span>
-                            </label>
-                            {n > 1 && (
-                              <button
-                                className={`${styles.perFileBtn} ${trueFalseExpanded ? styles.perFileBtnActive : ''}`}
-                                onClick={(e) => { e.stopPropagation(); setTrueFalseExpanded(v => !v); }}
-                                title={trueFalseExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.viewPerFile')}
-                              >
-                                <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                  <rect x="1.5" y="2" width="11" height="10" rx="2" />
-                                  <path d="M4 5h6M4 7.5h4" />
-                                </svg>
-                                {trueFalseExpanded ? t('uploadInfer.inferencePanel.hide') : t('uploadInfer.inferencePanel.perFile')}
-                                <svg className={`${styles.perFileChevron} ${trueFalseExpanded ? styles.perFileChevronOpen : ''}`} viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                                  <path d="M2 3.5l3 3 3-3" />
-                                </svg>
-                              </button>
-                            )}
-                          </div>
-                          <div className={`${styles.perFilePanel} ${trueFalseExpanded ? styles.perFilePanelOpen : ''}`}>
-                            <div className={styles.perFilePanelInner}>
-                              {selectedFiles.map(f => (
-                                <div key={f.id} className={styles.perFileRow}>
-                                  <div className={styles.perFileName}>{f.original_name}</div>
-                                  <div className={styles.perFilePrompt}>{f.true_false_prompt || <span className={styles.perFileEmpty}>{t('uploadInfer.inferencePanel.noPromptSet')}</span>}</div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                          <textarea className={styles.fc} rows={3}
-                            value={settings.trueFalsePromptOverride}
-                            placeholder={n === 1 ? t('uploadInfer.inferencePanel.autofillPlaceholder') : t('uploadInfer.inferencePanel.manualPlaceholder')}
-                            onChange={e => dispatch(updateTrueFalsePrompt(e.target.value))} />
-                        </div>
-                      </div>
-                    )}
-
-                  </div>
-
-                  </div>
-
-                  {/* Save / Cancel bar — persists any edited prompt overrides above */}
-                  {n > 0 && (settings.generateSummary || settings.generateKeywords || settings.generateQuestions
-                    || settings.generateShortAnswer || settings.generateTrueFalse) && (
-                    <div className={styles.promptActions}>
-                      {promptSaveError && (
-                        <span className={styles.promptSaveError}>{promptSaveError}</span>
-                      )}
-                      <button
-                        className={`${styles.btn} ${styles.btnSm} ${styles.btnGhost}`}
-                        onClick={handlePromptCancel}
-                        disabled={!promptsDirty || promptSaving}
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        className={`${styles.btn} ${styles.btnSm} ${styles.btnPrimary}`}
-                        onClick={handlePromptSave}
-                        disabled={!promptsDirty || promptSaving}
-                      >
-                        {promptSaving ? (
-                          <><span className={styles.btnSpinner} />{t('uploadInfer.inferencePanel.saving')}</>
-                        ) : t('uploadInfer.inferencePanel.savePrompts')}
-                      </button>
-                    </div>
-                  )}
-                </div>
-
+                ))}
               </div>
-            </div>}
 
-            {/* ══ 3-Column batch status ══ */}
-            {isBatchRunning && (
-              <div className={styles.batchSection}>
-                <div className={styles.batchSectionTitle}>
-                  <span className={styles.liveLabel}>{t('uploadInfer.inferencePanel.inferenceStatus')}</span>
-                  {isBatchRunning && (
-                    <span className={styles.liveStatus}>
-                      <span className={styles.liveDot} />
-                      Live
-                      <span className={styles.liveSep}>·</span>
-                      {t('uploadInfer.inferencePanel.refreshingIn', { sec: countdown })}
-                      {batchData.running.length > 0 && (
-                        <><span className={styles.liveSep}>·</span>
-                          <span className={styles.liveFiles}>
-                            {t('uploadInfer.inferencePanel.filesRunning', { count: batchData.running.length })}
-                          </span></>
+              <div className={styles['custom-rules-section']}>
+                <h4>Custom Rules <span className={styles.optional}>(Optional — combine with template above)</span></h4>
+
+                {rules.map((rule) => (
+                  <div key={rule.id} className={styles['rule-item']}>
+                    <div className={styles['rule-fields']}>
+                      <select
+                        className={`${styles.select} ${styles['rule-field-select']}`}
+                        value={rule.field}
+                        onChange={(e) => updateRule(rule.id, { field: e.target.value })}
+                      >
+                        {RULE_FIELDS.map((f) => <option key={f} value={f}>{f}</option>)}
+                      </select>
+                      <select
+                        className={`${styles.select} ${styles['rule-operator']}`}
+                        value={rule.operator}
+                        onChange={(e) => updateRule(rule.id, { operator: e.target.value })}
+                      >
+                        {RULE_OPERATORS.map((op) => <option key={op.value} value={op.value}>{op.label}</option>)}
+                      </select>
+                      <select
+                        className={`${styles.select} ${styles['rule-compare-type']}`}
+                        value={rule.compareType}
+                        onChange={(e) => updateRule(rule.id, { compareType: e.target.value as CompareType, value: '' })}
+                      >
+                        <option value="literal">Literal Value</option>
+                        <option value="field">Compare to Field</option>
+                      </select>
+                      {rule.compareType === 'literal' ? (
+                        <input
+                          className={`${styles.input} ${styles['rule-value']}`}
+                          placeholder="enter value"
+                          value={rule.value}
+                          onChange={(e) => updateRule(rule.id, { value: e.target.value })}
+                        />
+                      ) : (
+                        <select
+                          className={`${styles.select} ${styles['rule-value']}`}
+                          value={rule.value}
+                          onChange={(e) => updateRule(rule.id, { value: e.target.value })}
+                        >
+                          <option value="">select field…</option>
+                          {RULE_FIELDS.map((f) => <option key={f} value={f}>{f}</option>)}
+                        </select>
                       )}
-                    </span>
-                  )}
+                      <button
+                        type="button"
+                        className={styles['btn-icon']}
+                        title="Remove"
+                        onClick={() => removeRule(rule.id)}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                <div className={styles['add-rule-row']}>
+                  <select
+                    className={`${styles.select} ${styles['gate-select']}`}
+                    value={gate}
+                    onChange={(e) => setGate(e.target.value as 'AND' | 'OR')}
+                  >
+                    <option value="AND">AND</option>
+                    <option value="OR">OR</option>
+                  </select>
+                  <button type="button" className={`${styles.btn} ${styles['btn-sm']}`} onClick={addRule}>
+                    <Plus size={13} /> Add Rule
+                  </button>
                 </div>
-                <div className={styles.batchColumns}>
 
-                  {/* Queued */}
-                  <div className={styles.batchCol}>
-                    <div className={`${styles.batchColHead} ${styles.headQueued}`}>
-                      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
-                        <circle cx="7" cy="7" r="5" /><path d="M7 4v3.5l2 1.5" />
-                      </svg>
-                      Queued
-                      <span className={styles.batchColCount}>{batchData.queued.length}</span>
-                    </div>
-                    <div className={styles.batchColBody}>
-                      {batchData.queued.length === 0
-                        ? <div className={styles.batchEmpty}>—</div>
-                        : batchData.queued.map(f => (
-                          <StatusCard
-                            key={f.id}
-                            file={f}
-                            variant="queued"
-                            onStop={handleStop}
-                            stopping={stoppingIds.has(f.id)}
-                          />
-                        ))
-                      }
-                    </div>
-                  </div>
+                <div className={styles['rule-preview']}>
+                  <label>Generated Logic</label>
+                  <code>{generatedLogic || 'No rules defined'}</code>
+                </div>
+              </div>
 
-                  {/* Running */}
-                  <div className={styles.batchCol}>
-                    <div className={`${styles.batchColHead} ${styles.headRunning}`}>
-                      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
-                        <circle cx="7" cy="7" r="5" /><path d="M7 4v3M7 9.5v.2" />
-                      </svg>
-                      Running
-                      <span className={styles.batchColCount}>{batchData.running.length}</span>
-                    </div>
-                    <div className={styles.batchColBody}>
-                      {batchData.running.length === 0
-                        ? <div className={styles.batchEmpty}>—</div>
-                        : batchData.running.map(f => (
-                          <StatusCard
-                            key={f.id}
-                            file={f}
-                            variant="running"
-                            onStop={handleStop}
-                            stopping={stoppingIds.has(f.id)}
-                          />
-                        ))
-                      }
-                    </div>
-                  </div>
+              <div className={styles['threshold-row']}>
+                <div className={styles['rule-field']}>
+                  <label>Pass Threshold</label>
+                  <input
+                    type="number"
+                    className={styles.input}
+                    min={0}
+                    max={1}
+                    step={0.1}
+                    value={threshold}
+                    onChange={(e) => setThreshold(Math.min(1, Math.max(0, Number(e.target.value))))}
+                  />
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className={styles['code-editor']}>
+              <div className={styles['editor-header']}>
+                <span>Python Code</span>
+                <button
+                  type="button"
+                  className={`${styles.btn} ${styles['btn-sm']}`}
+                  onClick={() => { setCode(CODE_TEMPLATE); showToast('Template loaded', 'ok'); }}
+                >
+                  Load Template
+                </button>
+              </div>
+              <textarea
+                className={styles['code-area']}
+                spellCheck={false}
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+              />
+            </div>
+          )}
 
-                  {/* Completed */}
-                  <div className={styles.batchCol}>
-                    <div className={`${styles.batchColHead} ${styles.headCompleted}`}>
-                      <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="7" cy="7" r="5" /><path d="M4.5 7l2 2 3-3" />
-                      </svg>
-                      Completed
-                      <span className={styles.batchColCount}>{batchData.completed.length}</span>
-                    </div>
-                    <div className={styles.batchColBody}>
-                      {batchData.completed.length === 0
-                        ? <div className={styles.batchEmpty}>—</div>
-                        : batchData.completed.map(f => <StatusCard key={f.id} file={f} variant="completed" />)
-                      }
-                    </div>
-                  </div>
+          <div className={styles['validation-section']}>
+            <div className={styles['validation-header']}>
+              <h3>Validate Metric</h3>
+              <p>Test your metric on sample data before saving</p>
+            </div>
+            <div className={styles['validation-controls']}>
+              <select
+                className={styles.select}
+                value={validationDataset}
+                onChange={(e) => setValidationDataset(e.target.value)}
+              >
+                <option value="">Select a dataset…</option>
+                {VALIDATION_DATASETS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
+              </select>
+              <button type="button" className={styles.btn} onClick={runValidation} disabled={validating}>
+                {validating ? <Loader2 size={13} className={styles.spin} /> : null}
+                Run Validation
+              </button>
+            </div>
 
+            {showResults && (
+              <div className={styles['validation-results']}>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Input</th>
+                      <th>Output</th>
+                      <th>Expected</th>
+                      <th>Score</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {VALIDATION_ROWS.map((row, i) => (
+                      <tr key={i}>
+                        <td className={styles['cell-num']}>{i + 1}</td>
+                        <td>{row.input}</td>
+                        <td>{row.output}</td>
+                        <td>{row.expected}</td>
+                        <td className={row.score >= threshold ? styles['cell-pass'] : styles['cell-fail']}>{row.score.toFixed(2)}</td>
+                        <td className={row.score >= threshold ? styles['cell-pass'] : styles['cell-fail']}>
+                          {row.score >= threshold ? 'Pass' : 'Fail'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div className={styles['validation-summary']}>
+                  <span>Average Score: <strong>{avgScore}</strong></span>
+                  <span>Pass Rate: <strong>{passRate}%</strong></span>
                 </div>
               </div>
             )}
-
           </div>
-        </>
-      )}
 
-      <PromptTemplateAssociationModal
-        open={templateModalOpen}
-        onClose={() => setTemplateModalOpen(false)}
-      />
+          <div className={styles['form-actions']}>
+            <button
+              type="button"
+              className={`${styles.btn} ${styles['btn-secondary']}`}
+              onClick={() => navigate('/app/custom-metrics/dashboard')}
+            >
+              Cancel
+            </button>
+            <button type="button" className={`${styles.btn} ${styles['btn-primary']}`} onClick={saveMetric}>
+              Save Metric
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {ToastEl}
     </div>
   );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Uploaddataset.tsx
+import { useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Sparkles, Upload, X } from 'lucide-react';
+import styles from './CustomMetrics.module.scss';
+import { useToast } from './useToast';
+import { EVAL_TYPES, EvalType, SAMPLE_SOURCE_DATA, MAPPING_TARGETS, AUTO_MAP_GUESS } from './mockData';
+
+const STEP_LABELS = ['Upload', 'Preview', 'Map Fields', 'Save'];
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export default function UploadDataset() {
+  const navigate = useNavigate();
+  const { showToast, ToastEl } = useToast();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [step, setStep] = useState(1);
+  const [datasetName, setDatasetName] = useState('');
+  const [evalType, setEvalType] = useState<EvalType>('model');
+  const [file, setFile] = useState<{ name: string; size: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [mapping, setMapping] = useState<Record<string, string>>({});
+
+  const sourceRows = SAMPLE_SOURCE_DATA[evalType];
+  const columns = useMemo(() => (sourceRows.length ? Object.keys(sourceRows[0]) : []), [sourceRows]);
+  const targets = MAPPING_TARGETS[evalType];
+
+  const pickFile = () => fileInputRef.current?.click();
+
+  const acceptFile = (name: string, size: number) => {
+    setFile({ name, size });
+  };
+
+  const handleFileInput: React.ChangeEventHandler<HTMLInputElement> = (e) => {
+    const f = e.target.files?.[0];
+    if (f) acceptFile(f.name, f.size);
+  };
+
+  const handleDrop: React.DragEventHandler<HTMLDivElement> = (e) => {
+    e.preventDefault();
+    setDragging(false);
+    const f = e.dataTransfer.files?.[0];
+    if (f) acceptFile(f.name, f.size);
+    else acceptFile(`${evalType}_eval.json`, 4096); // mock fallback since this is static demo data
+  };
+
+  const clearFile = () => setFile(null);
+
+  const processFile = () => {
+    if (!file) return;
+    setStep(2);
+  };
+
+  const goToStep = (s: number) => setStep(s);
+
+  const autoMapFields = () => {
+    setMapping(AUTO_MAP_GUESS[evalType]);
+    showToast('Fields auto-mapped with AI', 'ok');
+  };
+
+  const requiredFilled = targets.filter((t) => t.required).every((t) => mapping[t.key]);
+
+  const previewTransform = () => {
+    if (!requiredFilled) {
+      showToast('Map all required fields first', 'error');
+      return;
+    }
+    setStep(4);
+  };
+
+  const transformed = useMemo(() => {
+    return sourceRows.map((row) => {
+      const out: Record<string, string> = {};
+      targets.forEach((t) => {
+        const src = mapping[t.key];
+        if (src && row[src] !== undefined) out[t.key] = row[src];
+      });
+      return out;
+    });
+  }, [sourceRows, targets, mapping]);
+
+  const validRows = transformed.filter((r) => targets.filter((t) => t.required).every((t) => r[t.key])).length;
+  const errorRows = transformed.length - validRows;
+
+  const saveDataset = () => {
+    if (!datasetName.trim()) {
+      showToast('Give the dataset a name first', 'error');
+      return;
+    }
+    showToast(`Dataset "${datasetName}" saved`, 'ok');
+    setTimeout(() => navigate('/app/custom-metrics/dashboard'), 700);
+  };
+
+  const stepClass = (n: number) => `${styles.step} ${step === n ? styles.active : ''} ${step > n ? styles.done : ''}`;
+
+  return (
+    <div className={`page-enter pg-shell ${styles.cm}`}>
+      <div className={styles['cm__header']}>
+        <div>
+          <p className={styles['cm__header-eyebrow']}>Custom Metrics</p>
+          <h1>Upload Dataset</h1>
+          <p className={styles['cm__header-sub']}>Import a dataset and map it to the evaluation schema</p>
+        </div>
+      </div>
+
+      <div className={`pg-body ${styles['pg-body-scroll']}`}>
+        <div className={styles.steps}>
+          {STEP_LABELS.map((label, i) => (
+            <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div className={stepClass(i + 1)}>
+                <span className={styles['step-num']}>{i + 1}</span>
+                <span className={styles['step-label']}>{label}</span>
+              </div>
+              {i < STEP_LABELS.length - 1 && <div className={styles['step-line']} />}
+            </div>
+          ))}
+        </div>
+
+        <div className={styles.panel}>
+          {step === 1 && (
+            <>
+              <div className={styles['form-group']}>
+                <label>Dataset Name</label>
+                <input
+                  className={styles.input}
+                  placeholder="e.g., Customer Support QA"
+                  value={datasetName}
+                  onChange={(e) => setDatasetName(e.target.value)}
+                />
+              </div>
+
+              <div className={styles['form-group']}>
+                <label>Evaluation Type</label>
+                <div className={styles['btn-group']}>
+                  {EVAL_TYPES.map((t) => (
+                    <button
+                      key={t.key}
+                      type="button"
+                      className={`${styles['btn-toggle']} ${evalType === t.key ? styles.active : ''}`}
+                      onClick={() => { setEvalType(t.key); setMapping({}); }}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div
+                className={`${styles.dropzone} ${dragging ? styles.drag : ''}`}
+                onClick={pickFile}
+                onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={handleDrop}
+              >
+                <div className={styles['dropzone-icon']}><Upload size={20} /></div>
+                <p>Drag and drop file here</p>
+                <p className={styles['dropzone-hint']}>or click to browse</p>
+                <p className={styles['dropzone-formats']}>Supported: JSON, CSV, Parquet, Arrow</p>
+                <input ref={fileInputRef} type="file" accept=".json,.csv,.parquet,.arrow" hidden onChange={handleFileInput} />
+              </div>
+
+              {file && (
+                <div className={styles['file-info']}>
+                  <span className={styles['file-name']}>{file.name}</span>
+                  <span className={styles['file-size']}>{formatFileSize(file.size)}</span>
+                  <button type="button" className={styles['btn-icon']} onClick={clearFile}><X size={13} /></button>
+                </div>
+              )}
+
+              <div className={styles['form-actions']}>
+                <button type="button" className={`${styles.btn} ${styles['btn-primary']}`} onClick={processFile} disabled={!file}>
+                  Process File
+                </button>
+              </div>
+            </>
+          )}
+
+          {step === 2 && (
+            <>
+              <h3 style={{ fontFamily: 'inherit' }}>Data Preview</h3>
+              <p className={styles.hint}>Showing first {sourceRows.length} rows. Total rows: {sourceRows.length}</p>
+
+              <div className={styles['table-wrap']}>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>{columns.map((c) => <th key={c}>{c}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {sourceRows.map((row, i) => (
+                      <tr key={i}>{columns.map((c) => <td key={c}>{row[c]}</td>)}</tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className={styles['detected-columns']}>
+                <h4>Detected Columns</h4>
+                <div className={styles['column-chips']}>
+                  {columns.map((c) => (
+                    <span key={c} className={styles.chip}>{c} <span>string</span></span>
+                  ))}
+                </div>
+              </div>
+
+              <div className={styles['form-actions']}>
+                <button type="button" className={`${styles.btn} ${styles['btn-secondary']}`} onClick={() => goToStep(1)}>Back</button>
+                <button type="button" className={`${styles.btn} ${styles['btn-primary']}`} onClick={() => goToStep(3)}>Continue to Mapping</button>
+              </div>
+            </>
+          )}
+
+          {step === 3 && (
+            <>
+              <h3 style={{ fontFamily: 'inherit' }}>Map Columns to Fields</h3>
+              <p className={styles.hint}>Map your data columns to the required evaluation fields</p>
+
+              {targets.map((t) => (
+                <div key={t.key} className={styles['mapping-row']}>
+                  <div className={styles['mapping-target']}>
+                    {t.required && <span className={styles.required}>*</span>}
+                    {t.label}
+                    <span className={styles['mapping-hint']}>{t.hint}</span>
+                  </div>
+                  <span className={styles['mapping-arrow']}>&#8594;</span>
+                  <select
+                    className={`${styles.select} ${styles['mapping-source']}`}
+                    value={mapping[t.key] || ''}
+                    onChange={(e) => setMapping((m) => ({ ...m, [t.key]: e.target.value }))}
+                  >
+                    <option value="">— none —</option>
+                    {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+              ))}
+
+              <div className={styles['ai-assist']}>
+                <button type="button" className={styles['btn-ai']} onClick={autoMapFields}>
+                  <Sparkles size={13} /> Auto-Map with AI
+                </button>
+                <span className={styles['ai-hint']}>Uses LLM to suggest column mappings</span>
+              </div>
+
+              <div className={styles['form-actions']}>
+                <button type="button" className={`${styles.btn} ${styles['btn-secondary']}`} onClick={() => goToStep(2)}>Back</button>
+                <button type="button" className={`${styles.btn} ${styles['btn-primary']}`} onClick={previewTransform}>Preview Result</button>
+              </div>
+            </>
+          )}
+
+          {step === 4 && (
+            <>
+              <h3 style={{ fontFamily: 'inherit' }}>Transformed Data Preview</h3>
+              <p className={styles.hint}>Review the transformed data before saving</p>
+
+              <div className={styles['json-preview']}>
+                <pre>{JSON.stringify(transformed, null, 2)}</pre>
+              </div>
+
+              <div className={styles['transform-summary']}>
+                <div className={styles['summary-item']}>
+                  <span className={styles['summary-label']}>Total Rows</span>
+                  <span className={styles['summary-value']}>{sourceRows.length}</span>
+                </div>
+                <div className={styles['summary-item']}>
+                  <span className={styles['summary-label']}>Evaluation Type</span>
+                  <span className={styles['summary-value']}>{evalType[0].toUpperCase() + evalType.slice(1)}</span>
+                </div>
+                <div className={styles['summary-item']}>
+                  <span className={styles['summary-label']}>Valid Rows</span>
+                  <span className={`${styles['summary-value']} ${styles['summary-value--ok']}`}>{validRows}</span>
+                </div>
+                <div className={styles['summary-item']}>
+                  <span className={styles['summary-label']}>Errors</span>
+                  <span className={`${styles['summary-value']} ${errorRows ? styles['summary-value--danger'] : ''}`}>{errorRows}</span>
+                </div>
+              </div>
+
+              <div className={styles['form-actions']}>
+                <button type="button" className={`${styles.btn} ${styles['btn-secondary']}`} onClick={() => goToStep(3)}>Back</button>
+                <button type="button" className={`${styles.btn} ${styles['btn-primary']}`} onClick={saveDataset}>Save Dataset</button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {ToastEl}
+    </div>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Custommetrics.module.scss
+@use '../../styles/_variables' as *;
+
+// ===========================================================================
+// Custom Metrics — Dashboard / Create Metric / Upload Dataset.
+// Mirrors the History/Reports/Comparison/Sidebar design system: ink/paper
+// palette, ultramarine signal accent, mono instrument labels, hover-lift.
+// Shared by all three sub-pages via CSS module composition.
+// ===========================================================================
+
+$ink:      var(--ink-1);
+$ink-2:    var(--ink-2);
+$ink-3:    var(--ink-3);
+$paper:    var(--paper);
+$card:     var(--card);
+$line:     var(--line);
+$line-2:   var(--line-2);
+$signal:   #2B2BF5;
+$signal-2: #1C1CC7;
+$wash:     var(--signal-wash);
+$ok:       #0FA968;
+$ok-wash:  var(--ok-wash);
+$amber:    #E08600;
+$amber-wash: var(--amber-wash);
+$danger:   #DC2626;
+$danger-wash: var(--danger-wash);
+$violet:   #6D28D9;
+$violet-wash: rgba(109, 40, 217, 0.1);
+$sky:      #0369A1;
+$sky-wash: var(--sky-wash);
+$ink-wash: var(--ink-wash);
+
+$mono:    $font-mono;
+$sans:    $font-body;
+$display: $font-display;
+
+$soft: 0 1px 2px rgba(20, 22, 27, 0.05);
+$lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
+
+%micro {
+  font-family: $mono;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+@keyframes cm-spin { to { transform: rotate(360deg); } }
+@keyframes cm-toast-in {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+
+// ---- shared page header -----------------------------------------------
+.cm {
+  &__header {
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 24px 32px 20px;
+    border-bottom: 1px solid $line;
+    background: $card;
+
+    h1 {
+      font-family: $display;
+      font-size: 1.5rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: $ink;
+      line-height: 1.2;
+    }
+  }
+
+  &__header-eyebrow {
+    @extend %micro;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: $signal;
+    margin-bottom: 6px;
+
+    &::before {
+      content: '';
+      width: 16px;
+      height: 2px;
+      border-radius: 2px;
+      background: $signal;
+    }
+  }
+
+  &__header-sub {
+    margin-top: 4px;
+    font-size: 0.84375rem;
+    color: $ink-2;
+  }
+}
+
+.pg-body-scroll {
+  overflow-y: auto;
+  padding: 20px 32px 32px;
+}
+
+// ---- buttons -------------------------------------------------------------
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 16px;
+  border-radius: 10px;
+  border: 1px solid $line;
+  background: $card;
+  color: $ink-2;
+  font-family: $sans;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+
+  &:hover:not(:disabled) { border-color: $ink-3; color: $ink; box-shadow: $soft; }
+  &:disabled { opacity: 0.45; cursor: not-allowed; }
+}
+
+.btn-sm { padding: 6px 11px; font-size: 0.75rem; border-radius: 8px; }
+
+.btn-primary {
+  border-color: $signal;
+  background: $signal;
+  color: #fff;
+
+  &:hover:not(:disabled) { background: $signal-2; border-color: $signal-2; color: #fff; transform: translateY(-1px); box-shadow: $lift; }
+}
+
+.btn-secondary {
+  background: $paper;
+}
+
+.btn-ai {
+  border-color: rgba($violet, 0.3);
+  background: $violet-wash;
+  color: $violet;
+
+  &:hover:not(:disabled) { border-color: $violet; background: rgba($violet, 0.16); color: $violet; }
+}
+
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: $ink-3;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+
+  &:hover { background: $danger-wash; border-color: rgba($danger, 0.2); color: $danger; }
+}
+
+.spin { animation: cm-spin 0.8s linear infinite; }
+
+// ---- toggle groups ---------------------------------------------------------
+.btn-group {
+  display: inline-flex;
+  padding: 3px;
+  background: $paper;
+  border: 1px solid $line;
+  border-radius: 11px;
+  gap: 2px;
+}
+
+.btn-toggle {
+  padding: 7px 16px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: $ink-2;
+  font-family: $sans;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+
+  &:hover { color: $ink; }
+
+  &.active {
+    background: $card;
+    color: $signal;
+    box-shadow: $soft;
+    font-weight: 700;
+  }
+}
+
+.toggle-container {
+  display: inline-flex;
+  border: 1px solid $line;
+  border-radius: 11px;
+  overflow: hidden;
+}
+
+.toggle-btn {
+  padding: 9px 18px;
+  border: none;
+  background: $paper;
+  color: $ink-2;
+  font-family: $sans;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+
+  &:hover { color: $ink; }
+
+  &.active {
+    background: $signal;
+    color: #fff;
+  }
+
+  &:not(:last-child) { border-right: 1px solid $line; }
+}
+
+// ---- cards (dashboard) ------------------------------------------------------
+.cards-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+.card {
+  background: $card;
+  border: 1px solid $line;
+  border-radius: 16px;
+  box-shadow: $soft;
+  overflow: hidden;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px;
+  border-bottom: 1px solid $line;
+
+  h3 {
+    font-family: $display;
+    font-size: 0.9375rem;
+    font-weight: 700;
+    color: $ink;
+  }
+}
+
+.card-body { padding: 4px 0 8px; }
+
+// ---- generic table -----------------------------------------------------
+.table-wrap {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+
+  thead th {
+    text-align: left;
+    background: $paper;
+    @extend %micro;
+    font-size: 0.5625rem;
+    color: $ink-3;
+    padding: 10px 18px;
+    white-space: nowrap;
+  }
+
+  tbody tr {
+    border-top: 1px solid $line-2;
+    transition: background 0.13s ease;
+    &:hover { background: $paper; }
+  }
+
+  tbody td {
+    padding: 11px 18px;
+    color: $ink;
+    vertical-align: middle;
+  }
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-family: $mono;
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: 6px;
+  padding: 3px 8px;
+  white-space: nowrap;
+  color: $signal;
+  background: $wash;
+
+  &--code  { color: $violet; background: $violet-wash; }
+  &--model { color: $signal; background: $wash; }
+  &--rag   { color: $sky; background: $sky-wash; }
+  &--agent { color: $amber; background: $amber-wash; }
+}
+
+// ---- forms ---------------------------------------------------------------
+.form-group {
+  margin-bottom: 20px;
+
+  label {
+    display: block;
+    @extend %micro;
+    font-size: 0.6875rem;
+    color: $ink-2;
+    margin-bottom: 8px;
+  }
+}
+
+.input,
+.select {
+  width: 100%;
+  border: 1.5px solid $line;
+  border-radius: 9px;
+  padding: 9px 12px;
+  font-size: 0.8125rem;
+  font-family: $sans;
+  color: $ink;
+  background: $card;
+
+  &::placeholder { color: $ink-3; }
+  &:focus { outline: none; border-color: $signal; box-shadow: 0 0 0 3px $wash; }
+}
+
+.select { cursor: pointer; }
+
+.hint {
+  font-size: 0.78125rem;
+  color: $ink-3;
+  margin: -4px 0 16px;
+}
+
+.panel {
+  background: $card;
+  border: 1px solid $line;
+  border-radius: 16px;
+  box-shadow: $soft;
+  padding: 24px;
+}
+
+.panel + .panel { margin-top: 16px; }
+
+// ---- metric template cards --------------------------------------------
+.metric-templates {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.metric-card {
+  position: relative;
+  border: 1.5px solid $line;
+  border-radius: 14px;
+  padding: 14px;
+  cursor: pointer;
+  background: $paper;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+
+  &:hover { border-color: $ink-3; }
+
+  &.selected {
+    border-color: $signal;
+    background: $wash;
+    box-shadow: 0 0 0 1px $signal inset;
+  }
+}
+
+.metric-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-family: $display;
+  font-weight: 700;
+  font-size: 0.84375rem;
+  color: $ink;
+
+  input[type='radio'] { accent-color: $signal; }
+}
+
+.metric-card p {
+  font-size: 0.75rem;
+  color: $ink-2;
+  line-height: 1.45;
+  margin-bottom: 8px;
+}
+
+.metric-card code {
+  display: block;
+  font-family: $mono;
+  font-size: 0.6875rem;
+  color: $signal;
+  background: $card;
+  border: 1px solid $line;
+  border-radius: 7px;
+  padding: 6px 8px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+// ---- custom rule builder ---------------------------------------------
+.custom-rules-section {
+  border-top: 1px solid $line;
+  padding-top: 20px;
+  margin-bottom: 20px;
+
+  h4 {
+    font-family: $display;
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: $ink;
+    margin-bottom: 12px;
+  }
+}
+
+.optional {
+  @extend %micro;
+  font-size: 0.625rem;
+  color: $ink-3;
+  margin-left: 6px;
+}
+
+.rule-item {
+  margin-bottom: 8px;
+}
+
+.rule-fields {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  select, input {
+    flex-shrink: 0;
+  }
+}
+
+.rule-field-select { width: 150px; }
+.rule-operator { width: 140px; }
+.rule-compare-type { width: 140px; }
+.rule-value { flex: 1; min-width: 0; }
+
+.add-rule-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 16px;
+}
+
+.gate-select { width: 90px; font-weight: 700; color: $signal; }
+
+.rule-preview {
+  label {
+    display: block;
+    @extend %micro;
+    font-size: 0.625rem;
+    color: $ink-3;
+    margin-bottom: 6px;
+  }
+
+  code {
+    display: block;
+    font-family: $mono;
+    font-size: 0.75rem;
+    color: $ink;
+    background: $paper;
+    border: 1px solid $line;
+    border-radius: 9px;
+    padding: 10px 12px;
+  }
+}
+
+.threshold-row {
+  display: flex;
+  gap: 24px;
+  margin-top: 16px;
+
+  .rule-field {
+    label {
+      display: block;
+      @extend %micro;
+      font-size: 0.625rem;
+      color: $ink-2;
+      margin-bottom: 6px;
+    }
+
+    input {
+      width: 100px;
+    }
+  }
+}
+
+// ---- code editor -----------------------------------------------------
+.code-editor {
+  border: 1px solid $line;
+  border-radius: 14px;
+  overflow: hidden;
+  margin-bottom: 24px;
+}
+
+.editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: $paper;
+  border-bottom: 1px solid $line;
+  @extend %micro;
+  font-size: 0.6875rem;
+  color: $ink-2;
+}
+
+.code-area {
+  width: 100%;
+  min-height: 320px;
+  border: none;
+  resize: vertical;
+  padding: 16px;
+  font-family: $mono;
+  font-size: 0.78125rem;
+  line-height: 1.6;
+  color: $ink;
+  background: $card;
+
+  &:focus { outline: none; }
+}
+
+// ---- validation ---------------------------------------------------------
+.validation-section {
+  border-top: 1px solid $line;
+  padding-top: 20px;
+  margin-bottom: 24px;
+}
+
+.validation-header {
+  margin-bottom: 12px;
+
+  h3 {
+    font-family: $display;
+    font-size: 0.9375rem;
+    font-weight: 700;
+    color: $ink;
+  }
+
+  p {
+    font-size: 0.78125rem;
+    color: $ink-3;
+    margin-top: 2px;
+  }
+}
+
+.validation-controls {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+
+  select { max-width: 280px; }
+}
+
+.validation-results {
+  border: 1px solid $line;
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.validation-summary {
+  display: flex;
+  gap: 24px;
+  padding: 12px 18px;
+  background: $paper;
+  border-top: 1px solid $line;
+  font-size: 0.8125rem;
+  color: $ink-2;
+
+  strong { color: $ink; font-family: $mono; }
+}
+
+.cell-pass { font-family: $mono; font-weight: 700; color: $ok; }
+.cell-fail { font-family: $mono; font-weight: 700; color: $danger; }
+.cell-num { font-family: $mono; font-weight: 700; color: $ink; }
+
+// ---- form actions ---------------------------------------------------------
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 8px;
+}
+
+// ---- upload wizard: steps -------------------------------------------------
+.steps {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 28px;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0.55;
+  transition: opacity 0.15s ease;
+
+  &.active, &.done { opacity: 1; }
+}
+
+.step-num {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: $mono;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: $ink-3;
+  background: $paper;
+  border: 1.5px solid $line;
+}
+
+.step.active .step-num {
+  color: #fff;
+  background: $signal;
+  border-color: $signal;
+}
+
+.step.done .step-num {
+  color: $signal;
+  background: $wash;
+  border-color: $signal;
+}
+
+.step-label {
+  font-size: 0.8125rem;
+  font-weight: 650;
+  color: $ink-2;
+}
+
+.step.active .step-label { color: $ink; font-weight: 700; }
+
+.step-line {
+  width: 32px;
+  height: 1.5px;
+  background: $line;
+}
+
+// ---- dropzone --------------------------------------------------------
+.dropzone {
+  border: 1.5px dashed $line;
+  border-radius: 16px;
+  padding: 40px 20px;
+  text-align: center;
+  cursor: pointer;
+  background: $paper;
+  transition: border-color 0.15s ease, background 0.15s ease;
+  margin-bottom: 16px;
+
+  &:hover, &.drag { border-color: $signal; background: $wash; }
+}
+
+.dropzone-icon {
+  width: 44px;
+  height: 44px;
+  margin: 0 auto 12px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: $card;
+  border: 1px solid $line;
+  color: $signal;
+}
+
+.dropzone p { font-size: 0.875rem; color: $ink; font-weight: 650; margin-bottom: 2px; }
+.dropzone-hint { font-size: 0.78125rem; color: $ink-3 !important; font-weight: 500 !important; }
+.dropzone-formats { font-family: $mono; font-size: 0.6875rem !important; color: $ink-3 !important; margin-top: 8px !important; font-weight: 500 !important; }
+
+.file-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid $line;
+  border-radius: 12px;
+  background: $card;
+  margin-bottom: 16px;
+
+  .file-name { font-weight: 700; color: $ink; font-size: 0.8125rem; }
+  .file-size { font-family: $mono; font-size: 0.71875rem; color: $ink-3; }
+}
+
+// ---- detected columns / chips ------------------------------------------
+.detected-columns {
+  margin-top: 20px;
+
+  h4 {
+    @extend %micro;
+    font-size: 0.6875rem;
+    color: $ink-2;
+    margin-bottom: 10px;
+  }
+}
+
+.column-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: $mono;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  color: $signal;
+  background: $wash;
+  border: 1px solid rgba($signal, 0.18);
+  border-radius: 999px;
+  padding: 4px 10px;
+
+  span { color: $ink-3; font-weight: 500; text-transform: none; letter-spacing: 0; }
+}
+
+// ---- field mapping --------------------------------------------------------
+.mapping-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 0;
+  border-bottom: 1px solid $line-2;
+
+  &:last-child { border-bottom: none; }
+}
+
+.mapping-target {
+  flex: 0 0 220px;
+  font-family: $display;
+  font-weight: 700;
+  font-size: 0.84375rem;
+  color: $ink;
+}
+
+.required { color: $danger; margin-right: 3px; }
+
+.mapping-hint {
+  display: block;
+  font-family: $sans;
+  font-weight: 500;
+  font-size: 0.71875rem;
+  color: $ink-3;
+  margin-top: 2px;
+}
+
+.mapping-arrow { color: $ink-3; flex-shrink: 0; }
+.mapping-source { flex: 1; }
+
+.ai-assist {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 20px 0;
+}
+
+.ai-hint { font-size: 0.75rem; color: $ink-3; }
+
+// ---- json preview / summary --------------------------------------------
+.json-preview {
+  background: $paper;
+  border: 1px solid $line;
+  border-radius: 14px;
+  padding: 16px;
+  margin-bottom: 20px;
+  max-height: 340px;
+  overflow: auto;
+
+  pre {
+    font-family: $mono;
+    font-size: 0.75rem;
+    line-height: 1.6;
+    color: $ink;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+}
+
+.transform-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.summary-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  background: $paper;
+  border: 1px solid $line;
+  border-radius: 14px;
+
+  .summary-label { @extend %micro; font-size: 0.5625rem; color: $ink-3; }
+  .summary-value { font-family: $mono; font-size: 1.0625rem; font-weight: 700; color: $ink; }
+  .summary-value--danger { color: $danger; }
+  .summary-value--ok { color: $ok; }
+}
+
+.empty {
+  padding: 24px;
+  text-align: center;
+  color: $ink-3;
+  font-size: 0.8125rem;
+}
+
+// ---- toast --------------------------------------------------------------
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 18px;
+  border-radius: 11px;
+  background: #14161B;
+  color: #fff;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  box-shadow: $lift;
+  animation: cm-toast-in 0.18s ease;
+
+  &--ok::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: $ok; flex-shrink: 0; }
+  &--error::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #FF6B6B; flex-shrink: 0; }
+}
+
+@media (max-width: 900px) {
+  .cards-row { grid-template-columns: 1fr; }
+  .metric-templates { grid-template-columns: 1fr; }
+  .transform-summary { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 640px) {
+  .cm__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
+  .pg-body-scroll { padding: 16px 18px 22px; }
+  .rule-fields { flex-wrap: wrap; }
+  .mapping-row { flex-wrap: wrap; }
+  .mapping-target { flex: 1 1 100%; }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Mockdata.ts
+export type EvalType = 'model' | 'agent' | 'rag';
+
+export const EVAL_TYPES: { key: EvalType; label: string }[] = [
+  { key: 'model', label: 'Model' },
+  { key: 'agent', label: 'Agent' },
+  { key: 'rag', label: 'RAG' },
+];
+
+// ---- Dashboard --------------------------------------------------------
+export const SAVED_METRICS = [
+  { id: 'm1', name: 'Keyword Match', type: 'visual' as const, created: '2024-01-15' },
+  { id: 'm2', name: 'Custom ROUGE', type: 'code' as const, created: '2024-01-14' },
+];
+
+export const SAVED_DATASETS = [
+  { id: 'd1', name: 'QA Dataset', type: 'model' as EvalType, rows: 150 },
+  { id: 'd2', name: 'RAG Test Set', type: 'rag' as EvalType, rows: 75 },
+];
+
+// ---- Create Metric — visual builder templates --------------------------
+export const METRIC_TEMPLATES: Record<EvalType, { id: string; name: string; desc: string; code: string }[]> = {
+  model: [
+    {
+      id: 'exact_match',
+      name: 'Exact Match',
+      desc: 'Checks if actual_output exactly matches expected_output',
+      code: 'score = 1.0 if actual_output == expected_output else 0.0',
+    },
+    {
+      id: 'contains_answer',
+      name: 'Contains Answer',
+      desc: 'Checks if expected_output appears within actual_output',
+      code: 'score = 1.0 if expected_output in actual_output else 0.0',
+    },
+    {
+      id: 'keyword_match',
+      name: 'Keyword Match',
+      desc: 'Calculates percentage of expected keywords found in output',
+      code: 'score = matched_keywords / total_keywords',
+    },
+  ],
+  rag: [
+    {
+      id: 'faithfulness',
+      name: 'Faithfulness',
+      desc: 'Checks if actual_output is grounded in retrieval_context',
+      code: 'score = claims_in_context / total_claims',
+    },
+    {
+      id: 'context_relevancy',
+      name: 'Context Relevancy',
+      desc: 'Measures how relevant the retrieval_context is to input',
+      code: 'score = relevant_sentences / total_sentences',
+    },
+    {
+      id: 'answer_relevancy',
+      name: 'Answer Relevancy',
+      desc: 'Checks if actual_output answers the input question',
+      code: 'score = semantic_similarity(output, expected)',
+    },
+  ],
+  agent: [
+    {
+      id: 'tool_correctness',
+      name: 'Tool Correctness',
+      desc: 'Checks if tools_called matches expected_tools',
+      code: 'score = matched_tools / expected_tools',
+    },
+    {
+      id: 'task_completion',
+      name: 'Task Completion',
+      desc: 'Evaluates if the agent completed the requested task',
+      code: 'score = LLM_judge(input, output, tools_called)',
+    },
+    {
+      id: 'tool_params',
+      name: 'Parameter Accuracy',
+      desc: 'Checks if tool parameters match expected values',
+      code: 'score = matched_params / total_params',
+    },
+  ],
 };
 
-export default InferencePanel;
+export const RULE_FIELDS = ['input', 'actual_output', 'expected_output', 'context'];
+
+export const RULE_OPERATORS: { value: string; label: string }[] = [
+  { value: 'contains', label: 'contains' },
+  { value: 'not_contains', label: 'not contains' },
+  { value: 'equals', label: 'equals' },
+  { value: 'starts_with', label: 'starts with' },
+  { value: 'ends_with', label: 'ends with' },
+  { value: 'length_gt', label: 'length >' },
+  { value: 'length_lt', label: 'length <' },
+  { value: 'regex', label: 'regex match' },
+];
+
+export const CODE_TEMPLATE = `from deepeval.metrics import BaseMetric
+from deepeval.test_case import LLMTestCase
+
+class CustomMetric(BaseMetric):
+    """
+    LLMTestCase fields:
+    - test_case.input: the prompt/question (str)
+    - test_case.actual_output: model's response (str)
+    - test_case.expected_output: expected answer (str)
+    - test_case.retrieval_context: context docs (list[str])
+    - test_case.tools_called: tools used (list[ToolCall])
+    - test_case.expected_tools: expected tools (list[ToolCall])
+    """
+
+    def __init__(self, threshold: float = 0.5):
+        self.threshold = threshold
+
+    def measure(self, test_case: LLMTestCase) -> float:
+        # Example: Check if expected answer is in output
+        if test_case.expected_output.lower() in test_case.actual_output.lower():
+            self.score = 1.0
+        else:
+            self.score = 0.0
+        self.success = self.score >= self.threshold
+        return self.score
+
+    async def a_measure(self, test_case: LLMTestCase) -> float:
+        return self.measure(test_case)
+
+    def is_successful(self) -> bool:
+        return self.success
+
+    @property
+    def __name__(self):
+        return "Custom Metric"
+`;
+
+export const VALIDATION_DATASETS = [
+  { value: 'qa-sample', label: 'QA Dataset (150 rows)' },
+  { value: 'rag-sample', label: 'RAG Test Set (75 rows)' },
+];
+
+export const VALIDATION_ROWS = [
+  { input: 'What is the capital of France?', output: 'Paris is the capital of France.', expected: 'Paris', score: 1.0 },
+  { input: 'Who wrote Romeo and Juliet?', output: 'It was written by William Shakespeare.', expected: 'William Shakespeare', score: 1.0 },
+  { input: 'What is the chemical symbol for water?', output: 'The formula is H2O.', expected: 'H2O', score: 1.0 },
+  { input: 'What year did World War II end?', output: 'The war ended in 1946.', expected: '1945', score: 0.0 },
+  { input: 'What is the largest planet?', output: 'Jupiter is the largest planet in our solar system.', expected: 'Jupiter', score: 1.0 },
+];
+
+// ---- Upload Dataset — sample source files (first rows) ------------------
+export const SAMPLE_SOURCE_DATA: Record<EvalType, Record<string, string>[]> = {
+  model: [
+    { question: 'What is the capital of France?', answer: 'Paris' },
+    { question: 'Who wrote Romeo and Juliet?', answer: 'William Shakespeare' },
+    { question: 'What is the chemical symbol for water?', answer: 'H2O' },
+    { question: 'What year did World War II end?', answer: '1945' },
+    { question: 'What is the largest planet in our solar system?', answer: 'Jupiter' },
+  ],
+  agent: [
+    { task: "What's the weather in San Francisco?", tools_json: 'get_weather({"location":"San Francisco"})', final_answer: 'The weather in San Francisco is sunny with a high of 68°F' },
+    { task: 'Search for the latest news about AI', tools_json: 'web_search({"query":"latest AI news"})', final_answer: 'Here are the latest AI news articles...' },
+    { task: 'Send an email to john@example.com about the meeting', tools_json: 'send_email({"to":"john@example.com"})', final_answer: 'Email sent successfully to john@example.com' },
+    { task: 'Calculate 25% of 200', tools_json: 'calculator({"expression":"0.25 * 200"})', final_answer: '25% of 200 is 50' },
+    { task: 'Book a flight from NYC to LA for tomorrow', tools_json: 'book_flight({"from":"NYC","to":"LA"})', final_answer: 'Flight booked from NYC to LA' },
+  ],
+  rag: [
+    { question: "What is the company's return policy?", context: 'Our return policy allows returns within 30 days of purchase with original receipt.', answer: '30 days with receipt' },
+    { question: 'How do I reset my password?', context: "Click the 'Forgot Password' link on the login page.", answer: 'Click forgot password on login page' },
+    { question: 'What are the shipping options?', context: 'We offer Standard (5-7 days) and Express (1-2 days) shipping.', answer: 'Standard (5-7 days) and Express (1-2 days)' },
+    { question: 'How do I contact customer support?', context: 'Email support@company.com or call 1-800-123-4567.', answer: 'Email support@company.com or call 1-800-123-4567' },
+    { question: 'What payment methods do you accept?', context: 'We accept credit cards, PayPal, and Apple Pay.', answer: 'Credit cards, PayPal, and Apple Pay' },
+  ],
+};
+
+export const MAPPING_TARGETS: Record<EvalType, { key: string; label: string; hint: string; required: boolean }[]> = {
+  model: [
+    { key: 'input', label: 'input', hint: 'The question or prompt', required: true },
+    { key: 'expected_output', label: 'expected_output', hint: 'The correct answer', required: true },
+    { key: 'context', label: 'context', hint: 'Additional context (optional)', required: false },
+  ],
+  agent: [
+    { key: 'input', label: 'input', hint: 'The task description', required: true },
+    { key: 'expected_tools', label: 'expected_tools', hint: 'Expected tool calls (JSON)', required: true },
+    { key: 'expected_output', label: 'expected_output', hint: 'Expected final answer (optional)', required: false },
+  ],
+  rag: [
+    { key: 'input', label: 'input', hint: 'The question', required: true },
+    { key: 'retrieval_context', label: 'retrieval_context', hint: 'Retrieved context documents', required: true },
+    { key: 'expected_output', label: 'expected_output', hint: 'Expected answer', required: true },
+  ],
+};
+
+// naive best-guess auto-mapping, keyed by eval type
+export const AUTO_MAP_GUESS: Record<EvalType, Record<string, string>> = {
+  model: { input: 'question', expected_output: 'answer', context: '' },
+  agent: { input: 'task', expected_tools: 'tools_json', expected_output: 'final_answer' },
+  rag: { input: 'question', retrieval_context: 'context', expected_output: 'answer' },
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Usetoast.tsx
+import { useCallback, useEffect, useState } from 'react';
+import styles from './CustomMetrics.module.scss';
+
+type ToastState = { message: string; type: 'ok' | 'error' | 'info' } | null;
+
+export function useToast() {
+  const [toast, setToast] = useState<ToastState>(null);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 2600);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  const showToast = useCallback((message: string, type: 'ok' | 'error' | 'info' = 'info') => {
+    setToast({ message, type });
+  }, []);
+
+  const ToastEl = toast ? (
+    <div className={`${styles.toast} ${styles[`toast--${toast.type}`] || ''}`}>{toast.message}</div>
+  ) : null;
+
+  return { showToast, ToastEl };
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Sidebar.tsx
+import { useState } from 'react';
+import { Link, NavLink, useLocation } from 'react-router-dom';
+import {
+  Home, Link2, Cpu, BookOpen, Play, FlaskConical, GitCompare, FileText, LogOut,
+  Gauge, ChevronDown, LayoutDashboard, PenSquare, UploadCloud,
+} from 'lucide-react';
+import { useAppDispatch, useAppSelector } from '../../hooks/redux';
+import { logout } from '../../store/slices/authSlice';
+import ThemeToggle from '../common/ThemeToggle';
+import styles from './Sidebar.module.scss';
+
+const navItems = [
+  { to: '/app/dashboard', icon: <Home size={18} />, label: 'Dashboard' },
+  { to: '/app/providers', icon: <Link2 size={18} />, label: 'Providers' },
+  { to: '/app/models', icon: <Cpu size={18} />, label: 'Models' },
+  { to: '/app/datasets', icon: <BookOpen size={18} />, label: 'Datasets' },
+];
+
+const workflowItems = [
+  { to: '/app/run-evaluation', icon: <Play size={18} />, label: 'New Evaluation' },
+  { to: '/app/history', icon: <FlaskConical size={18} />, label: 'History' },
+  { to: '/app/comparison', icon: <GitCompare size={18} />, label: 'Comparison' },
+  { to: '/app/reports', icon: <FileText size={18} />, label: 'Reports' },
+];
+
+const customMetricsSubItems = [
+  { to: '/app/custom-metrics/dashboard', icon: <LayoutDashboard size={15} />, label: 'Dashboard' },
+  { to: '/app/custom-metrics/create', icon: <PenSquare size={15} />, label: 'Create Metric' },
+  { to: '/app/custom-metrics/upload', icon: <UploadCloud size={15} />, label: 'Upload Dataset' },
+];
+
+export default function Sidebar() {
+  const dispatch = useAppDispatch();
+  const user = useAppSelector((s) => s.auth.user);
+  const location = useLocation();
+
+  const isOnCustomMetrics = location.pathname.startsWith('/app/custom-metrics');
+  const [customMetricsOpen, setCustomMetricsOpen] = useState(isOnCustomMetrics);
+
+  const navLinkClass = ({ isActive }: { isActive: boolean }) =>
+    `${styles['nav-item']} ${isActive ? styles.active : ''}`;
+
+  const subNavLinkClass = ({ isActive }: { isActive: boolean }) =>
+    `${styles['nav-item']} ${styles['nav-item--sub']} ${isActive ? styles.active : ''}`;
+
+  return (
+    <div className={styles.sidebar}>
+      <Link to="/" className={styles['sidebar__logo']}>
+        <div className={styles['sidebar__mark']}>&#9670;</div>
+        SemcoEval
+      </Link>
+      <nav className={styles['sidebar__nav']}>
+        {navItems.map((item) => (
+          <NavLink key={item.to} to={item.to} className={navLinkClass}>
+            {item.icon}
+            {item.label}
+          </NavLink>
+        ))}
+
+        <div className={styles['sidebar__section']}>Workflow</div>
+        {workflowItems.map((item) => (
+          <NavLink key={item.to} to={item.to} className={navLinkClass}>
+            {item.icon}
+            {item.label}
+          </NavLink>
+        ))}
+
+        <button
+          type="button"
+          className={`${styles['nav-item']} ${styles['nav-item--expandable']} ${isOnCustomMetrics ? styles.active : ''}`}
+          onClick={() => setCustomMetricsOpen((o) => !o)}
+          aria-expanded={customMetricsOpen}
+        >
+          <Gauge size={18} />
+          Custom Metrics
+          <ChevronDown
+            size={14}
+            className={`${styles['nav-item__chevron']} ${customMetricsOpen ? styles['nav-item__chevron--open'] : ''}`}
+          />
+        </button>
+
+        <div className={`${styles['nav-submenu']} ${customMetricsOpen ? styles['nav-submenu--open'] : ''}`}>
+          <div className={styles['nav-submenu__inner']}>
+            {customMetricsSubItems.map((item) => (
+              <NavLink key={item.to} to={item.to} className={subNavLinkClass}>
+                {item.icon}
+                {item.label}
+              </NavLink>
+            ))}
+          </div>
+        </div>
+      </nav>
+      <div className={styles['sidebar__foot']}>
+        <div className={styles['sidebar__theme-row']}>
+          <span>Theme</span>
+          <ThemeToggle />
+        </div>
+        <div className={styles['sidebar__user']}>
+          <div className={styles['sidebar__avatar']}>
+            {(user?.name || user?.email || '?').slice(0, 1).toUpperCase()}
+          </div>
+          <div className={styles['sidebar__user-info']}>
+            <div className={styles['sidebar__user-name']}>{user?.name || 'Account'}</div>
+            <div className={styles['sidebar__user-email']}>{user?.email}</div>
+          </div>
+          <button
+            type="button"
+            className={styles['sidebar__logout']}
+            title="Log out"
+            onClick={() => dispatch(logout())}
+          >
+            <LogOut size={15} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Sidebar.module.scss
+// ---- Add to Sidebar.module.scss ----------------------------------------
+// Paste inside the file, after the existing `.nav-item { ... }` block.
+
+.nav-item--expandable {
+  justify-content: flex-start;
+  position: relative;
+}
+
+.nav-item__chevron {
+  margin-left: auto;
+  color: $ink-3;
+  transition: transform 0.18s ease, color 0.18s ease;
+  flex-shrink: 0;
+
+  &--open { transform: rotate(180deg); }
+}
+
+.nav-item--expandable.active .nav-item__chevron { color: $signal-active; }
+
+.nav-submenu {
+  display: grid;
+  grid-template-rows: 0fr;
+  overflow: hidden;
+  transition: grid-template-rows 0.18s ease;
+
+  &--open { grid-template-rows: 1fr; }
+}
+
+.nav-submenu__inner {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: 14px;
+  margin-top: 2px;
+  border-left: 1.5px solid $line;
+}
+
+.nav-item--sub {
+  font-size: 0.8929em; // 0.78125rem / 0.875rem
+  padding: 8px 12px;
+  gap: 10px;
+
+  svg { color: $ink-3; }
+
+  &.active {
+    box-shadow: none;
+    background: $wash;
+  }
+}
