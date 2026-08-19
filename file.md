@@ -10,6 +10,9 @@ import NewEvaluation from '../components/evaluations/NewEvaluation';
 import Evaluations from '../components/evaluations/Evaluations';
 import EvaluationDetail from '../components/evaluations/EvaluationDetail';
 import Comparison from '../components/comparison/Comparison';
+import CustomMetricsDashboard from '../components/CustomMetrics/CustomMetricsDashboard';
+import CreateMetric from '../components/CustomMetrics/CreateMetric';
+import UploadDataset from '../components/CustomMetrics/UploadDataset';
 
 const MOCKS_ENABLED = import.meta.env.VITE_ENABLE_MOCKS === 'true';
 
@@ -31,6 +34,13 @@ export default function AppRoutes() {
           <Route path="evaluations" element={<Evaluations />} />
           <Route path="evaluations/:id" element={<EvaluationDetail />} />
           <Route path="comparison" element={<Comparison />} />
+
+          <Route path="custom-metrics">
+            <Route index element={<Navigate to="dashboard" replace />} />
+            <Route path="dashboard" element={<CustomMetricsDashboard />} />
+            <Route path="create" element={<CreateMetric />} />
+            <Route path="upload" element={<UploadDataset />} />
+          </Route>
         </Route>
       </Route>
 
