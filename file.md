@@ -1,6 +1,16 @@
-//Addcustommodeldrawer.tsx
-import { useEffect, useState } from 'react';
-import { X, Search, Loader2, ChevronDown, CheckCircle2, RotateCcw, AlertCircle } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import {
+  X,
+  Search,
+  Loader2,
+  ChevronDown,
+  Check,
+  CheckCircle2,
+  RotateCcw,
+  AlertCircle,
+  Sparkles,
+  PenLine,
+} from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
 import { fetchModelCategories } from '../../store/slices/modelsSlice';
 import { modelsApi, type DiscoveredModel } from '../../api/endpoints/models';
@@ -26,6 +36,8 @@ export default function AddCustomModelDrawer({ onClose, onSubmit, submitting }: 
   const [baseUrl, setBaseUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [category, setCategory] = useState('');
+  const [categoryOpen, setCategoryOpen] = useState(false);
+  const categoryRef = useRef<HTMLDivElement>(null);
   const [description, setDescription] = useState('');
 
   const [fieldsMode, setFieldsMode] = useState<FieldsMode>('hidden');
@@ -33,6 +45,7 @@ export default function AddCustomModelDrawer({ onClose, onSubmit, submitting }: 
   const [modelId, setModelId] = useState('');
   const [contextWindowInput, setContextWindowInput] = useState('');
   const [contextWindowLocked, setContextWindowLocked] = useState(false);
+  const [autoDetected, setAutoDetected] = useState(false);
 
   const [discoverStatus, setDiscoverStatus] = useState<'idle' | 'loading' | 'error'>('idle');
   const [discoverError, setDiscoverError] = useState<string | null>(null);
@@ -43,12 +56,32 @@ export default function AddCustomModelDrawer({ onClose, onSubmit, submitting }: 
     if (categoriesStatus === 'idle') dispatch(fetchModelCategories());
   }, [dispatch, categoriesStatus]);
 
+  // Close the custom category dropdown on outside click / Escape.
+  useEffect(() => {
+    if (!categoryOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      if (categoryRef.current && !categoryRef.current.contains(e.target as Node)) setCategoryOpen(false);
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCategoryOpen(false);
+    };
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [categoryOpen]);
+
+  const selectedCategory = categories.find((c) => c.value === category) || null;
+
   const resetModelFields = () => {
     setFieldsMode('hidden');
     setName('');
     setModelId('');
     setContextWindowInput('');
     setContextWindowLocked(false);
+    setAutoDetected(false);
     setDiscoveredModels([]);
     setSelectedModelId(null);
     setDiscoverStatus('idle');
@@ -90,6 +123,7 @@ export default function AddCustomModelDrawer({ onClose, onSubmit, submitting }: 
       setFieldsMode('discovered');
       if (res.models.length === 1) {
         selectDiscoveredModel(res.models[0]);
+        setAutoDetected(true);
       } else {
         setSelectedModelId(null);
       }
@@ -135,7 +169,7 @@ export default function AddCustomModelDrawer({ onClose, onSubmit, submitting }: 
             <input
               className="fi"
               value={baseUrl}
-              onChange={(e) => { setBaseUrl(e.target.value); }}
+              onChange={(e) => setBaseUrl(e.target.value)}
               placeholder="https://…"
             />
           </div>
@@ -151,62 +185,106 @@ export default function AddCustomModelDrawer({ onClose, onSubmit, submitting }: 
             />
           </div>
 
+          {/* ---- custom category dropdown ---- */}
           <div className="fg">
             <label className="fl">Category</label>
-            <div className={styles['select-wrap']}>
-              <select
-                className={styles['select-fi']}
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
+            <div className={styles['combo']} ref={categoryRef}>
+              <button
+                type="button"
+                className={`${styles['combo-trigger']} ${categoryOpen ? styles['combo-trigger--open'] : ''}`}
+                onClick={() => setCategoryOpen((o) => !o)}
                 disabled={categoriesStatus === 'loading'}
               >
-                <option value="" disabled>
-                  {categoriesStatus === 'loading' ? 'Loading categories…' : 'Select a category'}
-                </option>
-                {categories.map((c) => (
-                  <option key={c.value} value={c.value}>{c.label}</option>
-                ))}
-              </select>
-              <ChevronDown size={14} className={styles['select-caret']} />
+                {categoriesStatus === 'loading' ? (
+                  <span className={styles['combo-placeholder']}>Loading categories…</span>
+                ) : selectedCategory ? (
+                  <span className={styles['combo-value']}>
+                    <span className={styles['combo-value-label']}>{selectedCategory.label}</span>
+                  </span>
+                ) : (
+                  <span className={styles['combo-placeholder']}>Select a category</span>
+                )}
+                <ChevronDown size={15} className={`${styles['combo-caret']} ${categoryOpen ? styles['combo-caret--open'] : ''}`} />
+              </button>
+
+              {categoryOpen && (
+                <div className={styles['combo-panel']} role="listbox">
+                  {categories.length === 0 && categoriesStatus !== 'loading' && (
+                    <div className={styles['combo-empty']}>No categories available.</div>
+                  )}
+                  {categories.map((c) => (
+                    <button
+                      type="button"
+                      key={c.value}
+                      role="option"
+                      aria-selected={category === c.value}
+                      className={`${styles['combo-option']} ${category === c.value ? styles['combo-option--selected'] : ''}`}
+                      onClick={() => { setCategory(c.value); setCategoryOpen(false); }}
+                    >
+                      <div className={styles['combo-option-check']}>
+                        {category === c.value && <Check size={14} />}
+                      </div>
+                      <div className={styles['combo-option-text']}>
+                        <span className={styles['combo-option-label']}>{c.label}</span>
+                        {c.description && <span className={styles['combo-option-desc']}>{c.description}</span>}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             {categoriesStatus === 'failed' && (
-              <div className={styles['field-hint--error']}>Couldn't load categories. You can still type once available, or retry later.</div>
-            )}
-            {category && categories.find((c) => c.value === category)?.description && (
-              <div className={styles['field-hint']}>{categories.find((c) => c.value === category)?.description}</div>
+              <div className={styles['field-hint--error']}><AlertCircle size={12} /> Couldn't load categories. Try again shortly.</div>
             )}
           </div>
 
-          {/* --- Model identity: hidden until discovered, or the user opts into manual entry --- */}
+          {/* ---- discovery panel: hidden until the user opts into discover-or-manual ---- */}
           {fieldsMode === 'hidden' && (
             <div className={styles['discover-panel']}>
-              <div className={styles['discover-panel-text']}>
-                <Search size={14} />
-                <span>Discover the models this endpoint serves, or enter the details yourself.</span>
+              <div className={styles['discover-panel-icon']}>
+                <Sparkles size={16} />
               </div>
-              <div className={styles['discover-panel-actions']}>
-                <button
-                  type="button"
-                  className={styles['discover-btn']}
-                  disabled={!baseUrl.trim() || discoverStatus === 'loading'}
-                  onClick={handleDiscover}
-                >
-                  {discoverStatus === 'loading' ? (
-                    <Loader2 size={14} className={styles['spin']} />
-                  ) : (
-                    <Search size={14} />
-                  )}
-                  Discover Models
-                </button>
-                <button type="button" className={styles['discover-btn-ghost']} onClick={() => setFieldsMode('manual')}>
-                  Enter Manually
-                </button>
-              </div>
-              {discoverStatus === 'error' && (
-                <div className={styles['field-hint--error']}>
-                  <AlertCircle size={13} /> {discoverError}
+              <div className={styles['discover-panel-body']}>
+                <div className={styles['discover-panel-title']}>Auto-detect this model</div>
+                <p className={styles['discover-panel-text']}>
+                  We can probe the base URL to pull in the model name, ID, and context window automatically.
+                </p>
+
+                <div className={styles['discover-panel-actions']}>
+                  <button
+                    type="button"
+                    className={styles['discover-btn']}
+                    disabled={!baseUrl.trim() || discoverStatus === 'loading'}
+                    onClick={handleDiscover}
+                  >
+                    {discoverStatus === 'loading' ? (
+                      <Loader2 size={14} className={styles['spin']} />
+                    ) : (
+                      <Search size={14} />
+                    )}
+                    {discoverStatus === 'loading' ? 'Discovering…' : 'Discover Models'}
+                  </button>
+                  <button type="button" className={styles['discover-link']} onClick={() => setFieldsMode('manual')}>
+                    <PenLine size={12} /> or enter details manually
+                  </button>
                 </div>
-              )}
+
+                {!baseUrl.trim() && (
+                  <div className={styles['field-hint']}>Add a base URL above to enable discovery.</div>
+                )}
+                {discoverStatus === 'error' && (
+                  <div className={styles['field-hint--error']}>
+                    <AlertCircle size={13} /> {discoverError}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {fieldsMode === 'discovered' && autoDetected && selectedModelId && (
+            <div className={styles['success-banner']}>
+              <CheckCircle2 size={15} />
+              <span>Model detected automatically from this endpoint.</span>
             </div>
           )}
 
@@ -250,7 +328,7 @@ export default function AddCustomModelDrawer({ onClose, onSubmit, submitting }: 
 
               <div className="fg">
                 <label className="fl">
-                  Model ID {fieldsMode === 'discovered' && <span className="opt">(locked from discovery)</span>}
+                  Model ID {fieldsMode === 'discovered' && <span className={styles['locked-tag']}>Locked from discovery</span>}
                 </label>
                 <input
                   className="fi"
@@ -263,7 +341,7 @@ export default function AddCustomModelDrawer({ onClose, onSubmit, submitting }: 
 
               <div className="fg">
                 <label className="fl">
-                  Context Window {contextWindowLocked && <span className="opt">(locked from discovery)</span>}
+                  Context Window {contextWindowLocked && <span className={styles['locked-tag']}>Locked from discovery</span>}
                 </label>
                 <input
                   className="fi"
@@ -319,10 +397,6 @@ export default function AddCustomModelDrawer({ onClose, onSubmit, submitting }: 
 
 
 
-
-
-
-//Addcustommodel.module.scss
 @use '../../styles/_variables' as *;
 
 .drawer-overlay {
@@ -343,35 +417,128 @@ export default function AddCustomModelDrawer({ onClose, onSubmit, submitting }: 
 .drawer__body { flex: 1; overflow-y: auto; padding: 24px; }
 .drawer__foot { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 24px; border-top: 1px solid $border-light; }
 
-// ---- category select -------------------------------------------------------
-.select-wrap {
+// ---- category custom dropdown ------------------------------------------------
+.combo {
   position: relative;
 }
-.select-fi {
+.combo-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   width: 100%;
-  appearance: none;
-  -webkit-appearance: none;
-  font: inherit;
-  font-size: 13px;
-  color: $text-primary;
+  padding: 10px 12px;
+  border: 1.5px solid $border;
+  border-radius: 10px;
   background: $surface;
-  border: 1px solid $border;
-  border-radius: 8px;
-  padding: 9px 32px 9px 11px;
   cursor: pointer;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  text-align: left;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 
   &:hover:not(:disabled) { border-color: $indigo; }
-  &:focus { outline: none; border-color: $indigo; box-shadow: 0 0 0 3px $indigo-pale; }
   &:disabled { cursor: not-allowed; opacity: 0.6; }
+
+  &--open {
+    border-color: $indigo;
+    box-shadow: 0 0 0 3px $indigo-pale;
+  }
 }
-.select-caret {
-  position: absolute;
-  top: 50%;
-  right: 11px;
-  transform: translateY(-50%);
+.combo-value {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.combo-value-label {
+  font-size: 13px;
+  font-weight: 650;
+  color: $text-primary;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.combo-placeholder {
+  font-size: 13px;
   color: $text-muted;
-  pointer-events: none;
+}
+.combo-caret {
+  flex-shrink: 0;
+  color: $text-muted;
+  transition: transform 0.18s ease;
+
+  &--open { transform: rotate(180deg); color: $indigo; }
+}
+.combo-panel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 6px;
+  background: $surface;
+  border: 1px solid $border;
+  border-radius: 12px;
+  box-shadow: $shadow-3;
+  animation: combo-panel-in 0.14s ease both;
+}
+@keyframes combo-panel-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.combo-empty {
+  padding: 14px 10px;
+  font-size: 12.5px;
+  color: $text-muted;
+  text-align: center;
+}
+.combo-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 10px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s ease;
+
+  &:hover { background: $surface-alt; }
+
+  &--selected {
+    background: $indigo-pale;
+
+    &:hover { background: $indigo-pale; }
+  }
+
+  & + & { margin-top: 1px; }
+}
+.combo-option-check {
+  flex-shrink: 0;
+  width: 14px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: $indigo;
+}
+.combo-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.combo-option-label {
+  font-size: 13px;
+  font-weight: 650;
+  color: $text-primary;
+}
+.combo-option-desc {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: $text-secondary;
 }
 
 // ---- hint / error text -------------------------------------------------------
@@ -389,66 +556,117 @@ export default function AddCustomModelDrawer({ onClose, onSubmit, submitting }: 
   font-size: 12px;
   color: #DC2626;
 }
+.locked-tag {
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: $emerald-pale;
+  color: $emerald-dark;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  vertical-align: middle;
+}
 
 // ---- optional-discovery panel -------------------------------------------------
 .discover-panel {
-  margin-bottom: 16px;
-  padding: 14px;
-  border: 1px dashed $border;
-  border-radius: 10px;
-  background: $surface-alt;
+  display: flex;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 16px;
+  border-radius: 14px;
+  background: linear-gradient(165deg, $indigo-pale 0%, $surface-alt 65%);
+  border: 1px solid rgba($indigo, 0.16);
+  position: relative;
+  overflow: hidden;
+}
+.discover-panel-icon {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: $indigo;
+  color: #fff;
+  box-shadow: 0 4px 10px -3px rgba($indigo, 0.5);
+}
+.discover-panel-body {
+  min-width: 0;
+  flex: 1;
+}
+.discover-panel-title {
+  font-size: 13.5px;
+  font-weight: 750;
+  color: $text-primary;
+  margin-bottom: 3px;
 }
 .discover-panel-text {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  font-size: 12.5px;
+  font-size: 12px;
   line-height: 1.5;
   color: $text-secondary;
-  margin-bottom: 12px;
-
-  svg { flex-shrink: 0; margin-top: 1px; color: $text-muted; }
+  margin: 0 0 12px;
 }
 .discover-panel-actions {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: 14px;
   flex-wrap: wrap;
 }
 .discover-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 12px;
-  border-radius: 8px;
+  padding: 8px 14px;
+  border-radius: 9px;
   border: 1px solid $indigo;
   background: $indigo;
   color: #fff;
   font-size: 12.5px;
   font-weight: 700;
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  box-shadow: 0 2px 6px -2px rgba($indigo, 0.5);
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease, box-shadow 0.15s ease;
 
-  &:hover:not(:disabled) { background: $indigo-dark; border-color: $indigo-dark; }
-  &:disabled { opacity: 0.55; cursor: not-allowed; }
+  &:hover:not(:disabled) { background: $indigo-dark; border-color: $indigo-dark; transform: translateY(-1px); box-shadow: 0 4px 10px -2px rgba($indigo, 0.55); }
+  &:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
 }
-.discover-btn-ghost {
+.discover-link {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px 12px;
-  border-radius: 8px;
-  border: 1px solid $border;
-  background: $surface;
+  gap: 5px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 12px;
+  font-weight: 600;
   color: $text-secondary;
-  font-size: 12.5px;
-  font-weight: 650;
   cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease;
+  transition: color 0.15s ease;
 
-  &:hover { border-color: $text-muted; color: $text-primary; }
+  &:hover { color: $indigo; }
 }
 .spin { animation: add-custom-model-spin 0.8s linear infinite; }
 @keyframes add-custom-model-spin { to { transform: rotate(360deg); } }
+
+// ---- discovery success banner --------------------------------------------------
+.success-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 10px 13px;
+  border-radius: 10px;
+  background: $emerald-pale;
+  border: 1px solid rgba($emerald, 0.25);
+  color: $emerald-dark;
+  font-size: 12.5px;
+  font-weight: 650;
+
+  svg { flex-shrink: 0; }
+}
 
 // ---- discovered model picker -------------------------------------------------
 .discovered-list {
@@ -541,203 +759,3 @@ export default function AddCustomModelDrawer({ onClose, onSubmit, submitting }: 
 
   &:hover { text-decoration: underline; }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Models.ts
-import api from '../axiosInstance';
-import type { Model, CustomModelRequest } from '../../types';
-
-export interface ModelCategory {
-  value: string;
-  label: string;
-  description: string;
-}
-
-export interface DiscoveredModel {
-  id: string;
-  name: string;
-  context_window: number | null;
-  max_model_len: number | null;
-  owned_by: string;
-  already_added: boolean;
-}
-
-export interface DiscoverModelsRequest {
-  base_url: string;
-  api_key?: string;
-}
-
-export interface DiscoverModelsResponse {
-  base_url: string;
-  models: DiscoveredModel[];
-  total: number;
-  errors: string[];
-}
-
-export const modelsApi = {
-  list: () => api.get<{ models: Model[] }>('/models').then((r) => r.data.models ?? []),
-
-  createCustom: (payload: CustomModelRequest) =>
-    api.post<void>('/models/custom', payload).then(() => undefined),
-
-  // GET /models/by-provider/:providerId — all models registered under a single provider
-  listByProvider: (providerId: string) =>
-    api
-      .get<{ models: Model[]; total: number }>(`/models/by-provider/${providerId}`)
-      .then((r) => ({ models: r.data.models ?? [], total: r.data.total ?? 0 })),
-
-  // GET /models/categories — used to populate the Category dropdown
-  listCategories: () =>
-    api.get<{ categories: ModelCategory[] }>('/models/categories').then((r) => r.data.categories ?? []),
-
-  // POST /models/discover — optional endpoint probe to auto-fill model name/id/context window
-  discover: (payload: DiscoverModelsRequest) =>
-    api.post<DiscoverModelsResponse>('/models/discover', payload).then((r) => ({
-      base_url: r.data.base_url,
-      models: r.data.models ?? [],
-      total: r.data.total ?? 0,
-      errors: r.data.errors ?? [],
-    })),
-};
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Modelsslice.ts
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import { modelsApi, type ModelCategory } from '../../api/endpoints/models';
-import type { Model, CustomModelRequest } from '../../types';
-
-type FetchStatus = 'idle' | 'loading' | 'succeeded' | 'failed';
-
-interface ModelsState {
-  items: Model[];
-  status: FetchStatus;
-  error: string | null;
-  creating: boolean;
-  byProvider: Record<string, Model[]>;
-  byProviderStatus: Record<string, FetchStatus>;
-  categories: ModelCategory[];
-  categoriesStatus: FetchStatus;
-}
-
-const initialState: ModelsState = {
-  items: [],
-  status: 'idle',
-  error: null,
-  creating: false,
-  byProvider: {},
-  byProviderStatus: {},
-  categories: [],
-  categoriesStatus: 'idle',
-};
-
-export const fetchModels = createAsyncThunk('models/fetchAll', () => modelsApi.list());
-
-export const fetchModelsByProvider = createAsyncThunk(
-  'models/fetchByProvider',
-  async (providerId: string) => {
-    const { models } = await modelsApi.listByProvider(providerId);
-    return { providerId, models };
-  }
-);
-
-export const fetchModelCategories = createAsyncThunk(
-  'models/fetchCategories',
-  () => modelsApi.listCategories()
-);
-
-export const createCustomModel = createAsyncThunk(
-  'models/createCustom',
-  async (payload: CustomModelRequest, { dispatch }) => {
-    await modelsApi.createCustom(payload);
-    // spec: no meaningful body returned, so refetch afterwards
-    await dispatch(fetchModels());
-  }
-);
-
-const modelsSlice = createSlice({
-  name: 'models',
-  initialState,
-  reducers: {},
-  extraReducers: (builder) => {
-    builder
-      .addCase(fetchModels.pending, (state) => {
-        state.status = 'loading';
-      })
-      .addCase(fetchModels.fulfilled, (state, action) => {
-        state.status = 'succeeded';
-        state.items = action.payload ?? [];
-      })
-      .addCase(fetchModels.rejected, (state, action) => {
-        state.status = 'failed';
-        state.error = action.error.message || 'Failed to load models';
-      })
-      .addCase(createCustomModel.pending, (state) => {
-        state.creating = true;
-      })
-      .addCase(createCustomModel.fulfilled, (state) => {
-        state.creating = false;
-      })
-      .addCase(createCustomModel.rejected, (state, action) => {
-        state.creating = false;
-        state.error = action.error.message || 'Failed to register custom model';
-      })
-      .addCase(fetchModelsByProvider.pending, (state, action) => {
-        state.byProviderStatus[action.meta.arg] = 'loading';
-      })
-      .addCase(fetchModelsByProvider.fulfilled, (state, action) => {
-        state.byProviderStatus[action.payload.providerId] = 'succeeded';
-        state.byProvider[action.payload.providerId] = action.payload.models ?? [];
-      })
-      .addCase(fetchModelsByProvider.rejected, (state, action) => {
-        state.byProviderStatus[action.meta.arg] = 'failed';
-      })
-      .addCase(fetchModelCategories.pending, (state) => {
-        state.categoriesStatus = 'loading';
-      })
-      .addCase(fetchModelCategories.fulfilled, (state, action) => {
-        state.categoriesStatus = 'succeeded';
-        state.categories = action.payload ?? [];
-      })
-      .addCase(fetchModelCategories.rejected, (state) => {
-        state.categoriesStatus = 'failed';
-      });
-  },
-});
-
-export default modelsSlice.reducer;
