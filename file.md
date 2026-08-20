@@ -1,83 +1,3 @@
-//Testsuites.ts
-import { apiClient } from '../client';
-import type { TestSuite } from '../../store/slices/testSuitesSlice';
-
-interface TestSuitesResponse {
-  datasets: TestSuite[];
-}
-
-export type EvalType = 'model' | 'agent' | 'rag';
-
-export interface UploadDatasetParams {
-  file: File;
-  name: string;
-  description: string;
-  evalType: EvalType;
-}
-
-// Extensions routed to POST /datasets/upload
-const STRUCTURED_EXTENSIONS = ['json', 'arrow', 'parquet'];
-// Extension routed to POST /datasets/upload-jsonl
-const JSONL_EXTENSION = 'jsonl';
-
-export const SUPPORTED_UPLOAD_EXTENSIONS = [...STRUCTURED_EXTENSIONS, JSONL_EXTENSION];
-
-function getExtension(filename: string): string {
-  const idx = filename.lastIndexOf('.');
-  return idx >= 0 ? filename.slice(idx + 1).toLowerCase() : '';
-}
-
-export const testSuitesApi = {
-  // GET /datasets
-  list: async (): Promise<TestSuite[]> => {
-    const { data } = await apiClient.get<TestSuitesResponse>('/datasets');
-    return data?.datasets ?? [];
-  },
-
-  // Routes to POST /datasets/upload (.json, .arrow, .parquet) or
-  // POST /datasets/upload-jsonl (.jsonl) based on the file extension.
-  // Both endpoints return a bare 200 on success — no dataset body — so the
-  // caller is expected to re-fetch the list afterward.
-  upload: async ({ file, name, description, evalType }: UploadDatasetParams): Promise<void> => {
-    const ext = getExtension(file.name);
-
-    if (!SUPPORTED_UPLOAD_EXTENSIONS.includes(ext)) {
-      throw new Error('Unsupported file type. Please upload a .json, .jsonl, .arrow, or .parquet file.');
-    }
-
-    const formData = new FormData();
-    formData.append('file', file);
-
-    if (ext === JSONL_EXTENSION) {
-      // Agent uploads additionally require category="Agents" per the API
-      // contract; Model and RAG uploads omit the field entirely.
-      const params: Record<string, string> = { eval_type: evalType, name, description };
-      if (evalType === 'agent') params.category = 'Agents';
-
-      await apiClient.post('/datasets/upload-jsonl', formData, { params });
-      return;
-    }
-
-    await apiClient.post('/datasets/upload', formData, { params: { eval_type: evalType, name, description } });
-  },
-};
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Datasets.tsx
 //Datasets.tsx
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import {
@@ -556,13 +476,12 @@ function UploadModal({ uploadStatus, uploadError, onClose, onSubmit }: UploadMod
   const displayError = localError || (uploadStatus === 'failed' ? uploadError : null);
 
   return (
-    <div className={styles['datasets__modal-overlay']} onClick={() => !isLoading && onClose()}>
+    <div className={styles['datasets__modal-overlay']}>
       <div
         className={styles['datasets__modal']}
         role="dialog"
         aria-modal="true"
         aria-label="Upload dataset"
-        onClick={(e) => e.stopPropagation()}
       >
         <div className={styles['datasets__modal-hdr']}>
           <div>
