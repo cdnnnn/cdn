@@ -1,3 +1,242 @@
+import api from '../axiosInstance';
+
+// ---- Step 2: templates, built-in checks & placeholders --------------------
+export interface MetricTemplate {
+  id: string;
+  name: string;
+  type: string; // e.g. "llm" | "rag"
+}
+
+export interface BuiltinCheck {
+  id: string;
+  name: string;
+  logic: string;
+}
+
+export interface MetricPlaceholder {
+  name: string;
+  label: string;
+  description: string;
+  syntax: string; // e.g. "{input}"
+  category: string; // e.g. "basic" | "rag"
+}
+
+export interface TemplatesData {
+  templates: MetricTemplate[];
+  builtin_checks: BuiltinCheck[];
+  placeholders: MetricPlaceholder[];
+}
+
+// ---- Step 3: starter code for an eval type -------------------------------
+export interface CodeTemplateData {
+  eval_type: string;
+  language: string;
+  code_snippet: string;
+}
+
+// ---- Step 4: judge models + health ---------------------------------------
+export interface ModelSummary {
+  id: string;
+  name: string;
+  provider: string;
+}
+
+export interface ModelHealthData {
+  success: boolean;
+  message: string;
+  model_id: string;
+  response: string;
+}
+
+// ---- Step 5/6: datasets + preview ------------------------------------------
+export interface DatasetSummary {
+  id: string;
+  name: string;
+  question_count: number;
+}
+
+export interface PreviewQuestion {
+  id: string;
+  input: string;
+  expected_output: string;
+}
+
+export interface DatasetPreviewData {
+  dataset_id: string;
+  total_questions: number;
+  preview_limit: number;
+  questions: PreviewQuestion[];
+}
+
+// ---- Dashboard: saved custom metrics ---------------------------------
+// `definition` shape varies by metric_type — "simple" metrics carry a
+// `subtype`/`params` pair, rule-based ones carry a `rules` array. Both are
+// optional here since a given metric will only ever populate one branch.
+export interface CustomMetricRuleDef {
+  field: string;
+  operator: string;
+  value: string;
+  compared_to_field: boolean;
+}
+
+export interface CustomMetricDefinition {
+  subtype?: string;
+  params?: Record<string, unknown>;
+  rules?: CustomMetricRuleDef[];
+}
+
+export interface CustomMetric {
+  id: string;
+  name: string;
+  description: string;
+  metric_type: string; // e.g. "simple" | "code"
+  eval_types: string[];
+  definition: CustomMetricDefinition;
+  requires_judge: boolean;
+  threshold: number;
+  is_active: boolean;
+  created_by_id: number;
+  created_at: string;
+  updated_at: string;
+}
+
+// ---- Step 7/8: dry run + save ---------------------------------------------
+export interface MetricConfig {
+  name: string;
+  description?: string;
+  code: string;
+  rules: string[];
+}
+
+export interface JudgeConfig {
+  model_id: string;
+}
+
+export interface DryRunRequest {
+  metric_config: Pick<MetricConfig, 'name' | 'code' | 'rules'>;
+  judge_config: JudgeConfig;
+  test_case_ids: string[];
+}
+
+export interface DryRunResultRow {
+  question_id: string;
+  score: number;
+  reason: string;
+  passed: boolean;
+}
+
+export interface DryRunSummary {
+  total_run: number;
+  passed: number;
+  failed: number;
+  average_score: number;
+}
+
+export interface DryRunData {
+  is_valid: boolean;
+  execution_time_ms: number;
+  results: DryRunResultRow[];
+  summary: DryRunSummary;
+}
+
+export interface SaveMetricRequest {
+  metric_config: MetricConfig & { judge_config: JudgeConfig };
+}
+
+export interface SaveMetricData {
+  id?: string;
+  name?: string;
+}
+
+// None of these endpoints wrap their body in a { status, data } envelope —
+// every response below is the payload itself, so each call just unwraps
+// axios's own `r.data` and normalizes array fields to [] where the backend
+// might omit them, same pattern as evaluationsApi.list's normalizeListItem.
+export const metricsApi = {
+  // Dashboard — GET /metrics/custom -> { metrics: [...] }
+  list: () =>
+    api.get<{ metrics: CustomMetric[] }>('/metrics/custom').then((r) => r.data.metrics || []),
+
+  // Step 2 — GET /metrics/templates -> { templates, builtin_checks, placeholders }.
+  // `placeholders` documents the `{field}` tokens available for use in the
+  // code editor (Step 3) — not consumed by the UI yet, but returned here so
+  // it's ready when needed.
+  getTemplates: () =>
+    api.get<TemplatesData>('/metrics/templates').then((r) => ({
+      templates: r.data.templates || [],
+      builtin_checks: r.data.builtin_checks || [],
+      placeholders: r.data.placeholders || [],
+    })),
+
+  // Step 3 — "Insert Starter Code". Fired once a template's eval type is
+  // known; injects the returned snippet straight into the code editor.
+  getCodeTemplate: (evalType: string) =>
+    api.get<CodeTemplateData>(`/metrics/code-templates/${evalType}`).then((r) => r.data),
+
+  // Step 4 — judge model list. Called once when the Judge Model step is
+  // entered; each model's health is then pinged individually via
+  // checkModelHealth so the list can render "Checking…" per row instead of
+  // blocking on every ping before showing anything.
+  listModels: () =>
+    api.get<{ models: ModelSummary[] }>('/models').then((r) => r.data.models || []),
+
+  // Step 4 — per-model health ping. On failure (network error, a non-2xx
+  // response, or any body missing `success`) callers treat the model as
+  // unhealthy/offline rather than surfacing the error, so this resolves to
+  // a plain ModelHealthData-shaped fallback rather than throwing for the
+  // "unreachable" case.
+  checkModelHealth: (modelId: string) =>
+    api
+      .get<ModelHealthData>(`/models/health/${modelId}`)
+      .then((r) => ('success' in r.data ? r.data : { success: false, message: 'Unreachable', model_id: modelId, response: '' }))
+      .catch(() => ({ success: false, message: 'Unreachable', model_id: modelId, response: '' })),
+
+  // Step 5 — datasets filtered by the eval type resolved from the chosen
+  // template. Re-fetched whenever eval type changes.
+  listDatasets: (evalType: string) =>
+    api
+      .get<{ total_count: number; datasets: DatasetSummary[] }>('/datasets', { params: { eval_type: evalType } })
+      .then((r) => r.data.datasets || []),
+
+  // Step 6 — sample question preview for the selected dataset (first N,
+  // per preview_limit). Questions default to [] if the backend omits them.
+  previewDataset: (datasetId: string) =>
+    api.get<DatasetPreviewData>(`/datasets/${datasetId}/preview`).then((r) => ({
+      ...r.data,
+      questions: r.data.questions || [],
+    })),
+
+  // Step 7 — dry run against the selected test cases. Does not persist
+  // anything; only `is_valid` gates whether Step 8's Save button unlocks.
+  dryRun: (payload: DryRunRequest) =>
+    api.post<DryRunData>('/metrics/custom/preview', payload).then((r) => ({
+      ...r.data,
+      results: r.data.results || [],
+    })),
+
+  // Step 8 — persists the metric. Response body shape isn't fully specified
+  // by the spec beyond "200 status", so `id`/`name` are optional here —
+  // callers should fall back to a generic success message if `id` is absent.
+  create: (payload: SaveMetricRequest) =>
+    api.post<SaveMetricData | void>('/metrics/custom', payload).then((r) => r.data || {}),
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -51,7 +290,7 @@ export default function CreateMetric() {
   const [models, setModels] = useState<ModelSummary[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState('');
-  const [modelHealth, setModelHealth] = useState<Record<string, { status: ModelHealthStatus; latencyMs?: number }>>({});
+  const [modelHealth, setModelHealth] = useState<Record<string, { status: ModelHealthStatus; message?: string }>>({});
   const [selectedModelId, setSelectedModelId] = useState('');
 
   // Step 5
@@ -139,7 +378,7 @@ export default function CreateMetric() {
             .then((h) => {
               setModelHealth((prev) => ({
                 ...prev,
-                [m.id]: { status: h.is_healthy ? 'healthy' : 'unhealthy', latencyMs: h.latency_ms },
+                [m.id]: { status: h.success ? 'healthy' : 'unhealthy', message: h.message },
               }));
             });
         });
@@ -426,6 +665,7 @@ export default function CreateMetric() {
                     return (
                       <label
                         key={m.id}
+                        title={health?.message}
                         className={`${styles['model-item']} ${selected ? styles['model-item--selected'] : ''} ${disabled ? styles['model-item--disabled'] : ''}`}
                       >
                         <input
@@ -672,135 +912,6 @@ export default function CreateMetric() {
       )}
 
       {ToastEl}
-    </div>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { AlertCircle, Gauge, Loader2 } from 'lucide-react';
-import styles from './CustomMetrics.module.scss';
-import { metricsApi, CustomMetric } from '../../api/endpoints/metrics';
-
-function formatDate(iso: string) {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-}
-
-export default function CustomMetricsDashboard() {
-  const navigate = useNavigate();
-
-  const [metrics, setMetrics] = useState<CustomMetric[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    setLoading(true);
-    setError('');
-    metricsApi.list()
-      .then(setMetrics)
-      .catch((err) => setError(err.message || 'Failed to load metrics'))
-      .finally(() => setLoading(false));
-  }, []);
-
-  const activeCount = useMemo(() => metrics.filter((m) => m.is_active).length, [metrics]);
-
-  const badgeClass = (variant: string) => `${styles.badge} ${styles[`badge--${variant}`] || ''}`;
-
-  return (
-    <div className={`page-enter pg-shell ${styles.cm}`}>
-      <div className={styles['cm__header']}>
-        <div>
-          <p className={styles['cm__header-eyebrow']}>Custom Metrics</p>
-          <h1>Dashboard</h1>
-          <p className={styles['cm__header-sub']}>
-            {loading ? 'Saved metrics for evaluation' : `${metrics.length} metric${metrics.length === 1 ? '' : 's'} \u00b7 ${activeCount} active`}
-          </p>
-        </div>
-      </div>
-
-      <div className={`pg-body ${styles['pg-body-scroll']}`}>
-        <div className={styles.card}>
-          <div className={styles['card-header']}>
-            <h3>Saved Metrics</h3>
-            <button
-              type="button"
-              className={`${styles.btn} ${styles['btn-sm']}`}
-              onClick={() => navigate('/app/custom-metrics/create')}
-            >
-              + New
-            </button>
-          </div>
-
-          <div className={styles['card-body']}>
-            {error && <div className={styles['error-banner']}><AlertCircle size={14} /> {error}</div>}
-
-            {loading ? (
-              <div className={styles['loading-row']}><Loader2 size={14} className={styles.spin} /> Loading metrics…</div>
-            ) : metrics.length === 0 ? (
-              <div className={styles.empty}>
-                <Gauge size={16} /> No metrics saved yet — create your first custom metric to get started.
-              </div>
-            ) : (
-              <div className={styles['table-wrap']}>
-                <table className={styles.table}>
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Eval Types</th>
-                      <th>Type</th>
-                      <th>Threshold</th>
-                      <th>Judge</th>
-                      <th>Status</th>
-                      <th>Created</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {metrics.map((m) => (
-                      <tr key={m.id} title={m.description}>
-                        <td>{m.name}</td>
-                        <td>
-                          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                            {(m.eval_types || []).map((t) => (
-                              <span key={t} className={badgeClass(t)}>{(t || '').toUpperCase()}</span>
-                            ))}
-                          </div>
-                        </td>
-                        <td><span className={badgeClass(m.metric_type === 'code' ? 'code' : 'simple')}>{m.metric_type}</span></td>
-                        <td className={styles['cell-num']}>{m.threshold}</td>
-                        <td>{m.requires_judge ? 'Yes' : 'No'}</td>
-                        <td><span className={badgeClass(m.is_active ? 'active' : 'inactive')}>{m.is_active ? 'Active' : 'Inactive'}</span></td>
-                        <td>{formatDate(m.created_at)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
