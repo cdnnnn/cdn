@@ -2356,3 +2356,35 @@ export default function AppRoutes() {
     </Routes>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+src/
+├── api/
+│   └── endpoints/
+│       └── metrics.ts                       (NEW — API layer for the wizard: templates, code-templates, models, health, datasets, preview, dry-run, save)
+│
+├── components/
+│   ├── CustomMetrics/
+│   │   ├── CustomMetrics.module.scss         (UPDATED — shared styles + wizard additions + >1800px font scaling)
+│   │   ├── CreateMetric.tsx                  (REWRITTEN — 8-step wizard wired to real API)
+│   │   ├── CustomMetricsDashboard.tsx        (UPDATED — Saved Datasets card removed)
+│   │   ├── mockData.ts                       (UNCHANGED — still used by Dashboard's SAVED_METRICS; UploadDataset-related exports are now unused)
+│   │   └── useToast.tsx                      (UNCHANGED)
+│   │
+│   └── layout/
+│       ├── Sidebar.tsx                       (UPDATED — "Upload Dataset" submenu item removed)
+│       └── Sidebar.module.additions.scss     (UNCHANGED — still just a paste-in snippet, not a real file in your tree)
+│
+└── routes/
+    └── AppRoutes.tsx                         (UPDATED — /app/custom-metrics/upload route removed)
