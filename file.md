@@ -1552,3 +1552,53 @@ $cm-base-font: 0.875rem;
   color: $ink-3;
   font-size: 0.8929em; // 0.78125rem / 0.875rem
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//useToast.ts
+import { useCallback, useEffect, useState } from 'react';
+import styles from './CustomMetrics.module.scss';
+
+type ToastState = { message: string; type: 'ok' | 'error' | 'info' } | null;
+
+export function useToast() {
+  const [toast, setToast] = useState<ToastState>(null);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 2600);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  const showToast = useCallback((message: string, type: 'ok' | 'error' | 'info' = 'info') => {
+    setToast({ message, type });
+  }, []);
+
+  const ToastEl = toast ? (
+    <div className={`${styles.toast} ${styles[`toast--${toast.type}`] || ''}`}>{toast.message}</div>
+  ) : null;
+
+  return { showToast, ToastEl };
+}
