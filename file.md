@@ -1,9 +1,104 @@
-//CreateMetric.tsx
+//Customselect.tsx
+import { useEffect, useRef, useState } from 'react';
+import { Check, ChevronDown } from 'lucide-react';
+import styles from './CustomMetrics.module.scss';
+
+export interface DropdownOption {
+  value: string;
+  label: string;
+  sublabel?: string;
+}
+
+interface CustomSelectProps {
+  value: string;
+  onChange: (value: string) => void;
+  options: DropdownOption[];
+  placeholder?: string;
+  disabled?: boolean;
+  className?: string;
+}
+
+export default function CustomSelect({ value, onChange, options, placeholder = 'Select…', disabled, className }: CustomSelectProps) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onClickOutside = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onEscape = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onClickOutside);
+    document.addEventListener('keydown', onEscape);
+    return () => {
+      document.removeEventListener('mousedown', onClickOutside);
+      document.removeEventListener('keydown', onEscape);
+    };
+  }, [open]);
+
+  const selected = options.find((o) => o.value === value);
+
+  return (
+    <div ref={rootRef} className={`${styles.dropdown} ${className || ''} ${disabled ? styles['dropdown--disabled'] : ''}`}>
+      <button
+        type="button"
+        className={`${styles['dropdown__trigger']} ${open ? styles['dropdown__trigger--open'] : ''}`}
+        onClick={() => !disabled && setOpen((o) => !o)}
+        disabled={disabled}
+      >
+        <span className={selected ? styles['dropdown__value'] : styles['dropdown__placeholder']}>
+          {selected ? selected.label : placeholder}
+        </span>
+        <ChevronDown size={14} className={`${styles['dropdown__chevron']} ${open ? styles['dropdown__chevron--open'] : ''}`} />
+      </button>
+
+      {open && (
+        <div className={styles['dropdown__menu']}>
+          {options.length === 0 ? (
+            <div className={styles['dropdown__empty']}>No options</div>
+          ) : (
+            options.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                className={`${styles['dropdown__option']} ${opt.value === value ? styles['dropdown__option--selected'] : ''}`}
+                onClick={() => { onChange(opt.value); setOpen(false); }}
+              >
+                <span>
+                  {opt.label}
+                  {opt.sublabel && <span className={styles['dropdown__option-sub']}>{opt.sublabel}</span>}
+                </span>
+                {opt.value === value && <Check size={13} />}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Createmetric.tsx
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertCircle, CheckCircle2, Loader2, Plus, X, XCircle } from 'lucide-react';
 import styles from './CustomMetrics.module.scss';
 import { useToast } from './useToast';
+import CustomSelect from './CustomSelect';
 import {
   metricsApi, EvalType, MetricType, PromptTemplate,
   ModelSummary, DatasetSummary, PreviewQuestion, ValidateMetricData,
@@ -472,23 +567,37 @@ export default function CreateMetric() {
                     )}
                     <div className={styles['rule-item']}>
                       <div className={styles['rule-fields']}>
-                        <select className={`${styles.select} ${styles['rule-field-select']}`} value={rule.field} onChange={(e) => updateRule(rule.id, { field: e.target.value })}>
-                          {fields.map((f) => <option key={f} value={f}>{f}</option>)}
-                        </select>
-                        <select className={`${styles.select} ${styles['rule-operator']}`} value={rule.operator} onChange={(e) => updateRule(rule.id, { operator: e.target.value })}>
-                          {OPERATORS.map((op) => <option key={op.value} value={op.value}>{op.label}</option>)}
-                        </select>
-                        <select className={`${styles.select} ${styles['rule-compare-type']}`} value={rule.compareType} onChange={(e) => updateRule(rule.id, { compareType: e.target.value as CompareType, value: '' })}>
-                          <option value="field">Compared to Field</option>
-                          <option value="literal">Literal Value</option>
-                        </select>
+                        <CustomSelect
+                          className={styles['rule-field-select']}
+                          value={rule.field}
+                          onChange={(v) => updateRule(rule.id, { field: v })}
+                          options={fields.map((f) => ({ value: f, label: f }))}
+                        />
+                        <CustomSelect
+                          className={styles['rule-operator']}
+                          value={rule.operator}
+                          onChange={(v) => updateRule(rule.id, { operator: v })}
+                          options={OPERATORS}
+                        />
+                        <CustomSelect
+                          className={styles['rule-compare-type']}
+                          value={rule.compareType}
+                          onChange={(v) => updateRule(rule.id, { compareType: v as CompareType, value: '' })}
+                          options={[
+                            { value: 'field', label: 'Compared to Field' },
+                            { value: 'literal', label: 'Literal Value' },
+                          ]}
+                        />
                         {rule.compareType === 'literal' ? (
                           <input className={`${styles.input} ${styles['rule-value']}`} placeholder="enter value" value={rule.value} onChange={(e) => updateRule(rule.id, { value: e.target.value })} />
                         ) : (
-                          <select className={`${styles.select} ${styles['rule-value']}`} value={rule.value} onChange={(e) => updateRule(rule.id, { value: e.target.value })}>
-                            <option value="">select field…</option>
-                            {fields.map((f) => <option key={f} value={f}>{f}</option>)}
-                          </select>
+                          <CustomSelect
+                            className={styles['rule-value']}
+                            value={rule.value}
+                            onChange={(v) => updateRule(rule.id, { value: v })}
+                            placeholder="select field…"
+                            options={fields.map((f) => ({ value: f, label: f }))}
+                          />
                         )}
                         <button type="button" className={styles['btn-icon']} title="Remove" onClick={() => removeRule(rule.id)}>
                           <X size={14} />
@@ -641,12 +750,20 @@ export default function CreateMetric() {
             ) : datasets.length === 0 ? (
               <div className={styles.empty}>No datasets found for this evaluation type.</div>
             ) : (
-              <div className={styles['form-group']}>
-                <label>Dataset</label>
-                <select className={styles.select} value={selectedDatasetId} onChange={(e) => selectDataset(e.target.value)}>
-                  <option value="">Select a dataset…</option>
-                  {datasets.map((d) => <option key={d.id} value={d.id}>{d.name} ({d.question_count} questions)</option>)}
-                </select>
+              <div className={styles['dataset-grid']}>
+                {datasets.map((d) => (
+                  <div
+                    key={d.id}
+                    className={`${styles['dataset-card']} ${selectedDatasetId === d.id ? styles['dataset-card--selected'] : ''}`}
+                    onClick={() => selectDataset(d.id)}
+                  >
+                    <span className={styles['dataset-card__radio']} />
+                    <div className={styles['dataset-card__body']}>
+                      <div className={styles['dataset-card__name']}>{d.name}</div>
+                      <div className={styles['dataset-card__count']}>{d.question_count} questions</div>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
 
@@ -762,264 +879,6 @@ export default function CreateMetric() {
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Metrics.ts
-import api from '../axiosInstance';
-
-// ---- Evaluation type & metric type (client-side only, no API) -----------
-export type EvalType = 'model' | 'agent' | 'rag';
-export type MetricType = 'visual' | 'prompt' | 'code' | 'simple';
-
-// ---- Prompt Builder — GET /metrics/templates -----------------------------
-export interface PromptTemplate {
-  category: string; // "llm" | "agent" | "rag"
-  description: string;
-  label: string;
-  name: string;
-  template: string;
-  uses_placeholders: string[];
-}
-
-// ---- Code Editor — GET /metrics/code-templates/{eval_type} ----------------
-export interface CodeTemplateData {
-  eval_type: string;
-  code: string;
-}
-
-// ---- Judge model (Prompt Builder) — GET /models ---------------------------
-export interface ModelSummary {
-  id: string;
-  name: string;
-  provider_id: string;
-  category: string;
-  capabilities: string[];
-  context_window: number;
-  input_price: number | null;
-  output_price: number | null;
-  accuracy_score: number | null;
-  agent_score: number | null;
-  is_active: boolean;
-  base_url: string;
-}
-
-export interface ModelHealthData {
-  success: boolean;
-  message: string;
-  model_id: string;
-  response: string;
-}
-
-// ---- Datasets ---------------------------------------------------------
-export interface DatasetSummary {
-  id: string;
-  name: string;
-  question_count: number;
-}
-
-export interface PreviewQuestion {
-  id: string;
-  input: { prompt: string };
-  expected: { answer: string };
-}
-
-export interface DatasetPreviewData {
-  dataset_id: string;
-  questions: PreviewQuestion[];
-}
-
-// ---- Validate (dry run) — POST /metrics/custom/preview --------------------
-export interface RuleDef {
-  field: string;
-  operator: string;
-  value: string;
-  compare_to_field: boolean;
-}
-
-export interface MetricDefinition {
-  rules?: RuleDef[];
-  // NB: the spec's own example literally spells this "prompt_tenplate" —
-  // treating that as a typo and using the correct spelling here.
-  prompt_template?: string;
-  code?: string;
-  skip_validation?: boolean;
-}
-
-export interface TestCasePayload {
-  input: string;
-  actual_output: string;
-  expected_output: string;
-  context: string[];
-  retrieval_context: string[];
-  tools_called: string[];
-  expected_tools: string[];
-}
-
-export interface JudgeConfig {
-  model_id: string;
-}
-
-export interface ValidateMetricRequest {
-  actual_output: string;
-  context: string[];
-  definition: MetricDefinition;
-  description: string;
-  eval_types: EvalType[];
-  expected_output: string;
-  expected_tools: string[];
-  gates: string[];
-  input: string;
-  judge_config: JudgeConfig | null;
-  metric_type: string; // "condition" | "prompt" | "code" | "simple"
-  name: string;
-  retrieval_context: string[];
-  test_cases: TestCasePayload[];
-  threshold: string; // sent as a string, e.g. "0.70"
-  tools_called: string[];
-}
-
-export interface ValidateResultItem {
-  score: number;
-  reason: string;
-  success: boolean;
-  test_case: TestCasePayload;
-}
-
-export interface ValidateMetricData {
-  results: ValidateResultItem[];
-  total: number;
-  passed: number;
-}
-
-// ---- Save — POST /metrics/custom -------------------------------------
-export interface SaveMetricRequest {
-  definition: MetricDefinition;
-  description: string;
-  eval_types: EvalType[];
-  metric_type: string;
-  name: string;
-  threshold: string;
-  // Not shown in the spec's request sample, but included defensively since
-  // Prompt Builder metrics can't be scored without a judge model — drop
-  // this if the backend rejects the extra field.
-  judge_config?: JudgeConfig | null;
-}
-
-export interface SaveMetricData {
-  id?: string;
-  name?: string;
-}
-
-// ---- Dashboard: saved custom metrics ---------------------------------
-export interface CustomMetricRuleDef {
-  field: string;
-  operator: string;
-  value: string;
-  compared_to_field: boolean;
-}
-
-export interface CustomMetricDefinition {
-  subtype?: string;
-  params?: Record<string, unknown>;
-  rules?: CustomMetricRuleDef[];
-}
-
-export interface CustomMetric {
-  id: string;
-  name: string;
-  description: string;
-  metric_type: string;
-  eval_types: string[];
-  definition: CustomMetricDefinition;
-  requires_judge: boolean;
-  threshold: number;
-  is_active: boolean;
-  created_by_id: number;
-  created_at: string;
-  updated_at: string;
-}
-
-// None of these endpoints wrap their body in a { status, data } envelope —
-// every response below is the payload itself, so each call just unwraps
-// axios's own `r.data` and normalizes array fields to [] where the backend
-// might omit them.
-export const metricsApi = {
-  // Dashboard — GET /metrics/custom -> { metrics: [...] }
-  list: () =>
-    api.get<{ metrics: CustomMetric[] }>('/metrics/custom').then((r) => r.data.metrics || []),
-
-  // Prompt Builder — GET /metrics/templates -> { templates: [...] }
-  getPromptTemplates: () =>
-    api.get<{ templates: PromptTemplate[] }>('/metrics/templates').then((r) => r.data.templates || []),
-
-  // Code Editor — GET /metrics/code-templates/{eval_type}
-  getCodeTemplate: (evalType: EvalType) =>
-    api.get<CodeTemplateData>(`/metrics/code-templates/${evalType}`).then((r) => r.data),
-
-  // Prompt Builder — GET /models
-  listModels: () =>
-    api.get<{ models: ModelSummary[] }>('/models').then((r) => r.data.models || []),
-
-  // Prompt Builder — per-model health ping. Failures (network error, or a
-  // body missing `success`) resolve to an "unreachable" fallback instead
-  // of throwing, since an offline model is a normal UI state, not an
-  // exceptional one.
-  checkModelHealth: (modelId: string) =>
-    api
-      .get<ModelHealthData>(`/models/health/${modelId}`)
-      .then((r) => ('success' in r.data ? r.data : { success: false, message: 'Unreachable', model_id: modelId, response: '' }))
-      .catch(() => ({ success: false, message: 'Unreachable', model_id: modelId, response: '' })),
-
-  // Dataset selection — GET /datasets?eval_type={evalType}
-  listDatasets: (evalType: EvalType) =>
-    api
-      .get<{ total_count: number; datasets: DatasetSummary[] }>('/datasets', { params: { eval_type: evalType } })
-      .then((r) => r.data.datasets || []),
-
-  // GET /datasets/{dataset_id}/preview
-  previewDataset: (datasetId: string) =>
-    api.get<DatasetPreviewData>(`/datasets/${datasetId}/preview`).then((r) => ({
-      ...r.data,
-      questions: r.data.questions || [],
-    })),
-
-  // Footer "Validate Metric" — POST /metrics/custom/preview. Doesn't
-  // persist anything; a successful response with results unlocks Save.
-  validate: (payload: ValidateMetricRequest) =>
-    api.post<ValidateMetricData>('/metrics/custom/preview', payload).then((r) => ({
-      ...r.data,
-      results: r.data.results || [],
-    })),
-
-  // "Save Metric" — POST /metrics/custom. Response body beyond "200 OK"
-  // isn't specified, so `id`/`name` are optional here.
-  create: (payload: SaveMetricRequest) =>
-    api.post<SaveMetricData | void>('/metrics/custom', payload).then((r) => r.data || {}),
-};
 
 
 
@@ -2474,438 +2333,179 @@ $cm-base-font: 0.875rem;
 @media (max-width: 900px) {
   .card-grid, .card-grid--4 { grid-template-columns: 1fr; }
 }
+// ---- Add to CustomMetrics.module.scss ------------------------------------
 
+// ---- custom dropdown (replaces native <select> in Create Metric) -------
+.dropdown {
+  position: relative;
+  width: 100%;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Custommetricsdashboard.tsx
-import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { AlertCircle, Gauge, Loader2 } from 'lucide-react';
-import styles from './CustomMetrics.module.scss';
-import { metricsApi, CustomMetric } from '../../api/endpoints/metrics';
-
-function formatDate(iso: string) {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  &--disabled { opacity: 0.5; pointer-events: none; }
 }
 
-export default function CustomMetricsDashboard() {
-  const navigate = useNavigate();
+.dropdown__trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1.5px solid $line;
+  border-radius: 9px;
+  padding: 9px 11px;
+  font-size: 0.9286em; // 0.8125rem / 0.875rem
+  font-family: $sans;
+  color: $ink;
+  background: $card;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  text-align: left;
 
-  const [metrics, setMetrics] = useState<CustomMetric[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  &:hover { border-color: $ink-3; }
 
-  useEffect(() => {
-    setLoading(true);
-    setError('');
-    metricsApi.list()
-      .then(setMetrics)
-      .catch((err) => setError(err.message || 'Failed to load metrics'))
-      .finally(() => setLoading(false));
-  }, []);
-
-  const activeCount = useMemo(() => metrics.filter((m) => m.is_active).length, [metrics]);
-
-  const badgeClass = (variant: string) => `${styles.badge} ${styles[`badge--${variant}`] || ''}`;
-
-  return (
-    <div className={`page-enter pg-shell ${styles.cm}`}>
-      <div className={styles['cm__header']}>
-        <div>
-          <p className={styles['cm__header-eyebrow']}>Custom Metrics</p>
-          <h1>Dashboard</h1>
-          <p className={styles['cm__header-sub']}>
-            {loading ? 'Saved metrics for evaluation' : `${metrics.length} metric${metrics.length === 1 ? '' : 's'} \u00b7 ${activeCount} active`}
-          </p>
-        </div>
-      </div>
-
-      <div className={`pg-body ${styles['pg-body-scroll']}`}>
-        <div className={styles.card}>
-          <div className={styles['card-header']}>
-            <h3>Saved Metrics</h3>
-            <button
-              type="button"
-              className={`${styles.btn} ${styles['btn-sm']}`}
-              onClick={() => navigate('/app/custom-metrics/create')}
-            >
-              + New
-            </button>
-          </div>
-
-          <div className={styles['card-body']}>
-            {error && <div className={styles['error-banner']}><AlertCircle size={14} /> {error}</div>}
-
-            {loading ? (
-              <div className={styles['loading-row']}><Loader2 size={14} className={styles.spin} /> Loading metrics…</div>
-            ) : metrics.length === 0 ? (
-              <div className={styles.empty}>
-                <Gauge size={16} /> No metrics saved yet — create your first custom metric to get started.
-              </div>
-            ) : (
-              <div className={styles['table-wrap']}>
-                <table className={styles.table}>
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Eval Types</th>
-                      <th>Type</th>
-                      <th>Threshold</th>
-                      <th>Judge</th>
-                      <th>Status</th>
-                      <th>Created</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {metrics.map((m) => (
-                      <tr key={m.id} title={m.description}>
-                        <td>{m.name}</td>
-                        <td>
-                          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                            {(m.eval_types || []).map((t) => (
-                              <span key={t} className={badgeClass(t)}>{(t || '').toUpperCase()}</span>
-                            ))}
-                          </div>
-                        </td>
-                        <td><span className={badgeClass(m.metric_type === 'code' ? 'code' : 'simple')}>{m.metric_type}</span></td>
-                        <td className={styles['cell-num']}>{m.threshold}</td>
-                        <td>{m.requires_judge ? 'Yes' : 'No'}</td>
-                        <td><span className={badgeClass(m.is_active ? 'active' : 'inactive')}>{m.is_active ? 'Active' : 'Inactive'}</span></td>
-                        <td>{formatDate(m.created_at)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+  &--open {
+    border-color: $signal;
+    box-shadow: 0 0 0 3px $wash;
+  }
 }
 
+.dropdown__value { color: $ink; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dropdown__placeholder { color: $ink-3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+.dropdown__chevron {
+  flex-shrink: 0;
+  color: $ink-3;
+  transition: transform 0.15s ease;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//useToast.tsx
-import { useCallback, useEffect, useState } from 'react';
-import styles from './CustomMetrics.module.scss';
-
-type ToastState = { message: string; type: 'ok' | 'error' | 'info' } | null;
-
-export function useToast() {
-  const [toast, setToast] = useState<ToastState>(null);
-
-  useEffect(() => {
-    if (!toast) return;
-    const t = setTimeout(() => setToast(null), 2600);
-    return () => clearTimeout(t);
-  }, [toast]);
-
-  const showToast = useCallback((message: string, type: 'ok' | 'error' | 'info' = 'info') => {
-    setToast({ message, type });
-  }, []);
-
-  const ToastEl = toast ? (
-    <div className={`${styles.toast} ${styles[`toast--${toast.type}`] || ''}`}>{toast.message}</div>
-  ) : null;
-
-  return { showToast, ToastEl };
+  &--open { transform: rotate(180deg); }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Sidebar.tsx
-import { useState } from 'react';
-import { Link, NavLink, useLocation } from 'react-router-dom';
-import {
-  Home, Link2, Cpu, BookOpen, Play, FlaskConical, GitCompare, FileText, LogOut,
-  Gauge, ChevronDown, LayoutDashboard, PenSquare,
-} from 'lucide-react';
-import { useAppDispatch, useAppSelector } from '../../hooks/redux';
-import { logout } from '../../store/slices/authSlice';
-import ThemeToggle from '../common/ThemeToggle';
-import styles from './Sidebar.module.scss';
-
-const navItems = [
-  { to: '/app/dashboard', icon: <Home size={18} />, label: 'Dashboard' },
-  { to: '/app/providers', icon: <Link2 size={18} />, label: 'Providers' },
-  { to: '/app/models', icon: <Cpu size={18} />, label: 'Models' },
-  { to: '/app/datasets', icon: <BookOpen size={18} />, label: 'Datasets' },
-];
-
-const workflowItems = [
-  { to: '/app/run-evaluation', icon: <Play size={18} />, label: 'New Evaluation' },
-  { to: '/app/history', icon: <FlaskConical size={18} />, label: 'History' },
-  { to: '/app/comparison', icon: <GitCompare size={18} />, label: 'Comparison' },
-  { to: '/app/reports', icon: <FileText size={18} />, label: 'Reports' },
-];
-
-const customMetricsSubItems = [
-  { to: '/app/custom-metrics/dashboard', icon: <LayoutDashboard size={15} />, label: 'Dashboard' },
-  { to: '/app/custom-metrics/create', icon: <PenSquare size={15} />, label: 'Create Metric' },
-];
-
-export default function Sidebar() {
-  const dispatch = useAppDispatch();
-  const user = useAppSelector((s) => s.auth.user);
-  const location = useLocation();
-
-  const isOnCustomMetrics = location.pathname.startsWith('/app/custom-metrics');
-  const [customMetricsOpen, setCustomMetricsOpen] = useState(isOnCustomMetrics);
-
-  const navLinkClass = ({ isActive }: { isActive: boolean }) =>
-    `${styles['nav-item']} ${isActive ? styles.active : ''}`;
-
-  const subNavLinkClass = ({ isActive }: { isActive: boolean }) =>
-    `${styles['nav-item']} ${styles['nav-item--sub']} ${isActive ? styles.active : ''}`;
-
-  return (
-    <div className={styles.sidebar}>
-      <Link to="/" className={styles['sidebar__logo']}>
-        <div className={styles['sidebar__mark']}>&#9670;</div>
-        SemcoEval
-      </Link>
-      <nav className={styles['sidebar__nav']}>
-        {navItems.map((item) => (
-          <NavLink key={item.to} to={item.to} className={navLinkClass}>
-            {item.icon}
-            {item.label}
-          </NavLink>
-        ))}
-
-        <div className={styles['sidebar__section']}>Workflow</div>
-        {workflowItems.map((item) => (
-          <NavLink key={item.to} to={item.to} className={navLinkClass}>
-            {item.icon}
-            {item.label}
-          </NavLink>
-        ))}
-
-        <button
-          type="button"
-          className={`${styles['nav-item']} ${styles['nav-item--expandable']} ${isOnCustomMetrics ? styles.active : ''}`}
-          onClick={() => setCustomMetricsOpen((o) => !o)}
-          aria-expanded={customMetricsOpen}
-        >
-          <Gauge size={18} />
-          Custom Metrics
-          <ChevronDown
-            size={14}
-            className={`${styles['nav-item__chevron']} ${customMetricsOpen ? styles['nav-item__chevron--open'] : ''}`}
-          />
-        </button>
-
-        <div className={`${styles['nav-submenu']} ${customMetricsOpen ? styles['nav-submenu--open'] : ''}`}>
-          <div className={styles['nav-submenu__inner']}>
-            {customMetricsSubItems.map((item) => (
-              <NavLink key={item.to} to={item.to} className={subNavLinkClass}>
-                {item.icon}
-                {item.label}
-              </NavLink>
-            ))}
-          </div>
-        </div>
-      </nav>
-      <div className={styles['sidebar__foot']}>
-        <div className={styles['sidebar__theme-row']}>
-          <span>Theme</span>
-          <ThemeToggle />
-        </div>
-        <div className={styles['sidebar__user']}>
-          <div className={styles['sidebar__avatar']}>
-            {(user?.name || user?.email || '?').slice(0, 1).toUpperCase()}
-          </div>
-          <div className={styles['sidebar__user-info']}>
-            <div className={styles['sidebar__user-name']}>{user?.name || 'Account'}</div>
-            <div className={styles['sidebar__user-email']}>{user?.email}</div>
-          </div>
-          <button
-            type="button"
-            className={styles['sidebar__logout']}
-            title="Log out"
-            onClick={() => dispatch(logout())}
-          >
-            <LogOut size={15} />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+.dropdown__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  max-height: 260px;
+  overflow-y: auto;
+  background: $card;
+  border: 1px solid $line;
+  border-radius: 12px;
+  box-shadow: $lift;
+  padding: 4px;
 }
 
+.dropdown__option {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: $ink-2;
+  font-size: 0.9286em; // 0.8125rem / 0.875rem
+  font-weight: 550;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
 
+  &:hover { background: $paper; color: $ink; }
 
+  &--selected {
+    background: $wash;
+    color: $signal;
+    font-weight: 700;
+  }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Approutes.tsx
-import { Routes, Route, Navigate } from 'react-router-dom';
-import Landing from '../components/landing/Landing';
-import AppShell from '../components/layout/AppShell';
-import ProtectedRoute from './ProtectedRoute';
-import Dashboard from '../components/dashboard/Dashboard';
-import Providers from '../components/providers/Providers';
-import ModelCatalog from '../components/models/ModelCatalog';
-import TestSuites from '../components/suites/TestSuites';
-import NewEvaluation from '../components/evaluations/NewEvaluation';
-import Evaluations from '../components/evaluations/Evaluations';
-import EvaluationDetail from '../components/evaluations/EvaluationDetail';
-import Comparison from '../components/comparison/Comparison';
-import CustomMetricsDashboard from '../components/CustomMetrics/CustomMetricsDashboard';
-import CreateMetric from '../components/CustomMetrics/CreateMetric';
-
-const MOCKS_ENABLED = import.meta.env.VITE_ENABLE_MOCKS === 'true';
-
-export default function AppRoutes() {
-  return (
-    <Routes>
-      {/* In mock mode, main.tsx already seeds a session before render, so
-          skip the landing/SSO page entirely and land straight in the app. */}
-      <Route path="/" element={MOCKS_ENABLED ? <Navigate to="/app/dashboard" replace /> : <Landing />} />
-
-      <Route element={<ProtectedRoute />}>
-        <Route path="/app" element={<AppShell />}>
-          <Route index element={<Navigate to="dashboard" replace />} />
-          <Route path="dashboard" element={<Dashboard />} />
-          <Route path="providers" element={<Providers />} />
-          <Route path="models" element={<ModelCatalog />} />
-          <Route path="suites" element={<TestSuites />} />
-          <Route path="new-eval" element={<NewEvaluation />} />
-          <Route path="evaluations" element={<Evaluations />} />
-          <Route path="evaluations/:id" element={<EvaluationDetail />} />
-          <Route path="comparison" element={<Comparison />} />
-
-          <Route path="custom-metrics">
-            <Route index element={<Navigate to="dashboard" replace />} />
-            <Route path="dashboard" element={<CustomMetricsDashboard />} />
-            <Route path="create" element={<CreateMetric />} />
-          </Route>
-        </Route>
-      </Route>
-
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
-  );
+  svg { flex-shrink: 0; color: $signal; }
 }
 
+.dropdown__option-sub {
+  display: block;
+  font-family: $mono;
+  font-size: 0.8571em; // relative to option's own font-size
+  font-weight: 500;
+  color: $ink-3;
+  margin-top: 1px;
+}
 
+.dropdown__empty {
+  padding: 12px;
+  text-align: center;
+  color: $ink-3;
+  font-size: 0.8214em; // 0.71875rem / 0.875rem
+}
 
+// ---- dataset selection cards --------------------------------------------
+.dataset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
 
+.dataset-card {
+  position: relative;
+  border: 1.5px solid $line;
+  border-radius: 14px;
+  padding: 14px 16px;
+  cursor: pointer;
+  background: $paper;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+  display: flex;
+  align-items: center;
+  gap: 12px;
 
+  &:hover { border-color: $ink-3; }
 
+  &--selected {
+    border-color: $signal;
+    background: $wash;
+    box-shadow: 0 0 0 1px $signal inset;
+  }
+}
 
+.dataset-card__radio {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid $line-2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.15s ease;
 
+  .dataset-card--selected & { border-color: $signal; }
 
+  &::after {
+    content: '';
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: $signal;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
 
+  .dataset-card--selected &::after { opacity: 1; }
+}
 
-
-
-
-
-
-
-
-
-
-
-src/
-└── components/
-    ├── CustomMetrics/
-    │   ├── CustomMetrics.module.scss
-    │   ├── mockData.ts
-    │   ├── useToast.tsx
-    │   ├── CustomMetricsDashboard.tsx
-    │   ├── CreateMetric.tsx
-    │   └── UploadDataset.tsx
-    └── layout/
-        ├── Sidebar.tsx                        (replaces your existing one)
-        └── Sidebar.module.additions.scss      (snippet — paste into your existing Sidebar.module.scss)
+.dataset-card__body { min-width: 0; flex: 1; }
+.dataset-card__name {
+  font-family: $display;
+  font-weight: 700;
+  font-size: 0.9286em; // 0.8125rem / 0.875rem
+  color: $ink;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dataset-card__count {
+  font-family: $mono;
+  font-size: 0.7857em; // 0.6875rem / 0.875rem
+  color: $ink-3;
+  margin-top: 2px;
+}
