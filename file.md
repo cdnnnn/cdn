@@ -1,9 +1,8 @@
-//Prompttemplates.tsx
 // ═══════════════════════════════════════════════
 // pages/PromptTemplates/PromptTemplates.tsx
 // Content Analytics · Prompt Template management
 // ═══════════════════════════════════════════════
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import {
@@ -16,6 +15,47 @@ import {
 } from '../../store/promptTemplateSlice';
 import TourGuide, { type TourStep } from './TourGuide';
 import styles from './PromptTemplates.module.scss';
+
+// ─────────────────────────────────────────────
+// AutoResizeTextarea
+// Grows with content up to MAX_H, then scrolls.
+// Works correctly inside scrollable modal bodies
+// where the native resize grip is suppressed.
+// ─────────────────────────────────────────────
+const MAX_TEXTAREA_H = 320;
+
+interface AutoResizeTextareaProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {
+    className?: string;
+}
+
+const AutoResizeTextarea = React.forwardRef<HTMLTextAreaElement, AutoResizeTextareaProps>(
+    ({ onChange, className, value, ...props }, forwardedRef) => {
+        const innerRef = useRef<HTMLTextAreaElement>(null);
+        const ref = (forwardedRef as React.RefObject<HTMLTextAreaElement>) ?? innerRef;
+
+        const adjust = () => {
+            const el = ref.current;
+            if (!el) return;
+            el.style.height = 'auto';
+            const next = Math.min(el.scrollHeight, MAX_TEXTAREA_H);
+            el.style.height = `${next}px`;
+            el.style.overflowY = el.scrollHeight > MAX_TEXTAREA_H ? 'auto' : 'hidden';
+        };
+
+        // Re-measure whenever value changes (e.g. when edit modal pre-fills)
+        useLayoutEffect(() => { adjust(); });
+
+        return (
+            <textarea
+                ref={ref}
+                value={value}
+                className={className}
+                onChange={(e) => { adjust(); onChange?.(e); }}
+                {...props}
+            />
+        );
+    },
+);
 
 type FormState = {
     name: string;
@@ -444,11 +484,10 @@ const PromptTemplates: React.FC = () => {
                                                 required={modalMode !== 'view'}
                                             />
                                         ) : (
-                                            <textarea
+                                            <AutoResizeTextarea
                                                 className={`${styles.textarea} ${modalMode === 'view' ? styles.textareaReadonly : ''}`}
                                                 value={form[field]}
                                                 onChange={handleChange(field)}
-                                                rows={3}
                                                 placeholder={modalMode !== 'view' ? t(`promptTemplates.modal.${placeholderKey}`) : undefined}
                                                 readOnly={modalMode === 'view'}
                                                 required={modalMode !== 'view'}
@@ -537,7 +576,7 @@ export default PromptTemplates;
 
 
 
-//Prompttemplates.module.scss
+
 // ═══════════════════════════════════════════════
 // PromptTemplates.module.scss
 // Content Analytics · Prompt Template management
@@ -1086,21 +1125,19 @@ export default PromptTemplates;
 }
 
 .textarea {
-  resize: vertical;
+  // Height and overflow are driven by AutoResizeTextarea (JS).
+  // min-height sets the starting size; the component grows up to 320px
+  // then switches overflow-y to auto so the modal body can scroll.
   min-height: 80px;
-  max-height: 320px;
-  // overflow-y:scroll (not auto) keeps the scrollbar track always visible,
-  // which prevents the browser from hiding the native resize grip when
-  // content overflows — the grip lives in the same bottom-right corner.
-  overflow-y: scroll;
   line-height: 1.5;
   @include m.mono;
   font-size: 12px;
+  overflow-y: hidden; // JS overrides this to 'auto' once max-height is hit
+  resize: none;       // native grip disabled — auto-resize replaces it
 }
 
-// Read-only textarea shown in view mode — no resize, no focus ring
+// Read-only textarea shown in view mode
 .textareaReadonly {
-  resize: none;
   overflow-y: auto;
   cursor: default;
   opacity: 0.75;
@@ -1108,6 +1145,7 @@ export default PromptTemplates;
   border-color: var(--bdr) !important;
   box-shadow: none !important;
   color: var(--t1) !important;
+  resize: none;
 
   &:focus {
     border-color: var(--bdr) !important;
@@ -1156,210 +1194,5 @@ export default PromptTemplates;
 @keyframes ptSpin {
   to {
     transform: rotate(360deg);
-  }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//en.json
-{
-  "promptTemplates": {
-    "pageTitle": "Prompt Templates",
-    "pageSub_one": "{{count}} template · reusable prompts for summary, keyword & FAQ generation",
-    "pageSub_other": "{{count}} templates · reusable prompts for summary, keyword & FAQ generation",
-    "newTemplate": "New Template",
-    "loading": "Loading templates…",
-    "createdSuccess": "Template created.",
-    "updatedSuccess": "Template updated.",
-    "deletedSuccess": "Template deleted.",
-    "genericError": "Something went wrong. Please try again.",
-    "allFieldsRequired": "All fields are required.",
-    "table": {
-      "name": "Name",
-      "description": "Description",
-      "updated": "Updated",
-      "empty": "No templates yet — create your first one to standardise summary, keyword and FAQ prompts.",
-      "edit": "Edit",
-      "view": "View",
-      "delete": "Delete",
-      "deleting": "Deleting…",
-      "defaultBadge": "Default",
-      "defaultTooltip": "This is a platform default template and cannot be edited or deleted."
-    },
-    "modal": {
-      "createTitle": "New Template",
-      "editTitle": "Edit Template",
-      "viewTitle": "View Template",
-      "viewModeBadge": "Read-only",
-      "close": "Close",
-      "name": "Name",
-      "namePlaceholder": "e.g. Lecture Summary — Default",
-      "description": "Description",
-      "descPlaceholder": "Short description of when to use this template",
-      "summaryPrompt": "Summary Prompt",
-      "summaryPlaceholder": "Instructions used to generate the summary",
-      "keywordPrompt": "Keyword Prompt",
-      "keywordPlaceholder": "Instructions used to extract keywords",
-      "faqPrompt": "FAQ Prompt",
-      "faqPlaceholder": "Instructions used to generate FAQs",
-      "shortAnswerPrompt": "Short Answer Prompt",
-      "shortAnswerPlaceholder": "Instructions used to generate short answer questions",
-      "trueFalsePrompt": "True / False Prompt",
-      "trueFalsePlaceholder": "Instructions used to generate true/false questions",
-      "required": "*",
-      "cancel": "Cancel",
-      "saving": "Saving…",
-      "saveChanges": "Save Changes",
-      "createBtn": "Create Template",
-      "closeAriaLabel": "Close"
-    },
-    "deleteModal": {
-      "title": "Delete Template",
-      "body": "Delete <strong>{{name}}</strong>? This can't be undone.",
-      "cancel": "Cancel",
-      "confirm": "Delete"
-    },
-    "tour": {
-      "triggerLabel": "Take a tour",
-      "triggerTitle": "Take a guided tour of this page",
-      "headerTitle": "Prompt Templates",
-      "headerContent": "This page lets you manage reusable prompt templates. Each template bundles seven prompts — summary, keyword, FAQ, short-answer and true/false — so you can swap them without touching the pipeline configuration.",
-      "newBtnTitle": "Create a template",
-      "newBtnContent": "Click \"New Template\" to open the creation form. You can have as many templates as you need and switch between them freely.",
-      "tableTitle": "Template list",
-      "tableContent": "All saved templates appear here. The table shows the name, a short description and when the template was last edited.",
-      "editBtnTitle": "Edit a template",
-      "editBtnContent": "Click Edit on any row to open the template in the form and update any of its prompts.",
-      "deleteBtnTitle": "Delete a template",
-      "deleteBtnContent": "Click Delete to remove a template permanently. A confirmation dialog will appear before anything is deleted.",
-      "fieldNameTitle": "Name & Description",
-      "fieldNameContent": "Give the template a clear name and a short description so your team knows when to use it.",
-      "fieldSummaryTitle": "Summary Prompt",
-      "fieldSummaryContent": "This prompt is sent to the AI when generating a lecture summary. Tailor the tone and length requirements here.",
-      "fieldKeywordTitle": "Keyword Prompt",
-      "fieldKeywordContent": "Controls how keywords and key concepts are extracted from the transcript.",
-      "fieldFaqTitle": "FAQ Prompt",
-      "fieldFaqContent": "Shapes the frequently-asked-questions that are generated from the lecture content.",
-      "fieldShortAnswerTitle": "Short Answer Prompt",
-      "fieldShortAnswerContent": "Used when generating short-answer assessment questions from the lecture.",
-      "fieldTrueFalseTitle": "True / False Prompt",
-      "fieldTrueFalseContent": "Used when generating true/false questions. Describe any specific format or difficulty requirements you want the AI to follow."
-    }
-  }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//ko.json
-{
-  "promptTemplates": {
-    "pageTitle": "프롬프트 템플릿",
-    "pageSub_one": "{{count}}개 템플릿 · 요약, 키워드 및 FAQ 생성을 위한 재사용 가능한 프롬프트",
-    "pageSub_other": "{{count}}개 템플릿 · 요약, 키워드 및 FAQ 생성을 위한 재사용 가능한 프롬프트",
-    "newTemplate": "새 템플릿",
-    "loading": "템플릿 불러오는 중…",
-    "createdSuccess": "템플릿이 생성되었습니다.",
-    "updatedSuccess": "템플릿이 수정되었습니다.",
-    "deletedSuccess": "템플릿이 삭제되었습니다.",
-    "genericError": "오류가 발생했습니다. 다시 시도해 주세요.",
-    "allFieldsRequired": "모든 필드를 입력해야 합니다.",
-    "table": {
-      "name": "이름",
-      "description": "설명",
-      "updated": "수정일",
-      "empty": "아직 템플릿이 없습니다 — 첫 번째 템플릿을 생성하여 요약, 키워드 및 FAQ 프롬프트를 표준화하세요.",
-      "edit": "수정",
-      "view": "보기",
-      "delete": "삭제",
-      "deleting": "삭제 중…",
-      "defaultBadge": "기본",
-      "defaultTooltip": "플랫폼 기본 템플릿으로 수정하거나 삭제할 수 없습니다."
-    },
-    "modal": {
-      "createTitle": "새 템플릿",
-      "editTitle": "템플릿 수정",
-      "viewTitle": "템플릿 보기",
-      "viewModeBadge": "읽기 전용",
-      "close": "닫기",
-      "name": "이름",
-      "namePlaceholder": "예: 강의 요약 — 기본",
-      "description": "설명",
-      "descPlaceholder": "이 템플릿을 사용하는 상황에 대한 짧은 설명",
-      "summaryPrompt": "요약 프롬프트",
-      "summaryPlaceholder": "요약 생성에 사용되는 지시사항",
-      "keywordPrompt": "키워드 프롬프트",
-      "keywordPlaceholder": "키워드 추출에 사용되는 지시사항",
-      "faqPrompt": "FAQ 프롬프트",
-      "faqPlaceholder": "FAQ 생성에 사용되는 지시사항",
-      "shortAnswerPrompt": "단답형 프롬프트",
-      "shortAnswerPlaceholder": "단답형 문항 생성에 사용되는 지시사항",
-      "trueFalsePrompt": "진위형 프롬프트",
-      "trueFalsePlaceholder": "진위형 문항 생성에 사용되는 지시사항",
-      "required": "*",
-      "cancel": "취소",
-      "saving": "저장 중…",
-      "saveChanges": "변경사항 저장",
-      "createBtn": "템플릿 생성",
-      "closeAriaLabel": "닫기"
-    },
-    "deleteModal": {
-      "title": "템플릿 삭제",
-      "body": "<strong>{{name}}</strong>을(를) 삭제하시겠습니까? 이 작업은 취소할 수 없습니다.",
-      "cancel": "취소",
-      "confirm": "삭제"
-    },
-    "tour": {
-      "triggerLabel": "둘러보기",
-      "triggerTitle": "이 페이지의 가이드 투어 시작",
-      "headerTitle": "프롬프트 템플릿",
-      "headerContent": "이 페이지에서 재사용 가능한 프롬프트 템플릿을 관리할 수 있습니다. 각 템플릿에는 요약, 키워드, FAQ, 단답형, 진위형 등 7가지 프롬프트가 포함되어 있어, 파이프라인 설정을 변경하지 않고도 자유롭게 교체할 수 있습니다.",
-      "newBtnTitle": "템플릿 생성",
-      "newBtnContent": "\"새 템플릿\"을 클릭하면 생성 폼이 열립니다. 필요한 만큼 템플릿을 만들고 자유롭게 전환할 수 있습니다.",
-      "tableTitle": "템플릿 목록",
-      "tableContent": "저장된 모든 템플릿이 여기에 표시됩니다. 이름, 짧은 설명, 마지막 수정 날짜를 확인할 수 있습니다.",
-      "editBtnTitle": "템플릿 수정",
-      "editBtnContent": "행의 수정 버튼을 클릭하면 해당 템플릿이 폼에 열려 프롬프트를 수정할 수 있습니다.",
-      "deleteBtnTitle": "템플릿 삭제",
-      "deleteBtnContent": "삭제 버튼을 클릭하면 템플릿이 영구적으로 제거됩니다. 삭제 전에 확인 대화상자가 표시됩니다.",
-      "fieldNameTitle": "이름 및 설명",
-      "fieldNameContent": "팀원들이 언제 사용해야 할지 알 수 있도록 명확한 이름과 짧은 설명을 입력하세요.",
-      "fieldSummaryTitle": "요약 프롬프트",
-      "fieldSummaryContent": "강의 요약을 생성할 때 AI에 전달되는 프롬프트입니다. 여기에서 톤과 길이 요구사항을 조정하세요.",
-      "fieldKeywordTitle": "키워드 프롬프트",
-      "fieldKeywordContent": "전사본에서 키워드와 핵심 개념을 추출하는 방식을 제어합니다.",
-      "fieldFaqTitle": "FAQ 프롬프트",
-      "fieldFaqContent": "강의 내용에서 생성되는 자주 묻는 질문의 형태를 결정합니다.",
-      "fieldShortAnswerTitle": "단답형 프롬프트",
-      "fieldShortAnswerContent": "강의에서 단답형 평가 문항을 생성할 때 사용됩니다.",
-      "fieldTrueFalseTitle": "진위형 프롬프트",
-      "fieldTrueFalseContent": "진위형 문항을 생성할 때 사용됩니다. AI가 따라야 할 특정 형식이나 난이도 요구사항을 기술하세요."
-    }
   }
 }
