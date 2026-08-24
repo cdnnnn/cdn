@@ -1,791 +1,1365 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+//Prompttemplates.tsx
+// ═══════════════════════════════════════════════
+// pages/PromptTemplates/PromptTemplates.tsx
+// Content Analytics · Prompt Template management
+// ═══════════════════════════════════════════════
+import React, { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import {
-  AlertCircle, ArrowLeft, ArrowRight, Boxes, Check, CheckCircle2, Code2, Cpu, Database,
-  ListChecks, Loader2, Plus, ScrollText, SlidersHorizontal, Sparkles, Target, X, XCircle, Zap,
-} from 'lucide-react';
-// NB: the wizard was collapsed from 5 steps to 4 — Validate & Save now lives
-// inside the Dataset step's footer instead of being its own step.
-import styles from './CreateMetric.module.scss';
-import { useToast } from './useToast';
-import CustomSelect from './CustomSelect';
-import {
-  metricsApi, EvalType, MetricType, PromptTemplate,
-  ModelSummary, DatasetSummary, PreviewQuestion, ValidateMetricData, RuleDef,
-} from '../../api/endpoints/metrics';
+    fetchPromptTemplates,
+    createPromptTemplate,
+    updatePromptTemplate,
+    deletePromptTemplate,
+    clearPromptTemplateError,
+    type PromptTemplate,
+} from '../../store/promptTemplateSlice';
+import TourGuide, { type TourStep } from './TourGuide';
+import styles from './PromptTemplates.module.scss';
 
-// ---- static config -----------------------------------------------------
-const EVAL_TYPE_CARDS: { key: EvalType; label: string; desc: string; icon: JSX.Element }[] = [
-  { key: 'model', label: 'Model', desc: 'Score a model\u2019s output against an expected answer.', icon: <Cpu size={20} /> },
-  { key: 'agent', label: 'Agent', desc: 'Evaluate tool calls and task completion for agents.', icon: <Zap size={20} /> },
-  { key: 'rag', label: 'RAG', desc: 'Check answers grounded in retrieved context.', icon: <ScrollText size={20} /> },
-];
-
-const METRIC_TYPE_CARDS: { key: MetricType; label: string; desc: string; icon: JSX.Element }[] = [
-  { key: 'visual', label: 'Visual Builder', desc: 'Field comparisons joined with AND/OR logic. No code.', icon: <SlidersHorizontal size={18} /> },
-  { key: 'prompt', label: 'Prompt Builder', desc: 'An LLM judge scored with a prompt template.', icon: <Sparkles size={18} /> },
-  { key: 'code', label: 'Code Editor', desc: 'A custom Python scoring function.', icon: <Code2 size={18} /> },
-  { key: 'simple', label: 'Simple', desc: 'A minimal, zero-config pass/fail check.', icon: <Target size={18} /> },
-];
-
-const FIELDS_BY_EVAL_TYPE: Record<EvalType, string[]> = {
-  model: ['input', 'actual_output', 'expected_output'],
-  agent: ['input', 'actual_output', 'expected_output', 'tools_called', 'expected_tools'],
-  rag: ['input', 'actual_output', 'expected_output', 'tools_called', 'expected_tools'],
+type FormState = {
+    name: string;
+    description: string;
+    summary_prompt: string;
+    keyword_prompt: string;
+    faq_prompt: string;
+    short_answer_prompt: string;
+    true_false_prompt: string;
 };
 
-const OPERATORS = [
-  { value: 'contains', label: 'contains' },
-  { value: 'not_contains', label: 'not contains' },
-  { value: 'equals', label: 'equals' },
-  { value: 'starts_with', label: 'starts with' },
-  { value: 'ends_with', label: 'ends with' },
-  { value: 'greater_than', label: 'greater than' },
-  { value: 'less_than', label: 'less than' },
-  { value: 'regex_match', label: 'regex match' },
-];
-
-const OP_SYMBOL: Record<string, string> = {
-  contains: 'contains', not_contains: 'does not contain', equals: '==', starts_with: 'starts with',
-  ends_with: 'ends with', greater_than: '>', less_than: '<', regex_match: 'matches',
+const EMPTY_FORM: FormState = {
+    name: '',
+    description: '',
+    summary_prompt: '',
+    keyword_prompt: '',
+    faq_prompt: '',
+    short_answer_prompt: '',
+    true_false_prompt: '',
 };
 
-const METRIC_TYPE_TO_API: Record<MetricType, string> = {
-  visual: 'condition', prompt: 'prompt', code: 'code', simple: 'simple',
-};
-
-const EVAL_TYPE_TO_CATEGORY: Record<EvalType, string> = { model: 'llm', agent: 'agent', rag: 'rag' };
-
-type CompareType = 'field' | 'literal';
-interface RuleRow { id: number; field: string; operator: string; compareType: CompareType; value: string; }
-let ruleSeq = 1;
-
-type StepKey = 'details' | 'type' | 'config' | 'dataset';
-
-interface StepDef { key: StepKey; label: string; }
-
-export default function CreateMetric() {
-  const navigate = useNavigate();
-  const { showToast, ToastEl } = useToast();
-
-  const [step, setStep] = useState<StepKey>('details');
-
-  // details
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-
-  // type
-  const [evalType, setEvalType] = useState<EvalType | null>(null);
-  const [metricType, setMetricType] = useState<MetricType | null>(null);
-
-  // config: visual
-  const [rules, setRules] = useState<RuleRow[]>([{ id: ruleSeq, field: 'actual_output', operator: 'contains', compareType: 'field', value: 'input' }]);
-  const [gates, setGates] = useState<('AND' | 'OR')[]>([]);
-
-  // config: prompt
-  const [promptTemplates, setPromptTemplates] = useState<PromptTemplate[]>([]);
-  const [promptTemplatesLoading, setPromptTemplatesLoading] = useState(false);
-  const [promptTemplatesError, setPromptTemplatesError] = useState('');
-  const [selectedTemplateName, setSelectedTemplateName] = useState('');
-  const [promptText, setPromptText] = useState('');
-  const [models, setModels] = useState<ModelSummary[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
-  const [modelsError, setModelsError] = useState('');
-  const [modelHealth, setModelHealth] = useState<Record<string, 'checking' | 'healthy' | 'unhealthy'>>({});
-  const [selectedModelId, setSelectedModelId] = useState('');
-
-  // config: code
-  const [code, setCode] = useState('');
-  const [codeLoading, setCodeLoading] = useState(false);
-  const [codeError, setCodeError] = useState('');
-
-  // threshold (folded into config step)
-  const [threshold, setThreshold] = useState(0.7);
-
-  // dataset
-  const [datasets, setDatasets] = useState<DatasetSummary[]>([]);
-  const [datasetsLoading, setDatasetsLoading] = useState(false);
-  const [datasetsError, setDatasetsError] = useState('');
-  const [selectedDatasetId, setSelectedDatasetId] = useState('');
-  const [previewQuestions, setPreviewQuestions] = useState<PreviewQuestion[]>([]);
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewError, setPreviewError] = useState('');
-  const [selectedQuestionIds, setSelectedQuestionIds] = useState<Set<string>>(new Set());
-
-  // validate / save
-  const [validating, setValidating] = useState(false);
-  const [validateError, setValidateError] = useState('');
-  const [validateResult, setValidateResult] = useState<ValidateMetricData | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState('');
-  const [savedId, setSavedId] = useState('');
-
-  const fields = evalType ? FIELDS_BY_EVAL_TYPE[evalType] : [];
-
-  // ---- reset chains ------------------------------------------------------
-  const handleEvalType = (t: EvalType) => {
-    if (t === evalType) return;
-    setEvalType(t);
-    setDatasets([]); setSelectedDatasetId(''); setPreviewQuestions([]); setSelectedQuestionIds(new Set());
-    setCode(''); setPromptText(''); setSelectedTemplateName(''); setValidateResult(null); setSavedId('');
-  };
-  const handleMetricType = (t: MetricType) => {
-    if (t === metricType) return;
-    setMetricType(t); setValidateResult(null); setSavedId('');
-  };
-
-  // ---- visual rules ------------------------------------------------------
-  const addRule = () => {
-    ruleSeq += 1;
-    setRules((r) => [...r, { id: ruleSeq, field: fields[0] || 'input', operator: 'contains', compareType: 'literal', value: '' }]);
-    setGates((g) => [...g, 'AND']);
-  };
-  const removeRule = (id: number) => {
-    setRules((r) => {
-      if (r.length <= 1) return r;
-      const idx = r.findIndex((row) => row.id === id);
-      setGates((g) => g.filter((_, i) => i !== Math.max(0, idx - 1)));
-      return r.filter((row) => row.id !== id);
-    });
-  };
-  const updateRule = (id: number, patch: Partial<RuleRow>) => setRules((r) => r.map((row) => (row.id === id ? { ...row, ...patch } : row)));
-  const toggleGate = (idx: number) => setGates((g) => g.map((v, i) => (i === idx ? (v === 'AND' ? 'OR' : 'AND') : v)));
-
-  // ---- prompt templates + models ----------------------------------------
-  useEffect(() => {
-    if (metricType !== 'prompt' || promptTemplates.length) return;
-    setPromptTemplatesLoading(true); setPromptTemplatesError('');
-    metricsApi.getPromptTemplates()
-      .then(setPromptTemplates)
-      .catch((e) => setPromptTemplatesError(e.message || 'Failed to load templates'))
-      .finally(() => setPromptTemplatesLoading(false));
-  }, [metricType, promptTemplates.length]);
-
-  const matchingTemplates = useMemo(
-    () => promptTemplates.filter((t) => t.category === (evalType ? EVAL_TYPE_TO_CATEGORY[evalType] : '')),
-    [promptTemplates, evalType],
-  );
-  const allowsCustomPrompt = evalType === 'agent' || evalType === 'rag';
-
-  useEffect(() => {
-    if (metricType !== 'prompt' || models.length) return;
-    setModelsLoading(true); setModelsError('');
-    metricsApi.listModels()
-      .then((list) => {
-        setModels(list);
-        const init: Record<string, 'checking'> = {};
-        list.forEach((m) => { init[m.id] = 'checking'; });
-        setModelHealth(init);
-        list.forEach((m) => metricsApi.checkModelHealth(m.id).then((h) =>
-          setModelHealth((prev) => ({ ...prev, [m.id]: h.success ? 'healthy' : 'unhealthy' }))));
-      })
-      .catch((e) => setModelsError(e.message || 'Failed to load models'))
-      .finally(() => setModelsLoading(false));
-  }, [metricType, models.length]);
-
-  // ---- code template -----------------------------------------------------
-  useEffect(() => {
-    if (metricType !== 'code' || !evalType || code) return;
-    setCodeLoading(true); setCodeError('');
-    metricsApi.getCodeTemplate(evalType)
-      .then((res) => setCode(res.code))
-      .catch((e) => setCodeError(e.message || 'Failed to load starter code'))
-      .finally(() => setCodeLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [metricType, evalType]);
-
-  // ---- datasets ----------------------------------------------------------
-  useEffect(() => {
-    if (!evalType) return;
-    setDatasetsLoading(true); setDatasetsError(''); setSelectedDatasetId(''); setPreviewQuestions([]);
-    metricsApi.listDatasets(evalType)
-      .then(setDatasets)
-      .catch((e) => setDatasetsError(e.message || 'Failed to load datasets'))
-      .finally(() => setDatasetsLoading(false));
-  }, [evalType]);
-
-  const selectDataset = (id: string) => {
-    setSelectedDatasetId(id); setValidateResult(null); setSavedId('');
-    setPreviewLoading(true); setPreviewError('');
-    metricsApi.previewDataset(id)
-      .then((res) => {
-        const qs = res.questions.slice(0, 5);
-        setPreviewQuestions(qs);
-        setSelectedQuestionIds(new Set(qs.map((q) => q.id)));
-      })
-      .catch((e) => setPreviewError(e.message || 'Failed to load preview'))
-      .finally(() => setPreviewLoading(false));
-  };
-  const toggleQuestion = (id: string) => setSelectedQuestionIds((prev) => {
-    const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next;
-  });
-  const selectAllQuestions = () => setSelectedQuestionIds(new Set(previewQuestions.map((q) => q.id)));
-  const clearAllQuestions = () => setSelectedQuestionIds(new Set());
-
-  // ---- rule summary ------------------------------------------------------
-  const ruleSummary = useMemo(() => {
-    if (!rules.length) return null;
-    return rules.map((r, i) => {
-      const compare = r.compareType === 'field' ? (r.value || '<field>') : `"${r.value || '…'}"`;
-      return (
-        <span key={r.id}>
-          {i > 0 && <span className={styles['summary__gate']}>{gates[i - 1] || 'AND'}</span>}
-          <span className={styles['summary__token']}>{r.field}</span>
-          {' '}{OP_SYMBOL[r.operator] || r.operator}{' '}
-          <span className={styles['summary__token']}>{compare}</span>
-        </span>
-      );
-    });
-  }, [rules, gates]);
-
-  // ---- gating ------------------------------------------------------------
-  const detailsComplete = !!name.trim();
-  const typeComplete = !!evalType && !!metricType;
-  const configComplete = useMemo(() => {
-    if (!metricType) return false;
-    if (metricType === 'visual') return rules.every((r) => r.field && r.operator && (r.compareType === 'field' ? r.value : r.value.trim()));
-    if (metricType === 'prompt') return !!promptText.trim() && !!selectedModelId;
-    if (metricType === 'code') return !!code.trim();
-    return true;
-  }, [metricType, rules, promptText, selectedModelId, code]);
-  const datasetComplete = !!selectedDatasetId && selectedQuestionIds.size > 0;
-  const canValidate = detailsComplete && typeComplete && configComplete && datasetComplete && threshold >= 0 && threshold <= 1;
-  const validateSucceeded = !!validateResult && validateResult.passed > 0;
-
-  const STEPS: StepDef[] = [
-    { key: 'details', label: 'Metric Details' },
-    { key: 'type', label: 'Type & Target' },
-    { key: 'config', label: metricType === 'prompt' ? 'Judge Prompt' : metricType === 'code' ? 'Scoring Code' : metricType === 'simple' ? 'Configuration' : 'Rules' },
-    { key: 'dataset', label: 'Dataset · Validate & Save' },
-  ];
-
-  const stepDone: Record<StepKey, boolean> = {
-    details: detailsComplete,
-    type: typeComplete,
-    config: configComplete,
-    dataset: datasetComplete && !!validateResult,
-  };
-  const stepEnabled: Record<StepKey, boolean> = {
-    details: true,
-    type: detailsComplete,
-    config: typeComplete,
-    dataset: typeComplete,
-  };
-
-  const stepValue: Record<StepKey, string> = {
-    details: name || 'Not set',
-    type: evalType && metricType ? `${evalType.toUpperCase()} · ${METRIC_TYPE_CARDS.find((c) => c.key === metricType)!.label}` : 'Not set',
-    config: metricType ? (configComplete ? 'Configured' : 'Incomplete') : '—',
-    dataset: validateResult ? `${validateResult.passed}/${validateResult.total} passed` : (selectedDatasetId ? `${selectedQuestionIds.size} selected` : 'Not set'),
-  };
-
-  const stepIndex = STEPS.findIndex((s) => s.key === step);
-  const goStep = (k: StepKey) => { if (stepEnabled[k]) setStep(k); };
-  const nextStep = () => { const n = STEPS[stepIndex + 1]; if (n && stepEnabled[n.key]) setStep(n.key); };
-  const prevStep = () => { const p = STEPS[stepIndex - 1]; if (p) setStep(p.key); };
-
-  // ---- validate / save ---------------------------------------------------
-  const buildDefinition = () => {
-    if (metricType === 'visual') return { rules: rules.map<RuleDef>((r) => ({ field: r.field, operator: r.operator, value: r.value, compare_to_field: r.compareType === 'field' })) };
-    if (metricType === 'prompt') return { prompt_template: promptText };
-    if (metricType === 'code') return { code, skip_validation: true };
-    return {};
-  };
-
-  const runValidate = () => {
-    if (!canValidate || !evalType || !metricType) { showToast('Complete all steps first', 'error'); return; }
-    setValidating(true); setValidateError(''); setValidateResult(null);
-    const selectedQs = previewQuestions.filter((q) => selectedQuestionIds.has(q.id));
-    metricsApi.validate({
-      actual_output: '', context: [], definition: buildDefinition(), description,
-      eval_types: [evalType], expected_output: '', expected_tools: [],
-      gates: metricType === 'visual' ? gates : [], input: '',
-      judge_config: metricType === 'prompt' ? { model_id: selectedModelId } : null,
-      metric_type: METRIC_TYPE_TO_API[metricType], name, retrieval_context: [],
-      test_cases: selectedQs.map((q) => ({
-        input: q.input?.prompt || '', actual_output: '', expected_output: q.expected?.answer || '',
-        context: [], retrieval_context: [], tools_called: [], expected_tools: [],
-      })),
-      threshold: threshold.toFixed(2), tools_called: [],
-    })
-      .then(setValidateResult)
-      .catch((e) => setValidateError(e.message || 'Validation failed'))
-      .finally(() => setValidating(false));
-  };
-
-  const handleSave = () => {
-    if (!validateResult || !evalType || !metricType) { showToast('Run validation before saving', 'error'); return; }
-    setSaving(true); setSaveError('');
-    metricsApi.create({
-      definition: buildDefinition(), description, eval_types: [evalType],
-      metric_type: METRIC_TYPE_TO_API[metricType], name, threshold: threshold.toFixed(2),
-      judge_config: metricType === 'prompt' ? { model_id: selectedModelId } : null,
-    })
-      .then((res) => setSavedId(res.id || 'saved'))
-      .catch((e) => setSaveError(e.message || 'Failed to save metric'))
-      .finally(() => setSaving(false));
-  };
-
-  const resetForm = () => {
-    setStep('details');
-    setName(''); setDescription(''); setEvalType(null); setMetricType(null);
-    setRules([{ id: ++ruleSeq, field: 'actual_output', operator: 'contains', compareType: 'field', value: 'input' }]); setGates([]);
-    setPromptTemplates([]); setSelectedTemplateName(''); setPromptText('');
-    setModels([]); setModelHealth({}); setSelectedModelId(''); setCode(''); setThreshold(0.7);
-    setDatasets([]); setSelectedDatasetId(''); setPreviewQuestions([]); setSelectedQuestionIds(new Set());
-    setValidateResult(null); setValidateError(''); setSavedId('');
-  };
-
-  const currentStepLabel = STEPS[stepIndex]?.label ?? '';
-
-  // =========================================================================
-  return (
-    <div className={`page-enter ${styles.cm}`}>
-
-      {/* ============ PAGE HEADER (matches Model Catalog header) ============ */}
-      <div className={styles['page-header']}>
-        <div>
-          <p className={styles['page-header__eyebrow']}>Custom Metric</p>
-          <h1 className={styles['page-header__title']}>{name || 'Create Metric'}</h1>
-          <p className={styles['page-header__sub']}>
-            {evalType && metricType
-              ? `${evalType.toUpperCase()} · ${METRIC_TYPE_CARDS.find((c) => c.key === metricType)!.label}`
-              : 'Build a metric step by step'}
-          </p>
-        </div>
-        <div className={styles['page-header__meta']}>
-          <Boxes size={13} />
-          Step {stepIndex + 1} of {STEPS.length} · {currentStepLabel}
-        </div>
-      </div>
-
-      <div className={styles.builder}>
-
-        {/* ============ LEFT RAIL ============ */}
-        <aside className={styles.rail}>
-          <div className={styles['rail__head']}>
-            <div className={styles['rail__eyebrow']}>Progress</div>
-            <div className={styles['rail__sub']}>Complete each step to unlock the next.</div>
-          </div>
-
-          <nav className={styles['rail__steps']}>
-            {STEPS.map((s, i) => {
-              const active = step === s.key;
-              const done = stepDone[s.key] && !active;
-              return (
-                <button
-                  key={s.key}
-                  disabled={!stepEnabled[s.key]}
-                  onClick={() => goStep(s.key)}
-                  className={`${styles['rail-step']} ${active ? styles['rail-step--active'] : ''} ${done ? styles['rail-step--done'] : ''} ${!stepEnabled[s.key] ? styles['rail-step--disabled'] : ''}`}
-                >
-                  <span className={styles['rail-step__marker']}>
-                    {done ? <Check size={15} /> : i + 1}
-                  </span>
-                  <span className={styles['rail-step__body']}>
-                    <span className={styles['rail-step__label']}>{s.label}</span>
-                    <span className={styles['rail-step__value']}>{stepValue[s.key]}</span>
-                  </span>
-                </button>
-              );
-            })}
-          </nav>
-        </aside>
-
-        {/* ============ RIGHT WORKSPACE ============ */}
-        <section className={styles.work}>
-          <div className={styles['work__scroll']}>
-            <div className={styles['work__inner']} key={step}>
-
-              {/* ---- STEP: DETAILS ---- */}
-              {step === 'details' && (
-                <>
-                  <div className={styles['work__eyebrow']}>Step 1</div>
-                  <h1 className={styles['work__title']}>Name your metric</h1>
-                  <p className={styles['work__desc']}>Give it a clear name and, optionally, a short description of what it measures.</p>
-
-                  <div className={styles.field}>
-                    <label className={styles['field__label']}>Metric Name</label>
-                    <input className={styles.input} placeholder="e.g., Answer Faithfulness" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
-                  </div>
-                  <div className={styles.field}>
-                    <label className={styles['field__label']}>Description</label>
-                    <textarea className={styles.textarea} placeholder="What does this metric measure? (optional)" value={description} onChange={(e) => setDescription(e.target.value)} />
-                  </div>
-                </>
-              )}
-
-              {/* ---- STEP: TYPE & TARGET ---- */}
-              {step === 'type' && (
-                <>
-                  <div className={styles['work__eyebrow']}>Step 2</div>
-                  <h1 className={styles['work__title']}>Evaluation type &amp; approach</h1>
-                  <p className={styles['work__desc']}>Choose what you\u2019re evaluating, then how the metric should score it.</p>
-
-                  <div className={styles.field}>
-                    <label className={styles['field__label']}>Evaluation Type</label>
-                    <div className={`${styles['opt-grid']} ${styles['opt-grid--3']}`}>
-                      {EVAL_TYPE_CARDS.map((c) => (
-                        <button key={c.key} className={`${styles.opt} ${evalType === c.key ? styles['opt--selected'] : ''}`} onClick={() => handleEvalType(c.key)}>
-                          {evalType === c.key && <span className={styles['opt__check']}><Check size={12} /></span>}
-                          <span className={styles['opt__icon']}>{c.icon}</span>
-                          <div className={styles['opt__title']}>{c.label}</div>
-                          <div className={styles['opt__desc']}>{c.desc}</div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className={styles.field}>
-                    <label className={styles['field__label']}>Metric Type</label>
-                    <div className={styles['opt-grid']}>
-                      {METRIC_TYPE_CARDS.map((c) => (
-                        <button key={c.key} className={`${styles.opt} ${metricType === c.key ? styles['opt--selected'] : ''}`} onClick={() => handleMetricType(c.key)}>
-                          {metricType === c.key && <span className={styles['opt__check']}><Check size={12} /></span>}
-                          <span className={styles['opt__icon']}>{c.icon}</span>
-                          <div className={styles['opt__title']}>{c.label}</div>
-                          <div className={styles['opt__desc']}>{c.desc}</div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {/* ---- STEP: CONFIG ---- */}
-              {step === 'config' && (
-                <>
-                  <div className={styles['work__eyebrow']}>Step 3</div>
-                  <h1 className={styles['work__title']}>{STEPS[2].label}</h1>
-
-                  {/* visual */}
-                  {metricType === 'visual' && (
-                    <>
-                      <p className={styles['work__desc']}>Build one or more field comparisons. Combine them with AND / OR.</p>
-                      <div className={styles.rules}>
-                        {rules.map((rule, i) => (
-                          <div key={rule.id}>
-                            {i > 0 && (
-                              <div className={styles.gate}>
-                                <div className={styles['gate__toggle']}>
-                                  {(['AND', 'OR'] as const).map((g) => (
-                                    <button key={g} className={`${styles['gate__opt']} ${gates[i - 1] === g ? styles.on : ''}`} onClick={() => toggleGate(i - 1)}>{g}</button>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                            <div className={styles.rule}>
-                              <div className={styles['rule__index']}>{i + 1}</div>
-                              <div className={styles['rule__grid']}>
-                                <div className={styles['rule__field']}>
-                                  <span className={styles['rule__field-label']}>Field</span>
-                                  <CustomSelect value={rule.field} onChange={(v) => updateRule(rule.id, { field: v })} options={fields.map((f) => ({ value: f, label: f }))} />
-                                </div>
-                                <div className={styles['rule__field']}>
-                                  <span className={styles['rule__field-label']}>Operator</span>
-                                  <CustomSelect value={rule.operator} onChange={(v) => updateRule(rule.id, { operator: v })} options={OPERATORS} />
-                                </div>
-                                <div className={styles['rule__field']}>
-                                  <span className={styles['rule__field-label']}>Compare To</span>
-                                  <CustomSelect value={rule.compareType} onChange={(v) => updateRule(rule.id, { compareType: v as CompareType, value: '' })} options={[{ value: 'field', label: 'Field' }, { value: 'literal', label: 'Literal Value' }]} />
-                                </div>
-                                <div className={styles['rule__field']}>
-                                  <span className={styles['rule__field-label']}>Value</span>
-                                  {rule.compareType === 'literal'
-                                    ? <input className={styles.input} placeholder="value" value={rule.value} onChange={(e) => updateRule(rule.id, { value: e.target.value })} />
-                                    : <CustomSelect value={rule.value} onChange={(v) => updateRule(rule.id, { value: v })} placeholder="field…" options={fields.map((f) => ({ value: f, label: f }))} />}
-                                </div>
-                              </div>
-                              <button className={styles['btn-icon']} title="Remove" onClick={() => removeRule(rule.id)}><X size={15} /></button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                      <button className={`${styles.btn} ${styles['btn--sm']} ${styles['add-rule']}`} onClick={addRule}><Plus size={14} /> Add Rule</button>
-
-                      <div className={styles.summary}>
-                        <div className={styles['summary__label']}>Summary</div>
-                        <div className={styles['summary__code']}>{ruleSummary || 'No rules defined'}</div>
-                      </div>
-                    </>
-                  )}
-
-                  {/* prompt */}
-                  {metricType === 'prompt' && (
-                    <>
-                      <p className={styles['work__desc']}>Pick a judge prompt template (or write your own), then choose a judge model.</p>
-
-                      {promptTemplatesError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {promptTemplatesError}</div>}
-                      {promptTemplatesLoading ? (
-                        <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading templates…</div>
-                      ) : (
-                        <div className={styles['tpl-list']}>
-                          {matchingTemplates.length === 0 && !allowsCustomPrompt && <div className={styles.empty}>No templates for this evaluation type.</div>}
-                          {matchingTemplates.map((t) => (
-                            <label key={t.name} className={`${styles.tpl} ${selectedTemplateName === t.name ? styles['tpl--selected'] : ''}`}>
-                              <input type="radio" name="tpl" hidden checked={selectedTemplateName === t.name} onChange={() => { setSelectedTemplateName(t.name); setPromptText(t.template); }} />
-                              <span className={styles['tpl__radio']} />
-                              <span>
-                                <span className={styles['tpl__label']}>{t.label}</span>
-                                <span className={styles['tpl__desc']}>{t.description}</span>
-                                {t.uses_placeholders?.length > 0 && (
-                                  <span className={styles['tpl__tags']}>
-                                    {t.uses_placeholders.map((p) => <span key={p} className={styles.token}>{`{${p}}`}</span>)}
-                                  </span>
-                                )}
-                              </span>
-                            </label>
-                          ))}
-                          {allowsCustomPrompt && (
-                            <label className={`${styles.tpl} ${selectedTemplateName === '__custom__' ? styles['tpl--selected'] : ''}`}>
-                              <input type="radio" name="tpl" hidden checked={selectedTemplateName === '__custom__'} onChange={() => { setSelectedTemplateName('__custom__'); setPromptText(''); }} />
-                              <span className={styles['tpl__radio']} />
-                              <span>
-                                <span className={styles['tpl__label']}>Custom Prompt</span>
-                                <span className={styles['tpl__desc']}>Write your own judge prompt from scratch.</span>
-                              </span>
-                            </label>
-                          )}
-                        </div>
-                      )}
-
-                      {selectedTemplateName && (
-                        <div className={styles.field}>
-                          <label className={styles['field__label']}>Prompt</label>
-                          <textarea className={styles.textarea} style={{ minHeight: '150px' }} value={promptText} onChange={(e) => setPromptText(e.target.value)} placeholder="Enter your judge prompt…" />
-                        </div>
-                      )}
-
-                      <div className={styles.field}>
-                        <label className={styles['field__label']}>Judge Model</label>
-                        {modelsError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {modelsError}</div>}
-                        {modelsLoading ? (
-                          <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading models…</div>
-                        ) : models.length === 0 ? (
-                          <div className={styles.empty}>No models available.</div>
-                        ) : (
-                          <div className={styles.models}>
-                            {models.map((m) => {
-                              const health = modelHealth[m.id] || 'checking';
-                              const disabled = health === 'unhealthy';
-                              return (
-                                <label key={m.id} className={`${styles.model} ${selectedModelId === m.id ? styles['model--selected'] : ''} ${disabled ? styles['model--disabled'] : ''}`}>
-                                  <input type="radio" name="judge" hidden checked={selectedModelId === m.id} disabled={disabled} onChange={() => setSelectedModelId(m.id)} />
-                                  <span className={styles['model__radio']} />
-                                  <span>
-                                    <span className={styles['model__name']}>{m.name}</span>
-                                    <span className={styles['model__meta']}>{m.provider_id}</span>
-                                  </span>
-                                  <span className={`${styles['model__health']} ${styles[`health--${health}`]}`}>
-                                    <span className={styles['health-dot']} />
-                                    {health === 'checking' ? 'Checking' : health === 'healthy' ? 'Healthy' : 'Offline'}
-                                  </span>
-                                </label>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    </>
-                  )}
-
-                  {/* code */}
-                  {metricType === 'code' && (
-                    <>
-                      <p className={styles['work__desc']}>Starter code is tailored to the evaluation type. Edit it to suit your metric.</p>
-                      {codeError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {codeError}</div>}
-                      <div className={styles.code}>
-                        <div className={styles['code__bar']}>
-                          <span className={styles['code__lang']}>Python</span>
-                          {codeLoading && <Loader2 size={13} className={styles.spin} />}
-                        </div>
-                        <textarea className={styles['code__area']} spellCheck={false} value={code} onChange={(e) => setCode(e.target.value)} placeholder="# scoring function" />
-                      </div>
-                    </>
-                  )}
-
-                  {/* simple */}
-                  {metricType === 'simple' && (
-                    <p className={styles['work__desc']}>The Simple metric needs no extra configuration. Set a threshold below and continue.</p>
-                  )}
-
-                  {/* threshold — shared across all config types */}
-                  <div className={styles.field} style={{ marginTop: '26px' }}>
-                    <label className={styles['field__label']}>Pass Threshold</label>
-                    <div className={styles.thr}>
-                      <div className={styles['thr__value']}>{threshold.toFixed(2)}</div>
-                      <div className={styles['thr__cap']}>Minimum score required to pass</div>
-                      <input type="range" className={styles['thr__slider']} min={0} max={1} step={0.01} value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} />
-                      <div className={styles['thr__scale']}><span>0.00</span><span>0.50</span><span>1.00</span></div>
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {/* ---- STEP: DATASET ---- */}
-              {step === 'dataset' && (
-                <>
-                  <div className={styles['work__eyebrow']}>Step 4</div>
-                  <h1 className={styles['work__title']}>Choose test data &amp; validate</h1>
-                  <p className={styles['work__desc']}>Pick a dataset and questions, run validation, then save your metric.</p>
-
-                  <div className={styles['data-row']}>
-                    <div className={styles['data-col']}>
-                      <div className={styles['data-col__head']}>
-                        <span className={styles['data-col__head-title']}><Database size={12} /> Datasets</span>
-                        {datasets.length > 0 && <span className={styles['data-col__count']}>{datasets.length}</span>}
-                      </div>
-                      <div className={styles['data-col__body']}>
-                        {datasetsError ? <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {datasetsError}</div>
-                          : datasetsLoading ? <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading…</div>
-                          : datasets.length === 0 ? <div className={styles.empty}>No datasets for this type.</div>
-                          : (
-                            <div className={styles['ds-list']}>
-                              {datasets.map((d) => (
-                                <div key={d.id} className={`${styles.ds} ${selectedDatasetId === d.id ? styles['ds--selected'] : ''}`} onClick={() => selectDataset(d.id)}>
-                                  <span className={styles['ds__radio']} />
-                                  <span style={{ minWidth: 0 }}>
-                                    <span className={styles['ds__name']}>{d.name}</span>
-                                    <span className={styles['ds__count']}>{d.question_count} questions</span>
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                      </div>
-                    </div>
-
-                    <div className={styles['data-col']}>
-                      <div className={styles['data-col__head']}>
-                        <span className={styles['data-col__head-title']}>
-                          <ListChecks size={12} /> Questions
-                        </span>
-                        {previewQuestions.length > 0 && (
-                          <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                            <span className={styles['data-col__count']}>{selectedQuestionIds.size}/{previewQuestions.length}</span>
-                            <span style={{ display: 'flex', gap: '8px' }}>
-                              <button className={styles['link-btn']} onClick={selectAllQuestions}>All</button>
-                              <button className={styles['link-btn']} onClick={clearAllQuestions}>Clear</button>
-                            </span>
-                          </span>
-                        )}
-                      </div>
-                      <div className={styles['data-col__body']}>
-                        {previewError ? <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {previewError}</div>
-                          : previewLoading ? <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading…</div>
-                          : previewQuestions.length === 0 ? <div className={styles.empty}>Select a dataset to preview.</div>
-                          : (
-                            <div className={styles['q-list']}>
-                              {previewQuestions.map((q) => {
-                                const on = selectedQuestionIds.has(q.id);
-                                return (
-                                  <div key={q.id} className={`${styles.q} ${on ? styles['q--on'] : ''}`} onClick={() => toggleQuestion(q.id)}>
-                                    <span className={styles['q__check']}>{on && <Check size={12} />}</span>
-                                    <span className={styles['q__body']}>
-                                      <span className={styles['q__q']}>{q.input?.prompt}</span>
-                                      <span className={styles['q__a']}><span className={styles['q__a-label']}>Expected:</span>{q.expected?.answer}</span>
-                                    </span>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* ---- validate & save (folded into the last step) ---- */}
-                  <div className={styles['validate-section']}>
-                    <div className={styles['validate-section__label']}>Validate &amp; Save</div>
-                    <p className={styles['validate-section__desc']}>Run a dry-run against your selected questions. Saving unlocks once it passes.</p>
-
-                    {validateError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {validateError}</div>}
-
-                    {!validateResult && !validating && (
-                      <div className={`${styles.banner} ${styles['banner--info']}`}><Sparkles size={15} /> Ready to validate {selectedQuestionIds.size} test case{selectedQuestionIds.size === 1 ? '' : 's'}.</div>
-                    )}
-
-                    {validateResult && (
-                      <div style={{ marginBottom: '18px' }}>
-                        {validateSucceeded
-                          ? <div className={`${styles.banner} ${styles['banner--ok']}`}><CheckCircle2 size={15} /> Metric is valid — ready to save.</div>
-                          : <div className={`${styles.banner} ${styles['banner--err']}`}><XCircle size={15} /> No test cases passed. You can still save, or adjust your metric and re-run.</div>}
-
-                        <div className={styles.results}>
-                          {validateResult.results.map((r, i) => (
-                            <div key={i} className={styles['results__row']}>
-                              <span className={`${styles['results__score']} ${r.success ? styles['results__score--pass'] : styles['results__score--fail']}`}>{r.score.toFixed(2)}</span>
-                              <span className={styles['results__body']}>
-                                <span className={styles['results__io']}>{r.test_case.input}</span>
-                                {r.reason && <span className={styles['results__reason']}>{r.reason}</span>}
-                              </span>
-                              <span className={`${styles['results__pill']} ${r.success ? styles['results__pill--pass'] : styles['results__pill--fail']}`}>{r.success ? 'Pass' : 'Fail'}</span>
-                            </div>
-                          ))}
-                          <div className={styles['results__summary']}>
-                            <span>Passed: <strong>{validateResult.passed}/{validateResult.total}</strong></span>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* ---- footer nav ---- */}
-          <div className={styles['work__foot']}>
-            {step === 'details'
-              ? <button className={`${styles.btn} ${styles['btn--ghost']}`} onClick={() => navigate('/app/custom-metrics/dashboard')}>Cancel</button>
-              : <button className={styles.btn} onClick={prevStep}><ArrowLeft size={15} /> Back</button>}
-
-            {step !== 'dataset' ? (
-              <>
-                <span className={styles['work__foot-info']} />
-                <button className={`${styles.btn} ${styles['btn--primary']}`} onClick={nextStep} disabled={!stepDone[step]}>
-                  Continue <ArrowRight size={15} />
-                </button>
-              </>
-            ) : !validateResult ? (
-              <>
-                <span className={styles['work__foot-info']} />
-                <button className={`${styles.btn} ${styles['btn--primary']}`} onClick={runValidate} disabled={validating || !canValidate}>
-                  {validating ? <Loader2 size={15} className={styles.spin} /> : <Sparkles size={15} />}
-                  {validating ? 'Validating…' : 'Run Validation'}
-                </button>
-              </>
-            ) : (
-              <>
-                <span className={styles['work__foot-info']} />
-                <button className={`${styles.btn} ${styles['btn--ok']}`} onClick={handleSave} disabled={saving}>
-                  {saving ? <Loader2 size={15} className={styles.spin} /> : <Check size={15} />}
-                  Save Metric
-                </button>
-              </>
-            )}
-          </div>
-        </section>
-      </div>
-
-      {saveError && <div className={styles.toast}><AlertCircle size={15} /> {saveError}</div>}
-
-      {savedId && (
-        <div className={styles.overlay}>
-          <div className={styles.modal}>
-            <div className={styles['modal__icon']}><CheckCircle2 size={26} /></div>
-            <div className={styles['modal__title']}>Metric created!</div>
-            <div className={styles['modal__text']}>Your metric is now available for evaluations.</div>
-            <div className={styles['modal__id']}>ID: {savedId}</div>
-            <div className={styles['modal__actions']}>
-              <button className={styles.btn} onClick={resetForm}>Create Another</button>
-              <button className={`${styles.btn} ${styles['btn--primary']}`} onClick={() => navigate('/app/custom-metrics/dashboard')}>Go to Dashboard</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {ToastEl}
+// Maps each field to its i18n label key and tour target id
+const FIELD_CONFIG = [
+    { field: 'name'               as const, inputType: 'input'    as const, labelKey: 'name',            placeholderKey: 'namePlaceholder',     tourTarget: 'pt-field-name'         },
+    { field: 'description'        as const, inputType: 'input'    as const, labelKey: 'description',     placeholderKey: 'descPlaceholder',     tourTarget: undefined                },
+    { field: 'summary_prompt'     as const, inputType: 'textarea' as const, labelKey: 'summaryPrompt',   placeholderKey: 'summaryPlaceholder',  tourTarget: 'pt-field-summary'      },
+    { field: 'keyword_prompt'     as const, inputType: 'textarea' as const, labelKey: 'keywordPrompt',   placeholderKey: 'keywordPlaceholder',  tourTarget: 'pt-field-keyword'      },
+    { field: 'faq_prompt'         as const, inputType: 'textarea' as const, labelKey: 'faqPrompt',       placeholderKey: 'faqPlaceholder',      tourTarget: 'pt-field-faq'          },
+    { field: 'short_answer_prompt'as const, inputType: 'textarea' as const, labelKey: 'shortAnswerPrompt', placeholderKey: 'shortAnswerPlaceholder', tourTarget: 'pt-field-short-answer' },
+    { field: 'true_false_prompt'  as const, inputType: 'textarea' as const, labelKey: 'trueFalsePrompt', placeholderKey: 'trueFalsePlaceholder', tourTarget: 'pt-field-true-false'  },
+] as const;
+
+const formatDate = (iso: string) =>
+    new Date(iso).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+
+const Spinner: React.FC<{ label: string }> = ({ label }) => (
+    <div className={styles.spinnerWrap}>
+        <div className={styles.spinner} />
+        <span>{label}</span>
     </div>
-  );
+);
+
+const PromptTemplates: React.FC = () => {
+    const dispatch = useAppDispatch();
+    const { t } = useTranslation();
+    const { templates, total, loading, saving, deletingId, error } = useAppSelector(s => s.promptTemplate);
+
+    const [modalOpen, setModalOpen] = useState(false);
+    const [modalMode, setModalMode] = useState<'create' | 'edit' | 'view'>('create');
+    const [editingId, setEditingId] = useState<number | null>(null);
+    const [form, setForm] = useState<FormState>(EMPTY_FORM);
+    const [formError, setFormError] = useState<string | null>(null);
+    const [deleteTarget, setDeleteTarget] = useState<PromptTemplate | null>(null);
+    const [successMsg, setSuccessMsg] = useState<string | null>(null);
+    const [tourActive, setTourActive] = useState(false);
+
+    // Stable ref so tour onEnter callbacks never close over a stale setter
+    const setModalOpenRef = useRef(setModalOpen);
+    setModalOpenRef.current = setModalOpen;
+
+    useEffect(() => {
+        dispatch(fetchPromptTemplates());
+    }, [dispatch]);
+
+    useEffect(() => {
+        if (!successMsg) return;
+        const timer = setTimeout(() => setSuccessMsg(null), 3000);
+        return () => clearTimeout(timer);
+    }, [successMsg]);
+
+    const openCreate = () => {
+        setModalMode('create');
+        setEditingId(null);
+        setForm(EMPTY_FORM);
+        setFormError(null);
+        dispatch(clearPromptTemplateError());
+        setModalOpen(true);
+    };
+
+    const openEdit = (tpl: PromptTemplate) => {
+        setModalMode('edit');
+        setEditingId(tpl.id);
+        setForm({
+            name: tpl.name,
+            description: tpl.description,
+            summary_prompt: tpl.summary_prompt,
+            keyword_prompt: tpl.keyword_prompt,
+            faq_prompt: tpl.faq_prompt,
+            short_answer_prompt: tpl.short_answer_prompt,
+            true_false_prompt: tpl.true_false_prompt,
+        });
+        setFormError(null);
+        dispatch(clearPromptTemplateError());
+        setModalOpen(true);
+    };
+
+    const openView = (tpl: PromptTemplate) => {
+        setModalMode('view');
+        setEditingId(tpl.id);
+        setForm({
+            name: tpl.name,
+            description: tpl.description,
+            summary_prompt: tpl.summary_prompt,
+            keyword_prompt: tpl.keyword_prompt,
+            faq_prompt: tpl.faq_prompt,
+            short_answer_prompt: tpl.short_answer_prompt,
+            true_false_prompt: tpl.true_false_prompt,
+        });
+        setFormError(null);
+        setModalOpen(true);
+    };
+
+    const closeModal = () => {
+        if (saving) return;
+        setModalOpen(false);
+    };
+
+    const handleChange = (field: keyof FormState) => (
+        e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
+    ) => setForm(f => ({ ...f, [field]: e.target.value }));
+
+    const isFormValid =
+        form.name.trim() !== '' &&
+        form.description.trim() !== '' &&
+        form.summary_prompt.trim() !== '' &&
+        form.keyword_prompt.trim() !== '' &&
+        form.faq_prompt.trim() !== '' &&
+        form.short_answer_prompt.trim() !== '' &&
+        form.true_false_prompt.trim() !== '';
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!isFormValid) { setFormError(t('promptTemplates.allFieldsRequired')); return; }
+        setFormError(null);
+        try {
+            if (editingId) {
+                await dispatch(updatePromptTemplate({ id: editingId, ...form })).unwrap();
+                setSuccessMsg(t('promptTemplates.updatedSuccess'));
+            } else {
+                await dispatch(createPromptTemplate(form)).unwrap();
+                setSuccessMsg(t('promptTemplates.createdSuccess'));
+            }
+            setModalOpen(false);
+        } catch (err) {
+            setFormError(typeof err === 'string' ? err : t('promptTemplates.genericError'));
+        }
+    };
+
+    const confirmDelete = async () => {
+        if (!deleteTarget) return;
+        try {
+            await dispatch(deletePromptTemplate(deleteTarget.id)).unwrap();
+            setSuccessMsg(t('promptTemplates.deletedSuccess'));
+        } catch { /* surfaced via error banner */ } finally {
+            setDeleteTarget(null);
+        }
+    };
+
+    // ── Tour steps ────────────────────────────────
+    // Steps 6-13 target form fields inside the modal.
+    // onEnter on step 6 opens the modal so the fields exist in the DOM;
+    // handleTourFinish closes it again when the tour ends/is skipped.
+    const TOUR_STEPS: TourStep[] = [
+        {
+            target: 'pt-header',
+            title: t('promptTemplates.tour.headerTitle'),
+            content: t('promptTemplates.tour.headerContent'),
+            placement: 'bottom',
+        },
+        {
+            target: 'pt-new-btn',
+            title: t('promptTemplates.tour.newBtnTitle'),
+            content: t('promptTemplates.tour.newBtnContent'),
+            placement: 'bottom',
+        },
+        {
+            target: 'pt-table',
+            title: t('promptTemplates.tour.tableTitle'),
+            content: t('promptTemplates.tour.tableContent'),
+            placement: 'top',
+        },
+        {
+            target: 'pt-edit-btn',
+            title: t('promptTemplates.tour.editBtnTitle'),
+            content: t('promptTemplates.tour.editBtnContent'),
+            placement: 'left',
+        },
+        {
+            target: 'pt-delete-btn',
+            title: t('promptTemplates.tour.deleteBtnTitle'),
+            content: t('promptTemplates.tour.deleteBtnContent'),
+            placement: 'left',
+        },
+        {
+            target: 'pt-field-name',
+            title: t('promptTemplates.tour.fieldNameTitle'),
+            content: t('promptTemplates.tour.fieldNameContent'),
+            placement: 'bottom',
+            onEnter: () => {
+                setModalMode('create');
+                setEditingId(null);
+                setForm(EMPTY_FORM);
+                setFormError(null);
+                setModalOpenRef.current(true);
+            },
+        },
+        {
+            target: 'pt-field-summary',
+            title: t('promptTemplates.tour.fieldSummaryTitle'),
+            content: t('promptTemplates.tour.fieldSummaryContent'),
+            placement: 'right',
+        },
+        {
+            target: 'pt-field-keyword',
+            title: t('promptTemplates.tour.fieldKeywordTitle'),
+            content: t('promptTemplates.tour.fieldKeywordContent'),
+            placement: 'right',
+        },
+        {
+            target: 'pt-field-faq',
+            title: t('promptTemplates.tour.fieldFaqTitle'),
+            content: t('promptTemplates.tour.fieldFaqContent'),
+            placement: 'right',
+        },
+        {
+            target: 'pt-field-short-answer',
+            title: t('promptTemplates.tour.fieldShortAnswerTitle'),
+            content: t('promptTemplates.tour.fieldShortAnswerContent'),
+            placement: 'right',
+        },
+        {
+            target: 'pt-field-true-false',
+            title: t('promptTemplates.tour.fieldTrueFalseTitle'),
+            content: t('promptTemplates.tour.fieldTrueFalseContent'),
+            placement: 'right',
+        },
+    ];
+
+    const handleTourFinish = () => {
+        setTourActive(false);
+        setModalOpen(false);
+    };
+
+    return (
+        <div className={styles.page}>
+
+            {/* ── Page header ── */}
+            <div className={styles.ph} data-tour="pt-header">
+                <div className={styles.phRow}>
+                    <div>
+                        <div className={styles.phTitle}>{t('promptTemplates.pageTitle')}</div>
+                        <div className={styles.phSub}>
+                            {t('promptTemplates.pageSub', { count: total })}
+                        </div>
+                    </div>
+                    <div className={styles.phActs}>
+                        <button
+                            type="button"
+                            className={styles.tourTriggerBtn}
+                            onClick={() => setTourActive(true)}
+                            title={t('promptTemplates.tour.triggerTitle')}
+                        >
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <circle cx="8" cy="8" r="6.25" />
+                                <path d="M6.1 6.2a1.9 1.9 0 013.6.7c0 1.3-1.7 1.5-1.7 2.7M8 11.4v.1" />
+                            </svg>
+                            {t('promptTemplates.tour.triggerLabel')}
+                        </button>
+                        <button
+                            className={styles.btnPrimary}
+                            onClick={openCreate}
+                            data-tour="pt-new-btn"
+                        >
+                            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                                <path d="M6 1.5v9M1.5 6h9" />
+                            </svg>
+                            {t('promptTemplates.newTemplate')}
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            {/* ── Scrollable body ── */}
+            <div className={styles.body}>
+                <div className={styles.viewBody}>
+
+                    {successMsg && <div className={styles.successBanner}>{successMsg}</div>}
+                    {error && !modalOpen && <div className={styles.errorBanner}>{error}</div>}
+
+                    {loading ? (
+                        <Spinner label={t('promptTemplates.loading')} />
+                    ) : (
+                        <div className={styles.tableWrap} data-tour="pt-table">
+                            <table className={styles.table}>
+                                <thead>
+                                    <tr>
+                                        <th>{t('promptTemplates.table.name')}</th>
+                                        <th>{t('promptTemplates.table.description')}</th>
+                                        <th>{t('promptTemplates.table.updated')}</th>
+                                        <th />
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {templates.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={4} className={styles.emptyRow}>
+                                                {t('promptTemplates.table.empty')}
+                                            </td>
+                                        </tr>
+                                    ) : templates.map((tpl, idx) => (
+                                        <tr key={tpl.id}>
+                                            <td className={styles.nameCell}>
+                                                <div className={styles.nameCellInner}>
+                                                    {tpl.name}
+                                                    {tpl.is_default && (
+                                                        <span className={styles.defaultBadge}>
+                                                            {t('promptTemplates.table.defaultBadge')}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </td>
+                                            <td className={`${styles.muted} ${styles.descCell}`}>{tpl.description || '—'}</td>
+                                            <td className={`${styles.muted} ${styles.mono}`}>{formatDate(tpl.updated_at)}</td>
+                                            <td>
+                                                <div className={styles.rowActs}>
+                                                    {tpl.is_default ? (
+                                                        // Default templates are read-only — show a View button
+                                                        <button
+                                                            className={`${styles.btn} ${styles.btnSm} ${styles.btnView}`}
+                                                            onClick={() => openView(tpl)}
+                                                            title={t('promptTemplates.table.defaultTooltip')}
+                                                            {...(idx === 0 ? { 'data-tour': 'pt-edit-btn' } : {})}
+                                                        >
+                                                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                                                <path d="M1.5 8S4 3 8 3s6.5 5 6.5 5S12 13 8 13 1.5 8 1.5 8z" />
+                                                                <circle cx="8" cy="8" r="2" />
+                                                            </svg>
+                                                            {t('promptTemplates.table.view')}
+                                                        </button>
+                                                    ) : (
+                                                        <>
+                                                            <button
+                                                                className={`${styles.btn} ${styles.btnSm}`}
+                                                                onClick={() => openEdit(tpl)}
+                                                                {...(idx === 0 ? { 'data-tour': 'pt-edit-btn' } : {})}
+                                                            >
+                                                                {t('promptTemplates.table.edit')}
+                                                            </button>
+                                                            <button
+                                                                className={`${styles.btn} ${styles.btnSm} ${styles.btnDanger}`}
+                                                                onClick={() => setDeleteTarget(tpl)}
+                                                                disabled={deletingId === tpl.id}
+                                                                {...(idx === 0 ? { 'data-tour': 'pt-delete-btn' } : {})}
+                                                            >
+                                                                {deletingId === tpl.id
+                                                                    ? t('promptTemplates.table.deleting')
+                                                                    : t('promptTemplates.table.delete')}
+                                                            </button>
+                                                        </>
+                                                    )}
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* ── Create / Edit / View modal ── */}
+            {modalOpen && (
+                <div className={styles.overlay}>
+                    <div className={styles.modal}>
+                        <div className={styles.modalHead}>
+                            <div className={styles.modalHeadInner}>
+                                <div className={styles.modalTitle}>
+                                    {modalMode === 'view'
+                                        ? t('promptTemplates.modal.viewTitle')
+                                        : modalMode === 'edit'
+                                            ? t('promptTemplates.modal.editTitle')
+                                            : t('promptTemplates.modal.createTitle')}
+                                </div>
+                                {modalMode === 'view' && (
+                                    <span className={styles.viewModeBadge}>
+                                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                            <rect x="2.5" y="6" width="11" height="8" rx="1.5" />
+                                            <path d="M5 6V4.5a3 3 0 016 0V6" />
+                                        </svg>
+                                        {t('promptTemplates.modal.viewModeBadge')}
+                                    </span>
+                                )}
+                            </div>
+                            <button className={styles.closeBtn} onClick={closeModal} aria-label={t('promptTemplates.modal.closeAriaLabel')} type="button">
+                                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                                    <path d="M2 2l10 10M12 2L2 12" />
+                                </svg>
+                            </button>
+                        </div>
+
+                        <form onSubmit={handleSubmit}>
+                            <div className={styles.modalBody}>
+                                {formError && <div className={styles.errorBanner}>{formError}</div>}
+
+                                {FIELD_CONFIG.map(({ field, inputType, labelKey, placeholderKey, tourTarget }) => (
+                                    <div
+                                        className={styles.formGroup}
+                                        key={field}
+                                        {...(tourTarget ? { 'data-tour': tourTarget } : {})}
+                                    >
+                                        <label className={styles.label}>
+                                            {t(`promptTemplates.modal.${labelKey}`)}
+                                            {modalMode !== 'view' && (
+                                                <>{' '}<span className={styles.required}>{t('promptTemplates.modal.required')}</span></>
+                                            )}
+                                        </label>
+                                        {inputType === 'input' ? (
+                                            <input
+                                                className={`${styles.input} ${modalMode === 'view' ? styles.inputReadonly : ''}`}
+                                                value={form[field]}
+                                                onChange={handleChange(field)}
+                                                placeholder={modalMode !== 'view' ? t(`promptTemplates.modal.${placeholderKey}`) : undefined}
+                                                autoFocus={field === 'name' && !tourActive && modalMode !== 'view'}
+                                                readOnly={modalMode === 'view'}
+                                                required={modalMode !== 'view'}
+                                            />
+                                        ) : (
+                                            <textarea
+                                                className={`${styles.textarea} ${modalMode === 'view' ? styles.textareaReadonly : ''}`}
+                                                value={form[field]}
+                                                onChange={handleChange(field)}
+                                                rows={3}
+                                                placeholder={modalMode !== 'view' ? t(`promptTemplates.modal.${placeholderKey}`) : undefined}
+                                                readOnly={modalMode === 'view'}
+                                                required={modalMode !== 'view'}
+                                            />
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className={styles.modalFoot}>
+                                {modalMode === 'view' ? (
+                                    <button type="button" className={styles.btnPrimary} onClick={closeModal}>
+                                        {t('promptTemplates.modal.close')}
+                                    </button>
+                                ) : (
+                                    <>
+                                        <button type="button" className={styles.btn} onClick={closeModal} disabled={saving}>
+                                            {t('promptTemplates.modal.cancel')}
+                                        </button>
+                                        <button type="submit" className={styles.btnPrimary} disabled={saving || !isFormValid}>
+                                            {saving
+                                                ? t('promptTemplates.modal.saving')
+                                                : modalMode === 'edit'
+                                                    ? t('promptTemplates.modal.saveChanges')
+                                                    : t('promptTemplates.modal.createBtn')}
+                                        </button>
+                                    </>
+                                )}
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Delete confirmation ── */}
+            {deleteTarget && (
+                <div className={styles.overlay}>
+                    <div className={`${styles.modal} ${styles.modalSm}`}>
+                        <div className={styles.modalHead}>
+                            <div className={styles.modalTitle}>{t('promptTemplates.deleteModal.title')}</div>
+                        </div>
+                        <div className={styles.modalBody}>
+                            <p
+                                className={styles.confirmText}
+                                dangerouslySetInnerHTML={{
+                                    __html: t('promptTemplates.deleteModal.body', { name: deleteTarget.name }),
+                                }}
+                            />
+                        </div>
+                        <div className={styles.modalFoot}>
+                            <button className={styles.btn} onClick={() => setDeleteTarget(null)}>
+                                {t('promptTemplates.deleteModal.cancel')}
+                            </button>
+                            <button className={`${styles.btnPrimary} ${styles.btnDangerSolid}`} onClick={confirmDelete}>
+                                {t('promptTemplates.deleteModal.confirm')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ── Tour ── */}
+            <TourGuide
+                steps={TOUR_STEPS}
+                active={tourActive}
+                onFinish={handleTourFinish}
+            />
+        </div>
+    );
+};
+
+export default PromptTemplates;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Prompttemplates.module.scss
+// ═══════════════════════════════════════════════
+// PromptTemplates.module.scss
+// Content Analytics · Prompt Template management
+// ═══════════════════════════════════════════════
+@use '../../styles/mixins' as m;
+
+// ── Page shell ──────────────────────────────────
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+// ── Page header ─────────────────────────────────
+.ph {
+  padding: 14px 24px 12px;
+  background: var(--bg1);
+  border-bottom: 1px solid var(--bdr);
+  flex-shrink: 0;
+}
+
+.phRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.phTitle {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--t0);
+  letter-spacing: -0.3px;
+  font-family: var(--font-display);
+}
+
+.phSub {
+  font-size: 11px;
+  color: var(--t2);
+  margin-top: 3px;
+  @include m.mono;
+}
+
+.phActs {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+// Tour trigger pill — matches UploadInfer pattern
+.tourTriggerBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 99px;
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t2);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s;
+
+  svg { width: 13px; height: 13px; }
+
+  &:hover {
+    background: var(--bg3);
+    color: var(--t1);
+    border-color: var(--bdr3);
+  }
+}
+
+// ── Scrollable body ──────────────────────────────
+.body {
+  flex: 1;
+  overflow-y: auto;
+  @include m.scrollbar;
+}
+
+.viewBody {
+  padding: 20px 24px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+// ── Banners ───────────────────────────────────────
+.successBanner {
+  padding: 9px 14px;
+  border-radius: var(--r);
+  background: var(--green-dim);
+  border: 1px solid var(--green-bdr);
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.errorBanner {
+  padding: 9px 14px;
+  border-radius: var(--r);
+  background: var(--red-dim);
+  border: 1px solid var(--red-bdr);
+  color: var(--red);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+// ── Table ────────────────────────────────────────
+.tableWrap {
+  overflow-x: auto;
+  border: 1px solid var(--bdr);
+  border-radius: var(--rl);
+  background: var(--bg1);
+  @include m.scrollbar;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+
+  th {
+    padding: 10px 16px;
+    text-align: left;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--t2);
+    background: var(--bg0);
+    border-bottom: 1px solid var(--bdr);
+    white-space: nowrap;
+    @include m.mono;
+  }
+
+  td {
+    padding: 11px 16px;
+    border-bottom: 1px solid var(--bdr);
+    color: var(--t0);
+    vertical-align: middle;
+
+    &:last-child {
+      text-align: right;
+    }
+  }
+
+  tr:last-child td {
+    border-bottom: none;
+  }
+
+  tr:hover td {
+    background: var(--bg2);
+  }
+}
+
+.nameCell {
+  font-weight: 600;
+  color: var(--t0);
+}
+
+.nameCellInner {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+// "Default" badge shown next to the template name
+.defaultBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 99px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: var(--bg3);
+  border: 1px solid var(--bdr2);
+  color: var(--t2);
+  @include m.mono;
+  white-space: nowrap;
+}
+
+// Info chip shown in the actions column for default (read-only) templates
+.defaultInfo {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: var(--r);
+  border: 1px solid var(--bdr);
+  background: var(--bg2);
+  color: var(--t2);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: default;
+  white-space: nowrap;
+
+  svg {
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+    color: var(--blue);
+  }
+}
+
+.descCell {
+  max-width: 320px;
+  @include m.truncate;
+}
+
+.rowActs {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.emptyRow {
+  text-align: center !important;
+  color: var(--t2);
+  padding: 32px 16px !important;
+  font-size: 12px;
+}
+
+.muted {
+  color: var(--t2) !important;
+}
+
+.mono {
+  @include m.mono;
+  color: var(--t1) !important;
+}
+
+// ── Buttons ───────────────────────────────────────
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 13px;
+  border-radius: var(--r);
+  border: 1px solid var(--bdr2);
+  background: transparent;
+  color: var(--t1);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+
+  &:hover:not(:disabled) {
+    background: var(--bg3);
+    color: var(--t0);
+    border-color: var(--bdr3);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}
+
+.btnSm {
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+.btnPrimary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: var(--r);
+  border: 1px solid var(--blue-bdr);
+  background: var(--blue);
+  color: #fff;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.12s;
+  white-space: nowrap;
+
+  &:hover:not(:disabled) {
+    filter: brightness(1.08);
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+}
+
+.btnDanger {
+  color: var(--red);
+  border-color: var(--red-bdr);
+
+  &:hover:not(:disabled) {
+    background: var(--red-dim);
+    color: var(--red);
+    border-color: var(--red-bdr);
+  }
+}
+
+// View button for default (read-only) templates
+.btnView {
+  color: var(--blue);
+  border-color: var(--blue-bdr);
+  background: var(--blue-dim);
+
+  svg {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+  }
+
+  &:hover:not(:disabled) {
+    filter: brightness(0.95);
+  }
+}
+
+.btnDangerSolid {
+  background: var(--red);
+  border-color: var(--red-bdr);
+
+  &:hover:not(:disabled) {
+    filter: brightness(1.08);
+  }
+}
+
+// ── Spinner ───────────────────────────────────────
+.spinnerWrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 80px 0;
+  color: var(--t2);
+  font-size: 12px;
+  @include m.mono;
+}
+
+.spinner {
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--bdr2);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: ptSpin 0.7s linear infinite;
+}
+
+// ── Modal ─────────────────────────────────────────
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+  animation: ptFadeIn 0.15s ease-out;
+
+  // Give a little more breathing room on short viewports
+  @media (max-height: 700px) {
+    padding: 12px;
+    align-items: flex-start;
+    overflow-y: auto;
+    @include m.scrollbar;
+  }
+}
+
+.modal {
+  width: 100%;
+  max-width: 560px;
+  // Cap the modal at viewport height minus overlay padding
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  // Without this the flex children can push past max-height
+  min-height: 0;
+  background: var(--bg1);
+  border: 1px solid var(--bdr2);
+  border-radius: var(--rxl);
+  box-shadow: var(--shadow);
+  animation: ptScaleIn 0.16s cubic-bezier(0.4, 0, 0.2, 1);
+
+  // The <form> inside must also be a flex column so modalBody can flex-grow
+  form {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+  }
+}
+
+.modalSm {
+  max-width: 380px;
+}
+
+.modalHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--bdr);
+  flex-shrink: 0;
+}
+
+// Inner flex row: title + optional view-mode badge
+.modalHeadInner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+// "Read-only" lock badge shown next to the title in view mode
+.viewModeBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: var(--bg3);
+  border: 1px solid var(--bdr2);
+  color: var(--t2);
+  white-space: nowrap;
+  @include m.mono;
+
+  svg {
+    width: 11px;
+    height: 11px;
+    flex-shrink: 0;
+  }
+}
+
+.modalTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--t0);
+  font-family: var(--font-display);
+}
+
+.closeBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: var(--t2);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+
+  &:hover {
+    background: var(--bg3);
+    color: var(--t0);
+  }
+}
+
+.modalBody {
+  padding: 16px 18px;
+  flex: 1;        // fill all space between header and footer
+  min-height: 0;  // allows shrinking below content size so overflow-y kicks in
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  @include m.scrollbar;
+}
+
+.modalFoot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--bdr);
+  flex-shrink: 0;
+}
+
+.confirmText {
+  font-size: 13px;
+  color: var(--t1);
+  line-height: 1.5;
+
+  strong {
+    color: var(--t0);
+  }
+}
+
+// ── Form ──────────────────────────────────────────
+.formGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--t2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  @include m.mono;
+}
+
+.required {
+  color: var(--red);
+}
+
+.input,
+.textarea {
+  width: 100%;
+  background: var(--bg3);
+  border: 1px solid var(--bdr2);
+  border-radius: var(--r);
+  color: var(--t0);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  padding: 8px 10px;
+  outline: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+
+  &::placeholder {
+    color: var(--t2);
+  }
+
+  &:focus {
+    border-color: var(--blue-bdr);
+    box-shadow: 0 0 0 2px var(--blue-dim);
+  }
+}
+
+.textarea {
+  resize: vertical;
+  min-height: 80px;
+  max-height: 320px;
+  // overflow-y:scroll (not auto) keeps the scrollbar track always visible,
+  // which prevents the browser from hiding the native resize grip when
+  // content overflows — the grip lives in the same bottom-right corner.
+  overflow-y: scroll;
+  line-height: 1.5;
+  @include m.mono;
+  font-size: 12px;
+}
+
+// Read-only textarea shown in view mode — no resize, no focus ring
+.textareaReadonly {
+  resize: none;
+  overflow-y: auto;
+  cursor: default;
+  opacity: 0.75;
+  background: var(--bg2) !important;
+  border-color: var(--bdr) !important;
+  box-shadow: none !important;
+  color: var(--t1) !important;
+
+  &:focus {
+    border-color: var(--bdr) !important;
+    box-shadow: none !important;
+  }
+}
+
+// Read-only input shown in view mode
+.inputReadonly {
+  cursor: default;
+  opacity: 0.75;
+  background: var(--bg2) !important;
+  border-color: var(--bdr) !important;
+  box-shadow: none !important;
+  color: var(--t1) !important;
+
+  &:focus {
+    border-color: var(--bdr) !important;
+    box-shadow: none !important;
+  }
+}
+
+// ── Animations ────────────────────────────────────
+@keyframes ptFadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes ptScaleIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes ptSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//en.json
+{
+  "promptTemplates": {
+    "pageTitle": "Prompt Templates",
+    "pageSub_one": "{{count}} template · reusable prompts for summary, keyword & FAQ generation",
+    "pageSub_other": "{{count}} templates · reusable prompts for summary, keyword & FAQ generation",
+    "newTemplate": "New Template",
+    "loading": "Loading templates…",
+    "createdSuccess": "Template created.",
+    "updatedSuccess": "Template updated.",
+    "deletedSuccess": "Template deleted.",
+    "genericError": "Something went wrong. Please try again.",
+    "allFieldsRequired": "All fields are required.",
+    "table": {
+      "name": "Name",
+      "description": "Description",
+      "updated": "Updated",
+      "empty": "No templates yet — create your first one to standardise summary, keyword and FAQ prompts.",
+      "edit": "Edit",
+      "view": "View",
+      "delete": "Delete",
+      "deleting": "Deleting…",
+      "defaultBadge": "Default",
+      "defaultTooltip": "This is a platform default template and cannot be edited or deleted."
+    },
+    "modal": {
+      "createTitle": "New Template",
+      "editTitle": "Edit Template",
+      "viewTitle": "View Template",
+      "viewModeBadge": "Read-only",
+      "close": "Close",
+      "name": "Name",
+      "namePlaceholder": "e.g. Lecture Summary — Default",
+      "description": "Description",
+      "descPlaceholder": "Short description of when to use this template",
+      "summaryPrompt": "Summary Prompt",
+      "summaryPlaceholder": "Instructions used to generate the summary",
+      "keywordPrompt": "Keyword Prompt",
+      "keywordPlaceholder": "Instructions used to extract keywords",
+      "faqPrompt": "FAQ Prompt",
+      "faqPlaceholder": "Instructions used to generate FAQs",
+      "shortAnswerPrompt": "Short Answer Prompt",
+      "shortAnswerPlaceholder": "Instructions used to generate short answer questions",
+      "trueFalsePrompt": "True / False Prompt",
+      "trueFalsePlaceholder": "Instructions used to generate true/false questions",
+      "required": "*",
+      "cancel": "Cancel",
+      "saving": "Saving…",
+      "saveChanges": "Save Changes",
+      "createBtn": "Create Template",
+      "closeAriaLabel": "Close"
+    },
+    "deleteModal": {
+      "title": "Delete Template",
+      "body": "Delete <strong>{{name}}</strong>? This can't be undone.",
+      "cancel": "Cancel",
+      "confirm": "Delete"
+    },
+    "tour": {
+      "triggerLabel": "Take a tour",
+      "triggerTitle": "Take a guided tour of this page",
+      "headerTitle": "Prompt Templates",
+      "headerContent": "This page lets you manage reusable prompt templates. Each template bundles seven prompts — summary, keyword, FAQ, short-answer and true/false — so you can swap them without touching the pipeline configuration.",
+      "newBtnTitle": "Create a template",
+      "newBtnContent": "Click \"New Template\" to open the creation form. You can have as many templates as you need and switch between them freely.",
+      "tableTitle": "Template list",
+      "tableContent": "All saved templates appear here. The table shows the name, a short description and when the template was last edited.",
+      "editBtnTitle": "Edit a template",
+      "editBtnContent": "Click Edit on any row to open the template in the form and update any of its prompts.",
+      "deleteBtnTitle": "Delete a template",
+      "deleteBtnContent": "Click Delete to remove a template permanently. A confirmation dialog will appear before anything is deleted.",
+      "fieldNameTitle": "Name & Description",
+      "fieldNameContent": "Give the template a clear name and a short description so your team knows when to use it.",
+      "fieldSummaryTitle": "Summary Prompt",
+      "fieldSummaryContent": "This prompt is sent to the AI when generating a lecture summary. Tailor the tone and length requirements here.",
+      "fieldKeywordTitle": "Keyword Prompt",
+      "fieldKeywordContent": "Controls how keywords and key concepts are extracted from the transcript.",
+      "fieldFaqTitle": "FAQ Prompt",
+      "fieldFaqContent": "Shapes the frequently-asked-questions that are generated from the lecture content.",
+      "fieldShortAnswerTitle": "Short Answer Prompt",
+      "fieldShortAnswerContent": "Used when generating short-answer assessment questions from the lecture.",
+      "fieldTrueFalseTitle": "True / False Prompt",
+      "fieldTrueFalseContent": "Used when generating true/false questions. Describe any specific format or difficulty requirements you want the AI to follow."
+    }
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//ko.json
+{
+  "promptTemplates": {
+    "pageTitle": "프롬프트 템플릿",
+    "pageSub_one": "{{count}}개 템플릿 · 요약, 키워드 및 FAQ 생성을 위한 재사용 가능한 프롬프트",
+    "pageSub_other": "{{count}}개 템플릿 · 요약, 키워드 및 FAQ 생성을 위한 재사용 가능한 프롬프트",
+    "newTemplate": "새 템플릿",
+    "loading": "템플릿 불러오는 중…",
+    "createdSuccess": "템플릿이 생성되었습니다.",
+    "updatedSuccess": "템플릿이 수정되었습니다.",
+    "deletedSuccess": "템플릿이 삭제되었습니다.",
+    "genericError": "오류가 발생했습니다. 다시 시도해 주세요.",
+    "allFieldsRequired": "모든 필드를 입력해야 합니다.",
+    "table": {
+      "name": "이름",
+      "description": "설명",
+      "updated": "수정일",
+      "empty": "아직 템플릿이 없습니다 — 첫 번째 템플릿을 생성하여 요약, 키워드 및 FAQ 프롬프트를 표준화하세요.",
+      "edit": "수정",
+      "view": "보기",
+      "delete": "삭제",
+      "deleting": "삭제 중…",
+      "defaultBadge": "기본",
+      "defaultTooltip": "플랫폼 기본 템플릿으로 수정하거나 삭제할 수 없습니다."
+    },
+    "modal": {
+      "createTitle": "새 템플릿",
+      "editTitle": "템플릿 수정",
+      "viewTitle": "템플릿 보기",
+      "viewModeBadge": "읽기 전용",
+      "close": "닫기",
+      "name": "이름",
+      "namePlaceholder": "예: 강의 요약 — 기본",
+      "description": "설명",
+      "descPlaceholder": "이 템플릿을 사용하는 상황에 대한 짧은 설명",
+      "summaryPrompt": "요약 프롬프트",
+      "summaryPlaceholder": "요약 생성에 사용되는 지시사항",
+      "keywordPrompt": "키워드 프롬프트",
+      "keywordPlaceholder": "키워드 추출에 사용되는 지시사항",
+      "faqPrompt": "FAQ 프롬프트",
+      "faqPlaceholder": "FAQ 생성에 사용되는 지시사항",
+      "shortAnswerPrompt": "단답형 프롬프트",
+      "shortAnswerPlaceholder": "단답형 문항 생성에 사용되는 지시사항",
+      "trueFalsePrompt": "진위형 프롬프트",
+      "trueFalsePlaceholder": "진위형 문항 생성에 사용되는 지시사항",
+      "required": "*",
+      "cancel": "취소",
+      "saving": "저장 중…",
+      "saveChanges": "변경사항 저장",
+      "createBtn": "템플릿 생성",
+      "closeAriaLabel": "닫기"
+    },
+    "deleteModal": {
+      "title": "템플릿 삭제",
+      "body": "<strong>{{name}}</strong>을(를) 삭제하시겠습니까? 이 작업은 취소할 수 없습니다.",
+      "cancel": "취소",
+      "confirm": "삭제"
+    },
+    "tour": {
+      "triggerLabel": "둘러보기",
+      "triggerTitle": "이 페이지의 가이드 투어 시작",
+      "headerTitle": "프롬프트 템플릿",
+      "headerContent": "이 페이지에서 재사용 가능한 프롬프트 템플릿을 관리할 수 있습니다. 각 템플릿에는 요약, 키워드, FAQ, 단답형, 진위형 등 7가지 프롬프트가 포함되어 있어, 파이프라인 설정을 변경하지 않고도 자유롭게 교체할 수 있습니다.",
+      "newBtnTitle": "템플릿 생성",
+      "newBtnContent": "\"새 템플릿\"을 클릭하면 생성 폼이 열립니다. 필요한 만큼 템플릿을 만들고 자유롭게 전환할 수 있습니다.",
+      "tableTitle": "템플릿 목록",
+      "tableContent": "저장된 모든 템플릿이 여기에 표시됩니다. 이름, 짧은 설명, 마지막 수정 날짜를 확인할 수 있습니다.",
+      "editBtnTitle": "템플릿 수정",
+      "editBtnContent": "행의 수정 버튼을 클릭하면 해당 템플릿이 폼에 열려 프롬프트를 수정할 수 있습니다.",
+      "deleteBtnTitle": "템플릿 삭제",
+      "deleteBtnContent": "삭제 버튼을 클릭하면 템플릿이 영구적으로 제거됩니다. 삭제 전에 확인 대화상자가 표시됩니다.",
+      "fieldNameTitle": "이름 및 설명",
+      "fieldNameContent": "팀원들이 언제 사용해야 할지 알 수 있도록 명확한 이름과 짧은 설명을 입력하세요.",
+      "fieldSummaryTitle": "요약 프롬프트",
+      "fieldSummaryContent": "강의 요약을 생성할 때 AI에 전달되는 프롬프트입니다. 여기에서 톤과 길이 요구사항을 조정하세요.",
+      "fieldKeywordTitle": "키워드 프롬프트",
+      "fieldKeywordContent": "전사본에서 키워드와 핵심 개념을 추출하는 방식을 제어합니다.",
+      "fieldFaqTitle": "FAQ 프롬프트",
+      "fieldFaqContent": "강의 내용에서 생성되는 자주 묻는 질문의 형태를 결정합니다.",
+      "fieldShortAnswerTitle": "단답형 프롬프트",
+      "fieldShortAnswerContent": "강의에서 단답형 평가 문항을 생성할 때 사용됩니다.",
+      "fieldTrueFalseTitle": "진위형 프롬프트",
+      "fieldTrueFalseContent": "진위형 문항을 생성할 때 사용됩니다. AI가 따라야 할 특정 형식이나 난이도 요구사항을 기술하세요."
+    }
+  }
 }
