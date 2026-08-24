@@ -1,227 +1,3 @@
-{
-  "promptTemplates": {
-    "pageTitle": "Prompt Templates",
-    "pageSub_one": "{{count}} template · reusable prompts for summary, keyword & FAQ generation",
-    "pageSub_other": "{{count}} templates · reusable prompts for summary, keyword & FAQ generation",
-    "newTemplate": "New Template",
-    "loading": "Loading templates…",
-    "createdSuccess": "Template created.",
-    "updatedSuccess": "Template updated.",
-    "deletedSuccess": "Template deleted.",
-    "genericError": "Something went wrong. Please try again.",
-    "allFieldsRequired": "All fields are required.",
-    "table": {
-      "name": "Name",
-      "description": "Description",
-      "updated": "Updated",
-      "empty": "No templates yet — create your first one to standardise summary, keyword and FAQ prompts.",
-      "edit": "Edit",
-      "delete": "Delete",
-      "deleting": "Deleting…",
-      "defaultBadge": "Default",
-      "defaultInfo": "Read-only",
-      "defaultTooltip": "This is a platform default template and cannot be edited or deleted."
-    },
-    "modal": {
-      "createTitle": "New Template",
-      "editTitle": "Edit Template",
-      "name": "Name",
-      "namePlaceholder": "e.g. Lecture Summary — Default",
-      "description": "Description",
-      "descPlaceholder": "Short description of when to use this template",
-      "summaryPrompt": "Summary Prompt",
-      "summaryPlaceholder": "Instructions used to generate the summary",
-      "keywordPrompt": "Keyword Prompt",
-      "keywordPlaceholder": "Instructions used to extract keywords",
-      "faqPrompt": "FAQ Prompt",
-      "faqPlaceholder": "Instructions used to generate FAQs",
-      "shortAnswerPrompt": "Short Answer Prompt",
-      "shortAnswerPlaceholder": "Instructions used to generate short answer questions",
-      "trueFalsePrompt": "True / False Prompt",
-      "trueFalsePlaceholder": "Instructions used to generate true/false questions",
-      "required": "*",
-      "cancel": "Cancel",
-      "saving": "Saving…",
-      "saveChanges": "Save Changes",
-      "createBtn": "Create Template",
-      "closeAriaLabel": "Close"
-    },
-    "deleteModal": {
-      "title": "Delete Template",
-      "body": "Delete <strong>{{name}}</strong>? This can't be undone.",
-      "cancel": "Cancel",
-      "confirm": "Delete"
-    },
-    "tour": {
-      "triggerLabel": "Take a tour",
-      "triggerTitle": "Take a guided tour of this page",
-      "headerTitle": "Prompt Templates",
-      "headerContent": "This page lets you manage reusable prompt templates. Each template bundles seven prompts — summary, keyword, FAQ, short-answer and true/false — so you can swap them without touching the pipeline configuration.",
-      "newBtnTitle": "Create a template",
-      "newBtnContent": "Click \"New Template\" to open the creation form. You can have as many templates as you need and switch between them freely.",
-      "tableTitle": "Template list",
-      "tableContent": "All saved templates appear here. The table shows the name, a short description and when the template was last edited.",
-      "editBtnTitle": "Edit a template",
-      "editBtnContent": "Click Edit on any row to open the template in the form and update any of its prompts.",
-      "deleteBtnTitle": "Delete a template",
-      "deleteBtnContent": "Click Delete to remove a template permanently. A confirmation dialog will appear before anything is deleted.",
-      "fieldNameTitle": "Name & Description",
-      "fieldNameContent": "Give the template a clear name and a short description so your team knows when to use it.",
-      "fieldSummaryTitle": "Summary Prompt",
-      "fieldSummaryContent": "This prompt is sent to the AI when generating a lecture summary. Tailor the tone and length requirements here.",
-      "fieldKeywordTitle": "Keyword Prompt",
-      "fieldKeywordContent": "Controls how keywords and key concepts are extracted from the transcript.",
-      "fieldFaqTitle": "FAQ Prompt",
-      "fieldFaqContent": "Shapes the frequently-asked-questions that are generated from the lecture content.",
-      "fieldShortAnswerTitle": "Short Answer Prompt",
-      "fieldShortAnswerContent": "Used when generating short-answer assessment questions from the lecture.",
-      "fieldTrueFalseTitle": "True / False Prompt",
-      "fieldTrueFalseContent": "Used when generating true/false questions. Describe any specific format or difficulty requirements you want the AI to follow."
-    }
-  }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-{
-  "promptTemplates": {
-    "pageTitle": "프롬프트 템플릿",
-    "pageSub_one": "{{count}}개 템플릿 · 요약, 키워드 및 FAQ 생성을 위한 재사용 가능한 프롬프트",
-    "pageSub_other": "{{count}}개 템플릿 · 요약, 키워드 및 FAQ 생성을 위한 재사용 가능한 프롬프트",
-    "newTemplate": "새 템플릿",
-    "loading": "템플릿 불러오는 중…",
-    "createdSuccess": "템플릿이 생성되었습니다.",
-    "updatedSuccess": "템플릿이 수정되었습니다.",
-    "deletedSuccess": "템플릿이 삭제되었습니다.",
-    "genericError": "오류가 발생했습니다. 다시 시도해 주세요.",
-    "allFieldsRequired": "모든 필드를 입력해야 합니다.",
-    "table": {
-      "name": "이름",
-      "description": "설명",
-      "updated": "수정일",
-      "empty": "아직 템플릿이 없습니다 — 첫 번째 템플릿을 생성하여 요약, 키워드 및 FAQ 프롬프트를 표준화하세요.",
-      "edit": "수정",
-      "delete": "삭제",
-      "deleting": "삭제 중…",
-      "defaultBadge": "기본",
-      "defaultInfo": "읽기 전용",
-      "defaultTooltip": "플랫폼 기본 템플릿으로 수정하거나 삭제할 수 없습니다."
-    },
-    "modal": {
-      "createTitle": "새 템플릿",
-      "editTitle": "템플릿 수정",
-      "name": "이름",
-      "namePlaceholder": "예: 강의 요약 — 기본",
-      "description": "설명",
-      "descPlaceholder": "이 템플릿을 사용하는 상황에 대한 짧은 설명",
-      "summaryPrompt": "요약 프롬프트",
-      "summaryPlaceholder": "요약 생성에 사용되는 지시사항",
-      "keywordPrompt": "키워드 프롬프트",
-      "keywordPlaceholder": "키워드 추출에 사용되는 지시사항",
-      "faqPrompt": "FAQ 프롬프트",
-      "faqPlaceholder": "FAQ 생성에 사용되는 지시사항",
-      "shortAnswerPrompt": "단답형 프롬프트",
-      "shortAnswerPlaceholder": "단답형 문항 생성에 사용되는 지시사항",
-      "trueFalsePrompt": "진위형 프롬프트",
-      "trueFalsePlaceholder": "진위형 문항 생성에 사용되는 지시사항",
-      "required": "*",
-      "cancel": "취소",
-      "saving": "저장 중…",
-      "saveChanges": "변경사항 저장",
-      "createBtn": "템플릿 생성",
-      "closeAriaLabel": "닫기"
-    },
-    "deleteModal": {
-      "title": "템플릿 삭제",
-      "body": "<strong>{{name}}</strong>을(를) 삭제하시겠습니까? 이 작업은 취소할 수 없습니다.",
-      "cancel": "취소",
-      "confirm": "삭제"
-    },
-    "tour": {
-      "triggerLabel": "둘러보기",
-      "triggerTitle": "이 페이지의 가이드 투어 시작",
-      "headerTitle": "프롬프트 템플릿",
-      "headerContent": "이 페이지에서 재사용 가능한 프롬프트 템플릿을 관리할 수 있습니다. 각 템플릿에는 요약, 키워드, FAQ, 단답형, 진위형 등 7가지 프롬프트가 포함되어 있어, 파이프라인 설정을 변경하지 않고도 자유롭게 교체할 수 있습니다.",
-      "newBtnTitle": "템플릿 생성",
-      "newBtnContent": "\"새 템플릿\"을 클릭하면 생성 폼이 열립니다. 필요한 만큼 템플릿을 만들고 자유롭게 전환할 수 있습니다.",
-      "tableTitle": "템플릿 목록",
-      "tableContent": "저장된 모든 템플릿이 여기에 표시됩니다. 이름, 짧은 설명, 마지막 수정 날짜를 확인할 수 있습니다.",
-      "editBtnTitle": "템플릿 수정",
-      "editBtnContent": "행의 수정 버튼을 클릭하면 해당 템플릿이 폼에 열려 프롬프트를 수정할 수 있습니다.",
-      "deleteBtnTitle": "템플릿 삭제",
-      "deleteBtnContent": "삭제 버튼을 클릭하면 템플릿이 영구적으로 제거됩니다. 삭제 전에 확인 대화상자가 표시됩니다.",
-      "fieldNameTitle": "이름 및 설명",
-      "fieldNameContent": "팀원들이 언제 사용해야 할지 알 수 있도록 명확한 이름과 짧은 설명을 입력하세요.",
-      "fieldSummaryTitle": "요약 프롬프트",
-      "fieldSummaryContent": "강의 요약을 생성할 때 AI에 전달되는 프롬프트입니다. 여기에서 톤과 길이 요구사항을 조정하세요.",
-      "fieldKeywordTitle": "키워드 프롬프트",
-      "fieldKeywordContent": "전사본에서 키워드와 핵심 개념을 추출하는 방식을 제어합니다.",
-      "fieldFaqTitle": "FAQ 프롬프트",
-      "fieldFaqContent": "강의 내용에서 생성되는 자주 묻는 질문의 형태를 결정합니다.",
-      "fieldShortAnswerTitle": "단답형 프롬프트",
-      "fieldShortAnswerContent": "강의에서 단답형 평가 문항을 생성할 때 사용됩니다.",
-      "fieldTrueFalseTitle": "진위형 프롬프트",
-      "fieldTrueFalseContent": "진위형 문항을 생성할 때 사용됩니다. AI가 따라야 할 특정 형식이나 난이도 요구사항을 기술하세요."
-    }
-  }
-}
-
-
-
-
-
-
-
-
-
-
-
-
----------------
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 //CreateMetric.tsx
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -2698,3 +2474,438 @@ $cm-base-font: 0.875rem;
 @media (max-width: 900px) {
   .card-grid, .card-grid--4 { grid-template-columns: 1fr; }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Custommetricsdashboard.tsx
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { AlertCircle, Gauge, Loader2 } from 'lucide-react';
+import styles from './CustomMetrics.module.scss';
+import { metricsApi, CustomMetric } from '../../api/endpoints/metrics';
+
+function formatDate(iso: string) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+export default function CustomMetricsDashboard() {
+  const navigate = useNavigate();
+
+  const [metrics, setMetrics] = useState<CustomMetric[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    setLoading(true);
+    setError('');
+    metricsApi.list()
+      .then(setMetrics)
+      .catch((err) => setError(err.message || 'Failed to load metrics'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const activeCount = useMemo(() => metrics.filter((m) => m.is_active).length, [metrics]);
+
+  const badgeClass = (variant: string) => `${styles.badge} ${styles[`badge--${variant}`] || ''}`;
+
+  return (
+    <div className={`page-enter pg-shell ${styles.cm}`}>
+      <div className={styles['cm__header']}>
+        <div>
+          <p className={styles['cm__header-eyebrow']}>Custom Metrics</p>
+          <h1>Dashboard</h1>
+          <p className={styles['cm__header-sub']}>
+            {loading ? 'Saved metrics for evaluation' : `${metrics.length} metric${metrics.length === 1 ? '' : 's'} \u00b7 ${activeCount} active`}
+          </p>
+        </div>
+      </div>
+
+      <div className={`pg-body ${styles['pg-body-scroll']}`}>
+        <div className={styles.card}>
+          <div className={styles['card-header']}>
+            <h3>Saved Metrics</h3>
+            <button
+              type="button"
+              className={`${styles.btn} ${styles['btn-sm']}`}
+              onClick={() => navigate('/app/custom-metrics/create')}
+            >
+              + New
+            </button>
+          </div>
+
+          <div className={styles['card-body']}>
+            {error && <div className={styles['error-banner']}><AlertCircle size={14} /> {error}</div>}
+
+            {loading ? (
+              <div className={styles['loading-row']}><Loader2 size={14} className={styles.spin} /> Loading metrics…</div>
+            ) : metrics.length === 0 ? (
+              <div className={styles.empty}>
+                <Gauge size={16} /> No metrics saved yet — create your first custom metric to get started.
+              </div>
+            ) : (
+              <div className={styles['table-wrap']}>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Eval Types</th>
+                      <th>Type</th>
+                      <th>Threshold</th>
+                      <th>Judge</th>
+                      <th>Status</th>
+                      <th>Created</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {metrics.map((m) => (
+                      <tr key={m.id} title={m.description}>
+                        <td>{m.name}</td>
+                        <td>
+                          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                            {(m.eval_types || []).map((t) => (
+                              <span key={t} className={badgeClass(t)}>{(t || '').toUpperCase()}</span>
+                            ))}
+                          </div>
+                        </td>
+                        <td><span className={badgeClass(m.metric_type === 'code' ? 'code' : 'simple')}>{m.metric_type}</span></td>
+                        <td className={styles['cell-num']}>{m.threshold}</td>
+                        <td>{m.requires_judge ? 'Yes' : 'No'}</td>
+                        <td><span className={badgeClass(m.is_active ? 'active' : 'inactive')}>{m.is_active ? 'Active' : 'Inactive'}</span></td>
+                        <td>{formatDate(m.created_at)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//useToast.tsx
+import { useCallback, useEffect, useState } from 'react';
+import styles from './CustomMetrics.module.scss';
+
+type ToastState = { message: string; type: 'ok' | 'error' | 'info' } | null;
+
+export function useToast() {
+  const [toast, setToast] = useState<ToastState>(null);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 2600);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  const showToast = useCallback((message: string, type: 'ok' | 'error' | 'info' = 'info') => {
+    setToast({ message, type });
+  }, []);
+
+  const ToastEl = toast ? (
+    <div className={`${styles.toast} ${styles[`toast--${toast.type}`] || ''}`}>{toast.message}</div>
+  ) : null;
+
+  return { showToast, ToastEl };
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Sidebar.tsx
+import { useState } from 'react';
+import { Link, NavLink, useLocation } from 'react-router-dom';
+import {
+  Home, Link2, Cpu, BookOpen, Play, FlaskConical, GitCompare, FileText, LogOut,
+  Gauge, ChevronDown, LayoutDashboard, PenSquare,
+} from 'lucide-react';
+import { useAppDispatch, useAppSelector } from '../../hooks/redux';
+import { logout } from '../../store/slices/authSlice';
+import ThemeToggle from '../common/ThemeToggle';
+import styles from './Sidebar.module.scss';
+
+const navItems = [
+  { to: '/app/dashboard', icon: <Home size={18} />, label: 'Dashboard' },
+  { to: '/app/providers', icon: <Link2 size={18} />, label: 'Providers' },
+  { to: '/app/models', icon: <Cpu size={18} />, label: 'Models' },
+  { to: '/app/datasets', icon: <BookOpen size={18} />, label: 'Datasets' },
+];
+
+const workflowItems = [
+  { to: '/app/run-evaluation', icon: <Play size={18} />, label: 'New Evaluation' },
+  { to: '/app/history', icon: <FlaskConical size={18} />, label: 'History' },
+  { to: '/app/comparison', icon: <GitCompare size={18} />, label: 'Comparison' },
+  { to: '/app/reports', icon: <FileText size={18} />, label: 'Reports' },
+];
+
+const customMetricsSubItems = [
+  { to: '/app/custom-metrics/dashboard', icon: <LayoutDashboard size={15} />, label: 'Dashboard' },
+  { to: '/app/custom-metrics/create', icon: <PenSquare size={15} />, label: 'Create Metric' },
+];
+
+export default function Sidebar() {
+  const dispatch = useAppDispatch();
+  const user = useAppSelector((s) => s.auth.user);
+  const location = useLocation();
+
+  const isOnCustomMetrics = location.pathname.startsWith('/app/custom-metrics');
+  const [customMetricsOpen, setCustomMetricsOpen] = useState(isOnCustomMetrics);
+
+  const navLinkClass = ({ isActive }: { isActive: boolean }) =>
+    `${styles['nav-item']} ${isActive ? styles.active : ''}`;
+
+  const subNavLinkClass = ({ isActive }: { isActive: boolean }) =>
+    `${styles['nav-item']} ${styles['nav-item--sub']} ${isActive ? styles.active : ''}`;
+
+  return (
+    <div className={styles.sidebar}>
+      <Link to="/" className={styles['sidebar__logo']}>
+        <div className={styles['sidebar__mark']}>&#9670;</div>
+        SemcoEval
+      </Link>
+      <nav className={styles['sidebar__nav']}>
+        {navItems.map((item) => (
+          <NavLink key={item.to} to={item.to} className={navLinkClass}>
+            {item.icon}
+            {item.label}
+          </NavLink>
+        ))}
+
+        <div className={styles['sidebar__section']}>Workflow</div>
+        {workflowItems.map((item) => (
+          <NavLink key={item.to} to={item.to} className={navLinkClass}>
+            {item.icon}
+            {item.label}
+          </NavLink>
+        ))}
+
+        <button
+          type="button"
+          className={`${styles['nav-item']} ${styles['nav-item--expandable']} ${isOnCustomMetrics ? styles.active : ''}`}
+          onClick={() => setCustomMetricsOpen((o) => !o)}
+          aria-expanded={customMetricsOpen}
+        >
+          <Gauge size={18} />
+          Custom Metrics
+          <ChevronDown
+            size={14}
+            className={`${styles['nav-item__chevron']} ${customMetricsOpen ? styles['nav-item__chevron--open'] : ''}`}
+          />
+        </button>
+
+        <div className={`${styles['nav-submenu']} ${customMetricsOpen ? styles['nav-submenu--open'] : ''}`}>
+          <div className={styles['nav-submenu__inner']}>
+            {customMetricsSubItems.map((item) => (
+              <NavLink key={item.to} to={item.to} className={subNavLinkClass}>
+                {item.icon}
+                {item.label}
+              </NavLink>
+            ))}
+          </div>
+        </div>
+      </nav>
+      <div className={styles['sidebar__foot']}>
+        <div className={styles['sidebar__theme-row']}>
+          <span>Theme</span>
+          <ThemeToggle />
+        </div>
+        <div className={styles['sidebar__user']}>
+          <div className={styles['sidebar__avatar']}>
+            {(user?.name || user?.email || '?').slice(0, 1).toUpperCase()}
+          </div>
+          <div className={styles['sidebar__user-info']}>
+            <div className={styles['sidebar__user-name']}>{user?.name || 'Account'}</div>
+            <div className={styles['sidebar__user-email']}>{user?.email}</div>
+          </div>
+          <button
+            type="button"
+            className={styles['sidebar__logout']}
+            title="Log out"
+            onClick={() => dispatch(logout())}
+          >
+            <LogOut size={15} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Approutes.tsx
+import { Routes, Route, Navigate } from 'react-router-dom';
+import Landing from '../components/landing/Landing';
+import AppShell from '../components/layout/AppShell';
+import ProtectedRoute from './ProtectedRoute';
+import Dashboard from '../components/dashboard/Dashboard';
+import Providers from '../components/providers/Providers';
+import ModelCatalog from '../components/models/ModelCatalog';
+import TestSuites from '../components/suites/TestSuites';
+import NewEvaluation from '../components/evaluations/NewEvaluation';
+import Evaluations from '../components/evaluations/Evaluations';
+import EvaluationDetail from '../components/evaluations/EvaluationDetail';
+import Comparison from '../components/comparison/Comparison';
+import CustomMetricsDashboard from '../components/CustomMetrics/CustomMetricsDashboard';
+import CreateMetric from '../components/CustomMetrics/CreateMetric';
+
+const MOCKS_ENABLED = import.meta.env.VITE_ENABLE_MOCKS === 'true';
+
+export default function AppRoutes() {
+  return (
+    <Routes>
+      {/* In mock mode, main.tsx already seeds a session before render, so
+          skip the landing/SSO page entirely and land straight in the app. */}
+      <Route path="/" element={MOCKS_ENABLED ? <Navigate to="/app/dashboard" replace /> : <Landing />} />
+
+      <Route element={<ProtectedRoute />}>
+        <Route path="/app" element={<AppShell />}>
+          <Route index element={<Navigate to="dashboard" replace />} />
+          <Route path="dashboard" element={<Dashboard />} />
+          <Route path="providers" element={<Providers />} />
+          <Route path="models" element={<ModelCatalog />} />
+          <Route path="suites" element={<TestSuites />} />
+          <Route path="new-eval" element={<NewEvaluation />} />
+          <Route path="evaluations" element={<Evaluations />} />
+          <Route path="evaluations/:id" element={<EvaluationDetail />} />
+          <Route path="comparison" element={<Comparison />} />
+
+          <Route path="custom-metrics">
+            <Route index element={<Navigate to="dashboard" replace />} />
+            <Route path="dashboard" element={<CustomMetricsDashboard />} />
+            <Route path="create" element={<CreateMetric />} />
+          </Route>
+        </Route>
+      </Route>
+
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+src/
+└── components/
+    ├── CustomMetrics/
+    │   ├── CustomMetrics.module.scss
+    │   ├── mockData.ts
+    │   ├── useToast.tsx
+    │   ├── CustomMetricsDashboard.tsx
+    │   ├── CreateMetric.tsx
+    │   └── UploadDataset.tsx
+    └── layout/
+        ├── Sidebar.tsx                        (replaces your existing one)
+        └── Sidebar.module.additions.scss      (snippet — paste into your existing Sidebar.module.scss)
