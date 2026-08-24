@@ -2,7 +2,7 @@
 // pages/PromptTemplates/PromptTemplates.tsx
 // Content Analytics · Prompt Template management
 // ═══════════════════════════════════════════════
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import {
@@ -17,45 +17,79 @@ import TourGuide, { type TourStep } from './TourGuide';
 import styles from './PromptTemplates.module.scss';
 
 // ─────────────────────────────────────────────
-// AutoResizeTextarea
-// Grows with content up to MAX_H, then scrolls.
-// Works correctly inside scrollable modal bodies
-// where the native resize grip is suppressed.
+// ResizableTextarea
+// Custom drag handle that works inside any
+// overflow container (native CSS resize breaks
+// inside overflow:auto/scroll — this bypasses
+// that restriction via JS mouse events).
 // ─────────────────────────────────────────────
-const MAX_TEXTAREA_H = 320;
+const MIN_H = 80;
+const MAX_H = 400;
 
-interface AutoResizeTextareaProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {
-    className?: string;
+interface ResizableTextareaProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {
+    textareaClassName?: string;
+    wrapClassName?: string;
 }
 
-const AutoResizeTextarea = React.forwardRef<HTMLTextAreaElement, AutoResizeTextareaProps>(
-    ({ onChange, className, value, ...props }, forwardedRef) => {
-        const innerRef = useRef<HTMLTextAreaElement>(null);
-        const ref = (forwardedRef as React.RefObject<HTMLTextAreaElement>) ?? innerRef;
+const ResizableTextarea: React.FC<ResizableTextareaProps> = ({
+    textareaClassName,
+    wrapClassName,
+    readOnly,
+    ...props
+}) => {
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const startY = useRef(0);
+    const startH = useRef(0);
 
-        const adjust = () => {
-            const el = ref.current;
-            if (!el) return;
-            el.style.height = 'auto';
-            const next = Math.min(el.scrollHeight, MAX_TEXTAREA_H);
-            el.style.height = `${next}px`;
-            el.style.overflowY = el.scrollHeight > MAX_TEXTAREA_H ? 'auto' : 'hidden';
+    const onMouseDown = (e: React.MouseEvent) => {
+        if (readOnly) return;
+        e.preventDefault();
+        startY.current = e.clientY;
+        startH.current = textareaRef.current?.offsetHeight ?? MIN_H;
+
+        const onMouseMove = (ev: MouseEvent) => {
+            const delta = ev.clientY - startY.current;
+            const next = Math.max(MIN_H, Math.min(startH.current + delta, MAX_H));
+            if (textareaRef.current) {
+                textareaRef.current.style.height = `${next}px`;
+            }
         };
 
-        // Re-measure whenever value changes (e.g. when edit modal pre-fills)
-        useLayoutEffect(() => { adjust(); });
+        const onMouseUp = () => {
+            window.removeEventListener('mousemove', onMouseMove);
+            window.removeEventListener('mouseup', onMouseUp);
+        };
 
-        return (
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mouseup', onMouseUp);
+    };
+
+    return (
+        <div className={`${styles.textareaWrap} ${wrapClassName ?? ''}`}>
             <textarea
-                ref={ref}
-                value={value}
-                className={className}
-                onChange={(e) => { adjust(); onChange?.(e); }}
+                ref={textareaRef}
+                className={textareaClassName}
+                readOnly={readOnly}
                 {...props}
             />
-        );
-    },
-);
+            {!readOnly && (
+                <div
+                    className={styles.resizeHandle}
+                    onMouseDown={onMouseDown}
+                    title="Drag to resize"
+                    aria-hidden="true"
+                >
+                    {/* Three horizontal grip lines */}
+                    <svg width="18" height="6" viewBox="0 0 18 6" fill="none">
+                        <line x1="2" y1="1" x2="16" y2="1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                        <line x1="2" y1="3.5" x2="16" y2="3.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                        <line x1="2" y1="6" x2="16" y2="6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                    </svg>
+                </div>
+            )}
+        </div>
+    );
+};
 
 type FormState = {
     name: string;
@@ -484,8 +518,8 @@ const PromptTemplates: React.FC = () => {
                                                 required={modalMode !== 'view'}
                                             />
                                         ) : (
-                                            <AutoResizeTextarea
-                                                className={`${styles.textarea} ${modalMode === 'view' ? styles.textareaReadonly : ''}`}
+                                            <ResizableTextarea
+                                                textareaClassName={`${styles.textarea} ${modalMode === 'view' ? styles.textareaReadonly : ''}`}
                                                 value={form[field]}
                                                 onChange={handleChange(field)}
                                                 placeholder={modalMode !== 'view' ? t(`promptTemplates.modal.${placeholderKey}`) : undefined}
@@ -560,6 +594,12 @@ const PromptTemplates: React.FC = () => {
 };
 
 export default PromptTemplates;
+
+
+
+
+
+
 
 
 
@@ -1124,16 +1164,64 @@ export default PromptTemplates;
   }
 }
 
+// Wrapper that holds the textarea + custom drag handle as a single unit
+.textareaWrap {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--bdr2);
+  border-radius: var(--r);
+  overflow: hidden; // clips the handle inside the border-radius
+  transition: border-color 0.12s, box-shadow 0.12s;
+
+  // Lift focus ring to the wrapper so it shows even when the handle is clicked
+  &:focus-within {
+    border-color: var(--blue-bdr);
+    box-shadow: 0 0 0 2px var(--blue-dim);
+  }
+}
+
 .textarea {
-  // Height and overflow are driven by AutoResizeTextarea (JS).
-  // min-height sets the starting size; the component grows up to 320px
-  // then switches overflow-y to auto so the modal body can scroll.
+  width: 100%;
   min-height: 80px;
+  background: var(--bg3);
+  border: none; // border lives on the wrapper
+  border-radius: 0;
+  color: var(--t0);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  padding: 8px 10px;
+  outline: none;
+  resize: none;
+  overflow-y: auto;
   line-height: 1.5;
   @include m.mono;
-  font-size: 12px;
-  overflow-y: hidden; // JS overrides this to 'auto' once max-height is hit
-  resize: none;       // native grip disabled — auto-resize replaces it
+
+  &::placeholder { color: var(--t2); }
+}
+
+// Custom drag handle strip — always visible, always works
+.resizeHandle {
+  flex-shrink: 0;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ns-resize;
+  background: var(--bg2);
+  border-top: 1px solid var(--bdr);
+  color: var(--t2);
+  user-select: none;
+  transition: background 0.12s, color 0.12s;
+
+  &:hover {
+    background: var(--bg3);
+    color: var(--t1);
+  }
+
+  &:active {
+    background: var(--bg3);
+    color: var(--blue);
+  }
 }
 
 // Read-only textarea shown in view mode
@@ -1142,15 +1230,7 @@ export default PromptTemplates;
   cursor: default;
   opacity: 0.75;
   background: var(--bg2) !important;
-  border-color: var(--bdr) !important;
-  box-shadow: none !important;
   color: var(--t1) !important;
-  resize: none;
-
-  &:focus {
-    border-color: var(--bdr) !important;
-    box-shadow: none !important;
-  }
 }
 
 // Read-only input shown in view mode
@@ -1166,9 +1246,7 @@ export default PromptTemplates;
     border-color: var(--bdr) !important;
     box-shadow: none !important;
   }
-}
-
-// ── Animations ────────────────────────────────────
+}// ── Animations ────────────────────────────────────
 @keyframes ptFadeIn {
   from {
     opacity: 0;
