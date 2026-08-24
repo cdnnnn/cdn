@@ -647,61 +647,69 @@ export default function CreateMetric() {
             <h3 className={styles['section-title']}>Test Dataset</h3>
             <p className={styles['section-sub']}>Choose a dataset to preview and validate against</p>
 
-            {!evalType ? (
-              <div className={styles.empty}>Select an evaluation type first.</div>
-            ) : datasetsError ? (
-              <div className={styles['error-banner']}><AlertCircle size={14} /> {datasetsError}</div>
-            ) : datasetsLoading ? (
-              <div className={styles['loading-row']}><Loader2 size={14} className={styles.spin} /> Loading datasets…</div>
-            ) : datasets.length === 0 ? (
-              <div className={styles.empty}>No datasets found for this evaluation type.</div>
-            ) : (
-              <div className={styles['dataset-grid']}>
-                {datasets.map((d) => (
-                  <div
-                    key={d.id}
-                    className={`${styles['dataset-card']} ${selectedDatasetId === d.id ? styles['dataset-card--selected'] : ''}`}
-                    onClick={() => selectDataset(d.id)}
-                  >
-                    <span className={styles['dataset-card__radio']} />
-                    <div className={styles['dataset-card__body']}>
-                      <div className={styles['dataset-card__name']}>{d.name}</div>
-                      <div className={styles['dataset-card__count']}>{d.question_count} questions</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {previewError && <div className={styles['error-banner']}><AlertCircle size={14} /> {previewError}</div>}
-
-            {previewLoading ? (
-              <div className={styles['loading-row']}><Loader2 size={14} className={styles.spin} /> Loading preview…</div>
-            ) : previewQuestions.length > 0 && (
-              <>
-                <div className={styles['preview-toolbar']}>
-                  <span className={styles['section-sub']} style={{ marginBottom: 0 }}>{selectedQuestionIds.size} of {previewQuestions.length} selected</span>
-                  <div className={styles['preview-toolbar__actions']}>
-                    <button type="button" className={styles['link-btn']} onClick={selectAllQuestions}>Select all</button>
-                    <span style={{ color: 'var(--line)' }}>·</span>
-                    <button type="button" className={styles['link-btn']} onClick={clearAllQuestions}>Clear</button>
-                  </div>
-                </div>
-                <div className={styles['preview-list']}>
-                  {previewQuestions.map((q) => (
-                    <label key={q.id} className={styles['preview-item']}>
-                      <input type="checkbox" checked={selectedQuestionIds.has(q.id)} onChange={() => toggleQuestion(q.id)} />
-                      <div className={styles['preview-item__body']}>
-                        <div className={styles['preview-item__q']}>{q.input?.prompt}</div>
-                        <div className={styles['preview-item__a']}>
-                          <span className={styles['preview-item__a-label']}>Expected:</span>{q.expected?.answer}
+            <div className={styles['dataset-preview-row']}>
+              <div className={styles['dataset-preview-col']}>
+                {!evalType ? (
+                  <div className={styles.empty}>Select an evaluation type first.</div>
+                ) : datasetsError ? (
+                  <div className={styles['error-banner']}><AlertCircle size={14} /> {datasetsError}</div>
+                ) : datasetsLoading ? (
+                  <div className={styles['loading-row']}><Loader2 size={14} className={styles.spin} /> Loading datasets…</div>
+                ) : datasets.length === 0 ? (
+                  <div className={styles.empty}>No datasets found for this evaluation type.</div>
+                ) : (
+                  <div className={styles['dataset-grid']}>
+                    {datasets.map((d) => (
+                      <div
+                        key={d.id}
+                        className={`${styles['dataset-card']} ${selectedDatasetId === d.id ? styles['dataset-card--selected'] : ''}`}
+                        onClick={() => selectDataset(d.id)}
+                      >
+                        <span className={styles['dataset-card__radio']} />
+                        <div className={styles['dataset-card__body']}>
+                          <div className={styles['dataset-card__name']}>{d.name}</div>
+                          <div className={styles['dataset-card__count']}>{d.question_count} questions</div>
                         </div>
                       </div>
-                    </label>
-                  ))}
-                </div>
-              </>
-            )}
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className={styles['dataset-preview-col']}>
+                {previewError && <div className={styles['error-banner']}><AlertCircle size={14} /> {previewError}</div>}
+
+                {previewLoading ? (
+                  <div className={styles['loading-row']}><Loader2 size={14} className={styles.spin} /> Loading preview…</div>
+                ) : previewQuestions.length > 0 ? (
+                  <>
+                    <div className={styles['preview-toolbar']}>
+                      <span className={styles['section-sub']} style={{ marginBottom: 0 }}>{selectedQuestionIds.size} of {previewQuestions.length} selected</span>
+                      <div className={styles['preview-toolbar__actions']}>
+                        <button type="button" className={styles['link-btn']} onClick={selectAllQuestions}>Select all</button>
+                        <span style={{ color: 'var(--line)' }}>·</span>
+                        <button type="button" className={styles['link-btn']} onClick={clearAllQuestions}>Clear</button>
+                      </div>
+                    </div>
+                    <div className={styles['preview-list']}>
+                      {previewQuestions.map((q) => (
+                        <label key={q.id} className={styles['preview-item']}>
+                          <input type="checkbox" checked={selectedQuestionIds.has(q.id)} onChange={() => toggleQuestion(q.id)} />
+                          <div className={styles['preview-item__body']}>
+                            <div className={styles['preview-item__q']}>{q.input?.prompt}</div>
+                            <div className={styles['preview-item__a']}>
+                              <span className={styles['preview-item__a-label']}>Expected:</span>{q.expected?.answer}
+                            </div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <div className={styles.empty}>Select a dataset to preview its questions.</div>
+                )}
+              </div>
+            </div>
           </div>
 
           {/* ---- Validation results ---- */}
@@ -785,6 +793,13 @@ export default function CreateMetric() {
     </div>
   );
 }
+
+
+
+
+
+
+
 
 
 
@@ -1865,11 +1880,11 @@ $cm-base-font: 0.875rem;
 .badge--active { color: $ok; background: $ok-wash; }
 .badge--inactive { color: $ink-3; background: $ink-wash; }
 
-// ---- dataset preview list — 2-column grid of individual cards ----------
+// ---- dataset preview list — single-column list of cards -----------------
 .preview-list {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   max-height: 420px;
   overflow-y: auto;
   padding-right: 2px;
@@ -2248,7 +2263,7 @@ $cm-base-font: 0.875rem;
 
 @media (max-width: 900px) {
   .card-grid, .card-grid--4 { grid-template-columns: 1fr; }
-  .dataset-grid, .preview-list { grid-template-columns: 1fr; }
+  .dataset-preview-row { grid-template-columns: 1fr; }
 }
 // ---- Add to CustomMetrics.module.scss ------------------------------------
 
@@ -2365,10 +2380,12 @@ $cm-base-font: 0.875rem;
 
 // ---- dataset selection cards --------------------------------------------
 .dataset-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
-  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 2px;
 }
 
 .dataset-card {
@@ -2433,4 +2450,16 @@ $cm-base-font: 0.875rem;
   font-size: 0.7857em; // 0.6875rem / 0.875rem
   color: $ink-3;
   margin-top: 2px;
+}
+
+// ---- side-by-side dataset picker + question preview ---------------------
+.dataset-preview-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+.dataset-preview-col {
+  min-width: 0;
 }
