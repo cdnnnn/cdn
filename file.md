@@ -520,6 +520,7 @@ const PromptTemplates: React.FC = () => {
                                         ) : (
                                             <ResizableTextarea
                                                 textareaClassName={`${styles.textarea} ${modalMode === 'view' ? styles.textareaReadonly : ''}`}
+                                                wrapClassName={modalMode === 'view' ? styles.textareaWrapReadonly : ''}
                                                 value={form[field]}
                                                 onChange={handleChange(field)}
                                                 placeholder={modalMode !== 'view' ? t(`promptTemplates.modal.${placeholderKey}`) : undefined}
@@ -594,6 +595,15 @@ const PromptTemplates: React.FC = () => {
 };
 
 export default PromptTemplates;
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1170,13 +1180,24 @@ export default PromptTemplates;
   flex-direction: column;
   border: 1px solid var(--bdr2);
   border-radius: var(--r);
-  overflow: hidden; // clips the handle inside the border-radius
+  overflow: hidden;
   transition: border-color 0.12s, box-shadow 0.12s;
 
-  // Lift focus ring to the wrapper so it shows even when the handle is clicked
   &:focus-within {
     border-color: var(--blue-bdr);
     box-shadow: 0 0 0 2px var(--blue-dim);
+  }
+}
+
+// Applied to the wrapper in view/read-only mode
+.textareaWrapReadonly {
+  border-color: var(--bdr);
+  background: var(--bg2);
+
+  // Suppress the interactive focus ring — this is read-only content
+  &:focus-within {
+    border-color: var(--bdr);
+    box-shadow: none;
   }
 }
 
@@ -1228,7 +1249,6 @@ export default PromptTemplates;
 .textareaReadonly {
   overflow-y: auto;
   cursor: default;
-  opacity: 0.75;
   background: var(--bg2) !important;
   color: var(--t1) !important;
 }
