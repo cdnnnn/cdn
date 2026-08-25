@@ -1,3516 +1,2460 @@
-// ═══════════════════════════════════════════════
-// pages/UploadInfer/WorkspacePanel.module.scss
-// LectureAI · Step-3 Workspace Result panel
-// ═══════════════════════════════════════════════
-@use '../../styles/mixins' as m;
-
-// ── Keyframes ────────────────────────────────────────────
-@keyframes fadein {
-    from {
-        opacity: 0;
-        transform: translateY(2px);
-    }
-
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-@keyframes fadeInUp {
-    from {
-        opacity: 0;
-        transform: translateY(10px);
-    }
-
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-@keyframes float {
-
-    0%,
-    100% {
-        transform: translateY(0);
-    }
-
-    50% {
-        transform: translateY(-8px);
-    }
-}
-
-@keyframes wsSpin {
-    to {
-        transform: rotate(360deg);
-    }
-}
-
-@keyframes chipFadeIn {
-    from {
-        opacity: 0;
-        transform: scale(0.8) translateY(-6px);
-    }
-
-    to {
-        opacity: 1;
-        transform: scale(1) translateY(0);
-    }
-}
-
-@keyframes explanationSlideIn {
-    from {
-        opacity: 0;
-        transform: translateY(-6px);
-    }
-
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-@keyframes iconPop {
-    0% {
-        transform: scale(0);
-        opacity: 0;
-    }
-
-    60% {
-        transform: scale(1.2);
-    }
-
-    100% {
-        transform: scale(1);
-        opacity: 1;
-    }
-}
-
-@keyframes completeFadeIn {
-    from {
-        opacity: 0;
-        transform: scale(0.95);
-    }
-
-    to {
-        opacity: 1;
-        transform: scale(1);
-    }
-}
-
-@keyframes iconBounce {
-
-    0%,
-    100% {
-        transform: scale(1);
-    }
-
-    50% {
-        transform: scale(1.1);
-    }
-}
-
-// ── Panel shell ──────────────────────────────────────────
-.wspanel {
-    width: 360px;
-    flex-shrink: 0;
-    border-left: none;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    background: var(--bg0);
-    transition: width 0.25s ease;
-    position: relative;
-
-    // Gradient border — only visible when step-2 panel is open beside it
-    &::before {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        bottom: 0;
-        width: 1px;
-        background: linear-gradient(180deg,
-                rgba(139, 92, 246, 0.0) 0%,
-                rgba(139, 92, 246, 0.7) 20%,
-                rgba(56, 196, 186, 0.8) 55%,
-                rgba(240, 160, 48, 0.7) 85%,
-                rgba(240, 160, 48, 0.0) 100%);
-        pointer-events: none;
-        opacity: 0;
-        transition: opacity 0.32s ease;
-    }
-}
-
-// Border fades in only when step-2 is visible next to workspace
-.wspanelWithStep2::before {
-    opacity: 1;
-}
-
-.wspanelExpanded {
-    width: auto;
-    flex: 1;
-}
-
-// ── Header — unchanged from original ────────────────────
-.wspanelHead {
-    padding: 12px 18px 9px;
-    border-bottom: 1px solid var(--bdr);
-    background: var(--bg1);
-    flex-shrink: 0;
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-}
-
-.headLeft {
-    flex: 1;
-    min-width: 0;
-}
-
-.wsftitle {
-    font-size: 16px;
-    font-weight: 700;
-    color: var(--t0);
-    letter-spacing: -0.2px;
-    @include m.truncate;
-    line-height: 1.3;
-}
-
-.wsftitleEmpty {
-    font-size: 18px;
-    font-weight: 300;
-    color: var(--t2);
-    opacity: 0.4;
-}
-
-.wsmeta {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    margin-top: 5px;
-    flex-wrap: wrap;
-}
-
-.wsmetaId {
-    display: inline-flex;
-    align-items: center;
-    font-size: 10px;
-    font-weight: 700;
-    font-family: var(--font-mono);
-    color: #a78bfa;
-    background: rgba(167, 139, 250, 0.12);
-    border: 1px solid rgba(167, 139, 250, 0.3);
-    border-radius: 4px;
-    padding: 1px 6px;
-    flex-shrink: 0;
-    letter-spacing: 0.02em;
-}
-
-.wsmetaSep {
-    color: var(--t2);
-    opacity: 0.4;
-    font-size: 13px;
-}
-
-.wsmetaDate {
-    font-size: 13px;
-    color: var(--t2);
-    font-family: var(--font-mono);
-}
-
-.wsmetaHint {
-    font-size: 13px;
-    color: var(--t2);
-    font-family: var(--font-mono);
-    opacity: 0.6;
-    font-style: italic;
-}
-
-// ── Tab bar ─────────────────────────────────────────────
-.wsptabsWrap {
-    position: relative;
-    display: flex;
-    align-items: center;
-    border-bottom: 1px solid var(--bdr);
-    background: var(--bg1);
-    flex-shrink: 0;
-}
-
-.wsptabs {
-    display: flex;
-    padding: 0 16px;
-    flex: 1;
-    overflow-x: auto;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-
-    &::-webkit-scrollbar {
-        display: none;
-    }
-}
-
-.tabFade {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    width: 28px;
-    pointer-events: none;
-    z-index: 1;
-}
-
-.tabFadeLeft {
-    left: 28px;
-    background: linear-gradient(90deg, var(--bg1), transparent);
-}
-
-.tabFadeRight {
-    right: 28px;
-    background: linear-gradient(270deg, var(--bg1), transparent);
-}
-
-.tabScrollBtn {
-    flex-shrink: 0;
-    align-self: stretch;
-    width: 28px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: none;
-    background: var(--bg1);
-    color: var(--t2);
-    cursor: pointer;
-    z-index: 2;
-    transition: color 0.12s;
-
-    svg {
-        width: 13px;
-        height: 13px;
-    }
-
-    &:hover {
-        color: var(--t0);
-    }
-}
-
-.tab {
-    padding: 0 14px;
-    height: 36px;
-    display: flex;
-    align-items: center;
-    font-size: 14px;
-    color: var(--t2);
-    cursor: pointer;
-    border: none;
-    border-bottom: 2px solid transparent;
-    background: transparent;
-    font-family: var(--font-ui);
-    transition: all 0.12s;
-    user-select: none;
-    white-space: nowrap;
-    flex-shrink: 0;
-
-    &:hover {
-        color: var(--t1);
-    }
-
-    &.active {
-        color: var(--blue);
-        border-bottom-color: var(--blue);
-        font-weight: 500;
-    }
-}
-
-// ── Tab body ─────────────────────────────────────────────
-.wsbody {
-    flex: 1;
-    overflow-y: auto;
-    padding: 16px 18px;
-    background: var(--bg0);
-    @include m.scrollbar;
-    animation: fadein 0.15s ease;
-    display: flex;
-    flex-direction: column;
-}
-
-// ── Empty state ──────────────────────────────────────────
-.wsEmpty {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    text-align: center;
-
-    svg {
-        width: 44px;
-        height: 44px;
-        color: var(--t2);
-        opacity: 0.25;
-        flex-shrink: 0;
-        animation: float 3s ease-in-out infinite;
-    }
-}
-
-.wsEmptyTitle {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--t1);
-}
-
-.wsEmptyDesc {
-    font-size: 14px;
-    color: var(--t2);
-    @include m.mono;
-    line-height: 1.6;
-    max-width: 200px;
-}
-
-// ── Loading spinner ──────────────────────────────────────
-.wsSpinner {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    color: var(--t2);
-    font-size: 14px;
-    @include m.mono;
-}
-
-.spinner {
-    width: 28px;
-    height: 28px;
-    border: 2.5px solid var(--bdr2);
-    border-top-color: var(--blue);
-    border-radius: 50%;
-    animation: wsSpin 0.7s linear infinite;
-    flex-shrink: 0;
-}
-
-// ── Tab content wrapper ──────────────────────────────────
-.tabContent {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    animation: fadein 0.15s ease;
-    flex: 1;
-    min-height: 0;
-}
-
-.tabEmpty {
-    font-size: 14px;
-    color: var(--t2);
-    @include m.mono;
-    padding: 24px 0;
-    text-align: center;
-}
-
-// ── Summary — marked library output ─────────────────────
-// Font sizes and spacing match Angular .markdown-content-inline exactly
-.summaryMd {
-    font-size: 14px;
-    color: var(--t1);
-    line-height: 1.7;
-
-    // ── Paragraphs ──────────────────────────────────────
-    // Angular: margin: 8px 0, line-height: 1.7
-    p {
-        margin: 8px 0;
-        line-height: 1.7;
-
-        &:first-child {
-            margin-top: 0;
-        }
-
-        &:last-child {
-            margin-bottom: 0;
-        }
-    }
-
-    // ── Headings ─────────────────────────────────────────
-    // Angular h1: 18px, margin 12px 0 8px 0, padding-bottom 6px
-    h1 {
-        font-size: 18px;
-        font-weight: 700;
-        color: var(--blue);
-        margin: 12px 0 8px;
-        padding-bottom: 6px;
-        border-bottom: 2px solid rgba(139, 92, 246, 0.3);
-        line-height: 1.3;
-        position: relative;
-
-        &:first-child {
-            margin-top: 0;
-        }
-
-        &::before {
-            content: '';
-            position: absolute;
-            bottom: -2px;
-            left: 0;
-            width: 60px;
-            height: 2px;
-            background: var(--blue);
-        }
-    }
-
-    // Angular h2: 16px, margin 10px 0 6px 0, padding-left 12px
-    h2 {
-        font-size: 16px;
-        font-weight: 700;
-        color: #9f7aea;
-        margin: 10px 0 6px;
-        padding-left: 12px;
-        line-height: 1.3;
-        position: relative;
-
-        &:first-child {
-            margin-top: 0;
-        }
-
-        &::before {
-            content: '';
-            position: absolute;
-            left: 0;
-            top: 50%;
-            transform: translateY(-50%);
-            width: 4px;
-            height: 18px;
-            background: linear-gradient(180deg, var(--blue), #a78bfa);
-            border-radius: 2px;
-        }
-    }
-
-    // Angular h3: 14px, margin 8px 0 4px 0
-    h3 {
-        font-size: 14px;
-        font-weight: 700;
-        color: #a78bfa;
-        margin: 8px 0 4px;
-        line-height: 1.3;
-
-        &:first-child {
-            margin-top: 0;
-        }
-    }
-
-    // Angular h4/h5/h6: 13px, margin 6px 0 4px 0
-    h4,
-    h5,
-    h6 {
-        font-size: 14px;
-        font-weight: 600;
-        color: #b794f4;
-        margin: 6px 0 4px;
-        line-height: 1.3;
-
-        &:first-child {
-            margin-top: 0;
-        }
-    }
-
-    // ── Lists ────────────────────────────────────────────
-    // Angular: margin 8px 0, padding-left 20px
-    ul,
-    ol {
-        margin: 8px 0;
-        padding-left: 20px;
-
-        &:last-child {
-            margin-bottom: 0;
-        }
-    }
-
-    // Angular li: margin 4px 0, line-height 1.6, padding-left 8px
-    li {
-        margin: 4px 0;
-        line-height: 1.6;
-        padding-left: 8px;
-
-        ul,
-        ol {
-            margin-top: 4px;
-            margin-bottom: 4px;
-        }
-    }
-
-    ul li::marker {
-        color: var(--blue);
-        font-weight: bold;
-    }
-
-    ol li::marker {
-        color: var(--blue);
-        font-weight: bold;
-    }
-
-    // ── Inline formatting ────────────────────────────────
-    // Angular strong: color primary, background gradient, padding 2px 4px
-    strong {
-        font-weight: 700;
-        color: var(--blue);
-        background: linear-gradient(135deg,
-                rgba(139, 92, 246, 0.1),
-                rgba(167, 139, 250, 0.05));
-        padding: 2px 4px;
-        border-radius: 3px;
-    }
-
-    em {
-        font-style: italic;
-        color: #a78bfa;
-    }
-
-    // ── HR ───────────────────────────────────────────────
-    // Angular: height 2px, gradient, margin 16px 0, opacity 0.3
-    hr {
-        border: none;
-        height: 2px;
-        background: linear-gradient(90deg, transparent, var(--blue), transparent);
-        margin: 16px 0;
-        opacity: 0.3;
-    }
-
-    // ── Blockquote ───────────────────────────────────────
-    // Angular: border-left 3px, padding 12px 12px 12px 16px, margin 12px 0
-    blockquote {
-        border-left: 3px solid var(--blue);
-        margin: 12px 0;
-        padding: 12px 12px 12px 16px;
-        background: linear-gradient(135deg,
-                rgba(139, 92, 246, 0.08),
-                rgba(167, 139, 250, 0.05));
-        border-radius: 0 6px 6px 0;
-        font-style: italic;
-        opacity: 0.9;
-        position: relative;
-
-        &::before {
-            content: '"';
-            position: absolute;
-            top: 8px;
-            left: 8px;
-            font-size: 32px;
-            color: var(--blue);
-            opacity: 0.3;
-            font-family: Georgia, serif;
-            line-height: 0;
-        }
-
-        // marked wraps blockquote text in <p>
-        p {
-            margin: 0;
-            line-height: 1.6;
-        }
-    }
-
-    // ── Inline code ──────────────────────────────────────
-    // Angular: padding 3px 8px, font-size 0.9em (~11.7px), border rgba purple
-    code {
-        font-family: var(--font-mono);
-        font-size: 0.9em;
-        background: linear-gradient(135deg,
-                rgba(139, 92, 246, 0.15),
-                rgba(167, 139, 250, 0.1));
-        border: 1px solid rgba(139, 92, 246, 0.3);
-        border-radius: 4px;
-        padding: 3px 8px;
-        color: var(--blue);
-        font-weight: 500;
-    }
-
-    // ── Code block ───────────────────────────────────────
-    // Angular: padding 14px, margin 12px 0, border rgba purple
-    pre {
-        background: linear-gradient(135deg,
-                rgba(139, 92, 246, 0.08),
-                rgba(167, 139, 250, 0.05));
-        border: 1px solid rgba(139, 92, 246, 0.25);
-        border-radius: 8px;
-        padding: 14px;
-        overflow-x: auto;
-        margin: 12px 0;
-        position: relative;
-
-        &:last-child {
-            margin-bottom: 0;
-        }
-
-        // Angular pre::before — purple left accent bar
-        &::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 4px;
-            height: 100%;
-            background: linear-gradient(180deg, var(--blue), #a78bfa);
-            border-radius: 8px 0 0 8px;
-        }
-
-        code {
-            background: transparent;
-            border: none;
-            padding: 0;
-            font-size: 0.9em;
-            color: var(--t1);
-            font-weight: normal;
-        }
-    }
-
-    // ── Tables ───────────────────────────────────────────
-    table {
-        width: 100%;
-        border-collapse: collapse;
-        margin: 12px 0;
-        border-radius: 6px;
-        overflow: hidden;
-    }
-
-    th,
-    td {
-        padding: 10px 12px;
-        border: 1px solid rgba(139, 92, 246, 0.2);
-        text-align: left;
-    }
-
-    th {
-        background: linear-gradient(135deg,
-                rgba(139, 92, 246, 0.15),
-                rgba(167, 139, 250, 0.1));
-        font-weight: 700;
-        color: var(--blue);
-        border-bottom: 2px solid rgba(139, 92, 246, 0.3);
-    }
-
-    tr:hover {
-        background: rgba(139, 92, 246, 0.03);
-    }
-
-    // ── Links ────────────────────────────────────────────
-    a {
-        color: var(--blue);
-        text-decoration: none;
-        font-weight: 500;
-        border-bottom: 1px solid transparent;
-        transition: border-color 0.2s, color 0.2s;
-
-        &:hover {
-            color: #9f7aea;
-            border-bottom-color: var(--blue);
-        }
-    }
-
-    // First child: no top margin
-    >*:first-child {
-        margin-top: 0;
-    }
-
-    // Last child: no bottom margin
-    >*:last-child {
-        margin-bottom: 0;
-    }
-}
-
-// ── Keywords — gradient chips ────────────────────────────
-.keywordGrid {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 7px;
-}
-
-.keywordPill {
-    display: inline-flex;
-    align-items: center;
-    padding: 6px 12px;
-    border-radius: 8px;
-    font-size: 13px;
-    font-weight: 600;
-    @include m.mono;
-    color: #fff;
-    // background set inline via style prop (gradient)
-    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.15);
-    animation: chipFadeIn 0.25s ease-out;
-    position: relative;
-    overflow: hidden;
-    transition: transform 0.2s, box-shadow 0.2s;
-    cursor: default;
-
-    // shine on hover
-    &::before {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: -100%;
-        width: 100%;
-        height: 100%;
-        background: linear-gradient(90deg,
-                transparent,
-                rgba(255, 255, 255, 0.25),
-                transparent);
-        transition: left 0.42s ease;
-    }
-
-    &:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
-
-        &::before {
-            left: 100%;
-        }
-    }
-}
-
-// ── Assessment — progress bar ────────────────────────────
-.assessProgress {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.assessProgressTrack {
-    flex: 1;
-    height: 4px;
-    background: var(--bg3);
-    border-radius: 99px;
-    overflow: hidden;
-}
-
-.assessProgressFill {
-    height: 100%;
-    background: linear-gradient(90deg, var(--blue), #a78bfa);
-    border-radius: 99px;
-    transition: width 0.3s ease;
-}
-
-.assessProgressLabel {
-    font-size: 13px;
-    font-family: var(--font-mono);
-    font-weight: 700;
-    color: var(--blue);
-    white-space: nowrap;
-    flex-shrink: 0;
-}
-
-// ── Assessment — question card ───────────────────────────
-.faqCard {
-    background: var(--bg1);
-    border: 1px solid var(--bdr);
-    border-radius: var(--r);
-    padding: 12px 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 9px;
-    animation: fadeInUp 0.2s ease-out;
-    transition: border-color 0.15s, box-shadow 0.15s;
-
-    &:hover {
-        border-color: var(--blue-bdr);
-        box-shadow: 0 2px 8px rgba(139, 92, 246, 0.07);
-    }
-}
-
-.faqQ {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--t0);
-    line-height: 1.5;
-    display: flex;
-    gap: 8px;
-    align-items: flex-start;
-}
-
-.faqNum {
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--blue);
-    background: var(--blue-dim);
-    border: 1px solid var(--blue-bdr);
-    border-radius: 4px;
-    padding: 1px 6px;
-    flex-shrink: 0;
-    margin-top: 2px;
-    @include m.mono;
-}
-
-.faqOptions {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-// ── Option button — base ─────────────────────────────────
-.faqOpt {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    font-size: 13px;
-    color: var(--t1);
-    padding: 7px 10px;
-    border-radius: 6px;
-    border: 2px solid var(--bdr);
-    background: var(--bg0);
-    cursor: pointer;
-    text-align: left;
-    font-family: var(--font-ui);
-    width: 100%;
-    transition: border-color 0.15s, background 0.15s, transform 0.15s;
-
-    &:hover:not(:disabled) {
-        border-color: var(--blue-bdr);
-        background: var(--blue-dim);
-        transform: translateX(2px);
-    }
-
-    &:disabled {
-        cursor: default;
-    }
-}
-
-// Circle key badge
-.faqOptKey {
-    width: 22px;
-    height: 22px;
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 50%;
-    background: var(--bg3);
-    border: 1.5px solid var(--bdr2);
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--t1);
-    @include m.mono;
-    transition: background 0.15s, border-color 0.15s, color 0.15s;
-}
-
-.faqOptVal {
-    flex: 1;
-    line-height: 1.45;
-}
-
-// ── Option states ────────────────────────────────────────
-.faqOptSelected {
-    border-color: var(--blue-bdr);
-    background: var(--blue-dim);
-
-    .faqOptKey {
-        background: var(--blue);
-        border-color: var(--blue);
-        color: #fff;
-    }
-}
-
-.faqOptCorrect {
-    border-color: var(--green-bdr);
-    background: var(--green-dim);
-
-    .faqOptKey {
-        background: var(--green);
-        border-color: var(--green);
-        color: #fff;
-    }
-
-    .faqOptVal {
-        color: var(--green);
-        font-weight: 600;
-    }
-}
-
-.faqOptCorrectAlt {
-    border-color: var(--green-bdr);
-    background: var(--green-dim);
-
-    .faqOptKey {
-        background: var(--green);
-        border-color: var(--green);
-        color: #fff;
-    }
-
-    .faqOptVal {
-        color: var(--green);
-        font-weight: 600;
-    }
-}
-
-.faqOptWrong {
-    border-color: var(--red-bdr);
-    background: var(--red-dim);
-
-    .faqOptKey {
-        background: var(--red);
-        border-color: var(--red);
-        color: #fff;
-    }
-
-    .faqOptVal {
-        color: var(--red);
-        font-weight: 600;
-    }
-}
-
-// ── Check / X icons ──────────────────────────────────────
-.faqCheckIcon,
-.faqXIcon {
-    width: 13px;
-    height: 13px;
-    flex-shrink: 0;
-    margin-left: auto;
-    animation: iconPop 0.25s ease-out;
-}
-
-.faqCheckIcon {
-    color: var(--green);
-}
-
-.faqXIcon {
-    color: var(--red);
-}
-
-// ── Explanation box ──────────────────────────────────────
-.faqExplain {
-    background: var(--bg0);
-    border: 1px solid var(--bdr);
-    border-left: 3px solid var(--blue-bdr);
-    border-radius: 0 5px 5px 0;
-    padding: 8px 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    animation: explanationSlideIn 0.2s ease-out;
-}
-
-.faqExplainLabel {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--blue);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    @include m.mono;
-
-    svg {
-        width: 12px;
-        height: 12px;
-        flex-shrink: 0;
-    }
-}
-
-.faqExplainText {
-    font-size: 13px;
-    color: var(--t2);
-    line-height: 1.6;
-    @include m.mono;
-    margin: 0;
-}
-
-// ── Next / Finish button ─────────────────────────────────
-.assessNextBtn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 5px;
-    padding: 6px 14px; // matches .btnSm padding scale
-    border-radius: var(--r);
-    border: none;
-    background: var(--blue);
-    color: #fff;
-    font-size: 13px;
-    font-weight: 600;
-    font-family: var(--font-ui);
-    cursor: pointer;
-    align-self: flex-end;
-    animation: fadein 0.15s ease;
-    box-shadow: 0 2px 6px rgba(91, 164, 239, 0.28);
-    transition: opacity 0.12s, transform 0.15s, box-shadow 0.15s;
-
-    svg {
-        width: 12px;
-        height: 12px;
-    }
-
-    &:hover {
-        opacity: 0.9;
-        transform: translateY(-1px);
-        box-shadow: 0 4px 10px rgba(91, 164, 239, 0.35);
-    }
-}
-
-.assessDoneBtn {
-    background: var(--green);
-    box-shadow: 0 2px 6px rgba(74, 222, 128, 0.28);
-
-    &:hover {
-        box-shadow: 0 4px 10px rgba(74, 222, 128, 0.35);
-    }
-}
-
-// ── Complete screen ──────────────────────────────────────
-.assessComplete {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 10px;
-    padding: 28px 16px;
-    text-align: center;
-    animation: completeFadeIn 0.3s ease-out;
-}
-
-.assessCompleteIcon {
-    width: 56px;
-    height: 56px;
-    background: var(--green-dim);
-    border: 2px solid var(--green-bdr);
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    animation: iconBounce 0.5s ease-out;
-
-    svg {
-        width: 32px;
-        height: 32px;
-        color: var(--green);
-    }
-}
-
-.assessCompleteTitle {
-    font-size: 16px;
-    font-weight: 700;
-    color: var(--t0);
-}
-
-.assessCompleteDesc {
-    font-size: 14px;
-    color: var(--t2);
-    @include m.mono;
-}
-
-.assessRestartBtn {
-    margin-top: 4px;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 20px;
-    border-radius: var(--r);
-    border: 1px solid var(--bdr2);
-    background: transparent;
-    color: var(--t1);
-    font-size: 14px;
-    font-family: var(--font-ui);
-    cursor: pointer;
-    transition: all 0.12s;
-
-    &:hover {
-        background: var(--bg3);
-        color: var(--t0);
-        border-color: var(--bdr3);
-    }
-}
-
-// (tabToolbar and editIconBtn replaced by actionBtn/dropdown system below)
-
-// ── Edit mode layout ─────────────────────────────────────
-.editMode {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-}
-
-.editLayout {
-    display: flex;
-    gap: 12px;
-    flex: 1;
-    min-height: 0;
-    position: relative;
-    padding-bottom: 52px; // room for fixed footer
-}
-
-.editCol {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.editColHeader {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-}
-
-.editColLabel {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    color: var(--t2);
-}
-
-.editColTag {
-    font-size: 10px;
-    font-weight: 500;
-    color: var(--t2);
-    opacity: 0.55;
-    font-style: italic;
-    text-transform: none;
-    letter-spacing: 0;
-}
-
-.editTextarea {
-    flex: 1;
-    resize: none;
-    background: var(--bg1);
-    border: 1px solid var(--bdr);
-    border-radius: var(--r);
-    color: var(--t1);
-    font-size: 13px;
-    font-family: var(--font-mono);
-    line-height: 1.6;
-    padding: 10px 12px;
-    outline: none;
-    min-height: 280px;
-    transition: border-color 0.15s, box-shadow 0.15s;
-
-    &:focus {
-        border-color: var(--blue-bdr);
-        box-shadow: 0 0 0 2px rgba(91, 164, 239, 0.12);
-    }
-}
-
-.editPreview {
-    flex: 1;
-    background: var(--bg1);
-    border: 1px solid var(--bdr);
-    border-radius: var(--r);
-    padding: 10px 12px;
-    overflow-y: auto;
-    min-height: 280px;
-}
-
-// ── Fixed footer inside edit layout ──────────────────────
-.editFooter {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 48px;
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 8px;
-    border-top: 1px solid var(--bdr);
-    background: var(--bg1);
-    padding: 0 4px;
-    border-radius: 0 0 var(--r) var(--r);
-}
-
-.cancelBtn {
-    padding: 6px 14px;
-    border-radius: var(--r);
-    border: 1px solid var(--bdr2);
-    background: transparent;
-    color: var(--t1);
-    font-size: 13px;
-    font-family: var(--font-ui);
-    cursor: pointer;
-    transition: all 0.12s;
-
-    &:hover:not(:disabled) {
-        background: var(--bg3);
-        border-color: var(--bdr3);
-    }
-
-    &:disabled {
-        opacity: 0.4;
-        cursor: default;
-    }
-}
-
-.saveBtn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 16px;
-    border-radius: var(--r);
-    border: none;
-    background: var(--blue);
-    color: #fff;
-    font-size: 13px;
-    font-weight: 600;
-    font-family: var(--font-ui);
-    cursor: pointer;
-    transition: opacity 0.12s;
-    box-shadow: 0 2px 6px rgba(91, 164, 239, 0.28);
-
-    &:hover:not(:disabled) {
-        opacity: 0.88;
-    }
-
-    &:disabled {
-        opacity: 0.55;
-        cursor: default;
-    }
-}
-
-// ── Inline spinner for save button ───────────────────────
-.inlineSpinner {
-    width: 11px;
-    height: 11px;
-    border: 1.5px solid rgba(255, 255, 255, 0.35);
-    border-top-color: #fff;
-    border-radius: 50%;
-    animation: wsSpin 0.65s linear infinite;
-    flex-shrink: 0;
-}
-
-// ── Tab toolbar — icon-only buttons ──────────────────────
-.tabToolbar {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    justify-content: flex-end;
-    margin-bottom: 6px;
-}
-
-.actionBtn {
-    width: 28px;
-    height: 28px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 7px;
-    border: 1px solid var(--bdr2);
-    background: transparent;
-    color: var(--t2);
-    cursor: pointer;
-    padding: 0;
-    transition: all 0.15s;
-    flex-shrink: 0;
-
-    svg {
-        width: 13px;
-        height: 13px;
-    }
-
-    &:hover {
-        background: var(--blue-dim);
-        border-color: var(--blue-bdr);
-        color: var(--blue);
-    }
-}
-
-.actionBtnActive {
-    background: var(--blue-dim);
-    border-color: var(--blue-bdr);
-    color: var(--blue);
-}
-
-.successIcon {
-    color: var(--green) !important;
-}
-
-// ── Dropdown ──────────────────────────────────────────────
-.dropdownWrap {
-    position: relative;
-}
-
-.dropdown {
-    position: absolute;
-    top: calc(100% + 5px);
-    right: 0;
-    min-width: 168px;
-    background: var(--bg1);
-    border: 1px solid var(--bdr);
-    border-radius: var(--r);
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
-    z-index: 50;
-    overflow: hidden;
-    animation: ddFade 0.12s ease;
-}
-
-@keyframes ddFade {
-    from {
-        opacity: 0;
-        transform: translateY(-4px);
-    }
-
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-.dropdownLabel {
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    color: var(--t2);
-    padding: 7px 11px 4px;
-    opacity: 0.6;
-}
-
-.dropdownItem {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    width: 100%;
-    text-align: left;
-    padding: 7px 11px;
-    font-size: 13px;
-    color: var(--t1);
-    background: transparent;
-    border: none;
-    cursor: pointer;
-    font-family: var(--font-ui);
-    transition: background 0.1s, color 0.1s;
-
-    &:hover {
-        background: var(--blue-dim);
-        color: var(--blue);
-    }
-}
-
-.dropdownItemLabel {
-    flex: 1;
-    min-width: 0;
-}
-
-// Per-format colored glyph in copy/download menus
-.fmtIcon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    border-radius: 6px;
-    flex-shrink: 0;
-    transition: transform 0.12s ease;
-
-    svg {
-        width: 13px;
-        height: 13px;
-    }
-}
-
-.dropdownItem:hover .fmtIcon {
-    transform: scale(1.06);
-}
-
-// ── Keyword pill — new chip animation ────────────────────
-.keywordPillNew {
-    animation: chipFadeIn 0.25s ease-out;
-}
-
-// ── Assessment header row (mode tabs + toolbar) ───────────
-.assessHeader {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 10px;
-    gap: 8px;
-}
-
-// ── Mode toggle tabs ──────────────────────────────────────
-.assessModeTabs {
-    display: flex;
-    align-items: center;
-    gap: 3px;
-    background: var(--bg2);
-    border: 1px solid var(--bdr);
-    border-radius: 8px;
-    padding: 3px;
-}
-
-.assessModeTab {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 4px 10px;
-    border-radius: 6px;
-    border: none;
-    background: transparent;
-    color: var(--t2);
-    font-size: 12px;
-    font-weight: 500;
-    font-family: var(--font-ui);
-    cursor: pointer;
-    transition: all 0.15s;
-
-    svg {
-        width: 12px;
-        height: 12px;
-        flex-shrink: 0;
-    }
-
-    &:hover {
-        color: var(--t1);
-    }
-}
-
-.assessModeTabActive {
-    background: var(--bg0);
-    color: var(--blue);
-    font-weight: 600;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
-
-    svg {
-        stroke: var(--blue);
-    }
-}
-
-// ── View All list ─────────────────────────────────────────
-.viewAllList {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    animation: fadein 0.15s ease;
-}
-
-.viewAllCard {
-    background: var(--bg1);
-    border: 1px solid var(--bdr);
-    border-radius: var(--r);
-    padding: 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-
-    &:hover {
-        border-color: var(--blue-bdr);
-        box-shadow: 0 2px 8px rgba(139, 92, 246, 0.07);
-    }
-}
-
-.viewAllQ {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--t0);
-    line-height: 1.5;
-    display: flex;
-    gap: 8px;
-    align-items: flex-start;
-}
-
-// Neutral option style for View All (non-correct options)
-.viewAllOptNeutral {
-    cursor: default !important;
-    opacity: 0.65;
-
-    &:hover {
-        transform: none !important;
-        border-color: var(--bdr) !important;
-        background: var(--bg0) !important;
-    }
-}
-
-// Correct key badge in View All mode
-.faqOptKeyCorrect {
-    background: var(--green) !important;
-    border-color: var(--green) !important;
-    color: #fff !important;
-}
-
-// ── Large screen overrides (> 1900px) ────────────────────
-@media (min-width: 1920px) {
-    .wspanel {
-        width: 400px;
-    }
-
-    .wsftitle {
-        font-size: 18px;
-    }
-
-    .wsftitleEmpty {
-        font-size: 20px;
-    }
-
-    .wsmetaId {
-        font-size: 11px;
-    }
-
-    .wsmetaDate {
-        font-size: 14px;
-    }
-
-    .wsmetaHint {
-        font-size: 14px;
-    }
-
-    .tab {
-        font-size: 15px;
-    }
-
-    .wsEmptyTitle {
-        font-size: 18px;
-    }
-
-    .wsEmptyDesc {
-        font-size: 15px;
-    }
-
-    .wsSpinner {
-        font-size: 15px;
-    }
-
-    .tabEmpty {
-        font-size: 15px;
-    }
-
-    .summaryMd {
-        font-size: 15px;
-
-        h1 {
-            font-size: 20px;
-        }
-
-        h2 {
-            font-size: 17px;
-        }
-
-        h3 {
-            font-size: 15px;
-        }
-
-        h4,
-        h5,
-        h6 {
-            font-size: 15px;
-        }
-    }
-
-    .keywordPill {
-        font-size: 14px;
-    }
-
-    .assessProgressLabel {
-        font-size: 14px;
-    }
-
-    .faqQ {
-        font-size: 15px;
-    }
-
-    .faqNum {
-        font-size: 14px;
-    }
-
-    .faqOpt {
-        font-size: 14px;
-    }
-
-    .faqOptKey {
-        font-size: 14px;
-    }
-
-    .faqExplainLabel {
-        font-size: 14px;
-    }
-
-    .faqExplainText {
-        font-size: 14px;
-    }
-
-    .assessNextBtn {
-        font-size: 14px;
-    }
-
-    .assessCompleteTitle {
-        font-size: 18px;
-    }
-
-    .assessCompleteDesc {
-        font-size: 15px;
-    }
-
-    .assessRestartBtn {
-        font-size: 15px;
-    }
-
-    .dropdownItem {
-        font-size: 14px;
-    }
-
-    .dropdownLabel {
-        font-size: 11px;
-    }
-
-    .assessModeTab {
-        font-size: 13px;
-    }
-
-    .viewAllQ {
-        font-size: 15px;
-    }
-
-    .editColLabel {
-        font-size: 12px;
-    }
-
-    .editColTag {
-        font-size: 11px;
-    }
-
-    .editTextarea {
-        font-size: 14px;
-    }
-
-    .cancelBtn {
-        font-size: 14px;
-    }
-
-    .saveBtn {
-        font-size: 14px;
-    }
-}
-// ═══════════════════════════════════════════════
-// New content types — Short Answer, True/False,
-// Timestamped Summary, Keyword Insights
-// ═══════════════════════════════════════════════
-
-// ── Short Answer ──────────────────────────────────
-.revealAllBtn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 12px;
-    border-radius: 6px;
-    border: 1px solid var(--bdr2);
-    background: var(--bg0);
-    color: var(--t1);
-    font-size: 12.5px;
-    font-weight: 600;
-    font-family: var(--font-ui);
-    cursor: pointer;
-    transition: all 0.13s;
-
-    svg { width: 14px; height: 14px; }
-
-    &:hover {
-        border-color: var(--blue-bdr);
-        color: var(--blue);
-        background: var(--blue-dim);
-    }
-}
-
-.revealBtn {
-    margin-top: 10px;
-    padding: 7px 14px;
-    border-radius: 6px;
-    border: 1px dashed var(--bdr2);
-    background: transparent;
-    color: var(--t2);
-    font-size: 12.5px;
-    font-weight: 600;
-    font-family: var(--font-ui);
-    cursor: pointer;
-    transition: all 0.13s;
-
-    &:hover {
-        border-color: var(--blue-bdr);
-        border-style: solid;
-        color: var(--blue);
-        background: var(--blue-dim);
-    }
-}
-
-.shortAnswerBox {
-    margin-top: 10px;
-    padding: 12px 14px;
-    background: rgba(79, 172, 254, 0.08);
-    border-left: 3px solid #4facfe;
-    border-radius: 0 8px 8px 0;
-}
-
-.shortAnswerLabel {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: #4facfe;
-    margin-bottom: 4px;
-    @include m.mono;
-}
-
-.shortAnswerText {
-    font-size: 13.5px;
-    color: var(--t0);
-    line-height: 1.55;
-    margin: 0;
-}
-
-// ── True / False ──────────────────────────────────
-.tfOptions {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-    margin-top: 12px;
-}
-
-.tfOpt {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    font-size: 14px;
-    font-weight: 700;
-    color: var(--t1);
-    padding: 16px 10px;
-    border-radius: 8px;
-    border: 2px solid var(--bdr);
-    background: var(--bg0);
-    cursor: pointer;
-    text-align: center;
-    font-family: var(--font-ui);
-    transition: border-color 0.15s, background 0.15s, transform 0.15s;
-
-    &:hover:not(:disabled) {
-        border-color: var(--blue-bdr);
-        background: var(--blue-dim);
-        transform: translateY(-1px);
-    }
-
-    &:disabled {
-        cursor: default;
-    }
-}
-
-.tfOptLabel {
-    letter-spacing: 0.02em;
-}
-
-// ── Timestamped Summary ───────────────────────────
-.tsList {
-    display: flex;
-    flex-direction: column;
-    margin-top: 4px;
-}
-
-.tsRow {
-    display: flex;
-    gap: 14px;
-}
-
-.tsRail {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    flex-shrink: 0;
-    padding-top: 6px;
-}
-
-.tsDot {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: var(--blue);
-    box-shadow: 0 0 0 3px var(--blue-dim);
-    flex-shrink: 0;
-}
-
-.tsLine {
-    width: 2px;
-    flex: 1;
-    background: var(--bdr2);
-    margin-top: 2px;
-}
-
-.tsCard {
-    flex: 1;
-    padding-bottom: 20px;
-}
-
-.tsRange {
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--blue);
-    margin-bottom: 4px;
-    @include m.mono;
-}
-
-.tsArrow {
-    color: var(--t2);
-    margin: 0 2px;
-}
-
-.tsText {
-    font-size: 13.5px;
-    color: var(--t1);
-    line-height: 1.6;
-    margin: 0;
-}
-
-// ── Keyword Insights: sub-nav (scrollable, one line) ──
-.kiSubNavWrap {
-    position: relative;
-    display: flex;
-    align-items: center;
-    margin-bottom: 16px;
-    padding-bottom: 12px;
-    border-bottom: 1px solid var(--bdr);
-
-    .tabScrollBtn {
-        background: var(--bg0);
-    }
-
-    .tabFadeLeft {
-        background: linear-gradient(90deg, var(--bg0), transparent);
-    }
-
-    .tabFadeRight {
-        background: linear-gradient(270deg, var(--bg0), transparent);
-    }
-}
-
-.kiSubNav {
-    display: flex;
-    gap: 4px;
-    flex: 1;
-    overflow-x: auto;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-
-    &::-webkit-scrollbar {
-        display: none;
-    }
-}
-
-.kiSubTab {
-    padding: 5px 11px;
-    border-radius: 99px;
-    border: 1px solid var(--bdr2);
-    background: var(--bg0);
-    color: var(--t2);
-    font-size: 12px;
-    font-weight: 600;
-    font-family: var(--font-ui);
-    cursor: pointer;
-    transition: all 0.13s;
-    white-space: nowrap;
-    flex-shrink: 0;
-
-    &:hover {
-        color: var(--t0);
-        border-color: var(--bdr3, var(--bdr2));
-    }
-}
-
-.kiSubTabActive {
-    background: var(--blue-dim);
-    border-color: var(--blue-bdr);
-    color: var(--blue);
-}
-
-.kiBody {
-    min-height: 200px;
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-}
-
-// ── Keyword Insights: node-link graph (React Flow mindmap) ──
-.graphWrap {
-    width: 100%;
-    flex: 1;
-    min-height: 460px;
-    border-radius: 10px;
-    overflow: hidden;
-    border: 1px solid var(--bdr);
-    background: var(--bg0);
-
-    :global(.react-flow__attribution) {
-        display: none;
-    }
-
-    :global(.react-flow__controls) {
-        background: var(--bg1);
-        border: 1px solid var(--bdr2);
-        border-radius: 8px;
-        overflow: hidden;
-        box-shadow: none;
-    }
-
-    :global(.react-flow__controls-button) {
-        background: var(--bg1);
-        border-bottom: 1px solid var(--bdr2);
-        color: var(--t1);
-
-        &:hover {
-            background: var(--bg3);
-        }
-
-        svg {
-            fill: var(--t1);
-        }
-    }
-
-    :global(.react-flow__minimap) {
-        border-radius: 8px;
-        border: 1px solid var(--bdr2);
-        overflow: hidden;
-    }
-
-    :global(.react-flow__edge-path) {
-        stroke: var(--bdr2);
-    }
-
-    :global(.react-flow__edge:hover) .react-flow__edge-path,
-    :global(.react-flow__edge.selected) .react-flow__edge-path {
-        stroke: var(--blue);
-    }
-
-    :global(.react-flow__edge-text) {
-        fill: var(--t2);
-    }
-}
-
-// Whole node box — same width/height dagre reserved via estimateNodeBox().
-// Laying the circle + label out in normal vertical flow here (rather than
-// absolutely positioning the label under a free-floating circle) keeps
-// what's rendered in sync with what dagre thinks the node's footprint is,
-// which is what actually prevents nodes/labels from drifting into overlap.
-.rfNodeBox {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: flex-start;
-}
-
-.rfNode {
-    border-radius: 50%;
-    background: var(--blue-dim);
-    border: 1.6px solid var(--blue);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: grab;
-    position: relative;
-    flex-shrink: 0;
-    transition: background 0.15s;
-
-    &:active {
-        cursor: grabbing;
-    }
-
-    &:hover {
-        background: var(--blue);
-
-        + .rfNodeLabel {
-            color: var(--t0);
-        }
-    }
-}
-
-.rfNodeLabel {
-    margin-top: 5px;
-    font-size: 11px;
-    font-weight: 500;
-    line-height: 14px;
-    color: var(--t1);
-    text-align: center;
-    // keep-all (not overflow-wrap:break-word) — CJK text has no spaces
-    // within a word, so break-word was breaking it between individual
-    // characters whenever the estimated box was a little too narrow,
-    // which renders as letters stacking vertically one per line.
-    word-break: keep-all;
-    overflow-wrap: normal;
-    font-family: var(--font-ui);
-    pointer-events: none;
-}
-
-.rfHandle {
-    width: 6px !important;
-    height: 6px !important;
-    min-width: 0 !important;
-    background: transparent !important;
-    border: none !important;
-    opacity: 0;
-}
-
-// ── Keyword Insights: matrix / heatmap grid ───────
-.matrixScroll {
-    overflow-x: auto;
-    @include m.scrollbar;
-}
-
-.matrixGrid {
-    display: grid;
-    gap: 2px;
-    width: max-content;
-    min-width: 100%;
-}
-
-.matrixCorner {
-    background: transparent;
-}
-
-.matrixColHead {
-    font-size: 10px;
-    color: var(--t2);
-    writing-mode: vertical-rl;
-    transform: rotate(180deg);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-height: 90px;
-    padding: 4px 2px;
-    text-align: left;
-    @include m.mono;
-}
-
-.matrixRowHead {
-    font-size: 11.5px;
-    color: var(--t1);
-    padding: 4px 8px 4px 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 140px;
-    display: flex;
-    align-items: center;
-}
-
-.matrixCell {
-    min-width: 28px;
-    aspect-ratio: 1;
-    border-radius: 3px;
-    border: 1px solid var(--bdr);
-}
-
-// ── Keyword Insights: word cloud ──────────────────
-.wordCloud {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: center;
-    gap: 12px 18px;
-    padding: 24px 12px;
-}
-
-// Server-rendered word cloud image, wrapped in the pan/zoom viewer below.
-.wordCloudImageWrap {
-    flex: 1;
-    display: flex;
-    min-height: 380px;
-}
-
-// Pan/zoom viewer — drag to pan (once zoomed in), scroll to zoom, double
-// click to reset. Same interaction model as the Knowledge Graph tab.
-.zoomPanWrap {
-    position: relative;
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    overflow: hidden;
-    border-radius: 10px;
-    border: 1px solid var(--bdr);
-    background: var(--bg0);
-    touch-action: none;
-    user-select: none;
-}
-
-.wordCloudImage {
-    max-width: 100%;
-    max-height: 100%;
-    border-radius: 8px;
-    pointer-events: none;
-}
-
-.zoomControls {
-    position: absolute;
-    right: 10px;
-    bottom: 10px;
-    display: flex;
-    flex-direction: column;
-    background: var(--bg1);
-    border: 1px solid var(--bdr2);
-    border-radius: 8px;
-    overflow: hidden;
-    z-index: 2;
-}
-
-.zoomControlBtn {
-    width: 28px;
-    height: 28px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: none;
-    border-bottom: 1px solid var(--bdr2);
-    background: var(--bg1);
-    color: var(--t1);
-    cursor: pointer;
-    transition: background 0.12s;
-
-    svg {
-        width: 14px;
-        height: 14px;
-    }
-
-    &:last-child {
-        border-bottom: none;
-    }
-
-    &:hover:not(:disabled) {
-        background: var(--bg3);
-    }
-
-    &:disabled {
-        opacity: 0.35;
-        cursor: not-allowed;
-    }
-}
-
-.wcWord {
-    font-weight: 700;
-    font-family: var(--font-ui);
-    line-height: 1;
-    cursor: default;
-    transition: transform 0.15s;
-
-    &:hover {
-        transform: scale(1.08);
-    }
-}
-
-// ── Keyword Insights: clusters ────────────────────
-.clusterGrid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 12px;
-}
-
-.clusterCard {
-    padding: 12px 14px;
-    background: var(--bg0);
-    border: 1px solid var(--bdr);
-    border-radius: 10px;
-}
-
-.clusterTitle {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--t2);
-    margin-bottom: 8px;
-    @include m.mono;
-}
-
-.clusterChips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-}
-
-.clusterChip {
-    padding: 3px 9px;
-    border-radius: 99px;
-    background: var(--blue-dim);
-    border: 1px solid var(--blue-bdr);
-    color: var(--blue);
-    font-size: 11.5px;
-    font-weight: 600;
-}
-
-// ── Keyword Insights: frequency bars ──────────────
-.freqList {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.freqRow {
-    display: grid;
-    grid-template-columns: 130px 1fr 130px;
-    align-items: center;
-    gap: 12px;
-}
-
-.freqLabel {
-    font-size: 12.5px;
-    color: var(--t1);
-    font-weight: 600;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.freqBarTrack {
-    height: 10px;
-    background: var(--bg0);
-    border: 1px solid var(--bdr);
-    border-radius: 99px;
-    overflow: hidden;
-}
-
-.freqBarFill {
-    height: 100%;
-    background: linear-gradient(90deg, var(--blue), #a78bfa);
-    border-radius: 99px;
-}
-
-.freqMeta {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    font-size: 11px;
-    color: var(--t1);
-    justify-content: flex-end;
-    @include m.mono;
-}
-
-.freqDim {
-    color: var(--t2);
-}
-
-// ── Keyword Insights: importance/complexity columns ──
-// Sorted rows in normal document flow, grouped by complexity — this can
-// never overlap the way freely-positioned dots + floating labels could.
-
-// Explains what "m/n" (importance score) and "f× freq" (occurrence count)
-// mean, shown once above the columns.
-.importanceHint {
-    display: flex;
-    align-items: flex-start;
-    gap: 7px;
-    font-size: 12px;
-    color: var(--t2);
-    line-height: 1.5;
-    background: var(--bg1);
-    border: 1px solid var(--bdr);
-    border-radius: var(--r);
-    padding: 8px 10px;
-    margin-bottom: 12px;
-
-    svg {
-        width: 14px;
-        height: 14px;
-        flex-shrink: 0;
-        margin-top: 1px;
-        color: var(--blue);
-    }
-}
-
-// Explains what the X-axis (time, in whatever unit the backend sends)
-// and Y-axis (keyword) represent, shown once above the timeline grid.
-.timelineAxisHint {
-    display: flex;
-    align-items: flex-start;
-    gap: 7px;
-    font-size: 12px;
-    color: var(--t2);
-    line-height: 1.5;
-    background: var(--bg1);
-    border: 1px solid var(--bdr);
-    border-radius: var(--r);
-    padding: 8px 10px;
-    margin-bottom: 12px;
-
-    svg {
-        width: 14px;
-        height: 14px;
-        flex-shrink: 0;
-        margin-top: 1px;
-        color: var(--blue);
-    }
-}
-
-.importanceColumns {
-    display: flex;
-    gap: 20px;
-    flex-wrap: wrap;
-    align-items: flex-start;
-}
-
-.importanceColumn {
-    flex: 1;
-    min-width: 200px;
-}
-
-.importanceColumnHead {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    font-size: 12px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    padding-bottom: 8px;
-    margin-bottom: 10px;
-    border-bottom: 2px solid;
-    @include m.mono;
-}
-
-.importanceColumnCount {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--t2);
-    background: var(--bg0);
-    border: 1px solid var(--bdr2);
-    border-radius: 99px;
-    padding: 1px 7px;
-}
-
-.importanceRows {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.importanceRow {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-    row-gap: 4px;
-}
-
-.importanceDot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
-}
-
-.importanceKeyword {
-    font-size: 12.5px;
-    color: var(--t0);
-    font-weight: 600;
-    width: 84px;
-    flex-shrink: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.importanceBarTrack {
-    flex: 1 1 60px;
-    height: 7px;
-    background: var(--bg0);
-    border: 1px solid var(--bdr);
-    border-radius: 99px;
-    overflow: hidden;
-    min-width: 0;
-}
-
-.importanceBarFill {
-    height: 100%;
-    border-radius: 99px;
-}
-
-// Value + frequency grouped together so they size to their own content
-// and never fight the bar track for space — the bar shrinks first, this
-// block never wraps or overlaps its neighbors.
-.importanceMeta {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-shrink: 0;
-    white-space: nowrap;
-    margin-left: auto;
-}
-
-.importanceValue {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--t2);
-    flex-shrink: 0;
-    white-space: nowrap;
-    @include m.mono;
-}
-
-.importanceFrequency {
-    font-size: 11px;
-    color: var(--t2);
-    flex-shrink: 0;
-    white-space: nowrap;
-    @include m.mono;
-}
-
-// ── Keyword Insights: glossary ────────────────────
-.glossaryList {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
-
-.glossaryRow {
-    padding: 10px 14px;
-    background: var(--bg0);
-    border: 1px solid var(--bdr);
-    border-radius: 8px;
-}
-
-.glossaryTerm {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13.5px;
-    font-weight: 700;
-    color: var(--t0);
-    margin-bottom: 4px;
-}
-
-.glossaryTime {
-    font-size: 10.5px;
-    font-weight: 600;
-    color: var(--t2);
-    background: var(--bg1);
-    border: 1px solid var(--bdr2);
-    border-radius: 99px;
-    padding: 1px 7px;
-    @include m.mono;
-}
-
-.glossaryDef {
-    font-size: 13px;
-    color: var(--t1);
-    line-height: 1.55;
-}
-
-// ═══════════════════════════════════════════════
-// Compare Inference — trigger button, slide-in drawer,
-// custom version dropdown, side-by-side comparison
-// ═══════════════════════════════════════════════
-
-.compareTriggerBtn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    flex-shrink: 0;
-    height: 30px;
-    padding: 0 12px;
-    border-radius: var(--r);
-    border: 1px solid var(--violet, #8b5cf6);
-    background: rgba(139, 92, 246, 0.1);
-    color: #a78bfa;
-    font-size: 12px;
-    font-weight: 600;
-    font-family: var(--font-ui);
-    cursor: pointer;
-    white-space: nowrap;
-    transition: all 0.13s;
-
-    svg {
-        width: 13px;
-        height: 13px;
-        flex-shrink: 0;
-    }
-
-    &:hover {
-        background: #8b5cf6;
-        color: #fff;
-        box-shadow: 0 2px 8px rgba(139, 92, 246, 0.3);
-    }
-}
-
-// ── Overlay + backdrop ────────────────────────────
-.compareOverlay {
-    position: fixed;
-    inset: 0;
-    z-index: 900;
-    pointer-events: none;
-}
-
-.compareOverlayOpen {
-    pointer-events: auto;
-}
-
-.compareBackdrop {
-    position: absolute;
-    inset: 0;
-    background: rgba(5, 8, 20, 0.55);
-    backdrop-filter: blur(2px);
-    opacity: 0;
-    transition: opacity 0.25s ease;
-
-    .compareOverlayOpen & {
-        opacity: 1;
-    }
-}
-
-// ── Slide-in drawer ────────────────────────────────
-.compareDrawer {
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: min(94vw, 1440px);
-    background: var(--bg0);
-    border-left: 1px solid var(--bdr2);
-    box-shadow: -12px 0 40px rgba(0, 0, 0, 0.3);
-    display: flex;
-    flex-direction: column;
-    transform: translateX(100%);
-    transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.compareDrawerOpen {
-    transform: translateX(0);
-}
-
-// ── Header ──────────────────────────────────────────
-.compareHead {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 16px 20px;
-    background: var(--bg1);
-    border-bottom: 1px solid var(--bdr);
-    flex-shrink: 0;
-    position: relative;
-
-    &::after {
-        content: '';
-        position: absolute;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        height: 1px;
-        background: linear-gradient(90deg,
-                rgba(139, 92, 246, 0.0) 0%,
-                rgba(139, 92, 246, 0.6) 20%,
-                rgba(56, 196, 186, 0.7) 50%,
-                rgba(240, 160, 48, 0.6) 80%,
-                rgba(240, 160, 48, 0.0) 100%);
-        pointer-events: none;
-    }
-}
-
-.compareHeadIcon {
-    width: 38px;
-    height: 38px;
-    border-radius: 10px;
-    background: rgba(139, 92, 246, 0.12);
-    border: 1px solid rgba(139, 92, 246, 0.3);
-    color: #a78bfa;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-
-    svg {
-        width: 19px;
-        height: 19px;
-    }
-}
-
-.compareHeadText {
-    flex: 1;
-    min-width: 0;
-}
-
-.compareHeadTitle {
-    font-size: 16px;
-    font-weight: 700;
-    color: var(--t0);
-    letter-spacing: -0.2px;
-}
-
-.compareHeadSub {
-    font-size: 12.5px;
-    color: var(--t2);
-    margin-top: 2px;
-    @include m.truncate;
-}
-
-.compareCloseBtn {
-    width: 32px;
-    height: 32px;
-    border-radius: var(--r);
-    border: 1px solid var(--bdr2);
-    background: var(--bg2);
-    color: var(--t1);
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    transition: all 0.12s;
-
-    svg {
-        width: 14px;
-        height: 14px;
-    }
-
-    &:hover {
-        background: var(--bg3);
-        color: var(--t0);
-        border-color: var(--bdr3);
-    }
-}
-
-// ── Version selector row ───────────────────────────
-.compareSelectorRow {
-    display: flex;
-    align-items: flex-end;
-    gap: 16px;
-    padding: 16px 20px;
-    background: var(--bg1);
-    border-bottom: 1px solid var(--bdr);
-    flex-shrink: 0;
-}
-
-.compareSelectorLoading,
-.compareSelectorError {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    color: var(--t2);
-    @include m.mono;
-}
-
-.compareSelectorError {
-    color: var(--amber);
-}
-
-.compareArrow {
-    width: 20px;
-    height: 12px;
-    color: var(--t2);
-    flex-shrink: 0;
-    margin-bottom: 9px;
-}
-
-// ── Custom version dropdown ────────────────────────
-.verDropdownWrap {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    min-width: 240px;
-}
-
-.verDropdownLabel {
-    font-size: 10.5px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    color: var(--t2);
-}
-
-.verDropdownFrom .verDropdownLabel {
-    color: #4facfe;
-}
-
-.verDropdownTo .verDropdownLabel {
-    color: #a78bfa;
-}
-
-.verDropdownBtn {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    height: 42px;
-    padding: 0 12px;
-    border-radius: var(--rl);
-    border: 1.5px solid var(--bdr2);
-    background: var(--bg2);
-    cursor: pointer;
-    transition: all 0.14s;
-    width: 100%;
-
-    &:hover:not(:disabled) {
-        border-color: var(--bdr3);
-        background: var(--bg3);
-    }
-
-    &:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-    }
-}
-
-.verDropdownBtnOpen {
-    border-color: #8b5cf6;
-    box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15);
-}
-
-.verDropdownFrom .verDropdownBtnOpen {
-    border-color: #4facfe;
-    box-shadow: 0 0 0 3px rgba(79, 172, 254, 0.15);
-}
-
-.verDropdownSelected {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex: 1;
-    min-width: 0;
-}
-
-.verDropdownPlaceholder {
-    flex: 1;
-    font-size: 13px;
-    color: var(--t2);
-    text-align: left;
-}
-
-.verDropdownBadge {
-    flex-shrink: 0;
-    font-size: 11px;
-    font-weight: 700;
-    font-family: var(--font-mono);
-    color: #8b5cf6;
-    background: rgba(139, 92, 246, 0.12);
-    border: 1px solid rgba(139, 92, 246, 0.3);
-    border-radius: 5px;
-    padding: 2px 6px;
-}
-
-.verDropdownName {
-    flex: 1;
-    min-width: 0;
-    font-size: 13.5px;
-    font-weight: 600;
-    color: var(--t0);
-    text-align: left;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.verDropdownChevron {
-    flex-shrink: 0;
-    width: 12px;
-    height: 12px;
-    color: var(--t2);
-    transition: transform 0.15s;
-
-    .verDropdownBtnOpen & {
-        transform: rotate(180deg);
-    }
-}
-
-.verDropdownPanel {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    right: 0;
-    z-index: 20;
-    max-height: 320px;
-    overflow-y: auto;
-    background: var(--bg1);
-    border: 1px solid var(--bdr2);
-    border-radius: var(--rl);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
-    padding: 6px;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    animation: ddFade 0.12s ease;
-    @include m.scrollbar;
-}
-
-.verDropdownItem {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    padding: 9px 10px;
-    border-radius: 8px;
-    border: none;
-    background: transparent;
-    cursor: pointer;
-    text-align: left;
-    font-family: var(--font-ui);
-    transition: background 0.1s;
-
-    &:hover {
-        background: var(--bg2);
-    }
-}
-
-.verDropdownItemActive {
-    background: rgba(139, 92, 246, 0.1);
-
-    .verDropdownName {
-        color: #a78bfa;
-    }
-}
-
-.verDropdownCheck {
-    width: 14px;
-    height: 14px;
-    flex-shrink: 0;
-    color: #8b5cf6;
-    margin-left: auto;
-}
-
-// ── Comparison body: two scrollable columns side by side ──
-.compareBody {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    overflow: hidden;
-}
-
-.compareDivider {
-    width: 1px;
-    flex-shrink: 0;
-    background: linear-gradient(180deg,
-            rgba(139, 92, 246, 0.0) 0%,
-            rgba(139, 92, 246, 0.5) 15%,
-            rgba(56, 196, 186, 0.55) 50%,
-            rgba(240, 160, 48, 0.5) 85%,
-            rgba(240, 160, 48, 0.0) 100%);
-}
-
-.compareSide {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    position: relative;
-
-    &::before {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        height: 2px;
-    }
-}
-
-.compareSideFrom::before {
-    background: linear-gradient(90deg, #4facfe, transparent);
-}
-
-.compareSideTo::before {
-    background: linear-gradient(90deg, #a78bfa, transparent);
-}
-
-.compareSideBody {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 20px 22px 40px;
-    @include m.scrollbar;
-}
-
-.compareSideState {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 60px 20px;
-    color: var(--t2);
-    font-size: 13px;
-    @include m.mono;
-}
-
-.compareSideError {
-    color: var(--red);
-}
-
-.compareSideHead {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 14px 22px;
-    border-bottom: 1px solid var(--bdr);
-    background: var(--bg1);
-    flex-wrap: wrap;
-    flex-shrink: 0;
-}
-
-.compareSideFrom .compareSideHead {
-    background: rgba(79, 172, 254, 0.05);
-}
-
-.compareSideFrom .verDropdownBadge {
-    color: #4facfe;
-    background: rgba(79, 172, 254, 0.12);
-    border-color: rgba(79, 172, 254, 0.3);
-}
-
-.compareSideTo .compareSideHead {
-    background: rgba(139, 92, 246, 0.05);
-}
-
-.compareSideTitleRow {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-    flex: 1;
-}
-
-.compareSideNamePlaceholder {
-    font-size: 14px;
-    color: var(--t2);
-    opacity: 0.5;
-}
-
-.compareSideName {
-    font-size: 15px;
-    font-weight: 700;
-    color: var(--t0);
-}
-
-// ── Inline version rename ──────────────────────────
-.compareRenameBtn {
-    width: 22px;
-    height: 22px;
-    border-radius: 6px;
-    border: 1px solid transparent;
-    background: transparent;
-    color: var(--t2);
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    opacity: 0;
-    transition: all 0.12s;
-
-    svg {
-        width: 12px;
-        height: 12px;
-    }
-
-    .compareSideTitleRow:hover & {
-        opacity: 1;
-    }
-
-    &:hover {
-        background: var(--bg3);
-        border-color: var(--bdr2);
-        color: var(--t0);
-    }
-}
-
-.compareRenameWrap {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    flex: 1;
-    min-width: 0;
-}
-
-.compareRenameInput {
-    flex: 1;
-    min-width: 0;
-    height: 28px;
-    padding: 0 9px;
-    border-radius: 7px;
-    border: 1.5px solid #8b5cf6;
-    background: var(--bg2);
-    color: var(--t0);
-    font-size: 14px;
-    font-weight: 600;
-    font-family: var(--font-ui);
-    outline: none;
-    box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15);
-
-    &:disabled {
-        opacity: 0.6;
-    }
-}
-
-.compareRenameSave,
-.compareRenameCancel {
-    width: 26px;
-    height: 26px;
-    border-radius: 7px;
-    border: none;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    transition: opacity 0.12s;
-
-    svg {
-        width: 12px;
-        height: 12px;
-    }
-
-    &:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-    }
-}
-
-.compareRenameSave {
-    background: var(--green, #22c55e);
-    color: #fff;
-
-    &:hover:not(:disabled) {
-        opacity: 0.88;
-    }
-}
-
-.compareRenameCancel {
-    background: var(--bg3);
-    border: 1px solid var(--bdr2);
-    color: var(--t1);
-
-    &:hover:not(:disabled) {
-        background: var(--red-dim, rgba(239, 68, 68, 0.12));
-        color: var(--red, #ef4444);
-        border-color: var(--red-bdr, rgba(239, 68, 68, 0.35));
-    }
-}
-
-.compareRenameError {
-    font-size: 11px;
-    color: var(--red, #ef4444);
-    margin-top: 4px;
-    @include m.mono;
-}
-
-.compareSideMeta {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-
-.compareSideMetaItem {
-    font-size: 10.5px;
-    color: var(--t2);
-    background: var(--bg2);
-    border: 1px solid var(--bdr2);
-    border-radius: 99px;
-    padding: 2px 9px;
-    @include m.mono;
-}
-
-// ── Section tabs — pick one content type to compare at a time,
-// so each side gets full room instead of tiny stacked snippets. ──
-.compareSectionTabs {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 10px 20px;
-    background: var(--bg1);
-    border-bottom: 1px solid var(--bdr);
-    flex-shrink: 0;
-    overflow-x: auto;
-    scrollbar-width: none;
-
-    &::-webkit-scrollbar {
-        display: none;
-    }
-}
-
-.compareSectionTab {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    height: 32px;
-    padding: 0 13px;
-    border-radius: 99px;
-    border: 1px solid var(--bdr2);
-    background: var(--bg2);
-    color: var(--t2);
-    font-size: 12.5px;
-    font-weight: 600;
-    font-family: var(--font-ui);
-    cursor: pointer;
-    white-space: nowrap;
-    flex-shrink: 0;
-    transition: all 0.13s;
-
-    svg {
-        width: 13px;
-        height: 13px;
-        flex-shrink: 0;
-    }
-
-    &:hover {
-        color: var(--t0);
-        border-color: var(--bdr3);
-    }
-}
-
-.compareSectionTabActive {
-    background: linear-gradient(135deg, #8b5cf6, #a78bfa);
-    border-color: transparent;
-    color: #fff;
-    box-shadow: 0 2px 8px rgba(139, 92, 246, 0.35);
-
-    &:hover {
-        color: #fff;
-    }
-}
-
-.compareEmpty {
-    font-size: 12.5px;
-    color: var(--t2);
-    @include m.mono;
-    opacity: 0.7;
-    padding: 6px 0;
-}
-
-.compareStack {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-@media (max-width: 1100px) {
-    .compareDrawer {
-        width: 100vw;
-    }
-
-    .compareBody {
-        flex-direction: column;
-        overflow-y: auto;
-    }
-
-    .compareDivider {
-        width: auto;
-        height: 1px;
-        background: linear-gradient(90deg,
-                rgba(139, 92, 246, 0.0) 0%,
-                rgba(139, 92, 246, 0.5) 15%,
-                rgba(56, 196, 186, 0.55) 50%,
-                rgba(240, 160, 48, 0.5) 85%,
-                rgba(240, 160, 48, 0.0) 100%);
-    }
-
-    .compareSide {
-        overflow-y: visible;
-    }
-}
-
-
-// ── Compare Inference: per-side action buttons (Create Template /
-// Update Prompts) ──
-.compareSideActions {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
-    margin-top: 10px;
-    width: 100%;
-}
-
-.compareSideActionBtn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    height: 27px;
-    padding: 0 10px;
-    border-radius: 99px;
-    border: 1px solid var(--bdr2);
-    background: var(--bg2);
-    color: var(--t1);
-    font-size: 11.5px;
-    font-weight: 600;
-    font-family: var(--font-ui);
-    cursor: pointer;
-    white-space: nowrap;
-    transition: all 0.13s;
-
-    svg {
-        width: 12px;
-        height: 12px;
-        flex-shrink: 0;
-    }
-
-    &:hover {
-        background: var(--bg3);
-        border-color: var(--bdr3);
-        color: var(--t0);
-    }
-}
-
-// ── Prompt modals (Create Template / Update Prompts) — centered card
-// over a backdrop, distinct from the full-viewport Compare drawer since
-// these are simple forms, not another comparison surface. ──
-.promptModalOverlay {
-    position: fixed;
-    inset: 0;
-    z-index: 950;
-    background: rgba(5, 8, 20, 0.55);
-    backdrop-filter: blur(2px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-    animation: fadein 0.15s ease;
-}
-
-.promptModalCard {
-    width: 100%;
-    max-width: 520px;
-    max-height: 86vh;
-    background: var(--bg0);
-    border: 1px solid var(--bdr2);
-    border-radius: var(--rxl, 16px);
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    animation: modalPop 0.16s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@keyframes modalPop {
-    from {
-        opacity: 0;
-        transform: scale(0.96) translateY(6px);
-    }
-
-    to {
-        opacity: 1;
-        transform: scale(1) translateY(0);
-    }
-}
-
-.promptModalHead {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 18px 20px 14px;
-    border-bottom: 1px solid var(--bdr);
-    background: var(--bg1);
-    flex-shrink: 0;
-}
-
-.promptModalTitle {
-    font-size: 15px;
-    font-weight: 700;
-    color: var(--t0);
-}
-
-.promptModalSub {
-    font-size: 12px;
-    color: var(--t2);
-    margin-top: 3px;
-    @include m.mono;
-}
-
-.promptModalBody {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 18px 20px;
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    @include m.scrollbar;
-}
-
-.promptModalHint {
-    font-size: 12.5px;
-    color: var(--t2);
-    line-height: 1.5;
-    background: var(--bg1);
-    border: 1px solid var(--bdr);
-    border-radius: var(--r);
-    padding: 10px 12px;
-}
-
-.promptModalField {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.promptModalLabel {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--t2);
-}
-
-.promptModalInput,
-.promptModalTextarea {
-    width: 100%;
-    padding: 9px 12px;
-    border-radius: var(--r);
-    border: 1.5px solid var(--bdr2);
-    background: var(--bg2);
-    color: var(--t0);
-    font-size: 13.5px;
-    font-family: var(--font-ui);
-    outline: none;
-    transition: all 0.13s;
-
-    &:focus {
-        border-color: #8b5cf6;
-        box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15);
-    }
-
-    &::placeholder {
-        color: var(--t2);
-    }
-}
-
-.promptModalTextarea {
-    resize: vertical;
-    min-height: 56px;
-    line-height: 1.5;
-}
-
-.promptModalPreviewLabel {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--t2);
-    margin-top: 4px;
-}
-
-.promptModalPreviewList {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.promptModalPreviewItem {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    padding: 9px 11px;
-    background: var(--bg1);
-    border: 1px solid var(--bdr);
-    border-radius: var(--r);
-}
-
-.promptModalPreviewName {
-    font-size: 11px;
-    font-weight: 700;
-    color: #a78bfa;
-}
-
-.promptModalPreviewText {
-    font-size: 12px;
-    color: var(--t1);
-    line-height: 1.5;
-    white-space: pre-wrap;
-    word-break: break-word;
-}
-
-// ── Update Prompts: checklist ──────────────────────
-.promptModalCheckList {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.promptModalCheckItem {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    padding: 10px 12px;
-    border-radius: var(--rl);
-    border: 1.5px solid var(--bdr2);
-    background: var(--bg1);
-    cursor: pointer;
-    transition: all 0.13s;
-
-    input {
-        position: absolute;
-        opacity: 0;
-        pointer-events: none;
-    }
-
-    &:hover {
-        border-color: var(--bdr3);
-        background: var(--bg2);
-    }
-}
-
-.promptModalCheckItemActive {
-    border-color: #8b5cf6;
-    background: rgba(139, 92, 246, 0.06);
-}
-
-.promptModalCheckBox {
-    width: 18px;
-    height: 18px;
-    border-radius: 5px;
-    border: 1.5px solid var(--bdr2);
-    background: var(--bg2);
-    flex-shrink: 0;
-    margin-top: 1px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: transparent;
-    transition: all 0.13s;
-
-    svg {
-        width: 11px;
-        height: 11px;
-    }
-
-    .promptModalCheckItemActive & {
-        background: #8b5cf6;
-        border-color: #8b5cf6;
-        color: #fff;
-    }
-}
-
-.promptModalCheckText {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-    flex: 1;
-}
-
-.promptModalCheckName {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--t0);
-}
-
-.promptModalCheckPreview {
-    font-size: 11.5px;
-    color: var(--t2);
-    line-height: 1.45;
-    white-space: pre-wrap;
-    word-break: break-word;
-}
-
-.promptModalFooter {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 8px;
-    padding: 14px 20px;
-    border-top: 1px solid var(--bdr);
-    background: var(--bg1);
-    flex-shrink: 0;
-}
-
-.promptModalDone {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 10px;
-    padding: 40px 20px;
-    text-align: center;
-
-    svg {
-        width: 44px;
-        height: 44px;
-        color: var(--green, #22c55e);
-    }
+import { Component, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  ChevronLeft,
+  ChevronRight,
+  Check,
+  Cpu,
+  Bot,
+  Database,
+  Play,
+  Clock3,
+  Tag,
+  LayoutGrid,
+  Plug,
+  Target,
+  ClipboardCheck,
+  Gavel,
+  Layers,
+  Loader2,
+  Waypoints,
+  Lightbulb,
+  Plus,
+  Upload,
+  FileText,
+  HeartPulse,
+  ShieldCheck,
+  ShieldAlert,
+  RefreshCw,
+  Search,
+  Eye,
+  X,
+  AlertTriangle,
+  Info,
+  type LucideIcon,
+} from 'lucide-react';
+import { useAppDispatch, useAppSelector } from '../../hooks/redux';
+import { fetchProviders } from '../../store/slices/providersSlice';
+import { fetchModels, checkModelHealth } from '../../store/slices/modelsSlice';
+import { fetchDatasets, uploadDataset, resetUploadStatus } from '../../store/slices/datasetsSlice';
+import { SUPPORTED_UPLOAD_EXTENSIONS } from '../../api/endpoints/datasets';
+// `evaluationsApi.previewDataset` — GET /datasets/{id}/preview?limit={limit} —
+// is a thin, one-off read used only by the Test Suite preview slider below.
+// It lives in the evaluations API module (not datasets) and is called
+// directly rather than round-tripped through Redux.
+import { evaluationsApi } from '../../api/endpoints/evaluations';
+import { fetchMetrics } from '../../store/slices/metricsSlice';
+import {
+  launchEvaluation,
+  runAgentBenchmark,
+  runAgentBenchmarkMulti,
+  setDraft,
+  setDraftType,
+} from '../../store/slices/evaluationsSlice';
+import type { CreateEvaluationRequest, EvaluationDraft, DatasetPreviewResponse, CustomMetric } from '../../types';
+import styles from './NewEvaluation.module.scss';
+
+// ─────────────────────────────────────────────────────────────────────────
+// This component is built against the REAL evaluationsSlice draft shape:
+//   { name, type, providers, models, dataset, subgroup, runSamplesMode,
+//     runSamples, metrics, judgeModelId, agentFramework }
+// `type` is lowercase: 'model' | 'agent' | 'rag' | null.
+// setDraftType(type) — clears metrics, and clears agentFramework unless
+// type === 'agent' (handled in the slice itself).
+// runSamplesMode is 'custom' (default) or 'full' — see runSamplesControl
+// below and the `launch` function for how 'full' maps to run_samples: 0.
+//
+// Other slice assumptions this component depends on:
+//
+// providersSlice / modelsSlice / datasetsSlice / metricsSlice — lazy fetch:
+//   - fetchProviders() is dispatched once, the first time Step 2 is opened.
+//   - fetchModels() is dispatched once, the first time Step 3 is opened.
+//   - fetchDatasets(type) is dispatched the first time Step 4 is opened for
+//     a given dataset type/framework combination.
+//   - fetchMetrics(evalType) — GET /metrics?eval_type={type} — is
+//     dispatched the first time Step 5 is opened for a given draft.type.
+//     Response: { eval_type, metrics: string[], all_metrics: string[] }.
+//     Only `all_metrics` is consumed (see metricsCatalog below).
+//   - None of the above fire on mount or the instant their prerequisite
+//     (e.g. draft.type) is set — only on actually navigating to the step.
+//     Each step's "refresh" button bypasses this and calls the thunk
+//     directly, any time it's clicked.
+//
+// modelsSlice — health checks:
+//   - checkModelHealth(modelId: string) — GET /models/health/{model_id}
+//     Response: { success, message, model_id, response }
+//   - state.models.healthById: Record<string, 'idle'|'loading'|'success'|'failed'>
+//   - Fired automatically, in parallel, for every model in the current
+//     provider selection as soon as Step 3's model list is available (see
+//     the auto health-check effect below) — a model can't be selected
+//     until its check resolves to 'success'. The manual "Check health"
+//     button on each card still works too, e.g. to retry a failure.
+//
+// datasetsSlice:
+//   - fetchDatasets(type: string) — GET /datasets?eval_type={type}
+//     `type` is one of: 'model' | 'rag' | 'agent_benchmark' | 'agent_custom'
+//     (the last two both represent draft.type === 'agent', distinguished by
+//     whether draft.agentFramework is set).
+//   - Dataset items carry `dataset_type` (used to detect "custom" datasets)
+//     and `dataset_categories: string[]` (used for the subgroup rail).
+//
+// Search (client-side only, no new endpoints):
+//   - Providers/Models/Test Suite/Metrics steps each get a small toolbar
+//     with a search box that filters the already-fetched list by name, and
+//     a refresh button that re-dispatches that step's existing fetch thunk.
+// ─────────────────────────────────────────────────────────────────────────
+
+const STEPS = [
+  { label: 'Name' },
+  { label: 'Type' },
+  { label: 'Providers' },
+  { label: 'Models' },
+  { label: 'Test Suite' },
+  { label: 'Metrics' },
+  { label: 'Review' },
+];
+
+const STAGE = [
+  { title: 'Name your run', sub: 'A recognizable name makes this run easy to find later in your history.' },
+  { title: 'What are you evaluating?', sub: 'The system under test shapes which datasets and metrics you can pick.' },
+  { title: 'Select providers', sub: 'Choose which connected providers to draw candidate models from.' },
+  { title: 'Choose models', sub: 'Check a model\u2019s health before selecting it — only models that pass the check can be added to the run.' },
+  { title: 'Pick a test suite', sub: 'Select a dataset to evaluate against, or upload your own.' },
+  { title: 'Configure metrics', sub: 'Choose what to measure, and optionally a model to judge open-ended answers.' },
+  { title: 'Review & launch', sub: 'Confirm the run manifest, then launch.' },
+];
+
+const STEP_ICONS: LucideIcon[] = [Tag, LayoutGrid, Plug, Cpu, Database, Target, ClipboardCheck];
+
+// `value` matches draft.type exactly (lowercase); `label` is for display.
+const TYPE_OPTIONS: {
+  value: EvaluationDraft['type'];
+  label: string;
+  icon: LucideIcon;
+  sub: string;
+  variant: string;
+  disabled: boolean;
+}[] = [
+  {
+    value: 'model',
+    label: 'Model',
+    icon: Cpu,
+    sub: 'Benchmark a general-purpose LLM on standard tasks like reasoning, coding, and knowledge — ideal for comparing raw model quality across providers.',
+    variant: '',
+    disabled: false,
+  },
+  {
+    value: 'agent',
+    label: 'Agent',
+    icon: Bot,
+    sub: 'Test an autonomous agent that plans, calls tools, and completes multi-step tasks — measures task completion, not just single-turn output.',
+    variant: 'agent',
+    disabled: false,
+  },
+  {
+    value: 'rag',
+    label: 'RAG',
+    icon: Database,
+    sub: 'Evaluate a retrieval-augmented pipeline for grounding accuracy — checks how well answers stay faithful to your retrieved context.',
+    variant: 'rag',
+    disabled: false,
+  },
+];
+
+// Only Hermes remains as a selectable framework once "Agent" is chosen.
+const AGENT_FRAMEWORKS = [
+  { id: 'hermes', title: 'Hermes', desc: 'Lightweight tool-calling agent runtime' },
+];
+
+const SUGGESTED_NAMES = [
+  'Q3 Model Selection',
+  'Support Bot Regression',
+  'RAG Accuracy v2',
+  'GLM-4.6 vs Claude',
+];
+
+const NAMING_TIPS = [
+  "Include what you're testing — a model, a product feature, or a use case.",
+  'Add a date or version so you can track changes over time (e.g. "Q3", "v2").',
+  'Keep it specific enough to tell apart from similar past runs later.',
+];
+
+function formatContextWindow(tokens: number | null | undefined): string {
+  if (tokens === null || tokens === undefined || Number.isNaN(tokens)) return '—';
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toLocaleString()}M`;
+  if (tokens >= 1_000) return `${Math.round(tokens / 1000)}k`;
+  return `${tokens}`;
+}
+
+function formatPrice(price: number | null | undefined): string {
+  return price === null || price === undefined || Number.isNaN(price) ? '—' : `$${price.toFixed(2)}`;
+}
+
+function providerInitials(name: string | null | undefined): string {
+  const safeName = name?.trim() || '';
+  if (!safeName) return '??';
+  const parts = safeName.replace(/[^a-zA-Z0-9 ]/g, '').split(' ').filter(Boolean);
+  const letters = parts.slice(0, 2).map((w) => w[0]).join('');
+  return (letters || safeName.slice(0, 2)).toUpperCase();
+}
+
+type HealthStatus = 'idle' | 'loading' | 'success' | 'failed';
+
+// Pulls a displayable message out of a rejected createAsyncThunk action,
+// regardless of whether that slice uses rejectWithValue (payload is a
+// string, or an object with a `message`) or lets RTK's default serializer
+// handle it (action.error.message).
+function getThunkErrorMessage(action: any, fallback: string): string {
+  const payload = action?.payload;
+  if (typeof payload === 'string' && payload) return payload;
+  if (payload && typeof payload === 'object' && typeof payload.message === 'string' && payload.message) {
+    return payload.message;
+  }
+  return action?.error?.message || fallback;
+}
+
+// Preview slider (Change-2): user picks how many sample questions to pull,
+// clamped server-side-friendly at 1–20 inclusive.
+// Preview slider (Change-2, later moved to offset-based pagination): fixed
+// page size of 20 questions per page, starting at offset 0. Total page
+// count is derived from the selected dataset's own `question_count`
+// (surfaced in the /datasets list) rather than from the preview response.
+const PREVIEW_PAGE_SIZE = 20;
+
+type DatasetTypeFilter = 'all' | 'custom' | 'deepeval';
+
+const DATASET_TYPE_FILTERS: { value: DatasetTypeFilter; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'custom', label: 'Custom' },
+  { value: 'deepeval', label: 'Deepeval' },
+];
+
+// Skeleton placeholder counts — just enough to plausibly fill the grid
+// while a refresh is in flight, not meant to match the real result count.
+const SKELETON_CARD_COUNT = 6;
+const SKELETON_CHIP_COUNT = 8;
+
+// ---------------------------------------------------------------------------
+// StepErrorBoundary — catches render-time exceptions thrown while rendering
+// a single wizard step (e.g. an unexpected null/undefined field from the
+// API) and shows a small recoverable card in place of just that step's
+// content, instead of the whole page going blank. Must be a class component
+// — React only supports error boundaries via getDerivedStateFromError /
+// componentDidCatch, there's no hook equivalent.
+//
+// Rendered with `key={step}-${retryKey}` by the caller, so navigating to a
+// different step (or clicking "Try again", which bumps retryKey) always
+// remounts a fresh instance with hasError reset — no manual reset wiring
+// needed here.
+// ---------------------------------------------------------------------------
+interface StepErrorBoundaryProps {
+  children: ReactNode;
+  onRetry: () => void;
+  onBack: () => void;
+  canGoBack: boolean;
+}
+interface StepErrorBoundaryState {
+  hasError: boolean;
+}
+class StepErrorBoundary extends Component<StepErrorBoundaryProps, StepErrorBoundaryState> {
+  state: StepErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): StepErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    // eslint-disable-next-line no-console
+    console.error('[NewEvaluation] step failed to render:', error, info.componentStack);
+  }
+
+  render() {
+    if (!this.state.hasError) return this.props.children;
+    return (
+      <div className={styles.ev__error} style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <AlertTriangle size={16} />
+          <strong>This step hit an unexpected error.</strong>
+        </div>
+        <p style={{ margin: 0, fontWeight: 400 }}>
+          Your progress on earlier steps is safe. Try again, or go back and retry from there.
+        </p>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button type="button" className={`${styles.ev__btn} ${styles['ev__btn--primary']}`} onClick={this.props.onRetry}>
+            Try again
+          </button>
+          {this.props.canGoBack && (
+            <button type="button" className={`${styles.ev__btn} ${styles['ev__btn--ghost']}`} onClick={this.props.onBack}>
+              Back
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+}
+
+export default function NewEvaluation() {
+  const dispatch = useAppDispatch();
+  const navigate = useNavigate();
+  const [step, setStep] = useState(0);
+  // Bumped by StepErrorBoundary's "Try again" button to force a fresh
+  // remount of the current step's content without changing `step` itself.
+  const [stepRetryKey, setStepRetryKey] = useState(0);
+  const [toast, setToast] = useState(false);
+  const [datasetTab, setDatasetTab] = useState<'browse' | 'upload'>('browse');
+  const [uploadName, setUploadName] = useState('');
+  const [uploadDescription, setUploadDescription] = useState('');
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadFileError, setUploadFileError] = useState<string | null>(null);
+  const totalSteps = STEPS.length;
+
+  // ---- search (client-side filter) + refresh (re-fetch) state, one pair
+  // per searchable step: Providers, Models, Test Suite, Metrics. ----------
+  const [providerSearch, setProviderSearch] = useState('');
+  const [modelSearch, setModelSearch] = useState('');
+  const [datasetSearch, setDatasetSearch] = useState('');
+  const [metricSearch, setMetricSearch] = useState('');
+
+  const [providersLoading, setProvidersLoading] = useState(false);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [datasetsRefreshing, setDatasetsRefreshing] = useState(false);
+  const [metricsRefreshing, setMetricsRefreshing] = useState(false);
+  // Tracked locally rather than read from the datasets slice's own `error`
+  // field — that field wasn't reliably cleared on a subsequent successful
+  // fetch, so a stale error from an earlier failed attempt kept showing
+  // even after Refresh (or renavigating) succeeded. Deriving this purely
+  // from the outcome of our own dispatch calls below fixes that.
+  const [datasetsErrorLocal, setDatasetsErrorLocal] = useState<string | null>(null);
+
+  // ---- Test Suite: All/Custom/Deepeval filter (Change-1) -----------------
+  const [datasetTypeFilter, setDatasetTypeFilter] = useState<DatasetTypeFilter>('all');
+
+  // ---- Test Suite: preview slider (Change-2, now paginated) --------------
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewDatasetId, setPreviewDatasetId] = useState<string | null>(null);
+  const [previewDatasetName, setPreviewDatasetName] = useState<string>('');
+  // Total known question count for the dataset being previewed — comes
+  // from the dataset card (Dataset.question_count), not from the preview
+  // response itself. Used only to compute how many pages to offer.
+  const [previewQuestionCount, setPreviewQuestionCount] = useState(0);
+  const [previewOffset, setPreviewOffset] = useState(0);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewData, setPreviewData] = useState<DatasetPreviewResponse | null>(null);
+
+  const draft = useAppSelector((s) => s.evaluations.draft);
+  const launching = useAppSelector((s) => s.evaluations.launching);
+  const launchError = useAppSelector((s) => s.evaluations.launchError);
+
+  const providers = useAppSelector((s) => s.providers.items) ?? [];
+  const models = useAppSelector((s) => s.models.items) ?? [];
+  const healthById = useAppSelector((s) => (s.models as any).healthById) as Record<string, HealthStatus> | undefined;
+
+  const metricsState = useAppSelector((s) => s.metrics) ?? { allMetrics: [], customMetrics: [], status: 'idle' as const, error: null };
+  // Only `all_metrics` from the API response is used for the built-in
+  // catalog — it's the full list rendered as selectable chips. Loading
+  // state for this step is tracked locally (metricsRefreshing) rather than
+  // read from metricsState.status, for the same staleness reason as
+  // datasets below.
+  const metricsCatalog: string[] = (metricsState as any).allMetrics ?? [];
+  // `custom` from the same response, normalized by metricsSlice into
+  // state.metrics.customMetrics — richer objects (id/name/description/
+  // required_judge/etc.), rendered as their own section below the built-in
+  // metrics chips. Selection stores the metric's `id` (not its `name`) in
+  // draft.metrics, alongside the plain metric-name strings from
+  // metricsCatalog — both end up in the same selected_metrics array on
+  // launch, the backend only cares that each entry resolves to a metric.
+  const customMetricsCatalog: CustomMetric[] = (metricsState as any).customMetrics ?? [];
+  const customMetricsForType = useMemo(
+    () => customMetricsCatalog.filter((c) => !Array.isArray(c?.eval_types) || c.eval_types.length === 0 || (draft.type && c.eval_types.includes(draft.type))),
+    [customMetricsCatalog, draft.type]
+  );
+
+  const datasets = useAppSelector((s) => s.datasets.items) ?? [];
+  const datasetUploading = useAppSelector((s) => s.datasets.uploadStatus === 'loading');
+  const datasetUploadError = useAppSelector((s) => s.datasets.uploadError);
+
+  // ---- lazy fetch guards: each API is only called the first time the
+  // user actually navigates to the step that needs it, not on mount and
+  // not the moment its prerequisite (e.g. draft.type) is set. Refresh
+  // buttons bypass these guards entirely (they call the thunk directly).
+  const providersFetchedRef = useRef(false);
+  const modelsFetchedRef = useRef(false);
+  const datasetsFetchedForTypeRef = useRef<string | null>(null);
+  const metricsFetchedForTypeRef = useRef<string | null>(null);
+
+  // GET /providers — fetched once, the first time Step 2 is reached. If
+  // that fetch fails, the marker is rolled back so leaving and coming back
+  // to Step 2 retries it automatically, instead of silently reusing a
+  // failed attempt forever (the Refresh button already bypasses this).
+  useEffect(() => {
+    if (step !== 2 || providersFetchedRef.current) return;
+    providersFetchedRef.current = true;
+    (async () => {
+      setProvidersLoading(true);
+      const result = await dispatch(fetchProviders());
+      setProvidersLoading(false);
+      if (fetchProviders.rejected.match(result)) {
+        providersFetchedRef.current = false;
+      }
+    })();
+  }, [step, dispatch]);
+
+  // GET /models — fetched once, the first time Step 3 is reached (by then
+  // providers are already selected, since Step 2 requires it to advance).
+  // Same retry-on-failure behavior as providers above.
+  useEffect(() => {
+    if (step !== 3 || modelsFetchedRef.current) return;
+    modelsFetchedRef.current = true;
+    (async () => {
+      setModelsLoading(true);
+      const result = await dispatch(fetchModels());
+      setModelsLoading(false);
+      if (fetchModels.rejected.match(result)) {
+        modelsFetchedRef.current = false;
+      }
+    })();
+  }, [step, dispatch]);
+
+  // ---- (1) dataset "type" query param, split for Agent by framework -------
+  // Model/RAG: type = draft.type
+  // Agent, no framework chosen:  type = 'agent_benchmark'
+  // Agent, framework chosen:     type = 'agent_custom'
+  const datasetType = useMemo(() => {
+    if (!draft.type) return '';
+    if (draft.type === 'agent') {
+      return draft.agentFramework ? 'agent_custom' : 'agent_benchmark';
+    }
+    return draft.type;
+  }, [draft.type, draft.agentFramework]);
+
+  // GET /datasets?eval_type={type} — fetched the first time Step 4 is reached
+  // for a given type/framework combination. If the user goes back and
+  // changes type/framework, the pool is stale, so a different datasetType
+  // triggers one refetch the next time Step 4 is (re)entered. If the fetch
+  // itself fails, the marker is rolled back so re-selecting the *same*
+  // type and coming back to Step 4 retries automatically — previously a
+  // failed attempt permanently "used up" the marker for that type, so
+  // going back and forward again silently reused the failure.
+  useEffect(() => {
+    if (step !== 4 || !datasetType) return;
+    if (datasetsFetchedForTypeRef.current === datasetType) return;
+    datasetsFetchedForTypeRef.current = datasetType;
+    (async () => {
+      setDatasetsRefreshing(true);
+      const result = await dispatch(fetchDatasets(datasetType));
+      setDatasetsRefreshing(false);
+      if (fetchDatasets.rejected.match(result)) {
+        datasetsFetchedForTypeRef.current = null;
+        setDatasetsErrorLocal(getThunkErrorMessage(result, 'Failed to load test suites'));
+      } else {
+        setDatasetsErrorLocal(null);
+      }
+    })();
+  }, [step, datasetType, dispatch]);
+
+  // Any previously chosen dataset is invalid once the dataset "type" changes
+  // (different type/framework combination = different dataset pool). Also
+  // clear any in-progress dataset search since it applied to the old pool.
+  // This is a pure UI-state reset, independent of the fetch timing above.
+  useEffect(() => {
+    if (!datasetType) return;
+    dispatch(setDraft({ dataset: null }));
+    setDatasetSearch('');
+    setDatasetTypeFilter('all');
+    setDatasetsErrorLocal(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [datasetType]);
+
+  // GET /metrics?eval_type={type} — fetched the first time Step 5 is
+  // reached for a given draft.type. Only `all_metrics` is consumed (see
+  // metricsCatalog below) — `metrics` is ignored entirely. Same
+  // retry-on-failure rollback as datasets above.
+  useEffect(() => {
+    if (step !== 5 || !draft.type) return;
+    if (metricsFetchedForTypeRef.current === draft.type) return;
+    metricsFetchedForTypeRef.current = draft.type;
+    (async () => {
+      setMetricsRefreshing(true);
+      const result = await dispatch(fetchMetrics(draft.type));
+      setMetricsRefreshing(false);
+      if (fetchMetrics.rejected.match(result)) {
+        metricsFetchedForTypeRef.current = null;
+      }
+    })();
+  }, [step, draft.type, dispatch]);
+
+  const suite = datasets.find((d) => d?.id === draft.dataset);
+
+  // ---- (6) auto-select every subgroup on dataset pick ----------------------
+  useEffect(() => {
+    const cats = (suite as any)?.dataset_categories ?? [];
+    dispatch(setDraft({ subgroup: cats }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft.dataset]);
+
+  const selectAllSubgroups = () => dispatch(setDraft({ subgroup: (suite as any)?.dataset_categories ?? [] }));
+  const clearAllSubgroups = () => dispatch(setDraft({ subgroup: [] }));
+
+  // ---- Run Samples default/max, driven by the selected dataset's size ----
+  // More than 10 questions available: default to 10, cap the input at the
+  // dataset's total. 10 or fewer available: default (and cap) at the
+  // dataset's total, since there's nothing more to sample.
+  const selectedDatasetQuestionCount = suite?.question_count ?? 0;
+  const maxRunSamples = Math.max(1, selectedDatasetQuestionCount);
+  const defaultRunSamples = selectedDatasetQuestionCount > 10 ? 10 : maxRunSamples;
+
+  // Re-derive the default whenever the selected dataset itself changes
+  // (not on every render) — matches the same trigger as the subgroup
+  // auto-select effect above, and won't stomp on a value the user typed
+  // in manually unless they've actually picked a different dataset since.
+  useEffect(() => {
+    if (!draft.dataset) return;
+    dispatch(setDraft({ runSamples: defaultRunSamples }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft.dataset]);
+
+  const connectedProviders = providers.filter((p) => p?.status === 'connected');
+  const filteredProviders = useMemo(
+    () => connectedProviders.filter((p) => (p?.name ?? '').toLowerCase().includes(providerSearch.trim().toLowerCase())),
+    [connectedProviders, providerSearch]
+  );
+
+  const availableModels = useMemo(
+    () => models.filter((m) => draft.providers.includes(m?.provider_id)),
+    [models, draft.providers]
+  );
+  const filteredModels = useMemo(
+    () => availableModels.filter((m) => (m?.name ?? '').toLowerCase().includes(modelSearch.trim().toLowerCase())),
+    [availableModels, modelSearch]
+  );
+
+  // Counts per dataset_type, for the filter chip labels — computed off the
+  // full (unsearched, unfiltered) list so the counts don't shift as the
+  // user types in the search box.
+  const datasetTypeCounts = useMemo(
+    () => ({
+      all: datasets.length,
+      custom: datasets.filter((d) => (d as any)?.dataset_type === 'custom').length,
+      deepeval: datasets.filter((d) => (d as any)?.dataset_type === 'deepeval').length,
+    }),
+    [datasets]
+  );
+
+  const filteredDatasets = useMemo(
+    () =>
+      datasets.filter((d) => {
+        const matchesSearch = (d?.name ?? '').toLowerCase().includes(datasetSearch.trim().toLowerCase());
+        const matchesType = datasetTypeFilter === 'all' || (d as any)?.dataset_type === datasetTypeFilter;
+        return matchesSearch && matchesType;
+      }),
+    [datasets, datasetSearch, datasetTypeFilter]
+  );
+
+  const filteredMetrics = useMemo(
+    () => metricsCatalog.filter((m) => (m ?? '').toLowerCase().includes(metricSearch.trim().toLowerCase())),
+    [metricsCatalog, metricSearch]
+  );
+
+  const filteredCustomMetrics = useMemo(
+    () => customMetricsForType.filter((c) => (c?.name ?? '').toLowerCase().includes(metricSearch.trim().toLowerCase())),
+    [customMetricsForType, metricSearch]
+  );
+
+  // ---- refresh handlers: re-dispatch each step's existing fetch thunk ----
+  // Each sets its own `*Refreshing` flag so the step can swap its grid for
+  // skeleton placeholders while the request is in flight (Change-3).
+  const refreshProviders = async () => {
+    setProvidersLoading(true);
+    await dispatch(fetchProviders());
+    setProvidersLoading(false);
+  };
+
+  const refreshModels = async () => {
+    setModelsLoading(true);
+    await dispatch(fetchModels());
+    setModelsLoading(false);
+  };
+
+  const refreshDatasets = async () => {
+    if (!datasetType) return;
+    setDatasetsRefreshing(true);
+    const result = await dispatch(fetchDatasets(datasetType));
+    setDatasetsRefreshing(false);
+    if (fetchDatasets.rejected.match(result)) {
+      datasetsFetchedForTypeRef.current = null;
+      setDatasetsErrorLocal(getThunkErrorMessage(result, 'Failed to load test suites'));
+    } else {
+      datasetsFetchedForTypeRef.current = datasetType;
+      setDatasetsErrorLocal(null);
+    }
+  };
+
+  const refreshMetrics = async () => {
+    if (!draft.type) return;
+    setMetricsRefreshing(true);
+    const result = await dispatch(fetchMetrics(draft.type));
+    setMetricsRefreshing(false);
+    if (fetchMetrics.rejected.match(result)) {
+      metricsFetchedForTypeRef.current = null;
+    } else {
+      metricsFetchedForTypeRef.current = draft.type;
+    }
+  };
+
+  // ---- preview slider (Change-2, paginated): GET /datasets/{id}/preview?
+  // limit=20&offset={offset} ---------------------------------------------
+  const previewTotalPages = Math.max(1, Math.ceil(previewQuestionCount / PREVIEW_PAGE_SIZE));
+  const previewCurrentPage = Math.floor(previewOffset / PREVIEW_PAGE_SIZE) + 1;
+  const previewHasPrevPage = previewOffset > 0;
+  const previewHasNextPage = previewCurrentPage < previewTotalPages;
+
+  const openPreview = (datasetId: string, datasetName: string, questionCount: number) => {
+    setPreviewDatasetId(datasetId);
+    setPreviewDatasetName(datasetName);
+    setPreviewQuestionCount(questionCount || 0);
+    setPreviewOffset(0);
+    setPreviewData(null);
+    setPreviewError(null);
+    setPreviewOpen(true);
+  };
+
+  const closePreview = () => {
+    setPreviewOpen(false);
+  };
+
+  const goToPreviewPrevPage = () => {
+    setPreviewOffset((o) => Math.max(0, o - PREVIEW_PAGE_SIZE));
+  };
+
+  const goToPreviewNextPage = () => {
+    setPreviewOffset((o) => {
+      const maxOffset = Math.max(0, (previewTotalPages - 1) * PREVIEW_PAGE_SIZE);
+      return Math.min(maxOffset, o + PREVIEW_PAGE_SIZE);
+    });
+  };
+
+  // Fetches whatever page `previewOffset` currently points at. Called both
+  // by the auto-fetch effect below (on open / page change) and by the
+  // manual reload button (same page, fresh data).
+  const fetchPreviewPage = async (datasetId: string, offset: number) => {
+    setPreviewLoading(true);
+    setPreviewError(null);
+    try {
+      const data = await evaluationsApi.previewDataset(datasetId, PREVIEW_PAGE_SIZE, offset);
+      setPreviewData(data);
+    } catch (err) {
+      const detail =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        (err as Error)?.message ||
+        'Failed to load preview';
+      setPreviewError(detail);
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  // Auto-loads a page whenever the slider opens or the page changes — no
+  // separate "Load preview" click needed, Prev/Next just work.
+  useEffect(() => {
+    if (!previewOpen || !previewDatasetId) return;
+    fetchPreviewPage(previewDatasetId, previewOffset);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewOpen, previewDatasetId, previewOffset]);
+
+
+  // Manual, single-model health check — still available via the "Check
+  // health" button on each card, alongside the automatic parallel check
+  // below.
+  const runHealthCheck = (modelId: string) => {
+    dispatch(checkModelHealth(modelId));
+  };
+
+  // Auto health-check: as soon as the models list for the currently
+  // selected providers is available (and while Step 3 is open), fire a
+  // parallel health check for every visible model — the user isn't
+  // expected to click "Check health" one by one. Guarded on the raw
+  // `models` array reference so it re-runs once per fresh fetch (initial
+  // navigation-triggered fetch, or a manual refresh) rather than on every
+  // render or on unrelated state changes like typing in the search box.
+  const autoHealthCheckedForModelsRef = useRef<typeof models | null>(null);
+  useEffect(() => {
+    if (step !== 3 || availableModels.length === 0) return;
+    if (autoHealthCheckedForModelsRef.current === models) return;
+    autoHealthCheckedForModelsRef.current = models;
+    availableModels.forEach((m) => dispatch(checkModelHealth(m.id)));
+  }, [step, models, availableModels, dispatch]);
+
+  const toggle = (list: string[], value: string) =>
+    list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
+
+  // Built-in metrics (plain name strings) and custom metrics (ids) share
+  // the same draft.metrics array, so "select all" / "clear" for one
+  // section must only touch its own entries — otherwise selecting all
+  // built-in metrics would silently wipe out any chosen custom metrics
+  // (and vice versa).
+  const customMetricIdSet = new Set(customMetricsForType.map((c) => c.id));
+  const selectAllBuiltinMetrics = () => {
+    const keptCustom = draft.metrics.filter((m) => customMetricIdSet.has(m));
+    dispatch(setDraft({ metrics: [...keptCustom, ...metricsCatalog] }));
+  };
+  const clearBuiltinMetrics = () => {
+    dispatch(setDraft({ metrics: draft.metrics.filter((m) => customMetricIdSet.has(m)) }));
+  };
+  const selectAllCustomMetrics = () => {
+    const builtinSet = new Set(metricsCatalog);
+    const keptBuiltin = draft.metrics.filter((m) => builtinSet.has(m));
+    dispatch(setDraft({ metrics: [...keptBuiltin, ...customMetricsForType.map((c) => c.id)] }));
+  };
+  const clearCustomMetrics = () => {
+    dispatch(setDraft({ metrics: draft.metrics.filter((m) => !customMetricIdSet.has(m)) }));
+  };
+
+  const getFileExtension = (filename: string) => {
+    const idx = filename.lastIndexOf('.');
+    return idx >= 0 ? filename.slice(idx + 1).toLowerCase() : '';
+  };
+
+  const openUploadPanel = () => {
+    dispatch(resetUploadStatus());
+    setUploadName('');
+    setUploadDescription('');
+    setUploadFile(null);
+    setUploadFileError(null);
+    setDatasetTab('upload');
+  };
+
+  const handleUploadFileChange = (file: File | null) => {
+    setUploadFile(file);
+    if (!file) {
+      setUploadFileError(null);
+      return;
+    }
+    const ext = getFileExtension(file.name);
+    if (!SUPPORTED_UPLOAD_EXTENSIONS.includes(ext)) {
+      setUploadFileError('Unsupported file type. Please choose a .json, .jsonl, .arrow, or .parquet file.');
+    } else {
+      setUploadFileError(null);
+    }
+  };
+
+  const canUpload =
+    Boolean(uploadName.trim()) && Boolean(uploadFile) && !uploadFileError && Boolean(draft.type) && !datasetUploading;
+
+  const submitUpload = async () => {
+    if (!uploadFile || !canUpload) return;
+
+    // Hermes uploads (Agent type, agentFramework selected) go through
+    // /upload-jsonl (for .jsonl files, which also needs category: 'Agents')
+    // or /upload (any other supported extension) — both variants expect
+    // eval_type: 'agent' rather than the wizard's internal 'agent_custom'
+    // dataset-type discriminator. Every other case (Model, RAG, Agent
+    // benchmark with no framework) keeps sending datasetType unchanged.
+    const isHermesUpload = isAgentWithFramework;
+    const uploadFileExt = getFileExtension(uploadFile.name);
+
+    const result = await dispatch(
+      uploadDataset({
+        file: uploadFile,
+        name: uploadName.trim(),
+        description: uploadDescription.trim(),
+        evalType: isHermesUpload ? 'agent' : datasetType,
+        ...(isHermesUpload && uploadFileExt === 'jsonl' ? { category: 'Agents' } : {}),
+      })
+    );
+    if (uploadDataset.fulfilled.match(result)) {
+      dispatch(setDraft({ dataset: result.payload.id }));
+      setDatasetTab('browse');
+    }
+  };
+
+  // ---- (5) Model type + non-custom dataset ⇒ hide metrics & judge ---------
+  const isCustomDataset = (suite as any)?.dataset_type === 'custom';
+  const modelHidesMetrics = draft.type === 'model' && Boolean(suite) && !isCustomDataset;
+
+  // Agent type with no framework selected (draft.agentFramework null) maps
+  // to POST /agent-benchmark/run, which only ever accepts dataset_id,
+  // model_ids, evaluation_name, run_samples — there's no metrics or judge
+  // concept for this path at all, so the Metrics step (and the Test
+  // Suite step's Upload tab, further below) simplify down the same way
+  // the Model + standard-dataset case does.
+  const isAgentBenchmarkNoFramework = draft.type === 'agent' && !draft.agentFramework;
+  const hideMetricsStep = modelHidesMetrics || isAgentBenchmarkNoFramework;
+
+  // RAG datasets are always pre-built retrieval corpora — there's no
+  // "upload your own" flow for them (only Top K applies, further below).
+  const isRag = draft.type === 'rag';
+  const hideUploadTab = isAgentBenchmarkNoFramework || isRag;
+
+  // The Upload tab isn't offered for Agent benchmarks with no framework
+  // selected, or for RAG (see Test Suite step below) — if the user had it
+  // open and then goes back and changes type/framework into one of those
+  // states, snap back to Browse so there's no dangling reference to a
+  // hidden tab.
+  useEffect(() => {
+    if (hideUploadTab && datasetTab === 'upload') {
+      setDatasetTab('browse');
+    }
+  }, [hideUploadTab, datasetTab]);
+
+  // Clear any selected metrics the moment this simplified mode kicks in, so
+  // neither the manifest nor the launch payload carries stale selections.
+  useEffect(() => {
+    if (hideMetricsStep && draft.metrics.length > 0) {
+      dispatch(setDraft({ metrics: [] }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hideMetricsStep]);
+
+  const selectedModels = draft.models.map((id) => models.find((m) => m?.id === id)).filter(Boolean) as typeof models;
+  const judgeModel = draft.judgeModelId ? models.find((m) => m?.id === draft.judgeModelId) : null;
+
+  // Agent type WITH a framework selected (draft.agentFramework truthy, e.g.
+  // Hermes) maps to POST /agent-benchmark/run-multi — used below to pick
+  // the right upload payload shape, not for judge-related logic anymore
+  // (see the always-on judge model requirement, further below).
+  const isAgentWithFramework = draft.type === 'agent' && Boolean(draft.agentFramework);
+
+  const isModelSelectable = (modelId: string) => healthById?.[modelId] === 'success';
+
+  // Judge model options — reuse the exact same "available" definition as
+  // Step 3 (health check passed), scoped to the same provider selection,
+  // instead of filtering by is_active. Previously this used
+  // `models.filter(is_active)`, which could surface models that never
+  // passed (or never ran) a health check, or exclude ones that did but
+  // happen to have is_active === false.
+  const judgeCandidateModels = useMemo(
+    () => availableModels.filter((m) => isModelSelectable(m.id)),
+    [availableModels, healthById]
+  );
+
+  useEffect(() => {
+    if (draft.judgeModelId && !judgeCandidateModels.some((m) => m.id === draft.judgeModelId)) {
+      dispatch(setDraft({ judgeModelId: null }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [judgeCandidateModels, draft.judgeModelId]);
+
+  const toggleModel = (modelId: string) => {
+    const alreadySelected = draft.models.includes(modelId);
+    if (!alreadySelected && !isModelSelectable(modelId)) return;
+    dispatch(setDraft({ models: toggle(draft.models, modelId) }));
+  };
+
+  const canGo = () => {
+    if (step === 0) return Boolean(draft.name.trim());
+    if (step === 1) return Boolean(draft.type);
+    if (step === 2) return draft.providers.length > 0;
+    if (step === 3) return draft.models.length > 0;
+    // A dataset with 0 questions can't actually be run against — block
+    // continuing until one with at least one question is picked.
+    if (step === 4) return Boolean(draft.dataset) && (suite?.question_count ?? 0) > 0;
+    if (step === 5) {
+      // Judge model is mandatory for every type now — no more LLM_Judge /
+      // hideMetricsStep / agent-framework gating.
+      if (!draft.judgeModelId) return false;
+      // If the metrics catalog (built-in or custom) actually has anything
+      // in it for this type, picking at least one is mandatory too. When
+      // the whole metrics section is hidden (hideMetricsStep) or the
+      // catalog is genuinely empty, there's nothing to require.
+      const metricsAvailable = !hideMetricsStep && (metricsCatalog.length > 0 || customMetricsForType.length > 0);
+      if (metricsAvailable && draft.metrics.length === 0) return false;
+      return true;
+    }
+    return true;
+  };
+
+  const goNext = () => {
+    if (!canGo()) return;
+    setStep((s) => Math.min(totalSteps - 1, s + 1));
+  };
+  const goBack = () => setStep((s) => Math.max(0, s - 1));
+  const goToStep = (target: number) => {
+    if (target < step) setStep(target);
+  };
+
+  // ---- (3) & (4) launch: three different endpoints depending on type ------
+  const launch = async () => {
+    const dataset = datasets.find((d) => d?.id === draft.dataset);
+    const judgeModelObj = draft.judgeModelId ? models.find((m) => m?.id === draft.judgeModelId) : undefined;
+    // Change: "Full" mode means "use the whole dataset" — for the agent
+    // benchmark endpoints the backend contract for that is run_samples: 0.
+    const effectiveRunSamples = draft.runSamplesMode === 'full' ? 0 : draft.runSamples;
+    // For POST /evaluations (Model/RAG) specifically, "Full" instead sends
+    // the selected dataset's total category count (dataset_categories.length
+    // from the Test Suite step) rather than 0 — falls back to 0 if the
+    // dataset has no categories or wasn't found.
+    const fullModeCategoryCount = (dataset as any)?.dataset_categories?.length ?? 0;
+    const createEvalRunSamples = draft.runSamplesMode === 'full' ? fullModeCategoryCount : draft.runSamples;
+
+    let result: any;
+
+    if (draft.type === 'agent' && !draft.agentFramework) {
+      // POST /agent-benchmark/run
+      result = await dispatch(
+        runAgentBenchmark({
+          dataset_id: dataset?.id || '',
+          model_ids: draft.models,
+          evaluation_name: draft.name,
+          run_samples: effectiveRunSamples,
+        })
+      );
+    } else if (draft.type === 'agent' && draft.agentFramework) {
+      // POST /agent-benchmark/run-multi
+      result = await dispatch(
+        runAgentBenchmarkMulti({
+          dataset_id: dataset?.id || '',
+          model_ids: draft.models,
+          evaluation_name: draft.name,
+          selected_metrics: draft.metrics,
+          selected_categories: draft.subgroup,
+          run_samples: effectiveRunSamples,
+        })
+      );
+    } else {
+      // POST /evaluations then /evaluations/{id}/start — Model or RAG
+      const payload: CreateEvaluationRequest = {
+        name: draft.name,
+        eval_type: draft.type || '',
+        dataset_id: dataset?.id || '',
+        // RAG doesn't use `benchmark` — omitted entirely for that type
+        // rather than sent as the dataset name (or null), matching how
+        // top_k is likewise only ever included for RAG below.
+        ...(isRag ? {} : { benchmark: dataset?.name || undefined }),
+        model_ids: draft.models,
+        selected_metrics: hideMetricsStep ? [] : draft.metrics,
+        run_samples: createEvalRunSamples,
+        selected_category: draft.subgroup.length > 0 ? draft.subgroup : dataset ? [dataset.category] : undefined,
+        // Judge model is mandatory now (see canGo's step-5 check), so
+        // draft.judgeModelId is always set by the time launch() runs — the
+        // {} fallback is just defensive.
+        judge_config: draft.judgeModelId
+          ? {
+              model_id: draft.judgeModelId,
+              base_url: judgeModelObj?.base_url || '',
+              api_key: draft.judgeModelId,
+            }
+          : {},
+        // RAG-only — how many retrieved documents to consider per query.
+        // Omitted entirely for Model/Agent rather than sent as undefined,
+        // so it doesn't show up as a spurious key in the request body.
+        ...(isRag ? { top_k: draft.topK } : {}),
+      };
+      result = await dispatch(launchEvaluation(payload));
+    }
+
+    const succeeded =
+      launchEvaluation.fulfilled.match(result) ||
+      runAgentBenchmark.fulfilled.match(result) ||
+      runAgentBenchmarkMulti.fulfilled.match(result);
+
+    if (succeeded) {
+      setToast(true);
+      setTimeout(() => {
+        setToast(false);
+        navigate('/app/history');
+      }, 2000);
+    }
+  };
+
+  const progressPct = Math.round((step / (totalSteps - 1)) * 100);
+
+  // ---- live Run Manifest values (one per step) ----------------------------
+  const providerNames = draft.providers.map((id) => providers.find((p) => p?.id === id)?.name || id);
+  const mf = (value: string, filled: boolean) => ({ value: filled ? value : '—', empty: !filled });
+  const typeLabel = TYPE_OPTIONS.find((o) => o.value === draft.type)?.label ?? '';
+  const frameworkTitle = draft.agentFramework ? AGENT_FRAMEWORKS.find((f) => f.id === draft.agentFramework)?.title : null;
+  const manifest = [
+    mf(draft.name, Boolean(draft.name)),
+    mf(frameworkTitle ? `${typeLabel} · ${frameworkTitle}` : typeLabel, Boolean(draft.type)),
+    mf(draft.providers.length === 1 ? providerNames[0] : `${draft.providers.length} providers`, draft.providers.length > 0),
+    mf(`${draft.models.length} models`, draft.models.length > 0),
+    mf(suite?.name || '', Boolean(suite)),
+    mf(hideMetricsStep ? 'Not required' : `${draft.metrics.length} metrics`, hideMetricsStep || draft.metrics.length > 0),
+    mf(
+      judgeModel ? `Judge · ${judgeModel.name || 'Unnamed model'}` : 'Judge required',
+      Boolean(judgeModel)
+    ),
+  ];
+
+  const CrumbIcon = STEP_ICONS[step];
+
+  // ---- shared "Run samples" control (Custom / Full) ------------------------
+  // Used by both branches of Step 5 (the simplified model-benchmark view and
+  // the full metrics view) so the toggle behaves identically in either.
+  // 'full' means "use the whole dataset" — run_samples is sent as 0 in that
+  // case (see `launch` below), regardless of whatever number was last typed
+  // into the Custom field.
+  const runSamplesControl = (
+    <div className={`${styles.ev__field} ${styles['ev__field--samples']}`}>
+      <label className={styles.ev__label}>Run samples</label>
+      <div className={styles['ev__radio-row']}>
+        <button
+          type="button"
+          className={`${styles['ev__radio-opt']} ${draft.runSamplesMode === 'custom' ? styles['ev__radio-opt--on'] : ''}`}
+          onClick={() => dispatch(setDraft({ runSamplesMode: 'custom' }))}
+        >
+          <span className={`${styles.ev__radio} ${draft.runSamplesMode === 'custom' ? styles['ev__radio--on'] : ''}`} />
+          Custom
+        </button>
+        <button
+          type="button"
+          className={`${styles['ev__radio-opt']} ${draft.runSamplesMode === 'full' ? styles['ev__radio-opt--on'] : ''}`}
+          onClick={() => dispatch(setDraft({ runSamplesMode: 'full' }))}
+        >
+          <span className={`${styles.ev__radio} ${draft.runSamplesMode === 'full' ? styles['ev__radio--on'] : ''}`} />
+          Full
+        </button>
+      </div>
+      {draft.runSamplesMode === 'custom' ? (
+        <>
+          <input
+            type="number"
+            min={0}
+            max={maxRunSamples}
+            className={styles.ev__input}
+            style={{ marginTop: 10 }}
+            value={draft.runSamples}
+            onChange={(e) => {
+              const raw = e.target.value === '' ? 0 : Number(e.target.value);
+              const val = Number.isNaN(raw) ? 0 : Math.min(maxRunSamples, Math.max(0, raw));
+              dispatch(setDraft({ runSamples: val }));
+            }}
+          />
+          <p className={styles['ev__radio-full-note']}>Up to {maxRunSamples.toLocaleString()} questions available in this suite.</p>
+        </>
+      ) : (
+        <p className={styles['ev__radio-full-note']}>Every question in the suite will be used — no count needed.</p>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="page-enter" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      {/* ---- header (matches History/Reports/Comparison/Sidebar pattern) ---- */}
+      <div className={styles['ev__header']}>
+        <div>
+          <p className={styles['ev__header-eyebrow']}>Evaluation console</p>
+          <h1>New run</h1>
+          <p className={styles['ev__header-sub']}>Assemble and launch a new evaluation run</p>
+        </div>
+        <div className={styles['ev__header-meta']}>
+          <span className={styles['ev__header-status']} data-state={launching ? 'live' : 'draft'}>
+            {launching ? 'Launching' : 'Draft'}
+          </span>
+          <span className={styles['ev__header-eta']}>
+            <Clock3 size={13} /> ~5 min
+          </span>
+        </div>
+      </div>
+
+      <div className={styles.page}>
+        <div className={styles.ev}>
+          {/* ---- shell ---- */}
+          <div className={styles.ev__shell}>
+            {/* SIGNATURE: Run Manifest */}
+            <aside className={styles.ev__manifest}>
+              <div className={styles['ev__manifest-head']}>
+                <div className={styles['ev__manifest-eyebrow']}>
+                  <span>Run manifest</span>
+                  <span className={styles['ev__manifest-pct']}>{progressPct}%</span>
+                </div>
+                <div className={styles['ev__manifest-title']} data-empty={!draft.name}>
+                  {draft.name || 'Untitled run'}
+                </div>
+                <div className={styles.ev__meter}>
+                  <div className={styles['ev__meter-fill']} style={{ width: `${progressPct}%` }} />
+                </div>
+              </div>
+              <div className={styles.ev__spec}>
+                {STEPS.map((s, i) => {
+                  const state = i === step ? 'active' : i < step ? 'done' : 'todo';
+                  const Icon = STEP_ICONS[i];
+                  const row = manifest[i];
+                  return (
+                    <button
+                      key={s.label}
+                      type="button"
+                      className={`${styles['ev__spec-row']} ${styles[`ev__spec-row--${state}`]}`}
+                      onClick={() => goToStep(i)}
+                      disabled={i > step}
+                    >
+                      <span className={styles['ev__spec-tick']}>
+                        {state === 'done' ? <Check size={13} strokeWidth={3} /> : <Icon size={14} />}
+                      </span>
+                      <span className={styles['ev__spec-body']}>
+                        <span className={styles['ev__spec-label']}>{s.label}</span>
+                        <span className={styles['ev__spec-value']} data-empty={row.empty}>
+                          {row.value}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </aside>
+
+            {/* STAGE */}
+            <section className={styles.ev__stage}>
+              <div className={styles['ev__stage-head']}>
+                <div className={styles.ev__crumb}>
+                  <span>
+                    <CrumbIcon size={13} /> Step
+                  </span>
+                  <span className={styles['ev__crumb-sep']} />
+                  <span>
+                    <b>{String(step + 1).padStart(2, '0')}</b> / {String(totalSteps).padStart(2, '0')}
+                  </span>
+                  <span className={styles['ev__crumb-sep']} />
+                  <span>{STEPS[step].label}</span>
+                </div>
+                <h2 className={styles['ev__stage-title']}>{STAGE[step].title}</h2>
+                <p className={styles['ev__stage-sub']}>{STAGE[step].sub}</p>
+              </div>
+
+              <div className={styles['ev__stage-body']}>
+                <StepErrorBoundary
+                  key={`${step}-${stepRetryKey}`}
+                  onRetry={() => setStepRetryKey((k) => k + 1)}
+                  onBack={goBack}
+                  canGoBack={step > 0}
+                >
+                <div className={styles.ev__anim} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                  {/* STEP 0 — NAME */}
+                  {step === 0 && (
+                    <>
+                      <div className={styles.ev__field} style={{ maxWidth: 620 }}>
+                        <label className={styles.ev__label}>Run name</label>
+                        <input
+                          className={styles['ev__name-input']}
+                          placeholder="Untitled run"
+                          value={draft.name}
+                          onChange={(e) => dispatch(setDraft({ name: e.target.value }))}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && canGo()) goNext();
+                          }}
+                          autoFocus
+                        />
+                        <p className={styles['ev__name-caption']}>
+                          <Tag size={13} /> This is how the run appears in your history.
+                        </p>
+                      </div>
+
+                      <div className={styles.ev__quick}>
+                        <p className={styles['ev__quick-head']}>Presets</p>
+                        <div className={styles['ev__quick-row']}>
+                          {SUGGESTED_NAMES.map((s) => {
+                            const on = draft.name === s;
+                            return (
+                              <button
+                                key={s}
+                                type="button"
+                                className={`${styles.ev__preset} ${on ? styles['ev__preset--on'] : ''}`}
+                                onClick={() => dispatch(setDraft({ name: s }))}
+                              >
+                                {on ? <Check size={13} strokeWidth={3} /> : <Plus size={13} strokeWidth={2.5} />} {s}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className={styles.ev__note}>
+                        <span className={styles['ev__note-icon']}>
+                          <Lightbulb size={16} />
+                        </span>
+                        <div>
+                          <p className={styles['ev__note-title']}>What makes a good name</p>
+                          <ul className={styles['ev__note-list']}>
+                            {NAMING_TIPS.map((tip) => (
+                              <li key={tip}>{tip}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {/* STEP 1 — TYPE */}
+                  {step === 1 && (
+                    <>
+                      <div className={styles.ev__options}>
+                        {TYPE_OPTIONS.map((o) => {
+                          const Icon = o.icon;
+                          const on = draft.type === o.value;
+                          return (
+                            <button
+                              key={o.value}
+                              type="button"
+                              className={`${styles.ev__option} ${on ? styles['ev__option--on'] : ''} ${
+                                o.disabled ? styles['ev__option--off'] : ''
+                              }`}
+                              onClick={() => !o.disabled && dispatch(setDraftType(o.value))}
+                              disabled={o.disabled}
+                            >
+                              <span
+                                className={`${styles['ev__option-icon']} ${
+                                  o.variant ? styles[`ev__option-icon--${o.variant}`] : ''
+                                }`}
+                              >
+                                <Icon size={20} />
+                              </span>
+                              <span className={styles['ev__option-main']}>
+                                <span className={styles['ev__option-name']}>
+                                  {o.label}
+                                  {o.disabled && <span className={styles.ev__badge}>Soon</span>}
+                                </span>
+                                <span className={styles['ev__option-desc']}>{o.sub}</span>
+                              </span>
+                              {on && (
+                                <span className={styles.ev__mark}>
+                                  <Check size={13} strokeWidth={3} />
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {draft.type === 'agent' && (
+                        <div className={styles.ev__section}>
+                          <label className={styles.ev__label}>
+                            <Waypoints size={13} /> Agent framework <span className="opt">optional</span>
+                          </label>
+                          <p className={styles['ev__section-hint']}>
+                            Tell us which framework the agent runs on, if applicable. This also determines which test
+                            suites are available in the next steps.
+                          </p>
+                          <div className={styles['ev__fw-grid']}>
+                            {AGENT_FRAMEWORKS.map((f) => {
+                              const on = draft.agentFramework === f.id;
+                              return (
+                                <button
+                                  key={f.id}
+                                  type="button"
+                                  className={`${styles.ev__fw} ${on ? styles['ev__fw--on'] : ''}`}
+                                  onClick={() => dispatch(setDraft({ agentFramework: on ? null : f.id }))}
+                                >
+                                  <span className={styles['ev__fw-icon']}>
+                                    <Waypoints size={16} />
+                                  </span>
+                                  <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                                    <span className={styles['ev__fw-name']}>{f.title}</span>
+                                    <span className={styles['ev__fw-desc']}>{f.desc}</span>
+                                  </span>
+                                  {on && (
+                                    <span className={styles.ev__mark}>
+                                      <Check size={12} strokeWidth={3} />
+                                    </span>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {/* STEP 2 — PROVIDERS */}
+                  {step === 2 && (
+                    <div className={styles.ev__scroll}>
+                      <div className={styles['ev__step-toolbar']}>
+                        <div className={styles['ev__toolbar-search']}>
+                          <Search size={14} />
+                          <input
+                            placeholder="Search providers…"
+                            value={providerSearch}
+                            onChange={(e) => setProviderSearch(e.target.value)}
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          className={styles['ev__toolbar-refresh']}
+                          onClick={refreshProviders}
+                          disabled={providersLoading}
+                          title="Refresh providers"
+                        >
+                          <RefreshCw size={14} className={providersLoading ? styles.ev__spin : ''} />
+                        </button>
+                      </div>
+                      {providersLoading ? (
+                        <div className={styles.ev__grid} aria-busy="true" aria-label="Refreshing providers">
+                          {Array.from({ length: SKELETON_CARD_COUNT }).map((_, i) => (
+                            <div key={i} className={styles['ev__skel-pcard']}>
+                              <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--icon']}`} />
+                              <span className={styles['ev__skel-lines']}>
+                                <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '70%' }} />
+                                <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '45%' }} />
+                                <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--pill']}`} />
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className={styles.ev__grid}>
+                          {filteredProviders.map((p) => {
+                            const on = draft.providers.includes(p.id);
+                            return (
+                              <button
+                                key={p.id}
+                                type="button"
+                                className={`${styles.ev__pcard} ${on ? styles['ev__pcard--on'] : ''}`}
+                                onClick={() => dispatch(setDraft({ providers: toggle(draft.providers, p.id) }))}
+                              >
+                                <span className={styles['ev__pcard-icon']}>{providerInitials(p.name)}</span>
+                                <span className={styles['ev__pcard-body']}>
+                                  <span className={styles['ev__pcard-name']}>{p.name || 'Unnamed provider'}</span>
+                                  <span className={styles['ev__pcard-meta']}>{p.model_count ?? 0} models available</span>
+                                  <span className={styles.ev__pill}>Connected</span>
+                                </span>
+                                {on && (
+                                  <span className={styles.ev__mark}>
+                                    <Check size={12} strokeWidth={3} />
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                          {connectedProviders.length === 0 && (
+                            <p className={styles.ev__empty}>No connected providers yet. Connect one from the Providers page to continue.</p>
+                          )}
+                          {connectedProviders.length > 0 && filteredProviders.length === 0 && (
+                            <p className={styles.ev__empty}>No providers match "{providerSearch}".</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* STEP 3 — MODELS */}
+                  {step === 3 &&
+                    (availableModels.length > 0 ? (
+                      <div className={styles.ev__scroll}>
+                        <div className={styles['ev__step-toolbar']}>
+                          <div className={styles['ev__toolbar-search']}>
+                            <Search size={14} />
+                            <input
+                              placeholder="Search models…"
+                              value={modelSearch}
+                              onChange={(e) => setModelSearch(e.target.value)}
+                            />
+                          </div>
+                          <button
+                            type="button"
+                            className={styles['ev__toolbar-refresh']}
+                            onClick={refreshModels}
+                            disabled={modelsLoading}
+                            title="Refresh models"
+                          >
+                            <RefreshCw size={14} className={modelsLoading ? styles.ev__spin : ''} />
+                          </button>
+                        </div>
+                        {modelsLoading ? (
+                          <div className={`${styles.ev__grid} ${styles['ev__grid--wide']}`} aria-busy="true" aria-label="Refreshing models">
+                            {Array.from({ length: SKELETON_CARD_COUNT }).map((_, i) => (
+                              <div key={i} className={styles['ev__skel-mcard']}>
+                                <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '60%', height: 14 }} />
+                                <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '35%' }} />
+                                <span className={styles['ev__skel-caps']}>
+                                  <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--tag']}`} />
+                                  <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--tag']}`} />
+                                </span>
+                                <span className={styles['ev__skel-stats']}>
+                                  <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--stat']}`} />
+                                  <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--stat']}`} />
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                        <div className={`${styles.ev__grid} ${styles['ev__grid--wide']}`}>
+                          {filteredModels.map((m) => {
+                            const on = draft.models.includes(m.id);
+                            const health: HealthStatus = healthById?.[m.id] ?? 'idle';
+                            const selectable = health === 'success';
+                            const caps = (m as any).capabilities as string[] | undefined;
+                            const inputPrice = (m as any).input_price as number | null | undefined;
+                            const outputPrice = (m as any).output_price as number | null | undefined;
+                            const accuracy = (m as any).accuracy_score as number | null | undefined;
+                            const providerName = providers.find((p) => p?.id === m.provider_id)?.name ?? m.provider_id;
+
+                            return (
+                              // Not a <button> — it contains a nested "Check health"
+                              // control, so it's a clickable div with keyboard support
+                              // instead (nested interactive elements aren't valid HTML).
+                              <div
+                                key={m.id}
+                                role="button"
+                                tabIndex={0}
+                                className={`${styles.ev__mcard} ${on ? styles['ev__mcard--on'] : ''} ${
+                                  !selectable && !on ? styles['ev__mcard--locked'] : ''
+                                } ${health === 'loading' ? styles['ev__mcard--checking'] : ''}`}
+                                onClick={() => toggleModel(m.id)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    toggleModel(m.id);
+                                  }
+                                }}
+                                aria-pressed={on}
+                                aria-disabled={!selectable && !on}
+                              >
+                                <div className={styles['ev__mcard-top']}>
+                                  <div className={styles['ev__mcard-name']}>{m.name || 'Unnamed model'}</div>
+                                  {on && (
+                                    <span className={styles['ev__mcard-mark']}>
+                                      <Check size={12} strokeWidth={3} />
+                                    </span>
+                                  )}
+                                </div>
+
+                                {/* Provider name + health badge, same line, badge on the right */}
+                                <div className={styles['ev__mcard-provider-row']}>
+                                  <span className={styles['ev__mcard-provider']}>{providerName}</span>
+
+                                  {health === 'success' && (
+                                    <span className={`${styles['ev__health-badge']} ${styles['ev__health-badge--success']}`}>
+                                      <ShieldCheck size={12} /> Available
+                                    </span>
+                                  )}
+
+                                  {health === 'failed' && (
+                                    <button
+                                      type="button"
+                                      className={`${styles['ev__health-badge']} ${styles['ev__health-badge--failed']}`}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        runHealthCheck(m.id);
+                                      }}
+                                      title="Retry health check"
+                                    >
+                                      <ShieldAlert size={12} /> Unavailable
+                                    </button>
+                                  )}
+
+                                  {health === 'loading' && (
+                                    <span className={`${styles['ev__health-badge']} ${styles['ev__health-badge--loading']}`}>
+                                      <Loader2 size={12} className={styles.ev__spin} /> Checking…
+                                    </span>
+                                  )}
+
+                                  {health === 'idle' && (
+                                    <button
+                                      type="button"
+                                      className={styles['ev__health-check-btn']}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        runHealthCheck(m.id);
+                                      }}
+                                    >
+                                      <HeartPulse size={12} /> Check health
+                                    </button>
+                                  )}
+                                </div>
+
+                                {caps && caps.length > 0 && (
+                                  <div className={styles.ev__caps}>
+                                    {caps.slice(0, 3).map((c) => (
+                                      <span key={c} className={styles.ev__cap}>
+                                        {c}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                                <div className={styles['ev__mcard-stats']}>
+                                  <span className={styles.ev__stat}>
+                                    <span className={styles['ev__stat-k']}>Context</span>
+                                    <span className={styles['ev__stat-v']}>{formatContextWindow(m.context_window)}</span>
+                                  </span>
+                                  {(inputPrice !== undefined || outputPrice !== undefined) && (
+                                    <span className={styles.ev__stat}>
+                                      <span className={styles['ev__stat-k']}>Price /1M</span>
+                                      <span className={styles['ev__stat-v']}>
+                                        {formatPrice(inputPrice)}/{formatPrice(outputPrice)}
+                                      </span>
+                                    </span>
+                                  )}
+                                  {typeof accuracy === 'number' && Number.isFinite(accuracy) && (
+                                    <span className={styles.ev__stat}>
+                                      <span className={styles['ev__stat-k']}>Accuracy</span>
+                                      <span className={styles['ev__stat-v']}>{accuracy.toFixed(1)}%</span>
+                                    </span>
+                                  )}
+                                </div>
+
+                                {!selectable && !on && (
+                                  <p className={styles['ev__mcard-hint']}>
+                                    {health === 'idle' && 'Run a health check to enable selection.'}
+                                    {health === 'loading' && 'Waiting for health check to complete…'}
+                                    {health === 'failed' && 'This model failed its health check and can\u2019t be selected.'}
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })}
+                          {filteredModels.length === 0 && (
+                            <p className={styles.ev__empty}>No models match "{modelSearch}".</p>
+                          )}
+                        </div>
+                        )}
+                      </div>
+                    ) : (
+                      <p className={styles.ev__empty}>Select providers first to see their available models.</p>
+                    ))}
+
+                  {/* STEP 4 — TEST SUITE */}
+                  {step === 4 && (
+                    <>
+                      {/* Upload isn't offered for Agent benchmarks with no
+                          framework selected (POST /agent-benchmark/run only
+                          accepts existing datasets), or for RAG (fixed
+                          retrieval corpora, no upload-your-own flow) — so
+                          there's nothing to switch between and the tab bar
+                          itself is hidden, not just the Upload button. */}
+                      {!hideUploadTab && (
+                        <div className={styles.ev__tabs}>
+                          <button
+                            type="button"
+                            className={`${styles.ev__tab} ${datasetTab === 'browse' ? styles['ev__tab--on'] : ''}`}
+                            onClick={() => setDatasetTab('browse')}
+                          >
+                            <LayoutGrid size={14} /> Browse
+                          </button>
+                          <button
+                            type="button"
+                            className={`${styles.ev__tab} ${datasetTab === 'upload' ? styles['ev__tab--on'] : ''}`}
+                            onClick={openUploadPanel}
+                          >
+                            <Upload size={14} /> Upload
+                          </button>
+                        </div>
+                      )}
+
+                      {isRag && (
+                        <div className={`${styles.ev__field} ${styles['ev__field--topk']}`}>
+                          <label className={styles.ev__label}>
+                            Top K <span className="opt">how many retrieved documents to consider per query</span>
+                          </label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={50}
+                            className={styles.ev__input}
+                            value={draft.topK}
+                            onChange={(e) => {
+                              const raw = e.target.value === '' ? 5 : Number(e.target.value);
+                              const val = Number.isNaN(raw) ? 5 : Math.min(50, Math.max(1, Math.round(raw)));
+                              dispatch(setDraft({ topK: val }));
+                            }}
+                          />
+                        </div>
+                      )}
+
+                      {datasetTab === 'browse' && (
+                        <div className={styles.ev__suite}>
+                          <div className={styles['ev__suite-scroll']}>
+                            <div className={styles['ev__step-toolbar']}>
+                              <div className={styles['ev__toolbar-search']}>
+                                <Search size={14} />
+                                <input
+                                  placeholder="Search test suites…"
+                                  value={datasetSearch}
+                                  onChange={(e) => setDatasetSearch(e.target.value)}
+                                />
+                              </div>
+                              <button
+                                type="button"
+                                className={styles['ev__toolbar-refresh']}
+                                onClick={refreshDatasets}
+                                disabled={datasetsRefreshing}
+                                title="Refresh test suites"
+                              >
+                                <RefreshCw size={14} className={datasetsRefreshing ? styles.ev__spin : ''} />
+                              </button>
+                            </div>
+
+                            {/* Change-1: All / Custom / Deepeval filter */}
+                            <div className={styles['ev__filter-row']}>
+                              {DATASET_TYPE_FILTERS.map((f) => {
+                                const on = datasetTypeFilter === f.value;
+                                const count = datasetTypeCounts[f.value];
+                                return (
+                                  <button
+                                    key={f.value}
+                                    type="button"
+                                    className={`${styles['ev__filter-chip']} ${on ? styles['ev__filter-chip--on'] : ''}`}
+                                    onClick={() => setDatasetTypeFilter(f.value)}
+                                  >
+                                    {f.label}
+                                    <span className={styles['ev__filter-chip-count']}>{count}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+
+                            {(() => {
+                              // Both the busy flag and the error message are
+                              // tracked locally (set from the outcome of our
+                              // own dispatch calls) rather than read from the
+                              // datasets slice's own status/error fields —
+                              // see datasetsErrorLocal above for why.
+                              if (datasetsRefreshing) {
+                                return (
+                                  <div className={styles.ev__dgrid} aria-busy="true" aria-label="Loading test suites">
+                                    {Array.from({ length: SKELETON_CARD_COUNT }).map((_, i) => (
+                                      <div key={i} className={styles['ev__skel-dcard']}>
+                                        <span className={styles['ev__skel-dcard-top']}>
+                                          <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--icon-sm']}`} />
+                                          <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '55%' }} />
+                                        </span>
+                                        <span className={styles['ev__skel-caps']}>
+                                          <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--tag']}`} />
+                                          <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--tag']}`} />
+                                          <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--tag']}`} />
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                );
+                              }
+
+                              if (datasetsErrorLocal) {
+                                return <p className={styles.ev__error}>{datasetsErrorLocal}</p>;
+                              }
+
+                              return (
+                                <div className={styles.ev__dgrid}>
+                                  {filteredDatasets.map((d) => {
+                                    const on = draft.dataset === d.id;
+                                    const isCustom = (d as any)?.dataset_type === 'custom';
+                                    const isDeepeval = (d as any)?.dataset_type === 'deepeval';
+                                    const hasNoQuestions = (d.question_count ?? 0) <= 0;
+                                    return (
+                                      // Not a <button> — it now contains a nested "Preview"
+                                      // control, so it's a clickable div with keyboard
+                                      // support instead (mirrors the model card pattern;
+                                      // nested interactive elements aren't valid HTML).
+                                      <div
+                                        key={d.id}
+                                        role="button"
+                                        tabIndex={0}
+                                        className={`${styles.ev__dcard} ${on ? styles['ev__dcard--on'] : ''} ${
+                                          hasNoQuestions ? styles['ev__dcard--empty'] : ''
+                                        }`}
+                                        onClick={() => dispatch(setDraft({ dataset: d.id }))}
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter' || e.key === ' ') {
+                                            e.preventDefault();
+                                            dispatch(setDraft({ dataset: d.id }));
+                                          }
+                                        }}
+                                        aria-pressed={on}
+                                      >
+                                        <div className={styles['ev__dcard-top']}>
+                                          <div className={styles['ev__dcard-id']}>
+                                            <span className={styles['ev__dcard-icon']}>
+                                              <Database size={15} />
+                                            </span>
+                                            <span className={styles['ev__dcard-name']}>{d.name || 'Untitled dataset'}</span>
+                                            {hasNoQuestions && (
+                                              <span
+                                                className={styles['ev__dcard-warn-icon']}
+                                                title="This test suite has no questions yet — it can't be used until it does."
+                                              >
+                                                <Info size={13} />
+                                              </span>
+                                            )}
+                                          </div>
+                                          <div className={styles['ev__dcard-actions']}>
+                                            <button
+                                              type="button"
+                                              className={styles['ev__dcard-preview-btn']}
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                openPreview(d.id, d.name, d.question_count ?? 0);
+                                              }}
+                                              title="Preview sample questions"
+                                            >
+                                              <Eye size={13} /> Preview
+                                            </button>
+                                            {on && (
+                                              <span className={styles['ev__mcard-mark']}>
+                                                <Check size={12} strokeWidth={3} />
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                        <div className={styles['ev__dcard-tags']}>
+                                          {d.category && <span className={styles.ev__tag}>{d.category}</span>}
+                                          {d.eval_type && <span className={styles.ev__tag}>{d.eval_type}</span>}
+                                          {/* Change-1: both dataset_type values now get a tag —
+                                              previously only 'custom' rendered one. */}
+                                          {isCustom && (
+                                            <span className={`${styles.ev__tag} ${styles['ev__tag--custom']}`}>Custom</span>
+                                          )}
+                                          {isDeepeval && (
+                                            <span className={`${styles.ev__tag} ${styles['ev__tag--deepeval']}`}>Deepeval</span>
+                                          )}
+                                          <span
+                                            className={`${styles.ev__tag} ${styles['ev__tag--count']} ${
+                                              hasNoQuestions ? styles['ev__tag--count-empty'] : ''
+                                            }`}
+                                          >
+                                            {(d.question_count ?? 0).toLocaleString()} questions
+                                          </span>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                  {datasets.length === 0 && (
+                                    <p className={styles.ev__empty}>No test suites available for this type yet.</p>
+                                  )}
+                                  {datasets.length > 0 && filteredDatasets.length === 0 && (
+                                    <p className={styles.ev__empty}>
+                                      No test suites match {datasetSearch ? `"${datasetSearch}"` : 'this filter'}.
+                                    </p>
+                                  )}
+                                </div>
+                              );
+                            })()}
+                          </div>
+
+                          <aside className={styles.ev__rail}>
+                            <div className={styles['ev__rail-head']}>
+                              <div className={styles['ev__rail-head-row']}>
+                                <p className={styles['ev__rail-title']}>
+                                  <Layers size={13} /> Subgroups
+                                </p>
+                                {suite && (suite as any).dataset_categories?.length > 0 && (
+                                  <div className={styles['ev__rail-actions']}>
+                                    <button type="button" className={styles.ev__link} onClick={selectAllSubgroups}>
+                                      Select all
+                                    </button>
+                                    <button type="button" className={styles.ev__link} onClick={clearAllSubgroups}>
+                                      Unselect all
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                              <p className={styles['ev__rail-sub']}>
+                                {suite
+                                  ? `All of "${suite.name}"'s categories are selected by default — narrow as needed.`
+                                  : 'Select a suite to see its subgroups.'}
+                              </p>
+                            </div>
+                            <div className={styles['ev__rail-scroll']}>
+                              {!suite && <p className={styles['ev__rail-empty']}>No suite selected yet.</p>}
+                              {suite && (suite as any).dataset_categories?.length === 0 && (
+                                <p className={styles['ev__rail-empty']}>This suite has no subgroups.</p>
+                              )}
+                              {suite &&
+                                ((suite as any).dataset_categories ?? []).map((cat: string) => {
+                                  const on = draft.subgroup.includes(cat);
+                                  return (
+                                    <button
+                                      key={cat}
+                                      type="button"
+                                      className={`${styles['ev__check-row']} ${on ? styles['ev__check-row--on'] : ''}`}
+                                      onClick={() => dispatch(setDraft({ subgroup: toggle(draft.subgroup, cat) }))}
+                                    >
+                                      <span className={`${styles.ev__check} ${on ? styles['ev__check--on'] : ''}`}>
+                                        {on && <Check size={11} strokeWidth={3} />}
+                                      </span>
+                                      <span className={styles['ev__check-label']}>{cat}</span>
+                                    </button>
+                                  );
+                                })}
+                            </div>
+                          </aside>
+                        </div>
+                      )}
+
+                      {suite && (suite.question_count ?? 0) <= 0 && (
+                        <div className={styles['ev__dataset-empty-warning']}>
+                          <Info size={14} />
+                          <span>
+                            <strong>{suite.name || 'This test suite'}</strong> has no questions, so it can't be used for a
+                            run. Pick a different test suite to continue.
+                          </span>
+                        </div>
+                      )}
+
+                      {datasetTab === 'upload' && !hideUploadTab && (
+                        <div className={styles.ev__upload}>
+                          <div className={styles.ev__field}>
+                            <label className={styles.ev__label}>Name</label>
+                            <input
+                              className={styles.ev__input}
+                              placeholder="e.g. Internal QA set v1"
+                              value={uploadName}
+                              onChange={(e) => setUploadName(e.target.value)}
+                              disabled={datasetUploading}
+                            />
+                          </div>
+                          <div className={styles.ev__field}>
+                            <label className={styles.ev__label}>
+                              Description <span className="opt">optional</span>
+                            </label>
+                            <input
+                              className={styles.ev__input}
+                              placeholder="What does this dataset cover?"
+                              value={uploadDescription}
+                              onChange={(e) => setUploadDescription(e.target.value)}
+                              disabled={datasetUploading}
+                            />
+                          </div>
+                          <div className={styles.ev__field}>
+                            <label className={styles.ev__label}>Evaluation type</label>
+                            <input className={styles.ev__input} value={draft.type || '—'} disabled readOnly />
+                          </div>
+                          <div className={styles.ev__field}>
+                            <label className={styles.ev__label}>File</label>
+                            <label className={`${styles.ev__drop} ${uploadFile ? styles['ev__drop--has'] : ''}`}>
+                              <input
+                                type="file"
+                                accept={SUPPORTED_UPLOAD_EXTENSIONS.map((e) => `.${e}`).join(',')}
+                                onChange={(e) => handleUploadFileChange(e.target.files?.[0] ?? null)}
+                                disabled={datasetUploading}
+                                hidden
+                              />
+                              {uploadFile ? (
+                                <span className={styles['ev__drop-file']}>
+                                  <FileText size={15} /> {uploadFile.name}
+                                </span>
+                              ) : (
+                                <>
+                                  <FileText size={15} /> Choose a .json, .jsonl, .arrow or .parquet file
+                                </>
+                              )}
+                            </label>
+                            {uploadFileError && <p className={styles.ev__error}>{uploadFileError}</p>}
+                          </div>
+                          {datasetUploadError && <p className={styles.ev__error}>{datasetUploadError}</p>}
+                          <div className={styles['ev__upload-actions']}>
+                            <button
+                              type="button"
+                              className={`${styles.ev__btn} ${styles['ev__btn--ghost']}`}
+                              onClick={() => setDatasetTab('browse')}
+                              disabled={datasetUploading}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              className={`${styles.ev__btn} ${styles['ev__btn--primary']}`}
+                              onClick={submitUpload}
+                              disabled={!canUpload}
+                            >
+                              {datasetUploading ? (
+                                <>
+                                  <Loader2 size={15} className={styles.ev__spin} /> Uploading…
+                                </>
+                              ) : (
+                                <>
+                                  <Upload size={15} /> Upload &amp; use
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {/* STEP 5 — METRICS */}
+                  {step === 5 && (
+                    <div className={styles.ev__metrics}>
+                      <div className={styles['ev__metrics-main']}>
+                        <div className={styles.ev__samples}>
+                          {runSamplesControl}
+                          <p className={styles['ev__samples-note']}>
+                            {hideMetricsStep
+                              ? isAgentBenchmarkNoFramework
+                                ? "Metrics aren\u2019t configurable for agent benchmarks without a selected framework — a judge model is still required, though."
+                                : "Metrics aren\u2019t configurable for standard (non-custom) model benchmarks — a judge model is still required, though."
+                              : 'Questions sampled from the suite for each model.'}
+                          </p>
+                        </div>
+
+                        {!hideMetricsStep && (
+                          <>
+                            {(metricsCatalog.length > 0 || customMetricsForType.length > 0) && draft.metrics.length === 0 && (
+                              <p className={styles['ev__metrics-required']}>
+                                Select at least one metric (built-in or custom) to continue.
+                              </p>
+                            )}
+
+                            <div className={styles['ev__metrics-bar']}>
+                              <span className={styles['ev__metrics-count']}>
+                                <b>{draft.metrics.filter((m) => metricsCatalog.includes(m)).length}</b> of {metricsCatalog.length}{' '}
+                                selected
+                              </span>
+                              <div className={styles['ev__metrics-actions']}>
+                                <button type="button" className={styles.ev__link} onClick={selectAllBuiltinMetrics}>
+                                  Select all
+                                </button>
+                                <button type="button" className={styles.ev__link} onClick={clearBuiltinMetrics}>
+                                  Clear
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className={styles['ev__step-toolbar']}>
+                              <div className={styles['ev__toolbar-search']}>
+                                <Search size={14} />
+                                <input
+                                  placeholder="Search metrics…"
+                                  value={metricSearch}
+                                  onChange={(e) => setMetricSearch(e.target.value)}
+                                />
+                              </div>
+                              <button
+                                type="button"
+                                className={styles['ev__toolbar-refresh']}
+                                onClick={refreshMetrics}
+                                disabled={metricsRefreshing}
+                                title="Refresh metrics"
+                              >
+                                <RefreshCw size={14} className={metricsRefreshing ? styles.ev__spin : ''} />
+                              </button>
+                            </div>
+
+                            {metricsRefreshing ? (
+                              <div className={styles.ev__chips} aria-busy="true" aria-label="Loading metrics">
+                                {Array.from({ length: SKELETON_CHIP_COUNT }).map((_, i) => (
+                                  <span
+                                    key={i}
+                                    className={`${styles['ev__skel-block']} ${styles['ev__skel-block--chip']}`}
+                                    style={{ width: 64 + ((i * 37) % 90) }}
+                                  />
+                                ))}
+                              </div>
+                            ) : (
+                              <div className={styles.ev__chips}>
+                                {filteredMetrics.map((name: string) => {
+                                  const on = draft.metrics.includes(name);
+                                  return (
+                                    <button
+                                      key={name}
+                                      type="button"
+                                      className={`${styles.ev__chip} ${on ? styles['ev__chip--on'] : ''}`}
+                                      onClick={() => dispatch(setDraft({ metrics: toggle(draft.metrics, name) }))}
+                                    >
+                                      {on && (
+                                        <span className={styles['ev__chip-tick']}>
+                                          <Check size={12} strokeWidth={3} />
+                                        </span>
+                                      )}
+                                      {name}
+                                    </button>
+                                  );
+                                })}
+                                {metricsCatalog.length === 0 && (
+                                  <p className={styles.ev__empty}>No metrics available for this type.</p>
+                                )}
+                                {metricsCatalog.length > 0 && filteredMetrics.length === 0 && (
+                                  <p className={styles.ev__empty}>No metrics match "{metricSearch}".</p>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Custom metrics — same layout as built-in, separate section since
+                                they carry richer metadata (id/description/required_judge) and
+                                store the metric's `id` in draft.metrics rather than its name.
+                                Shown whenever the raw catalog has *any* entries — even if none
+                                match this eval type or the current search — so an empty result
+                                is visibly "0 for this type" rather than indistinguishable from
+                                the section never having loaded at all. */}
+                            {customMetricsCatalog.length > 0 && (
+                              <div className={styles['ev__custom-metrics']}>
+                                <div className={styles['ev__metrics-bar']}>
+                                  <span className={styles['ev__metrics-count']}>
+                                    <b>{draft.metrics.filter((m) => customMetricIdSet.has(m)).length}</b> of{' '}
+                                    {customMetricsForType.length} custom selected
+                                  </span>
+                                  <div className={styles['ev__metrics-actions']}>
+                                    <button type="button" className={styles.ev__link} onClick={selectAllCustomMetrics}>
+                                      Select all
+                                    </button>
+                                    <button type="button" className={styles.ev__link} onClick={clearCustomMetrics}>
+                                      Clear
+                                    </button>
+                                  </div>
+                                </div>
+
+                                <div className={styles.ev__chips}>
+                                  {filteredCustomMetrics.map((c) => {
+                                    const on = draft.metrics.includes(c.id);
+                                    return (
+                                      <button
+                                        key={c.id}
+                                        type="button"
+                                        className={`${styles.ev__chip} ${styles['ev__chip--custom']} ${on ? styles['ev__chip--on'] : ''}`}
+                                        onClick={() => dispatch(setDraft({ metrics: toggle(draft.metrics, c.id) }))}
+                                        title={c.description || c.name}
+                                      >
+                                        {on && (
+                                          <span className={styles['ev__chip-tick']}>
+                                            <Check size={12} strokeWidth={3} />
+                                          </span>
+                                        )}
+                                        {c.name}
+                                        {c.required_judge && <Gavel size={11} className={styles['ev__chip-judge-icon']} />}
+                                      </button>
+                                    );
+                                  })}
+                                  {customMetricsForType.length === 0 && (
+                                    <p className={styles.ev__empty}>No custom metrics available for this type.</p>
+                                  )}
+                                  {customMetricsForType.length > 0 && filteredCustomMetrics.length === 0 && (
+                                    <p className={styles.ev__empty}>No custom metrics match "{metricSearch}".</p>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+
+                      {/* Judge model — mandatory for every type now (Model, Agent, RAG),
+                          regardless of which metrics are selected or whether the metrics
+                          section itself is shown. */}
+                      <aside className={styles.ev__judge}>
+                        <div className={styles['ev__judge-head']}>
+                          <p className={styles['ev__judge-title']}>
+                            <Gavel size={13} /> Judge model
+                          </p>
+                          <p className={styles['ev__judge-sub']}>Required to launch, for every evaluation type.</p>
+                        </div>
+
+                        <div className={styles['ev__judge-info']}>
+                          <Info size={13} />
+                          <span>
+                            The judge model only actually grades metrics that need one (e.g. LLM-graded metrics) — for
+                            everything else it's simply ignored, but a selection is still required to launch.
+                          </span>
+                        </div>
+
+                        <div className={styles['ev__judge-scroll']}>
+                          {judgeCandidateModels.length === 0 ? (
+                            <div className={styles['ev__judge-empty']}>No available models yet.</div>
+                          ) : (
+                            judgeCandidateModels.map((m) => {
+                                const on = draft.judgeModelId === m.id;
+                                return (
+                                  <button
+                                    key={m.id}
+                                    type="button"
+                                    className={`${styles['ev__judge-row']} ${on ? styles['ev__judge-row--on'] : ''}`}
+                                    onClick={() => dispatch(setDraft({ judgeModelId: on ? null : m.id }))}
+                                  >
+                                    <span className={`${styles.ev__radio} ${on ? styles['ev__radio--on'] : ''}`} />
+                                    <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+                                      <span className={styles['ev__judge-name']}>{m.name || 'Unnamed model'}</span>
+                                      <span className={styles['ev__judge-meta']}>
+                                        {providers.find((p) => p?.id === m.provider_id)?.name ?? m.provider_id}
+                                      </span>
+                                    </span>
+                                  </button>
+                                );
+                              })
+                          )}
+                        </div>
+                        {!draft.judgeModelId && (
+                          <p className={styles['ev__judge-required']}>
+                            Select a judge model to continue — it's required for every evaluation.
+                          </p>
+                        )}
+                      </aside>
+                    </div>
+                  )}
+
+                  {/* STEP 6 — REVIEW */}
+                  {step === 6 && (
+                    <>
+                      <div className={styles.ev__summary}>
+                        <div className={styles['ev__summary-cell']}>
+                          <div className={styles['ev__summary-k']}>
+                            <Layers size={11} /> Questions
+                          </div>
+                          <div className={`${styles['ev__summary-v']} ${suite ? '' : styles['ev__summary-v--muted']}`}>
+                            {suite ? (suite.question_count ?? 0).toLocaleString() : '—'}
+                          </div>
+                        </div>
+                        <div className={styles['ev__summary-cell']}>
+                          <div className={styles['ev__summary-k']}>
+                            <Cpu size={11} /> Models
+                          </div>
+                          <div className={styles['ev__summary-v']}>{selectedModels.length}</div>
+                        </div>
+                        <div className={styles['ev__summary-cell']}>
+                          <div className={styles['ev__summary-k']}>
+                            <Target size={11} /> Metrics
+                          </div>
+                          <div className={styles['ev__summary-v']}>{hideMetricsStep ? '—' : draft.metrics.length}</div>
+                        </div>
+                      </div>
+
+                      <div className={styles.ev__block}>
+                        <p className={styles['ev__block-title']}>
+                          <Tag size={11} /> Overview
+                        </p>
+                        <div className={styles.ev__rows}>
+                          <div className={styles.ev__row}>
+                            <span>Name</span>
+                            <span>{draft.name || '—'}</span>
+                          </div>
+                          <div className={styles.ev__row}>
+                            <span>Type</span>
+                            <span>{typeLabel || '—'}</span>
+                          </div>
+                          {draft.agentFramework && (
+                            <div className={styles.ev__row}>
+                              <span>Framework</span>
+                              <span>{AGENT_FRAMEWORKS.find((f) => f.id === draft.agentFramework)?.title}</span>
+                            </div>
+                          )}
+                          <div className={styles.ev__row}>
+                            <span>Providers</span>
+                            <span>{draft.providers.map((id) => providers.find((p) => p?.id === id)?.name || id).join(', ') || '—'}</span>
+                          </div>
+                          <div className={styles.ev__row}>
+                            <span>Run samples</span>
+                            <span>{draft.runSamplesMode === 'full' ? 'Full dataset' : draft.runSamples}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className={styles.ev__block}>
+                        <p className={styles['ev__block-title']}>
+                          <Cpu size={11} /> Models <b>({selectedModels.length})</b>
+                        </p>
+                        {selectedModels.length > 0 ? (
+                          <div className={styles['ev__review-grid']}>
+                            {selectedModels.map((m) => (
+                              <div key={m!.id} className={styles['ev__review-card']}>
+                                <span className={styles['ev__review-card-icon']}>
+                                  <Cpu size={15} />
+                                </span>
+                                <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+                                  <span className={styles['ev__review-card-name']}>{m!.name || 'Unnamed model'}</span>
+                                  <span className={styles['ev__review-card-sub']}>
+                                    {providers.find((p) => p?.id === m!.provider_id)?.name || m!.provider_id}
+                                  </span>
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className={styles.ev__empty}>No models selected.</p>
+                        )}
+                      </div>
+
+                      <div className={styles.ev__block}>
+                        <p className={styles['ev__block-title']}>
+                          <Database size={11} /> Test suite
+                        </p>
+                        <div className={styles.ev__rows}>
+                          <div className={styles.ev__row}>
+                            <span>Suite</span>
+                            <span>{suite?.name ?? '—'}</span>
+                          </div>
+                          {suite?.category && (
+                            <div className={styles.ev__row}>
+                              <span>Category</span>
+                              <span>{suite.category}</span>
+                            </div>
+                          )}
+                          {draft.subgroup.length > 0 && (
+                            <div className={styles.ev__row}>
+                              <span>Subgroups</span>
+                              <span>{draft.subgroup.join(', ')}</span>
+                            </div>
+                          )}
+                          {isRag && (
+                            <div className={styles.ev__row}>
+                              <span>Top K</span>
+                              <span>{draft.topK}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {!hideMetricsStep && (
+                        <div className={styles.ev__block}>
+                          <p className={styles['ev__block-title']}>
+                            <Target size={11} /> Metrics <b>({draft.metrics.length})</b>
+                          </p>
+                          {draft.metrics.length > 0 ? (
+                            <div className={styles['ev__metric-tags']}>
+                              {draft.metrics.map((m) => {
+                                // draft.metrics mixes built-in metric names with custom
+                                // metric ids — resolve the id back to its display name.
+                                const custom = customMetricsCatalog.find((c) => c.id === m);
+                                return (
+                                  <span key={m} className={styles['ev__metric-tag']}>
+                                    {custom ? custom.name : m}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <p className={styles.ev__empty}>No metrics selected.</p>
+                          )}
+                        </div>
+                      )}
+
+                      <div className={styles.ev__block}>
+                        <p className={styles['ev__block-title']}>
+                          <Gavel size={11} /> Judge model
+                        </p>
+                        <div className={styles.ev__rows}>
+                          <div className={styles.ev__row}>
+                            <span>Model</span>
+                            <span>{judgeModel ? judgeModel.name || 'Unnamed model' : '—'}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {launchError && <p className={styles.ev__error}>{launchError}</p>}
+                    </>
+                  )}
+                </div>
+                </StepErrorBoundary>
+              </div>
+
+              {/* ---- footer nav ---- */}
+              <div className={styles.ev__footer}>
+                <button
+                  type="button"
+                  className={`${styles.ev__btn} ${styles['ev__btn--ghost']}`}
+                  onClick={() => (step > 0 ? goBack() : navigate('/app/dashboard'))}
+                  disabled={launching}
+                >
+                  <ChevronLeft size={16} /> {step === 0 ? 'Cancel' : 'Back'}
+                </button>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                  {step === 0 && canGo() && (
+                    <span className={styles.ev__hint}>
+                      <kbd>↵</kbd> Enter to continue
+                    </span>
+                  )}
+                  {step < totalSteps - 1 ? (
+                    <button type="button" className={`${styles.ev__btn} ${styles['ev__btn--primary']}`} onClick={goNext} disabled={!canGo()}>
+                      Continue <ChevronRight size={16} />
+                    </button>
+                  ) : (
+                    <button type="button" className={`${styles.ev__btn} ${styles['ev__btn--launch']}`} onClick={launch} disabled={launching}>
+                      {launching ? (
+                        <>
+                          <Loader2 size={16} className={styles.ev__spin} /> Launching…
+                        </>
+                      ) : (
+                        <>
+                          <Play size={16} /> Launch run
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+
+      {/* Change-2: dataset preview slider — right-to-left panel showing
+          GET /datasets/{id}/preview?limit={limit} for the clicked suite. */}
+      {previewOpen && (
+        <div className={styles['ev-preview-overlay']} onClick={closePreview}>
+          <aside
+            className={styles['ev-preview-panel']}
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Preview ${previewDatasetName}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className={styles['ev-preview-head']}>
+              <div className={styles['ev-preview-head-main']}>
+                <p className={styles['ev-preview-eyebrow']}>Test suite preview</p>
+                <h3 className={styles['ev-preview-title']}>{previewDatasetName || 'Dataset'}</h3>
+              </div>
+              <button type="button" className={styles['ev-preview-close']} onClick={closePreview} title="Close preview">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className={styles['ev-preview-controls']}>
+              <div className={styles['ev-preview-limit']}>
+                <label className={styles['ev-preview-limit-label']}>
+                  Page {previewCurrentPage} of {previewTotalPages}
+                  <span className={styles['ev-preview-limit-range']}>
+                    {' '}
+                    ({PREVIEW_PAGE_SIZE} per page
+                    {previewQuestionCount > 0 ? `, ${previewQuestionCount.toLocaleString()} total` : ''})
+                  </span>
+                </label>
+                <div className={styles['ev-preview-limit-controls']}>
+                  <button
+                    type="button"
+                    className={styles['ev-preview-stepper-btn']}
+                    onClick={goToPreviewPrevPage}
+                    disabled={previewLoading || !previewHasPrevPage}
+                    aria-label="Previous page"
+                    title="Previous page"
+                  >
+                    <ChevronLeft size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    className={styles['ev-preview-stepper-btn']}
+                    onClick={goToPreviewNextPage}
+                    disabled={previewLoading || !previewHasNextPage}
+                    aria-label="Next page"
+                    title="Next page"
+                  >
+                    <ChevronRight size={14} />
+                  </button>
+                </div>
+              </div>
+              <button
+                type="button"
+                className={`${styles.ev__btn} ${styles['ev__btn--primary']}`}
+                onClick={() => previewDatasetId && fetchPreviewPage(previewDatasetId, previewOffset)}
+                disabled={previewLoading}
+                title="Reload this page"
+              >
+                {previewLoading ? (
+                  <>
+                    <Loader2 size={15} className={styles.ev__spin} /> Loading…
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw size={15} /> Reload
+                  </>
+                )}
+              </button>
+            </div>
+
+            <div className={styles['ev-preview-body']}>
+              {previewError && <p className={styles.ev__error}>{previewError}</p>}
+
+              {previewLoading && (
+                <div className={styles['ev-preview-skel-list']} aria-busy="true" aria-label="Loading preview">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <div key={i} className={styles['ev-preview-skel-card']}>
+                      <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '85%' }} />
+                      <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '60%' }} />
+                      <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '40%' }} />
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {!previewLoading &&
+                !previewError &&
+                previewData &&
+                (() => {
+                  // Guard against `questions` being missing/non-array on the
+                  // response — accessing .length/.map directly on that would
+                  // throw if the API ever omits or nulls the field.
+                  const previewQuestions = Array.isArray(previewData.questions) ? previewData.questions : [];
+
+                  if (previewQuestions.length === 0) {
+                    return <p className={styles.ev__empty}>This suite returned no sample questions.</p>;
+                  }
+
+                  return (
+                    <div className={styles['ev-preview-list']}>
+                      {previewQuestions.map((q, i) => {
+                        // Two response shapes are both seen in practice —
+                        // resolve whichever fields are actually present
+                        // rather than assuming one fixed shape (see
+                        // DatasetPreviewQuestion in types).
+                        const promptText = q?.input?.prompt ?? q?.input?.question;
+                        const inputSource = q?.input?.source;
+                        const inputType = q?.input?.type;
+                        const expectedAnswer = q?.expected?.answer;
+                        const expectedDocId = q?.expected?.doc_id;
+                        const expectedSectionId = q?.expected?.section_id;
+                        const metadataEntries =
+                          q?.metadata && typeof q.metadata === 'object' ? Object.entries(q.metadata) : [];
+
+                        return (
+                          <div key={q?.id ?? i} className={styles['ev-preview-q']}>
+                            <div className={styles['ev-preview-q-head']}>
+                              <span className={styles['ev-preview-q-index']}>Q{previewOffset + i + 1}</span>
+                              {q?.category && <span className={styles['ev-preview-q-cat']}>{q.category}</span>}
+                              {q?.subgroup && <span className={styles['ev-preview-q-cat']}>{q.subgroup}</span>}
+                              {inputType && <span className={styles['ev-preview-q-cat']}>{String(inputType)}</span>}
+                            </div>
+
+                            {promptText != null && (
+                              <p className={styles['ev-preview-q-prompt']}>{String(promptText)}</p>
+                            )}
+                            {inputSource != null && (
+                              <p className={styles['ev-preview-q-source']}>
+                                <span>Source</span> {String(inputSource)}
+                              </p>
+                            )}
+
+                            {Array.isArray(q?.choices) && q.choices.length > 0 && (
+                              <ul className={styles['ev-preview-q-choices']}>
+                                {q.choices.map((c, ci) => (
+                                  <li key={ci}>{String(c)}</li>
+                                ))}
+                              </ul>
+                            )}
+
+                            {expectedAnswer !== undefined && expectedAnswer !== null && (
+                              <p className={styles['ev-preview-q-answer']}>
+                                <span>Expected</span> {String(expectedAnswer)}
+                              </p>
+                            )}
+                            {(expectedDocId != null || expectedSectionId != null) && (
+                              <p className={styles['ev-preview-q-answer']}>
+                                <span>Reference</span>{' '}
+                                {[expectedDocId != null ? `doc ${expectedDocId}` : null, expectedSectionId != null ? `section ${expectedSectionId}` : null]
+                                  .filter(Boolean)
+                                  .join(' · ')}
+                              </p>
+                            )}
+
+                            {metadataEntries.length > 0 && (
+                              <div className={styles['ev-preview-q-meta']}>
+                                {metadataEntries.map(([key, value]) => (
+                                  <span key={key} className={styles['ev-preview-q-meta-item']}>
+                                    <b>{key}</b>
+                                    {String(value)}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {toast && (
+        <div className={styles['ev-toast']}>
+          <div className={styles['ev-toast__icon']}>
+            <Check size={18} />
+          </div>
+          <div>
+            <div className={styles['ev-toast__title']}>Run launched</div>
+            <div className={styles['ev-toast__sub']}>You'll find it in your history once it completes.</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
