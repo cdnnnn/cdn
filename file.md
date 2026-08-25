@@ -1,2460 +1,2521 @@
-import { Component, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
+// ═══════════════════════════════════════════════
+// pages/UploadInfer/WorkspacePanel.tsx
+// LectureAI · Step-3 Workspace Result panel
+// ═══════════════════════════════════════════════
+import React, { useState, useMemo, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react';
+import { useTranslation } from 'react-i18next';
+import { marked } from 'marked';
 import {
-  ChevronLeft,
-  ChevronRight,
-  Check,
-  Cpu,
-  Bot,
-  Database,
-  Play,
-  Clock3,
-  Tag,
-  LayoutGrid,
-  Plug,
-  Target,
-  ClipboardCheck,
-  Gavel,
-  Layers,
-  Loader2,
-  Waypoints,
-  Lightbulb,
-  Plus,
-  Upload,
-  FileText,
-  HeartPulse,
-  ShieldCheck,
-  ShieldAlert,
-  RefreshCw,
-  Search,
-  Eye,
-  X,
-  AlertTriangle,
-  Info,
-  type LucideIcon,
-} from 'lucide-react';
-import { useAppDispatch, useAppSelector } from '../../hooks/redux';
-import { fetchProviders } from '../../store/slices/providersSlice';
-import { fetchModels, checkModelHealth } from '../../store/slices/modelsSlice';
-import { fetchDatasets, uploadDataset, resetUploadStatus } from '../../store/slices/datasetsSlice';
-import { SUPPORTED_UPLOAD_EXTENSIONS } from '../../api/endpoints/datasets';
-// `evaluationsApi.previewDataset` — GET /datasets/{id}/preview?limit={limit} —
-// is a thin, one-off read used only by the Test Suite preview slider below.
-// It lives in the evaluations API module (not datasets) and is called
-// directly rather than round-tripped through Redux.
-import { evaluationsApi } from '../../api/endpoints/evaluations';
-import { fetchMetrics } from '../../store/slices/metricsSlice';
-import {
-  launchEvaluation,
-  runAgentBenchmark,
-  runAgentBenchmarkMulti,
-  setDraft,
-  setDraftType,
-} from '../../store/slices/evaluationsSlice';
-import type { CreateEvaluationRequest, EvaluationDraft, DatasetPreviewResponse, CustomMetric } from '../../types';
-import styles from './NewEvaluation.module.scss';
+    ReactFlow, Background, Controls, MiniMap, Handle, Position, applyNodeChanges,
+    type Node as RFNode, type Edge as RFEdge, type NodeChange,
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
+import dagre from 'dagre';
+import api from '../../services/api';
+import type { FileResult, WordCloudData, ImportanceComplexityData, GlossaryData, KeywordInsights, TimelineData, TimelineTimeUnit } from './UploadInfer';
+import styles from './WorkspacePanel.module.scss';
 
-// ─────────────────────────────────────────────────────────────────────────
-// This component is built against the REAL evaluationsSlice draft shape:
-//   { name, type, providers, models, dataset, subgroup, runSamplesMode,
-//     runSamples, metrics, judgeModelId, agentFramework }
-// `type` is lowercase: 'model' | 'agent' | 'rag' | null.
-// setDraftType(type) — clears metrics, and clears agentFramework unless
-// type === 'agent' (handled in the slice itself).
-// runSamplesMode is 'custom' (default) or 'full' — see runSamplesControl
-// below and the `launch` function for how 'full' maps to run_samples: 0.
-//
-// Other slice assumptions this component depends on:
-//
-// providersSlice / modelsSlice / datasetsSlice / metricsSlice — lazy fetch:
-//   - fetchProviders() is dispatched once, the first time Step 2 is opened.
-//   - fetchModels() is dispatched once, the first time Step 3 is opened.
-//   - fetchDatasets(type) is dispatched the first time Step 4 is opened for
-//     a given dataset type/framework combination.
-//   - fetchMetrics(evalType) — GET /metrics?eval_type={type} — is
-//     dispatched the first time Step 5 is opened for a given draft.type.
-//     Response: { eval_type, metrics: string[], all_metrics: string[] }.
-//     Only `all_metrics` is consumed (see metricsCatalog below).
-//   - None of the above fire on mount or the instant their prerequisite
-//     (e.g. draft.type) is set — only on actually navigating to the step.
-//     Each step's "refresh" button bypasses this and calls the thunk
-//     directly, any time it's clicked.
-//
-// modelsSlice — health checks:
-//   - checkModelHealth(modelId: string) — GET /models/health/{model_id}
-//     Response: { success, message, model_id, response }
-//   - state.models.healthById: Record<string, 'idle'|'loading'|'success'|'failed'>
-//   - Fired automatically, in parallel, for every model in the current
-//     provider selection as soon as Step 3's model list is available (see
-//     the auto health-check effect below) — a model can't be selected
-//     until its check resolves to 'success'. The manual "Check health"
-//     button on each card still works too, e.g. to retry a failure.
-//
-// datasetsSlice:
-//   - fetchDatasets(type: string) — GET /datasets?eval_type={type}
-//     `type` is one of: 'model' | 'rag' | 'agent_benchmark' | 'agent_custom'
-//     (the last two both represent draft.type === 'agent', distinguished by
-//     whether draft.agentFramework is set).
-//   - Dataset items carry `dataset_type` (used to detect "custom" datasets)
-//     and `dataset_categories: string[]` (used for the subgroup rail).
-//
-// Search (client-side only, no new endpoints):
-//   - Providers/Models/Test Suite/Metrics steps each get a small toolbar
-//     with a search box that filters the already-fetched list by name, and
-//     a refresh button that re-dispatches that step's existing fetch thunk.
-// ─────────────────────────────────────────────────────────────────────────
+marked.setOptions({ breaks: false, gfm: true });
 
-const STEPS = [
-  { label: 'Name' },
-  { label: 'Type' },
-  { label: 'Providers' },
-  { label: 'Models' },
-  { label: 'Test Suite' },
-  { label: 'Metrics' },
-  { label: 'Review' },
-];
-
-const STAGE = [
-  { title: 'Name your run', sub: 'A recognizable name makes this run easy to find later in your history.' },
-  { title: 'What are you evaluating?', sub: 'The system under test shapes which datasets and metrics you can pick.' },
-  { title: 'Select providers', sub: 'Choose which connected providers to draw candidate models from.' },
-  { title: 'Choose models', sub: 'Check a model\u2019s health before selecting it — only models that pass the check can be added to the run.' },
-  { title: 'Pick a test suite', sub: 'Select a dataset to evaluate against, or upload your own.' },
-  { title: 'Configure metrics', sub: 'Choose what to measure, and optionally a model to judge open-ended answers.' },
-  { title: 'Review & launch', sub: 'Confirm the run manifest, then launch.' },
-];
-
-const STEP_ICONS: LucideIcon[] = [Tag, LayoutGrid, Plug, Cpu, Database, Target, ClipboardCheck];
-
-// `value` matches draft.type exactly (lowercase); `label` is for display.
-const TYPE_OPTIONS: {
-  value: EvaluationDraft['type'];
-  label: string;
-  icon: LucideIcon;
-  sub: string;
-  variant: string;
-  disabled: boolean;
-}[] = [
-  {
-    value: 'model',
-    label: 'Model',
-    icon: Cpu,
-    sub: 'Benchmark a general-purpose LLM on standard tasks like reasoning, coding, and knowledge — ideal for comparing raw model quality across providers.',
-    variant: '',
-    disabled: false,
-  },
-  {
-    value: 'agent',
-    label: 'Agent',
-    icon: Bot,
-    sub: 'Test an autonomous agent that plans, calls tools, and completes multi-step tasks — measures task completion, not just single-turn output.',
-    variant: 'agent',
-    disabled: false,
-  },
-  {
-    value: 'rag',
-    label: 'RAG',
-    icon: Database,
-    sub: 'Evaluate a retrieval-augmented pipeline for grounding accuracy — checks how well answers stay faithful to your retrieved context.',
-    variant: 'rag',
-    disabled: false,
-  },
-];
-
-// Only Hermes remains as a selectable framework once "Agent" is chosen.
-const AGENT_FRAMEWORKS = [
-  { id: 'hermes', title: 'Hermes', desc: 'Lightweight tool-calling agent runtime' },
-];
-
-const SUGGESTED_NAMES = [
-  'Q3 Model Selection',
-  'Support Bot Regression',
-  'RAG Accuracy v2',
-  'GLM-4.6 vs Claude',
-];
-
-const NAMING_TIPS = [
-  "Include what you're testing — a model, a product feature, or a use case.",
-  'Add a date or version so you can track changes over time (e.g. "Q3", "v2").',
-  'Keep it specific enough to tell apart from similar past runs later.',
-];
-
-function formatContextWindow(tokens: number | null | undefined): string {
-  if (tokens === null || tokens === undefined || Number.isNaN(tokens)) return '—';
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toLocaleString()}M`;
-  if (tokens >= 1_000) return `${Math.round(tokens / 1000)}k`;
-  return `${tokens}`;
+interface Props {
+    step2Visible?: boolean;
+    step2Minimized?: boolean;
+    fileResult: FileResult | null;
+    fileLoading: boolean;
+    activeFileId: number | null;
+    onResultUpdate?: (patch: Partial<Pick<FileResult, 'summary' | 'keywords'>>) => void;
 }
 
-function formatPrice(price: number | null | undefined): string {
-  return price === null || price === undefined || Number.isNaN(price) ? '—' : `$${price.toFixed(2)}`;
+// TABS labels are now driven by i18n — see tabLabels() inside WorkspacePanel
+const TAB_IDS = ['summary', 'keywords', 'assessment', 'shortAnswer', 'trueFalse', 'timestampedSummary', 'keywordInsights'] as const;
+type TabId = typeof TAB_IDS[number];
+
+// Exposed to the parent so the guided tour can drive which tab is showing
+// without lifting activeTab into Redux just for that one use.
+export interface WorkspacePanelHandle {
+    setTab: (id: TabId) => void;
 }
 
-function providerInitials(name: string | null | undefined): string {
-  const safeName = name?.trim() || '';
-  if (!safeName) return '??';
-  const parts = safeName.replace(/[^a-zA-Z0-9 ]/g, '').split(' ').filter(Boolean);
-  const letters = parts.slice(0, 2).map((w) => w[0]).join('');
-  return (letters || safeName.slice(0, 2)).toUpperCase();
+
+interface FaqItem {
+    question: string;
+    options: Record<string, string>;
+    correct_answer: string;
+    explanation: string;
 }
 
-type HealthStatus = 'idle' | 'loading' | 'success' | 'failed';
-
-// Pulls a displayable message out of a rejected createAsyncThunk action,
-// regardless of whether that slice uses rejectWithValue (payload is a
-// string, or an object with a `message`) or lets RTK's default serializer
-// handle it (action.error.message).
-function getThunkErrorMessage(action: any, fallback: string): string {
-  const payload = action?.payload;
-  if (typeof payload === 'string' && payload) return payload;
-  if (payload && typeof payload === 'object' && typeof payload.message === 'string' && payload.message) {
-    return payload.message;
-  }
-  return action?.error?.message || fallback;
-}
-
-// Preview slider (Change-2): user picks how many sample questions to pull,
-// clamped server-side-friendly at 1–20 inclusive.
-// Preview slider (Change-2, later moved to offset-based pagination): fixed
-// page size of 20 questions per page, starting at offset 0. Total page
-// count is derived from the selected dataset's own `question_count`
-// (surfaced in the /datasets list) rather than from the preview response.
-const PREVIEW_PAGE_SIZE = 20;
-
-type DatasetTypeFilter = 'all' | 'custom' | 'deepeval';
-
-const DATASET_TYPE_FILTERS: { value: DatasetTypeFilter; label: string }[] = [
-  { value: 'all', label: 'All' },
-  { value: 'custom', label: 'Custom' },
-  { value: 'deepeval', label: 'Deepeval' },
-];
-
-// Skeleton placeholder counts — just enough to plausibly fill the grid
-// while a refresh is in flight, not meant to match the real result count.
-const SKELETON_CARD_COUNT = 6;
-const SKELETON_CHIP_COUNT = 8;
-
-// ---------------------------------------------------------------------------
-// StepErrorBoundary — catches render-time exceptions thrown while rendering
-// a single wizard step (e.g. an unexpected null/undefined field from the
-// API) and shows a small recoverable card in place of just that step's
-// content, instead of the whole page going blank. Must be a class component
-// — React only supports error boundaries via getDerivedStateFromError /
-// componentDidCatch, there's no hook equivalent.
-//
-// Rendered with `key={step}-${retryKey}` by the caller, so navigating to a
-// different step (or clicking "Try again", which bumps retryKey) always
-// remounts a fresh instance with hasError reset — no manual reset wiring
-// needed here.
-// ---------------------------------------------------------------------------
-interface StepErrorBoundaryProps {
-  children: ReactNode;
-  onRetry: () => void;
-  onBack: () => void;
-  canGoBack: boolean;
-}
-interface StepErrorBoundaryState {
-  hasError: boolean;
-}
-class StepErrorBoundary extends Component<StepErrorBoundaryProps, StepErrorBoundaryState> {
-  state: StepErrorBoundaryState = { hasError: false };
-
-  static getDerivedStateFromError(): StepErrorBoundaryState {
-    return { hasError: true };
-  }
-
-  componentDidCatch(error: Error, info: ErrorInfo) {
-    // eslint-disable-next-line no-console
-    console.error('[NewEvaluation] step failed to render:', error, info.componentStack);
-  }
-
-  render() {
-    if (!this.state.hasError) return this.props.children;
-    return (
-      <div className={styles.ev__error} style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 10 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <AlertTriangle size={16} />
-          <strong>This step hit an unexpected error.</strong>
-        </div>
-        <p style={{ margin: 0, fontWeight: 400 }}>
-          Your progress on earlier steps is safe. Try again, or go back and retry from there.
-        </p>
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button type="button" className={`${styles.ev__btn} ${styles['ev__btn--primary']}`} onClick={this.props.onRetry}>
-            Try again
-          </button>
-          {this.props.canGoBack && (
-            <button type="button" className={`${styles.ev__btn} ${styles['ev__btn--ghost']}`} onClick={this.props.onBack}>
-              Back
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  }
-}
-
-export default function NewEvaluation() {
-  const dispatch = useAppDispatch();
-  const navigate = useNavigate();
-  const [step, setStep] = useState(0);
-  // Bumped by StepErrorBoundary's "Try again" button to force a fresh
-  // remount of the current step's content without changing `step` itself.
-  const [stepRetryKey, setStepRetryKey] = useState(0);
-  const [toast, setToast] = useState(false);
-  const [datasetTab, setDatasetTab] = useState<'browse' | 'upload'>('browse');
-  const [uploadName, setUploadName] = useState('');
-  const [uploadDescription, setUploadDescription] = useState('');
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [uploadFileError, setUploadFileError] = useState<string | null>(null);
-  const totalSteps = STEPS.length;
-
-  // ---- search (client-side filter) + refresh (re-fetch) state, one pair
-  // per searchable step: Providers, Models, Test Suite, Metrics. ----------
-  const [providerSearch, setProviderSearch] = useState('');
-  const [modelSearch, setModelSearch] = useState('');
-  const [datasetSearch, setDatasetSearch] = useState('');
-  const [metricSearch, setMetricSearch] = useState('');
-
-  const [providersLoading, setProvidersLoading] = useState(false);
-  const [modelsLoading, setModelsLoading] = useState(false);
-  const [datasetsRefreshing, setDatasetsRefreshing] = useState(false);
-  const [metricsRefreshing, setMetricsRefreshing] = useState(false);
-  // Tracked locally rather than read from the datasets slice's own `error`
-  // field — that field wasn't reliably cleared on a subsequent successful
-  // fetch, so a stale error from an earlier failed attempt kept showing
-  // even after Refresh (or renavigating) succeeded. Deriving this purely
-  // from the outcome of our own dispatch calls below fixes that.
-  const [datasetsErrorLocal, setDatasetsErrorLocal] = useState<string | null>(null);
-
-  // ---- Test Suite: All/Custom/Deepeval filter (Change-1) -----------------
-  const [datasetTypeFilter, setDatasetTypeFilter] = useState<DatasetTypeFilter>('all');
-
-  // ---- Test Suite: preview slider (Change-2, now paginated) --------------
-  const [previewOpen, setPreviewOpen] = useState(false);
-  const [previewDatasetId, setPreviewDatasetId] = useState<string | null>(null);
-  const [previewDatasetName, setPreviewDatasetName] = useState<string>('');
-  // Total known question count for the dataset being previewed — comes
-  // from the dataset card (Dataset.question_count), not from the preview
-  // response itself. Used only to compute how many pages to offer.
-  const [previewQuestionCount, setPreviewQuestionCount] = useState(0);
-  const [previewOffset, setPreviewOffset] = useState(0);
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewError, setPreviewError] = useState<string | null>(null);
-  const [previewData, setPreviewData] = useState<DatasetPreviewResponse | null>(null);
-
-  const draft = useAppSelector((s) => s.evaluations.draft);
-  const launching = useAppSelector((s) => s.evaluations.launching);
-  const launchError = useAppSelector((s) => s.evaluations.launchError);
-
-  const providers = useAppSelector((s) => s.providers.items) ?? [];
-  const models = useAppSelector((s) => s.models.items) ?? [];
-  const healthById = useAppSelector((s) => (s.models as any).healthById) as Record<string, HealthStatus> | undefined;
-
-  const metricsState = useAppSelector((s) => s.metrics) ?? { allMetrics: [], customMetrics: [], status: 'idle' as const, error: null };
-  // Only `all_metrics` from the API response is used for the built-in
-  // catalog — it's the full list rendered as selectable chips. Loading
-  // state for this step is tracked locally (metricsRefreshing) rather than
-  // read from metricsState.status, for the same staleness reason as
-  // datasets below.
-  const metricsCatalog: string[] = (metricsState as any).allMetrics ?? [];
-  // `custom` from the same response, normalized by metricsSlice into
-  // state.metrics.customMetrics — richer objects (id/name/description/
-  // required_judge/etc.), rendered as their own section below the built-in
-  // metrics chips. Selection stores the metric's `id` (not its `name`) in
-  // draft.metrics, alongside the plain metric-name strings from
-  // metricsCatalog — both end up in the same selected_metrics array on
-  // launch, the backend only cares that each entry resolves to a metric.
-  const customMetricsCatalog: CustomMetric[] = (metricsState as any).customMetrics ?? [];
-  const customMetricsForType = useMemo(
-    () => customMetricsCatalog.filter((c) => !Array.isArray(c?.eval_types) || c.eval_types.length === 0 || (draft.type && c.eval_types.includes(draft.type))),
-    [customMetricsCatalog, draft.type]
-  );
-
-  const datasets = useAppSelector((s) => s.datasets.items) ?? [];
-  const datasetUploading = useAppSelector((s) => s.datasets.uploadStatus === 'loading');
-  const datasetUploadError = useAppSelector((s) => s.datasets.uploadError);
-
-  // ---- lazy fetch guards: each API is only called the first time the
-  // user actually navigates to the step that needs it, not on mount and
-  // not the moment its prerequisite (e.g. draft.type) is set. Refresh
-  // buttons bypass these guards entirely (they call the thunk directly).
-  const providersFetchedRef = useRef(false);
-  const modelsFetchedRef = useRef(false);
-  const datasetsFetchedForTypeRef = useRef<string | null>(null);
-  const metricsFetchedForTypeRef = useRef<string | null>(null);
-
-  // GET /providers — fetched once, the first time Step 2 is reached. If
-  // that fetch fails, the marker is rolled back so leaving and coming back
-  // to Step 2 retries it automatically, instead of silently reusing a
-  // failed attempt forever (the Refresh button already bypasses this).
-  useEffect(() => {
-    if (step !== 2 || providersFetchedRef.current) return;
-    providersFetchedRef.current = true;
-    (async () => {
-      setProvidersLoading(true);
-      const result = await dispatch(fetchProviders());
-      setProvidersLoading(false);
-      if (fetchProviders.rejected.match(result)) {
-        providersFetchedRef.current = false;
-      }
-    })();
-  }, [step, dispatch]);
-
-  // GET /models — fetched once, the first time Step 3 is reached (by then
-  // providers are already selected, since Step 2 requires it to advance).
-  // Same retry-on-failure behavior as providers above.
-  useEffect(() => {
-    if (step !== 3 || modelsFetchedRef.current) return;
-    modelsFetchedRef.current = true;
-    (async () => {
-      setModelsLoading(true);
-      const result = await dispatch(fetchModels());
-      setModelsLoading(false);
-      if (fetchModels.rejected.match(result)) {
-        modelsFetchedRef.current = false;
-      }
-    })();
-  }, [step, dispatch]);
-
-  // ---- (1) dataset "type" query param, split for Agent by framework -------
-  // Model/RAG: type = draft.type
-  // Agent, no framework chosen:  type = 'agent_benchmark'
-  // Agent, framework chosen:     type = 'agent_custom'
-  const datasetType = useMemo(() => {
-    if (!draft.type) return '';
-    if (draft.type === 'agent') {
-      return draft.agentFramework ? 'agent_custom' : 'agent_benchmark';
-    }
-    return draft.type;
-  }, [draft.type, draft.agentFramework]);
-
-  // GET /datasets?eval_type={type} — fetched the first time Step 4 is reached
-  // for a given type/framework combination. If the user goes back and
-  // changes type/framework, the pool is stale, so a different datasetType
-  // triggers one refetch the next time Step 4 is (re)entered. If the fetch
-  // itself fails, the marker is rolled back so re-selecting the *same*
-  // type and coming back to Step 4 retries automatically — previously a
-  // failed attempt permanently "used up" the marker for that type, so
-  // going back and forward again silently reused the failure.
-  useEffect(() => {
-    if (step !== 4 || !datasetType) return;
-    if (datasetsFetchedForTypeRef.current === datasetType) return;
-    datasetsFetchedForTypeRef.current = datasetType;
-    (async () => {
-      setDatasetsRefreshing(true);
-      const result = await dispatch(fetchDatasets(datasetType));
-      setDatasetsRefreshing(false);
-      if (fetchDatasets.rejected.match(result)) {
-        datasetsFetchedForTypeRef.current = null;
-        setDatasetsErrorLocal(getThunkErrorMessage(result, 'Failed to load test suites'));
-      } else {
-        setDatasetsErrorLocal(null);
-      }
-    })();
-  }, [step, datasetType, dispatch]);
-
-  // Any previously chosen dataset is invalid once the dataset "type" changes
-  // (different type/framework combination = different dataset pool). Also
-  // clear any in-progress dataset search since it applied to the old pool.
-  // This is a pure UI-state reset, independent of the fetch timing above.
-  useEffect(() => {
-    if (!datasetType) return;
-    dispatch(setDraft({ dataset: null }));
-    setDatasetSearch('');
-    setDatasetTypeFilter('all');
-    setDatasetsErrorLocal(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [datasetType]);
-
-  // GET /metrics?eval_type={type} — fetched the first time Step 5 is
-  // reached for a given draft.type. Only `all_metrics` is consumed (see
-  // metricsCatalog below) — `metrics` is ignored entirely. Same
-  // retry-on-failure rollback as datasets above.
-  useEffect(() => {
-    if (step !== 5 || !draft.type) return;
-    if (metricsFetchedForTypeRef.current === draft.type) return;
-    metricsFetchedForTypeRef.current = draft.type;
-    (async () => {
-      setMetricsRefreshing(true);
-      const result = await dispatch(fetchMetrics(draft.type));
-      setMetricsRefreshing(false);
-      if (fetchMetrics.rejected.match(result)) {
-        metricsFetchedForTypeRef.current = null;
-      }
-    })();
-  }, [step, draft.type, dispatch]);
-
-  const suite = datasets.find((d) => d?.id === draft.dataset);
-
-  // ---- (6) auto-select every subgroup on dataset pick ----------------------
-  useEffect(() => {
-    const cats = (suite as any)?.dataset_categories ?? [];
-    dispatch(setDraft({ subgroup: cats }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft.dataset]);
-
-  const selectAllSubgroups = () => dispatch(setDraft({ subgroup: (suite as any)?.dataset_categories ?? [] }));
-  const clearAllSubgroups = () => dispatch(setDraft({ subgroup: [] }));
-
-  // ---- Run Samples default/max, driven by the selected dataset's size ----
-  // More than 10 questions available: default to 10, cap the input at the
-  // dataset's total. 10 or fewer available: default (and cap) at the
-  // dataset's total, since there's nothing more to sample.
-  const selectedDatasetQuestionCount = suite?.question_count ?? 0;
-  const maxRunSamples = Math.max(1, selectedDatasetQuestionCount);
-  const defaultRunSamples = selectedDatasetQuestionCount > 10 ? 10 : maxRunSamples;
-
-  // Re-derive the default whenever the selected dataset itself changes
-  // (not on every render) — matches the same trigger as the subgroup
-  // auto-select effect above, and won't stomp on a value the user typed
-  // in manually unless they've actually picked a different dataset since.
-  useEffect(() => {
-    if (!draft.dataset) return;
-    dispatch(setDraft({ runSamples: defaultRunSamples }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draft.dataset]);
-
-  const connectedProviders = providers.filter((p) => p?.status === 'connected');
-  const filteredProviders = useMemo(
-    () => connectedProviders.filter((p) => (p?.name ?? '').toLowerCase().includes(providerSearch.trim().toLowerCase())),
-    [connectedProviders, providerSearch]
-  );
-
-  const availableModels = useMemo(
-    () => models.filter((m) => draft.providers.includes(m?.provider_id)),
-    [models, draft.providers]
-  );
-  const filteredModels = useMemo(
-    () => availableModels.filter((m) => (m?.name ?? '').toLowerCase().includes(modelSearch.trim().toLowerCase())),
-    [availableModels, modelSearch]
-  );
-
-  // Counts per dataset_type, for the filter chip labels — computed off the
-  // full (unsearched, unfiltered) list so the counts don't shift as the
-  // user types in the search box.
-  const datasetTypeCounts = useMemo(
-    () => ({
-      all: datasets.length,
-      custom: datasets.filter((d) => (d as any)?.dataset_type === 'custom').length,
-      deepeval: datasets.filter((d) => (d as any)?.dataset_type === 'deepeval').length,
-    }),
-    [datasets]
-  );
-
-  const filteredDatasets = useMemo(
-    () =>
-      datasets.filter((d) => {
-        const matchesSearch = (d?.name ?? '').toLowerCase().includes(datasetSearch.trim().toLowerCase());
-        const matchesType = datasetTypeFilter === 'all' || (d as any)?.dataset_type === datasetTypeFilter;
-        return matchesSearch && matchesType;
-      }),
-    [datasets, datasetSearch, datasetTypeFilter]
-  );
-
-  const filteredMetrics = useMemo(
-    () => metricsCatalog.filter((m) => (m ?? '').toLowerCase().includes(metricSearch.trim().toLowerCase())),
-    [metricsCatalog, metricSearch]
-  );
-
-  const filteredCustomMetrics = useMemo(
-    () => customMetricsForType.filter((c) => (c?.name ?? '').toLowerCase().includes(metricSearch.trim().toLowerCase())),
-    [customMetricsForType, metricSearch]
-  );
-
-  // ---- refresh handlers: re-dispatch each step's existing fetch thunk ----
-  // Each sets its own `*Refreshing` flag so the step can swap its grid for
-  // skeleton placeholders while the request is in flight (Change-3).
-  const refreshProviders = async () => {
-    setProvidersLoading(true);
-    await dispatch(fetchProviders());
-    setProvidersLoading(false);
-  };
-
-  const refreshModels = async () => {
-    setModelsLoading(true);
-    await dispatch(fetchModels());
-    setModelsLoading(false);
-  };
-
-  const refreshDatasets = async () => {
-    if (!datasetType) return;
-    setDatasetsRefreshing(true);
-    const result = await dispatch(fetchDatasets(datasetType));
-    setDatasetsRefreshing(false);
-    if (fetchDatasets.rejected.match(result)) {
-      datasetsFetchedForTypeRef.current = null;
-      setDatasetsErrorLocal(getThunkErrorMessage(result, 'Failed to load test suites'));
-    } else {
-      datasetsFetchedForTypeRef.current = datasetType;
-      setDatasetsErrorLocal(null);
-    }
-  };
-
-  const refreshMetrics = async () => {
-    if (!draft.type) return;
-    setMetricsRefreshing(true);
-    const result = await dispatch(fetchMetrics(draft.type));
-    setMetricsRefreshing(false);
-    if (fetchMetrics.rejected.match(result)) {
-      metricsFetchedForTypeRef.current = null;
-    } else {
-      metricsFetchedForTypeRef.current = draft.type;
-    }
-  };
-
-  // ---- preview slider (Change-2, paginated): GET /datasets/{id}/preview?
-  // limit=20&offset={offset} ---------------------------------------------
-  const previewTotalPages = Math.max(1, Math.ceil(previewQuestionCount / PREVIEW_PAGE_SIZE));
-  const previewCurrentPage = Math.floor(previewOffset / PREVIEW_PAGE_SIZE) + 1;
-  const previewHasPrevPage = previewOffset > 0;
-  const previewHasNextPage = previewCurrentPage < previewTotalPages;
-
-  const openPreview = (datasetId: string, datasetName: string, questionCount: number) => {
-    setPreviewDatasetId(datasetId);
-    setPreviewDatasetName(datasetName);
-    setPreviewQuestionCount(questionCount || 0);
-    setPreviewOffset(0);
-    setPreviewData(null);
-    setPreviewError(null);
-    setPreviewOpen(true);
-  };
-
-  const closePreview = () => {
-    setPreviewOpen(false);
-  };
-
-  const goToPreviewPrevPage = () => {
-    setPreviewOffset((o) => Math.max(0, o - PREVIEW_PAGE_SIZE));
-  };
-
-  const goToPreviewNextPage = () => {
-    setPreviewOffset((o) => {
-      const maxOffset = Math.max(0, (previewTotalPages - 1) * PREVIEW_PAGE_SIZE);
-      return Math.min(maxOffset, o + PREVIEW_PAGE_SIZE);
-    });
-  };
-
-  // Fetches whatever page `previewOffset` currently points at. Called both
-  // by the auto-fetch effect below (on open / page change) and by the
-  // manual reload button (same page, fresh data).
-  const fetchPreviewPage = async (datasetId: string, offset: number) => {
-    setPreviewLoading(true);
-    setPreviewError(null);
+function parseFaq(raw: string): FaqItem[] {
+    if (!raw || raw === '[]') return [];
     try {
-      const data = await evaluationsApi.previewDataset(datasetId, PREVIEW_PAGE_SIZE, offset);
-      setPreviewData(data);
-    } catch (err) {
-      const detail =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-        (err as Error)?.message ||
-        'Failed to load preview';
-      setPreviewError(detail);
-    } finally {
-      setPreviewLoading(false);
+        // eslint-disable-next-line no-eval
+        const result = eval(raw);
+        if (Array.isArray(result)) return result as FaqItem[];
+        return [];
+    } catch {
+        // Fallback: try direct JSON parse (if API returns valid JSON)
+        try { return JSON.parse(raw) as FaqItem[]; } catch { }
+        return [];
     }
-  };
-
-  // Auto-loads a page whenever the slider opens or the page changes — no
-  // separate "Load preview" click needed, Prev/Next just work.
-  useEffect(() => {
-    if (!previewOpen || !previewDatasetId) return;
-    fetchPreviewPage(previewDatasetId, previewOffset);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [previewOpen, previewDatasetId, previewOffset]);
-
-
-  // Manual, single-model health check — still available via the "Check
-  // health" button on each card, alongside the automatic parallel check
-  // below.
-  const runHealthCheck = (modelId: string) => {
-    dispatch(checkModelHealth(modelId));
-  };
-
-  // Auto health-check: as soon as the models list for the currently
-  // selected providers is available (and while Step 3 is open), fire a
-  // parallel health check for every visible model — the user isn't
-  // expected to click "Check health" one by one. Guarded on the raw
-  // `models` array reference so it re-runs once per fresh fetch (initial
-  // navigation-triggered fetch, or a manual refresh) rather than on every
-  // render or on unrelated state changes like typing in the search box.
-  const autoHealthCheckedForModelsRef = useRef<typeof models | null>(null);
-  useEffect(() => {
-    if (step !== 3 || availableModels.length === 0) return;
-    if (autoHealthCheckedForModelsRef.current === models) return;
-    autoHealthCheckedForModelsRef.current = models;
-    availableModels.forEach((m) => dispatch(checkModelHealth(m.id)));
-  }, [step, models, availableModels, dispatch]);
-
-  const toggle = (list: string[], value: string) =>
-    list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
-
-  // Built-in metrics (plain name strings) and custom metrics (ids) share
-  // the same draft.metrics array, so "select all" / "clear" for one
-  // section must only touch its own entries — otherwise selecting all
-  // built-in metrics would silently wipe out any chosen custom metrics
-  // (and vice versa).
-  const customMetricIdSet = new Set(customMetricsForType.map((c) => c.id));
-  const selectAllBuiltinMetrics = () => {
-    const keptCustom = draft.metrics.filter((m) => customMetricIdSet.has(m));
-    dispatch(setDraft({ metrics: [...keptCustom, ...metricsCatalog] }));
-  };
-  const clearBuiltinMetrics = () => {
-    dispatch(setDraft({ metrics: draft.metrics.filter((m) => customMetricIdSet.has(m)) }));
-  };
-  const selectAllCustomMetrics = () => {
-    const builtinSet = new Set(metricsCatalog);
-    const keptBuiltin = draft.metrics.filter((m) => builtinSet.has(m));
-    dispatch(setDraft({ metrics: [...keptBuiltin, ...customMetricsForType.map((c) => c.id)] }));
-  };
-  const clearCustomMetrics = () => {
-    dispatch(setDraft({ metrics: draft.metrics.filter((m) => !customMetricIdSet.has(m)) }));
-  };
-
-  const getFileExtension = (filename: string) => {
-    const idx = filename.lastIndexOf('.');
-    return idx >= 0 ? filename.slice(idx + 1).toLowerCase() : '';
-  };
-
-  const openUploadPanel = () => {
-    dispatch(resetUploadStatus());
-    setUploadName('');
-    setUploadDescription('');
-    setUploadFile(null);
-    setUploadFileError(null);
-    setDatasetTab('upload');
-  };
-
-  const handleUploadFileChange = (file: File | null) => {
-    setUploadFile(file);
-    if (!file) {
-      setUploadFileError(null);
-      return;
-    }
-    const ext = getFileExtension(file.name);
-    if (!SUPPORTED_UPLOAD_EXTENSIONS.includes(ext)) {
-      setUploadFileError('Unsupported file type. Please choose a .json, .jsonl, .arrow, or .parquet file.');
-    } else {
-      setUploadFileError(null);
-    }
-  };
-
-  const canUpload =
-    Boolean(uploadName.trim()) && Boolean(uploadFile) && !uploadFileError && Boolean(draft.type) && !datasetUploading;
-
-  const submitUpload = async () => {
-    if (!uploadFile || !canUpload) return;
-
-    // Hermes uploads (Agent type, agentFramework selected) go through
-    // /upload-jsonl (for .jsonl files, which also needs category: 'Agents')
-    // or /upload (any other supported extension) — both variants expect
-    // eval_type: 'agent' rather than the wizard's internal 'agent_custom'
-    // dataset-type discriminator. Every other case (Model, RAG, Agent
-    // benchmark with no framework) keeps sending datasetType unchanged.
-    const isHermesUpload = isAgentWithFramework;
-    const uploadFileExt = getFileExtension(uploadFile.name);
-
-    const result = await dispatch(
-      uploadDataset({
-        file: uploadFile,
-        name: uploadName.trim(),
-        description: uploadDescription.trim(),
-        evalType: isHermesUpload ? 'agent' : datasetType,
-        ...(isHermesUpload && uploadFileExt === 'jsonl' ? { category: 'Agents' } : {}),
-      })
-    );
-    if (uploadDataset.fulfilled.match(result)) {
-      dispatch(setDraft({ dataset: result.payload.id }));
-      setDatasetTab('browse');
-    }
-  };
-
-  // ---- (5) Model type + non-custom dataset ⇒ hide metrics & judge ---------
-  const isCustomDataset = (suite as any)?.dataset_type === 'custom';
-  const modelHidesMetrics = draft.type === 'model' && Boolean(suite) && !isCustomDataset;
-
-  // Agent type with no framework selected (draft.agentFramework null) maps
-  // to POST /agent-benchmark/run, which only ever accepts dataset_id,
-  // model_ids, evaluation_name, run_samples — there's no metrics or judge
-  // concept for this path at all, so the Metrics step (and the Test
-  // Suite step's Upload tab, further below) simplify down the same way
-  // the Model + standard-dataset case does.
-  const isAgentBenchmarkNoFramework = draft.type === 'agent' && !draft.agentFramework;
-  const hideMetricsStep = modelHidesMetrics || isAgentBenchmarkNoFramework;
-
-  // RAG datasets are always pre-built retrieval corpora — there's no
-  // "upload your own" flow for them (only Top K applies, further below).
-  const isRag = draft.type === 'rag';
-  const hideUploadTab = isAgentBenchmarkNoFramework || isRag;
-
-  // The Upload tab isn't offered for Agent benchmarks with no framework
-  // selected, or for RAG (see Test Suite step below) — if the user had it
-  // open and then goes back and changes type/framework into one of those
-  // states, snap back to Browse so there's no dangling reference to a
-  // hidden tab.
-  useEffect(() => {
-    if (hideUploadTab && datasetTab === 'upload') {
-      setDatasetTab('browse');
-    }
-  }, [hideUploadTab, datasetTab]);
-
-  // Clear any selected metrics the moment this simplified mode kicks in, so
-  // neither the manifest nor the launch payload carries stale selections.
-  useEffect(() => {
-    if (hideMetricsStep && draft.metrics.length > 0) {
-      dispatch(setDraft({ metrics: [] }));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hideMetricsStep]);
-
-  const selectedModels = draft.models.map((id) => models.find((m) => m?.id === id)).filter(Boolean) as typeof models;
-  const judgeModel = draft.judgeModelId ? models.find((m) => m?.id === draft.judgeModelId) : null;
-
-  // Agent type WITH a framework selected (draft.agentFramework truthy, e.g.
-  // Hermes) maps to POST /agent-benchmark/run-multi — used below to pick
-  // the right upload payload shape, not for judge-related logic anymore
-  // (see the always-on judge model requirement, further below).
-  const isAgentWithFramework = draft.type === 'agent' && Boolean(draft.agentFramework);
-
-  const isModelSelectable = (modelId: string) => healthById?.[modelId] === 'success';
-
-  // Judge model options — reuse the exact same "available" definition as
-  // Step 3 (health check passed), scoped to the same provider selection,
-  // instead of filtering by is_active. Previously this used
-  // `models.filter(is_active)`, which could surface models that never
-  // passed (or never ran) a health check, or exclude ones that did but
-  // happen to have is_active === false.
-  const judgeCandidateModels = useMemo(
-    () => availableModels.filter((m) => isModelSelectable(m.id)),
-    [availableModels, healthById]
-  );
-
-  useEffect(() => {
-    if (draft.judgeModelId && !judgeCandidateModels.some((m) => m.id === draft.judgeModelId)) {
-      dispatch(setDraft({ judgeModelId: null }));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [judgeCandidateModels, draft.judgeModelId]);
-
-  const toggleModel = (modelId: string) => {
-    const alreadySelected = draft.models.includes(modelId);
-    if (!alreadySelected && !isModelSelectable(modelId)) return;
-    dispatch(setDraft({ models: toggle(draft.models, modelId) }));
-  };
-
-  const canGo = () => {
-    if (step === 0) return Boolean(draft.name.trim());
-    if (step === 1) return Boolean(draft.type);
-    if (step === 2) return draft.providers.length > 0;
-    if (step === 3) return draft.models.length > 0;
-    // A dataset with 0 questions can't actually be run against — block
-    // continuing until one with at least one question is picked.
-    if (step === 4) return Boolean(draft.dataset) && (suite?.question_count ?? 0) > 0;
-    if (step === 5) {
-      // Judge model is mandatory for every type now — no more LLM_Judge /
-      // hideMetricsStep / agent-framework gating.
-      if (!draft.judgeModelId) return false;
-      // If the metrics catalog (built-in or custom) actually has anything
-      // in it for this type, picking at least one is mandatory too. When
-      // the whole metrics section is hidden (hideMetricsStep) or the
-      // catalog is genuinely empty, there's nothing to require.
-      const metricsAvailable = !hideMetricsStep && (metricsCatalog.length > 0 || customMetricsForType.length > 0);
-      if (metricsAvailable && draft.metrics.length === 0) return false;
-      return true;
-    }
-    return true;
-  };
-
-  const goNext = () => {
-    if (!canGo()) return;
-    setStep((s) => Math.min(totalSteps - 1, s + 1));
-  };
-  const goBack = () => setStep((s) => Math.max(0, s - 1));
-  const goToStep = (target: number) => {
-    if (target < step) setStep(target);
-  };
-
-  // ---- (3) & (4) launch: three different endpoints depending on type ------
-  const launch = async () => {
-    const dataset = datasets.find((d) => d?.id === draft.dataset);
-    const judgeModelObj = draft.judgeModelId ? models.find((m) => m?.id === draft.judgeModelId) : undefined;
-    // Change: "Full" mode means "use the whole dataset" — for the agent
-    // benchmark endpoints the backend contract for that is run_samples: 0.
-    const effectiveRunSamples = draft.runSamplesMode === 'full' ? 0 : draft.runSamples;
-    // For POST /evaluations (Model/RAG) specifically, "Full" instead sends
-    // the selected dataset's total category count (dataset_categories.length
-    // from the Test Suite step) rather than 0 — falls back to 0 if the
-    // dataset has no categories or wasn't found.
-    const fullModeCategoryCount = (dataset as any)?.dataset_categories?.length ?? 0;
-    const createEvalRunSamples = draft.runSamplesMode === 'full' ? fullModeCategoryCount : draft.runSamples;
-
-    let result: any;
-
-    if (draft.type === 'agent' && !draft.agentFramework) {
-      // POST /agent-benchmark/run
-      result = await dispatch(
-        runAgentBenchmark({
-          dataset_id: dataset?.id || '',
-          model_ids: draft.models,
-          evaluation_name: draft.name,
-          run_samples: effectiveRunSamples,
-        })
-      );
-    } else if (draft.type === 'agent' && draft.agentFramework) {
-      // POST /agent-benchmark/run-multi
-      result = await dispatch(
-        runAgentBenchmarkMulti({
-          dataset_id: dataset?.id || '',
-          model_ids: draft.models,
-          evaluation_name: draft.name,
-          selected_metrics: draft.metrics,
-          selected_categories: draft.subgroup,
-          run_samples: effectiveRunSamples,
-        })
-      );
-    } else {
-      // POST /evaluations then /evaluations/{id}/start — Model or RAG
-      const payload: CreateEvaluationRequest = {
-        name: draft.name,
-        eval_type: draft.type || '',
-        dataset_id: dataset?.id || '',
-        // RAG doesn't use `benchmark` — omitted entirely for that type
-        // rather than sent as the dataset name (or null), matching how
-        // top_k is likewise only ever included for RAG below.
-        ...(isRag ? {} : { benchmark: dataset?.name || undefined }),
-        model_ids: draft.models,
-        selected_metrics: hideMetricsStep ? [] : draft.metrics,
-        run_samples: createEvalRunSamples,
-        selected_category: draft.subgroup.length > 0 ? draft.subgroup : dataset ? [dataset.category] : undefined,
-        // Judge model is mandatory now (see canGo's step-5 check), so
-        // draft.judgeModelId is always set by the time launch() runs — the
-        // {} fallback is just defensive.
-        judge_config: draft.judgeModelId
-          ? {
-              model_id: draft.judgeModelId,
-              base_url: judgeModelObj?.base_url || '',
-              api_key: draft.judgeModelId,
-            }
-          : {},
-        // RAG-only — how many retrieved documents to consider per query.
-        // Omitted entirely for Model/Agent rather than sent as undefined,
-        // so it doesn't show up as a spurious key in the request body.
-        ...(isRag ? { top_k: draft.topK } : {}),
-      };
-      result = await dispatch(launchEvaluation(payload));
-    }
-
-    const succeeded =
-      launchEvaluation.fulfilled.match(result) ||
-      runAgentBenchmark.fulfilled.match(result) ||
-      runAgentBenchmarkMulti.fulfilled.match(result);
-
-    if (succeeded) {
-      setToast(true);
-      setTimeout(() => {
-        setToast(false);
-        navigate('/app/history');
-      }, 2000);
-    }
-  };
-
-  const progressPct = Math.round((step / (totalSteps - 1)) * 100);
-
-  // ---- live Run Manifest values (one per step) ----------------------------
-  const providerNames = draft.providers.map((id) => providers.find((p) => p?.id === id)?.name || id);
-  const mf = (value: string, filled: boolean) => ({ value: filled ? value : '—', empty: !filled });
-  const typeLabel = TYPE_OPTIONS.find((o) => o.value === draft.type)?.label ?? '';
-  const frameworkTitle = draft.agentFramework ? AGENT_FRAMEWORKS.find((f) => f.id === draft.agentFramework)?.title : null;
-  const manifest = [
-    mf(draft.name, Boolean(draft.name)),
-    mf(frameworkTitle ? `${typeLabel} · ${frameworkTitle}` : typeLabel, Boolean(draft.type)),
-    mf(draft.providers.length === 1 ? providerNames[0] : `${draft.providers.length} providers`, draft.providers.length > 0),
-    mf(`${draft.models.length} models`, draft.models.length > 0),
-    mf(suite?.name || '', Boolean(suite)),
-    mf(hideMetricsStep ? 'Not required' : `${draft.metrics.length} metrics`, hideMetricsStep || draft.metrics.length > 0),
-    mf(
-      judgeModel ? `Judge · ${judgeModel.name || 'Unnamed model'}` : 'Judge required',
-      Boolean(judgeModel)
-    ),
-  ];
-
-  const CrumbIcon = STEP_ICONS[step];
-
-  // ---- shared "Run samples" control (Custom / Full) ------------------------
-  // Used by both branches of Step 5 (the simplified model-benchmark view and
-  // the full metrics view) so the toggle behaves identically in either.
-  // 'full' means "use the whole dataset" — run_samples is sent as 0 in that
-  // case (see `launch` below), regardless of whatever number was last typed
-  // into the Custom field.
-  const runSamplesControl = (
-    <div className={`${styles.ev__field} ${styles['ev__field--samples']}`}>
-      <label className={styles.ev__label}>Run samples</label>
-      <div className={styles['ev__radio-row']}>
-        <button
-          type="button"
-          className={`${styles['ev__radio-opt']} ${draft.runSamplesMode === 'custom' ? styles['ev__radio-opt--on'] : ''}`}
-          onClick={() => dispatch(setDraft({ runSamplesMode: 'custom' }))}
-        >
-          <span className={`${styles.ev__radio} ${draft.runSamplesMode === 'custom' ? styles['ev__radio--on'] : ''}`} />
-          Custom
-        </button>
-        <button
-          type="button"
-          className={`${styles['ev__radio-opt']} ${draft.runSamplesMode === 'full' ? styles['ev__radio-opt--on'] : ''}`}
-          onClick={() => dispatch(setDraft({ runSamplesMode: 'full' }))}
-        >
-          <span className={`${styles.ev__radio} ${draft.runSamplesMode === 'full' ? styles['ev__radio--on'] : ''}`} />
-          Full
-        </button>
-      </div>
-      {draft.runSamplesMode === 'custom' ? (
-        <>
-          <input
-            type="number"
-            min={0}
-            max={maxRunSamples}
-            className={styles.ev__input}
-            style={{ marginTop: 10 }}
-            value={draft.runSamples}
-            onChange={(e) => {
-              const raw = e.target.value === '' ? 0 : Number(e.target.value);
-              const val = Number.isNaN(raw) ? 0 : Math.min(maxRunSamples, Math.max(0, raw));
-              dispatch(setDraft({ runSamples: val }));
-            }}
-          />
-          <p className={styles['ev__radio-full-note']}>Up to {maxRunSamples.toLocaleString()} questions available in this suite.</p>
-        </>
-      ) : (
-        <p className={styles['ev__radio-full-note']}>Every question in the suite will be used — no count needed.</p>
-      )}
-    </div>
-  );
-
-  return (
-    <div className="page-enter" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      {/* ---- header (matches History/Reports/Comparison/Sidebar pattern) ---- */}
-      <div className={styles['ev__header']}>
-        <div>
-          <p className={styles['ev__header-eyebrow']}>Evaluation console</p>
-          <h1>New run</h1>
-          <p className={styles['ev__header-sub']}>Assemble and launch a new evaluation run</p>
-        </div>
-        <div className={styles['ev__header-meta']}>
-          <span className={styles['ev__header-status']} data-state={launching ? 'live' : 'draft'}>
-            {launching ? 'Launching' : 'Draft'}
-          </span>
-          <span className={styles['ev__header-eta']}>
-            <Clock3 size={13} /> ~5 min
-          </span>
-        </div>
-      </div>
-
-      <div className={styles.page}>
-        <div className={styles.ev}>
-          {/* ---- shell ---- */}
-          <div className={styles.ev__shell}>
-            {/* SIGNATURE: Run Manifest */}
-            <aside className={styles.ev__manifest}>
-              <div className={styles['ev__manifest-head']}>
-                <div className={styles['ev__manifest-eyebrow']}>
-                  <span>Run manifest</span>
-                  <span className={styles['ev__manifest-pct']}>{progressPct}%</span>
-                </div>
-                <div className={styles['ev__manifest-title']} data-empty={!draft.name}>
-                  {draft.name || 'Untitled run'}
-                </div>
-                <div className={styles.ev__meter}>
-                  <div className={styles['ev__meter-fill']} style={{ width: `${progressPct}%` }} />
-                </div>
-              </div>
-              <div className={styles.ev__spec}>
-                {STEPS.map((s, i) => {
-                  const state = i === step ? 'active' : i < step ? 'done' : 'todo';
-                  const Icon = STEP_ICONS[i];
-                  const row = manifest[i];
-                  return (
-                    <button
-                      key={s.label}
-                      type="button"
-                      className={`${styles['ev__spec-row']} ${styles[`ev__spec-row--${state}`]}`}
-                      onClick={() => goToStep(i)}
-                      disabled={i > step}
-                    >
-                      <span className={styles['ev__spec-tick']}>
-                        {state === 'done' ? <Check size={13} strokeWidth={3} /> : <Icon size={14} />}
-                      </span>
-                      <span className={styles['ev__spec-body']}>
-                        <span className={styles['ev__spec-label']}>{s.label}</span>
-                        <span className={styles['ev__spec-value']} data-empty={row.empty}>
-                          {row.value}
-                        </span>
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </aside>
-
-            {/* STAGE */}
-            <section className={styles.ev__stage}>
-              <div className={styles['ev__stage-head']}>
-                <div className={styles.ev__crumb}>
-                  <span>
-                    <CrumbIcon size={13} /> Step
-                  </span>
-                  <span className={styles['ev__crumb-sep']} />
-                  <span>
-                    <b>{String(step + 1).padStart(2, '0')}</b> / {String(totalSteps).padStart(2, '0')}
-                  </span>
-                  <span className={styles['ev__crumb-sep']} />
-                  <span>{STEPS[step].label}</span>
-                </div>
-                <h2 className={styles['ev__stage-title']}>{STAGE[step].title}</h2>
-                <p className={styles['ev__stage-sub']}>{STAGE[step].sub}</p>
-              </div>
-
-              <div className={styles['ev__stage-body']}>
-                <StepErrorBoundary
-                  key={`${step}-${stepRetryKey}`}
-                  onRetry={() => setStepRetryKey((k) => k + 1)}
-                  onBack={goBack}
-                  canGoBack={step > 0}
-                >
-                <div className={styles.ev__anim} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                  {/* STEP 0 — NAME */}
-                  {step === 0 && (
-                    <>
-                      <div className={styles.ev__field} style={{ maxWidth: 620 }}>
-                        <label className={styles.ev__label}>Run name</label>
-                        <input
-                          className={styles['ev__name-input']}
-                          placeholder="Untitled run"
-                          value={draft.name}
-                          onChange={(e) => dispatch(setDraft({ name: e.target.value }))}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' && canGo()) goNext();
-                          }}
-                          autoFocus
-                        />
-                        <p className={styles['ev__name-caption']}>
-                          <Tag size={13} /> This is how the run appears in your history.
-                        </p>
-                      </div>
-
-                      <div className={styles.ev__quick}>
-                        <p className={styles['ev__quick-head']}>Presets</p>
-                        <div className={styles['ev__quick-row']}>
-                          {SUGGESTED_NAMES.map((s) => {
-                            const on = draft.name === s;
-                            return (
-                              <button
-                                key={s}
-                                type="button"
-                                className={`${styles.ev__preset} ${on ? styles['ev__preset--on'] : ''}`}
-                                onClick={() => dispatch(setDraft({ name: s }))}
-                              >
-                                {on ? <Check size={13} strokeWidth={3} /> : <Plus size={13} strokeWidth={2.5} />} {s}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      <div className={styles.ev__note}>
-                        <span className={styles['ev__note-icon']}>
-                          <Lightbulb size={16} />
-                        </span>
-                        <div>
-                          <p className={styles['ev__note-title']}>What makes a good name</p>
-                          <ul className={styles['ev__note-list']}>
-                            {NAMING_TIPS.map((tip) => (
-                              <li key={tip}>{tip}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      </div>
-                    </>
-                  )}
-
-                  {/* STEP 1 — TYPE */}
-                  {step === 1 && (
-                    <>
-                      <div className={styles.ev__options}>
-                        {TYPE_OPTIONS.map((o) => {
-                          const Icon = o.icon;
-                          const on = draft.type === o.value;
-                          return (
-                            <button
-                              key={o.value}
-                              type="button"
-                              className={`${styles.ev__option} ${on ? styles['ev__option--on'] : ''} ${
-                                o.disabled ? styles['ev__option--off'] : ''
-                              }`}
-                              onClick={() => !o.disabled && dispatch(setDraftType(o.value))}
-                              disabled={o.disabled}
-                            >
-                              <span
-                                className={`${styles['ev__option-icon']} ${
-                                  o.variant ? styles[`ev__option-icon--${o.variant}`] : ''
-                                }`}
-                              >
-                                <Icon size={20} />
-                              </span>
-                              <span className={styles['ev__option-main']}>
-                                <span className={styles['ev__option-name']}>
-                                  {o.label}
-                                  {o.disabled && <span className={styles.ev__badge}>Soon</span>}
-                                </span>
-                                <span className={styles['ev__option-desc']}>{o.sub}</span>
-                              </span>
-                              {on && (
-                                <span className={styles.ev__mark}>
-                                  <Check size={13} strokeWidth={3} />
-                                </span>
-                              )}
-                            </button>
-                          );
-                        })}
-                      </div>
-
-                      {draft.type === 'agent' && (
-                        <div className={styles.ev__section}>
-                          <label className={styles.ev__label}>
-                            <Waypoints size={13} /> Agent framework <span className="opt">optional</span>
-                          </label>
-                          <p className={styles['ev__section-hint']}>
-                            Tell us which framework the agent runs on, if applicable. This also determines which test
-                            suites are available in the next steps.
-                          </p>
-                          <div className={styles['ev__fw-grid']}>
-                            {AGENT_FRAMEWORKS.map((f) => {
-                              const on = draft.agentFramework === f.id;
-                              return (
-                                <button
-                                  key={f.id}
-                                  type="button"
-                                  className={`${styles.ev__fw} ${on ? styles['ev__fw--on'] : ''}`}
-                                  onClick={() => dispatch(setDraft({ agentFramework: on ? null : f.id }))}
-                                >
-                                  <span className={styles['ev__fw-icon']}>
-                                    <Waypoints size={16} />
-                                  </span>
-                                  <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-                                    <span className={styles['ev__fw-name']}>{f.title}</span>
-                                    <span className={styles['ev__fw-desc']}>{f.desc}</span>
-                                  </span>
-                                  {on && (
-                                    <span className={styles.ev__mark}>
-                                      <Check size={12} strokeWidth={3} />
-                                    </span>
-                                  )}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-                    </>
-                  )}
-
-                  {/* STEP 2 — PROVIDERS */}
-                  {step === 2 && (
-                    <div className={styles.ev__scroll}>
-                      <div className={styles['ev__step-toolbar']}>
-                        <div className={styles['ev__toolbar-search']}>
-                          <Search size={14} />
-                          <input
-                            placeholder="Search providers…"
-                            value={providerSearch}
-                            onChange={(e) => setProviderSearch(e.target.value)}
-                          />
-                        </div>
-                        <button
-                          type="button"
-                          className={styles['ev__toolbar-refresh']}
-                          onClick={refreshProviders}
-                          disabled={providersLoading}
-                          title="Refresh providers"
-                        >
-                          <RefreshCw size={14} className={providersLoading ? styles.ev__spin : ''} />
-                        </button>
-                      </div>
-                      {providersLoading ? (
-                        <div className={styles.ev__grid} aria-busy="true" aria-label="Refreshing providers">
-                          {Array.from({ length: SKELETON_CARD_COUNT }).map((_, i) => (
-                            <div key={i} className={styles['ev__skel-pcard']}>
-                              <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--icon']}`} />
-                              <span className={styles['ev__skel-lines']}>
-                                <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '70%' }} />
-                                <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '45%' }} />
-                                <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--pill']}`} />
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className={styles.ev__grid}>
-                          {filteredProviders.map((p) => {
-                            const on = draft.providers.includes(p.id);
-                            return (
-                              <button
-                                key={p.id}
-                                type="button"
-                                className={`${styles.ev__pcard} ${on ? styles['ev__pcard--on'] : ''}`}
-                                onClick={() => dispatch(setDraft({ providers: toggle(draft.providers, p.id) }))}
-                              >
-                                <span className={styles['ev__pcard-icon']}>{providerInitials(p.name)}</span>
-                                <span className={styles['ev__pcard-body']}>
-                                  <span className={styles['ev__pcard-name']}>{p.name || 'Unnamed provider'}</span>
-                                  <span className={styles['ev__pcard-meta']}>{p.model_count ?? 0} models available</span>
-                                  <span className={styles.ev__pill}>Connected</span>
-                                </span>
-                                {on && (
-                                  <span className={styles.ev__mark}>
-                                    <Check size={12} strokeWidth={3} />
-                                  </span>
-                                )}
-                              </button>
-                            );
-                          })}
-                          {connectedProviders.length === 0 && (
-                            <p className={styles.ev__empty}>No connected providers yet. Connect one from the Providers page to continue.</p>
-                          )}
-                          {connectedProviders.length > 0 && filteredProviders.length === 0 && (
-                            <p className={styles.ev__empty}>No providers match "{providerSearch}".</p>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* STEP 3 — MODELS */}
-                  {step === 3 &&
-                    (availableModels.length > 0 ? (
-                      <div className={styles.ev__scroll}>
-                        <div className={styles['ev__step-toolbar']}>
-                          <div className={styles['ev__toolbar-search']}>
-                            <Search size={14} />
-                            <input
-                              placeholder="Search models…"
-                              value={modelSearch}
-                              onChange={(e) => setModelSearch(e.target.value)}
-                            />
-                          </div>
-                          <button
-                            type="button"
-                            className={styles['ev__toolbar-refresh']}
-                            onClick={refreshModels}
-                            disabled={modelsLoading}
-                            title="Refresh models"
-                          >
-                            <RefreshCw size={14} className={modelsLoading ? styles.ev__spin : ''} />
-                          </button>
-                        </div>
-                        {modelsLoading ? (
-                          <div className={`${styles.ev__grid} ${styles['ev__grid--wide']}`} aria-busy="true" aria-label="Refreshing models">
-                            {Array.from({ length: SKELETON_CARD_COUNT }).map((_, i) => (
-                              <div key={i} className={styles['ev__skel-mcard']}>
-                                <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '60%', height: 14 }} />
-                                <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '35%' }} />
-                                <span className={styles['ev__skel-caps']}>
-                                  <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--tag']}`} />
-                                  <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--tag']}`} />
-                                </span>
-                                <span className={styles['ev__skel-stats']}>
-                                  <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--stat']}`} />
-                                  <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--stat']}`} />
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                        <div className={`${styles.ev__grid} ${styles['ev__grid--wide']}`}>
-                          {filteredModels.map((m) => {
-                            const on = draft.models.includes(m.id);
-                            const health: HealthStatus = healthById?.[m.id] ?? 'idle';
-                            const selectable = health === 'success';
-                            const caps = (m as any).capabilities as string[] | undefined;
-                            const inputPrice = (m as any).input_price as number | null | undefined;
-                            const outputPrice = (m as any).output_price as number | null | undefined;
-                            const accuracy = (m as any).accuracy_score as number | null | undefined;
-                            const providerName = providers.find((p) => p?.id === m.provider_id)?.name ?? m.provider_id;
-
-                            return (
-                              // Not a <button> — it contains a nested "Check health"
-                              // control, so it's a clickable div with keyboard support
-                              // instead (nested interactive elements aren't valid HTML).
-                              <div
-                                key={m.id}
-                                role="button"
-                                tabIndex={0}
-                                className={`${styles.ev__mcard} ${on ? styles['ev__mcard--on'] : ''} ${
-                                  !selectable && !on ? styles['ev__mcard--locked'] : ''
-                                } ${health === 'loading' ? styles['ev__mcard--checking'] : ''}`}
-                                onClick={() => toggleModel(m.id)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter' || e.key === ' ') {
-                                    e.preventDefault();
-                                    toggleModel(m.id);
-                                  }
-                                }}
-                                aria-pressed={on}
-                                aria-disabled={!selectable && !on}
-                              >
-                                <div className={styles['ev__mcard-top']}>
-                                  <div className={styles['ev__mcard-name']}>{m.name || 'Unnamed model'}</div>
-                                  {on && (
-                                    <span className={styles['ev__mcard-mark']}>
-                                      <Check size={12} strokeWidth={3} />
-                                    </span>
-                                  )}
-                                </div>
-
-                                {/* Provider name + health badge, same line, badge on the right */}
-                                <div className={styles['ev__mcard-provider-row']}>
-                                  <span className={styles['ev__mcard-provider']}>{providerName}</span>
-
-                                  {health === 'success' && (
-                                    <span className={`${styles['ev__health-badge']} ${styles['ev__health-badge--success']}`}>
-                                      <ShieldCheck size={12} /> Available
-                                    </span>
-                                  )}
-
-                                  {health === 'failed' && (
-                                    <button
-                                      type="button"
-                                      className={`${styles['ev__health-badge']} ${styles['ev__health-badge--failed']}`}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        runHealthCheck(m.id);
-                                      }}
-                                      title="Retry health check"
-                                    >
-                                      <ShieldAlert size={12} /> Unavailable
-                                    </button>
-                                  )}
-
-                                  {health === 'loading' && (
-                                    <span className={`${styles['ev__health-badge']} ${styles['ev__health-badge--loading']}`}>
-                                      <Loader2 size={12} className={styles.ev__spin} /> Checking…
-                                    </span>
-                                  )}
-
-                                  {health === 'idle' && (
-                                    <button
-                                      type="button"
-                                      className={styles['ev__health-check-btn']}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        runHealthCheck(m.id);
-                                      }}
-                                    >
-                                      <HeartPulse size={12} /> Check health
-                                    </button>
-                                  )}
-                                </div>
-
-                                {caps && caps.length > 0 && (
-                                  <div className={styles.ev__caps}>
-                                    {caps.slice(0, 3).map((c) => (
-                                      <span key={c} className={styles.ev__cap}>
-                                        {c}
-                                      </span>
-                                    ))}
-                                  </div>
-                                )}
-                                <div className={styles['ev__mcard-stats']}>
-                                  <span className={styles.ev__stat}>
-                                    <span className={styles['ev__stat-k']}>Context</span>
-                                    <span className={styles['ev__stat-v']}>{formatContextWindow(m.context_window)}</span>
-                                  </span>
-                                  {(inputPrice !== undefined || outputPrice !== undefined) && (
-                                    <span className={styles.ev__stat}>
-                                      <span className={styles['ev__stat-k']}>Price /1M</span>
-                                      <span className={styles['ev__stat-v']}>
-                                        {formatPrice(inputPrice)}/{formatPrice(outputPrice)}
-                                      </span>
-                                    </span>
-                                  )}
-                                  {typeof accuracy === 'number' && Number.isFinite(accuracy) && (
-                                    <span className={styles.ev__stat}>
-                                      <span className={styles['ev__stat-k']}>Accuracy</span>
-                                      <span className={styles['ev__stat-v']}>{accuracy.toFixed(1)}%</span>
-                                    </span>
-                                  )}
-                                </div>
-
-                                {!selectable && !on && (
-                                  <p className={styles['ev__mcard-hint']}>
-                                    {health === 'idle' && 'Run a health check to enable selection.'}
-                                    {health === 'loading' && 'Waiting for health check to complete…'}
-                                    {health === 'failed' && 'This model failed its health check and can\u2019t be selected.'}
-                                  </p>
-                                )}
-                              </div>
-                            );
-                          })}
-                          {filteredModels.length === 0 && (
-                            <p className={styles.ev__empty}>No models match "{modelSearch}".</p>
-                          )}
-                        </div>
-                        )}
-                      </div>
-                    ) : (
-                      <p className={styles.ev__empty}>Select providers first to see their available models.</p>
-                    ))}
-
-                  {/* STEP 4 — TEST SUITE */}
-                  {step === 4 && (
-                    <>
-                      {/* Upload isn't offered for Agent benchmarks with no
-                          framework selected (POST /agent-benchmark/run only
-                          accepts existing datasets), or for RAG (fixed
-                          retrieval corpora, no upload-your-own flow) — so
-                          there's nothing to switch between and the tab bar
-                          itself is hidden, not just the Upload button. */}
-                      {!hideUploadTab && (
-                        <div className={styles.ev__tabs}>
-                          <button
-                            type="button"
-                            className={`${styles.ev__tab} ${datasetTab === 'browse' ? styles['ev__tab--on'] : ''}`}
-                            onClick={() => setDatasetTab('browse')}
-                          >
-                            <LayoutGrid size={14} /> Browse
-                          </button>
-                          <button
-                            type="button"
-                            className={`${styles.ev__tab} ${datasetTab === 'upload' ? styles['ev__tab--on'] : ''}`}
-                            onClick={openUploadPanel}
-                          >
-                            <Upload size={14} /> Upload
-                          </button>
-                        </div>
-                      )}
-
-                      {isRag && (
-                        <div className={`${styles.ev__field} ${styles['ev__field--topk']}`}>
-                          <label className={styles.ev__label}>
-                            Top K <span className="opt">how many retrieved documents to consider per query</span>
-                          </label>
-                          <input
-                            type="number"
-                            min={1}
-                            max={50}
-                            className={styles.ev__input}
-                            value={draft.topK}
-                            onChange={(e) => {
-                              const raw = e.target.value === '' ? 5 : Number(e.target.value);
-                              const val = Number.isNaN(raw) ? 5 : Math.min(50, Math.max(1, Math.round(raw)));
-                              dispatch(setDraft({ topK: val }));
-                            }}
-                          />
-                        </div>
-                      )}
-
-                      {datasetTab === 'browse' && (
-                        <div className={styles.ev__suite}>
-                          <div className={styles['ev__suite-scroll']}>
-                            <div className={styles['ev__step-toolbar']}>
-                              <div className={styles['ev__toolbar-search']}>
-                                <Search size={14} />
-                                <input
-                                  placeholder="Search test suites…"
-                                  value={datasetSearch}
-                                  onChange={(e) => setDatasetSearch(e.target.value)}
-                                />
-                              </div>
-                              <button
-                                type="button"
-                                className={styles['ev__toolbar-refresh']}
-                                onClick={refreshDatasets}
-                                disabled={datasetsRefreshing}
-                                title="Refresh test suites"
-                              >
-                                <RefreshCw size={14} className={datasetsRefreshing ? styles.ev__spin : ''} />
-                              </button>
-                            </div>
-
-                            {/* Change-1: All / Custom / Deepeval filter */}
-                            <div className={styles['ev__filter-row']}>
-                              {DATASET_TYPE_FILTERS.map((f) => {
-                                const on = datasetTypeFilter === f.value;
-                                const count = datasetTypeCounts[f.value];
-                                return (
-                                  <button
-                                    key={f.value}
-                                    type="button"
-                                    className={`${styles['ev__filter-chip']} ${on ? styles['ev__filter-chip--on'] : ''}`}
-                                    onClick={() => setDatasetTypeFilter(f.value)}
-                                  >
-                                    {f.label}
-                                    <span className={styles['ev__filter-chip-count']}>{count}</span>
-                                  </button>
-                                );
-                              })}
-                            </div>
-
-                            {(() => {
-                              // Both the busy flag and the error message are
-                              // tracked locally (set from the outcome of our
-                              // own dispatch calls) rather than read from the
-                              // datasets slice's own status/error fields —
-                              // see datasetsErrorLocal above for why.
-                              if (datasetsRefreshing) {
-                                return (
-                                  <div className={styles.ev__dgrid} aria-busy="true" aria-label="Loading test suites">
-                                    {Array.from({ length: SKELETON_CARD_COUNT }).map((_, i) => (
-                                      <div key={i} className={styles['ev__skel-dcard']}>
-                                        <span className={styles['ev__skel-dcard-top']}>
-                                          <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--icon-sm']}`} />
-                                          <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '55%' }} />
-                                        </span>
-                                        <span className={styles['ev__skel-caps']}>
-                                          <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--tag']}`} />
-                                          <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--tag']}`} />
-                                          <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--tag']}`} />
-                                        </span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                );
-                              }
-
-                              if (datasetsErrorLocal) {
-                                return <p className={styles.ev__error}>{datasetsErrorLocal}</p>;
-                              }
-
-                              return (
-                                <div className={styles.ev__dgrid}>
-                                  {filteredDatasets.map((d) => {
-                                    const on = draft.dataset === d.id;
-                                    const isCustom = (d as any)?.dataset_type === 'custom';
-                                    const isDeepeval = (d as any)?.dataset_type === 'deepeval';
-                                    const hasNoQuestions = (d.question_count ?? 0) <= 0;
-                                    return (
-                                      // Not a <button> — it now contains a nested "Preview"
-                                      // control, so it's a clickable div with keyboard
-                                      // support instead (mirrors the model card pattern;
-                                      // nested interactive elements aren't valid HTML).
-                                      <div
-                                        key={d.id}
-                                        role="button"
-                                        tabIndex={0}
-                                        className={`${styles.ev__dcard} ${on ? styles['ev__dcard--on'] : ''} ${
-                                          hasNoQuestions ? styles['ev__dcard--empty'] : ''
-                                        }`}
-                                        onClick={() => dispatch(setDraft({ dataset: d.id }))}
-                                        onKeyDown={(e) => {
-                                          if (e.key === 'Enter' || e.key === ' ') {
-                                            e.preventDefault();
-                                            dispatch(setDraft({ dataset: d.id }));
-                                          }
-                                        }}
-                                        aria-pressed={on}
-                                      >
-                                        <div className={styles['ev__dcard-top']}>
-                                          <div className={styles['ev__dcard-id']}>
-                                            <span className={styles['ev__dcard-icon']}>
-                                              <Database size={15} />
-                                            </span>
-                                            <span className={styles['ev__dcard-name']}>{d.name || 'Untitled dataset'}</span>
-                                            {hasNoQuestions && (
-                                              <span
-                                                className={styles['ev__dcard-warn-icon']}
-                                                title="This test suite has no questions yet — it can't be used until it does."
-                                              >
-                                                <Info size={13} />
-                                              </span>
-                                            )}
-                                          </div>
-                                          <div className={styles['ev__dcard-actions']}>
-                                            <button
-                                              type="button"
-                                              className={styles['ev__dcard-preview-btn']}
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                openPreview(d.id, d.name, d.question_count ?? 0);
-                                              }}
-                                              title="Preview sample questions"
-                                            >
-                                              <Eye size={13} /> Preview
-                                            </button>
-                                            {on && (
-                                              <span className={styles['ev__mcard-mark']}>
-                                                <Check size={12} strokeWidth={3} />
-                                              </span>
-                                            )}
-                                          </div>
-                                        </div>
-                                        <div className={styles['ev__dcard-tags']}>
-                                          {d.category && <span className={styles.ev__tag}>{d.category}</span>}
-                                          {d.eval_type && <span className={styles.ev__tag}>{d.eval_type}</span>}
-                                          {/* Change-1: both dataset_type values now get a tag —
-                                              previously only 'custom' rendered one. */}
-                                          {isCustom && (
-                                            <span className={`${styles.ev__tag} ${styles['ev__tag--custom']}`}>Custom</span>
-                                          )}
-                                          {isDeepeval && (
-                                            <span className={`${styles.ev__tag} ${styles['ev__tag--deepeval']}`}>Deepeval</span>
-                                          )}
-                                          <span
-                                            className={`${styles.ev__tag} ${styles['ev__tag--count']} ${
-                                              hasNoQuestions ? styles['ev__tag--count-empty'] : ''
-                                            }`}
-                                          >
-                                            {(d.question_count ?? 0).toLocaleString()} questions
-                                          </span>
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
-                                  {datasets.length === 0 && (
-                                    <p className={styles.ev__empty}>No test suites available for this type yet.</p>
-                                  )}
-                                  {datasets.length > 0 && filteredDatasets.length === 0 && (
-                                    <p className={styles.ev__empty}>
-                                      No test suites match {datasetSearch ? `"${datasetSearch}"` : 'this filter'}.
-                                    </p>
-                                  )}
-                                </div>
-                              );
-                            })()}
-                          </div>
-
-                          <aside className={styles.ev__rail}>
-                            <div className={styles['ev__rail-head']}>
-                              <div className={styles['ev__rail-head-row']}>
-                                <p className={styles['ev__rail-title']}>
-                                  <Layers size={13} /> Subgroups
-                                </p>
-                                {suite && (suite as any).dataset_categories?.length > 0 && (
-                                  <div className={styles['ev__rail-actions']}>
-                                    <button type="button" className={styles.ev__link} onClick={selectAllSubgroups}>
-                                      Select all
-                                    </button>
-                                    <button type="button" className={styles.ev__link} onClick={clearAllSubgroups}>
-                                      Unselect all
-                                    </button>
-                                  </div>
-                                )}
-                              </div>
-                              <p className={styles['ev__rail-sub']}>
-                                {suite
-                                  ? `All of "${suite.name}"'s categories are selected by default — narrow as needed.`
-                                  : 'Select a suite to see its subgroups.'}
-                              </p>
-                            </div>
-                            <div className={styles['ev__rail-scroll']}>
-                              {!suite && <p className={styles['ev__rail-empty']}>No suite selected yet.</p>}
-                              {suite && (suite as any).dataset_categories?.length === 0 && (
-                                <p className={styles['ev__rail-empty']}>This suite has no subgroups.</p>
-                              )}
-                              {suite &&
-                                ((suite as any).dataset_categories ?? []).map((cat: string) => {
-                                  const on = draft.subgroup.includes(cat);
-                                  return (
-                                    <button
-                                      key={cat}
-                                      type="button"
-                                      className={`${styles['ev__check-row']} ${on ? styles['ev__check-row--on'] : ''}`}
-                                      onClick={() => dispatch(setDraft({ subgroup: toggle(draft.subgroup, cat) }))}
-                                    >
-                                      <span className={`${styles.ev__check} ${on ? styles['ev__check--on'] : ''}`}>
-                                        {on && <Check size={11} strokeWidth={3} />}
-                                      </span>
-                                      <span className={styles['ev__check-label']}>{cat}</span>
-                                    </button>
-                                  );
-                                })}
-                            </div>
-                          </aside>
-                        </div>
-                      )}
-
-                      {suite && (suite.question_count ?? 0) <= 0 && (
-                        <div className={styles['ev__dataset-empty-warning']}>
-                          <Info size={14} />
-                          <span>
-                            <strong>{suite.name || 'This test suite'}</strong> has no questions, so it can't be used for a
-                            run. Pick a different test suite to continue.
-                          </span>
-                        </div>
-                      )}
-
-                      {datasetTab === 'upload' && !hideUploadTab && (
-                        <div className={styles.ev__upload}>
-                          <div className={styles.ev__field}>
-                            <label className={styles.ev__label}>Name</label>
-                            <input
-                              className={styles.ev__input}
-                              placeholder="e.g. Internal QA set v1"
-                              value={uploadName}
-                              onChange={(e) => setUploadName(e.target.value)}
-                              disabled={datasetUploading}
-                            />
-                          </div>
-                          <div className={styles.ev__field}>
-                            <label className={styles.ev__label}>
-                              Description <span className="opt">optional</span>
-                            </label>
-                            <input
-                              className={styles.ev__input}
-                              placeholder="What does this dataset cover?"
-                              value={uploadDescription}
-                              onChange={(e) => setUploadDescription(e.target.value)}
-                              disabled={datasetUploading}
-                            />
-                          </div>
-                          <div className={styles.ev__field}>
-                            <label className={styles.ev__label}>Evaluation type</label>
-                            <input className={styles.ev__input} value={draft.type || '—'} disabled readOnly />
-                          </div>
-                          <div className={styles.ev__field}>
-                            <label className={styles.ev__label}>File</label>
-                            <label className={`${styles.ev__drop} ${uploadFile ? styles['ev__drop--has'] : ''}`}>
-                              <input
-                                type="file"
-                                accept={SUPPORTED_UPLOAD_EXTENSIONS.map((e) => `.${e}`).join(',')}
-                                onChange={(e) => handleUploadFileChange(e.target.files?.[0] ?? null)}
-                                disabled={datasetUploading}
-                                hidden
-                              />
-                              {uploadFile ? (
-                                <span className={styles['ev__drop-file']}>
-                                  <FileText size={15} /> {uploadFile.name}
-                                </span>
-                              ) : (
-                                <>
-                                  <FileText size={15} /> Choose a .json, .jsonl, .arrow or .parquet file
-                                </>
-                              )}
-                            </label>
-                            {uploadFileError && <p className={styles.ev__error}>{uploadFileError}</p>}
-                          </div>
-                          {datasetUploadError && <p className={styles.ev__error}>{datasetUploadError}</p>}
-                          <div className={styles['ev__upload-actions']}>
-                            <button
-                              type="button"
-                              className={`${styles.ev__btn} ${styles['ev__btn--ghost']}`}
-                              onClick={() => setDatasetTab('browse')}
-                              disabled={datasetUploading}
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              type="button"
-                              className={`${styles.ev__btn} ${styles['ev__btn--primary']}`}
-                              onClick={submitUpload}
-                              disabled={!canUpload}
-                            >
-                              {datasetUploading ? (
-                                <>
-                                  <Loader2 size={15} className={styles.ev__spin} /> Uploading…
-                                </>
-                              ) : (
-                                <>
-                                  <Upload size={15} /> Upload &amp; use
-                                </>
-                              )}
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </>
-                  )}
-
-                  {/* STEP 5 — METRICS */}
-                  {step === 5 && (
-                    <div className={styles.ev__metrics}>
-                      <div className={styles['ev__metrics-main']}>
-                        <div className={styles.ev__samples}>
-                          {runSamplesControl}
-                          <p className={styles['ev__samples-note']}>
-                            {hideMetricsStep
-                              ? isAgentBenchmarkNoFramework
-                                ? "Metrics aren\u2019t configurable for agent benchmarks without a selected framework — a judge model is still required, though."
-                                : "Metrics aren\u2019t configurable for standard (non-custom) model benchmarks — a judge model is still required, though."
-                              : 'Questions sampled from the suite for each model.'}
-                          </p>
-                        </div>
-
-                        {!hideMetricsStep && (
-                          <>
-                            {(metricsCatalog.length > 0 || customMetricsForType.length > 0) && draft.metrics.length === 0 && (
-                              <p className={styles['ev__metrics-required']}>
-                                Select at least one metric (built-in or custom) to continue.
-                              </p>
-                            )}
-
-                            <div className={styles['ev__metrics-bar']}>
-                              <span className={styles['ev__metrics-count']}>
-                                <b>{draft.metrics.filter((m) => metricsCatalog.includes(m)).length}</b> of {metricsCatalog.length}{' '}
-                                selected
-                              </span>
-                              <div className={styles['ev__metrics-actions']}>
-                                <button type="button" className={styles.ev__link} onClick={selectAllBuiltinMetrics}>
-                                  Select all
-                                </button>
-                                <button type="button" className={styles.ev__link} onClick={clearBuiltinMetrics}>
-                                  Clear
-                                </button>
-                              </div>
-                            </div>
-
-                            <div className={styles['ev__step-toolbar']}>
-                              <div className={styles['ev__toolbar-search']}>
-                                <Search size={14} />
-                                <input
-                                  placeholder="Search metrics…"
-                                  value={metricSearch}
-                                  onChange={(e) => setMetricSearch(e.target.value)}
-                                />
-                              </div>
-                              <button
-                                type="button"
-                                className={styles['ev__toolbar-refresh']}
-                                onClick={refreshMetrics}
-                                disabled={metricsRefreshing}
-                                title="Refresh metrics"
-                              >
-                                <RefreshCw size={14} className={metricsRefreshing ? styles.ev__spin : ''} />
-                              </button>
-                            </div>
-
-                            {metricsRefreshing ? (
-                              <div className={styles.ev__chips} aria-busy="true" aria-label="Loading metrics">
-                                {Array.from({ length: SKELETON_CHIP_COUNT }).map((_, i) => (
-                                  <span
-                                    key={i}
-                                    className={`${styles['ev__skel-block']} ${styles['ev__skel-block--chip']}`}
-                                    style={{ width: 64 + ((i * 37) % 90) }}
-                                  />
-                                ))}
-                              </div>
-                            ) : (
-                              <div className={styles.ev__chips}>
-                                {filteredMetrics.map((name: string) => {
-                                  const on = draft.metrics.includes(name);
-                                  return (
-                                    <button
-                                      key={name}
-                                      type="button"
-                                      className={`${styles.ev__chip} ${on ? styles['ev__chip--on'] : ''}`}
-                                      onClick={() => dispatch(setDraft({ metrics: toggle(draft.metrics, name) }))}
-                                    >
-                                      {on && (
-                                        <span className={styles['ev__chip-tick']}>
-                                          <Check size={12} strokeWidth={3} />
-                                        </span>
-                                      )}
-                                      {name}
-                                    </button>
-                                  );
-                                })}
-                                {metricsCatalog.length === 0 && (
-                                  <p className={styles.ev__empty}>No metrics available for this type.</p>
-                                )}
-                                {metricsCatalog.length > 0 && filteredMetrics.length === 0 && (
-                                  <p className={styles.ev__empty}>No metrics match "{metricSearch}".</p>
-                                )}
-                              </div>
-                            )}
-
-                            {/* Custom metrics — same layout as built-in, separate section since
-                                they carry richer metadata (id/description/required_judge) and
-                                store the metric's `id` in draft.metrics rather than its name.
-                                Shown whenever the raw catalog has *any* entries — even if none
-                                match this eval type or the current search — so an empty result
-                                is visibly "0 for this type" rather than indistinguishable from
-                                the section never having loaded at all. */}
-                            {customMetricsCatalog.length > 0 && (
-                              <div className={styles['ev__custom-metrics']}>
-                                <div className={styles['ev__metrics-bar']}>
-                                  <span className={styles['ev__metrics-count']}>
-                                    <b>{draft.metrics.filter((m) => customMetricIdSet.has(m)).length}</b> of{' '}
-                                    {customMetricsForType.length} custom selected
-                                  </span>
-                                  <div className={styles['ev__metrics-actions']}>
-                                    <button type="button" className={styles.ev__link} onClick={selectAllCustomMetrics}>
-                                      Select all
-                                    </button>
-                                    <button type="button" className={styles.ev__link} onClick={clearCustomMetrics}>
-                                      Clear
-                                    </button>
-                                  </div>
-                                </div>
-
-                                <div className={styles.ev__chips}>
-                                  {filteredCustomMetrics.map((c) => {
-                                    const on = draft.metrics.includes(c.id);
-                                    return (
-                                      <button
-                                        key={c.id}
-                                        type="button"
-                                        className={`${styles.ev__chip} ${styles['ev__chip--custom']} ${on ? styles['ev__chip--on'] : ''}`}
-                                        onClick={() => dispatch(setDraft({ metrics: toggle(draft.metrics, c.id) }))}
-                                        title={c.description || c.name}
-                                      >
-                                        {on && (
-                                          <span className={styles['ev__chip-tick']}>
-                                            <Check size={12} strokeWidth={3} />
-                                          </span>
-                                        )}
-                                        {c.name}
-                                        {c.required_judge && <Gavel size={11} className={styles['ev__chip-judge-icon']} />}
-                                      </button>
-                                    );
-                                  })}
-                                  {customMetricsForType.length === 0 && (
-                                    <p className={styles.ev__empty}>No custom metrics available for this type.</p>
-                                  )}
-                                  {customMetricsForType.length > 0 && filteredCustomMetrics.length === 0 && (
-                                    <p className={styles.ev__empty}>No custom metrics match "{metricSearch}".</p>
-                                  )}
-                                </div>
-                              </div>
-                            )}
-                          </>
-                        )}
-                      </div>
-
-                      {/* Judge model — mandatory for every type now (Model, Agent, RAG),
-                          regardless of which metrics are selected or whether the metrics
-                          section itself is shown. */}
-                      <aside className={styles.ev__judge}>
-                        <div className={styles['ev__judge-head']}>
-                          <p className={styles['ev__judge-title']}>
-                            <Gavel size={13} /> Judge model
-                          </p>
-                          <p className={styles['ev__judge-sub']}>Required to launch, for every evaluation type.</p>
-                        </div>
-
-                        <div className={styles['ev__judge-info']}>
-                          <Info size={13} />
-                          <span>
-                            The judge model only actually grades metrics that need one (e.g. LLM-graded metrics) — for
-                            everything else it's simply ignored, but a selection is still required to launch.
-                          </span>
-                        </div>
-
-                        <div className={styles['ev__judge-scroll']}>
-                          {judgeCandidateModels.length === 0 ? (
-                            <div className={styles['ev__judge-empty']}>No available models yet.</div>
-                          ) : (
-                            judgeCandidateModels.map((m) => {
-                                const on = draft.judgeModelId === m.id;
-                                return (
-                                  <button
-                                    key={m.id}
-                                    type="button"
-                                    className={`${styles['ev__judge-row']} ${on ? styles['ev__judge-row--on'] : ''}`}
-                                    onClick={() => dispatch(setDraft({ judgeModelId: on ? null : m.id }))}
-                                  >
-                                    <span className={`${styles.ev__radio} ${on ? styles['ev__radio--on'] : ''}`} />
-                                    <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
-                                      <span className={styles['ev__judge-name']}>{m.name || 'Unnamed model'}</span>
-                                      <span className={styles['ev__judge-meta']}>
-                                        {providers.find((p) => p?.id === m.provider_id)?.name ?? m.provider_id}
-                                      </span>
-                                    </span>
-                                  </button>
-                                );
-                              })
-                          )}
-                        </div>
-                        {!draft.judgeModelId && (
-                          <p className={styles['ev__judge-required']}>
-                            Select a judge model to continue — it's required for every evaluation.
-                          </p>
-                        )}
-                      </aside>
-                    </div>
-                  )}
-
-                  {/* STEP 6 — REVIEW */}
-                  {step === 6 && (
-                    <>
-                      <div className={styles.ev__summary}>
-                        <div className={styles['ev__summary-cell']}>
-                          <div className={styles['ev__summary-k']}>
-                            <Layers size={11} /> Questions
-                          </div>
-                          <div className={`${styles['ev__summary-v']} ${suite ? '' : styles['ev__summary-v--muted']}`}>
-                            {suite ? (suite.question_count ?? 0).toLocaleString() : '—'}
-                          </div>
-                        </div>
-                        <div className={styles['ev__summary-cell']}>
-                          <div className={styles['ev__summary-k']}>
-                            <Cpu size={11} /> Models
-                          </div>
-                          <div className={styles['ev__summary-v']}>{selectedModels.length}</div>
-                        </div>
-                        <div className={styles['ev__summary-cell']}>
-                          <div className={styles['ev__summary-k']}>
-                            <Target size={11} /> Metrics
-                          </div>
-                          <div className={styles['ev__summary-v']}>{hideMetricsStep ? '—' : draft.metrics.length}</div>
-                        </div>
-                      </div>
-
-                      <div className={styles.ev__block}>
-                        <p className={styles['ev__block-title']}>
-                          <Tag size={11} /> Overview
-                        </p>
-                        <div className={styles.ev__rows}>
-                          <div className={styles.ev__row}>
-                            <span>Name</span>
-                            <span>{draft.name || '—'}</span>
-                          </div>
-                          <div className={styles.ev__row}>
-                            <span>Type</span>
-                            <span>{typeLabel || '—'}</span>
-                          </div>
-                          {draft.agentFramework && (
-                            <div className={styles.ev__row}>
-                              <span>Framework</span>
-                              <span>{AGENT_FRAMEWORKS.find((f) => f.id === draft.agentFramework)?.title}</span>
-                            </div>
-                          )}
-                          <div className={styles.ev__row}>
-                            <span>Providers</span>
-                            <span>{draft.providers.map((id) => providers.find((p) => p?.id === id)?.name || id).join(', ') || '—'}</span>
-                          </div>
-                          <div className={styles.ev__row}>
-                            <span>Run samples</span>
-                            <span>{draft.runSamplesMode === 'full' ? 'Full dataset' : draft.runSamples}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className={styles.ev__block}>
-                        <p className={styles['ev__block-title']}>
-                          <Cpu size={11} /> Models <b>({selectedModels.length})</b>
-                        </p>
-                        {selectedModels.length > 0 ? (
-                          <div className={styles['ev__review-grid']}>
-                            {selectedModels.map((m) => (
-                              <div key={m!.id} className={styles['ev__review-card']}>
-                                <span className={styles['ev__review-card-icon']}>
-                                  <Cpu size={15} />
-                                </span>
-                                <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
-                                  <span className={styles['ev__review-card-name']}>{m!.name || 'Unnamed model'}</span>
-                                  <span className={styles['ev__review-card-sub']}>
-                                    {providers.find((p) => p?.id === m!.provider_id)?.name || m!.provider_id}
-                                  </span>
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className={styles.ev__empty}>No models selected.</p>
-                        )}
-                      </div>
-
-                      <div className={styles.ev__block}>
-                        <p className={styles['ev__block-title']}>
-                          <Database size={11} /> Test suite
-                        </p>
-                        <div className={styles.ev__rows}>
-                          <div className={styles.ev__row}>
-                            <span>Suite</span>
-                            <span>{suite?.name ?? '—'}</span>
-                          </div>
-                          {suite?.category && (
-                            <div className={styles.ev__row}>
-                              <span>Category</span>
-                              <span>{suite.category}</span>
-                            </div>
-                          )}
-                          {draft.subgroup.length > 0 && (
-                            <div className={styles.ev__row}>
-                              <span>Subgroups</span>
-                              <span>{draft.subgroup.join(', ')}</span>
-                            </div>
-                          )}
-                          {isRag && (
-                            <div className={styles.ev__row}>
-                              <span>Top K</span>
-                              <span>{draft.topK}</span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      {!hideMetricsStep && (
-                        <div className={styles.ev__block}>
-                          <p className={styles['ev__block-title']}>
-                            <Target size={11} /> Metrics <b>({draft.metrics.length})</b>
-                          </p>
-                          {draft.metrics.length > 0 ? (
-                            <div className={styles['ev__metric-tags']}>
-                              {draft.metrics.map((m) => {
-                                // draft.metrics mixes built-in metric names with custom
-                                // metric ids — resolve the id back to its display name.
-                                const custom = customMetricsCatalog.find((c) => c.id === m);
-                                return (
-                                  <span key={m} className={styles['ev__metric-tag']}>
-                                    {custom ? custom.name : m}
-                                  </span>
-                                );
-                              })}
-                            </div>
-                          ) : (
-                            <p className={styles.ev__empty}>No metrics selected.</p>
-                          )}
-                        </div>
-                      )}
-
-                      <div className={styles.ev__block}>
-                        <p className={styles['ev__block-title']}>
-                          <Gavel size={11} /> Judge model
-                        </p>
-                        <div className={styles.ev__rows}>
-                          <div className={styles.ev__row}>
-                            <span>Model</span>
-                            <span>{judgeModel ? judgeModel.name || 'Unnamed model' : '—'}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {launchError && <p className={styles.ev__error}>{launchError}</p>}
-                    </>
-                  )}
-                </div>
-                </StepErrorBoundary>
-              </div>
-
-              {/* ---- footer nav ---- */}
-              <div className={styles.ev__footer}>
-                <button
-                  type="button"
-                  className={`${styles.ev__btn} ${styles['ev__btn--ghost']}`}
-                  onClick={() => (step > 0 ? goBack() : navigate('/app/dashboard'))}
-                  disabled={launching}
-                >
-                  <ChevronLeft size={16} /> {step === 0 ? 'Cancel' : 'Back'}
-                </button>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                  {step === 0 && canGo() && (
-                    <span className={styles.ev__hint}>
-                      <kbd>↵</kbd> Enter to continue
-                    </span>
-                  )}
-                  {step < totalSteps - 1 ? (
-                    <button type="button" className={`${styles.ev__btn} ${styles['ev__btn--primary']}`} onClick={goNext} disabled={!canGo()}>
-                      Continue <ChevronRight size={16} />
-                    </button>
-                  ) : (
-                    <button type="button" className={`${styles.ev__btn} ${styles['ev__btn--launch']}`} onClick={launch} disabled={launching}>
-                      {launching ? (
-                        <>
-                          <Loader2 size={16} className={styles.ev__spin} /> Launching…
-                        </>
-                      ) : (
-                        <>
-                          <Play size={16} /> Launch run
-                        </>
-                      )}
-                    </button>
-                  )}
-                </div>
-              </div>
-            </section>
-          </div>
-        </div>
-      </div>
-
-      {/* Change-2: dataset preview slider — right-to-left panel showing
-          GET /datasets/{id}/preview?limit={limit} for the clicked suite. */}
-      {previewOpen && (
-        <div className={styles['ev-preview-overlay']} onClick={closePreview}>
-          <aside
-            className={styles['ev-preview-panel']}
-            role="dialog"
-            aria-modal="true"
-            aria-label={`Preview ${previewDatasetName}`}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className={styles['ev-preview-head']}>
-              <div className={styles['ev-preview-head-main']}>
-                <p className={styles['ev-preview-eyebrow']}>Test suite preview</p>
-                <h3 className={styles['ev-preview-title']}>{previewDatasetName || 'Dataset'}</h3>
-              </div>
-              <button type="button" className={styles['ev-preview-close']} onClick={closePreview} title="Close preview">
-                <X size={16} />
-              </button>
-            </div>
-
-            <div className={styles['ev-preview-controls']}>
-              <div className={styles['ev-preview-limit']}>
-                <label className={styles['ev-preview-limit-label']}>
-                  Page {previewCurrentPage} of {previewTotalPages}
-                  <span className={styles['ev-preview-limit-range']}>
-                    {' '}
-                    ({PREVIEW_PAGE_SIZE} per page
-                    {previewQuestionCount > 0 ? `, ${previewQuestionCount.toLocaleString()} total` : ''})
-                  </span>
-                </label>
-                <div className={styles['ev-preview-limit-controls']}>
-                  <button
-                    type="button"
-                    className={styles['ev-preview-stepper-btn']}
-                    onClick={goToPreviewPrevPage}
-                    disabled={previewLoading || !previewHasPrevPage}
-                    aria-label="Previous page"
-                    title="Previous page"
-                  >
-                    <ChevronLeft size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    className={styles['ev-preview-stepper-btn']}
-                    onClick={goToPreviewNextPage}
-                    disabled={previewLoading || !previewHasNextPage}
-                    aria-label="Next page"
-                    title="Next page"
-                  >
-                    <ChevronRight size={14} />
-                  </button>
-                </div>
-              </div>
-              <button
-                type="button"
-                className={`${styles.ev__btn} ${styles['ev__btn--primary']}`}
-                onClick={() => previewDatasetId && fetchPreviewPage(previewDatasetId, previewOffset)}
-                disabled={previewLoading}
-                title="Reload this page"
-              >
-                {previewLoading ? (
-                  <>
-                    <Loader2 size={15} className={styles.ev__spin} /> Loading…
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw size={15} /> Reload
-                  </>
-                )}
-              </button>
-            </div>
-
-            <div className={styles['ev-preview-body']}>
-              {previewError && <p className={styles.ev__error}>{previewError}</p>}
-
-              {previewLoading && (
-                <div className={styles['ev-preview-skel-list']} aria-busy="true" aria-label="Loading preview">
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <div key={i} className={styles['ev-preview-skel-card']}>
-                      <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '85%' }} />
-                      <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '60%' }} />
-                      <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '40%' }} />
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {!previewLoading &&
-                !previewError &&
-                previewData &&
-                (() => {
-                  // Guard against `questions` being missing/non-array on the
-                  // response — accessing .length/.map directly on that would
-                  // throw if the API ever omits or nulls the field.
-                  const previewQuestions = Array.isArray(previewData.questions) ? previewData.questions : [];
-
-                  if (previewQuestions.length === 0) {
-                    return <p className={styles.ev__empty}>This suite returned no sample questions.</p>;
-                  }
-
-                  return (
-                    <div className={styles['ev-preview-list']}>
-                      {previewQuestions.map((q, i) => {
-                        // Two response shapes are both seen in practice —
-                        // resolve whichever fields are actually present
-                        // rather than assuming one fixed shape (see
-                        // DatasetPreviewQuestion in types).
-                        const promptText = q?.input?.prompt ?? q?.input?.question;
-                        const inputSource = q?.input?.source;
-                        const inputType = q?.input?.type;
-                        const expectedAnswer = q?.expected?.answer;
-                        const expectedDocId = q?.expected?.doc_id;
-                        const expectedSectionId = q?.expected?.section_id;
-                        const metadataEntries =
-                          q?.metadata && typeof q.metadata === 'object' ? Object.entries(q.metadata) : [];
-
-                        return (
-                          <div key={q?.id ?? i} className={styles['ev-preview-q']}>
-                            <div className={styles['ev-preview-q-head']}>
-                              <span className={styles['ev-preview-q-index']}>Q{previewOffset + i + 1}</span>
-                              {q?.category && <span className={styles['ev-preview-q-cat']}>{q.category}</span>}
-                              {q?.subgroup && <span className={styles['ev-preview-q-cat']}>{q.subgroup}</span>}
-                              {inputType && <span className={styles['ev-preview-q-cat']}>{String(inputType)}</span>}
-                            </div>
-
-                            {promptText != null && (
-                              <p className={styles['ev-preview-q-prompt']}>{String(promptText)}</p>
-                            )}
-                            {inputSource != null && (
-                              <p className={styles['ev-preview-q-source']}>
-                                <span>Source</span> {String(inputSource)}
-                              </p>
-                            )}
-
-                            {Array.isArray(q?.choices) && q.choices.length > 0 && (
-                              <ul className={styles['ev-preview-q-choices']}>
-                                {q.choices.map((c, ci) => (
-                                  <li key={ci}>{String(c)}</li>
-                                ))}
-                              </ul>
-                            )}
-
-                            {expectedAnswer !== undefined && expectedAnswer !== null && (
-                              <p className={styles['ev-preview-q-answer']}>
-                                <span>Expected</span> {String(expectedAnswer)}
-                              </p>
-                            )}
-                            {(expectedDocId != null || expectedSectionId != null) && (
-                              <p className={styles['ev-preview-q-answer']}>
-                                <span>Reference</span>{' '}
-                                {[expectedDocId != null ? `doc ${expectedDocId}` : null, expectedSectionId != null ? `section ${expectedSectionId}` : null]
-                                  .filter(Boolean)
-                                  .join(' · ')}
-                              </p>
-                            )}
-
-                            {metadataEntries.length > 0 && (
-                              <div className={styles['ev-preview-q-meta']}>
-                                {metadataEntries.map(([key, value]) => (
-                                  <span key={key} className={styles['ev-preview-q-meta-item']}>
-                                    <b>{key}</b>
-                                    {String(value)}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })()}
-            </div>
-          </aside>
-        </div>
-      )}
-
-      {toast && (
-        <div className={styles['ev-toast']}>
-          <div className={styles['ev-toast__icon']}>
-            <Check size={18} />
-          </div>
-          <div>
-            <div className={styles['ev-toast__title']}>Run launched</div>
-            <div className={styles['ev-toast__sub']}>You'll find it in your history once it completes.</div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
 }
+
+// ── Permissive parser for the newer python-repr-style fields (short_answer,
+//    true_false, timestamped_summary). Handles True/False/None literals that
+//    plain eval() can't, and tries strict JSON first since that's cheaper
+//    and safer whenever the backend does send valid JSON. ──
+function parsePyList<T>(raw: string): T[] {
+    if (!raw || raw === '[]') return [];
+    try {
+        const result = JSON.parse(raw);
+        if (Array.isArray(result)) return result as T[];
+    } catch { /* not valid JSON — fall through to python-ish eval */ }
+    try {
+        const normalized = raw
+            .replace(/\bTrue\b/g, 'true')
+            .replace(/\bFalse\b/g, 'false')
+            .replace(/\bNone\b/g, 'null');
+        // eslint-disable-next-line no-eval
+        const result = eval('(' + normalized + ')');
+        if (Array.isArray(result)) return result as T[];
+    } catch { /* give up */ }
+    return [];
+}
+
+interface ShortAnswerItem { question: string; answer: string; }
+interface TrueFalseItem { statement: string; is_true: boolean; explanation: string; }
+interface TimestampSegment { start_time: string; end_time: string; summary: string; }
+
+const CHIP_COLORS = [
+    'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
+    'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
+    'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)',
+    'linear-gradient(135deg, #fa709a 0%, #fee140 100%)',
+    'linear-gradient(135deg, #30cfd0 0%, #330867 100%)',
+    'linear-gradient(135deg, #a8edea 0%, #fed6e3 100%)',
+    'linear-gradient(135deg, #ff9a56 0%, #ff6a88 100%)',
+    'linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%)',
+    'linear-gradient(135deg, #a1c4fd 0%, #c2e9fb 100%)',
+];
+
+function seededColorIndex(str: string): number {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+    return hash % CHIP_COLORS.length;
+}
+
+// ── Copy / Download helpers ───────────────────────────────
+function copyText(text: string) {
+    if (navigator.clipboard) { navigator.clipboard.writeText(text).catch(() => fallbackCopy(text)); }
+    else fallbackCopy(text);
+}
+function fallbackCopy(text: string) {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch { }
+    document.body.removeChild(ta);
+}
+function downloadFile(content: string, filename: string, mime: string) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+function wrapHtml(body: string, title: string): string {
+    return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${title}</title><style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:900px;margin:40px auto;padding:20px;background:#f8f9fa;color:#333}</style></head><body>${body}</body></html>`;
+}
+
+// ── Format helpers ────────────────────────────────────────
+type Formatted = { content: string; filename: string; mime: string };
+
+function formatSummary(summary: string, fmt: string, base = 'summary'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    if (fmt === 'html') return { content: wrapHtml(marked.parse(summary) as string, 'Summary'), filename: `${base}_summary_${ts}.html`, mime: 'text/html' };
+    if (fmt === 'json') return { content: JSON.stringify({ type: 'summary', content: summary, timestamp: new Date().toISOString() }, null, 2), filename: `${base}_summary_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'md') return { content: summary, filename: `${base}_summary_${ts}.md`, mime: 'text/markdown' };
+    return { content: summary, filename: `${base}_summary_${ts}.txt`, mime: 'text/plain' };
+}
+
+function formatKeywords(keywords: string[], fmt: string, base = 'keywords'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    if (fmt === 'html') return { content: wrapHtml(`<div style="display:flex;flex-wrap:wrap;gap:10px">${keywords.map(k => `<span style="padding:6px 14px;border-radius:20px;background:linear-gradient(135deg,#8b5cf6,#a78bfa);color:#fff;font-weight:600">${k}</span>`).join('')}</div>`, 'Keywords'), filename: `${base}_keywords_${ts}.html`, mime: 'text/html' };
+    if (fmt === 'json') return { content: JSON.stringify({ type: 'keywords', keywords, timestamp: new Date().toISOString() }, null, 2), filename: `${base}_keywords_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'md') return { content: '# Keywords\n\n' + keywords.map(k => `- ${k}`).join('\n'), filename: `${base}_keywords_${ts}.md`, mime: 'text/markdown' };
+    return { content: keywords.join('\n'), filename: `${base}_keywords_${ts}.txt`, mime: 'text/plain' };
+}
+
+function formatAssessment(faqRaw: string, fmt: string, t: (key: string, fallback?: string) => string, base = 'assessment'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    const items = parseFaq(faqRaw);
+    const explanationLabel = t('uploadInfer.workspacePanel.explanation', 'Explanation');
+    if (fmt === 'json') return { content: JSON.stringify(items, null, 2), filename: `${base}_assessment_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'html') {
+        const body = items.map((q, i) =>
+            `<div style="background:#fff;border-radius:12px;padding:24px;margin-bottom:20px;box-shadow:0 2px 8px rgba(0,0,0,.08);border-left:4px solid #8b5cf6">
+             <div style="font-weight:700;font-size:16px;margin-bottom:14px"><span style="background:linear-gradient(135deg,#8b5cf6,#a78bfa);color:#fff;padding:3px 10px;border-radius:6px;margin-right:10px;font-size:13px">Q${i + 1}</span>${q.question}</div>
+             ${Object.entries(q.options).map(([k, v]) => `<div style="padding:10px 14px;margin:6px 0;border-radius:8px;border:1px solid ${k === q.correct_answer ? '#10b981' : '#e5e7eb'};background:${k === q.correct_answer ? 'rgba(16,185,129,.08)' : '#f9fafb'}"><b style="color:${k === q.correct_answer ? '#10b981' : '#8b5cf6'}">${k}.</b> ${v}${k === q.correct_answer ? ' <span style="background:#10b981;color:#fff;padding:1px 7px;border-radius:4px;font-size:11px">✓</span>' : ''}</div>`).join('')}
+             <div style="margin-top:14px;padding:12px 16px;background:rgba(139,92,246,.06);border-left:3px solid #8b5cf6;border-radius:0 8px 8px 0;font-size:13px"><b style="color:#8b5cf6;font-size:11px;text-transform:uppercase">${explanationLabel}</b><br/>${q.explanation}</div>
+             </div>`
+        ).join('');
+        return { content: wrapHtml(body, 'Assessment Questions'), filename: `${base}_assessment_${ts}.html`, mime: 'text/html' };
+    }
+    // txt
+    const answerLabel = t('uploadInfer.workspacePanel.answer', 'Answer');
+    const txt = items.map((q, i) =>
+        `Q${i + 1}. ${q.question}\n` +
+        Object.entries(q.options).map(([k, v]) => `  ${k}. ${v}${k === q.correct_answer ? ' ✓' : ''}`).join('\n') +
+        `\n\n${answerLabel}: ${q.correct_answer}\n${explanationLabel}: ${q.explanation}`
+    ).join('\n\n' + '─'.repeat(60) + '\n\n');
+    return { content: txt, filename: `${base}_assessment_${ts}.txt`, mime: 'text/plain' };
+}
+
+function formatShortAnswer(raw: string, fmt: string, t: (key: string, fallback?: string) => string, base = 'short_answer'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    const items = parsePyList<ShortAnswerItem>(raw);
+    const answerLabel = t('uploadInfer.workspacePanel.answer', 'Answer');
+    if (fmt === 'json') return { content: JSON.stringify(items, null, 2), filename: `${base}_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'html') {
+        const body = items.map((item, i) =>
+            `<div style="background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.08);border-left:4px solid #4facfe">
+             <div style="font-weight:700;font-size:15px;margin-bottom:10px"><span style="background:#4facfe;color:#fff;padding:3px 10px;border-radius:6px;margin-right:10px;font-size:13px">Q${i + 1}</span>${item.question}</div>
+             <div style="padding:10px 14px;background:rgba(79,172,254,.08);border-radius:8px;font-size:13px"><b style="color:#4facfe">${answerLabel}:</b> ${item.answer}</div>
+             </div>`
+        ).join('');
+        return { content: wrapHtml(body, 'Short Answer Questions'), filename: `${base}_${ts}.html`, mime: 'text/html' };
+    }
+    const txt = items.map((item, i) => `Q${i + 1}. ${item.question}\n${answerLabel}: ${item.answer}`).join('\n\n' + '─'.repeat(60) + '\n\n');
+    return { content: txt, filename: `${base}_${ts}.txt`, mime: 'text/plain' };
+}
+
+function formatTrueFalse(raw: string, fmt: string, t: (key: string, fallback?: string) => string, base = 'true_false'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    const items = parsePyList<TrueFalseItem>(raw);
+    const answerLabel = t('uploadInfer.workspacePanel.answer', 'Answer');
+    const explanationLabel = t('uploadInfer.workspacePanel.explanation', 'Explanation');
+    const trueLabel = t('uploadInfer.workspacePanel.true', 'True');
+    const falseLabel = t('uploadInfer.workspacePanel.false', 'False');
+    if (fmt === 'json') return { content: JSON.stringify(items, null, 2), filename: `${base}_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'html') {
+        const body = items.map((item, i) =>
+            `<div style="background:#fff;border-radius:12px;padding:20px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.08);border-left:4px solid #43e97b">
+             <div style="font-weight:700;font-size:15px;margin-bottom:10px"><span style="background:#43e97b;color:#fff;padding:3px 10px;border-radius:6px;margin-right:10px;font-size:13px">${i + 1}</span>${item.statement}</div>
+             <div style="padding:10px 14px;background:rgba(67,233,123,.08);border-radius:8px;font-size:13px"><b style="color:#43e97b">${answerLabel}:</b> ${item.is_true ? trueLabel : falseLabel}</div>
+             <div style="margin-top:10px;font-size:13px;color:#666"><b>${explanationLabel}:</b> ${item.explanation}</div>
+             </div>`
+        ).join('');
+        return { content: wrapHtml(body, 'True / False Questions'), filename: `${base}_${ts}.html`, mime: 'text/html' };
+    }
+    const txt = items.map((item, i) => `${i + 1}. ${item.statement}\n${answerLabel}: ${item.is_true ? trueLabel : falseLabel}\n${explanationLabel}: ${item.explanation}`).join('\n\n' + '─'.repeat(60) + '\n\n');
+    return { content: txt, filename: `${base}_${ts}.txt`, mime: 'text/plain' };
+}
+
+
+function formatTimestampedSummary(raw: string, fmt: string, base = 'timestamped_summary'): Formatted {
+    const ts = new Date().toISOString().slice(0, 10);
+    const items = parsePyList<TimestampSegment>(raw);
+    if (fmt === 'json') return { content: JSON.stringify(items, null, 2), filename: `${base}_${ts}.json`, mime: 'application/json' };
+    if (fmt === 'md') return { content: items.map(s => `### ${s.start_time} – ${s.end_time}\n\n${s.summary}`).join('\n\n'), filename: `${base}_${ts}.md`, mime: 'text/markdown' };
+    const txt = items.map(s => `[${s.start_time} – ${s.end_time}]\n${s.summary}`).join('\n\n');
+    return { content: txt, filename: `${base}_${ts}.txt`, mime: 'text/plain' };
+}
+
+
+const SUMMARY_FMTS = [{ k: 'txt', l: 'Text' }, { k: 'md', l: 'Markdown' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const KEYWORDS_FMTS = [{ k: 'txt', l: 'Text' }, { k: 'md', l: 'Markdown' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const ASSESSMENT_FMTS = [{ k: 'txt', l: 'Plain Text' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const SHORT_ANSWER_FMTS = [{ k: 'txt', l: 'Plain Text' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const TRUE_FALSE_FMTS = [{ k: 'txt', l: 'Plain Text' }, { k: 'html', l: 'HTML' }, { k: 'json', l: 'JSON' }];
+const TIMESTAMPED_SUMMARY_FMTS = [{ k: 'txt', l: 'Text' }, { k: 'md', l: 'Markdown' }, { k: 'json', l: 'JSON' }];
+
+// ── ActionBtn ─────────────────────────────────────────────
+const ActionBtn: React.FC<{ title: string; onClick: () => void; active?: boolean; children: React.ReactNode }> = ({ title, onClick, active, children }) => (
+    <button className={`${styles.actionBtn} ${active ? styles.actionBtnActive : ''}`} title={title} onClick={e => { e.stopPropagation(); onClick(); }}>
+        {children}
+    </button>
+);
+
+// ── FormatIcon ────────────────────────────────────────────
+// Small colored glyph rendered next to each format option in the
+// Copy / Download dropdowns. Each format has a recognisable hue.
+const FORMAT_ICONS: Record<string, { color: string; bg: string; node: React.ReactNode }> = {
+    txt: {
+        color: '#64748b',
+        bg: 'rgba(100, 116, 139, 0.12)',
+        node: (
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 2.5h6.5L13 6v7.5A1 1 0 0112 14.5H3a1 1 0 01-1-1v-10a1 1 0 011-1z" />
+                <path d="M9 2.5V6h4" />
+                <path d="M5 9h6M5 11.5h4" />
+            </svg>
+        ),
+    },
+    md: {
+        color: '#3b82f6',
+        bg: 'rgba(59, 130, 246, 0.14)',
+        node: (
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="1.5" y="3.5" width="13" height="9" rx="1.5" />
+                <path d="M4 10.5V6l1.75 2.5L7.5 6v4.5" />
+                <path d="M10.25 6v4.5M8.75 9l1.5 1.5L11.75 9" />
+            </svg>
+        ),
+    },
+    html: {
+        color: '#e34f26',
+        bg: 'rgba(227, 79, 38, 0.14)',
+        node: (
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M2.5 2l1 12 4.5 1.3L12.5 14l1-12z" />
+                <path d="M5 5.5h6L10.6 11l-2.6.8L5.4 11l-.15-2" />
+            </svg>
+        ),
+    },
+    json: {
+        color: '#f59e0b',
+        bg: 'rgba(245, 158, 11, 0.14)',
+        node: (
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M6 2.5C4.5 2.5 4 3.5 4 5v1.5C4 7.5 3 8 2 8c1 0 2 .5 2 1.5V11c0 1.5.5 2.5 2 2.5" />
+                <path d="M10 2.5c1.5 0 2 1 2 2.5v1.5C12 7.5 13 8 14 8c-1 0-2 .5-2 1.5V11c0 1.5-.5 2.5-2 2.5" />
+            </svg>
+        ),
+    },
+};
+
+const FormatIcon: React.FC<{ fmt: string }> = ({ fmt }) => {
+    const def = FORMAT_ICONS[fmt];
+    if (!def) return null;
+    return (
+        <span
+            className={styles.fmtIcon}
+            style={{ color: def.color, background: def.bg }}
+            aria-hidden="true"
+        >
+            {def.node}
+        </span>
+    );
+};
+
+// Maps a format's short key (used across all the *_FMTS arrays above) to
+// its translation key, so every Copy/Download dropdown gets a translated
+// label from one place instead of six separate hardcoded arrays.
+const FMT_LABEL_KEY: Record<string, string> = {
+    txt: 'uploadInfer.workspacePanel.fmtText',
+    md: 'uploadInfer.workspacePanel.fmtMarkdown',
+    html: 'uploadInfer.workspacePanel.fmtHtml',
+    json: 'uploadInfer.workspacePanel.fmtJson',
+};
+
+// ── Dropdown ──────────────────────────────────────────────
+const Dropdown: React.FC<{
+    icon: React.ReactNode; title: string; label: string;
+    fmts: { k: string; l: string }[];
+    onSelect: (k: string) => void; active?: boolean;
+}> = ({ icon, title, label, fmts, onSelect, active }) => {
+    const { t } = useTranslation();
+    const [open, setOpen] = useState(false);
+    const ref = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+        document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h);
+    }, []);
+    return (
+        <div className={styles.dropdownWrap} ref={ref}>
+            <ActionBtn title={title} onClick={() => setOpen(o => !o)} active={open || active}>{icon}</ActionBtn>
+            {open && (
+                <div className={styles.dropdown}>
+                    <div className={styles.dropdownLabel}>{label}</div>
+                    {fmts.map(f => (
+                        <button
+                            key={f.k}
+                            className={styles.dropdownItem}
+                            onClick={() => { onSelect(f.k); setOpen(false); }}
+                        >
+                            <FormatIcon fmt={f.k} />
+                            <span className={styles.dropdownItemLabel}>{t(FMT_LABEL_KEY[f.k] ?? f.k, f.l)}</span>
+                        </button>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Icons ─────────────────────────────────────────────────
+const IcoEdit = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M7 2.5H3.5A1.5 1.5 0 002 4v8.5A1.5 1.5 0 003.5 14H12a1.5 1.5 0 001.5-1.5V9" />
+        <path d="M11.5 1.5a1.414 1.414 0 012 2L8 9l-2.5.5.5-2.5 5.5-5.5z" />
+    </svg>
+);
+const IcoCopy = ({ success }: { success: boolean }) => success ? (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className={styles.successIcon}><path d="M3 8l3.5 3.5L13 4" /></svg>
+) : (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="5" y="5" width="8" height="9" rx="1.5" />
+        <path d="M10 5V4a1 1 0 00-1-1H4a1.5 1.5 0 00-1.5 1.5V11a1 1 0 001 1h1" />
+    </svg>
+);
+const IcoDownload = () => (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M8 2v8M5 7l3 3 3-3" />
+        <path d="M2 12v1.5A1.5 1.5 0 003.5 15h9a1.5 1.5 0 001.5-1.5V12" />
+    </svg>
+);
+
+// ── TabToolbar: edit + copy + download ───────────────────
+const TabToolbar: React.FC<{
+    onEdit?: () => void;
+    fmts: { k: string; l: string }[];
+    onCopy: (k: string) => void;
+    onDownload: (k: string) => void;
+    copied: boolean;
+}> = ({ onEdit, fmts, onCopy, onDownload, copied }) => {
+    const { t } = useTranslation();
+    return (
+        <div className={styles.tabToolbar}>
+            {onEdit && <ActionBtn title={t('uploadInfer.workspacePanel.edit')} onClick={onEdit}><IcoEdit /></ActionBtn>}
+            <Dropdown icon={<IcoCopy success={copied} />} title={t('uploadInfer.workspacePanel.copy')} label={t('uploadInfer.workspacePanel.copyAs')} fmts={fmts} onSelect={onCopy} active={copied} />
+            <Dropdown icon={<IcoDownload />} title={t('uploadInfer.workspacePanel.download')} label={t('uploadInfer.workspacePanel.downloadAs')} fmts={fmts} onSelect={onDownload} />
+        </div>
+    );
+};
+
+// ── Stable keyword chip ───────────────────────────────────
+const KeywordChip: React.FC<{ kw: string; isNew: boolean }> = ({ kw, isNew }) => (
+    <span className={`${styles.keywordPill} ${isNew ? styles.keywordPillNew : ''}`}
+        style={{ background: CHIP_COLORS[seededColorIndex(kw)] }}>
+        {kw}
+    </span>
+);
+
+const ChipGrid: React.FC<{ kws: string[]; prevSet?: Set<string> }> = ({ kws, prevSet }) => {
+    const { t } = useTranslation();
+    return kws.length > 0 ? (
+        <div className={styles.keywordGrid}>
+            {kws.map(kw => <KeywordChip key={kw} kw={kw} isNew={prevSet ? !prevSet.has(kw) : false} />)}
+        </div>
+    ) : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noKeywords')}</div>;
+};
+
+// ── Tab: Summary ──────────────────────────────────────────
+const TabSummary: React.FC<{ summary: string; fileId: number; onSaved: (s: string) => void }> = ({ summary, fileId, onSaved }) => {
+    const { t } = useTranslation();
+    const [editing, setEditing] = useState(false);
+    const [draft, setDraft] = useState(summary);
+    const [saving, setSaving] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    const html = useMemo(() => marked.parse(draft) as string, [draft]);
+    const viewHtml = useMemo(() => marked.parse(summary) as string, [summary]);
+
+    const handleSave = async () => {
+        setSaving(true);
+        try { await api.post('/files/update', { fileID: String(fileId), summary: draft }); onSaved(draft); setEditing(false); }
+        finally { setSaving(false); }
+    };
+    const handleCopy = (fmt: string) => { copyText(formatSummary(summary, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatSummary(summary, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!summary && !editing) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noSummary')}</div>;
+
+    return (
+        <div className={`${styles.tabContent} ${editing ? styles.editMode : ''}`}>
+            {!editing ? (
+                <>
+                    <TabToolbar onEdit={() => { setDraft(summary); setEditing(true); }} fmts={SUMMARY_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+                    <div className={styles.summaryMd} dangerouslySetInnerHTML={{ __html: viewHtml }} />
+                </>
+            ) : (
+                <div className={styles.editLayout}>
+                    <div className={styles.editCol}>
+                        <div className={styles.editColHeader}><span className={styles.editColLabel}>{t('uploadInfer.workspacePanel.editColPreview')}</span><span className={styles.editColTag}>{t('uploadInfer.workspacePanel.markdownRenderer')}</span></div>
+                        <div className={styles.editPreview}><div className={styles.summaryMd} dangerouslySetInnerHTML={{ __html: html }} /></div>
+                    </div>
+                    <div className={styles.editCol}>
+                        <div className={styles.editColHeader}><span className={styles.editColLabel}>{t('uploadInfer.workspacePanel.editColEdit')}</span><span className={styles.editColTag}>{t('uploadInfer.workspacePanel.markdownTag')}</span></div>
+                        <textarea className={styles.editTextarea} value={draft} onChange={e => setDraft(e.target.value)} spellCheck={false} />
+                    </div>
+                    <div className={styles.editFooter}>
+                        <button className={styles.cancelBtn} onClick={() => setEditing(false)} disabled={saving}>{t('uploadInfer.workspacePanel.cancel')}</button>
+                        <button className={styles.saveBtn} onClick={handleSave} disabled={saving}>
+                            {saving ? <><span className={styles.inlineSpinner} />{t('uploadInfer.workspacePanel.saving')}</> : t('uploadInfer.workspacePanel.save')}
+                        </button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Tab: Keywords ─────────────────────────────────────────
+const TabKeywords: React.FC<{ keywords: string[]; fileId: number; onSaved: (kws: string[]) => void }> = ({ keywords, fileId, onSaved }) => {
+    const { t } = useTranslation();
+    const [editing, setEditing] = useState(false);
+    const [draft, setDraft] = useState(keywords.join('\n'));
+    const [saving, setSaving] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    // prevSetSnapshot holds the keyword set from the PREVIOUS render of ChipGrid
+    // so only truly new chips get the pop animation
+    const prevSetSnapshot = useRef<Set<string>>(new Set(keywords));
+
+    const draftKeywords = useMemo(() => draft.split('\n').map(k => k.trim()).filter(Boolean), [draft]);
+
+    // After each render, schedule an update of the snapshot so the *next*
+    // render can compare against what's currently visible
+    useEffect(() => {
+        const id = setTimeout(() => { prevSetSnapshot.current = new Set(draftKeywords); }, 0);
+        return () => clearTimeout(id);
+    }, [draftKeywords]);
+
+    const handleSave = async () => {
+        setSaving(true);
+        try { await api.post('/files/update', { fileID: String(fileId), keywords: draftKeywords }); onSaved(draftKeywords); setEditing(false); }
+        finally { setSaving(false); }
+    };
+    const handleCopy = (fmt: string) => { copyText(formatKeywords(keywords, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatKeywords(keywords, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!keywords.length && !editing) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noKeywords')}</div>;
+
+    return (
+        <div className={`${styles.tabContent} ${editing ? styles.editMode : ''}`}>
+            {!editing ? (
+                <>
+                    <TabToolbar onEdit={() => { setDraft(keywords.join('\n')); prevSetSnapshot.current = new Set(keywords); setEditing(true); }} fmts={KEYWORDS_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+                    <ChipGrid kws={keywords} />
+                </>
+            ) : (
+                <div className={styles.editLayout}>
+                    <div className={styles.editCol}>
+                        <div className={styles.editColHeader}><span className={styles.editColLabel}>{t('uploadInfer.workspacePanel.editColPreview')}</span><span className={styles.editColTag}>{t('uploadInfer.workspacePanel.chipView')}</span></div>
+                        <div className={styles.editPreview}>
+                            <ChipGrid kws={draftKeywords} prevSet={prevSetSnapshot.current} />
+                        </div>
+                    </div>
+                    <div className={styles.editCol}>
+                        <div className={styles.editColHeader}><span className={styles.editColLabel}>{t('uploadInfer.workspacePanel.editColEdit')}</span><span className={styles.editColTag}>{t('uploadInfer.workspacePanel.onePerLine')}</span></div>
+                        <textarea className={styles.editTextarea} value={draft} onChange={e => setDraft(e.target.value)} spellCheck={false} placeholder={t('uploadInfer.workspacePanel.keywordPlaceholder')} />
+                    </div>
+                    <div className={styles.editFooter}>
+                        <button className={styles.cancelBtn} onClick={() => setEditing(false)} disabled={saving}>{t('uploadInfer.workspacePanel.cancel')}</button>
+                        <button className={styles.saveBtn} onClick={handleSave} disabled={saving}>
+                            {saving ? <><span className={styles.inlineSpinner} />{t('uploadInfer.workspacePanel.saving')}</> : t('uploadInfer.workspacePanel.save')}
+                        </button>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Tab: Assessment ───────────────────────────────────────
+type AssessMode = 'mcq' | 'all';
+
+const TabAssessment: React.FC<{ faq: string }> = ({ faq }) => {
+    const { t } = useTranslation();
+    const items = useMemo(() => parseFaq(faq), [faq]);
+
+    // Always default to MCQ; reset when faq changes (new file)
+    const [mode, setMode] = useState<AssessMode>('mcq');
+    const [current, setCurrent] = useState(0);
+    const [selected, setSelected] = useState<string | null>(null);
+    const [revealed, setRevealed] = useState(false);
+    const [complete, setComplete] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    const prevFaq = useRef(faq);
+    useEffect(() => {
+        if (faq !== prevFaq.current) {
+            prevFaq.current = faq;
+            setMode('mcq');
+            setCurrent(0); setSelected(null); setRevealed(false); setComplete(false);
+        }
+    }, [faq]);
+
+    const handleCopy = (fmt: string) => { copyText(formatAssessment(faq, fmt, t).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatAssessment(faq, fmt, t); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!items.length) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noQuestions')}</div>;
+
+    // ── MCQ helpers ───────────────────────────────────────
+    const q = items[current];
+    const isLast = current === items.length - 1;
+    const progress = Math.round(((current + (complete ? 1 : 0)) / items.length) * 100);
+
+    const handleSelect = (key: string) => { if (revealed) return; setSelected(key); setRevealed(true); };
+    const handleNext = () => { if (isLast) setComplete(true); else { setCurrent(c => c + 1); setSelected(null); setRevealed(false); } };
+    const handleRestart = () => { setCurrent(0); setSelected(null); setRevealed(false); setComplete(false); };
+    const getOptClass = (key: string) => {
+        if (!revealed) return selected === key ? styles.faqOptSelected : '';
+        if (key === q.correct_answer && selected === key) return styles.faqOptCorrect;
+        if (key === q.correct_answer) return styles.faqOptCorrectAlt;
+        if (key === selected) return styles.faqOptWrong;
+        return '';
+    };
+
+    return (
+        <div className={styles.tabContent}>
+            {/* Toolbar row: mode tabs left, copy/download right */}
+            <div className={styles.assessHeader}>
+                <div className={styles.assessModeTabs}>
+                    <button
+                        className={`${styles.assessModeTab} ${mode === 'mcq' ? styles.assessModeTabActive : ''}`}
+                        onClick={() => setMode('mcq')}
+                    >
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="8" cy="8" r="6" />
+                            <path d="M6 8.5l1.5 1.5L10.5 6" />
+                        </svg>
+                        {t('uploadInfer.workspacePanel.mcq')}
+                    </button>
+                    <button
+                        className={`${styles.assessModeTab} ${mode === 'all' ? styles.assessModeTabActive : ''}`}
+                        onClick={() => setMode('all')}
+                    >
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M2 4h12M2 8h12M2 12h8" />
+                        </svg>
+                        {t('uploadInfer.workspacePanel.viewAll')}
+                    </button>
+                </div>
+                <TabToolbar fmts={ASSESSMENT_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+            </div>
+
+            {/* ── MCQ mode ── */}
+            {mode === 'mcq' && (
+                complete ? (
+                    <div className={styles.assessComplete}>
+                        <div className={styles.assessCompleteIcon}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                        </div>
+                        <div className={styles.assessCompleteTitle}>{t('uploadInfer.workspacePanel.assessCompleteTitle')}</div>
+                        <div className={styles.assessCompleteDesc}>{t('uploadInfer.workspacePanel.assessCompleteDesc', { count: items.length })}</div>
+                        <button className={styles.assessRestartBtn} onClick={handleRestart}>{t('uploadInfer.workspacePanel.restart')}</button>
+                    </div>
+                ) : (
+                    <>
+                        <div className={styles.assessProgress}>
+                            <div className={styles.assessProgressTrack}>
+                                <div className={styles.assessProgressFill} style={{ width: `${progress}%` }} />
+                            </div>
+                            <span className={styles.assessProgressLabel}>{current + 1} / {items.length}</span>
+                        </div>
+                        <div className={styles.faqCard}>
+                            <div className={styles.faqQ}>
+                                <span className={styles.faqNum}>Q{current + 1}</span>
+                                {q.question}
+                            </div>
+                            <div className={styles.faqOptions}>
+                                {Object.entries(q.options).map(([key, val]) => (
+                                    <button key={key} className={`${styles.faqOpt} ${getOptClass(key)}`} onClick={() => handleSelect(key)} disabled={revealed}>
+                                        <span className={styles.faqOptKey}>{key}</span>
+                                        <span className={styles.faqOptVal}>{val}</span>
+                                        {revealed && key === q.correct_answer && <svg className={styles.faqCheckIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 8l3.5 3.5L13 4" /></svg>}
+                                        {revealed && key === selected && key !== q.correct_answer && <svg className={styles.faqXIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>}
+                                    </button>
+                                ))}
+                            </div>
+                            {revealed && (
+                                <div className={styles.faqExplain}>
+                                    <div className={styles.faqExplainLabel}>
+                                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" /><path d="M8 7v4M8 5.5v.5" /></svg>
+                                        {t('uploadInfer.workspacePanel.explanation')}
+                                    </div>
+                                    <p className={styles.faqExplainText}>{q.explanation}</p>
+                                </div>
+                            )}
+                        </div>
+                        {revealed && (
+                            <button className={`${styles.assessNextBtn} ${isLast ? styles.assessDoneBtn : ''}`} onClick={handleNext}>
+                                {isLast ? t('uploadInfer.workspacePanel.finish') : t('uploadInfer.workspacePanel.next')}
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                    {isLast ? <path d="M3 8l3.5 3.5L13 4" /> : <path d="M3 8h10M9 4l4 4-4 4" />}
+                                </svg>
+                            </button>
+                        )}
+                    </>
+                )
+            )}
+
+            {/* ── View All mode ── */}
+            {mode === 'all' && (
+                <div className={styles.viewAllList}>
+                    {items.map((item, idx) => (
+                        <div key={idx} className={styles.viewAllCard}>
+                            {/* Question */}
+                            <div className={styles.viewAllQ}>
+                                <span className={styles.faqNum}>Q{idx + 1}</span>
+                                {item.question}
+                            </div>
+
+                            {/* Options */}
+                            <div className={styles.faqOptions}>
+                                {Object.entries(item.options).map(([key, val]) => (
+                                    <div
+                                        key={key}
+                                        className={`${styles.faqOpt} ${key === item.correct_answer ? styles.faqOptCorrectAlt : styles.viewAllOptNeutral}`}
+                                    >
+                                        <span className={`${styles.faqOptKey} ${key === item.correct_answer ? styles.faqOptKeyCorrect : ''}`}>{key}</span>
+                                        <span className={styles.faqOptVal}>{val}</span>
+                                        {key === item.correct_answer && (
+                                            <svg className={styles.faqCheckIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                                <path d="M3 8l3.5 3.5L13 4" />
+                                            </svg>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+
+                            {/* Explanation */}
+                            <div className={styles.faqExplain}>
+                                <div className={styles.faqExplainLabel}>
+                                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                                        <circle cx="8" cy="8" r="6" /><path d="M8 7v4M8 5.5v.5" />
+                                    </svg>
+                                    {t('uploadInfer.workspacePanel.explanation')}
+                                </div>
+                                <p className={styles.faqExplainText}>{item.explanation}</p>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Tab: Short Answer ──────────────────────────────────────
+const TabShortAnswer: React.FC<{ raw: string }> = ({ raw }) => {
+    const { t } = useTranslation();
+    const items = useMemo(() => parsePyList<ShortAnswerItem>(raw), [raw]);
+    const [revealedIds, setRevealedIds] = useState<Set<number>>(new Set());
+    const [copied, setCopied] = useState(false);
+
+    const prevRaw = useRef(raw);
+    useEffect(() => { if (raw !== prevRaw.current) { prevRaw.current = raw; setRevealedIds(new Set()); } }, [raw]);
+
+    const toggleReveal = (idx: number) => setRevealedIds(prev => {
+        const next = new Set(prev);
+        if (next.has(idx)) next.delete(idx); else next.add(idx);
+        return next;
+    });
+    const allRevealed = items.length > 0 && revealedIds.size === items.length;
+    const toggleAll = () => setRevealedIds(allRevealed ? new Set() : new Set(items.map((_, i) => i)));
+
+    const handleCopy = (fmt: string) => { copyText(formatShortAnswer(raw, fmt, t).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatShortAnswer(raw, fmt, t); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!items.length) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noShortAnswer')}</div>;
+
+    return (
+        <div className={styles.tabContent}>
+            <div className={styles.assessHeader}>
+                <button className={styles.revealAllBtn} onClick={toggleAll}>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8s-2.5 4.5-6.5 4.5S1.5 8 1.5 8z" /><circle cx="8" cy="8" r="2" />
+                    </svg>
+                    {allRevealed ? t('uploadInfer.workspacePanel.hideAllAnswers') : t('uploadInfer.workspacePanel.showAllAnswers')}
+                </button>
+                <TabToolbar fmts={SHORT_ANSWER_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+            </div>
+            <div className={styles.viewAllList}>
+                {items.map((item, idx) => {
+                    const revealed = revealedIds.has(idx);
+                    return (
+                        <div key={idx} className={styles.viewAllCard}>
+                            <div className={styles.viewAllQ}>
+                                <span className={styles.faqNum}>Q{idx + 1}</span>
+                                {item.question}
+                            </div>
+                            {revealed ? (
+                                <div className={styles.shortAnswerBox}>
+                                    <div className={styles.shortAnswerLabel}>{t('uploadInfer.workspacePanel.answer')}</div>
+                                    <p className={styles.shortAnswerText}>{item.answer}</p>
+                                </div>
+                            ) : (
+                                <button className={styles.revealBtn} onClick={() => toggleReveal(idx)}>
+                                    {t('uploadInfer.workspacePanel.revealAnswer')}
+                                </button>
+                            )}
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
+};
+
+// ── Tab: True / False ────────────────────────────────────────
+type TfMode = 'quiz' | 'all';
+
+const TabTrueFalse: React.FC<{ raw: string }> = ({ raw }) => {
+    const { t } = useTranslation();
+    const items = useMemo(() => parsePyList<TrueFalseItem>(raw), [raw]);
+
+    const [mode, setMode] = useState<TfMode>('quiz');
+    const [current, setCurrent] = useState(0);
+    const [selected, setSelected] = useState<'true' | 'false' | null>(null);
+    const [revealed, setRevealed] = useState(false);
+    const [complete, setComplete] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    const prevRaw = useRef(raw);
+    useEffect(() => {
+        if (raw !== prevRaw.current) {
+            prevRaw.current = raw;
+            setMode('quiz');
+            setCurrent(0); setSelected(null); setRevealed(false); setComplete(false);
+        }
+    }, [raw]);
+
+    const handleCopy = (fmt: string) => { copyText(formatTrueFalse(raw, fmt, t).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatTrueFalse(raw, fmt, t); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!items.length) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noTrueFalse')}</div>;
+
+    const q = items[current];
+    const correctKey: 'true' | 'false' = q.is_true ? 'true' : 'false';
+    const isLast = current === items.length - 1;
+    const progress = Math.round(((current + (complete ? 1 : 0)) / items.length) * 100);
+
+    const handleSelect = (key: 'true' | 'false') => { if (revealed) return; setSelected(key); setRevealed(true); };
+    const handleNext = () => { if (isLast) setComplete(true); else { setCurrent(c => c + 1); setSelected(null); setRevealed(false); } };
+    const handleRestart = () => { setCurrent(0); setSelected(null); setRevealed(false); setComplete(false); };
+    const getOptClass = (key: 'true' | 'false') => {
+        if (!revealed) return selected === key ? styles.faqOptSelected : '';
+        if (key === correctKey && selected === key) return styles.faqOptCorrect;
+        if (key === correctKey) return styles.faqOptCorrectAlt;
+        if (key === selected) return styles.faqOptWrong;
+        return '';
+    };
+
+    return (
+        <div className={styles.tabContent}>
+            <div className={styles.assessHeader}>
+                <div className={styles.assessModeTabs}>
+                    <button className={`${styles.assessModeTab} ${mode === 'quiz' ? styles.assessModeTabActive : ''}`} onClick={() => setMode('quiz')}>
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                            <circle cx="8" cy="8" r="6" /><path d="M6 8.5l1.5 1.5L10.5 6" />
+                        </svg>
+                        {t('uploadInfer.workspacePanel.quizMode')}
+                    </button>
+                    <button className={`${styles.assessModeTab} ${mode === 'all' ? styles.assessModeTabActive : ''}`} onClick={() => setMode('all')}>
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M2 4h12M2 8h12M2 12h8" />
+                        </svg>
+                        {t('uploadInfer.workspacePanel.viewAll')}
+                    </button>
+                </div>
+                <TabToolbar fmts={TRUE_FALSE_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+            </div>
+
+            {mode === 'quiz' && (
+                complete ? (
+                    <div className={styles.assessComplete}>
+                        <div className={styles.assessCompleteIcon}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                        </div>
+                        <div className={styles.assessCompleteTitle}>{t('uploadInfer.workspacePanel.assessCompleteTitle')}</div>
+                        <div className={styles.assessCompleteDesc}>{t('uploadInfer.workspacePanel.assessCompleteDesc', { count: items.length })}</div>
+                        <button className={styles.assessRestartBtn} onClick={handleRestart}>{t('uploadInfer.workspacePanel.restart')}</button>
+                    </div>
+                ) : (
+                    <>
+                        <div className={styles.assessProgress}>
+                            <div className={styles.assessProgressTrack}><div className={styles.assessProgressFill} style={{ width: `${progress}%` }} /></div>
+                            <span className={styles.assessProgressLabel}>{current + 1} / {items.length}</span>
+                        </div>
+                        <div className={styles.faqCard}>
+                            <div className={styles.faqQ}>
+                                <span className={styles.faqNum}>{current + 1}</span>
+                                {q.statement}
+                            </div>
+                            <div className={styles.tfOptions}>
+                                {(['true', 'false'] as const).map(key => (
+                                    <button key={key} className={`${styles.tfOpt} ${getOptClass(key)}`} onClick={() => handleSelect(key)} disabled={revealed}>
+                                        <span className={styles.tfOptLabel}>{key === 'true' ? t('uploadInfer.workspacePanel.true') : t('uploadInfer.workspacePanel.false')}</span>
+                                        {revealed && key === correctKey && <svg className={styles.faqCheckIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 8l3.5 3.5L13 4" /></svg>}
+                                        {revealed && key === selected && key !== correctKey && <svg className={styles.faqXIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>}
+                                    </button>
+                                ))}
+                            </div>
+                            {revealed && (
+                                <div className={styles.faqExplain}>
+                                    <div className={styles.faqExplainLabel}>
+                                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" /><path d="M8 7v4M8 5.5v.5" /></svg>
+                                        {t('uploadInfer.workspacePanel.explanation')}
+                                    </div>
+                                    <p className={styles.faqExplainText}>{q.explanation}</p>
+                                </div>
+                            )}
+                        </div>
+                        {revealed && (
+                            <button className={`${styles.assessNextBtn} ${isLast ? styles.assessDoneBtn : ''}`} onClick={handleNext}>
+                                {isLast ? t('uploadInfer.workspacePanel.finish') : t('uploadInfer.workspacePanel.next')}
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                                    {isLast ? <path d="M3 8l3.5 3.5L13 4" /> : <path d="M3 8h10M9 4l4 4-4 4" />}
+                                </svg>
+                            </button>
+                        )}
+                    </>
+                )
+            )}
+
+            {mode === 'all' && (
+                <div className={styles.viewAllList}>
+                    {items.map((item, idx) => {
+                        const ck: 'true' | 'false' = item.is_true ? 'true' : 'false';
+                        return (
+                            <div key={idx} className={styles.viewAllCard}>
+                                <div className={styles.viewAllQ}>
+                                    <span className={styles.faqNum}>{idx + 1}</span>
+                                    {item.statement}
+                                </div>
+                                <div className={styles.tfOptions}>
+                                    {(['true', 'false'] as const).map(key => (
+                                        <div key={key} className={`${styles.tfOpt} ${key === ck ? styles.faqOptCorrectAlt : styles.viewAllOptNeutral}`}>
+                                            <span className={styles.tfOptLabel}>{key === 'true' ? t('uploadInfer.workspacePanel.true') : t('uploadInfer.workspacePanel.false')}</span>
+                                            {key === ck && <svg className={styles.faqCheckIcon} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 8l3.5 3.5L13 4" /></svg>}
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className={styles.faqExplain}>
+                                    <div className={styles.faqExplainLabel}>
+                                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="6" /><path d="M8 7v4M8 5.5v.5" /></svg>
+                                        {t('uploadInfer.workspacePanel.explanation')}
+                                    </div>
+                                    <p className={styles.faqExplainText}>{item.explanation}</p>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Tab: Timestamped Summary ─────────────────────────────────
+const TabTimestampedSummary: React.FC<{ raw: string }> = ({ raw }) => {
+    const { t } = useTranslation();
+    const items = useMemo(() => parsePyList<TimestampSegment>(raw), [raw]);
+    const [copied, setCopied] = useState(false);
+
+    const handleCopy = (fmt: string) => { copyText(formatTimestampedSummary(raw, fmt).content); setCopied(true); setTimeout(() => setCopied(false), 1500); };
+    const handleDownload = (fmt: string) => { const f = formatTimestampedSummary(raw, fmt); downloadFile(f.content, f.filename, f.mime); };
+
+    if (!items.length) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noTimestampedSummary')}</div>;
+
+    return (
+        <div className={styles.tabContent}>
+            <TabToolbar fmts={TIMESTAMPED_SUMMARY_FMTS} onCopy={handleCopy} onDownload={handleDownload} copied={copied} />
+            <div className={styles.tsList}>
+                {items.map((seg, idx) => (
+                    <div key={idx} className={styles.tsRow}>
+                        <div className={styles.tsRail}>
+                            <div className={styles.tsDot} />
+                            {idx < items.length - 1 && <div className={styles.tsLine} />}
+                        </div>
+                        <div className={styles.tsCard}>
+                            <div className={styles.tsRange}>{seg.start_time} <span className={styles.tsArrow}>→</span> {seg.end_time}</div>
+                            <p className={styles.tsText}>{seg.summary}</p>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+
+// ── Keyword Insights: shared node-link graph (used for Knowledge Graph) ──
+interface GNode { id: string; label: string; value?: number; }
+interface GEdge { source: string; target: string; label?: string; }
+
+function buildGraphNodes(nodes: GNode[], edges: GEdge[]): GNode[] {
+    const norm = (s: string) => s.trim().toLowerCase();
+    const byKey = new Map<string, GNode>();
+    const byId = new Map<string, GNode>();
+    nodes.forEach(n => {
+        byKey.set(norm(n.id), n); byKey.set(norm(n.label), n); byId.set(n.id, n);
+    });
+    edges.forEach(e => {
+        [e.source, e.target].forEach(ref => {
+            const k = norm(ref);
+            if (!byKey.has(k)) {
+                const synth: GNode = { id: ref, label: ref, value: 1 };
+                byKey.set(k, synth); byId.set(ref, synth);
+            }
+        });
+    });
+    return Array.from(byId.values());
+}
+
+// Custom node — a labeled circle sized by `value`, with an invisible
+// handle on all 4 sides (each doubling as source+target) so edges can
+// connect from whichever side actually faces the other node.
+// Multi-word labels wrap onto multiple lines (capped at LABEL_MAX_W).
+// Single unbroken words (no spaces/hyphens — common for keyword nodes)
+// are NOT force-wrapped: breaking a word with no natural break point
+// inside a narrow box is what produced near-vertical stacks of 1-2
+// characters per line. Those get their own width instead, up to
+// LABEL_HARD_MAX_W.
+const LABEL_MAX_W = 150;
+const LABEL_HARD_MAX_W = 220;
+const LABEL_CHAR_W = 6.1; // ~px per Latin character at the label's font size
+const LABEL_CJK_CHAR_W = 12.5; // ~px per CJK character (Hangul/Kanji/Kana glyphs render roughly 2x as wide as Latin at the same font-size)
+const LABEL_LINE_H = 14;
+
+// Matches Hangul syllables/Jamo, CJK Unified Ideographs, and Hiragana/Katakana.
+const CJK_CHAR_RE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7a3\uf900-\ufaff]/;
+
+function estimateTextWidth(label: string): number {
+    let width = 8;
+    for (const ch of label) width += CJK_CHAR_RE.test(ch) ? LABEL_CJK_CHAR_W : LABEL_CHAR_W;
+    return width;
+}
+
+// NOTE: dagre's setNode() specifically reads `node.width` / `node.height` to
+// reserve space for a node in the layout. The previous version of this
+// function returned `{ w, h, labelWidth }`, which meant every node was
+// silently treated by dagre as a 0×0 point — ranks were still spaced apart
+// via ranksep/nodesep, but nothing accounted for how wide/tall a node with
+// a long label actually is, so nodes and their labels overlapped each
+// other and adjacent edges. Returning `width`/`height` (matching what the
+// edge-label reservation code below already does) is the actual fix.
+function estimateNodeBox(label: string, circleSize: number) {
+    const hasBreakPoint = /[\s-]/.test(label);
+    const rawTextWidth = estimateTextWidth(label);
+    const capWidth = hasBreakPoint ? LABEL_MAX_W : LABEL_HARD_MAX_W;
+    const labelWidth = Math.min(capWidth, Math.max(rawTextWidth, 44));
+    const lines = hasBreakPoint ? Math.max(1, Math.ceil(rawTextWidth / LABEL_MAX_W)) : 1;
+    const width = Math.max(circleSize, labelWidth, 72) + 16;
+    const height = circleSize + 16 + lines * LABEL_LINE_H;
+    return { width, height, labelWidth };
+}
+
+// The node's DOM box is now sized to `width`×`height` (see NodeLinkGraph,
+// where these are passed onto the React Flow node), and the circle +
+// label are laid out top-to-bottom in normal flow inside that box —
+// instead of the label being position:absolute below a free-floating
+// circle. That keeps the visual box in sync with the box dagre reserved,
+// so nothing drifts as labels get longer.
+const MindMapNode: React.FC<{ data: { label: string; value?: number; labelWidth?: number } }> = ({ data }) => {
+    const size = 34 + Math.min(26, (data.value ?? 1) * 4);
+    const hasBreakPoint = /[\s-]/.test(data.label);
+    return (
+        <div className={styles.rfNodeBox}>
+            <div className={styles.rfNode} style={{ width: size, height: size }} title={data.label}>
+                <Handle type="target" position={Position.Top} id="top-target" className={styles.rfHandle} />
+                <Handle type="source" position={Position.Bottom} id="bottom-source" className={styles.rfHandle} />
+                <Handle type="target" position={Position.Left} id="left-target" className={styles.rfHandle} />
+                <Handle type="source" position={Position.Right} id="right-source" className={styles.rfHandle} />
+            </div>
+            <span
+                className={styles.rfNodeLabel}
+                style={{ maxWidth: data.labelWidth ?? LABEL_MAX_W, whiteSpace: hasBreakPoint ? 'normal' : 'nowrap' }}
+            >
+                {data.label}
+            </span>
+        </div>
+    );
+};
+const RF_NODE_TYPES = { mindmap: MindMapNode };
+
+// ── Dagre auto-layout — replaces naive circular placement, which packed
+//    nodes on top of each other once a graph had more than a handful of
+//    them. Dagre lays nodes out in ranked layers with guaranteed spacing,
+//    so nothing overlaps regardless of graph size, AS LONG AS the nodes
+//    passed to it actually carry width/height (see estimateNodeBox above —
+//    that mismatch was the actual source of the overlap bug). ──
+function computeDagreLayout(nodes: GNode[], edges: GEdge[]) {
+    const g = new dagre.graphlib.Graph();
+    g.setGraph({ rankdir: 'TB', nodesep: 72, ranksep: 150, marginx: 60, marginy: 60, acyclicer: 'greedy' });
+    g.setDefaultEdgeLabel(() => ({}));
+
+    const dims = new Map<string, { width: number; height: number; labelWidth: number }>();
+    nodes.forEach(n => {
+        const size = 34 + Math.min(26, (n.value ?? 1) * 4);
+        const dim = estimateNodeBox(n.label, size);
+        dims.set(n.id, dim);
+        g.setNode(n.id, dim);
+    });
+
+    const norm = (s: string) => s.trim().toLowerCase();
+    const byKey = new Map<string, string>();
+    nodes.forEach(n => { byKey.set(norm(n.id), n.id); byKey.set(norm(n.label), n.id); });
+
+    // Dedupe edges — repeated source/target pairs don't add information but
+    // do add extra crowded lines between the same two nodes.
+    const seenEdges = new Set<string>();
+    const resolvedEdges: { source: string; target: string; label?: string }[] = [];
+    edges.forEach(e => {
+        const s = byKey.get(norm(e.source));
+        const tg = byKey.get(norm(e.target));
+        if (!s || !tg || s === tg) return;
+        const key = `${s}→${tg}`;
+        if (seenEdges.has(key)) return;
+        seenEdges.add(key);
+        // Reserve space for the edge's own label too — without this, dagre
+        // has no idea the label text exists and will happily route another
+        // node right where that text needs to sit.
+        const label = e.label?.trim();
+        g.setEdge(s, tg, label ? { width: Math.min(120, estimateTextWidth(label) + 4), height: LABEL_LINE_H + 8, labelpos: 'c' } : {});
+        resolvedEdges.push({ source: s, target: tg, label: e.label });
+    });
+
+    dagre.layout(g);
+
+    const positioned = nodes.map(n => {
+        const pos = g.node(n.id);
+        const dim = dims.get(n.id)!;
+        // Dagre positions are centers — React Flow expects top-left.
+        return { ...n, x: pos.x - dim.width / 2, y: pos.y - dim.height / 2, labelWidth: dim.labelWidth, w: dim.width, h: dim.height };
+    });
+    return { positioned, resolvedEdges };
+}
+
+// ── Forest layout — each disconnected tree gets its own horizontal
+//    (root → children growing left-to-right) dagre layout, then the trees
+//    are stacked vertically underneath one another. Labels stay perfectly
+//    horizontal either way (that's just CSS text direction, unaffected by
+//    which way the tree branches), but growing each tree sideways instead
+//    of downward gives multi-word labels far more horizontal room before
+//    they need to wrap, and keeps unrelated trees visually separated
+//    instead of interleaved in one shared vertical ranking. ──
+function computeForestLayout(nodes: GNode[], edges: GEdge[]) {
+    const norm = (s: string) => s.trim().toLowerCase();
+    const byKey = new Map<string, string>();
+    nodes.forEach(n => { byKey.set(norm(n.id), n.id); byKey.set(norm(n.label), n.id); });
+
+    // Reduce to one parent per node — same rule as treeMode above, so each
+    // node belongs to exactly one tree with no crossing multi-parent edges.
+    const seenEdges = new Set<string>();
+    const hasParent = new Set<string>();
+    const treeEdges: { source: string; target: string; label?: string }[] = [];
+    edges.forEach(e => {
+        const s = byKey.get(norm(e.source));
+        const tg = byKey.get(norm(e.target));
+        if (!s || !tg || s === tg) return;
+        const key = `${s}→${tg}`;
+        if (seenEdges.has(key) || hasParent.has(tg)) return;
+        seenEdges.add(key);
+        hasParent.add(tg);
+        treeEdges.push({ source: s, target: tg, label: e.label });
+    });
+
+    // Union-find to group nodes into connected components (one per tree,
+    // including singleton nodes with no edges at all).
+    const uf = new Map<string, string>();
+    nodes.forEach(n => uf.set(n.id, n.id));
+    const find = (x: string): string => {
+        let root = x;
+        while (uf.get(root) !== root) root = uf.get(root)!;
+        while (uf.get(x) !== root) { const next = uf.get(x)!; uf.set(x, root); x = next; }
+        return root;
+    };
+    const union = (a: string, b: string) => { const ra = find(a), rb = find(b); if (ra !== rb) uf.set(ra, rb); };
+    treeEdges.forEach(e => union(e.source, e.target));
+
+    const groups = new Map<string, GNode[]>();
+    nodes.forEach(n => {
+        const root = find(n.id);
+        if (!groups.has(root)) groups.set(root, []);
+        groups.get(root)!.push(n);
+    });
+
+    const dims = new Map<string, { width: number; height: number; labelWidth: number }>();
+    nodes.forEach(n => {
+        const size = 34 + Math.min(26, (n.value ?? 1) * 4);
+        dims.set(n.id, estimateNodeBox(n.label, size));
+    });
+
+    const TREE_GAP = 56;
+    let yOffset = 0;
+    const positioned: (GNode & { x: number; y: number; labelWidth: number; w: number; h: number })[] = [];
+
+    for (const groupNodes of groups.values()) {
+        const g = new dagre.graphlib.Graph();
+        g.setGraph({ rankdir: 'LR', nodesep: 28, ranksep: 130, marginx: 20, marginy: 20, acyclicer: 'greedy' });
+        g.setDefaultEdgeLabel(() => ({}));
+        groupNodes.forEach(n => g.setNode(n.id, dims.get(n.id)!));
+
+        const idsInGroup = new Set(groupNodes.map(n => n.id));
+        treeEdges.forEach(e => {
+            if (!idsInGroup.has(e.source) || !idsInGroup.has(e.target)) return;
+            const label = e.label?.trim();
+            g.setEdge(e.source, e.target, label ? { width: Math.min(120, estimateTextWidth(label) + 4), height: LABEL_LINE_H + 8, labelpos: 'c' } : {});
+        });
+
+        dagre.layout(g);
+
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        groupNodes.forEach(n => {
+            const pos = g.node(n.id);
+            const dim = dims.get(n.id)!;
+            minX = Math.min(minX, pos.x - dim.width / 2);
+            maxX = Math.max(maxX, pos.x + dim.width / 2);
+            minY = Math.min(minY, pos.y - dim.height / 2);
+            maxY = Math.max(maxY, pos.y + dim.height / 2);
+        });
+        const shiftX = -minX;
+        const shiftY = yOffset - minY;
+
+        groupNodes.forEach(n => {
+            const pos = g.node(n.id);
+            const dim = dims.get(n.id)!;
+            positioned.push({ ...n, x: pos.x - dim.width / 2 + shiftX, y: pos.y - dim.height / 2 + shiftY, labelWidth: dim.labelWidth, w: dim.width, h: dim.height });
+        });
+
+        yOffset += (maxY - minY) + TREE_GAP;
+    }
+
+    return { positioned, resolvedEdges: treeEdges };
+}
+
+const NodeLinkGraph: React.FC<{ nodes: GNode[]; edges: GEdge[]; treeMode?: boolean }> = ({ nodes, edges, treeMode = false }) => {
+    const { t } = useTranslation();
+    const allNodes = useMemo(() => buildGraphNodes(nodes, edges), [nodes, edges]);
+
+    const initial = useMemo(() => {
+        const { positioned, resolvedEdges } = treeMode
+            ? computeForestLayout(allNodes, edges)
+            : computeDagreLayout(allNodes, edges);
+
+        const rfNodes: RFNode[] = positioned.map(n => ({
+            id: n.id,
+            type: 'mindmap',
+            position: { x: n.x, y: n.y },
+            // Give React Flow the same box dagre reserved, so its own
+            // internal bookkeeping (fitView, minimap, drag bounds) matches
+            // what was actually laid out.
+            width: n.w,
+            height: n.h,
+            data: { label: n.label, value: n.value, labelWidth: n.labelWidth },
+        }));
+
+        // Forest/tree mode lays out left→right (rankdir: 'LR'), so edges
+        // should leave from the right side of a node and arrive on the
+        // left of the next — using bottom/top handles there forced edges
+        // to arc around the node instead of running straight, which read
+        // as extra crossing/overlap. The plain knowledge-graph layout is
+        // still top→bottom, so it keeps the original top/bottom handles.
+        const sourceHandle = treeMode ? 'right-source' : 'bottom-source';
+        const targetHandle = treeMode ? 'left-target' : 'top-target';
+
+        const rfEdges: RFEdge[] = resolvedEdges.map((e, i) => ({
+            id: `e${i}-${e.source}-${e.target}`,
+            source: e.source,
+            target: e.target,
+            sourceHandle,
+            targetHandle,
+            type: 'smoothstep',
+            label: e.label,
+            style: { stroke: 'var(--bdr2)' },
+            labelStyle: { fill: 'var(--t2)', fontSize: 10 },
+            labelBgStyle: { fill: 'var(--bg1)' },
+        }));
+        return { rfNodes, rfEdges };
+    }, [allNodes, edges, treeMode]);
+
+    const [rfNodes, setRfNodes] = useState<RFNode[]>(initial.rfNodes);
+    useEffect(() => { setRfNodes(initial.rfNodes); }, [initial.rfNodes]);
+    const onNodesChange = useCallback((changes: NodeChange[]) => setRfNodes(nds => applyNodeChanges(changes, nds)), []);
+
+    if (allNodes.length === 0) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+
+    return (
+        <div className={styles.graphWrap}>
+            <ReactFlow
+                nodes={rfNodes}
+                edges={initial.rfEdges}
+                onNodesChange={onNodesChange}
+                nodeTypes={RF_NODE_TYPES}
+                fitView
+                fitViewOptions={{ padding: 0.25 }}
+                minZoom={0.1}
+                maxZoom={1.5}
+                proOptions={{ hideAttribution: true }}
+            >
+                <Background gap={16} size={1} color="var(--bdr)" />
+                <Controls showInteractive={false} />
+                {allNodes.length > 8 && <MiniMap pannable zoomable style={{ background: 'var(--bg0)' }} />}
+            </ReactFlow>
+        </div>
+    );
+};
+
+// ── Keyword Insights: timeline — heatmap-style grid with time labels
+//    running horizontally across the top header row (guaranteed via
+//    inline styles: nowrap + horizontal writing-mode) and one row per
+//    keyword running down the left. ──
+const TIME_UNIT_LABEL: Record<TimelineTimeUnit, string> = {
+    minutes: 'uploadInfer.workspacePanel.timeUnitMinutes',
+    hours: 'uploadInfer.workspacePanel.timeUnitHours',
+    seconds: 'uploadInfer.workspacePanel.timeUnitSeconds',
+};
+const TIME_UNIT_SHORT: Record<TimelineTimeUnit, string> = {
+    minutes: 'uploadInfer.workspacePanel.timeUnitMinShort',
+    hours: 'uploadInfer.workspacePanel.timeUnitHrShort',
+    seconds: 'uploadInfer.workspacePanel.timeUnitSecShort',
+};
+
+const TimelineView: React.FC<{ data: TimelineData }> = ({ data }) => {
+    const { t } = useTranslation();
+    const labels = data.labels ?? [];
+    const datasets = data.datasets ?? [];
+    if (!labels.length || !datasets.length) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+
+    const max = Math.max(1, ...datasets.flatMap(d => d.data.filter(v => typeof v === 'number')));
+    const ROW_LABEL_W = 140;
+    const COL_W = 56;
+    const timeUnit = data.time_unit ?? 'minutes';
+    const unitLabel = t(TIME_UNIT_LABEL[timeUnit]);
+    // When labels are already actual clock timestamps (e.g. "0:00–5:00"),
+    // the format itself conveys the unit — don't also append a suffix.
+    // Only append the short unit to plain numeric bucket labels.
+    const unitShort = t(TIME_UNIT_SHORT[timeUnit]);
+    const formatTimeLabel = (lab: string) => data.timestamped ? lab : `${lab} ${unitShort}`;
+
+    // Text guaranteed to stay horizontal, left-to-right, single line —
+    // independent of whatever the surrounding stylesheet does elsewhere.
+    const horizontalLabel: React.CSSProperties = {
+        writingMode: 'horizontal-tb',
+        textOrientation: 'mixed',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+    };
+
+    return (
+        <div className={styles.tabContent}>
+            <div className={styles.timelineAxisHint}>
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="8" cy="8" r="6.25" />
+                    <path d="M8 7.2v3.6M8 5.2v.1" />
+                </svg>
+                <span>
+                    {t('uploadInfer.workspacePanel.timelineAxisHint', { unit: unitLabel })}
+                </span>
+            </div>
+        <div style={{ overflowX: 'auto', paddingBottom: 4 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: `${ROW_LABEL_W}px repeat(${labels.length}, minmax(${COL_W}px, 1fr))`, width: 'max-content', minWidth: '100%' }}>
+                {/* Corner cell — axis labels */}
+                <div style={{ ...horizontalLabel, fontSize: 9.5, fontWeight: 700, color: 'var(--t2)', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'flex', alignItems: 'flex-end', padding: '0 10px 8px 0' }}>
+                    {t('uploadInfer.workspacePanel.timelineYAxis', 'Keyword')}
+                </div>
+                {/* Time labels — header row, horizontal across the top */}
+                {labels.map((lab, li) => (
+                    <div
+                        key={li}
+                        title={formatTimeLabel(lab)}
+                        style={{
+                            ...horizontalLabel,
+                            fontSize: 10.5, fontWeight: 600, color: 'var(--t2)',
+                            textAlign: 'center', padding: '0 4px 8px',
+                        }}
+                    >
+                        {formatTimeLabel(lab)}
+                    </div>
+                ))}
+                {/* One row per keyword */}
+                {datasets.map((ds, di) => (
+                    <React.Fragment key={di}>
+                        <div style={{ ...horizontalLabel, fontSize: 12, fontWeight: 600, color: 'var(--t1)', padding: '6px 10px 6px 0', display: 'flex', alignItems: 'center' }} title={ds.label}>
+                            {ds.label}
+                        </div>
+                        {labels.map((lab, li) => {
+                            const v = ds.data[li] ?? 0;
+                            const alpha = v > 0 ? Math.min(1, 0.22 + (v / max) * 0.78) : 0;
+                            return (
+                                <div
+                                    key={li}
+                                    title={`${ds.label} \u00b7 ${formatTimeLabel(lab)}`}
+                                    style={{
+                                        height: 32, margin: 2, borderRadius: 4,
+                                        background: `rgba(91, 164, 239, ${alpha})`,
+                                    }}
+                                />
+                            );
+                        })}
+                    </React.Fragment>
+                ))}
+            </div>
+        </div>
+        </div>
+    );
+};
+
+// ── Keyword Insights: word cloud ──
+// ── Pan/zoom image viewer — same interaction model as the Knowledge Graph
+// tab (drag anywhere to pan, scroll to zoom in/out, buttons for
+// zoom in/out/reset), but self-contained (no react-flow dependency needed
+// for a single static image). ──
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 4;
+const ZOOM_STEP = 0.35;
+
+const ZoomPanImage: React.FC<{ src: string; alt: string }> = ({ src, alt }) => {
+    const { t } = useTranslation();
+    const containerRef = useRef<HTMLDivElement>(null);
+    const [scale, setScale] = useState(1);
+    const [pan, setPan] = useState({ x: 0, y: 0 });
+    const dragRef = useRef<{ startX: number; startY: number; startPanX: number; startPanY: number } | null>(null);
+    const [dragging, setDragging] = useState(false);
+
+    const clampScale = (s: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, s));
+
+    // Zoom while keeping the point under the cursor/center visually fixed —
+    // same "zoom toward where you're pointing" feel as the graph view.
+    const zoomAt = (nextScaleRaw: number, clientX?: number, clientY?: number) => {
+        const nextScale = clampScale(nextScaleRaw);
+        const el = containerRef.current;
+        if (!el) { setScale(nextScale); return; }
+        const rect = el.getBoundingClientRect();
+        const cx = clientX ?? rect.left + rect.width / 2;
+        const cy = clientY ?? rect.top + rect.height / 2;
+        const originX = cx - rect.left - rect.width / 2;
+        const originY = cy - rect.top - rect.height / 2;
+        setPan(prev => {
+            if (nextScale === ZOOM_MIN) return { x: 0, y: 0 };
+            const ratio = nextScale / scale;
+            return {
+                x: originX - (originX - prev.x) * ratio,
+                y: originY - (originY - prev.y) * ratio,
+            };
+        });
+        setScale(nextScale);
+    };
+
+    const handleWheel = (e: React.WheelEvent) => {
+        e.preventDefault();
+        const delta = e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP;
+        zoomAt(scale + delta, e.clientX, e.clientY);
+    };
+
+    const handleMouseDown = (e: React.MouseEvent) => {
+        if (scale <= ZOOM_MIN) return;
+        dragRef.current = { startX: e.clientX, startY: e.clientY, startPanX: pan.x, startPanY: pan.y };
+        setDragging(true);
+    };
+    useEffect(() => {
+        if (!dragging) return;
+        const onMove = (e: MouseEvent) => {
+            const d = dragRef.current;
+            if (!d) return;
+            setPan({ x: d.startPanX + (e.clientX - d.startX), y: d.startPanY + (e.clientY - d.startY) });
+        };
+        const onUp = () => { setDragging(false); dragRef.current = null; };
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+        return () => {
+            window.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
+        };
+    }, [dragging]);
+
+    const zoomIn = () => zoomAt(scale + ZOOM_STEP);
+    const zoomOut = () => zoomAt(scale - ZOOM_STEP);
+    const reset = () => { setScale(1); setPan({ x: 0, y: 0 }); };
+
+    return (
+        <div
+            ref={containerRef}
+            className={styles.zoomPanWrap}
+            onWheel={handleWheel}
+            onMouseDown={handleMouseDown}
+            onDoubleClick={reset}
+            style={{ cursor: scale > ZOOM_MIN ? (dragging ? 'grabbing' : 'grab') : 'default' }}
+        >
+            <img
+                src={src}
+                alt={alt}
+                className={styles.wordCloudImage}
+                draggable={false}
+                style={{
+                    transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+                    transition: dragging ? 'none' : 'transform 0.15s ease-out',
+                }}
+            />
+            <div className={styles.zoomControls}>
+                <button type="button" className={styles.zoomControlBtn} onClick={zoomIn} disabled={scale >= ZOOM_MAX} title={t('uploadInfer.workspacePanel.zoomIn')}>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="7" cy="7" r="5" /><path d="M13.5 13.5L10.8 10.8M7 4.5v5M4.5 7h5" />
+                    </svg>
+                </button>
+                <button type="button" className={styles.zoomControlBtn} onClick={zoomOut} disabled={scale <= ZOOM_MIN} title={t('uploadInfer.workspacePanel.zoomOut')}>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="7" cy="7" r="5" /><path d="M13.5 13.5L10.8 10.8M4.5 7h5" />
+                    </svg>
+                </button>
+                <button type="button" className={styles.zoomControlBtn} onClick={reset} disabled={scale === ZOOM_MIN && pan.x === 0 && pan.y === 0} title={t('uploadInfer.workspacePanel.zoomReset')}>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M13.5 8a5.5 5.5 0 11-1.6-3.9" /><path d="M13.5 2.5v3h-3" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+    );
+};
+
+const WordCloudView: React.FC<{ data: WordCloudData }> = ({ data }) => {
+    const { t } = useTranslation();
+    if (!data.wordcloud_image) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+    return (
+        <div className={styles.wordCloudImageWrap}>
+            <ZoomPanImage src={data.wordcloud_image} alt={t('uploadInfer.workspacePanel.kiTabs.wordcloud')} />
+        </div>
+    );
+};
+
+// ── Keyword Insights: importance vs complexity scatter ──
+// Complexity → accent color, reused for the column header, bars, and dots.
+const COMPLEXITY_COLOR: Record<string, string> = {
+    Easy: 'var(--green)',
+    Medium: 'var(--amber)',
+    Hard: 'var(--red)',
+};
+const complexityColor = (c: string) => COMPLEXITY_COLOR[c] ?? 'var(--blue)';
+
+const ImportanceComplexityScatter: React.FC<{ data: ImportanceComplexityData }> = ({ data }) => {
+    const { t } = useTranslation();
+    const items = data.data ?? [];
+    if (!items.length) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+
+    const order = ['Easy', 'Medium', 'Hard'];
+    const complexities = Array.from(new Set(items.map(it => it.complexity)))
+        .sort((a, b) => {
+            const ai = order.indexOf(a), bi = order.indexOf(b);
+            if (ai === -1 && bi === -1) return a.localeCompare(b);
+            if (ai === -1) return 1;
+            if (bi === -1) return -1;
+            return ai - bi;
+        });
+
+    // Importance is always on a fixed 0–10 scale from the backend, so the
+    // bar fill is a direct out-of-10 progress value rather than scaled
+    // against whatever the largest item in this particular file happens
+    // to be — a 6 always fills 60% of the bar, on any file.
+    const IMPORTANCE_MAX = 10;
+
+    return (
+        <div className={styles.tabContent}>
+            <div className={styles.importanceHint}>
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="8" cy="8" r="6.25" />
+                    <path d="M8 7.2v3.6M8 5.2v.1" />
+                </svg>
+                <span>{t('uploadInfer.workspacePanel.importanceHint')}</span>
+            </div>
+            <div className={styles.importanceColumns}>
+            {complexities.map(c => {
+                const colItems = items.filter(it => it.complexity === c).sort((a, b) => b.importance - a.importance);
+                const color = complexityColor(c);
+                return (
+                    <div key={c} className={styles.importanceColumn}>
+                        <div className={styles.importanceColumnHead} style={{ color, borderColor: color }}>
+                            {c}
+                            <span className={styles.importanceColumnCount}>{colItems.length}</span>
+                        </div>
+                        <div className={styles.importanceRows}>
+                            {colItems.map((it, i) => (
+                                <div key={i} className={styles.importanceRow} title={it.reason}>
+                                    <span className={styles.importanceDot} style={{ background: color }} />
+                                    <span className={styles.importanceKeyword}>{it.keyword}</span>
+                                    <div className={styles.importanceBarTrack}>
+                                        <div
+                                            className={styles.importanceBarFill}
+                                            style={{ width: `${Math.min(100, (it.importance / IMPORTANCE_MAX) * 100)}%`, background: color }}
+                                        />
+                                    </div>
+                                    <span className={styles.importanceMeta}>
+                                        <span className={styles.importanceValue}>{it.importance}/{IMPORTANCE_MAX}</span>
+                                        <span
+                                            className={styles.importanceFrequency}
+                                            title={t('uploadInfer.workspacePanel.frequencyTitle')}
+                                        >
+                                            {t('uploadInfer.workspacePanel.frequencyCount', { count: it.frequency })}
+                                        </span>
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                );
+            })}
+            </div>
+        </div>
+    );
+};
+
+// ── Keyword Insights: glossary ──
+const GlossaryView: React.FC<{ data: GlossaryData }> = ({ data }) => {
+    const { t } = useTranslation();
+    const items = data.glossary ?? [];
+    if (!items.length) return <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>;
+    const fmtTime = (ms: number) => {
+        const totalSec = Math.floor(ms / 1000);
+        const m = Math.floor(totalSec / 60), s = totalSec % 60;
+        return `${m}:${String(s).padStart(2, '0')}`;
+    };
+    return (
+        <div className={styles.glossaryList}>
+            {items.map((it, i) => (
+                <div key={i} className={styles.glossaryRow}>
+                    <div className={styles.glossaryTerm}>{it.term}<span className={styles.glossaryTime}>{fmtTime(it.first_mentioned_ms)}</span></div>
+                    <div className={styles.glossaryDef}>{it.definition}</div>
+                </div>
+            ))}
+        </div>
+    );
+};
+
+// ── Tab: Keyword Insights ────────────────────────────────────
+const KI_SUBTABS = ['graph', 'wordcloud', 'timeline', 'importance', 'glossary'] as const;
+type KiSubTab = typeof KI_SUBTABS[number];
+
+const TabKeywordInsights: React.FC<{ data: KeywordInsights | null }> = ({ data }) => {
+    const { t } = useTranslation();
+    const [sub, setSub] = useState<KiSubTab>('graph');
+
+    if (!data) return <div className={`${styles.tabContent} ${styles.tabEmpty}`}>{t('uploadInfer.workspacePanel.noKeywordInsights')}</div>;
+
+    return (
+        <div className={styles.tabContent}>
+            <ScrollableTabRow
+                ids={KI_SUBTABS}
+                activeId={sub}
+                onChange={setSub}
+                labelFor={id => t(`uploadInfer.workspacePanel.kiTabs.${id}`)}
+                itemClassName={styles.kiSubTab}
+                activeClassName={styles.kiSubTabActive}
+                wrapClassName={styles.kiSubNavWrap}
+                trackClassName={styles.kiSubNav}
+            />
+            <div className={styles.kiBody}>
+                {sub === 'graph' && (data.knowledge_graph
+                    ? <NodeLinkGraph nodes={data.knowledge_graph.nodes} edges={data.knowledge_graph.edges.map(e => ({ source: e.source, target: e.target, label: e.type }))} treeMode />
+                    : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'wordcloud' && (data.word_cloud ? <WordCloudView data={data.word_cloud} /> : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'timeline' && (data.timeline
+                    ? <TimelineView data={data.timeline} />
+                    : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'importance' && (data.importance_complexity ? <ImportanceComplexityScatter data={data.importance_complexity} /> : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+                {sub === 'glossary' && (data.glossary ? <GlossaryView data={data.glossary} /> : <div className={styles.tabEmpty}>{t('uploadInfer.workspacePanel.noData')}</div>)}
+            </div>
+        </div>
+    );
+};
+
+// ── Scrollable tab row — generic horizontal-scroll tab strip with arrow
+//    buttons + edge fades, reused for both the main tab bar and any
+//    sub-navigation row (e.g. Keyword Insights) that could overflow. ──
+function ScrollableTabRow<T extends string>({
+    ids, activeId, onChange, labelFor,
+    itemClassName, activeClassName, wrapClassName, trackClassName,
+    dataTourFor,
+}: {
+    ids: readonly T[];
+    activeId: T;
+    onChange: (id: T) => void;
+    labelFor: (id: T) => string;
+    itemClassName: string;
+    activeClassName: string;
+    wrapClassName: string;
+    trackClassName: string;
+    // Optional — lets a specific caller (e.g. the main results tab bar)
+    // tag each individual tab button for the guided tour, without
+    // affecting other callers that reuse this same component (e.g. the
+    // Keyword Insights sub-tab row).
+    dataTourFor?: (id: T) => string | undefined;
+}) {
+    const { t } = useTranslation();
+    const trackRef = useRef<HTMLDivElement>(null);
+    const [canScrollLeft, setCanScrollLeft] = useState(false);
+    const [canScrollRight, setCanScrollRight] = useState(false);
+
+    const updateScrollState = () => {
+        const el = trackRef.current;
+        if (!el) return;
+        setCanScrollLeft(el.scrollLeft > 2);
+        setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 2);
+    };
+
+    useEffect(() => {
+        updateScrollState();
+        const el = trackRef.current;
+        if (!el) return;
+        const onResize = () => updateScrollState();
+        window.addEventListener('resize', onResize);
+        el.addEventListener('scroll', updateScrollState);
+        return () => { window.removeEventListener('resize', onResize); el.removeEventListener('scroll', updateScrollState); };
+    }, []); // eslint-disable-line
+
+    // Keep the active item in view when it changes
+    useEffect(() => {
+        const el = trackRef.current;
+        if (!el) return;
+        const activeEl = el.querySelector<HTMLElement>(`[data-tab-id="${activeId}"]`);
+        activeEl?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+        const id = setTimeout(updateScrollState, 300);
+        return () => clearTimeout(id);
+    }, [activeId]); // eslint-disable-line
+
+    const scrollBy = (dx: number) => trackRef.current?.scrollBy({ left: dx, behavior: 'smooth' });
+
+    return (
+        <div className={wrapClassName}>
+            {canScrollLeft && (
+                <button className={`${styles.tabScrollBtn} ${styles.tabScrollBtnLeft}`} onClick={() => scrollBy(-160)} aria-label={t('uploadInfer.workspacePanel.scrollLeft')}>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M10 3L6 8l4 5" /></svg>
+                </button>
+            )}
+            <div className={trackClassName} ref={trackRef}>
+                {ids.map(id => (
+                    <button
+                        key={id}
+                        data-tab-id={id}
+                        data-tour={dataTourFor?.(id)}
+                        className={`${itemClassName} ${activeId === id ? activeClassName : ''}`}
+                        onClick={() => onChange(id)}
+                    >
+                        {labelFor(id)}
+                    </button>
+                ))}
+            </div>
+            {canScrollLeft && <div className={`${styles.tabFade} ${styles.tabFadeLeft}`} />}
+            {canScrollRight && <div className={`${styles.tabFade} ${styles.tabFadeRight}`} />}
+            {canScrollRight && (
+                <button className={`${styles.tabScrollBtn} ${styles.tabScrollBtnRight}`} onClick={() => scrollBy(160)} aria-label={t('uploadInfer.workspacePanel.scrollRight')}>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M6 3l4 5-4 5" /></svg>
+                </button>
+            )}
+        </div>
+    );
+}
+
+// ── Main tab bar — the fixed-width flex row silently clipped tabs once
+//    there were more than ~3; ScrollableTabRow fixes that. ──
+const ScrollableTabs: React.FC<{ activeTab: TabId; onChange: (id: TabId) => void }> = ({ activeTab, onChange }) => {
+    const { t } = useTranslation();
+    return (
+        <div data-tour="results-tabbar">
+            <ScrollableTabRow
+                ids={TAB_IDS}
+                activeId={activeTab}
+                onChange={onChange}
+                labelFor={id => t(`uploadInfer.workspacePanel.tabs.${id}`)}
+                itemClassName={styles.tab}
+                activeClassName={styles.active}
+                wrapClassName={styles.wsptabsWrap}
+                trackClassName={styles.wsptabs}
+                dataTourFor={id => `results-tab-${id}`}
+            />
+        </div>
+    );
+};
+
+// ── Compare Inference: types ─────────────────────────────
+interface InferenceVersion { version_number: number; version_name: string; }
+interface InferenceVersionResult {
+    id: number;
+    file_id: number;
+    version_number: number;
+    version_name: string;
+    model: string;
+    summary_prompt: string;
+    keywords_prompt: string;
+    faq_prompt: string;
+    short_answer_prompt: string;
+    true_false_prompt: string;
+    summary: string;
+    keywords: string[];
+    faq: string;
+    short_answer: string;
+    true_false: string;
+    created_at: string;
+}
+
+// ── Compare Inference: custom version dropdown ───────────
+// Deliberately not a native <select> — a taller, card-style popover so
+// each version can show its name AND number as two distinct visual
+// weights, with a checkmark on whichever one is currently picked.
+const VersionDropdown: React.FC<{
+    label: string;
+    versions: InferenceVersion[];
+    value: number | null;
+    onChange: (v: number) => void;
+    disabled?: boolean;
+    accent: 'from' | 'to';
+}> = ({ label, versions, value, onChange, disabled, accent }) => {
+    const { t } = useTranslation();
+    const [open, setOpen] = useState(false);
+    const ref = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+        document.addEventListener('mousedown', h);
+        return () => document.removeEventListener('mousedown', h);
+    }, []);
+    const selected = versions.find(v => v.version_number === value) ?? null;
+
+    return (
+        <div className={`${styles.verDropdownWrap} ${accent === 'from' ? styles.verDropdownFrom : styles.verDropdownTo}`} ref={ref}>
+            <span className={styles.verDropdownLabel}>{label}</span>
+            <button
+                type="button"
+                className={`${styles.verDropdownBtn} ${open ? styles.verDropdownBtnOpen : ''}`}
+                onClick={() => setOpen(o => !o)}
+                disabled={disabled || versions.length === 0}
+            >
+                {selected ? (
+                    <span className={styles.verDropdownSelected}>
+                        <span className={styles.verDropdownBadge}>v{selected.version_number}</span>
+                        <span className={styles.verDropdownName}>{selected.version_name}</span>
+                    </span>
+                ) : (
+                    <span className={styles.verDropdownPlaceholder}>{versions.length === 0 ? '—' : t('uploadInfer.workspacePanel.compareSelectVersion', 'Select a version')}</span>
+                )}
+                <svg className={styles.verDropdownChevron} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 4.5l3 3 3-3" />
+                </svg>
+            </button>
+            {open && (
+                <div className={styles.verDropdownPanel}>
+                    {versions.map(v => (
+                        <button
+                            type="button"
+                            key={v.version_number}
+                            className={`${styles.verDropdownItem} ${v.version_number === value ? styles.verDropdownItemActive : ''}`}
+                            onClick={() => { onChange(v.version_number); setOpen(false); }}
+                        >
+                            <span className={styles.verDropdownBadge}>v{v.version_number}</span>
+                            <span className={styles.verDropdownName}>{v.version_name}</span>
+                            {v.version_number === value && (
+                                <svg className={styles.verDropdownCheck} viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M2.5 7l3 3 6-6" />
+                                </svg>
+                            )}
+                        </button>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
+// ── Compare Inference: one side of the comparison ────────
+type CompareSection = 'summary' | 'keywords' | 'assessment' | 'shortAnswer' | 'trueFalse';
+
+const COMPARE_SECTIONS: { id: CompareSection; labelKey: string; icon: string }[] = [
+    { id: 'summary', labelKey: 'uploadInfer.workspacePanel.tabs.summary', icon: 'M2.5 3.5h11M2.5 7h11M2.5 10.5h7' },
+    { id: 'keywords', labelKey: 'uploadInfer.workspacePanel.tabs.keywords', icon: 'M2 8.5V4a1.5 1.5 0 011.5-1.5H8l6 6-5.5 5.5-6-6z M5 6h.01' },
+    { id: 'assessment', labelKey: 'uploadInfer.workspacePanel.tabs.assessment', icon: 'M5 2.5h6M8 2.5v3M4 8.5a4 4 0 118 0c0 2-2 2.5-2 4M8 14v.01' },
+    { id: 'shortAnswer', labelKey: 'uploadInfer.workspacePanel.tabs.shortAnswer', icon: 'M2.5 4h11v6h-7L3 12.5V10h-.5z' },
+    { id: 'trueFalse', labelKey: 'uploadInfer.workspacePanel.tabs.trueFalse', icon: 'M3 5l2 2 3-3.5M9 8l2 2 3-3.5M3 12h4' },
+];
+
+// ── Shared list of the 5 prompt fields — maps each one's version-result
+// key (keywords_prompt, plural) to the key the create/update APIs
+// actually expect (keyword_prompt, singular) in one place, so that
+// mismatch only has to be handled once. ──
+const PROMPT_FIELD_DEFS: { versionKey: keyof InferenceVersionResult; apiKey: string; labelKey: string }[] = [
+    { versionKey: 'summary_prompt', apiKey: 'summary_prompt', labelKey: 'uploadInfer.workspacePanel.tabs.summary' },
+    { versionKey: 'keywords_prompt', apiKey: 'keyword_prompt', labelKey: 'uploadInfer.workspacePanel.tabs.keywords' },
+    { versionKey: 'faq_prompt', apiKey: 'faq_prompt', labelKey: 'uploadInfer.workspacePanel.tabs.assessment' },
+    { versionKey: 'short_answer_prompt', apiKey: 'short_answer_prompt', labelKey: 'uploadInfer.workspacePanel.tabs.shortAnswer' },
+    { versionKey: 'true_false_prompt', apiKey: 'true_false_prompt', labelKey: 'uploadInfer.workspacePanel.tabs.trueFalse' },
+];
+
+// ── Create a new prompt template from a version's 5 prompts ─────
+// The prompts themselves come straight from the version (read-only
+// preview here) — the only manual input is name + description.
+const CreateTemplateModal: React.FC<{ open: boolean; onClose: () => void; data: InferenceVersionResult | null }> = ({ open, onClose, data }) => {
+    const { t } = useTranslation();
+    const [name, setName] = useState('');
+    const [description, setDescription] = useState('');
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [done, setDone] = useState(false);
+
+    useEffect(() => {
+        if (open) { setName(''); setDescription(''); setError(null); setDone(false); }
+    }, [open]);
+
+    if (!open || !data) return null;
+
+    const handleCreate = async () => {
+        const trimmedName = name.trim();
+        if (!trimmedName) { setError(t('uploadInfer.workspacePanel.templateNameRequired', 'Template name is required.')); return; }
+        setSaving(true); setError(null);
+        try {
+            const payload: Record<string, string> = { name: trimmedName, description: description.trim() };
+            PROMPT_FIELD_DEFS.forEach(({ versionKey, apiKey }) => { payload[apiKey] = (data[versionKey] as string) ?? ''; });
+            // NOTE: endpoint assumed to match this app's existing
+            // /prompt_template/* naming convention (list_template,
+            // associate, disassociate) — adjust here if the real one differs.
+            await api.post('/prompt_template/create', payload);
+            setDone(true);
+        } catch {
+            setError(t('uploadInfer.workspacePanel.templateCreateFail', 'Could not create the template. Please try again.'));
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    return (
+        <div className={styles.promptModalOverlay} onClick={onClose}>
+            <div className={styles.promptModalCard} onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+                <div className={styles.promptModalHead}>
+                    <div>
+                        <div className={styles.promptModalTitle}>{t('uploadInfer.workspacePanel.createTemplateTitle', 'Save as New Template')}</div>
+                        <div className={styles.promptModalSub}>{t('uploadInfer.workspacePanel.createTemplateSub', { name: data.version_name, defaultValue: `From ${data.version_name}\u2019s prompts` })}</div>
+                    </div>
+                    <button type="button" className={styles.compareCloseBtn} onClick={onClose}>
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                    </button>
+                </div>
+
+                {done ? (
+                    <div className={styles.promptModalDone}>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <div>{t('uploadInfer.workspacePanel.templateCreated', 'Template created.')}</div>
+                        <button type="button" className={styles.saveBtn} onClick={onClose}>{t('uploadInfer.workspacePanel.close', 'Close')}</button>
+                    </div>
+                ) : (
+                    <>
+                        <div className={styles.promptModalBody}>
+                            <div className={styles.promptModalField}>
+                                <label className={styles.promptModalLabel}>{t('uploadInfer.workspacePanel.templateNameLabel', 'Name')}</label>
+                                <input
+                                    type="text"
+                                    className={styles.promptModalInput}
+                                    value={name}
+                                    onChange={e => setName(e.target.value)}
+                                    placeholder={t('uploadInfer.workspacePanel.templateNamePlaceholder', 'e.g. Lecture Summary v2')}
+                                    maxLength={100}
+                                    autoFocus
+                                />
+                            </div>
+                            <div className={styles.promptModalField}>
+                                <label className={styles.promptModalLabel}>{t('uploadInfer.workspacePanel.templateDescLabel', 'Description')}</label>
+                                <textarea
+                                    className={styles.promptModalTextarea}
+                                    value={description}
+                                    onChange={e => setDescription(e.target.value)}
+                                    placeholder={t('uploadInfer.workspacePanel.templateDescPlaceholder', 'What is this template for?')}
+                                    rows={2}
+                                />
+                            </div>
+
+                            <div className={styles.promptModalPreviewLabel}>{t('uploadInfer.workspacePanel.templatePromptsPreview', 'Prompts included (from this version)')}</div>
+                            <div className={styles.promptModalPreviewList}>
+                                {PROMPT_FIELD_DEFS.map(({ versionKey, labelKey }) => (
+                                    <div key={versionKey} className={styles.promptModalPreviewItem}>
+                                        <span className={styles.promptModalPreviewName}>{t(labelKey)}</span>
+                                        <span className={styles.promptModalPreviewText}>
+                                            {(data[versionKey] as string)?.trim() || t('uploadInfer.workspacePanel.noPromptSet', 'No prompt set')}
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+
+                            {error && <div className={styles.compareRenameError}>{error}</div>}
+                        </div>
+                        <div className={styles.promptModalFooter}>
+                            <button type="button" className={styles.cancelBtn} onClick={onClose} disabled={saving}>{t('uploadInfer.workspacePanel.cancel')}</button>
+                            <button type="button" className={styles.saveBtn} onClick={handleCreate} disabled={saving}>
+                                {saving ? <><span className={styles.inlineSpinner} />{t('uploadInfer.workspacePanel.saving')}</> : t('uploadInfer.workspacePanel.createTemplateBtn', 'Create Template')}
+                            </button>
+                        </div>
+                    </>
+                )}
+            </div>
+        </div>
+    );
+};
+
+// ── Apply a version's prompts back onto the file's live default prompts ──
+// Only the checked prompt types are included in the request at all — an
+// unchecked field is omitted from the payload entirely, not sent as empty.
+const UpdatePromptsModal: React.FC<{ open: boolean; onClose: () => void; data: InferenceVersionResult | null; fileId: number }> = ({ open, onClose, data, fileId }) => {
+    const { t } = useTranslation();
+    const [checked, setChecked] = useState<Record<string, boolean>>({});
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [done, setDone] = useState(false);
+
+    useEffect(() => {
+        if (open) { setChecked({}); setError(null); setDone(false); }
+    }, [open]);
+
+    if (!open || !data) return null;
+
+    const anyChecked = Object.values(checked).some(Boolean);
+    const toggle = (apiKey: string) => setChecked(prev => ({ ...prev, [apiKey]: !prev[apiKey] }));
+
+    const handleApply = async () => {
+        if (!anyChecked) { setError(t('uploadInfer.workspacePanel.updatePromptsNoneSelected', 'Pick at least one prompt to update.')); return; }
+        setSaving(true); setError(null);
+        try {
+            const payload: Record<string, unknown> = { file_ids: [fileId] };
+            PROMPT_FIELD_DEFS.forEach(({ versionKey, apiKey }) => {
+                if (checked[apiKey]) payload[apiKey] = (data[versionKey] as string) ?? '';
+            });
+            await api.post('/prompt_update', payload);
+            setDone(true);
+        } catch {
+            setError(t('uploadInfer.workspacePanel.updatePromptsFail', 'Could not update the file\u2019s prompts. Please try again.'));
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    return (
+        <div className={styles.promptModalOverlay} onClick={onClose}>
+            <div className={styles.promptModalCard} onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+                <div className={styles.promptModalHead}>
+                    <div>
+                        <div className={styles.promptModalTitle}>{t('uploadInfer.workspacePanel.updatePromptsTitle', 'Update File\u2019s Prompts')}</div>
+                        <div className={styles.promptModalSub}>{t('uploadInfer.workspacePanel.updatePromptsSub', { name: data.version_name, defaultValue: `From ${data.version_name}` })}</div>
+                    </div>
+                    <button type="button" className={styles.compareCloseBtn} onClick={onClose}>
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                    </button>
+                </div>
+
+                {done ? (
+                    <div className={styles.promptModalDone}>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <div>{t('uploadInfer.workspacePanel.promptsUpdated', 'Prompts updated.')}</div>
+                        <button type="button" className={styles.saveBtn} onClick={onClose}>{t('uploadInfer.workspacePanel.close', 'Close')}</button>
+                    </div>
+                ) : (
+                    <>
+                        <div className={styles.promptModalBody}>
+                            <div className={styles.promptModalHint}>
+                                {t('uploadInfer.workspacePanel.updatePromptsHint', 'Choose which prompts to copy from this version onto the file\u2019s default prompts. Anything left unchecked stays as-is.')}
+                            </div>
+                            <div className={styles.promptModalCheckList}>
+                                {PROMPT_FIELD_DEFS.map(({ versionKey, apiKey, labelKey }) => {
+                                    const value = (data[versionKey] as string)?.trim();
+                                    return (
+                                        <label key={apiKey} className={`${styles.promptModalCheckItem} ${checked[apiKey] ? styles.promptModalCheckItemActive : ''}`}>
+                                            <input
+                                                type="checkbox"
+                                                checked={!!checked[apiKey]}
+                                                onChange={() => toggle(apiKey)}
+                                            />
+                                            <span className={styles.promptModalCheckBox}>
+                                                <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 6l3 3 5-5" /></svg>
+                                            </span>
+                                            <span className={styles.promptModalCheckText}>
+                                                <span className={styles.promptModalCheckName}>{t(labelKey)}</span>
+                                                <span className={styles.promptModalCheckPreview}>
+                                                    {value || t('uploadInfer.workspacePanel.noPromptSet', 'No prompt set')}
+                                                </span>
+                                            </span>
+                                        </label>
+                                    );
+                                })}
+                            </div>
+                            {error && <div className={styles.compareRenameError}>{error}</div>}
+                        </div>
+                        <div className={styles.promptModalFooter}>
+                            <button type="button" className={styles.cancelBtn} onClick={onClose} disabled={saving}>{t('uploadInfer.workspacePanel.cancel')}</button>
+                            <button type="button" className={styles.saveBtn} onClick={handleApply} disabled={saving || !anyChecked}>
+                                {saving ? <><span className={styles.inlineSpinner} />{t('uploadInfer.workspacePanel.saving')}</> : t('uploadInfer.workspacePanel.updatePromptsBtn', 'Update Prompts')}
+                            </button>
+                        </div>
+                    </>
+                )}
+            </div>
+        </div>
+    );
+};
+
+const CompareSide: React.FC<{
+    data: InferenceVersionResult | null;
+    loading: boolean;
+    error: string | null;
+    section: CompareSection;
+    accent: 'from' | 'to';
+    fileId: number;
+    onRename: (versionNumber: number, newName: string) => Promise<boolean>;
+}> = ({ data, loading, error, section, accent, fileId, onRename }) => {
+    const { t } = useTranslation();
+    const [createTemplateOpen, setCreateTemplateOpen] = useState(false);
+    const [updatePromptsOpen, setUpdatePromptsOpen] = useState(false);
+    const faqItems = useMemo(() => data ? parseFaq(data.faq) : [], [data]);
+    const shortAnswerItems = useMemo(() => data ? parsePyList<ShortAnswerItem>(data.short_answer) : [], [data]);
+    const trueFalseItems = useMemo(() => data ? parsePyList<TrueFalseItem>(data.true_false) : [], [data]);
+    const summaryHtml = useMemo(() => data ? marked.parse(data.summary || '') as string : '', [data]);
+
+    // ── Inline rename ──────────────────────────────
+    const [renaming, setRenaming] = useState(false);
+    const [draftName, setDraftName] = useState('');
+    const [renameSaving, setRenameSaving] = useState(false);
+    const [renameError, setRenameError] = useState<string | null>(null);
+    const renameInputRef = useRef<HTMLInputElement>(null);
+
+    // Exit any in-progress rename whenever the loaded version itself
+    // changes (different dropdown selection, or a fresh fetch) — an
+    // in-flight edit for version 2 has no business surviving onto version 3.
+    useEffect(() => { setRenaming(false); setRenameError(null); }, [data?.version_number]);
+
+    const startRename = () => {
+        if (!data) return;
+        setDraftName(data.version_name);
+        setRenameError(null);
+        setRenaming(true);
+    };
+    const cancelRename = () => { setRenaming(false); setRenameError(null); };
+    const saveRename = async () => {
+        if (!data) return;
+        const trimmed = draftName.trim();
+        if (!trimmed) { setRenameError(t('uploadInfer.workspacePanel.compareRenameEmpty', 'Name can\u2019t be empty.')); return; }
+        if (trimmed === data.version_name) { setRenaming(false); return; }
+        setRenameSaving(true); setRenameError(null);
+        const ok = await onRename(data.version_number, trimmed);
+        setRenameSaving(false);
+        if (ok) setRenaming(false);
+        else setRenameError(t('uploadInfer.workspacePanel.compareRenameFail', 'Could not rename this version.'));
+    };
+
+    useEffect(() => { if (renaming) renameInputRef.current?.focus(); }, [renaming]);
+
+    return (
+        <div className={`${styles.compareSide} ${accent === 'from' ? styles.compareSideFrom : styles.compareSideTo}`}>
+            <div className={styles.compareSideHead}>
+                {data ? (
+                    <>
+                        <div className={styles.compareSideTitleRow}>
+                            <span className={styles.verDropdownBadge}>v{data.version_number}</span>
+                            {renaming ? (
+                                <div className={styles.compareRenameWrap}>
+                                    <input
+                                        ref={renameInputRef}
+                                        type="text"
+                                        className={styles.compareRenameInput}
+                                        value={draftName}
+                                        onChange={e => setDraftName(e.target.value)}
+                                        onKeyDown={e => { if (e.key === 'Enter') saveRename(); if (e.key === 'Escape') cancelRename(); }}
+                                        disabled={renameSaving}
+                                        maxLength={80}
+                                    />
+                                    <button type="button" className={styles.compareRenameSave} onClick={saveRename} disabled={renameSaving} title={t('uploadInfer.workspacePanel.save')}>
+                                        {renameSaving ? <span className={styles.inlineSpinner} /> : (
+                                            <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2.5 7l3 3 6-6" /></svg>
+                                        )}
+                                    </button>
+                                    <button type="button" className={styles.compareRenameCancel} onClick={cancelRename} disabled={renameSaving} title={t('uploadInfer.workspacePanel.cancel')}>
+                                        <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 3l8 8M11 3l-8 8" /></svg>
+                                    </button>
+                                </div>
+                            ) : (
+                                <>
+                                    <span className={styles.compareSideName}>{data.version_name}</span>
+                                    <button type="button" className={styles.compareRenameBtn} onClick={startRename} title={t('uploadInfer.workspacePanel.compareRenameBtn', 'Rename version')}>
+                                        <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                            <path d="M6 2.5H2.5a1 1 0 00-1 1v8a1 1 0 001 1h8a1 1 0 001-1V8" />
+                                            <path d="M10 1.5a1.24 1.24 0 011.75 1.75L7 8.5l-2.2.45L5.25 6.7 10 1.5z" />
+                                        </svg>
+                                    </button>
+                                </>
+                            )}
+                        </div>
+                        {renaming && renameError && <div className={styles.compareRenameError}>{renameError}</div>}
+                        <div className={styles.compareSideMeta}>
+                            {data.model && <span className={styles.compareSideMetaItem}>{data.model}</span>}
+                            {data.created_at && <span className={styles.compareSideMetaItem}>{data.created_at}</span>}
+                        </div>
+                        <div className={styles.compareSideActions}>
+                            <button type="button" className={styles.compareSideActionBtn} onClick={() => setCreateTemplateOpen(true)}>
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M9.5 2H4.8a1 1 0 00-1 1v10a1 1 0 001 1h6.4a1 1 0 001-1V5.5z" />
+                                    <path d="M9.5 2v3.5h3" />
+                                    <path d="M8 8.2v4M6 10.2h4" />
+                                </svg>
+                                {t('uploadInfer.workspacePanel.createTemplateBtn', 'Create Template')}
+                            </button>
+                            <button type="button" className={styles.compareSideActionBtn} onClick={() => setUpdatePromptsOpen(true)}>
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M13.3 4.3A5.5 5.5 0 003.3 3.1M2.7 2.7v3h3" />
+                                    <path d="M2.7 11.7a5.5 5.5 0 0010 1.2M13.3 13.3v-3h-3" />
+                                </svg>
+                                {t('uploadInfer.workspacePanel.updatePromptsBtn', 'Update Prompts')}
+                            </button>
+                        </div>
+                    </>
+                ) : <div className={styles.compareSideTitleRow}><span className={styles.compareSideNamePlaceholder}>—</span></div>}
+            </div>
+
+            <div className={styles.compareSideBody}>
+                {loading && <div className={styles.compareSideState}><div className={styles.spinner} /></div>}
+                {!loading && error && <div className={`${styles.compareSideState} ${styles.compareSideError}`}>{error}</div>}
+                {!loading && !error && !data && (
+                    <div className={styles.compareSideState}>{t('uploadInfer.workspacePanel.compareSelectPrompt', 'Select a version above')}</div>
+                )}
+
+                {!loading && !error && data && section === 'summary' && (
+                    data.summary
+                        ? <div className={styles.summaryMd} dangerouslySetInnerHTML={{ __html: summaryHtml }} />
+                        : <div className={styles.compareEmpty}>{t('uploadInfer.workspacePanel.noSummary')}</div>
+                )}
+
+                {!loading && !error && data && section === 'keywords' && (
+                    <ChipGrid kws={data.keywords ?? []} />
+                )}
+
+                {!loading && !error && data && section === 'assessment' && (
+                    faqItems.length === 0 ? <div className={styles.compareEmpty}>{t('uploadInfer.workspacePanel.noQuestions')}</div> : (
+                        <div className={styles.compareStack}>
+                            {faqItems.map((q, i) => (
+                                <div key={i} className={styles.viewAllCard}>
+                                    <div className={styles.viewAllQ}><span className={styles.faqNum}>Q{i + 1}</span>{q.question}</div>
+                                    <div className={styles.faqOptions}>
+                                        {Object.entries(q.options).map(([key, val]) => (
+                                            <div key={key} className={`${styles.faqOpt} ${key === q.correct_answer ? styles.faqOptCorrectAlt : styles.viewAllOptNeutral}`}>
+                                                <span className={`${styles.faqOptKey} ${key === q.correct_answer ? styles.faqOptKeyCorrect : ''}`}>{key}</span>
+                                                <span className={styles.faqOptVal}>{val}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )
+                )}
+
+                {!loading && !error && data && section === 'shortAnswer' && (
+                    shortAnswerItems.length === 0 ? <div className={styles.compareEmpty}>{t('uploadInfer.workspacePanel.noShortAnswer')}</div> : (
+                        <div className={styles.compareStack}>
+                            {shortAnswerItems.map((item, i) => (
+                                <div key={i} className={styles.viewAllCard}>
+                                    <div className={styles.viewAllQ}><span className={styles.faqNum}>Q{i + 1}</span>{item.question}</div>
+                                    <div className={styles.shortAnswerBox}>
+                                        <p className={styles.shortAnswerText}>{item.answer}</p>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )
+                )}
+
+                {!loading && !error && data && section === 'trueFalse' && (
+                    trueFalseItems.length === 0 ? <div className={styles.compareEmpty}>{t('uploadInfer.workspacePanel.noTrueFalse')}</div> : (
+                        <div className={styles.compareStack}>
+                            {trueFalseItems.map((item, i) => (
+                                <div key={i} className={styles.viewAllCard}>
+                                    <div className={styles.viewAllQ}><span className={styles.faqNum}>{i + 1}</span>{item.statement}</div>
+                                    <div className={styles.tfOptions}>
+                                        {(['true', 'false'] as const).map(key => (
+                                            <div key={key} className={`${styles.tfOpt} ${(key === 'true') === item.is_true ? styles.faqOptCorrectAlt : styles.viewAllOptNeutral}`}>
+                                                <span className={styles.tfOptLabel}>{key === 'true' ? t('uploadInfer.workspacePanel.true') : t('uploadInfer.workspacePanel.false')}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )
+                )}
+            </div>
+
+            <CreateTemplateModal open={createTemplateOpen} onClose={() => setCreateTemplateOpen(false)} data={data} />
+            <UpdatePromptsModal open={updatePromptsOpen} onClose={() => setUpdatePromptsOpen(false)} data={data} fileId={fileId} />
+        </div>
+    );
+};
+const CompareInferenceDrawer: React.FC<{ open: boolean; onClose: () => void; fileId: number; fileName: string }> = ({ open, onClose, fileId, fileName }) => {
+    const { t } = useTranslation();
+    const [versions, setVersions] = useState<InferenceVersion[]>([]);
+    const [versionsLoading, setVersionsLoading] = useState(false);
+    const [versionsError, setVersionsError] = useState<string | null>(null);
+
+    const [fromVersion, setFromVersion] = useState<number | null>(null);
+    const [toVersion, setToVersion] = useState<number | null>(null);
+
+    const [fromData, setFromData] = useState<InferenceVersionResult | null>(null);
+    const [toData, setToData] = useState<InferenceVersionResult | null>(null);
+    const [fromLoading, setFromLoading] = useState(false);
+    const [toLoading, setToLoading] = useState(false);
+    const [fromError, setFromError] = useState<string | null>(null);
+    const [toError, setToError] = useState<string | null>(null);
+
+    const [section, setSection] = useState<CompareSection>('summary');
+    useEffect(() => { if (open) setSection('summary'); }, [open]);
+
+    // Rename lives here (not in CompareSide) because a successful rename
+    // needs to update three separate pieces of state that CompareSide has
+    // no access to: the version list backing both dropdowns, and whichever
+    // of fromData/toData happens to currently be showing that version
+    // (either, both, or neither — the same version can be picked on both
+    // sides at once).
+    const handleRename = useCallback(async (versionNumber: number, newName: string): Promise<boolean> => {
+        try {
+            await api.put(`/inference-history/${fileId}/version/${versionNumber}/rename`, { version_name: newName });
+            setVersions(prev => prev.map(v => v.version_number === versionNumber ? { ...v, version_name: newName } : v));
+            setFromData(prev => prev && prev.version_number === versionNumber ? { ...prev, version_name: newName } : prev);
+            setToData(prev => prev && prev.version_number === versionNumber ? { ...prev, version_name: newName } : prev);
+            return true;
+        } catch {
+            return false;
+        }
+    }, [fileId]);
+
+    // Fetch the version list once each time the drawer opens, and default
+    // to comparing the two most recent versions (highest two version
+    // numbers) — the comparison people almost always want first.
+    useEffect(() => {
+        if (!open) return;
+        let cancelled = false;
+        (async () => {
+            setVersionsLoading(true); setVersionsError(null);
+            setFromData(null); setToData(null); setFromError(null); setToError(null);
+            try {
+                const res = await api.get(`/inference-history/${fileId}/versions`);
+                const list: InferenceVersion[] = (res.data as any)?.data?.versions ?? [];
+                if (cancelled) return;
+                const sorted = [...list].sort((a, b) => b.version_number - a.version_number);
+                setVersions(sorted);
+                if (sorted.length >= 2) {
+                    setToVersion(sorted[0].version_number);
+                    setFromVersion(sorted[1].version_number);
+                } else if (sorted.length === 1) {
+                    setToVersion(sorted[0].version_number);
+                    setFromVersion(null);
+                } else {
+                    setToVersion(null); setFromVersion(null);
+                }
+            } catch {
+                if (!cancelled) setVersionsError(t('uploadInfer.workspacePanel.compareLoadFail', 'Could not load versions.'));
+            } finally {
+                if (!cancelled) setVersionsLoading(false);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [open, fileId, t]);
+
+    // Fetch each side independently whenever its own version selection
+    // changes — so switching just "Compare To" doesn't re-fetch "Compare
+    // From" unnecessarily.
+    useEffect(() => {
+        if (!open || fromVersion === null) { setFromData(null); return; }
+        let cancelled = false;
+        (async () => {
+            setFromLoading(true); setFromError(null);
+            try {
+                const res = await api.get(`/inference-history/${fileId}/version/${fromVersion}`);
+                const result: InferenceVersionResult = (res.data as any)?.data?.result;
+                if (!cancelled) setFromData(result ?? null);
+            } catch {
+                if (!cancelled) setFromError(t('uploadInfer.workspacePanel.compareLoadFail', 'Could not load this version.'));
+            } finally {
+                if (!cancelled) setFromLoading(false);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [open, fileId, fromVersion, t]);
+
+    useEffect(() => {
+        if (!open || toVersion === null) { setToData(null); return; }
+        let cancelled = false;
+        (async () => {
+            setToLoading(true); setToError(null);
+            try {
+                const res = await api.get(`/inference-history/${fileId}/version/${toVersion}`);
+                const result: InferenceVersionResult = (res.data as any)?.data?.result;
+                if (!cancelled) setToData(result ?? null);
+            } catch {
+                if (!cancelled) setToError(t('uploadInfer.workspacePanel.compareLoadFail', 'Could not load this version.'));
+            } finally {
+                if (!cancelled) setToLoading(false);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [open, fileId, toVersion, t]);
+
+    // Esc to close
+    useEffect(() => {
+        if (!open) return;
+        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [open, onClose]);
+
+    return (
+        <div className={`${styles.compareOverlay} ${open ? styles.compareOverlayOpen : ''}`} aria-hidden={!open}>
+            <div className={styles.compareBackdrop} onClick={onClose} />
+            <div className={`${styles.compareDrawer} ${open ? styles.compareDrawerOpen : ''}`} role="dialog" aria-modal="true">
+                <div className={styles.compareHead}>
+                    <div className={styles.compareHeadIcon}>
+                        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="2.5" y="3" width="6.5" height="14" rx="1.5" />
+                            <rect x="11" y="3" width="6.5" height="14" rx="1.5" />
+                            <path d="M5.75 7.5v5M14.25 7.5v5" />
+                        </svg>
+                    </div>
+                    <div className={styles.compareHeadText}>
+                        <div className={styles.compareHeadTitle}>{t('uploadInfer.workspacePanel.compareTitle', 'Compare Inference Versions')}</div>
+                        <div className={styles.compareHeadSub}>{fileName}</div>
+                    </div>
+                    <button type="button" className={styles.compareCloseBtn} onClick={onClose} title={t('uploadInfer.workspacePanel.close', 'Close')}>
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                    </button>
+                </div>
+
+                <div className={styles.compareSelectorRow}>
+                    {versionsLoading && <div className={styles.compareSelectorLoading}><div className={styles.spinner} /> {t('uploadInfer.workspacePanel.compareLoadingVersions', 'Loading versions…')}</div>}
+                    {versionsError && <div className={styles.compareSelectorError}>{versionsError}</div>}
+                    {!versionsLoading && !versionsError && versions.length < 2 && (
+                        <div className={styles.compareSelectorError}>{t('uploadInfer.workspacePanel.compareNeedTwo', 'At least two inference versions are needed to compare.')}</div>
+                    )}
+                    {!versionsLoading && !versionsError && versions.length >= 1 && (
+                        <>
+                            <VersionDropdown
+                                label={t('uploadInfer.workspacePanel.compareFrom', 'Compare From')}
+                                versions={versions}
+                                value={fromVersion}
+                                onChange={setFromVersion}
+                                accent="from"
+                            />
+                            <svg className={styles.compareArrow} viewBox="0 0 20 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M1 6h18M14 1l5 5-5 5" />
+                            </svg>
+                            <VersionDropdown
+                                label={t('uploadInfer.workspacePanel.compareTo', 'Compare To')}
+                                versions={versions}
+                                value={toVersion}
+                                onChange={setToVersion}
+                                accent="to"
+                            />
+                        </>
+                    )}
+                </div>
+
+                <div className={styles.compareSectionTabs}>
+                    {COMPARE_SECTIONS.map(sec => (
+                        <button
+                            key={sec.id}
+                            type="button"
+                            className={`${styles.compareSectionTab} ${section === sec.id ? styles.compareSectionTabActive : ''}`}
+                            onClick={() => setSection(sec.id)}
+                        >
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                <path d={sec.icon} />
+                            </svg>
+                            {t(sec.labelKey)}
+                        </button>
+                    ))}
+                </div>
+
+                <div className={styles.compareBody}>
+                    <CompareSide data={fromData} loading={fromLoading} error={fromError} section={section} accent="from" fileId={fileId} onRename={handleRename} />
+                    <div className={styles.compareDivider} />
+                    <CompareSide data={toData} loading={toLoading} error={toError} section={section} accent="to" fileId={fileId} onRename={handleRename} />
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// ── Main panel ────────────────────────────────────────────
+const WorkspacePanel = forwardRef<WorkspacePanelHandle, Props>(({ step2Visible = true, step2Minimized = false, fileResult, fileLoading, activeFileId, onResultUpdate }, ref) => {
+    const { t } = useTranslation();
+    const [activeTab, setActiveTab] = useState<TabId>('summary');
+    const [compareOpen, setCompareOpen] = useState(false);
+
+    useImperativeHandle(ref, () => ({
+        setTab: (id: TabId) => setActiveTab(id),
+    }), []);
+
+    return (
+        <div className={`${styles.wspanel} ${(!step2Visible || step2Minimized) ? styles.wspanelExpanded : ''} ${step2Visible ? styles.wspanelWithStep2 : ''}`}>
+            <div className={styles.wspanelHead}>
+                <div className={styles.headLeft}>
+                    {fileResult ? (
+                        <>
+                            <div className={styles.wsftitle}>{fileResult.fileName}</div>
+                            <div className={styles.wsmeta}>
+                                <span className={styles.wsmetaId}>#{fileResult.fileId}</span>
+                                {fileResult.insertedAt && (<><span className={styles.wsmetaSep}>·</span><span className={styles.wsmetaDate}>{fileResult.insertedAt}</span></>)}
+                            </div>
+                        </>
+                    ) : (
+                        <>
+                            <div className={styles.wsftitleEmpty}>—</div>
+                            <div className={styles.wsmeta}><span className={styles.wsmetaHint}>{t('uploadInfer.workspacePanel.clickToView')}</span></div>
+                        </>
+                    )}
+                </div>
+                {fileResult && (
+                    <button type="button" className={styles.compareTriggerBtn} onClick={() => setCompareOpen(true)}>
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="2" y="2.5" width="5" height="11" rx="1.2" />
+                            <rect x="9" y="2.5" width="5" height="11" rx="1.2" />
+                            <path d="M4.5 6v3M11.5 6v3" />
+                        </svg>
+                        {t('uploadInfer.workspacePanel.compareBtn', 'Compare Versions')}
+                    </button>
+                )}
+            </div>
+
+            <ScrollableTabs activeTab={activeTab} onChange={setActiveTab} />
+
+            <div className={styles.wsbody}>
+                {fileLoading && (
+                    <div className={styles.wsSpinner}><div className={styles.spinner} /><span>{t('uploadInfer.workspacePanel.loadingFile')}</span></div>
+                )}
+                {!fileLoading && !fileResult && (
+                    <div className={styles.wsEmpty}>
+                        <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="8" y="6" width="32" height="36" rx="3" /><path d="M16 16h16M16 23h16M16 30h10" />
+                        </svg>
+                        <div className={styles.wsEmptyTitle}>{t('uploadInfer.workspacePanel.noFileSelected')}</div>
+                        <div className={styles.wsEmptyDesc}>{t('uploadInfer.workspacePanel.noFileDesc')}</div>
+                    </div>
+                )}
+                {!fileLoading && fileResult && (
+                    <>
+                        {activeTab === 'summary' && <TabSummary summary={fileResult.summary} fileId={fileResult.fileId} onSaved={s => onResultUpdate?.({ summary: s })} />}
+                        {activeTab === 'keywords' && <TabKeywords keywords={fileResult.keywords} fileId={fileResult.fileId} onSaved={kw => onResultUpdate?.({ keywords: kw })} />}
+                        {activeTab === 'assessment' && <TabAssessment faq={fileResult.faq} />}
+                        {activeTab === 'shortAnswer' && <TabShortAnswer raw={fileResult.shortAnswer} />}
+                        {activeTab === 'trueFalse' && <TabTrueFalse raw={fileResult.trueFalse} />}
+                        {activeTab === 'timestampedSummary' && <TabTimestampedSummary raw={fileResult.timestampedSummary} />}
+                        {activeTab === 'keywordInsights' && <TabKeywordInsights data={fileResult.keywordInsights} />}
+                    </>
+                )}
+            </div>
+
+            {fileResult && (
+                <CompareInferenceDrawer
+                    open={compareOpen}
+                    onClose={() => setCompareOpen(false)}
+                    fileId={fileResult.fileId}
+                    fileName={fileResult.fileName}
+                />
+            )}
+        </div>
+    );
+});
+
+WorkspacePanel.displayName = 'WorkspacePanel';
+
+export default WorkspacePanel;
