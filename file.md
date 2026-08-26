@@ -1,3 +1,272 @@
+//Toast.tsx
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
+import { CheckCircle2, XCircle, AlertTriangle, Info, X } from 'lucide-react';
+import styles from './Toast.module.scss';
+
+export type ToastTone = 'success' | 'error' | 'warning' | 'info';
+
+export interface ToastOptions {
+  /** How long the toast stays up before auto-dismissing, in ms. Pass 0 to disable. */
+  duration?: number;
+  title?: string;
+}
+
+interface ToastItem {
+  id: number;
+  tone: ToastTone;
+  message: string;
+  title?: string;
+  duration: number;
+}
+
+interface ToastContextValue {
+  /** Generic entry point — pick a tone explicitly. */
+  showToast: (message: string, tone?: ToastTone, options?: ToastOptions) => void;
+  success: (message: string, options?: ToastOptions) => void;
+  error: (message: string, options?: ToastOptions) => void;
+  warning: (message: string, options?: ToastOptions) => void;
+  info: (message: string, options?: ToastOptions) => void;
+  dismiss: (id: number) => void;
+}
+
+const ToastContext = createContext<ToastContextValue | null>(null);
+
+const DEFAULT_DURATION = 4000;
+
+const ICONS: Record<ToastTone, typeof CheckCircle2> = {
+  success: CheckCircle2,
+  error: XCircle,
+  warning: AlertTriangle,
+  info: Info,
+};
+
+/**
+ * Wrap the app (or a section of it) with <ToastProvider> once, then call
+ * useToast() anywhere below it to fire toasts:
+ *
+ *   const toast = useToast();
+ *   toast.success('Model registered');
+ *   toast.error('Something went wrong');
+ */
+export function ToastProvider({ children }: { children: ReactNode }) {
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const idRef = useRef(0);
+
+  const dismiss = useCallback((id: number) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  const showToast = useCallback(
+    (message: string, tone: ToastTone = 'info', options?: ToastOptions) => {
+      const id = ++idRef.current;
+      const duration = options?.duration ?? DEFAULT_DURATION;
+      setToasts((prev) => [...prev, { id, tone, message, title: options?.title, duration }]);
+      if (duration > 0) {
+        window.setTimeout(() => dismiss(id), duration);
+      }
+    },
+    [dismiss]
+  );
+
+  const value = useMemo<ToastContextValue>(
+    () => ({
+      showToast,
+      success: (message, options) => showToast(message, 'success', options),
+      error: (message, options) => showToast(message, 'error', options),
+      warning: (message, options) => showToast(message, 'warning', options),
+      info: (message, options) => showToast(message, 'info', options),
+      dismiss,
+    }),
+    [showToast, dismiss]
+  );
+
+  return (
+    <ToastContext.Provider value={value}>
+      {children}
+      <ToastViewport toasts={toasts} onDismiss={dismiss} />
+    </ToastContext.Provider>
+  );
+}
+
+export function useToast(): ToastContextValue {
+  const ctx = useContext(ToastContext);
+  if (!ctx) {
+    throw new Error('useToast must be used within a <ToastProvider>. Wrap your app root with it.');
+  }
+  return ctx;
+}
+
+function ToastViewport({ toasts, onDismiss }: { toasts: ToastItem[]; onDismiss: (id: number) => void }) {
+  if (toasts.length === 0) return null;
+  return (
+    <div className={styles['toast-viewport']} role="region" aria-label="Notifications">
+      {toasts.map((t) => {
+        const Icon = ICONS[t.tone];
+        return (
+          <div
+            key={t.id}
+            className={`${styles['toast']} ${styles[`toast--${t.tone}`]}`}
+            role={t.tone === 'error' ? 'alert' : 'status'}
+            aria-live={t.tone === 'error' ? 'assertive' : 'polite'}
+          >
+            <div className={styles['toast__icon']}>
+              <Icon size={17} />
+            </div>
+            <div className={styles['toast__body']}>
+              {t.title && <div className={styles['toast__title']}>{t.title}</div>}
+              <div className={styles['toast__message']}>{t.message}</div>
+            </div>
+            <button
+              type="button"
+              className={styles['toast__close']}
+              onClick={() => onDismiss(t.id)}
+              aria-label="Dismiss notification"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Toast.module.scss
+@use '../../styles/_variables' as *;
+
+.toast-viewport {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(360px, calc(100vw - 40px));
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px 14px;
+  border-radius: 12px;
+  background: $surface;
+  box-shadow: $shadow-4;
+  border: 1px solid $border;
+  border-left: 3px solid $text-muted;
+  animation: toast-in 0.18s cubic-bezier(0.22, 0.72, 0.16, 1) both;
+  font-size: 13px;
+
+  &--success { border-left-color: #10B981; }
+  &--error { border-left-color: #DC2626; }
+  &--warning { border-left-color: $amber-dark; }
+  &--info { border-left-color: $indigo; }
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(16px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.toast__icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+
+  .toast--success & { color: #10B981; }
+  .toast--error & { color: #DC2626; }
+  .toast--warning & { color: $amber-dark; }
+  .toast--info & { color: $indigo; }
+}
+
+.toast__body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.toast__title {
+  font-weight: 750;
+  color: $text-primary;
+  margin-bottom: 2px;
+}
+
+.toast__message {
+  color: $text-secondary;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.toast__close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-top: -2px;
+  margin-right: -4px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: $text-muted;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+
+  &:hover { background: $surface-alt; color: $text-primary; }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 //Addcustommodeldrawer.tsx
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -212,8 +481,8 @@ export default function AddCustomModelDrawer({ mode = 'create', initialModel, on
   };
 
   return (
-    <div className={styles['drawer-overlay']} onClick={onClose}>
-      <div className={styles.drawer} onClick={(e) => e.stopPropagation()}>
+    <div className={styles['drawer-overlay']}>
+      <div className={styles.drawer}>
         <div className={styles['drawer__hdr']}>
           <h2>{isEdit ? 'Edit Custom Model' : 'Register Custom Model'}</h2>
           <button className={styles['drawer__close']} onClick={onClose}><X size={18} /></button>
@@ -487,675 +756,6 @@ export default function AddCustomModelDrawer({ mode = 'create', initialModel, on
 
 
 
-//Addcustommodeldrawer.module.scss
-@use '../../styles/_variables' as *;
-
-// Font scaling: `.drawer` sets a single base font-size. All descendant
-// font-sizes are expressed in `em` (relative to that base), so bumping
-// `.drawer`'s font-size on wide screens scales the whole drawer
-// proportionally from one place — same convention as Sidebar, Providers,
-// and Model Catalog.
-
-// base font-size the drawer's internal `em` scale is built on
-$drawer-base-font: 13px;
-
-.drawer-overlay {
-  position: fixed; top: 0; left: 0; right: 0; bottom: $footer-height;
-  background: rgba(17, 24, 39, .4); z-index: 100;
-  display: flex; justify-content: flex-end;
-}
-.drawer {
-  width: 420px; max-width: 100%; height: calc(100% - 30px); background: $surface; box-shadow: $shadow-4;
-  display: flex; flex-direction: column; animation: drawerIn .25s ease both;
-
-  // master scale control — every em-based font-size below responds to this
-  font-size: $drawer-base-font;
-
-  @media (min-width: 1800px) {
-    font-size: 16px;
-  }
-}
-@keyframes drawerIn { from { transform: translateX(24px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-.drawer__hdr {
-  display: flex; justify-content: space-between; align-items: center; padding: 20px 24px; border-bottom: 1px solid $border-light;
-  h2 { font-size: 1.3846em; font-weight: 700; } // 18px / 13px
-}
-.drawer__close { background: none; border: none; cursor: pointer; color: $text-muted; }
-.drawer__body { flex: 1; overflow-y: auto; padding: 24px; }
-.drawer__foot { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 24px; border-top: 1px solid $border-light; }
-
-// ---- category custom dropdown ------------------------------------------------
-.combo {
-  position: relative;
-}
-.combo-trigger {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  padding: 10px 12px;
-  border: 1.5px solid $border;
-  border-radius: 10px;
-  background: $surface;
-  cursor: pointer;
-  text-align: left;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
-
-  &:hover:not(:disabled) { border-color: $indigo; }
-  &:disabled { cursor: not-allowed; opacity: 0.6; }
-
-  &--open {
-    border-color: $indigo;
-    box-shadow: 0 0 0 3px $indigo-pale;
-  }
-}
-.combo-value {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-.combo-value-label {
-  font-size: 1em; // 13px / 13px (base)
-  font-weight: 650;
-  color: $text-primary;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.combo-placeholder {
-  font-size: 1em; // 13px / 13px (base)
-  color: $text-muted;
-}
-.combo-caret {
-  flex-shrink: 0;
-  color: $text-muted;
-  transition: transform 0.18s ease;
-
-  &--open { transform: rotate(180deg); color: $indigo; }
-}
-.combo-panel {
-  position: absolute;
-  z-index: 20;
-  top: calc(100% + 6px);
-  left: 0;
-  right: 0;
-  max-height: 280px;
-  overflow-y: auto;
-  padding: 6px;
-  background: $surface;
-  border: 1px solid $border;
-  border-radius: 12px;
-  box-shadow: $shadow-3;
-  animation: combo-panel-in 0.14s ease both;
-}
-@keyframes combo-panel-in {
-  from { opacity: 0; transform: translateY(-4px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-.combo-empty {
-  padding: 14px 10px;
-  font-size: 0.9615em; // 12.5px / 13px
-  color: $text-muted;
-  text-align: center;
-}
-.combo-option {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  width: 100%;
-  padding: 9px 10px;
-  border: none;
-  border-radius: 8px;
-  background: none;
-  cursor: pointer;
-  text-align: left;
-  transition: background 0.12s ease;
-
-  &:hover { background: $surface-alt; }
-
-  &--selected {
-    background: $indigo-pale;
-
-    &:hover { background: $indigo-pale; }
-  }
-
-  & + & { margin-top: 1px; }
-}
-.combo-option-check {
-  flex-shrink: 0;
-  width: 14px;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: $indigo;
-}
-.combo-option-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.combo-option-label {
-  font-size: 1em; // 13px / 13px (base)
-  font-weight: 650;
-  color: $text-primary;
-}
-.combo-option-desc {
-  font-size: 0.8846em; // 11.5px / 13px
-  line-height: 1.4;
-  color: $text-secondary;
-}
-
-// ---- hint / error text -------------------------------------------------------
-.field-hint {
-  margin-top: 6px;
-  font-size: 0.9231em; // 12px / 13px
-  line-height: 1.45;
-  color: $text-secondary;
-}
-.field-hint--error {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-  font-size: 0.9231em; // 12px / 13px
-  color: #DC2626;
-}
-.locked-tag {
-  margin-left: 6px;
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: $emerald-pale;
-  color: $emerald-dark;
-  font-size: 0.8077em; // 10.5px / 13px
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  vertical-align: middle;
-}
-
-// ---- optional-discovery panel -------------------------------------------------
-.discover-panel {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 18px;
-  padding: 16px;
-  border-radius: 14px;
-  background: linear-gradient(165deg, $indigo-pale 0%, $surface-alt 65%);
-  border: 1px solid rgba($indigo, 0.16);
-  position: relative;
-  overflow: hidden;
-}
-.discover-panel-icon {
-  flex-shrink: 0;
-  width: 32px;
-  height: 32px;
-  border-radius: 9px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: $indigo;
-  color: #fff;
-  box-shadow: 0 4px 10px -3px rgba($indigo, 0.5);
-}
-.discover-panel-body {
-  min-width: 0;
-  flex: 1;
-}
-.discover-panel-title {
-  font-size: 1.0385em; // 13.5px / 13px
-  font-weight: 750;
-  color: $text-primary;
-  margin-bottom: 3px;
-}
-.discover-panel-text {
-  font-size: 0.9231em; // 12px / 13px
-  line-height: 1.5;
-  color: $text-secondary;
-  margin: 0 0 12px;
-}
-.discover-panel-actions {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-}
-.discover-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  border-radius: 9px;
-  border: 1px solid $indigo;
-  background: $indigo;
-  color: #fff;
-  font-size: 0.9615em; // 12.5px / 13px
-  font-weight: 700;
-  cursor: pointer;
-  box-shadow: 0 2px 6px -2px rgba($indigo, 0.5);
-  transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease, box-shadow 0.15s ease;
-
-  &:hover:not(:disabled) { background: $indigo-dark; border-color: $indigo-dark; transform: translateY(-1px); box-shadow: 0 4px 10px -2px rgba($indigo, 0.55); }
-  &:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
-}
-.discover-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 0;
-  border: none;
-  background: none;
-  font-size: 0.9231em; // 12px / 13px
-  font-weight: 600;
-  color: $text-secondary;
-  cursor: pointer;
-  transition: color 0.15s ease;
-
-  &:hover { color: $indigo; }
-}
-.spin { animation: add-custom-model-spin 0.8s linear infinite; }
-@keyframes add-custom-model-spin { to { transform: rotate(360deg); } }
-
-// ---- discovery success banner --------------------------------------------------
-.success-banner {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 16px;
-  padding: 10px 13px;
-  border-radius: 10px;
-  background: $emerald-pale;
-  border: 1px solid rgba($emerald, 0.25);
-  color: $emerald-dark;
-  font-size: 0.9615em; // 12.5px / 13px
-  font-weight: 650;
-
-  svg { flex-shrink: 0; }
-}
-
-// ---- edit-mode "different model detected" warning -------------------------------
-.mismatch-banner {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin-bottom: 16px;
-  padding: 11px 13px;
-  border-radius: 10px;
-  background: $amber-pale;
-  border: 1px solid rgba($amber-dark, 0.3);
-  color: #92400E;
-  font-size: 0.9231em; // 12px / 13px
-  font-weight: 550;
-  line-height: 1.5;
-
-  svg { flex-shrink: 0; margin-top: 1px; color: $amber-dark; }
-  strong { font-weight: 750; }
-  code {
-    font-family: monospace;
-    font-size: 0.92em;
-    background: rgba(0, 0, 0, 0.06);
-    padding: 1px 4px;
-    border-radius: 4px;
-  }
-}
-
-.same-model-badge {
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: $indigo-pale;
-  color: $indigo;
-  font-weight: 700;
-}
-
-// ---- discovered model picker -------------------------------------------------
-.discovered-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  max-height: 220px;
-  overflow-y: auto;
-  padding: 2px;
-}
-.discovered-row {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  width: 100%;
-  padding: 10px 34px 10px 12px;
-  border: 1.5px solid $border;
-  border-radius: 9px;
-  background: $surface;
-  cursor: pointer;
-  text-align: left;
-  transition: border-color 0.14s ease, background 0.14s ease;
-
-  &:hover { border-color: $indigo; background: $indigo-pale; }
-
-  &--selected {
-    border-color: $indigo;
-    background: $indigo-pale;
-  }
-}
-.discovered-row-main {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-.discovered-row-name {
-  font-weight: 700;
-  font-size: 1em; // 13px / 13px (base)
-  color: $text-primary;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.discovered-row-id {
-  flex-shrink: 0;
-  font-family: monospace;
-  font-size: 0.8462em; // 11px / 13px
-  color: $text-muted;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.discovered-row-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  font-size: 0.8462em; // 11px / 13px
-  color: $text-secondary;
-}
-.already-added-badge {
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: rgba(245, 158, 11, 0.16);
-  color: #B45309;
-  font-weight: 700;
-}
-.discovered-row-check {
-  position: absolute;
-  top: 50%;
-  right: 10px;
-  transform: translateY(-50%);
-  color: $indigo;
-}
-
-// ---- reset / mode-switch link -------------------------------------------------
-.reset-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  margin: -6px 0 16px;
-  padding: 0;
-  border: none;
-  background: none;
-  font-size: 0.9231em; // 12px / 13px
-  font-weight: 650;
-  color: $indigo;
-  cursor: pointer;
-
-  &:hover { text-decoration: underline; }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Providermodelssidebar.tsx
-import { useEffect, useRef, useState } from 'react';
-import { X, Loader2, Inbox, Trash2, Pencil } from 'lucide-react';
-import type { Provider, Model } from '../../types';
-import ConfirmDialog from './ConfirmDialog';
-import AddCustomModelDrawer, { type CustomModelSubmitPayload, type EditableModel } from './AddCustomModelDrawer';
-import styles from './Providers.module.scss';
-
-interface ProviderModelsSidebarProps {
-  provider: Provider;
-  models: Model[];
-  status: 'idle' | 'loading' | 'succeeded' | 'failed';
-  onClose: () => void;
-  /** Edit + delete affordances only make sense for the Custom provider. */
-  canManage?: boolean;
-  deletingId?: string | null;
-  updatingId?: string | null;
-  /** True while a "register as new model" submission (from a mismatched edit) is in flight. */
-  creatingNew?: boolean;
-  onDelete?: (modelId: string) => void;
-  /** Returning a Promise lets the sidebar close the edit drawer once the dispatch resolves. */
-  onEditSubmit?: (payload: CustomModelSubmitPayload) => Promise<unknown> | void;
-}
-
-export default function ProviderModelsSidebar({
-  provider,
-  models = [],
-  status,
-  onClose,
-  canManage = false,
-  deletingId = null,
-  updatingId = null,
-  creatingNew = false,
-  onDelete,
-  onEditSubmit,
-}: ProviderModelsSidebarProps) {
-  const [pendingDelete, setPendingDelete] = useState<EditableModel | null>(null);
-  const [editingModel, setEditingModel] = useState<EditableModel | null>(null);
-
-  const confirmDelete = () => {
-    if (pendingDelete && onDelete) onDelete(pendingDelete.id);
-  };
-
-  // Close the delete confirmation once the in-flight delete for the pending
-  // model finishes.
-  const prevDeletingId = useRef<string | null>(null);
-  useEffect(() => {
-    if (pendingDelete && prevDeletingId.current === pendingDelete.id && deletingId !== pendingDelete.id) {
-      setPendingDelete(null);
-    }
-    prevDeletingId.current = deletingId;
-  }, [deletingId, pendingDelete]);
-
-  const handleEditSubmit = (payload: CustomModelSubmitPayload) => {
-    const result = onEditSubmit?.(payload);
-    if (result && typeof (result as Promise<unknown>).then === 'function') {
-      (result as Promise<unknown>).then(() => setEditingModel(null));
-    } else {
-      setEditingModel(null);
-    }
-  };
-
-  const editSubmitting = editingModel
-    ? (updatingId === editingModel.id || creatingNew)
-    : false;
-
-  return (
-    <>
-      <div className={styles['providers__sidebar-overlay']} onClick={onClose} />
-      <aside className={styles['providers__sidebar']}>
-        <div className={styles['providers__sidebar-header']}>
-          <div>
-            <div className={styles['providers__sidebar-title']}>{provider?.name ?? 'Provider'}</div>
-            <div className={styles['providers__sidebar-subtitle']}>
-              {models.length} model{models.length === 1 ? '' : 's'} available
-            </div>
-          </div>
-          <button className="btn btn-sm btn-ghost" onClick={onClose} aria-label="Close">
-            <X size={16} />
-          </button>
-        </div>
-
-        <div className={styles['providers__sidebar-body']}>
-          {status === 'loading' && (
-            <div className={styles['providers__sidebar-empty']}>
-              <Loader2 size={18} style={{ animation: 'spin 1.5s linear infinite' }} />
-              <span>Loading models…</span>
-            </div>
-          )}
-
-          {status === 'failed' && (
-            <div className={styles['providers__sidebar-empty']}>
-              <span>Couldn't load models for this provider.</span>
-            </div>
-          )}
-
-          {status === 'succeeded' && models.length === 0 && (
-            <div className={styles['providers__sidebar-empty']}>
-              <Inbox size={18} />
-              <span>No models found for this provider yet.</span>
-            </div>
-          )}
-
-          {status === 'succeeded' && models.map((raw) => {
-            const m = raw as EditableModel;
-            const isDeleting = deletingId === m.id;
-
-            return (
-              <div
-                key={m.id}
-                className={`${styles['providers__model-row']} ${isDeleting ? styles['providers__model-row--deleting'] : ''}`}
-              >
-                <div className={styles['providers__model-row-head']}>
-                  <span className={styles['providers__model-row-name']}>{m.name ?? 'Unnamed model'}</span>
-                  <div className={styles['providers__model-row-head-actions']}>
-                    <span className={`badge ${m.is_active ? 'badge-green' : 'badge-gray'}`}>
-                      {m.is_active ? 'Active' : 'Inactive'}
-                    </span>
-                    {canManage && (
-                      <>
-                        <button
-                          type="button"
-                          className={styles['providers__model-row-edit']}
-                          onClick={() => setEditingModel(m)}
-                          title="Edit model"
-                          aria-label={`Edit ${m.name ?? m.id}`}
-                        >
-                          <Pencil size={13} />
-                        </button>
-                        <button
-                          type="button"
-                          className={styles['providers__model-row-delete']}
-                          onClick={() => setPendingDelete(m)}
-                          disabled={isDeleting}
-                          title="Remove model"
-                          aria-label={`Remove ${m.name ?? m.id}`}
-                        >
-                          {isDeleting ? (
-                            <Loader2 size={13} style={{ animation: 'spin 1.5s linear infinite' }} />
-                          ) : (
-                            <Trash2 size={13} />
-                          )}
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                {m.description && (
-                  <p className={styles['providers__model-row-desc']}>{m.description}</p>
-                )}
-
-                <div className={styles['providers__model-row-tags']}>
-                  {m.category && <span className="tag tag-ind">{m.category}</span>}
-                  {(m.capabilities ?? []).map((c) => (
-                    <span key={c} className="tag tag-ind">{c}</span>
-                  ))}
-                </div>
-
-                <div className={styles['providers__model-row-meta']}>
-                  <div>
-                    <span className={styles['providers__model-row-meta-label']}>Context</span>
-                    <span>{(m.context_window ?? 0).toLocaleString()}</span>
-                  </div>
-                  <div>
-                    <span className={styles['providers__model-row-meta-label']}>Price (in/out)</span>
-                    <span>
-                      {m.input_price != null ? `$${m.input_price.toFixed(2)}` : '—'} / {m.output_price != null ? `$${m.output_price.toFixed(2)}` : '—'}
-                    </span>
-                  </div>
-                  <div>
-                    <span className={styles['providers__model-row-meta-label']}>Accuracy</span>
-                    <span>{m.accuracy_score != null ? `${m.accuracy_score}%` : '—'}</span>
-                  </div>
-                  <div>
-                    <span className={styles['providers__model-row-meta-label']}>Agent Score</span>
-                    <span>{m.agent_score != null ? `${m.agent_score}%` : '—'}</span>
-                  </div>
-                </div>
-
-                {m.base_url && (
-                  <div className={styles['providers__model-row-url']} title={m.base_url}>
-                    {m.base_url}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </aside>
-
-      {pendingDelete && (
-        <ConfirmDialog
-          title="Remove this model?"
-          message={`"${pendingDelete.name ?? pendingDelete.id}" will be permanently removed from ${provider?.name ?? 'this provider'}. This can't be undone.`}
-          confirmLabel="Remove Model"
-          tone="danger"
-          loading={deletingId === pendingDelete.id}
-          onCancel={() => setPendingDelete(null)}
-          onConfirm={confirmDelete}
-        />
-      )}
-
-      {editingModel && (
-        <AddCustomModelDrawer
-          mode="edit"
-          initialModel={editingModel}
-          submitting={editSubmitting}
-          onClose={() => setEditingModel(null)}
-          onSubmit={handleEditSubmit}
-        />
-      )}
-    </>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -1184,12 +784,25 @@ import AddProviderDrawer from './AddProviderDrawer';
 import AddCustomModelDrawer from './AddCustomModelDrawer';
 import ProviderModelsSidebar from './ProviderModelsSidebar';
 import { SkeletonCards } from '../common/Skeleton';
+import { useToast } from '../common/Toast';
 import styles from './Providers.module.scss';
 import type { Provider } from '../../types';
 
 type Filter = 'all' | 'connected' | 'available';
 
 const FILTERS: Filter[] = ['all', 'connected', 'available'];
+
+// Thunks rejected via axios surface as either an Error (network/message) or
+// an object with a response payload — normalize both into a display string.
+function getErrorMessage(err: unknown, fallback: string): string {
+  if (err && typeof err === 'object') {
+    const anyErr = err as { response?: { data?: { message?: string; detail?: string } }; message?: string };
+    const serverMessage = anyErr.response?.data?.message || anyErr.response?.data?.detail;
+    if (serverMessage) return serverMessage;
+    if (anyErr.message) return anyErr.message;
+  }
+  return fallback;
+}
 
 export default function Providers() {
   const dispatch = useAppDispatch();
@@ -1206,6 +819,7 @@ export default function Providers() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [addModelOpen, setAddModelOpen] = useState(false);
   const [viewModelsProvider, setViewModelsProvider] = useState<Provider | null>(null);
+  const toast = useToast();
 
   useEffect(() => {
     dispatch(fetchProviders());
@@ -1446,11 +1060,17 @@ export default function Providers() {
           onClose={() => setAddModelOpen(false)}
           onSubmit={(result) => {
             if (result.kind !== 'create') return;
-            dispatch(createCustomModel(result.payload)).then(() => {
-              setAddModelOpen(false);
-              dispatch(fetchProviders());
-              dispatch(fetchModelsByProvider(customProvider.id));
-            });
+            dispatch(createCustomModel(result.payload))
+              .unwrap()
+              .then(() => {
+                setAddModelOpen(false);
+                toast.success(`"${result.payload.name}" was registered successfully.`, { title: 'Model registered' });
+                dispatch(fetchProviders());
+                dispatch(fetchModelsByProvider(customProvider.id));
+              })
+              .catch((err) => {
+                toast.error(getErrorMessage(err, 'Failed to register model.'), { title: 'Registration failed' });
+              });
           }}
         />
       )}
@@ -1466,9 +1086,15 @@ export default function Providers() {
           updatingId={customModelUpdatingId}
           creatingNew={customModelCreating}
           onDelete={(modelId) => {
-            dispatch(deleteCustomModel({ modelId, providerId: viewModelsProvider.id })).then(() => {
-              dispatch(fetchProviders());
-            });
+            dispatch(deleteCustomModel({ modelId, providerId: viewModelsProvider.id }))
+              .unwrap()
+              .then(() => {
+                toast.success('Model removed successfully.', { title: 'Model removed' });
+                dispatch(fetchProviders());
+              })
+              .catch((err) => {
+                toast.error(getErrorMessage(err, 'Failed to remove model.'), { title: 'Removal failed' });
+              });
           }}
           onEditSubmit={(result) => {
             if (result.kind === 'update') {
@@ -1476,17 +1102,265 @@ export default function Providers() {
                 model_id: result.model_id,
                 name: result.name,
                 description: result.description,
-              }));
+              }))
+                .unwrap()
+                .then((res) => {
+                  toast.success(`"${res.name}" was updated successfully.`, { title: 'Model updated' });
+                })
+                .catch((err) => {
+                  toast.error(getErrorMessage(err, 'Failed to update model.'), { title: 'Update failed' });
+                  throw err;
+                });
             }
             // Discovery found a different model id — register it as a new
             // model instead of mutating the one being edited.
-            return dispatch(createCustomModel(result.payload)).then(() => {
-              dispatch(fetchProviders());
-              dispatch(fetchModelsByProvider(viewModelsProvider.id));
-            });
+            return dispatch(createCustomModel(result.payload))
+              .unwrap()
+              .then(() => {
+                toast.success(`"${result.payload.name}" was registered as a new model.`, { title: 'Model registered' });
+                dispatch(fetchProviders());
+                dispatch(fetchModelsByProvider(viewModelsProvider.id));
+              })
+              .catch((err) => {
+                toast.error(getErrorMessage(err, 'Failed to register model.'), { title: 'Registration failed' });
+                throw err;
+              });
           }}
         />
       )}
     </div>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Providermodelssidebar.tsx
+import { useEffect, useRef, useState } from 'react';
+import { X, Loader2, Inbox, Trash2, Pencil } from 'lucide-react';
+import type { Provider, Model } from '../../types';
+import ConfirmDialog from './ConfirmDialog';
+import AddCustomModelDrawer, { type CustomModelSubmitPayload, type EditableModel } from './AddCustomModelDrawer';
+import styles from './Providers.module.scss';
+
+interface ProviderModelsSidebarProps {
+  provider: Provider;
+  models: Model[];
+  status: 'idle' | 'loading' | 'succeeded' | 'failed';
+  onClose: () => void;
+  /** Edit + delete affordances only make sense for the Custom provider. */
+  canManage?: boolean;
+  deletingId?: string | null;
+  updatingId?: string | null;
+  /** True while a "register as new model" submission (from a mismatched edit) is in flight. */
+  creatingNew?: boolean;
+  onDelete?: (modelId: string) => void;
+  /** Returning a Promise lets the sidebar close the edit drawer once the dispatch resolves. */
+  onEditSubmit?: (payload: CustomModelSubmitPayload) => Promise<unknown> | void;
+}
+
+export default function ProviderModelsSidebar({
+  provider,
+  models = [],
+  status,
+  onClose,
+  canManage = false,
+  deletingId = null,
+  updatingId = null,
+  creatingNew = false,
+  onDelete,
+  onEditSubmit,
+}: ProviderModelsSidebarProps) {
+  const [pendingDelete, setPendingDelete] = useState<EditableModel | null>(null);
+  const [editingModel, setEditingModel] = useState<EditableModel | null>(null);
+
+  const confirmDelete = () => {
+    if (pendingDelete && onDelete) onDelete(pendingDelete.id);
+  };
+
+  // Close the delete confirmation once the in-flight delete for the pending
+  // model finishes.
+  const prevDeletingId = useRef<string | null>(null);
+  useEffect(() => {
+    if (pendingDelete && prevDeletingId.current === pendingDelete.id && deletingId !== pendingDelete.id) {
+      setPendingDelete(null);
+    }
+    prevDeletingId.current = deletingId;
+  }, [deletingId, pendingDelete]);
+
+  const handleEditSubmit = (payload: CustomModelSubmitPayload) => {
+    const result = onEditSubmit?.(payload);
+    if (result && typeof (result as Promise<unknown>).then === 'function') {
+      // On success close the drawer; on failure (already toasted by the
+      // caller) keep it open so the user can adjust and retry.
+      (result as Promise<unknown>).then(() => setEditingModel(null)).catch(() => {});
+    } else {
+      setEditingModel(null);
+    }
+  };
+
+  const editSubmitting = editingModel
+    ? (updatingId === editingModel.id || creatingNew)
+    : false;
+
+  return (
+    <>
+      <div className={styles['providers__sidebar-overlay']} onClick={onClose} />
+      <aside className={styles['providers__sidebar']}>
+        <div className={styles['providers__sidebar-header']}>
+          <div>
+            <div className={styles['providers__sidebar-title']}>{provider?.name ?? 'Provider'}</div>
+            <div className={styles['providers__sidebar-subtitle']}>
+              {models.length} model{models.length === 1 ? '' : 's'} available
+            </div>
+          </div>
+          <button className="btn btn-sm btn-ghost" onClick={onClose} aria-label="Close">
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className={styles['providers__sidebar-body']}>
+          {status === 'loading' && (
+            <div className={styles['providers__sidebar-empty']}>
+              <Loader2 size={18} style={{ animation: 'spin 1.5s linear infinite' }} />
+              <span>Loading models…</span>
+            </div>
+          )}
+
+          {status === 'failed' && (
+            <div className={styles['providers__sidebar-empty']}>
+              <span>Couldn't load models for this provider.</span>
+            </div>
+          )}
+
+          {status === 'succeeded' && models.length === 0 && (
+            <div className={styles['providers__sidebar-empty']}>
+              <Inbox size={18} />
+              <span>No models found for this provider yet.</span>
+            </div>
+          )}
+
+          {status === 'succeeded' && models.map((raw) => {
+            const m = raw as EditableModel;
+            const isDeleting = deletingId === m.id;
+
+            return (
+              <div
+                key={m.id}
+                className={`${styles['providers__model-row']} ${isDeleting ? styles['providers__model-row--deleting'] : ''}`}
+              >
+                <div className={styles['providers__model-row-head']}>
+                  <span className={styles['providers__model-row-name']}>{m.name ?? 'Unnamed model'}</span>
+                  <div className={styles['providers__model-row-head-actions']}>
+                    <span className={`badge ${m.is_active ? 'badge-green' : 'badge-gray'}`}>
+                      {m.is_active ? 'Active' : 'Inactive'}
+                    </span>
+                    {canManage && (
+                      <>
+                        <button
+                          type="button"
+                          className={styles['providers__model-row-edit']}
+                          onClick={() => setEditingModel(m)}
+                          title="Edit model"
+                          aria-label={`Edit ${m.name ?? m.id}`}
+                        >
+                          <Pencil size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          className={styles['providers__model-row-delete']}
+                          onClick={() => setPendingDelete(m)}
+                          disabled={isDeleting}
+                          title="Remove model"
+                          aria-label={`Remove ${m.name ?? m.id}`}
+                        >
+                          {isDeleting ? (
+                            <Loader2 size={13} style={{ animation: 'spin 1.5s linear infinite' }} />
+                          ) : (
+                            <Trash2 size={13} />
+                          )}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {m.description && (
+                  <p className={styles['providers__model-row-desc']}>{m.description}</p>
+                )}
+
+                <div className={styles['providers__model-row-tags']}>
+                  {m.category && <span className="tag tag-ind">{m.category}</span>}
+                  {(m.capabilities ?? []).map((c) => (
+                    <span key={c} className="tag tag-ind">{c}</span>
+                  ))}
+                </div>
+
+                <div className={styles['providers__model-row-meta']}>
+                  <div>
+                    <span className={styles['providers__model-row-meta-label']}>Context</span>
+                    <span>{(m.context_window ?? 0).toLocaleString()}</span>
+                  </div>
+                  <div>
+                    <span className={styles['providers__model-row-meta-label']}>Price (in/out)</span>
+                    <span>
+                      {m.input_price != null ? `$${m.input_price.toFixed(2)}` : '—'} / {m.output_price != null ? `$${m.output_price.toFixed(2)}` : '—'}
+                    </span>
+                  </div>
+                  <div>
+                    <span className={styles['providers__model-row-meta-label']}>Accuracy</span>
+                    <span>{m.accuracy_score != null ? `${m.accuracy_score}%` : '—'}</span>
+                  </div>
+                  <div>
+                    <span className={styles['providers__model-row-meta-label']}>Agent Score</span>
+                    <span>{m.agent_score != null ? `${m.agent_score}%` : '—'}</span>
+                  </div>
+                </div>
+
+                {m.base_url && (
+                  <div className={styles['providers__model-row-url']} title={m.base_url}>
+                    {m.base_url}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </aside>
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Remove this model?"
+          message={`"${pendingDelete.name ?? pendingDelete.id}" will be permanently removed from ${provider?.name ?? 'this provider'}. This can't be undone.`}
+          confirmLabel="Remove Model"
+          tone="danger"
+          loading={deletingId === pendingDelete.id}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={confirmDelete}
+        />
+      )}
+
+      {editingModel && (
+        <AddCustomModelDrawer
+          mode="edit"
+          initialModel={editingModel}
+          submitting={editSubmitting}
+          onClose={() => setEditingModel(null)}
+          onSubmit={handleEditSubmit}
+        />
+      )}
+    </>
   );
 }
