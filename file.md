@@ -183,13 +183,15 @@ export default function AddCustomModelDrawer({ mode = 'create', initialModel, on
         request_params: parsed.value,
       });
       setVerifyResult(res);
-      if (!res.supported) {
-        setVerifyStatus('error');
-      } else if ((res.warning && res.warning.length > 0) || (res.skipped_params && res.skipped_params.length > 0)) {
-        setVerifyStatus('warning');
-      } else {
-        setVerifyStatus('success');
-      }
+      // Any 200 response counts as "verified" and unblocks Save — warnings
+      // (or even an unsupported result) are surfaced to the user but don't
+      // stop them from saving. Only an actual failed call (network error /
+      // non-200, handled in the catch below) blocks saving.
+      const hasIssues =
+        !res.supported ||
+        (res.warning && res.warning.length > 0) ||
+        (res.skipped_params && res.skipped_params.length > 0);
+      setVerifyStatus(hasIssues ? 'warning' : 'success');
     } catch (err) {
       setVerifyStatus('error');
       setVerifyError(err instanceof Error ? err.message : 'Could not verify these parameters against this endpoint.');
@@ -624,12 +626,17 @@ export default function AddCustomModelDrawer({ mode = 'create', initialModel, on
                   <div className={styles['verify-banner--warning']}>
                     <AlertTriangle size={15} />
                     <div>
+                      {!verifyResult.supported && (
+                        <div className={styles['verify-unsupported-note']}>
+                          This model doesn't fully support the given parameters — you can still save, but requests may ignore some of them.
+                        </div>
+                      )}
                       {verifyResult.warning && verifyResult.warning.length > 0 ? (
                         <ul className={styles['verify-warning-list']}>
                           {verifyResult.warning.map((w, i) => <li key={i}>{w}</li>)}
                         </ul>
                       ) : (
-                        <span>Some parameters were ignored by this model.</span>
+                        verifyResult.supported && <span>Some parameters were ignored by this model.</span>
                       )}
                       {verifyResult.skipped_params && verifyResult.skipped_params.length > 0 && (
                         <div className={styles['verify-skipped']}>
@@ -643,19 +650,7 @@ export default function AddCustomModelDrawer({ mode = 'create', initialModel, on
                 {verifyStatus === 'error' && (
                   <div className={styles['verify-banner--error']}>
                     <XCircle size={15} />
-                    <div>
-                      {verifyResult && !verifyResult.supported ? (
-                        verifyResult.warning && verifyResult.warning.length > 0 ? (
-                          <ul className={styles['verify-warning-list']}>
-                            {verifyResult.warning.map((w, i) => <li key={i}>{w}</li>)}
-                          </ul>
-                        ) : (
-                          <span>These parameters are not supported by this model.</span>
-                        )
-                      ) : (
-                        <span>{verifyError || 'Could not verify these parameters against this endpoint.'}</span>
-                      )}
-                    </div>
+                    <span>{verifyError || 'Could not verify these parameters against this endpoint.'}</span>
                   </div>
                 )}
 
@@ -1165,6 +1160,10 @@ $drawer-base-font: 13px;
   padding-left: 16px;
   li { margin-bottom: 2px; }
 }
+.verify-unsupported-note {
+  margin-bottom: 4px;
+  font-weight: 650;
+}
 .verify-skipped {
   margin-top: 4px;
   code {
@@ -1267,144 +1266,3 @@ $drawer-base-font: 13px;
 
   &:hover { text-decoration: underline; }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-import api from '../axiosInstance';
-import type { Model, CustomModelRequest } from '../../types';
-
-export interface ModelCategory {
-  value: string;
-  label: string;
-  description: string;
-}
-
-export interface DiscoveredModel {
-  id: string;
-  name: string;
-  context_window: number | null;
-  max_model_len: number | null;
-  owned_by: string;
-  already_added: boolean;
-}
-
-export interface DiscoverModelsRequest {
-  base_url: string;
-  api_key?: string;
-}
-
-export interface DiscoverModelsResponse {
-  base_url: string;
-  models: DiscoveredModel[];
-  total: number;
-  errors: string[];
-}
-
-export interface DeleteCustomModelResponse {
-  status: string;
-  model_id: string;
-}
-
-export interface UpdateCustomModelRequest {
-  model_id: string;
-  name: string;
-  description: string;
-  /** Optional advanced request params (e.g. chat_template_kwargs, reasoning_effort). */
-  request_params?: Record<string, unknown>;
-}
-
-export interface UpdateCustomModelResponse {
-  model_id: string;
-  name: string;
-  description: string;
-}
-
-// A CustomModelRequest widened with the optional advanced `request_params`
-// field. Defined locally rather than editing the shared `CustomModelRequest`
-// type in ../../types, but stays fully compatible with it since the added
-// field is optional — anywhere a CustomModelRequest is expected, this works.
-export type CustomModelRequestWithParams = CustomModelRequest & {
-  request_params?: Record<string, unknown>;
-};
-
-export interface VerifyParamsRequest {
-  base_url: string;
-  api_key?: string;
-  model_id: string;
-  request_params: Record<string, unknown>;
-}
-
-export interface VerifyParamsResponse {
-  supported: boolean;
-  skipped_params: string[];
-  warning?: string[];
-  sample_output?: string;
-}
-
-export const modelsApi = {
-  list: () => api.get<{ models: Model[] }>('/models').then((r) => r.data.models ?? []),
-
-  createCustom: (payload: CustomModelRequestWithParams) =>
-    api.post<void>('/models/custom', payload).then(() => undefined),
-
-  // POST /models/custom — same endpoint as create, keyed by model_id: used here
-  // to update just the name/description of an existing custom model.
-  updateCustom: (payload: UpdateCustomModelRequest) =>
-    api.post<UpdateCustomModelResponse>('/models/custom', payload).then((r) => r.data),
-
-  // DELETE /models/custom/:modelId — remove a previously registered custom model
-  deleteCustom: (modelId: string) =>
-    api.delete<DeleteCustomModelResponse>(`/models/custom/${modelId}`).then((r) => r.data),
-
-  // GET /models/by-provider/:providerId — all models registered under a single provider
-  listByProvider: (providerId: string) =>
-    api
-      .get<{ models: Model[]; total: number }>(`/models/by-provider/${providerId}`)
-      .then((r) => ({ models: r.data.models ?? [], total: r.data.total ?? 0 })),
-
-  // GET /models/categories — used to populate the Category dropdown
-  listCategories: () =>
-    api.get<{ categories: ModelCategory[] }>('/models/categories').then((r) => r.data.categories ?? []),
-
-  // POST /models/discover — optional endpoint probe to auto-fill model name/id/context window
-  discover: (payload: DiscoverModelsRequest) =>
-    api.post<DiscoverModelsResponse>('/models/discover', payload).then((r) => ({
-      base_url: r.data.base_url,
-      models: r.data.models ?? [],
-      total: r.data.total ?? 0,
-      errors: r.data.errors ?? [],
-    })),
-
-  // POST /models/verify-params — probes the endpoint with a candidate set of
-  // advanced request params (e.g. chat_template_kwargs, reasoning_effort) to
-  // confirm the model actually supports them before saving.
-  verifyParams: (payload: VerifyParamsRequest) =>
-    api.post<VerifyParamsResponse>('/models/verify-params', payload).then((r) => r.data),
-};
