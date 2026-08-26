@@ -1,4 +1,3 @@
-//Addcustommodeldrawer.tsx
 import { useEffect, useRef, useState } from 'react';
 import {
   X,
@@ -78,12 +77,14 @@ export default function AddCustomModelDrawer({ mode = 'create', initialModel, on
   // and a candidate chosen — that's what drives the same-model/new-model check.
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
 
-  // ---- advanced: request_params + verify ----
-  const [advancedOpen, setAdvancedOpen] = useState(
-    Boolean(initialModel?.request_params && Object.keys(initialModel.request_params).length > 0)
-  );
+  // ---- request params: always-visible, mandatory-verify step ----
+  // Auto-filled with a sensible starting template so the user sees a working
+  // example immediately; they're free to edit or clear it before saving.
+  const DEFAULT_REQUEST_PARAMS_TEXT = '{\n  "chat_template_kwargs": { "thinking": true },\n  "reasoning_effort": "high"\n}';
   const [requestParamsText, setRequestParamsText] = useState(
-    initialModel?.request_params ? JSON.stringify(initialModel.request_params, null, 2) : ''
+    initialModel?.request_params
+      ? JSON.stringify(initialModel.request_params, null, 2)
+      : DEFAULT_REQUEST_PARAMS_TEXT
   );
   const [requestParamsError, setRequestParamsError] = useState<string | null>(null);
   const [verifyStatus, setVerifyStatus] = useState<'idle' | 'loading' | 'success' | 'warning' | 'error'>('idle');
@@ -157,7 +158,11 @@ export default function AddCustomModelDrawer({ mode = 'create', initialModel, on
   };
 
   const parsedRequestParams = parseRequestParams(requestParamsText);
-  const hasRequestParams = requestParamsText.trim() !== '';
+  // Whether there's actually something to verify — an empty box or `{}`
+  // needs no verification and won't block saving.
+  const requestParamsNonEmpty = parsedRequestParams.ok && Object.keys(parsedRequestParams.value).length > 0;
+  const needsVerification = requestParamsNonEmpty;
+  const paramsVerified = !needsVerification || verifyStatus === 'success' || verifyStatus === 'warning';
 
   const handleVerifyParams = async () => {
     const parsed = parseRequestParams(requestParamsText);
@@ -180,7 +185,7 @@ export default function AddCustomModelDrawer({ mode = 'create', initialModel, on
       setVerifyResult(res);
       if (!res.supported) {
         setVerifyStatus('error');
-      } else if (res.warning || (res.skipped_params && res.skipped_params.length > 0)) {
+      } else if ((res.warning && res.warning.length > 0) || (res.skipped_params && res.skipped_params.length > 0)) {
         setVerifyStatus('warning');
       } else {
         setVerifyStatus('success');
@@ -273,7 +278,8 @@ export default function AddCustomModelDrawer({ mode = 'create', initialModel, on
   const valid = (needsFullValidation
     ? Boolean(name.trim() && modelId.trim() && category.trim() && baseUrl.trim() && contextWindowValid)
     : Boolean(name.trim()))
-    && !requestParamsError;
+    && !requestParamsError
+    && paramsVerified;
 
   const submitLabel = needsFullValidation
     ? (submitting ? 'Registering…' : (willCreateNew ? 'Register as New Model' : 'Register Model'))
@@ -552,104 +558,113 @@ export default function AddCustomModelDrawer({ mode = 'create', initialModel, on
                 </button>
               )}
 
-              {/* ---- advanced: request_params + verify ---- */}
-              <button
-                type="button"
-                className={styles['advanced-toggle']}
-                onClick={() => setAdvancedOpen((o) => !o)}
-                aria-expanded={advancedOpen}
-              >
-                <SlidersHorizontal size={13} />
-                Advanced
-                <ChevronDown size={14} className={`${styles['advanced-toggle-caret']} ${advancedOpen ? styles['advanced-toggle-caret--open'] : ''}`} />
-              </button>
-
-              {advancedOpen && (
-                <div className={styles['advanced-panel']}>
-                  <div className="fg">
-                    <label className="fl">
-                      Request Params <span className="opt">(optional — JSON)</span>
-                    </label>
-                    <textarea
-                      className={`fi ${styles['json-input']} ${requestParamsError ? styles['json-input--error'] : ''}`}
-                      rows={5}
-                      spellCheck={false}
-                      value={requestParamsText}
-                      onChange={(e) => handleRequestParamsChange(e.target.value)}
-                      placeholder={'{\n  "chat_template_kwargs": { "thinking": true },\n  "reasoning_effort": "high"\n}'}
-                    />
-                    {requestParamsError ? (
-                      <div className={styles['field-hint--error']}>
-                        <AlertCircle size={12} /> {requestParamsError}
-                      </div>
-                    ) : (
-                      <div className={styles['field-hint']}>
-                        Extra parameters sent with every request to this model — verify they're actually supported before saving.
-                      </div>
-                    )}
+              {/* ---- request params: always visible, verification is mandatory before saving ---- */}
+              <div className={styles['params-card']}>
+                <div className={styles['params-card-hdr']}>
+                  <div className={styles['params-card-title']}>
+                    <SlidersHorizontal size={13} />
+                    Request Parameters
                   </div>
+                  <span className={styles['params-required-tag']}>
+                    {paramsVerified && verifyStatus !== 'idle' ? 'Verified' : 'Verify before saving'}
+                  </span>
+                </div>
+                <p className={styles['params-card-text']}>
+                  Extra parameters sent with every request to this model — edit as needed, then verify they're
+                  actually supported by this endpoint before saving.
+                </p>
 
-                  <div className={styles['verify-row']}>
-                    <button
-                      type="button"
-                      className={styles['discover-btn']}
-                      disabled={
-                        !baseUrl.trim() ||
-                        !effectiveModelId ||
-                        !hasRequestParams ||
-                        !parsedRequestParams.ok ||
-                        verifyStatus === 'loading'
-                      }
-                      onClick={handleVerifyParams}
-                    >
-                      {verifyStatus === 'loading' ? <Loader2 size={14} className={styles['spin']} /> : <ShieldCheck size={14} />}
-                      {verifyStatus === 'loading' ? 'Verifying…' : 'Verify'}
-                    </button>
-                    {!effectiveModelId && (
-                      <span className={styles['field-hint']}>Select a model above to verify params against it.</span>
-                    )}
+                <textarea
+                  className={`${styles['json-input']} ${requestParamsError ? styles['json-input--error'] : ''}`}
+                  rows={5}
+                  spellCheck={false}
+                  value={requestParamsText}
+                  onChange={(e) => handleRequestParamsChange(e.target.value)}
+                  placeholder={'{\n  "chat_template_kwargs": { "thinking": true },\n  "reasoning_effort": "high"\n}'}
+                />
+                {requestParamsError && (
+                  <div className={styles['field-hint--error']}>
+                    <AlertCircle size={12} /> {requestParamsError}
                   </div>
+                )}
 
-                  {verifyStatus === 'success' && verifyResult && (
-                    <div className={styles['success-banner']}>
-                      <CheckCircle2 size={15} />
-                      <span>
-                        Verified — all parameters are supported by this model.
-                        {verifyResult.sample_output && (
-                          <>
-                            {' '}Sample response: <em>&ldquo;{verifyResult.sample_output}&rdquo;</em>
-                          </>
-                        )}
-                      </span>
-                    </div>
+                <div className={styles['verify-row']}>
+                  <button
+                    type="button"
+                    className={styles['verify-btn']}
+                    disabled={!baseUrl.trim() || !effectiveModelId || !requestParamsNonEmpty || verifyStatus === 'loading'}
+                    onClick={handleVerifyParams}
+                  >
+                    {verifyStatus === 'loading' ? <Loader2 size={14} className={styles['spin']} /> : <ShieldCheck size={14} />}
+                    {verifyStatus === 'loading' ? 'Verifying…' : 'Verify Parameters'}
+                  </button>
+                  {!effectiveModelId && (
+                    <span className={styles['field-hint']}>Select a model above to verify.</span>
                   )}
-
-                  {verifyStatus === 'warning' && verifyResult && (
-                    <div className={styles['mismatch-banner']}>
-                      <AlertTriangle size={15} />
-                      <span>
-                        {verifyResult.warning || 'Some parameters were ignored by this model.'}
-                        {verifyResult.skipped_params && verifyResult.skipped_params.length > 0 && (
-                          <>
-                            {' '}Skipped: <code>{verifyResult.skipped_params.join(', ')}</code>
-                          </>
-                        )}
-                      </span>
-                    </div>
-                  )}
-
-                  {verifyStatus === 'error' && (
-                    <div className={styles['error-banner']}>
-                      <XCircle size={15} />
-                      <span>
-                        {verifyResult && !verifyResult.supported
-                          ? (verifyResult.warning || 'These parameters are not supported by this model.')
-                          : (verifyError || 'Could not verify these parameters against this endpoint.')}
-                      </span>
-                    </div>
+                  {effectiveModelId && !requestParamsNonEmpty && (
+                    <span className={styles['field-hint']}>Box is empty — nothing to verify, this model will use default params.</span>
                   )}
                 </div>
-              )}
+
+                {verifyStatus === 'success' && verifyResult && (
+                  <div className={styles['verify-banner--success']}>
+                    <CheckCircle2 size={15} />
+                    <span>
+                      Verified — all parameters are supported by this model.
+                      {verifyResult.sample_output && (
+                        <>
+                          {' '}Sample response: <em>&ldquo;{verifyResult.sample_output}&rdquo;</em>
+                        </>
+                      )}
+                    </span>
+                  </div>
+                )}
+
+                {verifyStatus === 'warning' && verifyResult && (
+                  <div className={styles['verify-banner--warning']}>
+                    <AlertTriangle size={15} />
+                    <div>
+                      {verifyResult.warning && verifyResult.warning.length > 0 ? (
+                        <ul className={styles['verify-warning-list']}>
+                          {verifyResult.warning.map((w, i) => <li key={i}>{w}</li>)}
+                        </ul>
+                      ) : (
+                        <span>Some parameters were ignored by this model.</span>
+                      )}
+                      {verifyResult.skipped_params && verifyResult.skipped_params.length > 0 && (
+                        <div className={styles['verify-skipped']}>
+                          Skipped: <code>{verifyResult.skipped_params.join(', ')}</code>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {verifyStatus === 'error' && (
+                  <div className={styles['verify-banner--error']}>
+                    <XCircle size={15} />
+                    <div>
+                      {verifyResult && !verifyResult.supported ? (
+                        verifyResult.warning && verifyResult.warning.length > 0 ? (
+                          <ul className={styles['verify-warning-list']}>
+                            {verifyResult.warning.map((w, i) => <li key={i}>{w}</li>)}
+                          </ul>
+                        ) : (
+                          <span>These parameters are not supported by this model.</span>
+                        )
+                      ) : (
+                        <span>{verifyError || 'Could not verify these parameters against this endpoint.'}</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {needsVerification && !paramsVerified && verifyStatus === 'idle' && (
+                  <div className={styles['field-hint--error']}>
+                    <AlertCircle size={12} /> Verify these parameters before you can save.
+                  </div>
+                )}
+              </div>
             </>
           )}
 
@@ -660,6 +675,9 @@ export default function AddCustomModelDrawer({ mode = 'create', initialModel, on
         </div>
 
         <div className={styles['drawer__foot']}>
+          {needsVerification && !paramsVerified && (
+            <span className={styles['params-gate-hint']}>Verify request parameters to continue</span>
+          )}
           <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
           <button className="btn btn-ind" disabled={!valid || submitting} onClick={handleSubmit}>{submitLabel}</button>
         </div>
@@ -687,7 +705,8 @@ export default function AddCustomModelDrawer({ mode = 'create', initialModel, on
 
 
 
-//Addcustommodeldrawer.module.scss
+
+
 @use '../../styles/_variables' as *;
 
 // Font scaling: `.drawer` sets a single base font-size. All descendant
@@ -1009,47 +1028,72 @@ $drawer-base-font: 13px;
   font-weight: 700;
 }
 
-// ---- advanced: request_params + verify ---------------------------------------
-.advanced-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin: 2px 0 14px;
-  padding: 0;
-  border: none;
-  background: none;
-  font-size: 0.9231em; // 12px / 13px
-  font-weight: 650;
-  color: $text-secondary;
-  cursor: pointer;
-  transition: color 0.15s ease;
-
-  &:hover { color: $indigo; }
-}
-.advanced-toggle-caret {
-  transition: transform 0.18s ease;
-  &--open { transform: rotate(180deg); }
-}
-.advanced-panel {
+// ---- request params: mandatory-verify card --------------------------------------
+// Uses the same ink/paper/signal token system as Providers.module.scss (shared
+// via _variables.scss) rather than the drawer's older $indigo/$amber tokens, so
+// this card's colors stay consistent with the rest of the Providers surface
+// and pick up theme changes automatically.
+.params-card {
   margin-bottom: 16px;
   padding: 14px;
   border-radius: 12px;
-  background: $surface-alt;
-  border: 1px solid $border-light;
-  animation: advanced-panel-in 0.15s ease both;
+  background: $paper;
+  border: 1px solid $line;
 }
-@keyframes advanced-panel-in {
-  from { opacity: 0; transform: translateY(-4px); }
-  to { opacity: 1; transform: translateY(0); }
+.params-card-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.params-card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 1.0385em; // 13.5px / 13px
+  font-weight: 750;
+  color: $ink;
+
+  svg { color: $signal; }
+}
+.params-required-tag {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: $wash;
+  color: $signal;
+  font-size: 0.8077em; // 10.5px / 13px
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+.params-card-text {
+  font-size: 0.9231em; // 12px / 13px
+  line-height: 1.5;
+  color: $ink-2;
+  margin: 0 0 12px;
 }
 .json-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1.5px solid $line;
+  border-radius: 10px;
+  background: $card;
+  color: $ink;
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
   font-size: 0.9231em; // 12px / 13px
   line-height: 1.5;
   resize: vertical;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+
+  &::placeholder { color: $ink-3; }
+  &:focus { outline: none; border-color: $signal; box-shadow: 0 0 0 3px $wash; }
 
   &--error {
-    border-color: #DC2626 !important;
+    border-color: $danger;
+    &:focus { box-shadow: 0 0 0 3px $danger-wash; }
   }
 }
 .verify-row {
@@ -1058,23 +1102,71 @@ $drawer-base-font: 13px;
   gap: 12px;
   margin-top: 10px;
 }
+.verify-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 9px;
+  border: 1px solid $signal;
+  background: $signal;
+  color: #fff;
+  font-size: 0.9615em; // 12.5px / 13px
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
 
-// ---- verify failure banner -----------------------------------------------------
-.error-banner {
+  &:hover:not(:disabled) { background: $signal-2; border-color: $signal-2; transform: translateY(-1px); }
+  &:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+}
+.params-gate-hint {
+  margin-right: auto;
+  font-size: 0.9231em; // 12px / 13px
+  font-weight: 600;
+  color: $ink-3;
+}
+
+// ---- verify result banners -------------------------------------------------------
+.verify-banner--success,
+.verify-banner--warning,
+.verify-banner--error {
   display: flex;
   align-items: flex-start;
   gap: 8px;
   margin-top: 12px;
   padding: 10px 13px;
   border-radius: 10px;
-  background: $red-pale;
-  border: 1px solid rgba(#DC2626, 0.25);
-  color: #B91C1C;
   font-size: 0.9231em; // 12px / 13px
   font-weight: 550;
   line-height: 1.5;
 
-  svg { flex-shrink: 0; margin-top: 1px; color: #DC2626; }
+  svg { flex-shrink: 0; margin-top: 1px; }
+}
+.verify-banner--success {
+  background: $ok-wash;
+  border: 1px solid rgba($ok, 0.25);
+  color: $ok;
+  svg { color: $ok; }
+}
+.verify-banner--warning {
+  background: $amber-pale;
+  border: 1px solid rgba($amber-dark, 0.3);
+  color: #92400E;
+  svg { color: $amber-dark; }
+}
+.verify-banner--error {
+  background: $danger-wash;
+  border: 1px solid rgba($danger, 0.3);
+  color: $danger;
+  svg { color: $danger; }
+}
+.verify-warning-list {
+  margin: 0;
+  padding-left: 16px;
+  li { margin-bottom: 2px; }
+}
+.verify-skipped {
+  margin-top: 4px;
   code {
     font-family: monospace;
     font-size: 0.92em;
@@ -1197,7 +1289,14 @@ $drawer-base-font: 13px;
 
 
 
-//Models.ts
+
+
+
+
+
+
+
+
 import api from '../axiosInstance';
 import type { Model, CustomModelRequest } from '../../types';
 
@@ -1265,7 +1364,7 @@ export interface VerifyParamsRequest {
 export interface VerifyParamsResponse {
   supported: boolean;
   skipped_params: string[];
-  warning?: string;
+  warning?: string[];
   sample_output?: string;
 }
 
@@ -1309,566 +1408,3 @@ export const modelsApi = {
   verifyParams: (payload: VerifyParamsRequest) =>
     api.post<VerifyParamsResponse>('/models/verify-params', payload).then((r) => r.data),
 };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Modelsslice.ts
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import { modelsApi, type ModelCategory, type CustomModelRequestWithParams } from '../../api/endpoints/models';
-import type { Model } from '../../types';
-
-type FetchStatus = 'idle' | 'loading' | 'succeeded' | 'failed';
-
-interface ModelsState {
-  items: Model[];
-  status: FetchStatus;
-  error: string | null;
-  creating: boolean;
-  byProvider: Record<string, Model[]>;
-  byProviderStatus: Record<string, FetchStatus>;
-  categories: ModelCategory[];
-  categoriesStatus: FetchStatus;
-  deletingId: string | null;
-  updatingId: string | null;
-}
-
-const initialState: ModelsState = {
-  items: [],
-  status: 'idle',
-  error: null,
-  creating: false,
-  byProvider: {},
-  byProviderStatus: {},
-  categories: [],
-  categoriesStatus: 'idle',
-  deletingId: null,
-  updatingId: null,
-};
-
-export const fetchModels = createAsyncThunk('models/fetchAll', () => modelsApi.list());
-
-export const fetchModelsByProvider = createAsyncThunk(
-  'models/fetchByProvider',
-  async (providerId: string) => {
-    const { models } = await modelsApi.listByProvider(providerId);
-    return { providerId, models };
-  }
-);
-
-export const fetchModelCategories = createAsyncThunk(
-  'models/fetchCategories',
-  () => modelsApi.listCategories()
-);
-
-export const createCustomModel = createAsyncThunk(
-  'models/createCustom',
-  async (payload: CustomModelRequestWithParams, { dispatch }) => {
-    await modelsApi.createCustom(payload);
-    // spec: no meaningful body returned, so refetch afterwards
-    await dispatch(fetchModels());
-  }
-);
-
-export const updateCustomModel = createAsyncThunk(
-  'models/updateCustom',
-  async (payload: { model_id: string; name: string; description: string; request_params?: Record<string, unknown> }) => {
-    const res = await modelsApi.updateCustom(payload);
-    return {
-      modelId: res.model_id || payload.model_id,
-      name: res.name ?? payload.name,
-      description: res.description ?? payload.description,
-    };
-  }
-);
-
-export const deleteCustomModel = createAsyncThunk(
-  'models/deleteCustom',
-  async ({ modelId, providerId }: { modelId: string; providerId: string }) => {
-    const res = await modelsApi.deleteCustom(modelId);
-    return { modelId: res.model_id || modelId, providerId };
-  }
-);
-
-const modelsSlice = createSlice({
-  name: 'models',
-  initialState,
-  reducers: {},
-  extraReducers: (builder) => {
-    builder
-      .addCase(fetchModels.pending, (state) => {
-        state.status = 'loading';
-      })
-      .addCase(fetchModels.fulfilled, (state, action) => {
-        state.status = 'succeeded';
-        state.items = action.payload ?? [];
-      })
-      .addCase(fetchModels.rejected, (state, action) => {
-        state.status = 'failed';
-        state.error = action.error.message || 'Failed to load models';
-      })
-      .addCase(createCustomModel.pending, (state) => {
-        state.creating = true;
-      })
-      .addCase(createCustomModel.fulfilled, (state) => {
-        state.creating = false;
-      })
-      .addCase(createCustomModel.rejected, (state, action) => {
-        state.creating = false;
-        state.error = action.error.message || 'Failed to register custom model';
-      })
-      .addCase(fetchModelsByProvider.pending, (state, action) => {
-        state.byProviderStatus[action.meta.arg] = 'loading';
-      })
-      .addCase(fetchModelsByProvider.fulfilled, (state, action) => {
-        state.byProviderStatus[action.payload.providerId] = 'succeeded';
-        state.byProvider[action.payload.providerId] = action.payload.models ?? [];
-      })
-      .addCase(fetchModelsByProvider.rejected, (state, action) => {
-        state.byProviderStatus[action.meta.arg] = 'failed';
-      })
-      .addCase(fetchModelCategories.pending, (state) => {
-        state.categoriesStatus = 'loading';
-      })
-      .addCase(fetchModelCategories.fulfilled, (state, action) => {
-        state.categoriesStatus = 'succeeded';
-        state.categories = action.payload ?? [];
-      })
-      .addCase(fetchModelCategories.rejected, (state) => {
-        state.categoriesStatus = 'failed';
-      })
-      .addCase(deleteCustomModel.pending, (state, action) => {
-        state.deletingId = action.meta.arg.modelId;
-      })
-      .addCase(deleteCustomModel.fulfilled, (state, action) => {
-        state.deletingId = null;
-        const { modelId, providerId } = action.payload;
-        state.items = state.items.filter((m) => m.id !== modelId);
-        if (state.byProvider[providerId]) {
-          state.byProvider[providerId] = state.byProvider[providerId].filter((m) => m.id !== modelId);
-        }
-      })
-      .addCase(deleteCustomModel.rejected, (state, action) => {
-        state.deletingId = null;
-        state.error = action.error.message || 'Failed to delete model';
-      })
-      .addCase(updateCustomModel.pending, (state, action) => {
-        state.updatingId = action.meta.arg.model_id;
-      })
-      .addCase(updateCustomModel.fulfilled, (state, action) => {
-        state.updatingId = null;
-        const { modelId, name, description } = action.payload;
-        const patch = (m: Model) => {
-          if (m.id !== modelId) return m;
-          return { ...m, name, description } as Model & { description: string };
-        };
-        state.items = state.items.map(patch);
-        for (const providerId of Object.keys(state.byProvider)) {
-          state.byProvider[providerId] = state.byProvider[providerId].map(patch);
-        }
-      })
-      .addCase(updateCustomModel.rejected, (state, action) => {
-        state.updatingId = null;
-        state.error = action.error.message || 'Failed to update model';
-      });
-  },
-});
-
-export default modelsSlice.reducer;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Providers.tsx
-import { useEffect, useState } from 'react';
-import { Search, Check, Plus, Settings, Unlink, Loader2, Cable, Trash2, RefreshCw, Eye, ListPlus, ListFilter, ListChecks } from 'lucide-react';
-import { useAppDispatch, useAppSelector } from '../../hooks/redux';
-import {
-  fetchProviders,
-  createProvider,
-  deleteProvider,
-  connectProvider,
-  disconnectProvider,
-  syncModels,
-} from '../../store/slices/providersSlice';
-import { fetchModelsByProvider, createCustomModel, deleteCustomModel, updateCustomModel } from '../../store/slices/modelsSlice';
-import AddProviderDrawer from './AddProviderDrawer';
-import AddCustomModelDrawer from './AddCustomModelDrawer';
-import ProviderModelsSidebar from './ProviderModelsSidebar';
-import { SkeletonCards } from '../common/Skeleton';
-import { useToast } from '../common/Toast';
-import styles from './Providers.module.scss';
-import type { Provider } from '../../types';
-
-type Filter = 'all' | 'connected' | 'available';
-
-const FILTERS: Filter[] = ['all', 'connected', 'available'];
-
-// Thunks rejected via axios surface as either an Error (network/message) or
-// an object with a response payload — normalize both into a display string.
-function getErrorMessage(err: unknown, fallback: string): string {
-  if (err && typeof err === 'object') {
-    const anyErr = err as { response?: { data?: { message?: string; detail?: string } }; message?: string };
-    const serverMessage = anyErr.response?.data?.message || anyErr.response?.data?.detail;
-    if (serverMessage) return serverMessage;
-    if (anyErr.message) return anyErr.message;
-  }
-  return fallback;
-}
-
-export default function Providers() {
-  const dispatch = useAppDispatch();
-  const { items, status, mutatingId, creating, syncingId } = useAppSelector((s) => s.providers);
-  const modelsByProvider = useAppSelector((s) => s.models.byProvider);
-  const modelsByProviderStatus = useAppSelector((s) => s.models.byProviderStatus);
-  const customModelCreating = useAppSelector((s) => s.models.creating);
-  const customModelDeletingId = useAppSelector((s) => s.models.deletingId);
-  const customModelUpdatingId = useAppSelector((s) => s.models.updatingId);
-  const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState<Filter>('all');
-  const [keyPromptFor, setKeyPromptFor] = useState<string | null>(null);
-  const [apiKeyInput, setApiKeyInput] = useState('');
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [addModelOpen, setAddModelOpen] = useState(false);
-  const [viewModelsProvider, setViewModelsProvider] = useState<Provider | null>(null);
-  const toast = useToast();
-
-  useEffect(() => {
-    dispatch(fetchProviders());
-  }, [dispatch]);
-
-  const connectedCount = items.filter((p) => p.status === 'connected').length;
-
-  const filtered = items.filter((p) => {
-    if (filter === 'connected' && p.status !== 'connected') return false;
-    if (filter === 'available' && p.status === 'connected') return false;
-    return !search || (p.name ?? '').toLowerCase().includes(search.toLowerCase());
-  });
-
-  const submitConnect = (providerId: string) => {
-    if (!apiKeyInput.trim()) return;
-    dispatch(connectProvider({ providerId, payload: { api_key: apiKeyInput } }));
-    setKeyPromptFor(null);
-    setApiKeyInput('');
-  };
-
-  const openModelsSidebar = (p: Provider) => {
-    setViewModelsProvider(p);
-    dispatch(fetchModelsByProvider(p.id));
-  };
-
-  const customProvider = items.find((p) => p.name === 'Custom') || null;
-
-  return (
-    <div className="page-enter pg-shell">
-      <div className={styles.providers__header}>
-        <div>
-          <p className={styles['providers__header-eyebrow']}>Integrations</p>
-          <h1>Providers</h1>
-          <p className={styles['providers__header-sub']}>Manage your AI provider connections</p>
-        </div>
-        <div className={styles['providers__header-meta']}>
-          <Cable size={13} />
-          {connectedCount} of {items.length} connected
-        </div>
-      </div>
-
-      <div className={styles['providers__toolbar']}>
-        <div className={styles['providers__search']}>
-          <Search size={16} />
-          <input placeholder="Search providers…" value={search} onChange={(e) => setSearch(e.target.value)} />
-        </div>
-
-        <div className={styles['providers__toolbar-right']}>
-          <div className={styles['providers__filter-group']}>
-            <span className={styles['providers__toolbar-label']}>
-              <ListFilter size={11} /> Status
-            </span>
-            {FILTERS.map((f) => (
-              <button
-                key={f}
-                className={`${styles['providers__filter-pill']} ${filter === f ? styles['providers__filter-pill--on'] : ''}`}
-                onClick={() => setFilter(f)}
-              >
-                {f[0].toUpperCase() + f.slice(1)}
-              </button>
-            ))}
-          </div>
-          <span className={styles['providers__toolbar-divider']} />
-          <button className={styles['providers__add-btn']} onClick={() => setDrawerOpen(true)}>
-            <Plus size={14} /> Add Provider
-          </button>
-        </div>
-      </div>
-
-      <div className="pg-body">
-        <div className={styles['providers__grid']}>
-          {status === 'loading' && <SkeletonCards count={6} />}
-          {status !== 'loading' &&
-            filtered.map((p) => {
-              const isCustom = p.name === 'Custom';
-              return (
-                <div className={styles['providers__card']} key={p.id}>
-                  <div className={styles['providers__card-hdr']}>
-                    <div className={styles['providers__card-id']}>
-                      <div className={styles['providers__icon']}>
-                        {p.logo_url ? <img src={p.logo_url} alt={p.name ?? 'Provider'} /> : (p.name?.[0] ?? '?')}
-                      </div>
-                      <div style={{ minWidth: 0 }}>
-                        <div className={styles['providers__name']}>{p.name ?? 'Unnamed provider'}</div>
-                        <div className={styles['providers__count']}>{p.model_count ?? 0} models</div>
-                      </div>
-                    </div>
-                    <div className={styles['providers__card-top-actions']}>
-                      <button
-                        className={styles['providers__icon-btn']}
-                        onClick={() => openModelsSidebar(p)}
-                        title={isCustom ? 'Manage models' : 'View models'}
-                        aria-label={`${isCustom ? 'Manage' : 'View'} models for ${p.name ?? 'provider'}`}
-                      >
-                        {isCustom ? <ListChecks size={14} /> : <Eye size={14} />}
-                      </button>
-                      {p.status === 'connected' ? (
-                        <span className={styles['providers__badge-connected']}>
-                          <Check size={10} strokeWidth={3} /> Connected
-                        </span>
-                      ) : (
-                        <span className={styles['providers__badge-idle']}>Not connected</span>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className={styles['providers__desc']}>{p.description}</div>
-
-                  {keyPromptFor === p.id ? (
-                    <div className={styles['providers__key-form']}>
-                      <input
-                        className={styles['providers__key-input']}
-                        type="password"
-                        placeholder="Paste API key…"
-                        value={apiKeyInput}
-                        onChange={(e) => setApiKeyInput(e.target.value)}
-                        autoFocus
-                      />
-                      <div className={styles['providers__key-actions']}>
-                        <button
-                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--primary']}`}
-                          onClick={() => submitConnect(p.id)}
-                        >
-                          Save
-                        </button>
-                        <button
-                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--ghost']}`}
-                          onClick={() => setKeyPromptFor(null)}
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className={styles['providers__foot-actions']}>
-                      {isCustom && (
-                        <button
-                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--accent']}`}
-                          onClick={() => setAddModelOpen(true)}
-                        >
-                          <ListPlus size={13} /> Add Model
-                        </button>
-                      )}
-                      {p.status !== 'connected' && (
-                        <button
-                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--primary']}`}
-                          disabled={mutatingId === p.id}
-                          onClick={() => setKeyPromptFor(p.id)}
-                        >
-                          {mutatingId === p.id ? (
-                            <Loader2 size={13} className={styles['providers__spin']} />
-                          ) : (
-                            <>
-                              <Plus size={13} /> Connect
-                            </>
-                          )}
-                        </button>
-                      )}
-                      {/* Configure button temporarily disabled per request
-                      {p.status === 'connected' && (
-                        <button
-                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--ghost']}`}
-                          disabled={mutatingId === p.id}
-                          onClick={() => setKeyPromptFor(p.id)}
-                        >
-                          {mutatingId === p.id ? (
-                            <Loader2 size={13} className={styles['providers__spin']} />
-                          ) : (
-                            <>
-                              <Settings size={13} /> Configure
-                            </>
-                          )}
-                        </button>
-                      )}
-                      */}
-                      {p.status === 'connected' && (
-                        <>
-                          <button
-                            className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--ghost']}`}
-                            disabled={syncingId === p.id}
-                            onClick={() => dispatch(syncModels(p.id))}
-                          >
-                            {syncingId === p.id ? (
-                              <Loader2 size={13} className={styles['providers__spin']} />
-                            ) : (
-                              <>
-                                <RefreshCw size={13} /> Sync
-                              </>
-                            )}
-                          </button>
-                          <button
-                            className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--danger']}`}
-                            disabled={mutatingId === p.id}
-                            onClick={() => dispatch(disconnectProvider(p.id))}
-                          >
-                            <Unlink size={13} /> Disconnect
-                          </button>
-                        </>
-                      )}
-                      {p.status !== 'connected' && (
-                        <button
-                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--danger']}`}
-                          disabled={mutatingId === p.id}
-                          onClick={() => {
-                            if (window.confirm(`Delete ${p.name ?? 'this provider'}? This cannot be undone.`)) {
-                              dispatch(deleteProvider(p.id));
-                            }
-                          }}
-                        >
-                          <Trash2 size={13} /> Delete
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          {status !== 'loading' && filtered.length === 0 && (
-            <p className={styles['providers__empty']}>No providers match your search or filter.</p>
-          )}
-        </div>
-      </div>
-
-      {drawerOpen && (
-        <AddProviderDrawer
-          submitting={creating}
-          onClose={() => setDrawerOpen(false)}
-          onSubmit={(payload) => {
-            dispatch(createProvider(payload)).then(() => setDrawerOpen(false));
-          }}
-        />
-      )}
-
-      {addModelOpen && customProvider && (
-        <AddCustomModelDrawer
-          mode="create"
-          submitting={customModelCreating}
-          onClose={() => setAddModelOpen(false)}
-          onSubmit={(result) => {
-            if (result.kind !== 'create') return;
-            dispatch(createCustomModel(result.payload))
-              .unwrap()
-              .then(() => {
-                setAddModelOpen(false);
-                toast.success(`"${result.payload.name}" was registered successfully.`, { title: 'Model registered' });
-                dispatch(fetchProviders());
-                dispatch(fetchModelsByProvider(customProvider.id));
-              })
-              .catch((err) => {
-                toast.error(getErrorMessage(err, 'Failed to register model.'), { title: 'Registration failed' });
-              });
-          }}
-        />
-      )}
-
-      {viewModelsProvider && (
-        <ProviderModelsSidebar
-          provider={viewModelsProvider}
-          models={modelsByProvider[viewModelsProvider.id] || []}
-          status={modelsByProviderStatus[viewModelsProvider.id] || 'idle'}
-          onClose={() => setViewModelsProvider(null)}
-          canManage={viewModelsProvider.name === 'Custom'}
-          deletingId={customModelDeletingId}
-          updatingId={customModelUpdatingId}
-          creatingNew={customModelCreating}
-          onDelete={(modelId) => {
-            dispatch(deleteCustomModel({ modelId, providerId: viewModelsProvider.id }))
-              .unwrap()
-              .then(() => {
-                toast.success('Model removed successfully.', { title: 'Model removed' });
-                dispatch(fetchProviders());
-              })
-              .catch((err) => {
-                toast.error(getErrorMessage(err, 'Failed to remove model.'), { title: 'Removal failed' });
-              });
-          }}
-          onEditSubmit={(result) => {
-            if (result.kind === 'update') {
-              return dispatch(updateCustomModel({
-                model_id: result.model_id,
-                name: result.name,
-                description: result.description,
-                request_params: result.request_params,
-              }))
-                .unwrap()
-                .then((res) => {
-                  toast.success(`"${res.name}" was updated successfully.`, { title: 'Model updated' });
-                })
-                .catch((err) => {
-                  toast.error(getErrorMessage(err, 'Failed to update model.'), { title: 'Update failed' });
-                  throw err;
-                });
-            }
-            // Discovery found a different model id — register it as a new
-            // model instead of mutating the one being edited.
-            return dispatch(createCustomModel(result.payload))
-              .unwrap()
-              .then(() => {
-                toast.success(`"${result.payload.name}" was registered as a new model.`, { title: 'Model registered' });
-                dispatch(fetchProviders());
-                dispatch(fetchModelsByProvider(viewModelsProvider.id));
-              })
-              .catch((err) => {
-                toast.error(getErrorMessage(err, 'Failed to register model.'), { title: 'Registration failed' });
-                throw err;
-              });
-          }}
-        />
-      )}
-    </div>
-  );
-}
