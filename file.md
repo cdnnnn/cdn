@@ -1,451 +1,669 @@
-//Custommtricsdashboard.tsx
-import { useEffect, useMemo, useState, useCallback } from 'react';
+//Addcustommodeldrawer.tsx
+import { useEffect, useRef, useState } from 'react';
 import {
-  Search, Gauge, LayoutDashboard, PenSquare, ListFilter, AlertCircle, Loader2, Trash2, X,
-  ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
+  X,
+  Search,
+  Loader2,
+  ChevronDown,
+  Check,
+  CheckCircle2,
+  RotateCcw,
+  AlertCircle,
+  AlertTriangle,
+  XCircle,
+  Sparkles,
+  PenLine,
+  SlidersHorizontal,
+  ShieldCheck,
 } from 'lucide-react';
-import { SkeletonTableRows } from '../common/Skeleton';
-import styles from './CustomMetrics.module.scss';
-import { metricsApi, CustomMetric } from '../../api/endpoints/metrics';
-import CreateMetric from './CreateMetric';
+import { useAppDispatch, useAppSelector } from '../../hooks/redux';
+import { fetchModelCategories } from '../../store/slices/modelsSlice';
+import { modelsApi, type DiscoveredModel, type CustomModelRequestWithParams, type VerifyParamsResponse } from '../../api/endpoints/models';
+import type { Model } from '../../types';
+import styles from './AddCustomModelDrawer.module.scss';
 
-type View = 'dashboard' | 'create';
-type SortKey = 'name' | 'type' | 'threshold' | 'judge' | 'status' | 'created';
-type SortDir = 'asc' | 'desc';
+// The update endpoint returns `description`, which the shared `Model` type
+// doesn't declare — extend it locally for the edit-prefill case.
+export type EditableModel = Model & { description?: string; request_params?: Record<string, unknown> };
 
-const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+// Create always POSTs the full CustomModelRequest. Editing normally only
+// POSTs {model_id, name, description} against the existing model — but if
+// discovery finds a *different* model id than the one being edited, we
+// treat that as registering a brand-new model instead, so the caller needs
+// to know which branch happened.
+export type CustomModelSubmitPayload =
+  | { kind: 'create'; payload: CustomModelRequestWithParams }
+  | { kind: 'update'; model_id: string; name: string; description: string; request_params?: Record<string, unknown> };
 
-function formatDate(iso: string) {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+interface Props {
+  mode?: 'create' | 'edit';
+  initialModel?: EditableModel;
+  onClose: () => void;
+  onSubmit: (payload: CustomModelSubmitPayload) => void;
+  submitting: boolean;
 }
 
-// Maps an eval type to its badge color variant; anything outside the
-// known set (model/agent/rag) falls back to a neutral badge.
-function evalTypeVariant(t: string): string {
-  const known = ['model', 'agent', 'rag'];
-  return known.includes((t ?? '').toLowerCase()) ? (t ?? '').toLowerCase() : 'default';
-}
+// Fields that describe the actual model (name/id/context window) start out
+// hidden in CREATE mode — the user either runs discovery against the base
+// URL to auto-fill them, or opts into filling them in by hand. In EDIT mode
+// they're always visible/pre-filled since we already have the model's data.
+type FieldsMode = 'hidden' | 'manual' | 'discovered';
 
-// Builds a compact page-number list with ellipses, e.g. [1, '…', 4, 5, 6, '…', 12]
-function buildPageList(current: number, total: number): (number | '…')[] {
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
-  const pages = new Set<number>([1, total, current, current - 1, current + 1]);
-  const sorted = [...pages].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
-  const result: (number | '…')[] = [];
-  let prev = 0;
-  for (const p of sorted) {
-    if (prev && p - prev > 1) result.push('…');
-    result.push(p);
-    prev = p;
-  }
-  return result;
-}
+export default function AddCustomModelDrawer({ mode = 'create', initialModel, onClose, onSubmit, submitting }: Props) {
+  const dispatch = useAppDispatch();
+  const categories = useAppSelector((s) => s.models.categories);
+  const categoriesStatus = useAppSelector((s) => s.models.categoriesStatus);
+  const isEdit = mode === 'edit';
 
-interface SortableThProps {
-  label: string;
-  sortKey: SortKey;
-  activeKey: SortKey;
-  dir: SortDir;
-  onSort: (key: SortKey) => void;
-}
+  const [baseUrl, setBaseUrl] = useState(initialModel?.base_url ?? '');
+  const [apiKey, setApiKey] = useState('');
+  const [category, setCategory] = useState(initialModel?.category ?? '');
+  const [categoryOpen, setCategoryOpen] = useState(false);
+  const categoryRef = useRef<HTMLDivElement>(null);
+  const [description, setDescription] = useState(initialModel?.description ?? '');
 
-function SortableTh({ label, sortKey, activeKey, dir, onSort }: SortableThProps) {
-  const active = activeKey === sortKey;
-  return (
-    <th className={styles['custom-metrics__sortable-th']}>
-      <button
-        type="button"
-        className={`${styles['custom-metrics__sort-btn']} ${active ? styles['custom-metrics__sort-btn--active'] : ''}`}
-        onClick={() => onSort(sortKey)}
-      >
-        {label}
-        {active ? (
-          dir === 'asc' ? <ChevronUp size={13} /> : <ChevronDown size={13} />
-        ) : (
-          <ChevronsUpDown size={13} className={styles['custom-metrics__sort-icon-idle']} />
-        )}
-      </button>
-    </th>
+  const [fieldsMode, setFieldsMode] = useState<FieldsMode>(isEdit ? 'manual' : 'hidden');
+  const [name, setName] = useState(initialModel?.name ?? '');
+  const [modelId, setModelId] = useState(initialModel?.id ?? '');
+  const [contextWindowInput, setContextWindowInput] = useState(
+    initialModel?.context_window != null ? String(initialModel.context_window) : ''
   );
-}
+  const [contextWindowLocked, setContextWindowLocked] = useState(false);
+  const [autoDetected, setAutoDetected] = useState(false);
 
-export default function CustomMetricsDashboard() {
-  const [view, setView] = useState<View>('dashboard');
+  const [discoverStatus, setDiscoverStatus] = useState<'idle' | 'loading' | 'error'>('idle');
+  const [discoverError, setDiscoverError] = useState<string | null>(null);
+  const [discoveredModels, setDiscoveredModels] = useState<DiscoveredModel[]>([]);
+  // In edit mode, `selectedModelId` only gets set once discovery has been run
+  // and a candidate chosen — that's what drives the same-model/new-model check.
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
 
-  const [metrics, setMetrics] = useState<CustomMetric[]>([]);
-  const [status, setStatus] = useState<'idle' | 'loading' | 'succeeded' | 'failed'>('loading');
-  const [error, setError] = useState('');
-
-  const [search, setSearch] = useState('');
-  const [evalFilter, setEvalFilter] = useState('All');
-  const [sortKey, setSortKey] = useState<SortKey>('name');
-  const [sortDir, setSortDir] = useState<SortDir>('asc');
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
-
-  // delete state
-  const [pendingDeleteId, setPendingDeleteId] = useState('');
-  const [deletingId, setDeletingId] = useState('');
-  const [deleteError, setDeleteError] = useState('');
-
-  const fetchMetrics = useCallback(() => {
-    setStatus('loading');
-    setError('');
-    metricsApi.list()
-      .then((list) => { setMetrics(list); setStatus('succeeded'); })
-      .catch((err) => { setError(err.message || 'Failed to load metrics'); setStatus('failed'); })
-      .finally(() => {});
-  }, []);
-
-  useEffect(() => { fetchMetrics(); }, [fetchMetrics]);
-
-  const evalTypeOptions = useMemo(() => ['All', ...new Set(metrics.flatMap((m) => m.eval_types ?? []))], [metrics]);
-
-  const filtered = useMemo(() => {
-    return metrics.filter((m) => {
-      if (evalFilter !== 'All' && !(m.eval_types ?? []).includes(evalFilter)) return false;
-      const q = search.toLowerCase();
-      return !q || (m.name ?? '').toLowerCase().includes(q) || (m.description ?? '').toLowerCase().includes(q);
-    });
-  }, [metrics, search, evalFilter]);
-
-  const sorted = useMemo(() => {
-    const dir = sortDir === 'asc' ? 1 : -1;
-    const compare = (a: CustomMetric, b: CustomMetric): number => {
-      switch (sortKey) {
-        case 'name':
-          return (a.name ?? '').localeCompare(b.name ?? '') * dir;
-        case 'type':
-          return (a.metric_type ?? '').localeCompare(b.metric_type ?? '') * dir;
-        case 'threshold':
-          return ((a.threshold ?? 0) - (b.threshold ?? 0)) * dir;
-        case 'judge':
-          return (Number(a.requires_judge) - Number(b.requires_judge)) * dir;
-        case 'status':
-          return (Number(a.is_active) - Number(b.is_active)) * dir;
-        case 'created':
-          return (new Date(a.created_at).getTime() - new Date(b.created_at).getTime()) * dir;
-        default:
-          return 0;
-      }
-    };
-    return [...filtered].sort(compare);
-  }, [filtered, sortKey, sortDir]);
-
-  const total = sorted.length;
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const safePage = Math.min(page, totalPages);
-  const startIdx = (safePage - 1) * pageSize;
-  const pageItems = sorted.slice(startIdx, startIdx + pageSize);
-  const pageList = useMemo(() => buildPageList(safePage, totalPages), [safePage, totalPages]);
+  // ---- advanced: request_params + verify ----
+  const [advancedOpen, setAdvancedOpen] = useState(
+    Boolean(initialModel?.request_params && Object.keys(initialModel.request_params).length > 0)
+  );
+  const [requestParamsText, setRequestParamsText] = useState(
+    initialModel?.request_params ? JSON.stringify(initialModel.request_params, null, 2) : ''
+  );
+  const [requestParamsError, setRequestParamsError] = useState<string | null>(null);
+  const [verifyStatus, setVerifyStatus] = useState<'idle' | 'loading' | 'success' | 'warning' | 'error'>('idle');
+  const [verifyResult, setVerifyResult] = useState<VerifyParamsResponse | null>(null);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
 
   useEffect(() => {
-    setPage(1);
-  }, [search, evalFilter, pageSize]);
+    if (categoriesStatus === 'idle') dispatch(fetchModelCategories());
+  }, [dispatch, categoriesStatus]);
 
-  const toggleSort = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortKey(key);
-      setSortDir('asc');
+  // Close the custom category dropdown on outside click / Escape.
+  useEffect(() => {
+    if (!categoryOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      if (categoryRef.current && !categoryRef.current.contains(e.target as Node)) setCategoryOpen(false);
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCategoryOpen(false);
+    };
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [categoryOpen]);
+
+  // The model id to verify/submit params against — whichever field is
+  // currently authoritative for the mode/state combination.
+  const effectiveModelId = (isEdit ? (initialModel?.id ?? modelId) : modelId).trim();
+
+  // Any change to the target (endpoint, key, or which model) invalidates a
+  // previously-verified result — force the user to re-verify before saving.
+  useEffect(() => {
+    if (verifyStatus !== 'idle') {
+      setVerifyStatus('idle');
+      setVerifyResult(null);
+      setVerifyError(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseUrl, apiKey, effectiveModelId]);
+
+  const selectedCategory = categories.find((c) => c.value === category) || null;
+
+  // Re-parses on every keystroke so the Verify button's enabled state and
+  // any JSON error message stay in sync with what's actually in the field.
+  const parseRequestParams = (text: string): { ok: true; value: Record<string, unknown> } | { ok: false } => {
+    const trimmed = text.trim();
+    if (!trimmed) return { ok: true, value: {} };
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return { ok: false };
+      }
+      return { ok: true, value: parsed as Record<string, unknown> };
+    } catch {
+      return { ok: false };
     }
   };
 
-  const requestDelete = (id: string) => {
-    setDeleteError('');
-    setPendingDeleteId(id);
-  };
-  const cancelDelete = () => setPendingDeleteId('');
-  const confirmDelete = (id: string) => {
-    setDeletingId(id);
-    setDeleteError('');
-    metricsApi.remove(id)
-      .then(() => {
-        setMetrics((prev) => prev.filter((m) => m.id !== id));
-        setPendingDeleteId('');
-      })
-      .catch((err) => setDeleteError(err.message || 'Failed to delete metric'))
-      .finally(() => setDeletingId(''));
+  const handleRequestParamsChange = (text: string) => {
+    setRequestParamsText(text);
+    const parsed = parseRequestParams(text);
+    setRequestParamsError(parsed.ok ? null : 'Enter valid JSON, e.g. {"reasoning_effort": "high"}');
+    // Any edit invalidates a prior verification result.
+    if (verifyStatus !== 'idle') {
+      setVerifyStatus('idle');
+      setVerifyResult(null);
+      setVerifyError(null);
+    }
   };
 
-  // After a successful save, hop back to the dashboard and refresh the list.
-  const handleSaved = () => {
-    setView('dashboard');
-    fetchMetrics();
+  const parsedRequestParams = parseRequestParams(requestParamsText);
+  const hasRequestParams = requestParamsText.trim() !== '';
+
+  const handleVerifyParams = async () => {
+    const parsed = parseRequestParams(requestParamsText);
+    if (!parsed.ok) {
+      setRequestParamsError('Enter valid JSON, e.g. {"reasoning_effort": "high"}');
+      return;
+    }
+    if (!baseUrl.trim() || !effectiveModelId) return;
+
+    setVerifyStatus('loading');
+    setVerifyError(null);
+    setVerifyResult(null);
+    try {
+      const res = await modelsApi.verifyParams({
+        base_url: baseUrl.trim(),
+        api_key: apiKey.trim() || undefined,
+        model_id: effectiveModelId,
+        request_params: parsed.value,
+      });
+      setVerifyResult(res);
+      if (!res.supported) {
+        setVerifyStatus('error');
+      } else if (res.warning || (res.skipped_params && res.skipped_params.length > 0)) {
+        setVerifyStatus('warning');
+      } else {
+        setVerifyStatus('success');
+      }
+    } catch (err) {
+      setVerifyStatus('error');
+      setVerifyError(err instanceof Error ? err.message : 'Could not verify these parameters against this endpoint.');
+    }
+  };
+
+  // Whether the currently-selected discovered candidate is a different model
+  // than the one we started editing — only meaningful in edit mode, and only
+  // once a discovery result has actually been applied.
+  const willCreateNew = isEdit && !!initialModel && selectedModelId !== null && selectedModelId !== initialModel.id;
+  const matchConfirmed = isEdit && !!initialModel && selectedModelId !== null && selectedModelId === initialModel.id;
+
+  const resetModelFields = () => {
+    if (isEdit && initialModel) {
+      // "Use a different endpoint" in edit mode reverts to the original
+      // model's own data rather than clearing everything out.
+      setFieldsMode('manual');
+      setName(initialModel.name ?? '');
+      setModelId(initialModel.id ?? '');
+      setContextWindowInput(initialModel.context_window != null ? String(initialModel.context_window) : '');
+    } else {
+      setFieldsMode('hidden');
+      setName('');
+      setModelId('');
+      setContextWindowInput('');
+    }
+    setContextWindowLocked(false);
+    setAutoDetected(false);
+    setDiscoveredModels([]);
+    setSelectedModelId(null);
+    setDiscoverStatus('idle');
+    setDiscoverError(null);
+  };
+
+  const selectDiscoveredModel = (m: DiscoveredModel) => {
+    setSelectedModelId(m.id);
+    setName(m.name ?? '');
+    setModelId(m.id);
+    const cw = m.context_window ?? m.max_model_len;
+    if (cw != null) {
+      setContextWindowInput(String(cw));
+      setContextWindowLocked(true);
+    } else {
+      // Endpoint didn't report a context length — fall back to manual entry
+      // for just this field since there's nothing authoritative to lock to.
+      setContextWindowInput('');
+      setContextWindowLocked(false);
+    }
+  };
+
+  const handleDiscover = async () => {
+    if (!baseUrl.trim()) return;
+    setDiscoverStatus('loading');
+    setDiscoverError(null);
+    try {
+      const res = await modelsApi.discover({
+        base_url: baseUrl.trim(),
+        api_key: apiKey.trim() || undefined,
+      });
+      if (res.models.length === 0) {
+        setDiscoverStatus('error');
+        setDiscoverError(res.errors[0] || 'No models were found at this endpoint.');
+        return;
+      }
+      setDiscoverStatus('idle');
+      setDiscoveredModels(res.models);
+      setFieldsMode('discovered');
+      if (res.models.length === 1) {
+        selectDiscoveredModel(res.models[0]);
+        setAutoDetected(true);
+      } else {
+        setSelectedModelId(null);
+      }
+    } catch (err) {
+      setDiscoverStatus('error');
+      setDiscoverError(err instanceof Error ? err.message : 'Could not reach this endpoint.');
+    }
+  };
+
+  const contextWindowValid = contextWindowInput.trim() !== '' && !Number.isNaN(Number(contextWindowInput)) && Number(contextWindowInput) > 0;
+
+  // Full validation (name/id/category/base URL/context window) applies to a
+  // real create — either CREATE mode outright, or an edit that discovered a
+  // different model and will therefore be submitted as a new registration.
+  const needsFullValidation = mode === 'create' || willCreateNew;
+  const valid = (needsFullValidation
+    ? Boolean(name.trim() && modelId.trim() && category.trim() && baseUrl.trim() && contextWindowValid)
+    : Boolean(name.trim()))
+    && !requestParamsError;
+
+  const submitLabel = needsFullValidation
+    ? (submitting ? 'Registering…' : (willCreateNew ? 'Register as New Model' : 'Register Model'))
+    : (submitting ? 'Saving…' : 'Update Model');
+
+  const handleSubmit = () => {
+    if (!valid) return;
+    const parsed = parseRequestParams(requestParamsText);
+    const requestParams = parsed.ok && Object.keys(parsed.value).length > 0 ? parsed.value : undefined;
+
+    if (needsFullValidation) {
+      onSubmit({
+        kind: 'create',
+        payload: {
+          name: name.trim(),
+          model_id: modelId.trim(),
+          category: category.trim(),
+          base_url: baseUrl.trim(),
+          api_key: apiKey,
+          context_window: Number(contextWindowInput),
+          description: description.trim(),
+          ...(requestParams ? { request_params: requestParams } : {}),
+        },
+      });
+      return;
+    }
+    // Plain update — name/description, plus request_params if the user set any.
+    onSubmit({
+      kind: 'update',
+      model_id: (initialModel?.id ?? modelId).trim(),
+      name: name.trim(),
+      description: description.trim(),
+      ...(requestParams ? { request_params: requestParams } : {}),
+    });
   };
 
   return (
-    <div className="page-enter pg-shell">
-      <div className={styles['custom-metrics__header']}>
-        <div>
-          <p className={styles['custom-metrics__header-eyebrow']}>Custom Metrics</p>
-          <h1>{view === 'dashboard' ? 'Dashboard' : 'Create Metric'}</h1>
-          <p className={styles['custom-metrics__header-sub']}>
-            {view === 'dashboard' ? 'Saved metrics for evaluation' : 'Fill in every section below, then validate and save.'}
-          </p>
+    <div className={styles['drawer-overlay']}>
+      <div className={styles.drawer}>
+        <div className={styles['drawer__hdr']}>
+          <h2>{isEdit ? 'Edit Custom Model' : 'Register Custom Model'}</h2>
+          <button className={styles['drawer__close']} onClick={onClose}><X size={18} /></button>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div className={styles.tabbar}>
-            <button
-              type="button"
-              className={`${styles.tab} ${view === 'dashboard' ? styles['tab--active'] : ''}`}
-              onClick={() => setView('dashboard')}
-            >
-              <LayoutDashboard size={14} /> Dashboard
-            </button>
-            <button
-              type="button"
-              className={`${styles.tab} ${view === 'create' ? styles['tab--active'] : ''}`}
-              onClick={() => setView('create')}
-            >
-              <PenSquare size={14} /> Create Metric
-            </button>
+        <div className={styles['drawer__body']}>
+          <div className="fg">
+            <label className="fl">Base URL</label>
+            <input
+              className="fi"
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              placeholder="https://…"
+            />
           </div>
 
-          {view === 'dashboard' && (
-            <div className={styles['custom-metrics__header-meta']}>
-              <Gauge size={13} />
-              {metrics.length} metric{metrics.length === 1 ? '' : 's'} listed
-            </div>
-          )}
-        </div>
-      </div>
+          <div className="fg">
+            <label className="fl">API Key <span className="opt">(optional)</span></label>
+            <input
+              className="fi"
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder="Paste API key…"
+            />
+          </div>
 
-      {view === 'create' ? (
-        <CreateMetric onCancel={() => setView('dashboard')} onSaved={handleSaved} />
-      ) : (
-        <>
-          <div className="pg-toolbar">
-            <div className="toolbar">
-              <div className="search-box">
-                <Search size={16} color="var(--text-muted)" />
-                <input placeholder="Search metrics…" value={search} onChange={(e) => setSearch(e.target.value)} />
-              </div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <div className={styles['custom-metrics__filter-group']}>
-                  <span className={styles['custom-metrics__toolbar-label']}>
-                    <ListFilter size={11} /> Eval Type
+          {/* ---- custom category dropdown ---- */}
+          <div className="fg">
+            <label className="fl">Category</label>
+            <div className={styles['combo']} ref={categoryRef}>
+              <button
+                type="button"
+                className={`${styles['combo-trigger']} ${categoryOpen ? styles['combo-trigger--open'] : ''}`}
+                onClick={() => setCategoryOpen((o) => !o)}
+                disabled={categoriesStatus === 'loading'}
+              >
+                {categoriesStatus === 'loading' ? (
+                  <span className={styles['combo-placeholder']}>Loading categories…</span>
+                ) : selectedCategory ? (
+                  <span className={styles['combo-value']}>
+                    <span className={styles['combo-value-label']}>{selectedCategory.label}</span>
                   </span>
-                  {evalTypeOptions.map((t) => (
+                ) : (
+                  <span className={styles['combo-placeholder']}>Select a category</span>
+                )}
+                <ChevronDown size={15} className={`${styles['combo-caret']} ${categoryOpen ? styles['combo-caret--open'] : ''}`} />
+              </button>
+
+              {categoryOpen && (
+                <div className={styles['combo-panel']} role="listbox">
+                  {categories.length === 0 && categoriesStatus !== 'loading' && (
+                    <div className={styles['combo-empty']}>No categories available.</div>
+                  )}
+                  {categories.map((c) => (
                     <button
-                      key={t}
-                      className={`${styles['custom-metrics__filter-pill']} ${evalFilter === t ? styles['custom-metrics__filter-pill--on'] : ''}`}
-                      onClick={() => setEvalFilter(t)}
+                      type="button"
+                      key={c.value}
+                      role="option"
+                      aria-selected={category === c.value}
+                      className={`${styles['combo-option']} ${category === c.value ? styles['combo-option--selected'] : ''}`}
+                      onClick={() => { setCategory(c.value); setCategoryOpen(false); }}
                     >
-                      {t === 'All' ? 'All' : t.toUpperCase()}
+                      <div className={styles['combo-option-check']}>
+                        {category === c.value && <Check size={14} />}
+                      </div>
+                      <div className={styles['combo-option-text']}>
+                        <span className={styles['combo-option-label']}>{c.label}</span>
+                        {c.description && <span className={styles['combo-option-desc']}>{c.description}</span>}
+                      </div>
                     </button>
                   ))}
                 </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="pg-body">
-            {error && <div className={styles['error-banner']}><AlertCircle size={14} /> {error}</div>}
-            {deleteError && <div className={styles['error-banner']}><AlertCircle size={14} /> {deleteError}</div>}
-
-            <div className="tw">
-              <table className="tbl">
-                <thead>
-                  <tr>
-                    <SortableTh label="Name" sortKey="name" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                    <th>Eval Types</th>
-                    <SortableTh label="Type" sortKey="type" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                    <SortableTh label="Threshold" sortKey="threshold" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                    <SortableTh label="Judge" sortKey="judge" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                    <SortableTh label="Status" sortKey="status" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                    <SortableTh label="Created" sortKey="created" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                    <th style={{ width: '1%' }} />
-                  </tr>
-                </thead>
-                <tbody>
-                  {status === 'loading' && <SkeletonTableRows columns={8} rows={6} />}
-                  {status !== 'loading' && pageItems.map((m) => {
-                    return (
-                      <tr key={m.id} title={m.description}>
-                        <td style={{ fontWeight: 700 }}>{m.name ?? '—'}</td>
-                        <td>
-                          <div className={styles['type-badge-group']}>
-                            {(m.eval_types ?? []).map((t) => (
-                              <span key={t} className={`${styles['type-badge']} ${styles[`type-badge--${evalTypeVariant(t)}`]}`}>
-                                {(t ?? '').toUpperCase()}
-                              </span>
-                            ))}
-                          </div>
-                        </td>
-                        <td><span className={`${styles['type-badge']} ${styles['type-badge--metric']}`}>{m.metric_type}</span></td>
-                        <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontSize: 13, color: 'var(--text-secondary)' }}>{m.threshold}</td>
-                        <td style={{ color: 'var(--text-secondary)' }}>{m.requires_judge ? 'Yes' : 'No'}</td>
-                        <td><span className={`badge ${m.is_active ? 'badge-green' : 'badge-gray'}`}>{m.is_active ? 'Active' : 'Inactive'}</span></td>
-                        <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontSize: 13, color: 'var(--text-secondary)' }}>{formatDate(m.created_at)}</td>
-                        <td>
-                          <button
-                            type="button"
-                            title="Delete metric"
-                            aria-label={`Delete ${m.name}`}
-                            onClick={() => requestDelete(m.id)}
-                            style={{
-                              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                              width: 28, height: 28, borderRadius: 8, border: '1px solid transparent',
-                              background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer',
-                            }}
-                            onMouseEnter={(e) => {
-                              e.currentTarget.style.background = 'rgba(220,38,38,0.08)';
-                              e.currentTarget.style.borderColor = 'rgba(220,38,38,0.2)';
-                              e.currentTarget.style.color = '#DC2626';
-                            }}
-                            onMouseLeave={(e) => {
-                              e.currentTarget.style.background = 'transparent';
-                              e.currentTarget.style.borderColor = 'transparent';
-                              e.currentTarget.style.color = 'var(--text-muted)';
-                            }}
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {status !== 'loading' && pageItems.length === 0 && (
-                    <tr>
-                      <td colSpan={8} className={styles['custom-metrics__empty']}>No metrics match your filters.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-
-              {status !== 'loading' && total > 0 && (
-                <div className={styles['custom-metrics__pagination']}>
-                  <div className={styles['custom-metrics__pagination-info']}>
-                    <span>
-                      Showing <strong>{startIdx + 1}–{Math.min(startIdx + pageSize, total)}</strong> of <strong>{total}</strong> metric{total === 1 ? '' : 's'}
-                    </span>
-                    <div className={styles['custom-metrics__page-size']}>
-                      <label htmlFor="custom-metrics-page-size">Rows per page</label>
-                      <select
-                        id="custom-metrics-page-size"
-                        value={pageSize}
-                        onChange={(e) => setPageSize(Number(e.target.value))}
-                      >
-                        {PAGE_SIZE_OPTIONS.map((n) => (
-                          <option key={n} value={n}>{n}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className={styles['custom-metrics__pager']}>
-                    <button
-                      className={styles['custom-metrics__page-btn']}
-                      disabled={safePage === 1}
-                      onClick={() => setPage(1)}
-                      aria-label="First page"
-                    >
-                      <ChevronsLeft size={14} />
-                    </button>
-                    <button
-                      className={styles['custom-metrics__page-btn']}
-                      disabled={safePage === 1}
-                      onClick={() => setPage((p) => Math.max(1, p - 1))}
-                      aria-label="Previous page"
-                    >
-                      <ChevronLeft size={14} />
-                    </button>
-
-                    {pageList.map((p, i) =>
-                      p === '…' ? (
-                        <span key={`dots-${i}`} className={styles['custom-metrics__page-dots']}>…</span>
-                      ) : (
-                        <button
-                          key={p}
-                          className={`${styles['custom-metrics__page-btn']} ${styles['custom-metrics__page-btn--num']} ${p === safePage ? styles['custom-metrics__page-btn--active'] : ''}`}
-                          onClick={() => setPage(p)}
-                          aria-current={p === safePage ? 'page' : undefined}
-                        >
-                          {p}
-                        </button>
-                      )
-                    )}
-
-                    <button
-                      className={styles['custom-metrics__page-btn']}
-                      disabled={safePage === totalPages}
-                      onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                      aria-label="Next page"
-                    >
-                      <ChevronRight size={14} />
-                    </button>
-                    <button
-                      className={styles['custom-metrics__page-btn']}
-                      disabled={safePage === totalPages}
-                      onClick={() => setPage(totalPages)}
-                      aria-label="Last page"
-                    >
-                      <ChevronsRight size={14} />
-                    </button>
-                  </div>
-                </div>
               )}
             </div>
+            {categoriesStatus === 'failed' && (
+              <div className={styles['field-hint--error']}><AlertCircle size={12} /> Couldn't load categories. Try again shortly.</div>
+            )}
           </div>
-        </>
-      )}
 
-      {pendingDeleteId && (() => {
-        const target = metrics.find((m) => m.id === pendingDeleteId);
-        const isDeleting = deletingId === pendingDeleteId;
-        return (
-          // Backdrop is intentionally non-interactive — no onClick here —
-          // so clicking outside the modal does not dismiss it. Only the
-          // close icon and Cancel button call cancelDelete().
-          <div className={styles['confirm-overlay']}>
-            <div className={styles['confirm-modal']} role="dialog" aria-modal="true" aria-label="Confirm delete metric">
-              <div className={styles['confirm-modal__top']}>
-                <div className={styles['confirm-modal__icon']}>
-                  <AlertCircle size={20} />
+          {/* ---- discovery panel ----
+              CREATE: hidden until the user opts into discover-or-manual.
+              EDIT: always available as an optional "re-check" action. */}
+          {(mode === 'create' ? fieldsMode === 'hidden' : true) && (
+            <div className={styles['discover-panel']}>
+              <div className={styles['discover-panel-icon']}>
+                <Sparkles size={16} />
+              </div>
+              <div className={styles['discover-panel-body']}>
+                <div className={styles['discover-panel-title']}>
+                  {isEdit ? 'Re-check this endpoint' : 'Auto-detect this model'}
                 </div>
-                <button
-                  type="button"
-                  className={styles['confirm-modal__close']}
-                  aria-label="Close"
-                  disabled={isDeleting}
-                  onClick={cancelDelete}
-                >
-                  <X size={16} />
-                </button>
-              </div>
+                <p className={styles['discover-panel-text']}>
+                  {isEdit
+                    ? "We'll probe the base URL again to confirm this is still the same model — or catch it if the endpoint now serves something else."
+                    : 'We can probe the base URL to pull in the model name, ID, and context window automatically.'}
+                </p>
 
-              <div className={styles['confirm-modal__title']}>Delete this metric?</div>
-              <div className={styles['confirm-modal__text']}>
-                {target ? <>This will permanently delete <strong>{target.name}</strong>. This action can&apos;t be undone.</> : "This action can't be undone."}
-              </div>
+                <div className={styles['discover-panel-actions']}>
+                  <button
+                    type="button"
+                    className={styles['discover-btn']}
+                    disabled={!baseUrl.trim() || discoverStatus === 'loading'}
+                    onClick={handleDiscover}
+                  >
+                    {discoverStatus === 'loading' ? (
+                      <Loader2 size={14} className={styles['spin']} />
+                    ) : (
+                      <Search size={14} />
+                    )}
+                    {discoverStatus === 'loading' ? 'Discovering…' : 'Discover Models'}
+                  </button>
+                  {!isEdit && (
+                    <button type="button" className={styles['discover-link']} onClick={() => setFieldsMode('manual')}>
+                      <PenLine size={12} /> or enter details manually
+                    </button>
+                  )}
+                </div>
 
-              <div className={styles['confirm-modal__actions']}>
-                <button
-                  type="button"
-                  className={`${styles['confirm-modal__btn']} ${styles['confirm-modal__btn--cancel']}`}
-                  disabled={isDeleting}
-                  onClick={cancelDelete}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className={`${styles['confirm-modal__btn']} ${styles['confirm-modal__btn--danger']}`}
-                  disabled={isDeleting}
-                  onClick={() => confirmDelete(pendingDeleteId)}
-                >
-                  {isDeleting ? <Loader2 size={14} className={styles.spin} /> : <Trash2 size={14} />}
-                  Delete
-                </button>
+                {!baseUrl.trim() && (
+                  <div className={styles['field-hint']}>Add a base URL above to enable discovery.</div>
+                )}
+                {discoverStatus === 'error' && (
+                  <div className={styles['field-hint--error']}>
+                    <AlertCircle size={13} /> {discoverError}
+                  </div>
+                )}
               </div>
             </div>
+          )}
+
+          {/* Same-model confirmation (edit only) */}
+          {matchConfirmed && (
+            <div className={styles['success-banner']}>
+              <CheckCircle2 size={15} />
+              <span>Confirmed — this endpoint still serves the same model.</span>
+            </div>
+          )}
+
+          {/* Different-model warning (edit only) */}
+          {willCreateNew && initialModel && (
+            <div className={styles['mismatch-banner']}>
+              <AlertTriangle size={15} />
+              <span>
+                This endpoint now reports a different model ID (<code>{modelId}</code>) than the one you're
+                editing (<code>{initialModel.id}</code>). Saving will register this as a <strong>new model</strong> —
+                "{initialModel.name ?? initialModel.id}" itself will be left unchanged.
+              </span>
+            </div>
+          )}
+
+          {/* Create-mode auto-detect confirmation */}
+          {!isEdit && fieldsMode === 'discovered' && autoDetected && selectedModelId && (
+            <div className={styles['success-banner']}>
+              <CheckCircle2 size={15} />
+              <span>Model detected automatically from this endpoint.</span>
+            </div>
+          )}
+
+          {fieldsMode === 'discovered' && discoveredModels.length > 1 && (
+            <div className="fg">
+              <label className="fl">
+                Discovered Models <span className="opt">({discoveredModels.length} found — select one)</span>
+              </label>
+              <div className={styles['discovered-list']}>
+                {discoveredModels.map((m) => (
+                  <button
+                    type="button"
+                    key={m.id}
+                    className={`${styles['discovered-row']} ${selectedModelId === m.id ? styles['discovered-row--selected'] : ''}`}
+                    onClick={() => selectDiscoveredModel(m)}
+                  >
+                    <div className={styles['discovered-row-main']}>
+                      <span className={styles['discovered-row-name']}>{m.name || m.id}</span>
+                      <span className={styles['discovered-row-id']}>{m.id}</span>
+                    </div>
+                    <div className={styles['discovered-row-meta']}>
+                      {(m.context_window ?? m.max_model_len) != null && (
+                        <span>{(m.context_window ?? m.max_model_len)!.toLocaleString()} ctx</span>
+                      )}
+                      {m.owned_by && <span>{m.owned_by}</span>}
+                      {isEdit && initialModel && m.id === initialModel.id && (
+                        <span className={styles['same-model-badge']}>Currently editing</span>
+                      )}
+                      {m.already_added && m.id !== initialModel?.id && (
+                        <span className={styles['already-added-badge']}>Already added</span>
+                      )}
+                    </div>
+                    {selectedModelId === m.id && <CheckCircle2 size={16} className={styles['discovered-row-check']} />}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {(isEdit || fieldsMode === 'manual' || (fieldsMode === 'discovered' && selectedModelId)) && (
+            <>
+              <div className="fg">
+                <label className="fl">Model Name</label>
+                <input className="fi" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. My Fine-tuned Llama" />
+              </div>
+
+              <div className="fg">
+                <label className="fl">
+                  Model ID {(isEdit || fieldsMode === 'discovered') && <span className={styles['locked-tag']}>{isEdit ? 'Not editable' : 'Locked from discovery'}</span>}
+                </label>
+                <input
+                  className="fi"
+                  value={modelId}
+                  onChange={(e) => setModelId(e.target.value)}
+                  placeholder="e.g. llama-3-70b-custom"
+                  disabled={isEdit || fieldsMode === 'discovered'}
+                />
+              </div>
+
+              <div className="fg">
+                <label className="fl">
+                  Context Window {contextWindowLocked && <span className={styles['locked-tag']}>Locked from discovery</span>}
+                </label>
+                <input
+                  className="fi"
+                  type="number"
+                  min={1}
+                  value={contextWindowInput}
+                  onChange={(e) => setContextWindowInput(e.target.value)}
+                  placeholder="e.g. 128000"
+                  disabled={contextWindowLocked}
+                />
+                {fieldsMode === 'discovered' && !contextWindowLocked && (
+                  <div className={styles['field-hint']}>This endpoint didn't report a context length — enter it manually.</div>
+                )}
+              </div>
+
+              {(willCreateNew || (!isEdit && fieldsMode === 'discovered')) && (
+                <button type="button" className={styles['reset-link']} onClick={resetModelFields}>
+                  <RotateCcw size={12} /> {isEdit ? 'Cancel — keep editing the original model' : 'Use a different endpoint'}
+                </button>
+              )}
+
+              {/* ---- advanced: request_params + verify ---- */}
+              <button
+                type="button"
+                className={styles['advanced-toggle']}
+                onClick={() => setAdvancedOpen((o) => !o)}
+                aria-expanded={advancedOpen}
+              >
+                <SlidersHorizontal size={13} />
+                Advanced
+                <ChevronDown size={14} className={`${styles['advanced-toggle-caret']} ${advancedOpen ? styles['advanced-toggle-caret--open'] : ''}`} />
+              </button>
+
+              {advancedOpen && (
+                <div className={styles['advanced-panel']}>
+                  <div className="fg">
+                    <label className="fl">
+                      Request Params <span className="opt">(optional — JSON)</span>
+                    </label>
+                    <textarea
+                      className={`fi ${styles['json-input']} ${requestParamsError ? styles['json-input--error'] : ''}`}
+                      rows={5}
+                      spellCheck={false}
+                      value={requestParamsText}
+                      onChange={(e) => handleRequestParamsChange(e.target.value)}
+                      placeholder={'{\n  "chat_template_kwargs": { "thinking": true },\n  "reasoning_effort": "high"\n}'}
+                    />
+                    {requestParamsError ? (
+                      <div className={styles['field-hint--error']}>
+                        <AlertCircle size={12} /> {requestParamsError}
+                      </div>
+                    ) : (
+                      <div className={styles['field-hint']}>
+                        Extra parameters sent with every request to this model — verify they're actually supported before saving.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className={styles['verify-row']}>
+                    <button
+                      type="button"
+                      className={styles['discover-btn']}
+                      disabled={
+                        !baseUrl.trim() ||
+                        !effectiveModelId ||
+                        !hasRequestParams ||
+                        !parsedRequestParams.ok ||
+                        verifyStatus === 'loading'
+                      }
+                      onClick={handleVerifyParams}
+                    >
+                      {verifyStatus === 'loading' ? <Loader2 size={14} className={styles['spin']} /> : <ShieldCheck size={14} />}
+                      {verifyStatus === 'loading' ? 'Verifying…' : 'Verify'}
+                    </button>
+                    {!effectiveModelId && (
+                      <span className={styles['field-hint']}>Select a model above to verify params against it.</span>
+                    )}
+                  </div>
+
+                  {verifyStatus === 'success' && verifyResult && (
+                    <div className={styles['success-banner']}>
+                      <CheckCircle2 size={15} />
+                      <span>
+                        Verified — all parameters are supported by this model.
+                        {verifyResult.sample_output && (
+                          <>
+                            {' '}Sample response: <em>&ldquo;{verifyResult.sample_output}&rdquo;</em>
+                          </>
+                        )}
+                      </span>
+                    </div>
+                  )}
+
+                  {verifyStatus === 'warning' && verifyResult && (
+                    <div className={styles['mismatch-banner']}>
+                      <AlertTriangle size={15} />
+                      <span>
+                        {verifyResult.warning || 'Some parameters were ignored by this model.'}
+                        {verifyResult.skipped_params && verifyResult.skipped_params.length > 0 && (
+                          <>
+                            {' '}Skipped: <code>{verifyResult.skipped_params.join(', ')}</code>
+                          </>
+                        )}
+                      </span>
+                    </div>
+                  )}
+
+                  {verifyStatus === 'error' && (
+                    <div className={styles['error-banner']}>
+                      <XCircle size={15} />
+                      <span>
+                        {verifyResult && !verifyResult.supported
+                          ? (verifyResult.warning || 'These parameters are not supported by this model.')
+                          : (verifyError || 'Could not verify these parameters against this endpoint.')}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+
+          <div className="fg">
+            <label className="fl">Description <span className="opt">(optional)</span></label>
+            <textarea className="fi" rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />
           </div>
-        );
-      })()}
+        </div>
+
+        <div className={styles['drawer__foot']}>
+          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn btn-ind" disabled={!valid || submitting} onClick={handleSubmit}>{submitLabel}</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -467,594 +685,1190 @@ export default function CustomMetricsDashboard() {
 
 
 
-//Custommetrics.module.scss
+
+
+//Addcustommodeldrawer.module.scss
 @use '../../styles/_variables' as *;
 
-// ===========================================================================
-// Custom Metrics Dashboard — mirrors the Model Catalog design system
-// exactly: ink/paper palette, ultramarine signal accent, mono instrument
-// labels, sortable table headers, filter pills, and the same pagination
-// bar. Reuses the app's shared global classes (pg-shell, pg-toolbar,
-// toolbar, search-box, pills, pill, pg-body, tw, tbl, tag, tag-ind, badge,
-// badge-green, badge-gray) for the toolbar/table body, exactly like
-// Model Catalog does — this module only supplies the header, the tab
-// switcher (Dashboard/Create Metric — unique to this page), sortable
-// column headers, pagination, and a couple of shared bits (toast, spin)
-// used elsewhere in this feature.
-//
-// Font scaling: `.custom-metrics` sets a single base font-size — the same
-// 0.8125rem base Model Catalog uses. All descendant font-sizes are
-// expressed in `em` (relative to that base), so bumping the base on wide
-// screens scales the whole page proportionally from one place — same
-// convention, same numbers, as Model Catalog.
-// ===========================================================================
+// Font scaling: `.drawer` sets a single base font-size. All descendant
+// font-sizes are expressed in `em` (relative to that base), so bumping
+// `.drawer`'s font-size on wide screens scales the whole drawer
+// proportionally from one place — same convention as Sidebar, Providers,
+// and Model Catalog.
 
-$mono:    $font-mono;
-$sans:    $font-body;
-$display: $font-display;
+// base font-size the drawer's internal `em` scale is built on
+$drawer-base-font: 13px;
 
-$soft: 0 1px 2px rgba(20, 22, 27, 0.05);
-$lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
-
-// base font-size the dashboard's internal `em` scale is built on — matches
-// Model Catalog's base exactly, so both pages scale identically together.
-$custom-metrics-base-font: 0.8125rem;
-
-%micro {
-  font-family: $mono;
-  font-size: 0.8462em; // 0.6875rem / 0.8125rem
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+.drawer-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: $footer-height;
+  background: rgba(17, 24, 39, .4); z-index: 100;
+  display: flex; justify-content: flex-end;
 }
+.drawer {
+  width: 420px; max-width: 100%; height: calc(100% - 30px); background: $surface; box-shadow: $shadow-4;
+  display: flex; flex-direction: column; animation: drawerIn .25s ease both;
 
-@keyframes cm-spin { to { transform: rotate(360deg); } }
-@keyframes cm-toast-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
-@keyframes cm-modal-in { from { opacity: 0; transform: translateY(12px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
-@keyframes cm-overlay-in { from { opacity: 0; } to { opacity: 1; } }
-
-.spin { animation: cm-spin 0.8s linear infinite; }
-
-.custom-metrics {
   // master scale control — every em-based font-size below responds to this
-  font-size: $custom-metrics-base-font;
+  font-size: $drawer-base-font;
 
   @media (min-width: 1800px) {
-    font-size: 1rem;
-  }
-
-  // ---- header -------------------------------------------------------------
-  &__header {
-    flex-shrink: 0;
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 24px 32px 20px;
-    margin-bottom: 20px;
-    border-bottom: 1px solid $line;
-    background: $card;
-    flex-wrap: wrap;
-
-    h1 {
-      font-family: $display;
-      font-size: 1.8462em; // 1.5rem / 0.8125rem
-      font-weight: 800;
-      letter-spacing: -0.02em;
-      color: $ink;
-      line-height: 1.2;
-    }
-  }
-
-  &__header-eyebrow {
-    @extend %micro;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    color: $signal;
-    margin-bottom: 6px;
-
-    &::before {
-      content: '';
-      width: 16px;
-      height: 2px;
-      border-radius: 2px;
-      background: $signal;
-    }
-  }
-
-  &__header-sub {
-    margin-top: 4px;
-    font-size: 1.0385em; // 0.84375rem / 0.8125rem
-    color: $ink-2;
-  }
-
-  &__header-meta {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    padding: 7px 13px;
-    border-radius: 999px;
-    border: 1px solid $line;
-    background: $paper;
-    font-family: $mono;
-    font-size: 0.8846em; // 0.71875rem / 0.8125rem
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: $ink-2;
-    white-space: nowrap;
-    margin-bottom: 3px;
-  }
-
-  // ---- toolbar filter group (Eval Type pills) ------------------------------
-  &__filter-group {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 4px;
-    background: $paper;
-    border: 1px solid $line;
-    border-radius: 999px;
-    flex-wrap: wrap;
-  }
-
-  &__toolbar-label {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 5px 10px 5px 11px;
-    @extend %micro;
-    font-size: 0.7692em; // 0.625rem / 0.8125rem
-    color: $ink-3;
-    white-space: nowrap;
-  }
-
-  &__filter-pill {
-    padding: 6px 13px;
-    border: 0;
-    border-radius: 999px;
-    background: transparent;
-    color: $ink-2;
-    font-size: 0.9615em; // 0.78125rem / 0.8125rem
-    font-weight: 650;
-    cursor: pointer;
-    transition: all 0.15s ease;
-
-    &:hover { color: $ink; }
-
-    &--on {
-      background: $card;
-      color: $signal;
-      box-shadow: $soft;
-    }
-  }
-
-  // --- sortable column headers ----------------------------------------------
-  &__sortable-th {
-    padding: 0 !important;
-  }
-
-  &__sort-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    width: 100%;
-    padding: 12px 16px;
-    background: none;
-    border: none;
-    cursor: pointer;
-    font: inherit;
-    font-family: $mono;
-    font-weight: 700;
-    font-size: 0.7692em; // 0.625rem / 0.8125rem
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: $ink-3;
-    text-align: left;
-    transition: color 0.15s ease;
-
-    &:hover {
-      color: $ink;
-
-      .custom-metrics__sort-icon-idle { opacity: 0.7; }
-    }
-
-    &--active {
-      color: $signal;
-    }
-  }
-
-  &__sort-icon-idle {
-    opacity: 0.28;
-    transition: opacity 0.15s ease;
-  }
-
-  &__empty {
-    text-align: center;
-    padding: 44px 16px !important;
-    color: $ink-3;
-    font-size: 1.0385em; // 0.84375rem / 0.8125rem
-  }
-
-  // --- pagination bar ---------------------------------------------------------
-  &__pagination {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 12px;
-    padding: 14px 20px;
-    border-top: 1px solid $line;
-    background: $paper;
-  }
-
-  &__pagination-info {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 18px;
-    font-size: 0.9615em; // 0.78125rem / 0.8125rem
-    color: $ink-2;
-
-    strong { color: $ink; font-weight: 700; }
-  }
-
-  &__page-size {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-
-    label {
-      font-size: 0.8846em; // 0.71875rem / 0.8125rem
-      color: $ink-3;
-      white-space: nowrap;
-    }
-
-    select {
-      appearance: none;
-      -webkit-appearance: none;
-      font: inherit;
-      font-size: 0.9615em; // 0.78125rem / 0.8125rem
-      font-weight: 650;
-      color: $ink;
-      background: $card;
-      border: 1px solid $line;
-      border-radius: 8px;
-      padding: 5px 26px 5px 10px;
-      cursor: pointer;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23565B66' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-      background-repeat: no-repeat;
-      background-position: right 10px center;
-
-      &:hover { border-color: $ink-3; }
-      &:focus { outline: none; border-color: $signal; box-shadow: 0 0 0 3px $wash; }
-    }
-  }
-
-  &__pager {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-  }
-
-  &__page-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 30px;
-    height: 30px;
-    padding: 0 6px;
-    border-radius: 8px;
-    border: 1px solid transparent;
-    background: transparent;
-    color: $ink-2;
-    font-family: $mono;
-    font-size: 0.9615em; // 0.78125rem / 0.8125rem
-    font-weight: 650;
-    cursor: pointer;
-    transition: background 0.14s ease, color 0.14s ease;
-
-    &:hover:not(:disabled) {
-      background: $wash;
-      color: $signal;
-    }
-
-    &:disabled {
-      opacity: 0.35;
-      cursor: not-allowed;
-    }
-
-    &--num {
-      min-width: 30px;
-    }
-
-    &--active {
-      background: $signal;
-      color: #fff;
-
-      &:hover:not(:disabled) {
-        background: $signal;
-        color: #fff;
-      }
-    }
-  }
-
-  &__page-dots {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 20px;
-    height: 30px;
-    color: $ink-3;
-    font-size: 0.9615em; // 0.78125rem / 0.8125rem
+    font-size: 16px;
   }
 }
-
-// ---------------------------------------------------------------------------
-// tab switcher (Dashboard / Create Metric) — unique to this page, not part
-// of the Model Catalog reference, sized on the same em scale.
-// ---------------------------------------------------------------------------
-.tabbar {
-  flex-shrink: 0;
-  display: inline-flex;
-  padding: 3px;
-  gap: 2px;
-  border-radius: 11px;
-  border: 1px solid $line;
-  background: $paper;
-  margin-bottom: 3px;
+@keyframes drawerIn { from { transform: translateX(24px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+.drawer__hdr {
+  display: flex; justify-content: space-between; align-items: center; padding: 20px 24px; border-bottom: 1px solid $border-light;
+  h2 { font-size: 1.3846em; font-weight: 700; } // 18px / 13px
 }
+.drawer__close { background: none; border: none; cursor: pointer; color: $text-muted; }
+.drawer__body { flex: 1; overflow-y: auto; padding: 24px; }
+.drawer__foot { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 24px; border-top: 1px solid $border-light; }
 
-.tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 8px 14px;
-  border-radius: 8px;
-  border: none;
-  background: transparent;
-  color: $ink-2;
-  font-family: $sans;
-  font-size: 0.9615em; // 0.78125rem / 0.8125rem
-  font-weight: 650;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: all 0.15s ease;
-
-  &:hover:not(&--active) { color: $ink; }
+// ---- category custom dropdown ------------------------------------------------
+.combo {
+  position: relative;
 }
-
-.tab--active {
-  background: $card;
-  color: $signal;
-  box-shadow: $soft;
-}
-
-// ---------------------------------------------------------------------------
-// eval-type / metric-type badges — replaces the generic global "tag" pill
-// with color-coded badges so eval types (model/agent/rag) are scannable
-// at a glance. Colors reuse the same theme tokens as the rest of the app
-// (no new hex values); each eval type gets a distinct existing wash.
-// ---------------------------------------------------------------------------
-.type-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-family: $mono;
-  font-size: 0.7692em; // 0.625rem / 0.8125rem
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  padding: 3px 9px;
-  border-radius: 6px;
-  border: 1px solid transparent;
-  white-space: nowrap;
-
-  &::before {
-    content: '';
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-
-  // eval-type variants
-  &--model {
-    color: $signal;
-    background: $wash;
-    border-color: rgba($signal, 0.16);
-    &::before { background: $signal; }
-  }
-  &--agent {
-    color: $sky-ink;
-    background: $sky-ink-wash;
-    border-color: rgba($sky-ink, 0.18);
-    &::before { background: $sky-ink; }
-  }
-  &--rag {
-    color: $rose-ink;
-    background: $rose-ink-wash;
-    border-color: rgba($rose-ink, 0.18);
-    &::before { background: $rose-ink; }
-  }
-  // fallback for any eval type outside the known set
-  &--default {
-    color: $ink-2;
-    background: $ink-wash;
-    border-color: $line;
-    &::before { background: $ink-3; }
-  }
-
-  // metric-type column reuses the same shape but stays neutral/monochrome
-  // so it reads as a distinct dimension from the colored eval-type badges
-  &--metric {
-    color: $ink-2;
-    background: $paper;
-    border-color: $line;
-    &::before { display: none; }
-  }
-}
-
-.type-badge-group {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
-// ---------------------------------------------------------------------------
-// delete confirmation modal — click-outside is intentionally inert; only
-// the close icon or Cancel button dismiss it.
-// ---------------------------------------------------------------------------
-.confirm-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 300;
+.combo-trigger {
   display: flex;
   align-items: center;
-  justify-content: center;
-  background: rgba(10, 12, 18, 0.55);
-  padding: 20px;
-  animation: cm-overlay-in 0.15s ease;
-}
-
-.confirm-modal {
+  justify-content: space-between;
+  gap: 8px;
   width: 100%;
-  max-width: 380px;
-  background: $card;
-  border-radius: 18px;
-  box-shadow: $lift;
-  padding: 24px 24px 20px;
-  animation: cm-modal-in 0.2s ease;
-}
+  padding: 10px 12px;
+  border: 1.5px solid $border;
+  border-radius: 10px;
+  background: $surface;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 
-.confirm-modal__top {
+  &:hover:not(:disabled) { border-color: $indigo; }
+  &:disabled { cursor: not-allowed; opacity: 0.6; }
+
+  &--open {
+    border-color: $indigo;
+    box-shadow: 0 0 0 3px $indigo-pale;
+  }
+}
+.combo-value {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.combo-value-label {
+  font-size: 1em; // 13px / 13px (base)
+  font-weight: 650;
+  color: $text-primary;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.combo-placeholder {
+  font-size: 1em; // 13px / 13px (base)
+  color: $text-muted;
+}
+.combo-caret {
+  flex-shrink: 0;
+  color: $text-muted;
+  transition: transform 0.18s ease;
+
+  &--open { transform: rotate(180deg); color: $indigo; }
+}
+.combo-panel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 6px;
+  background: $surface;
+  border: 1px solid $border;
+  border-radius: 12px;
+  box-shadow: $shadow-3;
+  animation: combo-panel-in 0.14s ease both;
+}
+@keyframes combo-panel-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.combo-empty {
+  padding: 14px 10px;
+  font-size: 0.9615em; // 12.5px / 13px
+  color: $text-muted;
+  text-align: center;
+}
+.combo-option {
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
-}
-
-.confirm-modal__icon {
-  flex-shrink: 0;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background: $danger-wash;
-  color: $danger;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.confirm-modal__close {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 10px;
   border: none;
-  background: transparent;
-  color: $ink-3;
+  border-radius: 8px;
+  background: none;
   cursor: pointer;
-  transition: background 0.14s ease, color 0.14s ease;
+  text-align: left;
+  transition: background 0.12s ease;
 
-  &:hover { background: $paper; color: $ink; }
+  &:hover { background: $surface-alt; }
+
+  &--selected {
+    background: $indigo-pale;
+
+    &:hover { background: $indigo-pale; }
+  }
+
+  & + & { margin-top: 1px; }
 }
-
-.confirm-modal__title {
-  font-family: $display;
-  font-size: 1.2308em; // 1rem / 0.8125rem
-  font-weight: 800;
-  color: $ink;
-  margin-bottom: 6px;
-}
-
-.confirm-modal__text {
-  font-size: 0.9615em; // 0.78125rem / 0.8125rem
-  color: $ink-2;
-  line-height: 1.5;
-  margin-bottom: 20px;
-
-  strong { color: $ink; font-weight: 700; }
-}
-
-.confirm-modal__actions {
+.combo-option-check {
+  flex-shrink: 0;
+  width: 14px;
+  height: 20px;
   display: flex;
-  gap: 10px;
+  align-items: center;
+  justify-content: center;
+  color: $indigo;
+}
+.combo-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.combo-option-label {
+  font-size: 1em; // 13px / 13px (base)
+  font-weight: 650;
+  color: $text-primary;
+}
+.combo-option-desc {
+  font-size: 0.8846em; // 11.5px / 13px
+  line-height: 1.4;
+  color: $text-secondary;
 }
 
-.confirm-modal__btn {
+// ---- hint / error text -------------------------------------------------------
+.field-hint {
+  margin-top: 6px;
+  font-size: 0.9231em; // 12px / 13px
+  line-height: 1.45;
+  color: $text-secondary;
+}
+.field-hint--error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 0.9231em; // 12px / 13px
+  color: #DC2626;
+}
+.locked-tag {
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: $emerald-pale;
+  color: $emerald-dark;
+  font-size: 0.8077em; // 10.5px / 13px
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  vertical-align: middle;
+}
+
+// ---- optional-discovery panel -------------------------------------------------
+.discover-panel {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 16px;
+  border-radius: 14px;
+  background: linear-gradient(165deg, $indigo-pale 0%, $surface-alt 65%);
+  border: 1px solid rgba($indigo, 0.16);
+  position: relative;
+  overflow: hidden;
+}
+.discover-panel-icon {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: $indigo;
+  color: #fff;
+  box-shadow: 0 4px 10px -3px rgba($indigo, 0.5);
+}
+.discover-panel-body {
+  min-width: 0;
   flex: 1;
+}
+.discover-panel-title {
+  font-size: 1.0385em; // 13.5px / 13px
+  font-weight: 750;
+  color: $text-primary;
+  margin-bottom: 3px;
+}
+.discover-panel-text {
+  font-size: 0.9231em; // 12px / 13px
+  line-height: 1.5;
+  color: $text-secondary;
+  margin: 0 0 12px;
+}
+.discover-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.discover-btn {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
   gap: 6px;
-  padding: 10px 14px;
-  border-radius: 10px;
-  font-size: 0.9615em; // 0.78125rem / 0.8125rem
-  font-weight: 650;
+  padding: 8px 14px;
+  border-radius: 9px;
+  border: 1px solid $indigo;
+  background: $indigo;
+  color: #fff;
+  font-size: 0.9615em; // 12.5px / 13px
+  font-weight: 700;
   cursor: pointer;
-  transition: all 0.15s ease;
+  box-shadow: 0 2px 6px -2px rgba($indigo, 0.5);
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease, box-shadow 0.15s ease;
 
-  &--cancel {
-    border: 1.5px solid $line;
-    background: $card;
-    color: $ink-2;
-
-    &:hover:not(:disabled) { border-color: $ink-3; color: $ink; }
-  }
-
-  &--danger {
-    border: 1.5px solid $danger;
-    background: $danger;
-    color: #fff;
-
-    &:hover:not(:disabled) { filter: brightness(0.92); }
-    &:disabled { opacity: 0.6; cursor: not-allowed; }
-  }
+  &:hover:not(:disabled) { background: $indigo-dark; border-color: $indigo-dark; transform: translateY(-1px); box-shadow: 0 4px 10px -2px rgba($indigo, 0.55); }
+  &:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
 }
+.discover-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 0.9231em; // 12px / 13px
+  font-weight: 600;
+  color: $text-secondary;
+  cursor: pointer;
+  transition: color 0.15s ease;
 
-// ---------------------------------------------------------------------------
-// error banner (fetch/delete failures)
-// ---------------------------------------------------------------------------
-.error-banner {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 14px; border-radius: 10px;
-  background: $danger-wash; border: 1px solid rgba($danger, 0.2);
-  color: $danger; font-size: 1em; margin-bottom: 16px;
+  &:hover { color: $indigo; }
 }
+.spin { animation: add-custom-model-spin 0.8s linear infinite; }
+@keyframes add-custom-model-spin { to { transform: rotate(360deg); } }
 
-// ---------------------------------------------------------------------------
-// toast (used by useToast.tsx)
-// ---------------------------------------------------------------------------
-.toast {
-  position: fixed;
-  left: 50%;
-  bottom: 28px;
-  transform: translateX(-50%);
-  z-index: 400;
+// ---- discovery success banner --------------------------------------------------
+.success-banner {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px 18px;
-  border-radius: 11px;
-  background: #14161B;
-  color: #fff;
-  font-size: 0.8125rem;
+  margin-bottom: 16px;
+  padding: 10px 13px;
+  border-radius: 10px;
+  background: $emerald-pale;
+  border: 1px solid rgba($emerald, 0.25);
+  color: $emerald-dark;
+  font-size: 0.9615em; // 12.5px / 13px
   font-weight: 650;
-  box-shadow: $lift;
-  animation: cm-toast-in 0.18s ease;
-}
-.toast--ok::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: $ok; }
-.toast--error::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: $danger; }
-.toast--info::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: $signal; }
 
-@media (max-width: 768px) {
-  .custom-metrics__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
+  svg { flex-shrink: 0; }
+}
+
+// ---- edit-mode "different model detected" warning -------------------------------
+.mismatch-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 11px 13px;
+  border-radius: 10px;
+  background: $amber-pale;
+  border: 1px solid rgba($amber-dark, 0.3);
+  color: #92400E;
+  font-size: 0.9231em; // 12px / 13px
+  font-weight: 550;
+  line-height: 1.5;
+
+  svg { flex-shrink: 0; margin-top: 1px; color: $amber-dark; }
+  strong { font-weight: 750; }
+  code {
+    font-family: monospace;
+    font-size: 0.92em;
+    background: rgba(0, 0, 0, 0.06);
+    padding: 1px 4px;
+    border-radius: 4px;
+  }
+}
+
+.same-model-badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: $indigo-pale;
+  color: $indigo;
+  font-weight: 700;
+}
+
+// ---- advanced: request_params + verify ---------------------------------------
+.advanced-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 14px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 0.9231em; // 12px / 13px
+  font-weight: 650;
+  color: $text-secondary;
+  cursor: pointer;
+  transition: color 0.15s ease;
+
+  &:hover { color: $indigo; }
+}
+.advanced-toggle-caret {
+  transition: transform 0.18s ease;
+  &--open { transform: rotate(180deg); }
+}
+.advanced-panel {
+  margin-bottom: 16px;
+  padding: 14px;
+  border-radius: 12px;
+  background: $surface-alt;
+  border: 1px solid $border-light;
+  animation: advanced-panel-in 0.15s ease both;
+}
+@keyframes advanced-panel-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.json-input {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 0.9231em; // 12px / 13px
+  line-height: 1.5;
+  resize: vertical;
+
+  &--error {
+    border-color: #DC2626 !important;
+  }
+}
+.verify-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+// ---- verify failure banner -----------------------------------------------------
+.error-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 13px;
+  border-radius: 10px;
+  background: $red-pale;
+  border: 1px solid rgba(#DC2626, 0.25);
+  color: #B91C1C;
+  font-size: 0.9231em; // 12px / 13px
+  font-weight: 550;
+  line-height: 1.5;
+
+  svg { flex-shrink: 0; margin-top: 1px; color: #DC2626; }
+  code {
+    font-family: monospace;
+    font-size: 0.92em;
+    background: rgba(0, 0, 0, 0.06);
+    padding: 1px 4px;
+    border-radius: 4px;
+  }
+}
+
+// ---- discovered model picker -------------------------------------------------
+.discovered-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 2px;
+}
+.discovered-row {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 10px 34px 10px 12px;
+  border: 1.5px solid $border;
+  border-radius: 9px;
+  background: $surface;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.14s ease, background 0.14s ease;
+
+  &:hover { border-color: $indigo; background: $indigo-pale; }
+
+  &--selected {
+    border-color: $indigo;
+    background: $indigo-pale;
+  }
+}
+.discovered-row-main {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.discovered-row-name {
+  font-weight: 700;
+  font-size: 1em; // 13px / 13px (base)
+  color: $text-primary;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.discovered-row-id {
+  flex-shrink: 0;
+  font-family: monospace;
+  font-size: 0.8462em; // 11px / 13px
+  color: $text-muted;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.discovered-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 0.8462em; // 11px / 13px
+  color: $text-secondary;
+}
+.already-added-badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.16);
+  color: #B45309;
+  font-weight: 700;
+}
+.discovered-row-check {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  color: $indigo;
+}
+
+// ---- reset / mode-switch link -------------------------------------------------
+.reset-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: -6px 0 16px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 0.9231em; // 12px / 13px
+  font-weight: 650;
+  color: $indigo;
+  cursor: pointer;
+
+  &:hover { text-decoration: underline; }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Models.ts
+import api from '../axiosInstance';
+import type { Model, CustomModelRequest } from '../../types';
+
+export interface ModelCategory {
+  value: string;
+  label: string;
+  description: string;
+}
+
+export interface DiscoveredModel {
+  id: string;
+  name: string;
+  context_window: number | null;
+  max_model_len: number | null;
+  owned_by: string;
+  already_added: boolean;
+}
+
+export interface DiscoverModelsRequest {
+  base_url: string;
+  api_key?: string;
+}
+
+export interface DiscoverModelsResponse {
+  base_url: string;
+  models: DiscoveredModel[];
+  total: number;
+  errors: string[];
+}
+
+export interface DeleteCustomModelResponse {
+  status: string;
+  model_id: string;
+}
+
+export interface UpdateCustomModelRequest {
+  model_id: string;
+  name: string;
+  description: string;
+  /** Optional advanced request params (e.g. chat_template_kwargs, reasoning_effort). */
+  request_params?: Record<string, unknown>;
+}
+
+export interface UpdateCustomModelResponse {
+  model_id: string;
+  name: string;
+  description: string;
+}
+
+// A CustomModelRequest widened with the optional advanced `request_params`
+// field. Defined locally rather than editing the shared `CustomModelRequest`
+// type in ../../types, but stays fully compatible with it since the added
+// field is optional — anywhere a CustomModelRequest is expected, this works.
+export type CustomModelRequestWithParams = CustomModelRequest & {
+  request_params?: Record<string, unknown>;
+};
+
+export interface VerifyParamsRequest {
+  base_url: string;
+  api_key?: string;
+  model_id: string;
+  request_params: Record<string, unknown>;
+}
+
+export interface VerifyParamsResponse {
+  supported: boolean;
+  skipped_params: string[];
+  warning?: string;
+  sample_output?: string;
+}
+
+export const modelsApi = {
+  list: () => api.get<{ models: Model[] }>('/models').then((r) => r.data.models ?? []),
+
+  createCustom: (payload: CustomModelRequestWithParams) =>
+    api.post<void>('/models/custom', payload).then(() => undefined),
+
+  // POST /models/custom — same endpoint as create, keyed by model_id: used here
+  // to update just the name/description of an existing custom model.
+  updateCustom: (payload: UpdateCustomModelRequest) =>
+    api.post<UpdateCustomModelResponse>('/models/custom', payload).then((r) => r.data),
+
+  // DELETE /models/custom/:modelId — remove a previously registered custom model
+  deleteCustom: (modelId: string) =>
+    api.delete<DeleteCustomModelResponse>(`/models/custom/${modelId}`).then((r) => r.data),
+
+  // GET /models/by-provider/:providerId — all models registered under a single provider
+  listByProvider: (providerId: string) =>
+    api
+      .get<{ models: Model[]; total: number }>(`/models/by-provider/${providerId}`)
+      .then((r) => ({ models: r.data.models ?? [], total: r.data.total ?? 0 })),
+
+  // GET /models/categories — used to populate the Category dropdown
+  listCategories: () =>
+    api.get<{ categories: ModelCategory[] }>('/models/categories').then((r) => r.data.categories ?? []),
+
+  // POST /models/discover — optional endpoint probe to auto-fill model name/id/context window
+  discover: (payload: DiscoverModelsRequest) =>
+    api.post<DiscoverModelsResponse>('/models/discover', payload).then((r) => ({
+      base_url: r.data.base_url,
+      models: r.data.models ?? [],
+      total: r.data.total ?? 0,
+      errors: r.data.errors ?? [],
+    })),
+
+  // POST /models/verify-params — probes the endpoint with a candidate set of
+  // advanced request params (e.g. chat_template_kwargs, reasoning_effort) to
+  // confirm the model actually supports them before saving.
+  verifyParams: (payload: VerifyParamsRequest) =>
+    api.post<VerifyParamsResponse>('/models/verify-params', payload).then((r) => r.data),
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Modelsslice.ts
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import { modelsApi, type ModelCategory, type CustomModelRequestWithParams } from '../../api/endpoints/models';
+import type { Model } from '../../types';
+
+type FetchStatus = 'idle' | 'loading' | 'succeeded' | 'failed';
+
+interface ModelsState {
+  items: Model[];
+  status: FetchStatus;
+  error: string | null;
+  creating: boolean;
+  byProvider: Record<string, Model[]>;
+  byProviderStatus: Record<string, FetchStatus>;
+  categories: ModelCategory[];
+  categoriesStatus: FetchStatus;
+  deletingId: string | null;
+  updatingId: string | null;
+}
+
+const initialState: ModelsState = {
+  items: [],
+  status: 'idle',
+  error: null,
+  creating: false,
+  byProvider: {},
+  byProviderStatus: {},
+  categories: [],
+  categoriesStatus: 'idle',
+  deletingId: null,
+  updatingId: null,
+};
+
+export const fetchModels = createAsyncThunk('models/fetchAll', () => modelsApi.list());
+
+export const fetchModelsByProvider = createAsyncThunk(
+  'models/fetchByProvider',
+  async (providerId: string) => {
+    const { models } = await modelsApi.listByProvider(providerId);
+    return { providerId, models };
+  }
+);
+
+export const fetchModelCategories = createAsyncThunk(
+  'models/fetchCategories',
+  () => modelsApi.listCategories()
+);
+
+export const createCustomModel = createAsyncThunk(
+  'models/createCustom',
+  async (payload: CustomModelRequestWithParams, { dispatch }) => {
+    await modelsApi.createCustom(payload);
+    // spec: no meaningful body returned, so refetch afterwards
+    await dispatch(fetchModels());
+  }
+);
+
+export const updateCustomModel = createAsyncThunk(
+  'models/updateCustom',
+  async (payload: { model_id: string; name: string; description: string; request_params?: Record<string, unknown> }) => {
+    const res = await modelsApi.updateCustom(payload);
+    return {
+      modelId: res.model_id || payload.model_id,
+      name: res.name ?? payload.name,
+      description: res.description ?? payload.description,
+    };
+  }
+);
+
+export const deleteCustomModel = createAsyncThunk(
+  'models/deleteCustom',
+  async ({ modelId, providerId }: { modelId: string; providerId: string }) => {
+    const res = await modelsApi.deleteCustom(modelId);
+    return { modelId: res.model_id || modelId, providerId };
+  }
+);
+
+const modelsSlice = createSlice({
+  name: 'models',
+  initialState,
+  reducers: {},
+  extraReducers: (builder) => {
+    builder
+      .addCase(fetchModels.pending, (state) => {
+        state.status = 'loading';
+      })
+      .addCase(fetchModels.fulfilled, (state, action) => {
+        state.status = 'succeeded';
+        state.items = action.payload ?? [];
+      })
+      .addCase(fetchModels.rejected, (state, action) => {
+        state.status = 'failed';
+        state.error = action.error.message || 'Failed to load models';
+      })
+      .addCase(createCustomModel.pending, (state) => {
+        state.creating = true;
+      })
+      .addCase(createCustomModel.fulfilled, (state) => {
+        state.creating = false;
+      })
+      .addCase(createCustomModel.rejected, (state, action) => {
+        state.creating = false;
+        state.error = action.error.message || 'Failed to register custom model';
+      })
+      .addCase(fetchModelsByProvider.pending, (state, action) => {
+        state.byProviderStatus[action.meta.arg] = 'loading';
+      })
+      .addCase(fetchModelsByProvider.fulfilled, (state, action) => {
+        state.byProviderStatus[action.payload.providerId] = 'succeeded';
+        state.byProvider[action.payload.providerId] = action.payload.models ?? [];
+      })
+      .addCase(fetchModelsByProvider.rejected, (state, action) => {
+        state.byProviderStatus[action.meta.arg] = 'failed';
+      })
+      .addCase(fetchModelCategories.pending, (state) => {
+        state.categoriesStatus = 'loading';
+      })
+      .addCase(fetchModelCategories.fulfilled, (state, action) => {
+        state.categoriesStatus = 'succeeded';
+        state.categories = action.payload ?? [];
+      })
+      .addCase(fetchModelCategories.rejected, (state) => {
+        state.categoriesStatus = 'failed';
+      })
+      .addCase(deleteCustomModel.pending, (state, action) => {
+        state.deletingId = action.meta.arg.modelId;
+      })
+      .addCase(deleteCustomModel.fulfilled, (state, action) => {
+        state.deletingId = null;
+        const { modelId, providerId } = action.payload;
+        state.items = state.items.filter((m) => m.id !== modelId);
+        if (state.byProvider[providerId]) {
+          state.byProvider[providerId] = state.byProvider[providerId].filter((m) => m.id !== modelId);
+        }
+      })
+      .addCase(deleteCustomModel.rejected, (state, action) => {
+        state.deletingId = null;
+        state.error = action.error.message || 'Failed to delete model';
+      })
+      .addCase(updateCustomModel.pending, (state, action) => {
+        state.updatingId = action.meta.arg.model_id;
+      })
+      .addCase(updateCustomModel.fulfilled, (state, action) => {
+        state.updatingId = null;
+        const { modelId, name, description } = action.payload;
+        const patch = (m: Model) => {
+          if (m.id !== modelId) return m;
+          return { ...m, name, description } as Model & { description: string };
+        };
+        state.items = state.items.map(patch);
+        for (const providerId of Object.keys(state.byProvider)) {
+          state.byProvider[providerId] = state.byProvider[providerId].map(patch);
+        }
+      })
+      .addCase(updateCustomModel.rejected, (state, action) => {
+        state.updatingId = null;
+        state.error = action.error.message || 'Failed to update model';
+      });
+  },
+});
+
+export default modelsSlice.reducer;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Providers.tsx
+import { useEffect, useState } from 'react';
+import { Search, Check, Plus, Settings, Unlink, Loader2, Cable, Trash2, RefreshCw, Eye, ListPlus, ListFilter, ListChecks } from 'lucide-react';
+import { useAppDispatch, useAppSelector } from '../../hooks/redux';
+import {
+  fetchProviders,
+  createProvider,
+  deleteProvider,
+  connectProvider,
+  disconnectProvider,
+  syncModels,
+} from '../../store/slices/providersSlice';
+import { fetchModelsByProvider, createCustomModel, deleteCustomModel, updateCustomModel } from '../../store/slices/modelsSlice';
+import AddProviderDrawer from './AddProviderDrawer';
+import AddCustomModelDrawer from './AddCustomModelDrawer';
+import ProviderModelsSidebar from './ProviderModelsSidebar';
+import { SkeletonCards } from '../common/Skeleton';
+import { useToast } from '../common/Toast';
+import styles from './Providers.module.scss';
+import type { Provider } from '../../types';
+
+type Filter = 'all' | 'connected' | 'available';
+
+const FILTERS: Filter[] = ['all', 'connected', 'available'];
+
+// Thunks rejected via axios surface as either an Error (network/message) or
+// an object with a response payload — normalize both into a display string.
+function getErrorMessage(err: unknown, fallback: string): string {
+  if (err && typeof err === 'object') {
+    const anyErr = err as { response?: { data?: { message?: string; detail?: string } }; message?: string };
+    const serverMessage = anyErr.response?.data?.message || anyErr.response?.data?.detail;
+    if (serverMessage) return serverMessage;
+    if (anyErr.message) return anyErr.message;
+  }
+  return fallback;
+}
+
+export default function Providers() {
+  const dispatch = useAppDispatch();
+  const { items, status, mutatingId, creating, syncingId } = useAppSelector((s) => s.providers);
+  const modelsByProvider = useAppSelector((s) => s.models.byProvider);
+  const modelsByProviderStatus = useAppSelector((s) => s.models.byProviderStatus);
+  const customModelCreating = useAppSelector((s) => s.models.creating);
+  const customModelDeletingId = useAppSelector((s) => s.models.deletingId);
+  const customModelUpdatingId = useAppSelector((s) => s.models.updatingId);
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState<Filter>('all');
+  const [keyPromptFor, setKeyPromptFor] = useState<string | null>(null);
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [addModelOpen, setAddModelOpen] = useState(false);
+  const [viewModelsProvider, setViewModelsProvider] = useState<Provider | null>(null);
+  const toast = useToast();
+
+  useEffect(() => {
+    dispatch(fetchProviders());
+  }, [dispatch]);
+
+  const connectedCount = items.filter((p) => p.status === 'connected').length;
+
+  const filtered = items.filter((p) => {
+    if (filter === 'connected' && p.status !== 'connected') return false;
+    if (filter === 'available' && p.status === 'connected') return false;
+    return !search || (p.name ?? '').toLowerCase().includes(search.toLowerCase());
+  });
+
+  const submitConnect = (providerId: string) => {
+    if (!apiKeyInput.trim()) return;
+    dispatch(connectProvider({ providerId, payload: { api_key: apiKeyInput } }));
+    setKeyPromptFor(null);
+    setApiKeyInput('');
+  };
+
+  const openModelsSidebar = (p: Provider) => {
+    setViewModelsProvider(p);
+    dispatch(fetchModelsByProvider(p.id));
+  };
+
+  const customProvider = items.find((p) => p.name === 'Custom') || null;
+
+  return (
+    <div className="page-enter pg-shell">
+      <div className={styles.providers__header}>
+        <div>
+          <p className={styles['providers__header-eyebrow']}>Integrations</p>
+          <h1>Providers</h1>
+          <p className={styles['providers__header-sub']}>Manage your AI provider connections</p>
+        </div>
+        <div className={styles['providers__header-meta']}>
+          <Cable size={13} />
+          {connectedCount} of {items.length} connected
+        </div>
+      </div>
+
+      <div className={styles['providers__toolbar']}>
+        <div className={styles['providers__search']}>
+          <Search size={16} />
+          <input placeholder="Search providers…" value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
+
+        <div className={styles['providers__toolbar-right']}>
+          <div className={styles['providers__filter-group']}>
+            <span className={styles['providers__toolbar-label']}>
+              <ListFilter size={11} /> Status
+            </span>
+            {FILTERS.map((f) => (
+              <button
+                key={f}
+                className={`${styles['providers__filter-pill']} ${filter === f ? styles['providers__filter-pill--on'] : ''}`}
+                onClick={() => setFilter(f)}
+              >
+                {f[0].toUpperCase() + f.slice(1)}
+              </button>
+            ))}
+          </div>
+          <span className={styles['providers__toolbar-divider']} />
+          <button className={styles['providers__add-btn']} onClick={() => setDrawerOpen(true)}>
+            <Plus size={14} /> Add Provider
+          </button>
+        </div>
+      </div>
+
+      <div className="pg-body">
+        <div className={styles['providers__grid']}>
+          {status === 'loading' && <SkeletonCards count={6} />}
+          {status !== 'loading' &&
+            filtered.map((p) => {
+              const isCustom = p.name === 'Custom';
+              return (
+                <div className={styles['providers__card']} key={p.id}>
+                  <div className={styles['providers__card-hdr']}>
+                    <div className={styles['providers__card-id']}>
+                      <div className={styles['providers__icon']}>
+                        {p.logo_url ? <img src={p.logo_url} alt={p.name ?? 'Provider'} /> : (p.name?.[0] ?? '?')}
+                      </div>
+                      <div style={{ minWidth: 0 }}>
+                        <div className={styles['providers__name']}>{p.name ?? 'Unnamed provider'}</div>
+                        <div className={styles['providers__count']}>{p.model_count ?? 0} models</div>
+                      </div>
+                    </div>
+                    <div className={styles['providers__card-top-actions']}>
+                      <button
+                        className={styles['providers__icon-btn']}
+                        onClick={() => openModelsSidebar(p)}
+                        title={isCustom ? 'Manage models' : 'View models'}
+                        aria-label={`${isCustom ? 'Manage' : 'View'} models for ${p.name ?? 'provider'}`}
+                      >
+                        {isCustom ? <ListChecks size={14} /> : <Eye size={14} />}
+                      </button>
+                      {p.status === 'connected' ? (
+                        <span className={styles['providers__badge-connected']}>
+                          <Check size={10} strokeWidth={3} /> Connected
+                        </span>
+                      ) : (
+                        <span className={styles['providers__badge-idle']}>Not connected</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className={styles['providers__desc']}>{p.description}</div>
+
+                  {keyPromptFor === p.id ? (
+                    <div className={styles['providers__key-form']}>
+                      <input
+                        className={styles['providers__key-input']}
+                        type="password"
+                        placeholder="Paste API key…"
+                        value={apiKeyInput}
+                        onChange={(e) => setApiKeyInput(e.target.value)}
+                        autoFocus
+                      />
+                      <div className={styles['providers__key-actions']}>
+                        <button
+                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--primary']}`}
+                          onClick={() => submitConnect(p.id)}
+                        >
+                          Save
+                        </button>
+                        <button
+                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--ghost']}`}
+                          onClick={() => setKeyPromptFor(null)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className={styles['providers__foot-actions']}>
+                      {isCustom && (
+                        <button
+                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--accent']}`}
+                          onClick={() => setAddModelOpen(true)}
+                        >
+                          <ListPlus size={13} /> Add Model
+                        </button>
+                      )}
+                      {p.status !== 'connected' && (
+                        <button
+                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--primary']}`}
+                          disabled={mutatingId === p.id}
+                          onClick={() => setKeyPromptFor(p.id)}
+                        >
+                          {mutatingId === p.id ? (
+                            <Loader2 size={13} className={styles['providers__spin']} />
+                          ) : (
+                            <>
+                              <Plus size={13} /> Connect
+                            </>
+                          )}
+                        </button>
+                      )}
+                      {/* Configure button temporarily disabled per request
+                      {p.status === 'connected' && (
+                        <button
+                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--ghost']}`}
+                          disabled={mutatingId === p.id}
+                          onClick={() => setKeyPromptFor(p.id)}
+                        >
+                          {mutatingId === p.id ? (
+                            <Loader2 size={13} className={styles['providers__spin']} />
+                          ) : (
+                            <>
+                              <Settings size={13} /> Configure
+                            </>
+                          )}
+                        </button>
+                      )}
+                      */}
+                      {p.status === 'connected' && (
+                        <>
+                          <button
+                            className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--ghost']}`}
+                            disabled={syncingId === p.id}
+                            onClick={() => dispatch(syncModels(p.id))}
+                          >
+                            {syncingId === p.id ? (
+                              <Loader2 size={13} className={styles['providers__spin']} />
+                            ) : (
+                              <>
+                                <RefreshCw size={13} /> Sync
+                              </>
+                            )}
+                          </button>
+                          <button
+                            className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--danger']}`}
+                            disabled={mutatingId === p.id}
+                            onClick={() => dispatch(disconnectProvider(p.id))}
+                          >
+                            <Unlink size={13} /> Disconnect
+                          </button>
+                        </>
+                      )}
+                      {p.status !== 'connected' && (
+                        <button
+                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--danger']}`}
+                          disabled={mutatingId === p.id}
+                          onClick={() => {
+                            if (window.confirm(`Delete ${p.name ?? 'this provider'}? This cannot be undone.`)) {
+                              dispatch(deleteProvider(p.id));
+                            }
+                          }}
+                        >
+                          <Trash2 size={13} /> Delete
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          {status !== 'loading' && filtered.length === 0 && (
+            <p className={styles['providers__empty']}>No providers match your search or filter.</p>
+          )}
+        </div>
+      </div>
+
+      {drawerOpen && (
+        <AddProviderDrawer
+          submitting={creating}
+          onClose={() => setDrawerOpen(false)}
+          onSubmit={(payload) => {
+            dispatch(createProvider(payload)).then(() => setDrawerOpen(false));
+          }}
+        />
+      )}
+
+      {addModelOpen && customProvider && (
+        <AddCustomModelDrawer
+          mode="create"
+          submitting={customModelCreating}
+          onClose={() => setAddModelOpen(false)}
+          onSubmit={(result) => {
+            if (result.kind !== 'create') return;
+            dispatch(createCustomModel(result.payload))
+              .unwrap()
+              .then(() => {
+                setAddModelOpen(false);
+                toast.success(`"${result.payload.name}" was registered successfully.`, { title: 'Model registered' });
+                dispatch(fetchProviders());
+                dispatch(fetchModelsByProvider(customProvider.id));
+              })
+              .catch((err) => {
+                toast.error(getErrorMessage(err, 'Failed to register model.'), { title: 'Registration failed' });
+              });
+          }}
+        />
+      )}
+
+      {viewModelsProvider && (
+        <ProviderModelsSidebar
+          provider={viewModelsProvider}
+          models={modelsByProvider[viewModelsProvider.id] || []}
+          status={modelsByProviderStatus[viewModelsProvider.id] || 'idle'}
+          onClose={() => setViewModelsProvider(null)}
+          canManage={viewModelsProvider.name === 'Custom'}
+          deletingId={customModelDeletingId}
+          updatingId={customModelUpdatingId}
+          creatingNew={customModelCreating}
+          onDelete={(modelId) => {
+            dispatch(deleteCustomModel({ modelId, providerId: viewModelsProvider.id }))
+              .unwrap()
+              .then(() => {
+                toast.success('Model removed successfully.', { title: 'Model removed' });
+                dispatch(fetchProviders());
+              })
+              .catch((err) => {
+                toast.error(getErrorMessage(err, 'Failed to remove model.'), { title: 'Removal failed' });
+              });
+          }}
+          onEditSubmit={(result) => {
+            if (result.kind === 'update') {
+              return dispatch(updateCustomModel({
+                model_id: result.model_id,
+                name: result.name,
+                description: result.description,
+                request_params: result.request_params,
+              }))
+                .unwrap()
+                .then((res) => {
+                  toast.success(`"${res.name}" was updated successfully.`, { title: 'Model updated' });
+                })
+                .catch((err) => {
+                  toast.error(getErrorMessage(err, 'Failed to update model.'), { title: 'Update failed' });
+                  throw err;
+                });
+            }
+            // Discovery found a different model id — register it as a new
+            // model instead of mutating the one being edited.
+            return dispatch(createCustomModel(result.payload))
+              .unwrap()
+              .then(() => {
+                toast.success(`"${result.payload.name}" was registered as a new model.`, { title: 'Model registered' });
+                dispatch(fetchProviders());
+                dispatch(fetchModelsByProvider(viewModelsProvider.id));
+              })
+              .catch((err) => {
+                toast.error(getErrorMessage(err, 'Failed to register model.'), { title: 'Registration failed' });
+                throw err;
+              });
+          }}
+        />
+      )}
+    </div>
+  );
 }
