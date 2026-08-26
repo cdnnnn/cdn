@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertCircle, ArrowRight, Boxes, Check, CheckCircle2, ChevronRight, Code2, Cpu, Database,
+  AlertCircle, ArrowRight, Check, CheckCircle2, ChevronRight, Code2, Cpu, Database,
   ListChecks, Loader2, Plus, ScrollText, SlidersHorizontal, Sparkles, Target, X, XCircle, Zap,
 } from 'lucide-react';
 import styles from './CreateMetric.module.scss';
@@ -339,23 +339,6 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
   // =========================================================================
   return (
     <div className={styles.cm}>
-
-      {/* ============ SUB-HEADER ============ */}
-      <div className={styles['page-header']}>
-        <div>
-          <p className={styles['page-header__eyebrow']}>Custom Metric</p>
-          <h1 className={styles['page-header__title']}>{name || 'Create Metric'}</h1>
-          <p className={styles['page-header__sub']}>
-            {evalType && metricType
-              ? `${evalType.toUpperCase()} · ${METRIC_TYPE_CARDS.find((c) => c.key === metricType)!.label}`
-              : 'Fill in every section, then validate and save.'}
-          </p>
-        </div>
-        <div className={styles['page-header__meta']}>
-          <Boxes size={13} />
-          {completedCount}/{SECTIONS.length} sections ready
-        </div>
-      </div>
 
       <div className={styles.builder}>
 
@@ -814,9 +797,6 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
 
 
 
-
-
-
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
@@ -894,75 +874,6 @@ $base-font: 0.875rem;
   @media (min-width: 1800px) { font-size: 1rem; }
 }
 
-// ---------------------------------------------------------------------------
-// sub-header (sits below the Dashboard/Create tab switcher)
-// ---------------------------------------------------------------------------
-.page-header {
-  flex-shrink: 0;
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 18px 32px;
-  border-bottom: 1px solid $line;
-  background: $card;
-}
-
-.page-header__eyebrow {
-  @extend %micro;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: $signal;
-  margin-bottom: 6px;
-
-  &::before {
-    content: '';
-    width: 16px;
-    height: 2px;
-    border-radius: 2px;
-    background: $signal;
-  }
-}
-
-.page-header__title {
-  font-family: $display;
-  font-size: 1.5714em; // 1.375rem / 0.875rem
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  color: $ink;
-  line-height: 1.2;
-  max-width: 620px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.page-header__sub {
-  margin-top: 4px;
-  font-size: 0.9643em; // 0.84375rem / 0.875rem
-  color: $ink-2;
-}
-
-.page-header__meta {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 7px 13px;
-  border-radius: 999px;
-  border: 1px solid $line;
-  background: $paper;
-  font-family: $mono;
-  font-size: 0.8214em; // 0.71875rem / 0.875rem
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: $ink-2;
-  white-space: nowrap;
-  margin-bottom: 3px;
-}
-
 .builder {
   flex: 1;
   min-height: 0;
@@ -989,7 +900,6 @@ $base-font: 0.875rem;
 .rail__head {
   padding: 26px 22px 20px;
   border-bottom: 1px solid $line;
-  background: $wash;
 }
 
 .rail__eyebrow {
@@ -1375,22 +1285,13 @@ $base-font: 0.875rem;
 
 .rule {
   position: relative;
-  padding: 16px 18px 18px 20px;
+  padding: 16px 18px 18px;
   border: 1.5px solid $line;
   border-radius: 16px;
   background: $card;
-  overflow: hidden;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 
-  &::before {
-    content: '';
-    position: absolute;
-    left: 0; top: 0; bottom: 0;
-    width: 4px;
-    background: $signal;
-  }
-
-  &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-1px); }
+  &:hover { border-color: $ink-3; box-shadow: $soft; }
 }
 
 .rule__head {
@@ -1480,23 +1381,23 @@ $base-font: 0.875rem;
   margin-top: 18px;
   padding: 16px;
   border-radius: 12px;
-  background: $ink-solid;
-  border: 1px solid $ink-solid;
+  background: $paper;
+  border: 1px solid $line;
 }
 .summary__label {
   @extend %micro;
   font-size: 0.6429em; // 0.5625rem / 0.875rem
-  color: rgba(255, 255, 255, 0.55);
+  color: $ink-3;
   margin-bottom: 8px;
 }
 .summary__code {
   font-family: $mono;
   font-size: 0.9643em; // 0.84375rem / 0.875rem
-  color: #fff;
+  color: $ink;
   line-height: 1.7;
   word-break: break-word;
 }
-.summary__token { color: #9db2ff; }
+.summary__token { color: $signal; font-weight: 700; }
 .summary__gate { color: $amber; font-weight: 700; padding: 0 4px; }
 
 
