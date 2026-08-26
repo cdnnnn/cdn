@@ -817,11 +817,6 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
 
 
 
-
-
-
-
-
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
