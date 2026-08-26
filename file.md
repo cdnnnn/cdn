@@ -674,7 +674,7 @@ export default function AddCustomModelDrawer({ mode = 'create', initialModel, on
             <span className={styles['params-gate-hint']}>Verify request parameters to continue</span>
           )}
           <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="btn btn-ind" disabled={!valid || submitting} onClick={handleSubmit}>{submitLabel}</button>
+          <button className={styles['drawer-submit-btn']} disabled={!valid || submitting} onClick={handleSubmit}>{submitLabel}</button>
         </div>
       </div>
     </div>
@@ -897,8 +897,8 @@ $drawer-base-font: 13px;
   margin-bottom: 18px;
   padding: 16px;
   border-radius: 14px;
-  background: linear-gradient(165deg, $indigo-pale 0%, $surface-alt 65%);
-  border: 1px solid rgba($indigo, 0.16);
+  background: linear-gradient(165deg, $wash 0%, $paper 65%);
+  border: 1px solid rgba($signal, 0.16);
   position: relative;
   overflow: hidden;
 }
@@ -910,9 +910,9 @@ $drawer-base-font: 13px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: $indigo;
+  background: $signal;
   color: #fff;
-  box-shadow: 0 4px 10px -3px rgba($indigo, 0.5);
+  box-shadow: 0 4px 10px -3px rgba($signal, 0.5);
 }
 .discover-panel-body {
   min-width: 0;
@@ -942,16 +942,16 @@ $drawer-base-font: 13px;
   gap: 6px;
   padding: 8px 14px;
   border-radius: 9px;
-  border: 1px solid $indigo;
-  background: $indigo;
+  border: 1px solid $signal;
+  background: $signal;
   color: #fff;
   font-size: 0.9615em; // 12.5px / 13px
   font-weight: 700;
   cursor: pointer;
-  box-shadow: 0 2px 6px -2px rgba($indigo, 0.5);
+  box-shadow: 0 2px 6px -2px rgba($signal, 0.5);
   transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease, box-shadow 0.15s ease;
 
-  &:hover:not(:disabled) { background: $indigo-dark; border-color: $indigo-dark; transform: translateY(-1px); box-shadow: 0 4px 10px -2px rgba($indigo, 0.55); }
+  &:hover:not(:disabled) { background: $signal-2; border-color: $signal-2; transform: translateY(-1px); box-shadow: 0 4px 10px -2px rgba($signal, 0.55); }
   &:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
 }
 .discover-link {
@@ -967,7 +967,7 @@ $drawer-base-font: 13px;
   cursor: pointer;
   transition: color 0.15s ease;
 
-  &:hover { color: $indigo; }
+  &:hover { color: $signal; }
 }
 .spin { animation: add-custom-model-spin 0.8s linear infinite; }
 @keyframes add-custom-model-spin { to { transform: rotate(360deg); } }
@@ -1119,6 +1119,28 @@ $drawer-base-font: 13px;
   font-size: 0.9231em; // 12px / 13px
   font-weight: 600;
   color: $ink-3;
+}
+
+// ---- drawer submit button (Register / Update Model) -------------------------------
+// Standard button color: mirrors Providers' foot-btn--primary via the shared
+// $signal token, rather than the drawer's legacy $indigo.
+.drawer-submit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 130px;
+  padding: 9px 18px;
+  border-radius: 9px;
+  border: 1px solid $signal;
+  background: $signal;
+  color: #fff;
+  font-size: 0.9615em; // 12.5px / 13px
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
+
+  &:hover:not(:disabled) { background: $signal-2; border-color: $signal-2; transform: translateY(-1px); }
+  &:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
 }
 
 // ---- verify result banners -------------------------------------------------------
