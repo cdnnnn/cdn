@@ -1,946 +1,7 @@
-//AppRoutes.tsx
-import { Routes, Route, Navigate } from 'react-router-dom';
-import Landing from '../components/landing/Landing';
-import AppShell from '../components/layout/AppShell';
-import ProtectedRoute from './ProtectedRoute';
-import Dashboard from '../components/dashboard/Dashboard';
-import Providers from '../components/providers/Providers';
-import ModelCatalog from '../components/models/ModelCatalog';
-import TestSuites from '../components/suites/TestSuites';
-import NewEvaluation from '../components/evaluations/NewEvaluation';
-import Evaluations from '../components/evaluations/Evaluations';
-import EvaluationDetail from '../components/evaluations/EvaluationDetail';
-import Comparison from '../components/comparison/Comparison';
-import CustomMetricsDashboard from '../components/CustomMetrics/CustomMetricsDashboard';
-
-const MOCKS_ENABLED = import.meta.env.VITE_ENABLE_MOCKS === 'true';
-
-export default function AppRoutes() {
-  return (
-    <Routes>
-      {/* In mock mode, main.tsx already seeds a session before render, so
-          skip the landing/SSO page entirely and land straight in the app. */}
-      <Route path="/" element={MOCKS_ENABLED ? <Navigate to="/app/dashboard" replace /> : <Landing />} />
-
-      <Route element={<ProtectedRoute />}>
-        <Route path="/app" element={<AppShell />}>
-          <Route index element={<Navigate to="dashboard" replace />} />
-          <Route path="dashboard" element={<Dashboard />} />
-          <Route path="providers" element={<Providers />} />
-          <Route path="models" element={<ModelCatalog />} />
-          <Route path="suites" element={<TestSuites />} />
-          <Route path="new-eval" element={<NewEvaluation />} />
-          <Route path="evaluations" element={<Evaluations />} />
-          <Route path="evaluations/:id" element={<EvaluationDetail />} />
-          <Route path="comparison" element={<Comparison />} />
-
-          {/* Single route — Dashboard vs Create is an internal tab, not a route. */}
-          <Route path="custom-metrics" element={<CustomMetricsDashboard />} />
-        </Route>
-      </Route>
-
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Sidebar.tsx
-import { Link, NavLink } from 'react-router-dom';
-import {
-  Home, Link2, Cpu, BookOpen, Play, FlaskConical, GitCompare, FileText, LogOut, Gauge,
-} from 'lucide-react';
-import { useAppDispatch, useAppSelector } from '../../hooks/redux';
-import { logout } from '../../store/slices/authSlice';
-import ThemeToggle from '../common/ThemeToggle';
-import styles from './Sidebar.module.scss';
-
-const navItems = [
-  { to: '/app/dashboard', icon: <Home size={18} />, label: 'Dashboard' },
-  { to: '/app/providers', icon: <Link2 size={18} />, label: 'Providers' },
-  { to: '/app/models', icon: <Cpu size={18} />, label: 'Models' },
-  { to: '/app/datasets', icon: <BookOpen size={18} />, label: 'Datasets' },
-];
-
-const workflowItems = [
-  { to: '/app/run-evaluation', icon: <Play size={18} />, label: 'New Evaluation' },
-  { to: '/app/history', icon: <FlaskConical size={18} />, label: 'History' },
-  { to: '/app/comparison', icon: <GitCompare size={18} />, label: 'Comparison' },
-  { to: '/app/reports', icon: <FileText size={18} />, label: 'Reports' },
-  // Single entry now — Dashboard vs Create is toggled inside the page itself.
-  { to: '/app/custom-metrics', icon: <Gauge size={18} />, label: 'Custom Metrics' },
-];
-
-export default function Sidebar() {
-  const dispatch = useAppDispatch();
-  const user = useAppSelector((s) => s.auth.user);
-
-  const navLinkClass = ({ isActive }: { isActive: boolean }) =>
-    `${styles['nav-item']} ${isActive ? styles.active : ''}`;
-
-  return (
-    <div className={styles.sidebar}>
-      <Link to="/" className={styles['sidebar__logo']}>
-        <div className={styles['sidebar__mark']}>&#9670;</div>
-        SemcoEval
-      </Link>
-      <nav className={styles['sidebar__nav']}>
-        {navItems.map((item) => (
-          <NavLink key={item.to} to={item.to} className={navLinkClass}>
-            {item.icon}
-            {item.label}
-          </NavLink>
-        ))}
-
-        <div className={styles['sidebar__section']}>Workflow</div>
-        {workflowItems.map((item) => (
-          <NavLink key={item.to} to={item.to} className={navLinkClass}>
-            {item.icon}
-            {item.label}
-          </NavLink>
-        ))}
-      </nav>
-      <div className={styles['sidebar__foot']}>
-        <div className={styles['sidebar__theme-row']}>
-          <span>Theme</span>
-          <ThemeToggle />
-        </div>
-        <div className={styles['sidebar__user']}>
-          <div className={styles['sidebar__avatar']}>
-            {(user?.name || user?.email || '?').slice(0, 1).toUpperCase()}
-          </div>
-          <div className={styles['sidebar__user-info']}>
-            <div className={styles['sidebar__user-name']}>{user?.name || 'Account'}</div>
-            <div className={styles['sidebar__user-email']}>{user?.email}</div>
-          </div>
-          <button
-            type="button"
-            className={styles['sidebar__logout']}
-            title="Log out"
-            onClick={() => dispatch(logout())}
-          >
-            <LogOut size={15} />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Metrics.ts
-import api from '../axiosInstance';
-
-// ---- Evaluation type & metric type (client-side only, no API) -----------
-export type EvalType = 'model' | 'agent' | 'rag';
-export type MetricType = 'visual' | 'prompt' | 'code' | 'simple';
-
-// ---- Prompt Builder — GET /metrics/templates -----------------------------
-export interface PromptTemplate {
-  category: string; // "llm" | "agent" | "rag"
-  description: string;
-  label: string;
-  name: string;
-  template: string;
-  uses_placeholders: string[];
-}
-
-// ---- Code Editor — GET /metrics/code-templates/{eval_type} ----------------
-export interface CodeTemplateData {
-  eval_type: string;
-  code: string;
-}
-
-// ---- Judge model (Prompt Builder) — GET /models ---------------------------
-export interface ModelSummary {
-  id: string;
-  name: string;
-  provider_id: string;
-  category: string;
-  capabilities: string[];
-  context_window: number;
-  input_price: number | null;
-  output_price: number | null;
-  accuracy_score: number | null;
-  agent_score: number | null;
-  is_active: boolean;
-  base_url: string;
-}
-
-export interface ModelHealthData {
-  success: boolean;
-  message: string;
-  model_id: string;
-  response: string;
-}
-
-// ---- Datasets ---------------------------------------------------------
-export interface DatasetSummary {
-  id: string;
-  name: string;
-  question_count: number;
-}
-
-export interface PreviewQuestion {
-  id: string;
-  input: { prompt: string };
-  expected: { answer: string };
-}
-
-export interface DatasetPreviewData {
-  dataset_id: string;
-  questions: PreviewQuestion[];
-}
-
-// ---- Validate (dry run) — POST /metrics/custom/preview --------------------
-export interface RuleDef {
-  field: string;
-  operator: string;
-  value: string;
-  compare_to_field: boolean;
-}
-
-export interface MetricDefinition {
-  rules?: RuleDef[];
-  // NB: the spec's own example literally spells this "prompt_tenplate" —
-  // treating that as a typo and using the correct spelling here.
-  prompt_template?: string;
-  code?: string;
-  skip_validation?: boolean;
-}
-
-export interface TestCasePayload {
-  input: string;
-  actual_output: string;
-  expected_output: string;
-  context: string[];
-  retrieval_context: string[];
-  tools_called: string[];
-  expected_tools: string[];
-}
-
-export interface JudgeConfig {
-  model_id: string;
-}
-
-export interface ValidateMetricRequest {
-  actual_output: string;
-  context: string[];
-  definition: MetricDefinition;
-  description: string;
-  eval_types: EvalType[];
-  expected_output: string;
-  expected_tools: string[];
-  gates: string[];
-  input: string;
-  judge_config: JudgeConfig | null;
-  metric_type: string; // "condition" | "prompt" | "code" | "simple"
-  name: string;
-  retrieval_context: string[];
-  test_cases: TestCasePayload[];
-  threshold: string; // sent as a string, e.g. "0.70"
-  tools_called: string[];
-}
-
-export interface ValidateResultItem {
-  score: number;
-  reason: string;
-  success: boolean;
-  test_case: TestCasePayload;
-}
-
-export interface ValidateMetricData {
-  results: ValidateResultItem[];
-  total: number;
-  passed: number;
-}
-
-// ---- Save — POST /metrics/custom -------------------------------------
-export interface SaveMetricRequest {
-  definition: MetricDefinition;
-  description: string;
-  eval_types: EvalType[];
-  metric_type: string;
-  name: string;
-  threshold: string;
-  // Not shown in the spec's request sample, but included defensively since
-  // Prompt Builder metrics can't be scored without a judge model — drop
-  // this if the backend rejects the extra field.
-  judge_config?: JudgeConfig | null;
-}
-
-export interface SaveMetricData {
-  id?: string;
-  name?: string;
-}
-
-// ---- Delete — DELETE /metrics/custom/{metric_id} --------------------------
-export interface DeleteMetricData {
-  status: string;
-  metric_id: string;
-}
-
-// ---- Dashboard: saved custom metrics ---------------------------------
-export interface CustomMetricRuleDef {
-  field: string;
-  operator: string;
-  value: string;
-  compared_to_field: boolean;
-}
-
-export interface CustomMetricDefinition {
-  subtype?: string;
-  params?: Record<string, unknown>;
-  rules?: CustomMetricRuleDef[];
-}
-
-export interface CustomMetric {
-  id: string;
-  name: string;
-  description: string;
-  metric_type: string;
-  eval_types: string[];
-  definition: CustomMetricDefinition;
-  requires_judge: boolean;
-  threshold: number;
-  is_active: boolean;
-  created_by_id: number;
-  created_at: string;
-  updated_at: string;
-}
-
-// None of these endpoints wrap their body in a { status, data } envelope —
-// every response below is the payload itself, so each call just unwraps
-// axios's own `r.data` and normalizes array fields to [] where the backend
-// might omit them.
-export const metricsApi = {
-  // Dashboard — GET /metrics/custom -> { metrics: [...] }
-  list: () =>
-    api.get<{ metrics: CustomMetric[] }>('/metrics/custom').then((r) => r.data.metrics || []),
-
-  // Prompt Builder — GET /metrics/templates -> { templates: [...] }
-  getPromptTemplates: () =>
-    api.get<{ templates: PromptTemplate[] }>('/metrics/templates').then((r) => r.data.templates || []),
-
-  // Code Editor — GET /metrics/code-templates/{eval_type}
-  getCodeTemplate: (evalType: EvalType) =>
-    api.get<CodeTemplateData>(`/metrics/code-templates/${evalType}`).then((r) => r.data),
-
-  // Prompt Builder — GET /models
-  listModels: () =>
-    api.get<{ models: ModelSummary[] }>('/models').then((r) => r.data.models || []),
-
-  // Prompt Builder — per-model health ping. Failures (network error, or a
-  // body missing `success`) resolve to an "unreachable" fallback instead
-  // of throwing, since an offline model is a normal UI state, not an
-  // exceptional one.
-  checkModelHealth: (modelId: string) =>
-    api
-      .get<ModelHealthData>(`/models/health/${modelId}`)
-      .then((r) => ('success' in r.data ? r.data : { success: false, message: 'Unreachable', model_id: modelId, response: '' }))
-      .catch(() => ({ success: false, message: 'Unreachable', model_id: modelId, response: '' })),
-
-  // Dataset selection — GET /datasets?eval_type={evalType}
-  listDatasets: (evalType: EvalType) =>
-    api
-      .get<{ total_count: number; datasets: DatasetSummary[] }>('/datasets', { params: { eval_type: evalType } })
-      .then((r) => r.data.datasets || []),
-
-  // GET /datasets/{dataset_id}/preview
-  previewDataset: (datasetId: string) =>
-    api.get<DatasetPreviewData>(`/datasets/${datasetId}/preview`).then((r) => ({
-      ...r.data,
-      questions: r.data.questions || [],
-    })),
-
-  // Footer "Validate Metric" — POST /metrics/custom/preview. Doesn't
-  // persist anything; a successful response with results unlocks Save.
-  validate: (payload: ValidateMetricRequest) =>
-    api.post<ValidateMetricData>('/metrics/custom/preview', payload).then((r) => ({
-      ...r.data,
-      results: r.data.results || [],
-    })),
-
-  // "Save Metric" — POST /metrics/custom. Response body beyond "200 OK"
-  // isn't specified, so `id`/`name` are optional here.
-  create: (payload: SaveMetricRequest) =>
-    api.post<SaveMetricData | void>('/metrics/custom', payload).then((r) => r.data || {}),
-
-  // Dashboard "Delete" — DELETE /metrics/custom/{metric_id} -> { status, metric_id }
-  remove: (metricId: string) =>
-    api.delete<DeleteMetricData>(`/metrics/custom/${metricId}`).then((r) => r.data),
-};
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Custommetricsdashboard.tsx
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertCircle, Gauge, LayoutDashboard, Loader2, PenSquare, Trash2 } from 'lucide-react';
-import styles from './CustomMetrics.module.scss';
-import { metricsApi, CustomMetric } from '../../api/endpoints/metrics';
-import CreateMetric from './CreateMetric';
-
-type View = 'dashboard' | 'create';
-
-function formatDate(iso: string) {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-}
-
-export default function CustomMetricsDashboard() {
-  const [view, setView] = useState<View>('dashboard');
-
-  const [metrics, setMetrics] = useState<CustomMetric[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
-  // delete state
-  const [pendingDeleteId, setPendingDeleteId] = useState('');
-  const [deletingId, setDeletingId] = useState('');
-  const [deleteError, setDeleteError] = useState('');
-
-  const fetchMetrics = useCallback(() => {
-    setLoading(true);
-    setError('');
-    metricsApi.list()
-      .then(setMetrics)
-      .catch((err) => setError(err.message || 'Failed to load metrics'))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => { fetchMetrics(); }, [fetchMetrics]);
-
-  const activeCount = useMemo(() => metrics.filter((m) => m.is_active).length, [metrics]);
-
-  const badgeClass = (variant: string) => `${styles.badge} ${styles[`badge--${variant}`] || ''}`;
-
-  const requestDelete = (id: string) => {
-    setDeleteError('');
-    setPendingDeleteId(id);
-  };
-
-  const cancelDelete = () => setPendingDeleteId('');
-
-  const confirmDelete = (id: string) => {
-    setDeletingId(id);
-    setDeleteError('');
-    metricsApi.remove(id)
-      .then(() => {
-        setMetrics((prev) => prev.filter((m) => m.id !== id));
-        setPendingDeleteId('');
-      })
-      .catch((err) => setDeleteError(err.message || 'Failed to delete metric'))
-      .finally(() => setDeletingId(''));
-  };
-
-  // After a successful save, hop back to the dashboard and refresh the list.
-  const handleSaved = () => {
-    setView('dashboard');
-    fetchMetrics();
-  };
-
-  return (
-    <div className={`page-enter pg-shell ${styles.cm}`}>
-      <div className={styles['cm__header']}>
-        <div>
-          <p className={styles['cm__header-eyebrow']}>Custom Metrics</p>
-          <h1>{view === 'dashboard' ? 'Dashboard' : 'Create Metric'}</h1>
-          <p className={styles['cm__header-sub']}>
-            {view === 'dashboard'
-              ? (loading ? 'Saved metrics for evaluation' : `${metrics.length} metric${metrics.length === 1 ? '' : 's'} \u00b7 ${activeCount} active`)
-              : 'Fill in every section below, then validate and save.'}
-          </p>
-        </div>
-
-        <div className={styles.tabbar}>
-          <button
-            type="button"
-            className={`${styles.tab} ${view === 'dashboard' ? styles['tab--active'] : ''}`}
-            onClick={() => setView('dashboard')}
-          >
-            <LayoutDashboard size={14} /> Dashboard
-          </button>
-          <button
-            type="button"
-            className={`${styles.tab} ${view === 'create' ? styles['tab--active'] : ''}`}
-            onClick={() => setView('create')}
-          >
-            <PenSquare size={14} /> Create Metric
-          </button>
-        </div>
-      </div>
-
-      {view === 'create' ? (
-        <CreateMetric onCancel={() => setView('dashboard')} onSaved={handleSaved} />
-      ) : (
-        <div className={`pg-body ${styles['pg-body-scroll']}`}>
-          <div className={styles.card}>
-            <div className={styles['card-header']}>
-              <h3>Saved Metrics</h3>
-              <button
-                type="button"
-                className={`${styles.btn} ${styles['btn-sm']}`}
-                onClick={() => setView('create')}
-              >
-                + New
-              </button>
-            </div>
-
-            <div className={styles['card-body']}>
-              {error && <div className={styles['error-banner']}><AlertCircle size={14} /> {error}</div>}
-              {deleteError && <div className={styles['error-banner']}><AlertCircle size={14} /> {deleteError}</div>}
-
-              {loading ? (
-                <div className={styles['loading-row']}><Loader2 size={14} className={styles.spin} /> Loading metrics…</div>
-              ) : metrics.length === 0 ? (
-                <div className={styles.empty}>
-                  <Gauge size={16} /> No metrics saved yet — create your first custom metric to get started.
-                </div>
-              ) : (
-                <div className={styles['table-wrap']}>
-                  <table className={styles.table}>
-                    <thead>
-                      <tr>
-                        <th>Name</th>
-                        <th>Eval Types</th>
-                        <th>Type</th>
-                        <th>Threshold</th>
-                        <th>Judge</th>
-                        <th>Status</th>
-                        <th>Created</th>
-                        <th style={{ width: '1%' }} />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {metrics.map((m) => {
-                        const isPending = pendingDeleteId === m.id;
-                        const isDeleting = deletingId === m.id;
-                        return (
-                          <tr key={m.id} title={m.description}>
-                            <td>{m.name}</td>
-                            <td>
-                              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                                {(m.eval_types || []).map((t) => (
-                                  <span key={t} className={badgeClass(t)}>{(t || '').toUpperCase()}</span>
-                                ))}
-                              </div>
-                            </td>
-                            <td><span className={badgeClass(m.metric_type === 'code' ? 'code' : 'simple')}>{m.metric_type}</span></td>
-                            <td className={styles['cell-num']}>{m.threshold}</td>
-                            <td>{m.requires_judge ? 'Yes' : 'No'}</td>
-                            <td><span className={badgeClass(m.is_active ? 'active' : 'inactive')}>{m.is_active ? 'Active' : 'Inactive'}</span></td>
-                            <td>{formatDate(m.created_at)}</td>
-                            <td>
-                              {isPending ? (
-                                <div style={{ display: 'flex', gap: '6px', alignItems: 'center', whiteSpace: 'nowrap' }}>
-                                  <span style={{ fontSize: '0.78125rem', color: 'var(--ink-2)' }}>Delete?</span>
-                                  <button
-                                    type="button"
-                                    className={`${styles.btn} ${styles['btn-sm']}`}
-                                    style={{ borderColor: '#DC2626', background: '#DC2626', color: '#fff' }}
-                                    disabled={isDeleting}
-                                    onClick={() => confirmDelete(m.id)}
-                                  >
-                                    {isDeleting ? <Loader2 size={13} className={styles.spin} /> : 'Confirm'}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className={`${styles.btn} ${styles['btn-sm']}`}
-                                    disabled={isDeleting}
-                                    onClick={cancelDelete}
-                                  >
-                                    Cancel
-                                  </button>
-                                </div>
-                              ) : (
-                                <button
-                                  type="button"
-                                  title="Delete metric"
-                                  aria-label={`Delete ${m.name}`}
-                                  onClick={() => requestDelete(m.id)}
-                                  style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    width: '28px',
-                                    height: '28px',
-                                    borderRadius: '8px',
-                                    border: '1px solid transparent',
-                                    background: 'transparent',
-                                    color: 'var(--ink-3)',
-                                    cursor: 'pointer',
-                                  }}
-                                  onMouseEnter={(e) => {
-                                    e.currentTarget.style.background = 'rgba(220,38,38,0.08)';
-                                    e.currentTarget.style.borderColor = 'rgba(220,38,38,0.2)';
-                                    e.currentTarget.style.color = '#DC2626';
-                                  }}
-                                  onMouseLeave={(e) => {
-                                    e.currentTarget.style.background = 'transparent';
-                                    e.currentTarget.style.borderColor = 'transparent';
-                                    e.currentTarget.style.color = 'var(--ink-3)';
-                                  }}
-                                >
-                                  <Trash2 size={14} />
-                                </button>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Custommetrics.module.scss
-@use '../../styles/_variables' as *;
-
-// ===========================================================================
-// Custom Metrics — Dashboard-only stylesheet. Create Metric now has its own
-// module (CreateMetric.module.scss) so this file just needs the header,
-// tab switcher, saved-metrics table, and shared toast.
-// ===========================================================================
-
-$ink:      var(--ink-1);
-$ink-2:    var(--ink-2);
-$ink-3:    var(--ink-3);
-$paper:    var(--paper);
-$card:     var(--card);
-$line:     var(--line);
-$line-2:   var(--line-2);
-$signal:   #2B2BF5;
-$signal-2: #1C1CC7;
-$wash:     var(--signal-wash);
-$ok:       #0FA968;
-$ok-wash:  var(--ok-wash);
-$amber:    #E08600;
-$amber-wash: var(--amber-wash);
-$danger:   #DC2626;
-$danger-wash: var(--danger-wash);
-$violet:   #6D28D9;
-$violet-wash: rgba(109, 40, 217, 0.1);
-$sky:      #0369A1;
-$sky-wash: var(--sky-wash);
-$ink-wash: var(--ink-wash);
-
-$mono:    $font-mono;
-$sans:    $font-body;
-$display: $font-display;
-
-$soft: 0 1px 2px rgba(20, 22, 27, 0.05);
-$lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
-
-$cm-base-font: 0.875rem;
-
-%micro {
-  font-family: $mono;
-  font-size: 0.6875rem;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-
-@keyframes cm-spin { to { transform: rotate(360deg); } }
-@keyframes cm-toast-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
-
-.spin { animation: cm-spin 0.8s linear infinite; }
-
-.cm {
-  font-size: $cm-base-font;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  @media (min-width: 1800px) { font-size: 1rem; }
-}
-
-// ---- header ---------------------------------------------------------------
-.cm__header {
-  flex-shrink: 0;
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 24px 32px 20px;
-  border-bottom: 1px solid $line;
-  background: $card;
-
-  h1 {
-    font-family: $display;
-    font-size: 1.5rem;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    color: $ink;
-    line-height: 1.2;
-  }
-}
-
-.cm__header-eyebrow {
-  @extend %micro;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: $signal;
-  margin-bottom: 6px;
-
-  &::before { content: ''; width: 16px; height: 2px; border-radius: 2px; background: $signal; }
-}
-
-.cm__header-sub { margin-top: 4px; font-size: 0.84375rem; color: $ink-2; }
-
-// ---- tab switcher (Dashboard / Create Metric) -----------------------------
-.tabbar {
-  flex-shrink: 0;
-  display: inline-flex;
-  padding: 3px;
-  gap: 2px;
-  border-radius: 11px;
-  border: 1px solid $line;
-  background: $paper;
-  margin-bottom: 3px;
-}
-
-.tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 8px 14px;
-  border-radius: 8px;
-  border: none;
-  background: transparent;
-  color: $ink-2;
-  font-family: $sans;
-  font-size: 0.8125rem;
-  font-weight: 650;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: all 0.15s ease;
-
-  &:hover:not(&--active) { color: $ink; }
-}
-
-.tab--active {
-  background: $card;
-  color: $signal;
-  box-shadow: $soft;
-}
-
-.pg-body-scroll { overflow-y: auto; padding: 20px 32px 32px; }
-
-// ---- generic buttons (shared) ---------------------------------------------
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 10px 18px;
-  border-radius: 10px;
-  border: 1px solid $line;
-  background: $card;
-  color: $ink-2;
-  font-family: $sans;
-  font-size: 0.84375rem;
-  font-weight: 650;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  white-space: nowrap;
-
-  &:hover:not(:disabled) { border-color: $ink-3; color: $ink; }
-  &:disabled { opacity: 0.45; cursor: not-allowed; }
-}
-
-.btn-sm { padding: 7px 12px; font-size: 0.78125rem; border-radius: 8px; }
-
-// ---- saved metrics table ---------------------------------------------------
-.card {
-  background: $card;
-  border: 1px solid $line;
-  border-radius: 16px;
-  box-shadow: $soft;
-  overflow: hidden;
-}
-
-.card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 18px;
-  border-bottom: 1px solid $line;
-  h3 { font-family: $display; font-size: 0.9375rem; font-weight: 700; color: $ink; }
-}
-
-.card-body { padding: 4px 0 8px; }
-.table-wrap { overflow-x: auto; }
-
-.table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.8125rem;
-
-  thead th { text-align: left; background: $paper; @extend %micro; font-size: 0.5625rem; color: $ink-3; padding: 10px 18px; white-space: nowrap; }
-  tbody tr { border-top: 1px solid $line-2; transition: background 0.13s ease; &:hover { background: $paper; } }
-  tbody td { padding: 11px 18px; color: $ink; vertical-align: middle; }
-}
-
-.cell-num { font-family: $mono; font-weight: 700; color: $ink; }
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  font-family: $mono;
-  font-size: 0.625rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  border-radius: 6px;
-  padding: 3px 8px;
-  white-space: nowrap;
-  color: $signal;
-  background: $wash;
-
-  &--code { color: $violet; background: $violet-wash; }
-  &--model { color: $signal; background: $wash; }
-  &--rag { color: $sky; background: $sky-wash; }
-  &--agent { color: $amber; background: $amber-wash; }
-  &--simple { color: $signal; background: $wash; }
-  &--active { color: $ok; background: $ok-wash; }
-  &--inactive { color: $ink-3; background: $ink-wash; }
-}
-
-.error-banner {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 14px; border-radius: 10px;
-  background: $danger-wash; border: 1px solid rgba($danger, 0.2);
-  color: $danger; font-size: 0.8125rem; margin-bottom: 16px;
-}
-
-.empty { padding: 28px 20px; text-align: center; color: $ink-3; font-size: 0.8125rem; display: flex; align-items: center; gap: 8px; justify-content: center; }
-.loading-row { display: flex; align-items: center; gap: 8px; padding: 24px; justify-content: center; color: $ink-3; font-size: 0.8125rem; }
-
-// ---- toast (used by useToast.tsx) -----------------------------------------
-.toast {
-  position: fixed;
-  left: 50%;
-  bottom: 28px;
-  transform: translateX(-50%);
-  z-index: 400;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 18px;
-  border-radius: 11px;
-  background: #14161B;
-  color: #fff;
-  font-size: 0.8125rem;
-  font-weight: 650;
-  box-shadow: $lift;
-  animation: cm-toast-in 0.18s ease;
-}
-.toast--ok::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: $ok; }
-.toast--error::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #FF6B6B; }
-.toast--info::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: $signal; }
-
-@media (max-width: 760px) {
-  .cm__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 12px; }
-  .pg-body-scroll { padding: 16px 18px 24px; }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 //Createmetric.tsx
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertCircle, ArrowRight, Boxes, Check, CheckCircle2, Code2, Cpu, Database,
+  AlertCircle, ArrowRight, Boxes, Check, CheckCircle2, ChevronRight, Code2, Cpu, Database,
   ListChecks, Loader2, Plus, ScrollText, SlidersHorizontal, Sparkles, Target, X, XCircle,
 } from 'lucide-react';
 import styles from './CreateMetric.module.scss';
@@ -1322,6 +383,7 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
                     <span className={styles['rail-step__label']}>{s.label}</span>
                     <span className={styles['rail-step__value']}>{sectionValue[s.key]}</span>
                   </span>
+                  <ChevronRight size={14} className={styles['rail-step__arrow']} />
                 </button>
               );
             })}
@@ -1579,15 +641,22 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
                           : datasets.length === 0 ? <div className={styles.empty}>No datasets for this type.</div>
                           : (
                             <div className={styles['ds-list']}>
-                              {datasets.map((d) => (
-                                <div key={d.id} className={`${styles.ds} ${selectedDatasetId === d.id ? styles['ds--selected'] : ''}`} onClick={() => selectDataset(d.id)}>
-                                  <span className={styles['ds__radio']} />
-                                  <span style={{ minWidth: 0 }}>
+                              {datasets.map((d) => {
+                                const selected = selectedDatasetId === d.id;
+                                return (
+                                  <div
+                                    key={d.id}
+                                    className={`${styles.ds} ${selected ? styles['ds--selected'] : ''}`}
+                                    onClick={() => selectDataset(d.id)}
+                                    title={d.name}
+                                  >
+                                    <span className={styles['ds__check']}><Check size={11} /></span>
+                                    <span className={styles['ds__icon']}><Database size={14} /></span>
                                     <span className={styles['ds__name']}>{d.name}</span>
-                                    <span className={styles['ds__count']}>{d.question_count} questions</span>
-                                  </span>
-                                </div>
-                              ))}
+                                    <span className={styles['ds__count']}>{d.question_count} {d.question_count === 1 ? 'question' : 'questions'}</span>
+                                  </div>
+                                );
+                              })}
                             </div>
                           )}
                       </div>
@@ -1737,14 +806,25 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
 
 
 
+
+
+
+
+
+
 //Createmetric.module.scss
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
 // Create Metric — single-page builder (all sections visible at once).
-// Left: overview rail with jump-to links + live status per section.
-// Right: every section stacked, separated by dashed dividers.
-// Ink/paper design system, ultramarine signal accent, mono instrument labels.
+// Left: overview rail with a redesigned "living timeline" stepper.
+// Right: every section stacked, separated by dashed dividers, capped at
+// a wider 1000px reading column.
+//
+// Font scaling follows the same convention as Model Catalog: `.cm` sets a
+// single base font-size, every descendant font-size is expressed in `em`
+// relative to that base, so bumping `.cm`'s font-size on wide screens
+// scales the whole builder proportionally from one place.
 // ===========================================================================
 
 $ink:      var(--ink-1);
@@ -1777,11 +857,12 @@ $display: $font-display;
 $soft: 0 1px 2px rgba(20, 22, 27, 0.05);
 $lift: 0 18px 40px -20px rgba(20, 22, 27, 0.30);
 
+// base font-size the whole builder's internal `em` scale is built on
 $base-font: 0.875rem;
 
 %micro {
   font-family: $mono;
-  font-size: 0.6875rem;
+  font-size: 0.7857em; // 0.6875rem / 0.875rem
   font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -1791,11 +872,13 @@ $base-font: 0.875rem;
 @keyframes cm-fade-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes cm-pop { 0% { transform: scale(0.7); opacity: 0; } 60% { transform: scale(1.08); } 100% { transform: scale(1); opacity: 1; } }
 @keyframes cm-modal-in { from { opacity: 0; transform: translateY(12px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes cm-check-pop { 0% { transform: scale(0.4); opacity: 0; } 70% { transform: scale(1.15); } 100% { transform: scale(1); opacity: 1; } }
 
 .spin { animation: cm-spin 0.8s linear infinite; }
 
 // ---------------------------------------------------------------------------
-// shell
+// shell — master scale control. Every em-based font-size below responds
+// to this. On very wide screens, bumping it to 1rem scales everything.
 // ---------------------------------------------------------------------------
 .cm {
   font-size: $base-font;
@@ -1840,7 +923,7 @@ $base-font: 0.875rem;
 
 .page-header__title {
   font-family: $display;
-  font-size: 1.375rem;
+  font-size: 1.5714em; // 1.375rem / 0.875rem
   font-weight: 800;
   letter-spacing: -0.02em;
   color: $ink;
@@ -1853,7 +936,7 @@ $base-font: 0.875rem;
 
 .page-header__sub {
   margin-top: 4px;
-  font-size: 0.84375rem;
+  font-size: 0.9643em; // 0.84375rem / 0.875rem
   color: $ink-2;
 }
 
@@ -1867,7 +950,7 @@ $base-font: 0.875rem;
   border: 1px solid $line;
   background: $paper;
   font-family: $mono;
-  font-size: 0.71875rem;
+  font-size: 0.8214em; // 0.71875rem / 0.875rem
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -1880,13 +963,15 @@ $base-font: 0.875rem;
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 300px 1fr;
   gap: 0;
   overflow: hidden;
 }
 
 // ---------------------------------------------------------------------------
-// LEFT RAIL — jump-to links (no disabled states, everything is reachable)
+// LEFT RAIL — "living timeline" stepper. Gradient markers, a filled
+// connector line that lights up as sections complete, card-style rows
+// that lift and glow on hover/done — jump to any section, any time.
 // ---------------------------------------------------------------------------
 .rail {
   display: flex;
@@ -1898,13 +983,14 @@ $base-font: 0.875rem;
 }
 
 .rail__head {
-  padding: 22px 20px 16px;
+  padding: 26px 22px 20px;
   border-bottom: 1px solid $line;
+  background: linear-gradient(180deg, $wash 0%, rgba(43, 43, 245, 0) 100%);
 }
 
 .rail__eyebrow {
   @extend %micro;
-  font-size: 0.625rem;
+  font-size: 0.7143em; // 0.625rem / 0.875rem
   color: $signal;
   display: flex;
   align-items: center;
@@ -1916,13 +1002,14 @@ $base-font: 0.875rem;
 
 .rail__sub {
   margin-top: 4px;
-  font-size: 0.78125rem;
+  font-size: 0.8929em; // 0.78125rem / 0.875rem
   color: $ink-3;
+  line-height: 1.5;
 }
 
 .rail__steps {
   flex: 1;
-  padding: 12px;
+  padding: 18px 14px 20px;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -1931,71 +1018,122 @@ $base-font: 0.875rem;
 .rail-step {
   position: relative;
   display: flex;
-  align-items: center;
-  gap: 12px;
+  align-items: flex-start;
+  gap: 14px;
   width: 100%;
   text-align: left;
-  padding: 11px 12px;
-  border-radius: 11px;
-  border: none;
+  padding: 13px 14px 13px 12px;
+  border-radius: 16px;
+  border: 1.5px solid transparent;
   background: transparent;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
 
-  &:hover { background: $paper; }
+  &:hover {
+    background: $paper;
+    border-color: $line;
+    transform: translateX(3px);
 
-  // connector line between markers
+    .rail-step__arrow { opacity: 1; transform: translateX(0); }
+  }
+
+  &--done {
+    background: linear-gradient(135deg, $wash 0%, rgba(43, 43, 245, 0.02) 100%);
+    border-color: rgba($signal, 0.16);
+
+    &:hover { border-color: rgba($signal, 0.35); }
+  }
+
+  // vertical connector between this marker and the next — sits behind
+  // the row content, lights up with a gradient once the step is done.
   &:not(:last-child)::after {
     content: '';
     position: absolute;
-    left: 27px;
-    top: 38px;
-    bottom: -2px;
-    width: 1.5px;
+    left: 29px;
+    top: 48px;
+    bottom: -6px;
+    width: 2px;
+    border-radius: 2px;
     background: $line;
+    z-index: 0;
+    transition: background 0.25s ease;
   }
-  &--done:not(:last-child)::after { background: $signal; }
+  &--done:not(:last-child)::after {
+    background: linear-gradient(180deg, $signal 0%, rgba(43, 43, 245, 0.25) 100%);
+  }
 }
 
 .rail-step__marker {
+  position: relative;
+  z-index: 1;
   flex-shrink: 0;
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   font-family: $mono;
-  font-size: 0.8125rem;
-  font-weight: 700;
+  font-size: 0.9286em; // 0.8125rem / 0.875rem
+  font-weight: 800;
   color: $ink-3;
   background: $paper;
-  border: 1.5px solid $line;
-  z-index: 1;
-  transition: all 0.15s ease;
+  border: 2px solid $line;
+  transition: all 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
 
-  .rail-step--done & { color: #fff; background: $signal; border-color: $signal; }
+  .rail-step--done & {
+    color: #fff;
+    background: linear-gradient(135deg, $signal, $signal-2);
+    border-color: $signal;
+    box-shadow: 0 4px 12px -3px rgba(43, 43, 245, 0.45);
+    animation: cm-check-pop 0.3s ease;
+  }
+
+  .rail-step:hover:not(.rail-step--done) & {
+    border-color: $ink-3;
+    color: $ink-2;
+    transform: scale(1.08);
+  }
 }
 
-.rail-step__body { min-width: 0; flex: 1; }
+.rail-step__body {
+  min-width: 0;
+  flex: 1;
+  padding-top: 4px;
+}
 
 .rail-step__label {
-  font-size: 0.8125rem;
-  font-weight: 650;
+  display: block;
+  font-size: 0.9286em; // 0.8125rem / 0.875rem
+  font-weight: 700;
   color: $ink-2;
-  transition: color 0.15s ease;
+  transition: color 0.2s ease;
 
   .rail-step--done & { color: $ink; }
 }
 
 .rail-step__value {
+  display: block;
   font-family: $mono;
-  font-size: 0.6875rem;
+  font-size: 0.7857em; // 0.6875rem / 0.875rem
   color: $ink-3;
-  margin-top: 2px;
+  margin-top: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+
+  .rail-step--done & { color: $signal; font-weight: 700; }
+}
+
+.rail-step__arrow {
+  flex-shrink: 0;
+  align-self: center;
+  color: $ink-3;
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: all 0.2s ease;
+
+  .rail-step--done & { color: $signal; }
 }
 
 // ---------------------------------------------------------------------------
@@ -2016,7 +1154,7 @@ $base-font: 0.875rem;
 }
 
 .work__inner {
-  max-width: 760px;
+  max-width: 1000px;
   margin: 0 auto;
 }
 
@@ -2030,14 +1168,14 @@ $base-font: 0.875rem;
 
 .work__eyebrow {
   @extend %micro;
-  font-size: 0.625rem;
+  font-size: 0.7143em; // 0.625rem / 0.875rem
   color: $ink-3;
   margin-bottom: 8px;
 }
 
 .work__title {
   font-family: $display;
-  font-size: 1.375rem;
+  font-size: 1.5714em; // 1.375rem / 0.875rem
   font-weight: 800;
   letter-spacing: -0.02em;
   color: $ink;
@@ -2047,7 +1185,7 @@ $base-font: 0.875rem;
 .work__desc {
   margin-top: 6px;
   margin-bottom: 26px;
-  font-size: 0.9375rem;
+  font-size: 1.0714em; // 0.9375rem / 0.875rem
   color: $ink-2;
   line-height: 1.5;
 }
@@ -2071,7 +1209,7 @@ $base-font: 0.875rem;
 
 .work__foot-info {
   font-family: $mono;
-  font-size: 0.75rem;
+  font-size: 0.8571em; // 0.75rem / 0.875rem
   font-weight: 700;
   color: $ink-3;
 }
@@ -2089,7 +1227,7 @@ $base-font: 0.875rem;
   background: $card;
   color: $ink-2;
   font-family: $sans;
-  font-size: 0.84375rem;
+  font-size: 0.9643em; // 0.84375rem / 0.875rem
   font-weight: 650;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -2099,7 +1237,7 @@ $base-font: 0.875rem;
   &:disabled { opacity: 0.45; cursor: not-allowed; }
 }
 
-.btn--sm { padding: 7px 12px; font-size: 0.78125rem; border-radius: 8px; }
+.btn--sm { padding: 7px 12px; font-size: 0.8929em; border-radius: 8px; } // 0.78125rem / 0.875rem
 
 .btn--primary {
   border-color: $signal;
@@ -2131,18 +1269,18 @@ $base-font: 0.875rem;
 .field__label {
   display: block;
   @extend %micro;
-  font-size: 0.6875rem;
+  font-size: 0.7857em; // 0.6875rem / 0.875rem
   color: $ink-2;
   margin-bottom: 8px;
 }
-.field__hint { font-size: 0.78125rem; color: $ink-3; margin-top: 6px; }
+.field__hint { font-size: 0.8929em; color: $ink-3; margin-top: 6px; } // 0.78125rem / 0.875rem
 
 .input, .textarea {
   width: 100%;
   border: 1.5px solid $line;
   border-radius: 10px;
   padding: 11px 13px;
-  font-size: 0.9375rem;
+  font-size: 1.0714em; // 0.9375rem / 0.875rem
   font-family: $sans;
   color: $ink;
   background: $card;
@@ -2202,11 +1340,11 @@ $base-font: 0.875rem;
 .opt__title {
   font-family: $display;
   font-weight: 700;
-  font-size: 1rem;
+  font-size: 1.1429em; // 1rem / 0.875rem
   color: $ink;
   margin-bottom: 4px;
 }
-.opt__desc { font-size: 0.8125rem; color: $ink-2; line-height: 1.45; }
+.opt__desc { font-size: 0.9286em; color: $ink-2; line-height: 1.45; } // 0.8125rem / 0.875rem
 
 .opt__check {
   position: absolute;
@@ -2246,7 +1384,7 @@ $base-font: 0.875rem;
   align-items: center;
   justify-content: center;
   font-family: $mono;
-  font-size: 0.75rem;
+  font-size: 0.8571em; // 0.75rem / 0.875rem
   font-weight: 700;
   color: $signal;
   background: $wash;
@@ -2271,7 +1409,7 @@ $base-font: 0.875rem;
 
 .rule__field-label {
   @extend %micro;
-  font-size: 0.5625rem;
+  font-size: 0.6429em; // 0.5625rem / 0.875rem
   color: $ink-3;
 }
 
@@ -2300,7 +1438,7 @@ $base-font: 0.875rem;
   background: transparent;
   color: $ink-2;
   font-family: $mono;
-  font-size: 0.6875rem;
+  font-size: 0.7857em; // 0.6875rem / 0.875rem
   font-weight: 700;
   cursor: pointer;
   &.on { background: $signal; color: #fff; }
@@ -2317,13 +1455,13 @@ $base-font: 0.875rem;
 }
 .summary__label {
   @extend %micro;
-  font-size: 0.5625rem;
+  font-size: 0.6429em; // 0.5625rem / 0.875rem
   color: rgba(255, 255, 255, 0.55);
   margin-bottom: 8px;
 }
 .summary__code {
   font-family: $mono;
-  font-size: 0.84375rem;
+  font-size: 0.9643em; // 0.84375rem / 0.875rem
   color: #fff;
   line-height: 1.7;
   word-break: break-word;
@@ -2363,13 +1501,13 @@ $base-font: 0.875rem;
   .tpl--selected &::after { opacity: 1; }
 }
 
-.tpl__label { font-weight: 700; font-size: 0.9375rem; color: $ink; }
-.tpl__desc { font-size: 0.8125rem; color: $ink-2; margin-top: 3px; line-height: 1.4; }
+.tpl__label { font-weight: 700; font-size: 1.0714em; color: $ink; } // 0.9375rem / 0.875rem
+.tpl__desc { font-size: 0.9286em; color: $ink-2; margin-top: 3px; line-height: 1.4; } // 0.8125rem / 0.875rem
 .tpl__tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
 
 .token {
   font-family: $mono;
-  font-size: 0.6875rem;
+  font-size: 0.7857em; // 0.6875rem / 0.875rem
   font-weight: 700;
   color: $signal;
   background: $wash;
@@ -2410,13 +1548,13 @@ $base-font: 0.875rem;
   .model--selected &::after { opacity: 1; }
 }
 
-.model__name { font-family: $display; font-weight: 700; font-size: 0.9375rem; color: $ink; }
-.model__meta { font-family: $mono; font-size: 0.6875rem; color: $ink-3; margin-top: 1px; }
+.model__name { font-family: $display; font-weight: 700; font-size: 1.0714em; color: $ink; } // 0.9375rem / 0.875rem
+.model__meta { font-family: $mono; font-size: 0.7857em; color: $ink-3; margin-top: 1px; } // 0.6875rem / 0.875rem
 
 .model__health {
   margin-left: auto;
   display: inline-flex; align-items: center; gap: 6px;
-  font-family: $mono; font-size: 0.625rem; font-weight: 700; text-transform: uppercase;
+  font-family: $mono; font-size: 0.7143em; font-weight: 700; text-transform: uppercase; // 0.625rem / 0.875rem
 }
 .health-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .health--healthy { color: $ok; .health-dot { background: $ok; } }
@@ -2439,7 +1577,7 @@ $base-font: 0.875rem;
 }
 .code__lang {
   @extend %micro;
-  font-size: 0.625rem;
+  font-size: 0.7143em; // 0.625rem / 0.875rem
   color: #9db2ff;
 }
 .code__area {
@@ -2449,7 +1587,7 @@ $base-font: 0.875rem;
   resize: vertical;
   padding: 16px;
   font-family: $mono;
-  font-size: 0.8125rem;
+  font-size: 0.9286em; // 0.8125rem / 0.875rem
   line-height: 1.65;
   color: $ink;
   background: $card;
@@ -2467,14 +1605,14 @@ $base-font: 0.875rem;
 }
 .thr__value {
   font-family: $mono;
-  font-size: 2.5rem;
+  font-size: 2.8571em; // 2.5rem / 0.875rem
   font-weight: 700;
   color: $signal;
   line-height: 1;
   text-align: center;
   margin-bottom: 4px;
 }
-.thr__cap { text-align: center; font-size: 0.78125rem; color: $ink-3; margin-bottom: 20px; }
+.thr__cap { text-align: center; font-size: 0.8929em; color: $ink-3; margin-bottom: 20px; } // 0.78125rem / 0.875rem
 .thr__slider {
   -webkit-appearance: none;
   appearance: none;
@@ -2508,7 +1646,7 @@ $base-font: 0.875rem;
   justify-content: space-between;
   margin-top: 8px;
   font-family: $mono;
-  font-size: 0.625rem;
+  font-size: 0.7143em; // 0.625rem / 0.875rem
   color: $ink-3;
 }
 
@@ -2544,7 +1682,7 @@ $base-font: 0.875rem;
 
 .data-col__head-title {
   @extend %micro;
-  font-size: 0.625rem;
+  font-size: 0.7143em; // 0.625rem / 0.875rem
   color: $ink-3;
   display: flex;
   align-items: center;
@@ -2553,7 +1691,7 @@ $base-font: 0.875rem;
 
 .data-col__count {
   font-family: $mono;
-  font-size: 0.6875rem;
+  font-size: 0.7857em; // 0.6875rem / 0.875rem
   font-weight: 700;
   color: $signal;
   background: $wash;
@@ -2563,33 +1701,108 @@ $base-font: 0.875rem;
 }
 
 .data-col__body {
-  padding: 10px;
+  padding: 12px;
   max-height: 400px;
   overflow-y: auto;
 }
 
-.ds-list { display: flex; flex-direction: column; gap: 8px; }
+// ---- dataset cards — grid of self-sizing tiles; as many fit per row as
+// space allows, wrapping to the next row otherwise. Name and count are
+// stacked (not squeezed onto one line), with a top icon chip and a
+// corner check badge that pops in when selected. ----------------------
+.ds-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+}
 
 .ds {
-  display: flex; align-items: center; gap: 12px;
-  padding: 13px 15px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px 14px 13px;
   border: 1.5px solid $line;
-  border-radius: 12px;
-  cursor: pointer;
+  border-radius: 14px;
   background: $card;
-  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
-  &:hover { border-color: $ink-3; transform: translateX(2px); }
-  &--selected { border-color: $signal; background: $wash; }
+  cursor: pointer;
+  transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
+
+  &:hover { border-color: $ink-3; transform: translateY(-2px); box-shadow: $soft; }
+
+  &--selected {
+    border-color: $signal;
+    background: $wash;
+    box-shadow: 0 0 0 1px $signal inset;
+  }
 }
-.ds__radio {
-  flex-shrink: 0; width: 18px; height: 18px; border-radius: 50%;
-  border: 1.5px solid $line-2; display: flex; align-items: center; justify-content: center;
-  .ds--selected & { border-color: $signal; }
-  &::after { content: ''; width: 9px; height: 9px; border-radius: 50%; background: $signal; opacity: 0; transition: opacity 0.15s ease; }
-  .ds--selected &::after { opacity: 1; }
+
+.ds__icon {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: $paper;
+  border: 1px solid $line;
+  color: $signal;
+  transition: all 0.16s ease;
+
+  .ds--selected & { background: $signal; border-color: $signal; color: #fff; }
 }
-.ds__name { font-family: $display; font-weight: 700; font-size: 0.875rem; color: $ink; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ds__count { font-family: $mono; font-size: 0.6875rem; color: $ink-3; margin-top: 1px; }
+
+.ds__name {
+  width: 100%;
+  font-family: $display;
+  font-weight: 700;
+  font-size: 1em; // 0.875rem / 0.875rem
+  color: $ink;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ds__count {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  font-family: $mono;
+  font-size: 0.7857em; // 0.6875rem / 0.875rem
+  font-weight: 700;
+  color: $ink-3;
+  background: $paper;
+  border: 1px solid $line;
+  border-radius: 999px;
+  padding: 3px 9px;
+  white-space: nowrap;
+  transition: all 0.16s ease;
+
+  .ds--selected & { color: $signal; background: rgba(255, 255, 255, 0.6); border-color: rgba($signal, 0.3); }
+}
+
+.ds__check {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: $signal;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transform: scale(0.5);
+  transition: all 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  .ds--selected & { opacity: 1; transform: scale(1); }
+}
 
 .q-list { display: flex; flex-direction: column; gap: 8px; }
 
@@ -2613,13 +1826,13 @@ $base-font: 0.875rem;
   .q--on & { background: $signal; border-color: $signal; }
 }
 .q__body { min-width: 0; }
-.q__q { display: block; font-size: 0.84375rem; color: $ink; font-weight: 600; margin-bottom: 3px; }
-.q__a { display: block; font-size: 0.78125rem; color: $ink-2; }
-.q__a-label { font-family: $mono; font-size: 0.625rem; color: $ink-3; margin-right: 5px; }
+.q__q { display: block; font-size: 0.9643em; color: $ink; font-weight: 600; margin-bottom: 3px; } // 0.84375rem / 0.875rem
+.q__a { display: block; font-size: 0.8929em; color: $ink-2; } // 0.78125rem / 0.875rem
+.q__a-label { font-family: $mono; font-size: 0.7143em; color: $ink-3; margin-right: 5px; } // 0.625rem / 0.875rem
 
 .link-btn {
   border: none; background: none; padding: 0;
-  color: $signal; font-size: 0.71875rem; font-weight: 650; cursor: pointer;
+  color: $signal; font-size: 0.8214em; font-weight: 650; cursor: pointer; // 0.71875rem / 0.875rem
   &:hover { text-decoration: underline; }
 }
 
@@ -2634,13 +1847,13 @@ $base-font: 0.875rem;
 
 .validate-section__label {
   @extend %micro;
-  font-size: 0.6875rem;
+  font-size: 0.7857em; // 0.6875rem / 0.875rem
   color: $ink-2;
   margin-bottom: 6px;
 }
 
 .validate-section__desc {
-  font-size: 0.84375rem;
+  font-size: 0.9643em; // 0.84375rem / 0.875rem
   color: $ink-2;
   margin-bottom: 16px;
 }
@@ -2651,7 +1864,7 @@ $base-font: 0.875rem;
 .banner {
   display: flex; align-items: center; gap: 8px;
   padding: 12px 16px; border-radius: 12px;
-  font-size: 0.84375rem; font-weight: 600;
+  font-size: 0.9643em; font-weight: 600; // 0.84375rem / 0.875rem
   margin-bottom: 18px;
 }
 .banner--ok { background: $ok-wash; color: $ok; border: 1px solid rgba($ok, 0.2); }
@@ -2671,18 +1884,18 @@ $base-font: 0.875rem;
 }
 .results__score {
   flex-shrink: 0;
-  font-family: $mono; font-weight: 700; font-size: 1rem;
+  font-family: $mono; font-weight: 700; font-size: 1.1429em; // 1rem / 0.875rem
   width: 48px; text-align: center;
 }
 .results__score--pass { color: $ok; }
 .results__score--fail { color: $danger; }
 .results__body { min-width: 0; flex: 1; }
-.results__io { font-size: 0.8125rem; color: $ink; }
-.results__reason { font-size: 0.78125rem; color: $ink-2; margin-top: 4px; font-style: italic; }
+.results__io { font-size: 0.9286em; color: $ink; } // 0.8125rem / 0.875rem
+.results__reason { font-size: 0.8929em; color: $ink-2; margin-top: 4px; font-style: italic; } // 0.78125rem / 0.875rem
 .results__pill {
   flex-shrink: 0;
   @extend %micro;
-  font-size: 0.5625rem;
+  font-size: 0.6429em; // 0.5625rem / 0.875rem
   padding: 3px 9px; border-radius: 999px;
 }
 .results__pill--pass { color: $ok; background: $ok-wash; }
@@ -2692,7 +1905,7 @@ $base-font: 0.875rem;
   padding: 12px 16px;
   background: $paper;
   border-top: 1px solid $line;
-  font-size: 0.84375rem; color: $ink-2;
+  font-size: 0.9643em; color: $ink-2; // 0.84375rem / 0.875rem
   strong { color: $ink; font-family: $mono; }
 }
 
@@ -2702,7 +1915,7 @@ $base-font: 0.875rem;
 .loading, .empty {
   display: flex; align-items: center; justify-content: center; gap: 8px;
   padding: 28px; text-align: center;
-  color: $ink-3; font-size: 0.84375rem;
+  color: $ink-3; font-size: 0.9643em; // 0.84375rem / 0.875rem
   border: 1px dashed $line;
   border-radius: 12px;
 }
@@ -2732,11 +1945,11 @@ $base-font: 0.875rem;
   display: flex; align-items: center; justify-content: center;
   animation: cm-pop 0.3s ease;
 }
-.modal__title { font-family: $display; font-size: 1.25rem; font-weight: 800; color: $ink; margin-bottom: 6px; }
-.modal__text { font-size: 0.875rem; color: $ink-2; margin-bottom: 8px; }
+.modal__title { font-family: $display; font-size: 1.4286em; font-weight: 800; color: $ink; margin-bottom: 6px; } // 1.25rem / 0.875rem
+.modal__text { font-size: 1em; color: $ink-2; margin-bottom: 8px; } // 0.875rem / 0.875rem
 .modal__id {
   display: inline-block;
-  font-family: $mono; font-size: 0.75rem; font-weight: 700;
+  font-family: $mono; font-size: 0.8571em; font-weight: 700; // 0.75rem / 0.875rem
   color: $signal; background: $wash;
   border-radius: 8px; padding: 4px 10px; margin-bottom: 22px;
 }
@@ -2755,7 +1968,7 @@ $base-font: 0.875rem;
   padding: 12px 18px;
   border-radius: 12px;
   background: $ink-solid; color: #fff;
-  font-size: 0.84375rem; font-weight: 600;
+  font-size: 0.9643em; font-weight: 600; // 0.84375rem / 0.875rem
   box-shadow: $lift;
   animation: cm-fade-up 0.2s ease;
 }
@@ -2781,6 +1994,7 @@ $base-font: 0.875rem;
   .work__foot { padding: 14px 18px; }
   .opt-grid, .opt-grid--3 { grid-template-columns: 1fr; }
   .data-row { grid-template-columns: 1fr; }
+  .ds-list { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
   .rule { flex-wrap: wrap; }
   .rule__grid { grid-template-columns: 1fr 1fr; }
 }
@@ -2797,233 +2011,510 @@ $base-font: 0.875rem;
 
 
 
-//Customselect.tsx
-import { useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown } from 'lucide-react';
-import styles from './CustomSelect.module.scss';
 
-export interface DropdownOption {
-  value: string;
-  label: string;
-  sublabel?: string;
+
+
+
+
+
+//Custommetrics.module.scss
+@use '../../styles/_variables' as *;
+
+// ===========================================================================
+// Custom Metrics — Dashboard-only stylesheet. Create Metric has its own
+// module (CreateMetric.module.scss) so this file just needs the header,
+// tab switcher, saved-metrics table, and shared toast.
+//
+// Font scaling follows the same convention as Model Catalog: `.cm` sets a
+// single base font-size, every descendant font-size is expressed in `em`
+// relative to that base, so bumping `.cm`'s font-size on wide screens
+// scales the whole dashboard proportionally from one place.
+// ===========================================================================
+
+$ink:      var(--ink-1);
+$ink-2:    var(--ink-2);
+$ink-3:    var(--ink-3);
+$paper:    var(--paper);
+$card:     var(--card);
+$line:     var(--line);
+$line-2:   var(--line-2);
+$signal:   #2B2BF5;
+$signal-2: #1C1CC7;
+$wash:     var(--signal-wash);
+$ok:       #0FA968;
+$ok-wash:  var(--ok-wash);
+$amber:    #E08600;
+$amber-wash: var(--amber-wash);
+$danger:   #DC2626;
+$danger-wash: var(--danger-wash);
+$violet:   #6D28D9;
+$violet-wash: rgba(109, 40, 217, 0.1);
+$sky:      #0369A1;
+$sky-wash: var(--sky-wash);
+$ink-wash: var(--ink-wash);
+
+$mono:    $font-mono;
+$sans:    $font-body;
+$display: $font-display;
+
+$soft: 0 1px 2px rgba(20, 22, 27, 0.05);
+$lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
+
+// base font-size the whole dashboard's internal `em` scale is built on
+$cm-base-font: 0.875rem;
+
+%micro {
+  font-family: $mono;
+  font-size: 0.7857em; // 0.6875rem / 0.875rem
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
 }
 
-interface CustomSelectProps {
-  value: string;
-  onChange: (value: string) => void;
-  options: DropdownOption[];
-  placeholder?: string;
-  disabled?: boolean;
-  className?: string;
+@keyframes cm-spin { to { transform: rotate(360deg); } }
+@keyframes cm-toast-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+.spin { animation: cm-spin 0.8s linear infinite; }
+
+.cm {
+  // master scale control — every em-based font-size below responds to this
+  font-size: $cm-base-font;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  @media (min-width: 1800px) { font-size: 1rem; }
 }
 
-export default function CustomSelect({ value, onChange, options, placeholder = 'Select…', disabled, className }: CustomSelectProps) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
+// ---- header ---------------------------------------------------------------
+.cm__header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 24px 32px 20px;
+  border-bottom: 1px solid $line;
+  background: $card;
 
-  useEffect(() => {
-    if (!open) return;
-    const onClickOutside = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onEscape = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    document.addEventListener('mousedown', onClickOutside);
-    document.addEventListener('keydown', onEscape);
-    return () => {
-      document.removeEventListener('mousedown', onClickOutside);
-      document.removeEventListener('keydown', onEscape);
-    };
-  }, [open]);
+  h1 {
+    font-family: $display;
+    font-size: 1.7143em; // 1.5rem / 0.875rem
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: $ink;
+    line-height: 1.2;
+  }
+}
 
-  const selected = options.find((o) => o.value === value);
+.cm__header-eyebrow {
+  @extend %micro;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: $signal;
+  margin-bottom: 6px;
+
+  &::before { content: ''; width: 16px; height: 2px; border-radius: 2px; background: $signal; }
+}
+
+.cm__header-sub { margin-top: 4px; font-size: 0.9643em; color: $ink-2; } // 0.84375rem / 0.875rem
+
+// ---- tab switcher (Dashboard / Create Metric) -----------------------------
+.tabbar {
+  flex-shrink: 0;
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 11px;
+  border: 1px solid $line;
+  background: $paper;
+  margin-bottom: 3px;
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: $ink-2;
+  font-family: $sans;
+  font-size: 0.9286em; // 0.8125rem / 0.875rem
+  font-weight: 650;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+
+  &:hover:not(&--active) { color: $ink; }
+}
+
+.tab--active {
+  background: $card;
+  color: $signal;
+  box-shadow: $soft;
+}
+
+.pg-body-scroll { overflow-y: auto; padding: 20px 32px 32px; }
+
+// ---- generic buttons (shared) ---------------------------------------------
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 18px;
+  border-radius: 10px;
+  border: 1px solid $line;
+  background: $card;
+  color: $ink-2;
+  font-family: $sans;
+  font-size: 0.9643em; // 0.84375rem / 0.875rem
+  font-weight: 650;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+
+  &:hover:not(:disabled) { border-color: $ink-3; color: $ink; }
+  &:disabled { opacity: 0.45; cursor: not-allowed; }
+}
+
+.btn-sm { padding: 7px 12px; font-size: 0.8929em; border-radius: 8px; } // 0.78125rem / 0.875rem
+
+// ---- saved metrics table ---------------------------------------------------
+.card {
+  background: $card;
+  border: 1px solid $line;
+  border-radius: 16px;
+  box-shadow: $soft;
+  overflow: hidden;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px;
+  border-bottom: 1px solid $line;
+  h3 { font-family: $display; font-size: 1.0714em; font-weight: 700; color: $ink; } // 0.9375rem / 0.875rem
+}
+
+.card-body { padding: 4px 0 8px; }
+.table-wrap { overflow-x: auto; }
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9286em; // 0.8125rem / 0.875rem
+
+  thead th { text-align: left; background: $paper; @extend %micro; font-size: 0.6429em; color: $ink-3; padding: 10px 18px; white-space: nowrap; } // 0.5625rem / 0.875rem
+  tbody tr { border-top: 1px solid $line-2; transition: background 0.13s ease; &:hover { background: $paper; } }
+  tbody td { padding: 11px 18px; color: $ink; vertical-align: middle; }
+}
+
+.cell-num { font-family: $mono; font-weight: 700; color: $ink; }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-family: $mono;
+  font-size: 0.7143em; // 0.625rem / 0.875rem
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: 6px;
+  padding: 3px 8px;
+  white-space: nowrap;
+  color: $signal;
+  background: $wash;
+
+  &--code { color: $violet; background: $violet-wash; }
+  &--model { color: $signal; background: $wash; }
+  &--rag { color: $sky; background: $sky-wash; }
+  &--agent { color: $amber; background: $amber-wash; }
+  &--simple { color: $signal; background: $wash; }
+  &--active { color: $ok; background: $ok-wash; }
+  &--inactive { color: $ink-3; background: $ink-wash; }
+}
+
+.error-banner {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px; border-radius: 10px;
+  background: $danger-wash; border: 1px solid rgba($danger, 0.2);
+  color: $danger; font-size: 0.9286em; margin-bottom: 16px; // 0.8125rem / 0.875rem
+}
+
+.empty { padding: 28px 20px; text-align: center; color: $ink-3; font-size: 0.9286em; display: flex; align-items: center; gap: 8px; justify-content: center; } // 0.8125rem / 0.875rem
+.loading-row { display: flex; align-items: center; gap: 8px; padding: 24px; justify-content: center; color: $ink-3; font-size: 0.9286em; } // 0.8125rem / 0.875rem
+
+// ---- toast (used by useToast.tsx) -----------------------------------------
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  z-index: 400;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 18px;
+  border-radius: 11px;
+  background: #14161B;
+  color: #fff;
+  font-size: 0.9286em; // 0.8125rem / 0.875rem
+  font-weight: 650;
+  box-shadow: $lift;
+  animation: cm-toast-in 0.18s ease;
+}
+.toast--ok::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: $ok; }
+.toast--error::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #FF6B6B; }
+.toast--info::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: $signal; }
+
+@media (max-width: 760px) {
+  .cm__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 12px; }
+  .pg-body-scroll { padding: 16px 18px 24px; }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Custommetricsdashboard.tsx
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { AlertCircle, Gauge, LayoutDashboard, Loader2, PenSquare, Trash2 } from 'lucide-react';
+import styles from './CustomMetrics.module.scss';
+import { metricsApi, CustomMetric } from '../../api/endpoints/metrics';
+import CreateMetric from './CreateMetric';
+
+type View = 'dashboard' | 'create';
+
+function formatDate(iso: string) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+export default function CustomMetricsDashboard() {
+  const [view, setView] = useState<View>('dashboard');
+
+  const [metrics, setMetrics] = useState<CustomMetric[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  // delete state
+  const [pendingDeleteId, setPendingDeleteId] = useState('');
+  const [deletingId, setDeletingId] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+
+  const fetchMetrics = useCallback(() => {
+    setLoading(true);
+    setError('');
+    metricsApi.list()
+      .then(setMetrics)
+      .catch((err) => setError(err.message || 'Failed to load metrics'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { fetchMetrics(); }, [fetchMetrics]);
+
+  const activeCount = useMemo(() => metrics.filter((m) => m.is_active).length, [metrics]);
+
+  const badgeClass = (variant: string) => `${styles.badge} ${styles[`badge--${variant}`] || ''}`;
+
+  const requestDelete = (id: string) => {
+    setDeleteError('');
+    setPendingDeleteId(id);
+  };
+
+  const cancelDelete = () => setPendingDeleteId('');
+
+  const confirmDelete = (id: string) => {
+    setDeletingId(id);
+    setDeleteError('');
+    metricsApi.remove(id)
+      .then(() => {
+        setMetrics((prev) => prev.filter((m) => m.id !== id));
+        setPendingDeleteId('');
+      })
+      .catch((err) => setDeleteError(err.message || 'Failed to delete metric'))
+      .finally(() => setDeletingId(''));
+  };
+
+  // After a successful save, hop back to the dashboard and refresh the list.
+  const handleSaved = () => {
+    setView('dashboard');
+    fetchMetrics();
+  };
 
   return (
-    <div ref={rootRef} className={`${styles.dropdown} ${className || ''} ${disabled ? styles['dropdown--disabled'] : ''}`}>
-      <button
-        type="button"
-        className={`${styles['dropdown__trigger']} ${open ? styles['dropdown__trigger--open'] : ''}`}
-        onClick={() => !disabled && setOpen((o) => !o)}
-        disabled={disabled}
-      >
-        <span className={selected ? styles['dropdown__value'] : styles['dropdown__placeholder']}>
-          {selected ? selected.label : placeholder}
-        </span>
-        <ChevronDown size={14} className={`${styles['dropdown__chevron']} ${open ? styles['dropdown__chevron--open'] : ''}`} />
-      </button>
+    <div className={`page-enter pg-shell ${styles.cm}`}>
+      <div className={styles['cm__header']}>
+        <div>
+          <p className={styles['cm__header-eyebrow']}>Custom Metrics</p>
+          <h1>{view === 'dashboard' ? 'Dashboard' : 'Create Metric'}</h1>
+          <p className={styles['cm__header-sub']}>
+            {view === 'dashboard'
+              ? (loading ? 'Saved metrics for evaluation' : `${metrics.length} metric${metrics.length === 1 ? '' : 's'} \u00b7 ${activeCount} active`)
+              : 'Fill in every section below, then validate and save.'}
+          </p>
+        </div>
 
-      {open && (
-        <div className={styles['dropdown__menu']}>
-          {options.length === 0 ? (
-            <div className={styles['dropdown__empty']}>No options</div>
-          ) : (
-            options.map((opt) => (
+        <div className={styles.tabbar}>
+          <button
+            type="button"
+            className={`${styles.tab} ${view === 'dashboard' ? styles['tab--active'] : ''}`}
+            onClick={() => setView('dashboard')}
+          >
+            <LayoutDashboard size={14} /> Dashboard
+          </button>
+          <button
+            type="button"
+            className={`${styles.tab} ${view === 'create' ? styles['tab--active'] : ''}`}
+            onClick={() => setView('create')}
+          >
+            <PenSquare size={14} /> Create Metric
+          </button>
+        </div>
+      </div>
+
+      {view === 'create' ? (
+        <CreateMetric onCancel={() => setView('dashboard')} onSaved={handleSaved} />
+      ) : (
+        <div className={`pg-body ${styles['pg-body-scroll']}`}>
+          <div className={styles.card}>
+            <div className={styles['card-header']}>
+              <h3>Saved Metrics</h3>
               <button
-                key={opt.value}
                 type="button"
-                className={`${styles['dropdown__option']} ${opt.value === value ? styles['dropdown__option--selected'] : ''}`}
-                onClick={() => { onChange(opt.value); setOpen(false); }}
+                className={`${styles.btn} ${styles['btn-sm']}`}
+                onClick={() => setView('create')}
               >
-                <span>
-                  {opt.label}
-                  {opt.sublabel && <span className={styles['dropdown__option-sub']}>{opt.sublabel}</span>}
-                </span>
-                {opt.value === value && <Check size={13} />}
+                + New
               </button>
-            ))
-          )}
+            </div>
+
+            <div className={styles['card-body']}>
+              {error && <div className={styles['error-banner']}><AlertCircle size={14} /> {error}</div>}
+              {deleteError && <div className={styles['error-banner']}><AlertCircle size={14} /> {deleteError}</div>}
+
+              {loading ? (
+                <div className={styles['loading-row']}><Loader2 size={14} className={styles.spin} /> Loading metrics…</div>
+              ) : metrics.length === 0 ? (
+                <div className={styles.empty}>
+                  <Gauge size={16} /> No metrics saved yet — create your first custom metric to get started.
+                </div>
+              ) : (
+                <div className={styles['table-wrap']}>
+                  <table className={styles.table}>
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Eval Types</th>
+                        <th>Type</th>
+                        <th>Threshold</th>
+                        <th>Judge</th>
+                        <th>Status</th>
+                        <th>Created</th>
+                        <th style={{ width: '1%' }} />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {metrics.map((m) => {
+                        const isPending = pendingDeleteId === m.id;
+                        const isDeleting = deletingId === m.id;
+                        return (
+                          <tr key={m.id} title={m.description}>
+                            <td>{m.name}</td>
+                            <td>
+                              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                {(m.eval_types || []).map((t) => (
+                                  <span key={t} className={badgeClass(t)}>{(t || '').toUpperCase()}</span>
+                                ))}
+                              </div>
+                            </td>
+                            <td><span className={badgeClass(m.metric_type === 'code' ? 'code' : 'simple')}>{m.metric_type}</span></td>
+                            <td className={styles['cell-num']}>{m.threshold}</td>
+                            <td>{m.requires_judge ? 'Yes' : 'No'}</td>
+                            <td><span className={badgeClass(m.is_active ? 'active' : 'inactive')}>{m.is_active ? 'Active' : 'Inactive'}</span></td>
+                            <td>{formatDate(m.created_at)}</td>
+                            <td>
+                              {isPending ? (
+                                <div style={{ display: 'flex', gap: '6px', alignItems: 'center', whiteSpace: 'nowrap' }}>
+                                  <span style={{ fontSize: '0.78125rem', color: 'var(--ink-2)' }}>Delete?</span>
+                                  <button
+                                    type="button"
+                                    className={`${styles.btn} ${styles['btn-sm']}`}
+                                    style={{ borderColor: '#DC2626', background: '#DC2626', color: '#fff' }}
+                                    disabled={isDeleting}
+                                    onClick={() => confirmDelete(m.id)}
+                                  >
+                                    {isDeleting ? <Loader2 size={13} className={styles.spin} /> : 'Confirm'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className={`${styles.btn} ${styles['btn-sm']}`}
+                                    disabled={isDeleting}
+                                    onClick={cancelDelete}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  title="Delete metric"
+                                  aria-label={`Delete ${m.name}`}
+                                  onClick={() => requestDelete(m.id)}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    width: '28px',
+                                    height: '28px',
+                                    borderRadius: '8px',
+                                    border: '1px solid transparent',
+                                    background: 'transparent',
+                                    color: 'var(--ink-3)',
+                                    cursor: 'pointer',
+                                  }}
+                                  onMouseEnter={(e) => {
+                                    e.currentTarget.style.background = 'rgba(220,38,38,0.08)';
+                                    e.currentTarget.style.borderColor = 'rgba(220,38,38,0.2)';
+                                    e.currentTarget.style.color = '#DC2626';
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    e.currentTarget.style.background = 'transparent';
+                                    e.currentTarget.style.borderColor = 'transparent';
+                                    e.currentTarget.style.color = 'var(--ink-3)';
+                                  }}
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
   );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Customselect.module.scss
-@use '../../styles/_variables' as *;
-
-// Self-contained styles for the CustomSelect dropdown so the component
-// works on any page regardless of which parent stylesheet is loaded.
-
-$ink:   var(--ink-1);
-$ink-2: var(--ink-2);
-$ink-3: var(--ink-3);
-$paper: var(--paper);
-$card:  var(--card);
-$line:  var(--line);
-$signal: #2B2BF5;
-$wash:  var(--signal-wash);
-$mono:  $font-mono;
-$sans:  $font-body;
-$lift:  0 18px 40px -20px rgba(20, 22, 27, 0.30);
-
-.dropdown { position: relative; width: 100%; }
-
-.dropdown__trigger {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  border: 1.5px solid $line;
-  border-radius: 10px;
-  padding: 10px 12px;
-  font-size: 0.84375rem;
-  font-family: $sans;
-  color: $ink;
-  background: $card;
-  cursor: pointer;
-  text-align: left;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-
-  &:hover { border-color: $ink-3; }
-  &--open { border-color: $signal; box-shadow: 0 0 0 3px $wash; }
-}
-
-.dropdown__value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dropdown__placeholder { color: $ink-3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dropdown__chevron { flex-shrink: 0; color: $ink-3; transition: transform 0.15s ease; &--open { transform: rotate(180deg); } }
-
-.dropdown__menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  min-width: 100%;
-  width: max-content;
-  max-width: 340px;
-  z-index: 40;
-  max-height: 280px;
-  overflow-y: auto;
-  background: $card;
-  border: 1px solid $line;
-  border-radius: 12px;
-  box-shadow: $lift;
-  padding: 4px;
-}
-
-.dropdown__option {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 10px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: $ink-2;
-  font-size: 0.84375rem;
-  font-weight: 550;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
-
-  &:hover { background: $paper; color: $ink; }
-  &--selected { background: $wash; color: $signal; font-weight: 700; }
-  svg { flex-shrink: 0; color: $signal; }
-}
-
-.dropdown__option-sub { display: block; font-family: $mono; font-size: 0.85em; font-weight: 500; color: $ink-3; margin-top: 1px; }
-.dropdown__empty { padding: 12px; text-align: center; color: $ink-3; font-size: 0.78125rem; }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//useToast.tsx
-import { useCallback, useEffect, useState } from 'react';
-import styles from './CustomMetrics.module.scss';
-
-type ToastState = { message: string; type: 'ok' | 'error' | 'info' } | null;
-
-export function useToast() {
-  const [toast, setToast] = useState<ToastState>(null);
-
-  useEffect(() => {
-    if (!toast) return;
-    const t = setTimeout(() => setToast(null), 2600);
-    return () => clearTimeout(t);
-  }, [toast]);
-
-  const showToast = useCallback((message: string, type: 'ok' | 'error' | 'info' = 'info') => {
-    setToast({ message, type });
-  }, []);
-
-  const ToastEl = toast ? (
-    <div className={`${styles.toast} ${styles[`toast--${toast.type}`] || ''}`}>{toast.message}</div>
-  ) : null;
-
-  return { showToast, ToastEl };
 }
