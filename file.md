@@ -1,8 +1,7 @@
-//Createmetric.tsx
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle, ArrowRight, Boxes, Check, CheckCircle2, ChevronRight, Code2, Cpu, Database,
-  ListChecks, Loader2, Plus, ScrollText, SlidersHorizontal, Sparkles, Target, X, XCircle,
+  ListChecks, Loader2, Plus, ScrollText, SlidersHorizontal, Sparkles, Target, X, XCircle, Zap,
 } from 'lucide-react';
 import styles from './CreateMetric.module.scss';
 import { useToast } from './useToast';
@@ -20,7 +19,7 @@ interface CreateMetricProps {
 // ---- static config -----------------------------------------------------
 const EVAL_TYPE_CARDS: { key: EvalType; label: string; desc: string; icon: JSX.Element }[] = [
   { key: 'model', label: 'Model', desc: 'Score a model\u2019s output against an expected answer.', icon: <Cpu size={20} /> },
-  { key: 'agent', label: 'Agent', desc: 'Evaluate tool calls and task completion for agents.', icon: <ScrollText size={20} /> },
+  { key: 'agent', label: 'Agent', desc: 'Evaluate tool calls and task completion for agents.', icon: <Zap size={20} /> },
   { key: 'rag', label: 'RAG', desc: 'Check answers grounded in retrieved context.', icon: <ScrollText size={20} /> },
 ];
 
@@ -472,7 +471,10 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
                             </div>
                           )}
                           <div className={styles.rule}>
-                            <div className={styles['rule__index']}>{i + 1}</div>
+                            <div className={styles['rule__head']}>
+                              <span className={styles['rule__index']}>Rule {i + 1}</span>
+                              <button className={styles['btn-icon']} title="Remove" onClick={() => removeRule(rule.id)}><X size={15} /></button>
+                            </div>
                             <div className={styles['rule__grid']}>
                               <div className={styles['rule__field']}>
                                 <span className={styles['rule__field-label']}>Field</span>
@@ -493,7 +495,6 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
                                   : <CustomSelect value={rule.value} onChange={(v) => updateRule(rule.id, { value: v })} placeholder="field…" options={fields.map((f) => ({ value: f, label: f }))} />}
                               </div>
                             </div>
-                            <button className={styles['btn-icon']} title="Remove" onClick={() => removeRule(rule.id)}><X size={15} /></button>
                           </div>
                         </div>
                       ))}
@@ -744,24 +745,30 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
 
           {/* ---- sticky footer ---- */}
           <div className={styles['work__foot']}>
-            <button className={`${styles.btn} ${styles['btn--ghost']}`} onClick={onCancel}>Cancel</button>
-
             <span className={styles['work__foot-info']}>
               {completedCount}/{SECTIONS.length} sections ready
             </span>
 
-            {!validateResult ? (
-              <button className={`${styles.btn} ${styles['btn--primary']}`} onClick={runValidate} disabled={validating || !canValidate}>
-                {validating ? <Loader2 size={15} className={styles.spin} /> : <Sparkles size={15} />}
-                {validating ? 'Validating…' : 'Run Validation'}
-                {!validating && <ArrowRight size={15} />}
-              </button>
-            ) : (
-              <button className={`${styles.btn} ${styles['btn--ok']}`} onClick={handleSave} disabled={saving}>
-                {saving ? <Loader2 size={15} className={styles.spin} /> : <Check size={15} />}
-                Save Metric
-              </button>
-            )}
+            <div className={styles['work__foot-actions']}>
+              {!validateResult ? (
+                <>
+                  <button className={`${styles.btn} ${styles['btn--primary']}`} onClick={runValidate} disabled={validating || !canValidate}>
+                    {validating ? <Loader2 size={15} className={styles.spin} /> : <Sparkles size={15} />}
+                    {validating ? 'Validating…' : 'Run Validation'}
+                    {!validating && <ArrowRight size={15} />}
+                  </button>
+                  <button className={`${styles.btn} ${styles['btn--ghost']}`} onClick={onCancel}>Cancel</button>
+                </>
+              ) : (
+                <>
+                  <button className={`${styles.btn} ${styles['btn--ok']}`} onClick={handleSave} disabled={saving}>
+                    {saving ? <Loader2 size={15} className={styles.spin} /> : <Check size={15} />}
+                    Save Metric
+                  </button>
+                  <button className={`${styles.btn} ${styles['btn--ghost']}`} onClick={onCancel}>Cancel</button>
+                </>
+              )}
+            </div>
           </div>
         </section>
       </div>
@@ -812,7 +819,9 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
 
 
 
-//Createmetric.module.scss
+
+
+
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
@@ -969,9 +978,9 @@ $base-font: 0.875rem;
 }
 
 // ---------------------------------------------------------------------------
-// LEFT RAIL — "living timeline" stepper. Gradient markers, a filled
-// connector line that lights up as sections complete, card-style rows
-// that lift and glow on hover/done — jump to any section, any time.
+// LEFT RAIL — vertical stepper with a connecting line that tracks the
+// 12px gap between rows, flat solid colors (no gradients), and a clear
+// done/active state — jump to any section, any time.
 // ---------------------------------------------------------------------------
 .rail {
   display: flex;
@@ -985,7 +994,7 @@ $base-font: 0.875rem;
 .rail__head {
   padding: 26px 22px 20px;
   border-bottom: 1px solid $line;
-  background: linear-gradient(180deg, $wash 0%, rgba(43, 43, 245, 0) 100%);
+  background: $wash;
 }
 
 .rail__eyebrow {
@@ -1012,7 +1021,7 @@ $base-font: 0.875rem;
   padding: 18px 14px 20px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 12px;
 }
 
 .rail-step {
@@ -1038,20 +1047,20 @@ $base-font: 0.875rem;
   }
 
   &--done {
-    background: linear-gradient(135deg, $wash 0%, rgba(43, 43, 245, 0.02) 100%);
+    background: $wash;
     border-color: rgba($signal, 0.16);
 
     &:hover { border-color: rgba($signal, 0.35); }
   }
 
-  // vertical connector between this marker and the next — sits behind
-  // the row content, lights up with a gradient once the step is done.
+  // vertical connector: starts right below this marker, and reaches all
+  // the way through the 12px row gap into the top of the next marker.
   &:not(:last-child)::after {
     content: '';
     position: absolute;
-    left: 29px;
-    top: 48px;
-    bottom: -6px;
+    left: 30px;
+    top: 49px;
+    bottom: -25px; // 12px row gap + 13px next step's top padding
     width: 2px;
     border-radius: 2px;
     background: $line;
@@ -1059,7 +1068,7 @@ $base-font: 0.875rem;
     transition: background 0.25s ease;
   }
   &--done:not(:last-child)::after {
-    background: linear-gradient(180deg, $signal 0%, rgba(43, 43, 245, 0.25) 100%);
+    background: $signal;
   }
 }
 
@@ -1067,14 +1076,14 @@ $base-font: 0.875rem;
   position: relative;
   z-index: 1;
   flex-shrink: 0;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   font-family: $mono;
-  font-size: 0.9286em; // 0.8125rem / 0.875rem
+  font-size: 1.1429em; // 1rem / 0.875rem
   font-weight: 800;
   color: $ink-3;
   background: $paper;
@@ -1083,7 +1092,7 @@ $base-font: 0.875rem;
 
   .rail-step--done & {
     color: #fff;
-    background: linear-gradient(135deg, $signal, $signal-2);
+    background: $signal;
     border-color: $signal;
     box-shadow: 0 4px 12px -3px rgba(43, 43, 245, 0.45);
     animation: cm-check-pop 0.3s ease;
@@ -1099,12 +1108,12 @@ $base-font: 0.875rem;
 .rail-step__body {
   min-width: 0;
   flex: 1;
-  padding-top: 4px;
+  padding-top: 5px;
 }
 
 .rail-step__label {
   display: block;
-  font-size: 0.9286em; // 0.8125rem / 0.875rem
+  font-size: 1.1429em; // 1rem / 0.875rem
   font-weight: 700;
   color: $ink-2;
   transition: color 0.2s ease;
@@ -1115,9 +1124,9 @@ $base-font: 0.875rem;
 .rail-step__value {
   display: block;
   font-family: $mono;
-  font-size: 0.7857em; // 0.6875rem / 0.875rem
+  font-size: 0.9286em; // 0.8125rem / 0.875rem
   color: $ink-3;
-  margin-top: 4px;
+  margin-top: 5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1212,6 +1221,12 @@ $base-font: 0.875rem;
   font-size: 0.8571em; // 0.75rem / 0.875rem
   font-weight: 700;
   color: $ink-3;
+}
+
+.work__foot-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 // ---------------------------------------------------------------------------
@@ -1358,58 +1373,78 @@ $base-font: 0.875rem;
 }
 
 // ---------------------------------------------------------------------------
-// rule builder
+// rule builder — each rule is its own card with a solid accent bar, a
+// header row (index pill + remove), and a clean fields grid underneath.
 // ---------------------------------------------------------------------------
-.rules { display: flex; flex-direction: column; }
+.rules { display: flex; flex-direction: column; gap: 14px; }
 
 .rule {
-  display: flex;
-  align-items: flex-end;
-  gap: 12px;
-  padding: 16px;
+  position: relative;
+  padding: 16px 18px 18px 20px;
   border: 1.5px solid $line;
-  border-radius: 14px;
+  border-radius: 16px;
   background: $card;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  overflow: hidden;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 
-  &:hover { border-color: $ink-3; box-shadow: $soft; }
+  &::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 4px;
+    background: $signal;
+  }
+
+  &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-1px); }
+}
+
+.rule__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px dashed $line;
 }
 
 .rule__index {
-  flex-shrink: 0;
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
+  gap: 7px;
   font-family: $mono;
   font-size: 0.8571em; // 0.75rem / 0.875rem
-  font-weight: 700;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: $signal;
-  background: $wash;
-  border: 1px solid rgba($signal, 0.2);
-  margin-bottom: 4px;
+
+  &::before {
+    content: '';
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: $signal;
+  }
 }
 
 .rule__grid {
-  flex: 1;
   display: grid;
   grid-template-columns: 1fr 1fr 1fr 1fr;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
 }
 
 .rule__field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
   min-width: 0;
 }
 
 .rule__field-label {
   @extend %micro;
-  font-size: 0.6429em; // 0.5625rem / 0.875rem
+  font-size: 0.7857em; // 0.6875rem / 0.875rem
   color: $ink-3;
 }
 
@@ -1417,7 +1452,7 @@ $base-font: 0.875rem;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 0;
+  padding: 4px 0;
 
   &::before, &::after { content: ''; flex: 1; height: 1px; background: $line; }
 }
@@ -1444,7 +1479,7 @@ $base-font: 0.875rem;
   &.on { background: $signal; color: #fff; }
 }
 
-.add-rule { align-self: flex-start; margin-top: 12px; }
+.add-rule { align-self: flex-start; margin-top: 14px; }
 
 .summary {
   margin-top: 18px;
@@ -1468,6 +1503,7 @@ $base-font: 0.875rem;
 }
 .summary__token { color: #9db2ff; }
 .summary__gate { color: $amber; font-weight: 700; padding: 0 4px; }
+
 
 // ---------------------------------------------------------------------------
 // prompt templates
@@ -1995,526 +2031,5 @@ $base-font: 0.875rem;
   .opt-grid, .opt-grid--3 { grid-template-columns: 1fr; }
   .data-row { grid-template-columns: 1fr; }
   .ds-list { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
-  .rule { flex-wrap: wrap; }
   .rule__grid { grid-template-columns: 1fr 1fr; }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Custommetrics.module.scss
-@use '../../styles/_variables' as *;
-
-// ===========================================================================
-// Custom Metrics — Dashboard-only stylesheet. Create Metric has its own
-// module (CreateMetric.module.scss) so this file just needs the header,
-// tab switcher, saved-metrics table, and shared toast.
-//
-// Font scaling follows the same convention as Model Catalog: `.cm` sets a
-// single base font-size, every descendant font-size is expressed in `em`
-// relative to that base, so bumping `.cm`'s font-size on wide screens
-// scales the whole dashboard proportionally from one place.
-// ===========================================================================
-
-$ink:      var(--ink-1);
-$ink-2:    var(--ink-2);
-$ink-3:    var(--ink-3);
-$paper:    var(--paper);
-$card:     var(--card);
-$line:     var(--line);
-$line-2:   var(--line-2);
-$signal:   #2B2BF5;
-$signal-2: #1C1CC7;
-$wash:     var(--signal-wash);
-$ok:       #0FA968;
-$ok-wash:  var(--ok-wash);
-$amber:    #E08600;
-$amber-wash: var(--amber-wash);
-$danger:   #DC2626;
-$danger-wash: var(--danger-wash);
-$violet:   #6D28D9;
-$violet-wash: rgba(109, 40, 217, 0.1);
-$sky:      #0369A1;
-$sky-wash: var(--sky-wash);
-$ink-wash: var(--ink-wash);
-
-$mono:    $font-mono;
-$sans:    $font-body;
-$display: $font-display;
-
-$soft: 0 1px 2px rgba(20, 22, 27, 0.05);
-$lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
-
-// base font-size the whole dashboard's internal `em` scale is built on
-$cm-base-font: 0.875rem;
-
-%micro {
-  font-family: $mono;
-  font-size: 0.7857em; // 0.6875rem / 0.875rem
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-
-@keyframes cm-spin { to { transform: rotate(360deg); } }
-@keyframes cm-toast-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
-
-.spin { animation: cm-spin 0.8s linear infinite; }
-
-.cm {
-  // master scale control — every em-based font-size below responds to this
-  font-size: $cm-base-font;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  @media (min-width: 1800px) { font-size: 1rem; }
-}
-
-// ---- header ---------------------------------------------------------------
-.cm__header {
-  flex-shrink: 0;
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 24px 32px 20px;
-  border-bottom: 1px solid $line;
-  background: $card;
-
-  h1 {
-    font-family: $display;
-    font-size: 1.7143em; // 1.5rem / 0.875rem
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    color: $ink;
-    line-height: 1.2;
-  }
-}
-
-.cm__header-eyebrow {
-  @extend %micro;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: $signal;
-  margin-bottom: 6px;
-
-  &::before { content: ''; width: 16px; height: 2px; border-radius: 2px; background: $signal; }
-}
-
-.cm__header-sub { margin-top: 4px; font-size: 0.9643em; color: $ink-2; } // 0.84375rem / 0.875rem
-
-// ---- tab switcher (Dashboard / Create Metric) -----------------------------
-.tabbar {
-  flex-shrink: 0;
-  display: inline-flex;
-  padding: 3px;
-  gap: 2px;
-  border-radius: 11px;
-  border: 1px solid $line;
-  background: $paper;
-  margin-bottom: 3px;
-}
-
-.tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 8px 14px;
-  border-radius: 8px;
-  border: none;
-  background: transparent;
-  color: $ink-2;
-  font-family: $sans;
-  font-size: 0.9286em; // 0.8125rem / 0.875rem
-  font-weight: 650;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: all 0.15s ease;
-
-  &:hover:not(&--active) { color: $ink; }
-}
-
-.tab--active {
-  background: $card;
-  color: $signal;
-  box-shadow: $soft;
-}
-
-.pg-body-scroll { overflow-y: auto; padding: 20px 32px 32px; }
-
-// ---- generic buttons (shared) ---------------------------------------------
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 10px 18px;
-  border-radius: 10px;
-  border: 1px solid $line;
-  background: $card;
-  color: $ink-2;
-  font-family: $sans;
-  font-size: 0.9643em; // 0.84375rem / 0.875rem
-  font-weight: 650;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  white-space: nowrap;
-
-  &:hover:not(:disabled) { border-color: $ink-3; color: $ink; }
-  &:disabled { opacity: 0.45; cursor: not-allowed; }
-}
-
-.btn-sm { padding: 7px 12px; font-size: 0.8929em; border-radius: 8px; } // 0.78125rem / 0.875rem
-
-// ---- saved metrics table ---------------------------------------------------
-.card {
-  background: $card;
-  border: 1px solid $line;
-  border-radius: 16px;
-  box-shadow: $soft;
-  overflow: hidden;
-}
-
-.card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 18px;
-  border-bottom: 1px solid $line;
-  h3 { font-family: $display; font-size: 1.0714em; font-weight: 700; color: $ink; } // 0.9375rem / 0.875rem
-}
-
-.card-body { padding: 4px 0 8px; }
-.table-wrap { overflow-x: auto; }
-
-.table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.9286em; // 0.8125rem / 0.875rem
-
-  thead th { text-align: left; background: $paper; @extend %micro; font-size: 0.6429em; color: $ink-3; padding: 10px 18px; white-space: nowrap; } // 0.5625rem / 0.875rem
-  tbody tr { border-top: 1px solid $line-2; transition: background 0.13s ease; &:hover { background: $paper; } }
-  tbody td { padding: 11px 18px; color: $ink; vertical-align: middle; }
-}
-
-.cell-num { font-family: $mono; font-weight: 700; color: $ink; }
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  font-family: $mono;
-  font-size: 0.7143em; // 0.625rem / 0.875rem
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  border-radius: 6px;
-  padding: 3px 8px;
-  white-space: nowrap;
-  color: $signal;
-  background: $wash;
-
-  &--code { color: $violet; background: $violet-wash; }
-  &--model { color: $signal; background: $wash; }
-  &--rag { color: $sky; background: $sky-wash; }
-  &--agent { color: $amber; background: $amber-wash; }
-  &--simple { color: $signal; background: $wash; }
-  &--active { color: $ok; background: $ok-wash; }
-  &--inactive { color: $ink-3; background: $ink-wash; }
-}
-
-.error-banner {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 14px; border-radius: 10px;
-  background: $danger-wash; border: 1px solid rgba($danger, 0.2);
-  color: $danger; font-size: 0.9286em; margin-bottom: 16px; // 0.8125rem / 0.875rem
-}
-
-.empty { padding: 28px 20px; text-align: center; color: $ink-3; font-size: 0.9286em; display: flex; align-items: center; gap: 8px; justify-content: center; } // 0.8125rem / 0.875rem
-.loading-row { display: flex; align-items: center; gap: 8px; padding: 24px; justify-content: center; color: $ink-3; font-size: 0.9286em; } // 0.8125rem / 0.875rem
-
-// ---- toast (used by useToast.tsx) -----------------------------------------
-.toast {
-  position: fixed;
-  left: 50%;
-  bottom: 28px;
-  transform: translateX(-50%);
-  z-index: 400;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 18px;
-  border-radius: 11px;
-  background: #14161B;
-  color: #fff;
-  font-size: 0.9286em; // 0.8125rem / 0.875rem
-  font-weight: 650;
-  box-shadow: $lift;
-  animation: cm-toast-in 0.18s ease;
-}
-.toast--ok::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: $ok; }
-.toast--error::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #FF6B6B; }
-.toast--info::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: $signal; }
-
-@media (max-width: 760px) {
-  .cm__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 12px; }
-  .pg-body-scroll { padding: 16px 18px 24px; }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Custommetricsdashboard.tsx
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertCircle, Gauge, LayoutDashboard, Loader2, PenSquare, Trash2 } from 'lucide-react';
-import styles from './CustomMetrics.module.scss';
-import { metricsApi, CustomMetric } from '../../api/endpoints/metrics';
-import CreateMetric from './CreateMetric';
-
-type View = 'dashboard' | 'create';
-
-function formatDate(iso: string) {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-}
-
-export default function CustomMetricsDashboard() {
-  const [view, setView] = useState<View>('dashboard');
-
-  const [metrics, setMetrics] = useState<CustomMetric[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
-  // delete state
-  const [pendingDeleteId, setPendingDeleteId] = useState('');
-  const [deletingId, setDeletingId] = useState('');
-  const [deleteError, setDeleteError] = useState('');
-
-  const fetchMetrics = useCallback(() => {
-    setLoading(true);
-    setError('');
-    metricsApi.list()
-      .then(setMetrics)
-      .catch((err) => setError(err.message || 'Failed to load metrics'))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => { fetchMetrics(); }, [fetchMetrics]);
-
-  const activeCount = useMemo(() => metrics.filter((m) => m.is_active).length, [metrics]);
-
-  const badgeClass = (variant: string) => `${styles.badge} ${styles[`badge--${variant}`] || ''}`;
-
-  const requestDelete = (id: string) => {
-    setDeleteError('');
-    setPendingDeleteId(id);
-  };
-
-  const cancelDelete = () => setPendingDeleteId('');
-
-  const confirmDelete = (id: string) => {
-    setDeletingId(id);
-    setDeleteError('');
-    metricsApi.remove(id)
-      .then(() => {
-        setMetrics((prev) => prev.filter((m) => m.id !== id));
-        setPendingDeleteId('');
-      })
-      .catch((err) => setDeleteError(err.message || 'Failed to delete metric'))
-      .finally(() => setDeletingId(''));
-  };
-
-  // After a successful save, hop back to the dashboard and refresh the list.
-  const handleSaved = () => {
-    setView('dashboard');
-    fetchMetrics();
-  };
-
-  return (
-    <div className={`page-enter pg-shell ${styles.cm}`}>
-      <div className={styles['cm__header']}>
-        <div>
-          <p className={styles['cm__header-eyebrow']}>Custom Metrics</p>
-          <h1>{view === 'dashboard' ? 'Dashboard' : 'Create Metric'}</h1>
-          <p className={styles['cm__header-sub']}>
-            {view === 'dashboard'
-              ? (loading ? 'Saved metrics for evaluation' : `${metrics.length} metric${metrics.length === 1 ? '' : 's'} \u00b7 ${activeCount} active`)
-              : 'Fill in every section below, then validate and save.'}
-          </p>
-        </div>
-
-        <div className={styles.tabbar}>
-          <button
-            type="button"
-            className={`${styles.tab} ${view === 'dashboard' ? styles['tab--active'] : ''}`}
-            onClick={() => setView('dashboard')}
-          >
-            <LayoutDashboard size={14} /> Dashboard
-          </button>
-          <button
-            type="button"
-            className={`${styles.tab} ${view === 'create' ? styles['tab--active'] : ''}`}
-            onClick={() => setView('create')}
-          >
-            <PenSquare size={14} /> Create Metric
-          </button>
-        </div>
-      </div>
-
-      {view === 'create' ? (
-        <CreateMetric onCancel={() => setView('dashboard')} onSaved={handleSaved} />
-      ) : (
-        <div className={`pg-body ${styles['pg-body-scroll']}`}>
-          <div className={styles.card}>
-            <div className={styles['card-header']}>
-              <h3>Saved Metrics</h3>
-              <button
-                type="button"
-                className={`${styles.btn} ${styles['btn-sm']}`}
-                onClick={() => setView('create')}
-              >
-                + New
-              </button>
-            </div>
-
-            <div className={styles['card-body']}>
-              {error && <div className={styles['error-banner']}><AlertCircle size={14} /> {error}</div>}
-              {deleteError && <div className={styles['error-banner']}><AlertCircle size={14} /> {deleteError}</div>}
-
-              {loading ? (
-                <div className={styles['loading-row']}><Loader2 size={14} className={styles.spin} /> Loading metrics…</div>
-              ) : metrics.length === 0 ? (
-                <div className={styles.empty}>
-                  <Gauge size={16} /> No metrics saved yet — create your first custom metric to get started.
-                </div>
-              ) : (
-                <div className={styles['table-wrap']}>
-                  <table className={styles.table}>
-                    <thead>
-                      <tr>
-                        <th>Name</th>
-                        <th>Eval Types</th>
-                        <th>Type</th>
-                        <th>Threshold</th>
-                        <th>Judge</th>
-                        <th>Status</th>
-                        <th>Created</th>
-                        <th style={{ width: '1%' }} />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {metrics.map((m) => {
-                        const isPending = pendingDeleteId === m.id;
-                        const isDeleting = deletingId === m.id;
-                        return (
-                          <tr key={m.id} title={m.description}>
-                            <td>{m.name}</td>
-                            <td>
-                              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                                {(m.eval_types || []).map((t) => (
-                                  <span key={t} className={badgeClass(t)}>{(t || '').toUpperCase()}</span>
-                                ))}
-                              </div>
-                            </td>
-                            <td><span className={badgeClass(m.metric_type === 'code' ? 'code' : 'simple')}>{m.metric_type}</span></td>
-                            <td className={styles['cell-num']}>{m.threshold}</td>
-                            <td>{m.requires_judge ? 'Yes' : 'No'}</td>
-                            <td><span className={badgeClass(m.is_active ? 'active' : 'inactive')}>{m.is_active ? 'Active' : 'Inactive'}</span></td>
-                            <td>{formatDate(m.created_at)}</td>
-                            <td>
-                              {isPending ? (
-                                <div style={{ display: 'flex', gap: '6px', alignItems: 'center', whiteSpace: 'nowrap' }}>
-                                  <span style={{ fontSize: '0.78125rem', color: 'var(--ink-2)' }}>Delete?</span>
-                                  <button
-                                    type="button"
-                                    className={`${styles.btn} ${styles['btn-sm']}`}
-                                    style={{ borderColor: '#DC2626', background: '#DC2626', color: '#fff' }}
-                                    disabled={isDeleting}
-                                    onClick={() => confirmDelete(m.id)}
-                                  >
-                                    {isDeleting ? <Loader2 size={13} className={styles.spin} /> : 'Confirm'}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className={`${styles.btn} ${styles['btn-sm']}`}
-                                    disabled={isDeleting}
-                                    onClick={cancelDelete}
-                                  >
-                                    Cancel
-                                  </button>
-                                </div>
-                              ) : (
-                                <button
-                                  type="button"
-                                  title="Delete metric"
-                                  aria-label={`Delete ${m.name}`}
-                                  onClick={() => requestDelete(m.id)}
-                                  style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    width: '28px',
-                                    height: '28px',
-                                    borderRadius: '8px',
-                                    border: '1px solid transparent',
-                                    background: 'transparent',
-                                    color: 'var(--ink-3)',
-                                    cursor: 'pointer',
-                                  }}
-                                  onMouseEnter={(e) => {
-                                    e.currentTarget.style.background = 'rgba(220,38,38,0.08)';
-                                    e.currentTarget.style.borderColor = 'rgba(220,38,38,0.2)';
-                                    e.currentTarget.style.color = '#DC2626';
-                                  }}
-                                  onMouseLeave={(e) => {
-                                    e.currentTarget.style.background = 'transparent';
-                                    e.currentTarget.style.borderColor = 'transparent';
-                                    e.currentTarget.style.color = 'var(--ink-3)';
-                                  }}
-                                >
-                                  <Trash2 size={14} />
-                                </button>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
 }
