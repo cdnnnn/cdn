@@ -1,4 +1,3 @@
-//Createmetric.tsx
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle, ArrowRight, Check, CheckCircle2, ChevronRight, Code2, Cpu, Database,
@@ -359,7 +358,7 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
     if (metricType === 'simple') {
       if (builtinCheck === 'contains_keyword') {
         const list = keywords.split(',').map((k) => k.trim()).filter(Boolean);
-        return { subtype: 'contains_keyword', params: { keywords: list } };
+        return { subtype: 'contains_keywords', params: { keywords: list } };
       }
       if (builtinCheck === 'exact_match') return { subtype: 'exact_match', params: { case_sensitive: caseSensitive } };
       if (builtinCheck === 'agent_loop_detection') return { subtype: 'agent_loop_detection', params: { max_repetitions: Number(maxRepetitions) } };
@@ -690,11 +689,11 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
                     )}
 
                     {builtinCheck === 'contains_keyword' && (
-                      <div className={styles.field} style={{ marginTop: '18px' }}>
+                      <div className={`${styles.field} ${styles['field--fit']}`} style={{ marginTop: '18px' }}>
                         <label className={styles['field__label']}>Keywords (comma-separated)</label>
                         <input
                           className={styles.input}
-                          placeholder="e.g. refund, cancel, error"
+                          placeholder="Enter one or more keywords, separated by commas"
                           value={keywords}
                           onChange={(e) => setKeywords(e.target.value)}
                         />
@@ -702,7 +701,7 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
                     )}
 
                     {builtinCheck === 'exact_match' && (
-                      <div className={styles.field} style={{ marginTop: '18px' }}>
+                      <div className={`${styles.field} ${styles['field--fit']}`} style={{ marginTop: '18px' }}>
                         <div className={styles['switch-row']}>
                           <div>
                             <div className={styles['switch-row__label']}>Case Sensitive</div>
@@ -722,7 +721,7 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
                     )}
 
                     {builtinCheck === 'agent_loop_detection' && (
-                      <div className={styles.field} style={{ marginTop: '18px' }}>
+                      <div className={`${styles.field} ${styles['field--fit']}`} style={{ marginTop: '18px' }}>
                         <label className={styles['field__label']}>Max Repetitions</label>
                         <input
                           type="number"
@@ -742,7 +741,7 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
                     )}
 
                     {builtinCheck === 'tool_correctness' && (
-                      <div className={styles.field} style={{ marginTop: '18px' }}>
+                      <div className={`${styles.field} ${styles['field--fit']}`} style={{ marginTop: '18px' }}>
                         <div className={styles['switch-row']}>
                           <div>
                             <div className={styles['switch-row__label']}>Check Arguments</div>
@@ -767,9 +766,11 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
                 {metricType && (
                   <div className={styles.field} style={{ marginTop: '26px' }}>
                     <label className={styles['field__label']}>Pass Threshold</label>
-                    <div className={styles.thr}>
-                      <div className={styles['thr__value']}>{threshold.toFixed(2)}</div>
-                      <div className={styles['thr__cap']}>Minimum score required to pass</div>
+                    <div className={`${styles.thr} ${styles['field--fit']}`}>
+                      <div className={styles['thr__row']}>
+                        <span className={styles['thr__cap']}>Minimum score required to pass</span>
+                        <span className={styles['thr__value']}>{threshold.toFixed(2)}</span>
+                      </div>
                       <input type="range" className={styles['thr__slider']} min={0} max={1} step={0.01} value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} />
                       <div className={styles['thr__scale']}><span>0.00</span><span>0.50</span><span>1.00</span></div>
                     </div>
@@ -967,7 +968,15 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
 
 
 
-//Createmetric.module.scss
+
+
+
+
+
+
+
+
+
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
@@ -1344,6 +1353,15 @@ $base-font: 0.8125rem; // matches Model Catalog / Custom Metrics Dashboard base
 // forms
 // ---------------------------------------------------------------------------
 .field { margin-bottom: 20px; }
+
+// constrains a field to its natural content width instead of stretching
+// across the (now unconstrained) workspace width — used for compact
+// single-value inputs/toggles like the Built-in Check params.
+.field--fit {
+  max-width: 360px;
+
+  .input { width: 100%; }
+}
 
 // side-by-side fields (e.g. Metric Name / Description) to use the wider
 // workspace now that .work__inner has no max-width cap
@@ -1754,26 +1772,32 @@ $base-font: 0.8125rem; // matches Model Catalog / Custom Metrics Dashboard base
 // threshold slider
 // ---------------------------------------------------------------------------
 .thr {
-  padding: 24px;
+  padding: 14px 16px;
   border: 1px solid $line;
-  border-radius: 16px;
+  border-radius: 12px;
   background: $card;
+}
+.thr__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
 }
 .thr__value {
   font-family: $mono;
-  font-size: 3.0769em; // 2.5rem / 0.8125rem
+  font-size: 1.2308em; // 1rem / 0.8125rem
   font-weight: 700;
   color: $signal;
   line-height: 1;
-  text-align: center;
-  margin-bottom: 4px;
+  flex-shrink: 0;
 }
-.thr__cap { text-align: center; font-size: 0.9615em; color: $ink-3; margin-bottom: 20px; } // 0.78125rem / 0.8125rem
+.thr__cap { font-size: 0.9231em; color: $ink-3; } // 0.75rem / 0.8125rem
 .thr__slider {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
-  height: 6px;
+  height: 5px;
   border-radius: 999px;
   background: $line;
   outline: none;
@@ -1782,25 +1806,25 @@ $base-font: 0.8125rem; // matches Model Catalog / Custom Metrics Dashboard base
   &::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
-    width: 22px; height: 22px;
+    width: 17px; height: 17px;
     border-radius: 50%;
     background: $signal;
-    border: 3px solid $card;
+    border: 2.5px solid $card;
     box-shadow: 0 2px 6px rgba(43, 43, 245, 0.4);
     cursor: pointer;
   }
   &::-moz-range-thumb {
-    width: 22px; height: 22px;
+    width: 17px; height: 17px;
     border-radius: 50%;
     background: $signal;
-    border: 3px solid $card;
+    border: 2.5px solid $card;
     cursor: pointer;
   }
 }
 .thr__scale {
   display: flex;
   justify-content: space-between;
-  margin-top: 8px;
+  margin-top: 6px;
   font-family: $mono;
   font-size: 0.7692em; // 0.625rem / 0.8125rem
   color: $ink-3;
