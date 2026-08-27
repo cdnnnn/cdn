@@ -232,7 +232,9 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
     () => promptTemplates.filter((t) => t.category === (evalType ? EVAL_TYPE_TO_CATEGORY[evalType] : '')),
     [promptTemplates, evalType],
   );
-  const allowsCustomPrompt = evalType === 'agent' || evalType === 'rag';
+  // Custom Prompt is available for every evaluation type — Model included,
+  // same as Agent and RAG.
+  const allowsCustomPrompt = evalType === 'agent' || evalType === 'rag' || evalType === 'model';
 
   useEffect(() => {
     if (metricType !== 'prompt' || models.length) return;
@@ -459,13 +461,15 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
                 <h1 className={styles['work__title']}>Name your metric</h1>
                 <p className={styles['work__desc']}>Give it a clear name and, optionally, a short description of what it measures.</p>
 
-                <div className={styles.field}>
-                  <label className={styles['field__label']}>Metric Name</label>
-                  <input className={styles.input} placeholder="e.g., Answer Faithfulness" value={name} onChange={(e) => setName(e.target.value)} />
-                </div>
-                <div className={styles.field}>
-                  <label className={styles['field__label']}>Description</label>
-                  <textarea className={styles.textarea} placeholder="What does this metric measure? (optional)" value={description} onChange={(e) => setDescription(e.target.value)} />
+                <div className={styles['field-row']}>
+                  <div className={styles.field}>
+                    <label className={styles['field__label']}>Metric Name</label>
+                    <input className={styles.input} placeholder="e.g., Answer Faithfulness" value={name} onChange={(e) => setName(e.target.value)} />
+                  </div>
+                  <div className={styles.field}>
+                    <label className={styles['field__label']}>Description</label>
+                    <input className={styles.input} placeholder="What does this metric measure? (optional)" value={description} onChange={(e) => setDescription(e.target.value)} />
+                  </div>
                 </div>
               </div>
 
@@ -491,7 +495,7 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
 
                 <div className={styles.field}>
                   <label className={styles['field__label']}>Metric Type</label>
-                  <div className={styles['opt-grid']}>
+                  <div className={`${styles['opt-grid']} ${styles['opt-grid--4']}`}>
                     {METRIC_TYPE_CARDS.map((c) => (
                       <button key={c.key} className={`${styles.opt} ${metricType === c.key ? styles['opt--selected'] : ''}`} onClick={() => handleMetricType(c.key)}>
                         {metricType === c.key && <span className={styles['opt__check']}><Check size={12} /></span>}
@@ -669,7 +673,7 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
                     {!evalType ? (
                       <div className={styles.empty}>Choose an evaluation type above to see available checks.</div>
                     ) : (
-                      <div className={styles['opt-grid']}>
+                      <div className={`${styles['opt-grid']} ${availableBuiltinChecks.length >= 4 ? styles['opt-grid--4'] : ''}`}>
                         {availableBuiltinChecks.map((c) => (
                           <button
                             key={c.key}
@@ -962,6 +966,7 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
 
 
 
+
 //Createmetric.module.scss
 @use '../../styles/_variables' as *;
 
@@ -1223,7 +1228,6 @@ $base-font: 0.8125rem; // matches Model Catalog / Custom Metrics Dashboard base
 }
 
 .work__inner {
-  max-width: 1000px;
   margin: 0 auto;
 }
 
@@ -1341,6 +1345,16 @@ $base-font: 0.8125rem; // matches Model Catalog / Custom Metrics Dashboard base
 // ---------------------------------------------------------------------------
 .field { margin-bottom: 20px; }
 
+// side-by-side fields (e.g. Metric Name / Description) to use the wider
+// workspace now that .work__inner has no max-width cap
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+
+  .field { margin-bottom: 20px; }
+}
+
 .field__label {
   display: block;
   @extend %micro;
@@ -1375,6 +1389,7 @@ $base-font: 0.8125rem; // matches Model Catalog / Custom Metrics Dashboard base
   gap: 12px;
 }
 .opt-grid--3 { grid-template-columns: repeat(3, 1fr); }
+.opt-grid--4 { grid-template-columns: repeat(4, 1fr); }
 
 .opt {
   position: relative;
@@ -1723,7 +1738,7 @@ $base-font: 0.8125rem; // matches Model Catalog / Custom Metrics Dashboard base
 }
 .code__area {
   width: 100%;
-  min-height: 340px;
+  min-height: 520px;
   border: none;
   resize: vertical;
   padding: 16px;
@@ -2127,279 +2142,16 @@ $base-font: 0.8125rem; // matches Model Catalog / Custom Metrics Dashboard base
   .rail__steps { flex-direction: row; overflow-x: auto; }
   .rail-step { flex-direction: column; align-items: flex-start; min-width: 130px; }
   .rail-step:not(:last-child)::after { display: none; }
+  .opt-grid--4 { grid-template-columns: repeat(2, 1fr); }
+  .field-row { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 760px) {
   .page-header { padding: 16px 18px; flex-direction: column; align-items: flex-start; gap: 10px; }
   .work__scroll { padding: 22px 18px; }
   .work__foot { padding: 14px 18px; }
-  .opt-grid, .opt-grid--3 { grid-template-columns: 1fr; }
+  .opt-grid, .opt-grid--3, .opt-grid--4 { grid-template-columns: 1fr; }
   .data-row { grid-template-columns: 1fr; }
   .ds-list { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
   .rule__grid { grid-template-columns: 1fr 1fr; }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Metrics.ts
-import api from '../axiosInstance';
-
-// ---- Evaluation type & metric type (client-side only, no API) -----------
-export type EvalType = 'model' | 'agent' | 'rag';
-export type MetricType = 'visual' | 'prompt' | 'code' | 'simple';
-
-// ---- Prompt Builder — GET /metrics/templates -----------------------------
-export interface PromptTemplate {
-  category: string; // "llm" | "agent" | "rag"
-  description: string;
-  label: string;
-  name: string;
-  template: string;
-  uses_placeholders: string[];
-}
-
-// ---- Code Editor — GET /metrics/code-templates/{eval_type} ----------------
-export interface CodeTemplateData {
-  eval_type: string;
-  code: string;
-}
-
-// ---- Judge model (Prompt Builder) — GET /models ---------------------------
-export interface ModelSummary {
-  id: string;
-  name: string;
-  provider_id: string;
-  category: string;
-  capabilities: string[];
-  context_window: number;
-  input_price: number | null;
-  output_price: number | null;
-  accuracy_score: number | null;
-  agent_score: number | null;
-  is_active: boolean;
-  base_url: string;
-}
-
-export interface ModelHealthData {
-  success: boolean;
-  message: string;
-  model_id: string;
-  response: string;
-}
-
-// ---- Datasets ---------------------------------------------------------
-export interface DatasetSummary {
-  id: string;
-  name: string;
-  question_count: number;
-}
-
-export interface PreviewQuestion {
-  id: string;
-  input: { prompt: string };
-  expected: { answer: string };
-}
-
-export interface DatasetPreviewData {
-  dataset_id: string;
-  questions: PreviewQuestion[];
-}
-
-// ---- Validate (dry run) — POST /metrics/custom/preview --------------------
-export interface RuleDef {
-  field: string;
-  operator: string;
-  value: string;
-  compare_to_field: boolean;
-}
-
-export interface MetricDefinition {
-  rules?: RuleDef[];
-  // NB: the spec's own example literally spells this "prompt_tenplate" —
-  // treating that as a typo and using the correct spelling here.
-  prompt_template?: string;
-  code?: string;
-  skip_validation?: boolean;
-  // Simple metric type — Built-in Check (contains_keyword / exact_match /
-  // agent_loop_detection / tool_correctness).
-  subtype?: string;
-  params?: Record<string, unknown>;
-}
-
-export interface TestCasePayload {
-  input: string;
-  actual_output: string;
-  expected_output: string;
-  context: string[];
-  retrieval_context: string[];
-  tools_called: string[];
-  expected_tools: string[];
-}
-
-export interface JudgeConfig {
-  model_id: string;
-}
-
-export interface ValidateMetricRequest {
-  actual_output: string;
-  context: string[];
-  definition: MetricDefinition;
-  description: string;
-  eval_types: EvalType[];
-  expected_output: string;
-  expected_tools: string[];
-  gates: string[];
-  input: string;
-  judge_config: JudgeConfig | null;
-  metric_type: string; // "condition" | "prompt" | "code" | "simple"
-  name: string;
-  retrieval_context: string[];
-  test_cases: TestCasePayload[];
-  threshold: string; // sent as a string, e.g. "0.70"
-  tools_called: string[];
-}
-
-export interface ValidateResultItem {
-  score: number;
-  reason: string;
-  success: boolean;
-  test_case: TestCasePayload;
-}
-
-export interface ValidateMetricData {
-  results: ValidateResultItem[];
-  total: number;
-  passed: number;
-}
-
-// ---- Save — POST /metrics/custom -------------------------------------
-export interface SaveMetricRequest {
-  definition: MetricDefinition;
-  description: string;
-  eval_types: EvalType[];
-  metric_type: string;
-  name: string;
-  threshold: string;
-  // Not shown in the spec's request sample, but included defensively since
-  // Prompt Builder metrics can't be scored without a judge model — drop
-  // this if the backend rejects the extra field.
-  judge_config?: JudgeConfig | null;
-}
-
-export interface SaveMetricData {
-  id?: string;
-  name?: string;
-}
-
-// ---- Delete — DELETE /metrics/custom/{metric_id} --------------------------
-export interface DeleteMetricData {
-  status: string;
-  metric_id: string;
-}
-
-// ---- Dashboard: saved custom metrics ---------------------------------
-export interface CustomMetricRuleDef {
-  field: string;
-  operator: string;
-  value: string;
-  compared_to_field: boolean;
-}
-
-export interface CustomMetricDefinition {
-  subtype?: string;
-  params?: Record<string, unknown>;
-  rules?: CustomMetricRuleDef[];
-}
-
-export interface CustomMetric {
-  id: string;
-  name: string;
-  description: string;
-  metric_type: string;
-  eval_types: string[];
-  definition: CustomMetricDefinition;
-  requires_judge: boolean;
-  threshold: number;
-  is_active: boolean;
-  created_by_id: number;
-  created_at: string;
-  updated_at: string;
-}
-
-// None of these endpoints wrap their body in a { status, data } envelope —
-// every response below is the payload itself, so each call just unwraps
-// axios's own `r.data` and normalizes array fields to [] where the backend
-// might omit them.
-export const metricsApi = {
-  // Dashboard — GET /metrics/custom -> { metrics: [...] }
-  list: () =>
-    api.get<{ metrics: CustomMetric[] }>('/metrics/custom').then((r) => r.data.metrics || []),
-
-  // Prompt Builder — GET /metrics/templates -> { templates: [...] }
-  getPromptTemplates: () =>
-    api.get<{ templates: PromptTemplate[] }>('/metrics/templates').then((r) => r.data.templates || []),
-
-  // Code Editor — GET /metrics/code-templates/{eval_type}
-  getCodeTemplate: (evalType: EvalType) =>
-    api.get<CodeTemplateData>(`/metrics/code-templates/${evalType}`).then((r) => r.data),
-
-  // Prompt Builder — GET /models
-  listModels: () =>
-    api.get<{ models: ModelSummary[] }>('/models').then((r) => r.data.models || []),
-
-  // Prompt Builder — per-model health ping. Failures (network error, or a
-  // body missing `success`) resolve to an "unreachable" fallback instead
-  // of throwing, since an offline model is a normal UI state, not an
-  // exceptional one.
-  checkModelHealth: (modelId: string) =>
-    api
-      .get<ModelHealthData>(`/models/health/${modelId}`)
-      .then((r) => ('success' in r.data ? r.data : { success: false, message: 'Unreachable', model_id: modelId, response: '' }))
-      .catch(() => ({ success: false, message: 'Unreachable', model_id: modelId, response: '' })),
-
-  // Dataset selection — GET /datasets?eval_type={evalType}
-  listDatasets: (evalType: EvalType) =>
-    api
-      .get<{ total_count: number; datasets: DatasetSummary[] }>('/datasets', { params: { eval_type: evalType } })
-      .then((r) => r.data.datasets || []),
-
-  // GET /datasets/{dataset_id}/preview
-  previewDataset: (datasetId: string) =>
-    api.get<DatasetPreviewData>(`/datasets/${datasetId}/preview`).then((r) => ({
-      ...r.data,
-      questions: r.data.questions || [],
-    })),
-
-  // Footer "Validate Metric" — POST /metrics/custom/preview. Doesn't
-  // persist anything; a successful response with results unlocks Save.
-  validate: (payload: ValidateMetricRequest) =>
-    api.post<ValidateMetricData>('/metrics/custom/preview', payload).then((r) => ({
-      ...r.data,
-      results: r.data.results || [],
-    })),
-
-  // "Save Metric" — POST /metrics/custom. Response body beyond "200 OK"
-  // isn't specified, so `id`/`name` are optional here.
-  create: (payload: SaveMetricRequest) =>
-    api.post<SaveMetricData | void>('/metrics/custom', payload).then((r) => r.data || {}),
-
-  // Dashboard "Delete" — DELETE /metrics/custom/{metric_id} -> { status, metric_id }
-  remove: (metricId: string) =>
-    api.delete<DeleteMetricData>(`/metrics/custom/${metricId}`).then((r) => r.data),
-};
