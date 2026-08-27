@@ -348,6 +348,46 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
     dataset: validateResult ? `${validateResult.passed}/${validateResult.total} passed` : (selectedDatasetId ? `${selectedQuestionIds.size} selected` : 'Not set'),
   };
 
+  // What's still missing for each incomplete section, surfaced in the rail
+  // so the user knows exactly what to do next instead of just seeing
+  // "Incomplete" / "Not set".
+  const sectionMissing: Record<SectionKey, string> = {
+    details: !name.trim() ? 'Add a metric name' : '',
+
+    type: (() => {
+      if (!evalType && !metricType) return 'Choose an evaluation type and a metric type';
+      if (!evalType) return 'Choose an evaluation type';
+      if (!metricType) return 'Choose a metric type';
+      return '';
+    })(),
+
+    config: (() => {
+      if (!metricType) return 'Pick a metric type in the section above first';
+      if (configComplete) return '';
+      if (metricType === 'visual') return 'Fill in every rule\u2019s field, operator, and value';
+      if (metricType === 'prompt') {
+        if (!promptText.trim() && !selectedModelId) return 'Write a judge prompt and choose a judge model';
+        if (!promptText.trim()) return 'Write a judge prompt';
+        return 'Choose a judge model';
+      }
+      if (metricType === 'code') return 'Add your scoring code';
+      if (metricType === 'simple') {
+        if (!builtinCheck) return 'Select a built-in check';
+        if (builtinCheck === 'contains_keyword') return 'Enter at least one keyword';
+        if (builtinCheck === 'agent_loop_detection') return 'Enter a max repetitions value greater than 0';
+      }
+      return '';
+    })(),
+
+    dataset: (() => {
+      if (!evalType) return 'Choose an evaluation type to load datasets';
+      if (!selectedDatasetId) return 'Select a dataset';
+      if (selectedQuestionIds.size === 0) return 'Select at least one test question';
+      if (!validateResult) return 'Run validation to complete this step';
+      return '';
+    })(),
+  };
+
   const completedCount = SECTIONS.filter((s) => sectionDone[s.key]).length;
 
   // ---- validate / save ---------------------------------------------------
@@ -441,6 +481,12 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
                   <span className={styles['rail-step__body']}>
                     <span className={styles['rail-step__label']}>{s.label}</span>
                     <span className={styles['rail-step__value']}>{sectionValue[s.key]}</span>
+                    {!done && sectionMissing[s.key] && (
+                      <span className={styles['rail-step__missing']}>
+                        <AlertCircle size={11} />
+                        {sectionMissing[s.key]}
+                      </span>
+                    )}
                   </span>
                   <ChevronRight size={14} className={styles['rail-step__arrow']} />
                 </button>
@@ -971,12 +1017,6 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
 
 
 
-
-
-
-
-
-
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
@@ -1206,6 +1246,21 @@ $base-font: 0.8125rem; // matches Model Catalog / Custom Metrics Dashboard base
   white-space: nowrap;
 
   .rail-step--done & { color: $signal; font-weight: 700; }
+}
+
+.rail-step__missing {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  margin-top: 6px;
+  font-family: $sans;
+  font-size: 0.9231em; // 0.75rem / 0.8125rem
+  font-weight: 600;
+  color: $amber;
+  line-height: 1.35;
+  white-space: normal;
+
+  svg { flex-shrink: 0; margin-top: 1px; }
 }
 
 .rail-step__arrow {
