@@ -1,9 +1,10 @@
+//History.tsx
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   Search, Sparkles, Bot, Layers, Loader2, Download, ListTree, Gauge, CheckCircle2, XCircle,
   Award, ListChecks, Clock, History as HistoryIcon, SlidersHorizontal, CalendarDays, X, PlaySquare,
-  StopCircle, AlertTriangle, Trash2,
+  StopCircle, AlertTriangle, Trash2, ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
 import {
@@ -25,6 +26,8 @@ const DOWNLOAD_OPTIONS: { format: ReportDownloadFormat; label: string }[] = [
   { format: 'csv_detailed', label: 'CSV (Detailed)' },
   { format: 'pdf', label: 'PDF' },
 ];
+
+const PAGE_SIZE_OPTIONS = [20, 30, 40, 50];
 
 // Maps a raw status to the module status-pill variant suffix.
 function statusVariant(status: EvaluationStatusValue): string {
@@ -63,7 +66,7 @@ export default function History() {
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedId = searchParams.get('id');
 
-  const { list: rawList, listStatus, listError, resultsByEvalId, resultsStatusByEvalId, resultsErrorByEvalId } = useAppSelector((s) => s.evaluations);
+  const { list: rawList, total, listStatus, listError, resultsByEvalId, resultsStatusByEvalId, resultsErrorByEvalId } = useAppSelector((s) => s.evaluations);
   const list = rawList || [];
   const models = useAppSelector((s) => s.models.items) || [];
   const providers = useAppSelector((s) => s.providers.items) || [];
@@ -83,6 +86,19 @@ export default function History() {
   const [confirmTarget, setConfirmTarget] = useState<{ evaluation: EvaluationListItem; action: 'cancel' | 'delete' } | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
+  // typeFilter/statusFilter are now server-side (query params on GET
+  // /evaluations), so changing either means a genuinely different result
+  // set — jump back to page 1 rather than potentially landing on an
+  // out-of-range page for the new filter.
+  const changeTypeFilter = (value: string) => {
+    setTypeFilter(value);
+    setPage(1);
+  };
+  const changeStatusFilter = (value: string) => {
+    setStatusFilter(value);
+    setPage(1);
+  };
+
   const toggleFilter = (key: 'search' | 'type' | 'date' | 'status') => {
     setActiveFilter((prev) => (prev === key ? null : key));
   };
@@ -100,23 +116,43 @@ export default function History() {
     failed: 'Failed',
   };
 
-  // Initial load + silent 10s poll (spec §2.4) — no spinner/error disruption
-  // on background refreshes; the slice only flips listStatus when list is empty.
-  useEffect(() => {
-    dispatch(fetchEvaluations());
-    const interval = setInterval(() => dispatch(fetchEvaluations()), 10000);
-    return () => clearInterval(interval);
-  }, [dispatch]);
+  // Local page/page-size state drives the server request — Redux's `page`/
+  // `pageSize` (set above) just echo back whatever the most recent fetch
+  // actually requested, once it resolves.
+  const [pageState, setPage] = useState(1);
+  const [pageSizeState, setPageSizeState] = useState(20);
+  const changePageSize = (value: number) => {
+    setPageSizeState(value);
+    setPage(1);
+  };
 
+  // Initial load + refetch on page/page-size/filter change, plus a silent
+  // 10s background poll of whatever's currently being viewed (spec §2.4) —
+  // the poll never disrupts the loading/error UI over data already on
+  // screen (see fetchEvaluations.pending in the slice).
+  useEffect(() => {
+    dispatch(fetchEvaluations({ page: pageState, pageSize: pageSizeState, status: statusFilter, evalType: typeFilter }));
+    const interval = setInterval(() => {
+      dispatch(fetchEvaluations({ page: pageState, pageSize: pageSizeState, status: statusFilter, evalType: typeFilter, silent: true }));
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [dispatch, pageState, pageSizeState, statusFilter, typeFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSizeState));
+  const rangeStart = total === 0 ? 0 : (pageState - 1) * pageSizeState + 1;
+  const rangeEnd = Math.min(pageState * pageSizeState, total);
+
+  // search/date remain client-side, applied only to the current page's rows
+  // — the API doesn't take a search or date-range param yet. type/status
+  // are now handled server-side (see the fetch effect above) rather than
+  // filtered here.
   const filtered = useMemo(() => {
     return list.filter((e) => {
       if (search && !(e.name || '').toLowerCase().includes(search.toLowerCase())) return false;
-      if (typeFilter !== 'All' && e.eval_type !== typeFilter) return false;
-      if (statusFilter !== 'All' && e.status !== statusFilter) return false;
       if (!withinDateRange(e.created_at, dateFilter)) return false;
       return true;
     });
-  }, [list, search, typeFilter, dateFilter, statusFilter]);
+  }, [list, search, dateFilter]);
 
   const selected = list.find((e) => e.id === selectedId) || filtered[0] || null;
 
@@ -320,7 +356,7 @@ export default function History() {
                   {typeFilter !== 'All' && (
                     <span className={styles['filter-chip']}>
                       <span>{TYPE_LABEL[typeFilter]}</span>
-                      <X size={11} onClick={() => setTypeFilter('All')} />
+                      <X size={11} onClick={() => changeTypeFilter('All')} />
                     </span>
                   )}
                   {dateFilter !== 'all' && (
@@ -332,7 +368,7 @@ export default function History() {
                   {statusFilter !== 'All' && (
                     <span className={styles['filter-chip']}>
                       <span>{STATUS_LABEL[statusFilter]}</span>
-                      <X size={11} onClick={() => setStatusFilter('All')} />
+                      <X size={11} onClick={() => changeStatusFilter('All')} />
                     </span>
                   )}
                 </div>
@@ -360,7 +396,7 @@ export default function History() {
                           key={t}
                           className={`${styles['panel-pill']} ${typeFilter === t ? styles.on : ''}`}
                           onClick={() => {
-                            setTypeFilter(t);
+                            changeTypeFilter(t);
                             setActiveFilter(null);
                           }}
                         >
@@ -396,7 +432,7 @@ export default function History() {
                           key={value}
                           className={`${styles['panel-pill']} ${statusFilter === value ? styles.on : ''}`}
                           onClick={() => {
-                            setStatusFilter(value);
+                            changeStatusFilter(value);
                             setActiveFilter(null);
                           }}
                         >
@@ -411,7 +447,7 @@ export default function History() {
               {listStatus === 'failed' && list.length === 0 && (
                 <div className={styles.empty}>{listError || 'Failed to load evaluations.'}</div>
               )}
-              {listStatus !== 'loading' && list.length > 0 && filtered.length === 0 && (
+              {listStatus !== 'loading' && total > 0 && (list.length === 0 || filtered.length === 0) && (
                 <div className={styles.empty}>No evaluations match your filters.</div>
               )}
             </div>
@@ -419,10 +455,13 @@ export default function History() {
             <div className={styles.rows}>
               {listStatus === 'loading' && list.length === 0 && <SkeletonListRows count={5} />}
 
-              {/* True empty state — the account has no evaluations at all yet,
-                  as opposed to "no evaluations match your current filters"
-                  (handled above via styles.empty). */}
-              {listStatus === 'succeeded' && list.length === 0 && (
+              {/* True empty state — the account has no evaluations at all yet
+                  (total === 0), as opposed to "no evaluations match your
+                  current page/filters" (handled above via styles.empty),
+                  which can now happen even with list.length === 0 if a
+                  server-side status/type filter or a later page just has no
+                  rows while other pages/filters still do. */}
+              {listStatus === 'succeeded' && total === 0 && (
                 <div className={styles['sidebar-empty']}>
                   <div className={styles['sidebar-empty__icon']}>
                     <HistoryIcon size={22} />
@@ -492,6 +531,52 @@ export default function History() {
                 );
               })}
             </div>
+
+            {/* Pagination bar — only worth showing once there's more than
+                one page, or the page-size control is worth exposing even at
+                exactly one page so it's discoverable before it's needed. */}
+            {total > 0 && (
+              <div className={styles.pagination}>
+                <div className={styles['pagination__info']}>
+                  {rangeStart}–{rangeEnd} of {total}
+                </div>
+                <div className={styles['pagination__controls']}>
+                  <select
+                    className={styles['pagination__size-select']}
+                    value={pageSizeState}
+                    onChange={(e) => changePageSize(Number(e.target.value))}
+                    title="Rows per page"
+                  >
+                    {PAGE_SIZE_OPTIONS.map((n) => (
+                      <option key={n} value={n}>
+                        {n} / page
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className={styles['pagination__nav-btn']}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={pageState <= 1 || listStatus === 'loading'}
+                    title="Previous page"
+                  >
+                    <ChevronLeft size={14} />
+                  </button>
+                  <span className={styles['pagination__page-label']}>
+                    {pageState} / {totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    className={styles['pagination__nav-btn']}
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={pageState >= totalPages || listStatus === 'loading'}
+                    title="Next page"
+                  >
+                    <ChevronRight size={14} />
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* ---------- Detail panel ---------- */}
@@ -882,11 +967,7 @@ export default function History() {
 
 
 
-
-
-
-
-
+//History.module.scss
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
@@ -1321,6 +1402,83 @@ $history-base-font: 0.8125rem;
   gap: 10px;
   margin-top: 14px;
   padding-right: 2px;
+}
+
+// ---- pagination bar (bottom of sidebar) ------------------------------------
+.pagination {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid $line;
+}
+
+.pagination__info {
+  font-family: $font-mono;
+  font-size: 0.7692em; // 0.625rem / 0.8125rem
+  color: $ink-3;
+  white-space: nowrap;
+}
+
+.pagination__controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pagination__size-select {
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+  font-family: $font-mono;
+  font-size: 0.7692em; // 0.625rem / 0.8125rem
+  font-weight: 650;
+  color: $ink-2;
+  background: $paper;
+  border: 1px solid $line;
+  border-radius: 8px;
+  padding: 5px 22px 5px 9px;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%238A909B' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+
+  &:hover { border-color: $ink-3; }
+  &:focus { outline: none; border-color: $signal; box-shadow: 0 0 0 3px $wash; }
+}
+
+.pagination__nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  border: 1px solid $line;
+  background: $paper;
+  color: $ink-2;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+  &:hover:not(:disabled) { border-color: $signal; color: $signal; background: $wash; }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+}
+
+.pagination__page-label {
+  min-width: 44px;
+  text-align: center;
+  font-family: $font-mono;
+  font-size: 0.7692em; // 0.625rem / 0.8125rem
+  font-weight: 700;
+  color: $ink;
 }
 
 .row {
@@ -2156,4 +2314,817 @@ $history-base-font: 0.8125rem;
 @media (max-width: 640px) {
   .history__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
   .pg-body-fixed { padding: 16px 18px 22px; }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Evaluations.ts
+import api from '../axiosInstance';
+import type {
+  AgentBenchmarkRunMultiRequest,
+  AgentBenchmarkRunRequest,
+  CreateEvaluationRequest,
+  CreateEvaluationResponse,
+  DatasetPreviewResponse,
+  EvaluationsListResponse,
+  EvaluationResultsResponse,
+  EvaluationListItem,
+  ModelResult,
+  GenerateInstructionRequest,
+  GenerateInstructionResponse,
+} from '../../types';
+
+// Re-exported for convenience so existing imports of these two request
+// types from this module (e.g. in evaluationsSlice.ts) keep working —
+// the canonical definitions now live in ../../types.
+export type { AgentBenchmarkRunRequest, AgentBenchmarkRunMultiRequest };
+
+// Normalizes one list-item so array fields the UI iterates over
+// (model_ids.length, selected_metrics.map, etc.) are never null/undefined,
+// even if the backend omits them for a given row. Same normalize-at-the-
+// boundary pattern as benchmarksApi.list's `tasks`.
+function normalizeListItem(e: EvaluationListItem): EvaluationListItem {
+  return {
+    ...e,
+    model_ids: e.model_ids || [],
+    selected_metrics: e.selected_metrics || [],
+    selected_category: e.selected_category || [],
+    datasets_config: e.datasets_config || [],
+  };
+}
+
+export interface ListEvaluationsParams {
+  offset: number;
+  limit: number;
+  // Omit (leave undefined) rather than passing 'All' — axios drops
+  // undefined params from the query string automatically, which is how we
+  // satisfy "don't send status/eval_type at all when no filter is applied".
+  status?: string;
+  eval_type?: string;
+}
+
+export const evaluationsApi = {
+  // Populates the History sidebar list. Called on mount, on page/page-size/
+  // filter changes, and every 10s (silent poll) — see History.tsx. Backed by
+  // GET /evaluations?status=&eval_type=&offset=&limit= with a { evaluations,
+  // total } response; `total` is the full filtered count across all pages,
+  // not just this page's length, and drives the pagination bar.
+  list: (params: ListEvaluationsParams) =>
+    api.get<EvaluationsListResponse>('/evaluations', { params }).then((r) => ({
+      evaluations: (r.data.evaluations || []).map(normalizeListItem),
+      total: r.data.total ?? 0,
+    })),
+
+  create: (payload: CreateEvaluationRequest) =>
+    api.post<CreateEvaluationResponse>('/evaluations', payload).then((r) => r.data),
+
+  start: (evaluationId: string) =>
+    api.post<void>(`/evaluations/${evaluationId}/start`).then(() => undefined),
+
+  // Stops a running evaluation — used by the "Stop evaluation" button on a
+  // running card in History.tsx (behind a confirm dialog). The backend
+  // responds 200 with { status: 'cancelled', evaluation_id } on success.
+  cancel: (evaluationId: string) =>
+    api.post<{ status: string; evaluation_id: string }>(`/evaluations/${evaluationId}/cancel`).then((r) => r.data),
+
+  // Deletes an evaluation outright — used by the "Delete" action on a
+  // non-running card in History.tsx (behind a confirm dialog). The backend
+  // responds 200 with { status: 'deleted', evaluation_id } on success.
+  remove: (evaluationId: string) =>
+    api.delete<{ status: string; evaluation_id: string }>(`/evaluations/${evaluationId}`).then((r) => r.data),
+
+  // Only ever called when the selected evaluation's status === 'completed'.
+  // The backend returns 400 with { detail: "Execution not completed." } if
+  // called too early — callers should surface err.response.data.detail.
+  //
+  // Also normalizes at the boundary: `total_test` (singular, as sent by the
+  // API) -> `total_tests`; and `results`/`metric_scores`/`details`/
+  // `selected_metrics` default to []/{} when the backend omits them, so
+  // downstream code can rely on them always being iterable.
+  results: (evaluationId: string) =>
+    api.get<EvaluationResultsResponse>(`/evaluations/${evaluationId}/results`).then((r) => {
+      const data = r.data;
+      return {
+        ...data,
+        selected_metrics: data.selected_metrics || [],
+        results: (data.results || []).map((m) => {
+          const raw = m as unknown as ModelResult & { total_test?: number };
+          return {
+            ...raw,
+            total_tests: raw.total_tests ?? raw.total_test ?? 0,
+            metric_scores: raw.metric_scores || {},
+            details: raw.details || [],
+          };
+        }),
+      };
+    }),
+
+  // Convenience helper used by the wizard's "Start Evaluation" (step 7):
+  // create, then immediately start. Only for draft.type 'model' | 'rag'.
+  createAndStart: async (payload: CreateEvaluationRequest) => {
+    const created = await evaluationsApi.create(payload);
+    const id = created.id || created.evaluation_id;
+    if (!id) {
+      throw new Error('Evaluation was created but no id was returned by the server.');
+    }
+    await evaluationsApi.start(id);
+    return id;
+  },
+
+  // POST /agent-benchmark/run — draft.type === 'agent', no framework selected.
+  // 200 OK response means successful submission; no meaningful body is relied upon.
+  runAgentBenchmark: (payload: AgentBenchmarkRunRequest) =>
+    api.post<void>('/agent-benchmark/run', payload).then(() => undefined),
+
+  // POST /agent-benchmark/run-multi — draft.type === 'agent', framework selected.
+  // 200 OK response means successful submission; no meaningful body is relied upon.
+  runAgentBenchmarkMulti: (payload: AgentBenchmarkRunMultiRequest) =>
+    api.post<void>('/agent-benchmark/run-multi', payload).then(() => undefined),
+
+  // GET /datasets/{id}/preview?limit={limit}&offset={offset} — lives here
+  // (not in the datasets API module) since it's only ever used from the
+  // evaluation wizard's Test Suite step preview slider. Paginated, 20
+  // questions per page by default (limit=20, offset starts at 0). Total
+  // page count is derived on the caller's side from the dataset's own
+  // `question_count` (from the /datasets list), not from this response.
+  previewDataset: (datasetId: string, limit: number, offset: number) =>
+    api
+      .get<DatasetPreviewResponse>(`/datasets/${datasetId}/preview`, { params: { limit, offset } })
+      .then((r) => r.data),
+
+  // POST /evaluations/generate-instruction — Metrics step's "Generate
+  // Instruction" button. See NewEvaluation.tsx `generateInstruction` for
+  // how model_id/eval_type/questions are assembled.
+  generateInstruction: (payload: GenerateInstructionRequest) =>
+    api.post<GenerateInstructionResponse>('/evaluations/generate-instruction', payload).then((r) => r.data),
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Evaluationsslice.ts
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import type { PayloadAction } from '@reduxjs/toolkit';
+import { evaluationsApi } from '../../api/endpoints/evaluations';
+import type { AgentBenchmarkRunMultiRequest, AgentBenchmarkRunRequest } from '../../api/endpoints/evaluations';
+import type {
+  CreateEvaluationRequest,
+  EvaluationDraft,
+  EvaluationListItem,
+  EvaluationResultsResponse,
+} from '../../types';
+
+type AsyncStatus = 'idle' | 'loading' | 'succeeded' | 'failed';
+
+interface EvaluationsState {
+  draft: EvaluationDraft;
+
+  // History list (GET /evaluations) — silently re-fetched every 10s from
+  // History.tsx. `listStatus` only gates the *initial* loading/error UI;
+  // components should check `list.length === 0` alongside it so a failed
+  // background poll never shows a spinner/error over existing data (spec §2.4).
+  //
+  // Server-paginated as of the offset/limit + status/eval_type filter API:
+  // `list` holds only the *current page's* rows, `total` is the full
+  // filtered count across all pages (drives History's pagination bar), and
+  // `page`/`pageSize` echo back whatever the most recent fetchEvaluations
+  // call requested.
+  list: EvaluationListItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  listStatus: AsyncStatus;
+  listError: string | null;
+
+  // Per-evaluation results (GET /evaluations/{id}/results), fetched lazily
+  // and only once status === 'completed' (spec §2.3).
+  resultsByEvalId: Record<string, EvaluationResultsResponse>;
+  resultsStatusByEvalId: Record<string, AsyncStatus>;
+  resultsErrorByEvalId: Record<string, string | null>;
+
+  launching: boolean;
+  launchError: string | null;
+
+  // Cancel-in-flight tracking for the "Stop evaluation" action on a running
+  // card in History.tsx (confirm dialog -> POST /evaluations/{id}/cancel).
+  cancelingId: string | null;
+  cancelError: string | null;
+
+  // Delete-in-flight tracking for the "Delete" action on a non-running card
+  // in History.tsx (confirm dialog -> DELETE /evaluations/{id}).
+  deletingId: string | null;
+  deleteError: string | null;
+}
+
+const initialDraft: EvaluationDraft = {
+  name: '',
+  type: null,
+  providers: [],
+  models: [],
+  retryConfigMode: 'individual',
+  retryConfigAll: { max_retries: 1, timeout: 60 },
+  modelRetryConfig: {},
+  dataset: null,
+  subgroup: [],
+  runSamplesMode: 'custom',
+  runSamples: 10,
+  metrics: [],
+  judgeModelId: null,
+  agentFramework: null,
+  topK: 5,
+  instruction: '',
+  retestOnWrong: false,
+  retestMaxRounds: 3,
+  retestVerifyMetric: null,
+};
+
+const initialState: EvaluationsState = {
+  draft: initialDraft,
+  list: [],
+  total: 0,
+  page: 1,
+  pageSize: 20,
+  listStatus: 'idle',
+  listError: null,
+  resultsByEvalId: {},
+  resultsStatusByEvalId: {},
+  resultsErrorByEvalId: {},
+  launching: false,
+  launchError: null,
+  cancelingId: null,
+  cancelError: null,
+  deletingId: null,
+  deleteError: null,
+};
+
+// Args for fetchEvaluations — `status`/`evalType` of 'All' (or omitted) mean
+// "no filter", which the thunk translates into leaving those query params
+// off the request entirely (see evaluationsApi.list). `silent: true` is used
+// for the 10s background poll so it doesn't flip listStatus back to
+// 'loading' over data that's already on screen (spec §2.4) — explicit page/
+// page-size/filter changes should still show the loading state, since the
+// content is genuinely about to change.
+export interface FetchEvaluationsArgs {
+  page: number;
+  pageSize: number;
+  status?: string;
+  evalType?: string;
+  silent?: boolean;
+}
+
+export const fetchEvaluations = createAsyncThunk('evaluations/fetchList', async (args: FetchEvaluationsArgs) => {
+  const offset = (args.page - 1) * args.pageSize;
+  const result = await evaluationsApi.list({
+    offset,
+    limit: args.pageSize,
+    status: args.status && args.status !== 'All' ? args.status : undefined,
+    eval_type: args.evalType && args.evalType !== 'All' ? args.evalType : undefined,
+  });
+  return { ...result, page: args.page, pageSize: args.pageSize };
+});
+
+
+export const fetchEvaluationResults = createAsyncThunk(
+  'evaluations/fetchResults',
+  async (evaluationId: string, { rejectWithValue }) => {
+    try {
+      const data = await evaluationsApi.results(evaluationId);
+      return { evaluationId, data };
+    } catch (err) {
+      const detail =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        (err as Error)?.message ||
+        'Failed to load results';
+      return rejectWithValue({ evaluationId, message: detail });
+    }
+  }
+);
+
+// Shared across all three launch thunks below, cancelEvaluation,
+// deleteEvaluation, and fetchEvaluationResults above — the backend's error
+// body on 4xx responses is { detail: string }, so that's what should end up
+// in state, not axios's generic "Request failed with status code 400".
+function extractErrorDetail(err: unknown, fallback: string): string {
+  return (
+    (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+    (err as Error)?.message ||
+    fallback
+  );
+}
+
+// POST /evaluations then /evaluations/{id}/start — draft.type 'model' | 'rag'.
+export const launchEvaluation = createAsyncThunk(
+  'evaluations/launch',
+  async (payload: CreateEvaluationRequest, { rejectWithValue }) => {
+    try {
+      return await evaluationsApi.createAndStart(payload);
+    } catch (err) {
+      return rejectWithValue(extractErrorDetail(err, 'Failed to launch evaluation'));
+    }
+  }
+);
+
+// POST /agent-benchmark/run — draft.type 'agent', no agentFramework selected.
+export const runAgentBenchmark = createAsyncThunk(
+  'evaluations/runAgentBenchmark',
+  async (payload: AgentBenchmarkRunRequest, { rejectWithValue }) => {
+    try {
+      return await evaluationsApi.runAgentBenchmark(payload);
+    } catch (err) {
+      return rejectWithValue(extractErrorDetail(err, 'Failed to launch agent benchmark'));
+    }
+  }
+);
+
+// POST /agent-benchmark/run-multi — draft.type 'agent', agentFramework selected.
+export const runAgentBenchmarkMulti = createAsyncThunk(
+  'evaluations/runAgentBenchmarkMulti',
+  async (payload: AgentBenchmarkRunMultiRequest, { rejectWithValue }) => {
+    try {
+      return await evaluationsApi.runAgentBenchmarkMulti(payload);
+    } catch (err) {
+      return rejectWithValue(extractErrorDetail(err, 'Failed to launch agent benchmark'));
+    }
+  }
+);
+
+// POST /evaluations/{id}/cancel — "Stop evaluation" button on a running
+// card in History.tsx, behind a confirm dialog. `evaluationId` is threaded
+// through action.meta.arg (createAsyncThunk's default), so the reducers
+// below can key cancelingId/list updates off it without it being part of
+// the rejected payload.
+export const cancelEvaluation = createAsyncThunk(
+  'evaluations/cancel',
+  async (evaluationId: string, { rejectWithValue }) => {
+    try {
+      return await evaluationsApi.cancel(evaluationId);
+    } catch (err) {
+      return rejectWithValue(extractErrorDetail(err, 'Failed to stop evaluation'));
+    }
+  }
+);
+
+// DELETE /evaluations/{id} — "Delete" action on a non-running card in
+// History.tsx, behind a confirm dialog. Same evaluationId-via-meta.arg
+// pattern as cancelEvaluation above.
+export const deleteEvaluation = createAsyncThunk(
+  'evaluations/delete',
+  async (evaluationId: string, { rejectWithValue }) => {
+    try {
+      return await evaluationsApi.remove(evaluationId);
+    } catch (err) {
+      return rejectWithValue(extractErrorDetail(err, 'Failed to delete evaluation'));
+    }
+  }
+);
+
+const evaluationsSlice = createSlice({
+  name: 'evaluations',
+  initialState,
+  reducers: {
+    setDraft(state, action: PayloadAction<Partial<EvaluationDraft>>) {
+      state.draft = { ...state.draft, ...action.payload };
+    },
+    // Step 2: changing type invalidates everything chosen after it — the
+    // available providers/models/datasets/metrics all depend on type, so
+    // stale selections from a previous type must not silently carry over.
+    // Providers and models in particular are toggle-based multi-select
+    // (see NewEvaluation.tsx `toggle`), so without this reset, switching
+    // from e.g. Model -> Agent -> Model again and picking a *different*
+    // model each time would leave BOTH models checked (the old selection
+    // was never cleared, only added to) — that's the bug this fixes.
+    setDraftType(state, action: PayloadAction<EvaluationDraft['type']>) {
+      state.draft.type = action.payload;
+      state.draft.providers = [];
+      state.draft.models = [];
+      state.draft.retryConfigMode = 'individual';
+      state.draft.retryConfigAll = { max_retries: 1, timeout: 60 };
+      state.draft.modelRetryConfig = {};
+      state.draft.dataset = null;
+      state.draft.subgroup = [];
+      state.draft.metrics = [];
+      state.draft.judgeModelId = null;
+      state.draft.runSamplesMode = 'custom';
+      state.draft.runSamples = 10;
+      state.draft.topK = 5;
+      state.draft.instruction = '';
+      state.draft.retestOnWrong = false;
+      state.draft.retestMaxRounds = 3;
+      state.draft.retestVerifyMetric = null;
+      if (action.payload !== 'agent') {
+        state.draft.agentFramework = null;
+      }
+    },
+    resetDraft(state) {
+      state.draft = initialDraft;
+    },
+    // Local-only removal, kept as a manual escape hatch for edge cases (e.g.
+    // clearing a stale row the backend won't return anymore). The primary
+    // delete path is now the deleteEvaluation thunk below, which calls
+    // DELETE /evaluations/{id} and removes the row on success — this
+    // reducer does not call the API and does not persist.
+    removeEvaluationLocal(state, action: PayloadAction<string>) {
+      state.list = state.list.filter((e) => e.id !== action.payload);
+    },
+  },
+  extraReducers: (builder) => {
+    builder
+      .addCase(fetchEvaluations.pending, (state, action) => {
+        // Silent (background poll) calls never show the loading state over
+        // data that's already on screen. Explicit calls (page/page-size/
+        // filter changes, or the very first load) do — the content is
+        // genuinely about to change, not just being silently refreshed.
+        if (!action.meta.arg.silent || state.list.length === 0) {
+          state.listStatus = 'loading';
+        }
+      })
+      .addCase(fetchEvaluations.fulfilled, (state, action) => {
+        state.listStatus = 'succeeded';
+        state.listError = null;
+        state.list = action.payload.evaluations;
+        state.total = action.payload.total;
+        state.page = action.payload.page;
+        state.pageSize = action.payload.pageSize;
+      })
+      .addCase(fetchEvaluations.rejected, (state, action) => {
+        // Background polls fail silently (spec §2.4) — only surface the
+        // error state when we have nothing on screen yet.
+        if (state.list.length === 0) {
+          state.listStatus = 'failed';
+          state.listError = action.error.message || 'Failed to load evaluations';
+        }
+      })
+      .addCase(fetchEvaluationResults.pending, (state, action) => {
+        state.resultsStatusByEvalId[action.meta.arg] = 'loading';
+        state.resultsErrorByEvalId[action.meta.arg] = null;
+      })
+      .addCase(fetchEvaluationResults.fulfilled, (state, action) => {
+        const { evaluationId, data } = action.payload;
+        state.resultsStatusByEvalId[evaluationId] = 'succeeded';
+        state.resultsByEvalId[evaluationId] = data;
+      })
+      .addCase(fetchEvaluationResults.rejected, (state, action) => {
+        const payload = action.payload as { evaluationId: string; message: string } | undefined;
+        const id = payload?.evaluationId ?? action.meta.arg;
+        state.resultsStatusByEvalId[id] = 'failed';
+        state.resultsErrorByEvalId[id] = payload?.message || 'Failed to load results';
+      })
+
+      // ---- launch: three thunks (Model/RAG, Agent-benchmark, Agent-multi) ---
+      // all share the same launching/launchError flags and all clear the
+      // draft on success, exactly like the original launchEvaluation did.
+      .addCase(launchEvaluation.pending, (state) => {
+        state.launching = true;
+        state.launchError = null;
+      })
+      .addCase(launchEvaluation.fulfilled, (state) => {
+        state.launching = false;
+        state.draft = initialDraft;
+      })
+      .addCase(launchEvaluation.rejected, (state, action) => {
+        state.launching = false;
+        state.launchError = (action.payload as string) || action.error.message || 'Failed to launch evaluation';
+      })
+
+      .addCase(runAgentBenchmark.pending, (state) => {
+        state.launching = true;
+        state.launchError = null;
+      })
+      .addCase(runAgentBenchmark.fulfilled, (state) => {
+        state.launching = false;
+        state.draft = initialDraft;
+      })
+      .addCase(runAgentBenchmark.rejected, (state, action) => {
+        state.launching = false;
+        state.launchError = (action.payload as string) || action.error.message || 'Failed to launch agent benchmark';
+      })
+
+      .addCase(runAgentBenchmarkMulti.pending, (state) => {
+        state.launching = true;
+        state.launchError = null;
+      })
+      .addCase(runAgentBenchmarkMulti.fulfilled, (state) => {
+        state.launching = false;
+        state.draft = initialDraft;
+      })
+      .addCase(runAgentBenchmarkMulti.rejected, (state, action) => {
+        state.launching = false;
+        state.launchError = (action.payload as string) || action.error.message || 'Failed to launch agent benchmark';
+      })
+
+      // ---- cancel (stop a running evaluation) --------------------------------
+      .addCase(cancelEvaluation.pending, (state, action) => {
+        state.cancelingId = action.meta.arg;
+        state.cancelError = null;
+      })
+      .addCase(cancelEvaluation.fulfilled, (state, action) => {
+        state.cancelingId = null;
+        // Optimistically flip the row to 'canceled' right away rather than
+        // waiting for the next 10s background poll to pick it up.
+        const item = state.list.find((e) => e.id === action.payload.evaluation_id);
+        if (item) item.status = 'canceled';
+      })
+      .addCase(cancelEvaluation.rejected, (state, action) => {
+        state.cancelingId = null;
+        state.cancelError = (action.payload as string) || action.error.message || 'Failed to stop evaluation';
+      })
+
+      // ---- delete ------------------------------------------------------------
+      .addCase(deleteEvaluation.pending, (state, action) => {
+        state.deletingId = action.meta.arg;
+        state.deleteError = null;
+      })
+      .addCase(deleteEvaluation.fulfilled, (state, action) => {
+        state.deletingId = null;
+        state.list = state.list.filter((e) => e.id !== action.payload.evaluation_id);
+      })
+      .addCase(deleteEvaluation.rejected, (state, action) => {
+        state.deletingId = null;
+        state.deleteError = (action.payload as string) || action.error.message || 'Failed to delete evaluation';
+      });
+  },
+});
+
+export const { setDraft, setDraftType, resetDraft, removeEvaluationLocal } = evaluationsSlice.actions;
+export default evaluationsSlice.reducer;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//index.ts
+// ---------- Auth ----------
+export interface SsoLoginRequest {
+  token: string;
+  data: string;
+}
+export interface SsoLoginResult {
+  token: string;
+  username: string;
+  email: string;
+  language: string;
+  profile_name: string;
+}
+export interface SsoLoginResponse {
+  status: string;
+  message: string;
+  result: SsoLoginResult;
+}
+
+// ---------- Providers ----------
+export interface Provider {
+  id: string;
+  name: string;
+  description: string;
+  logo_url: string | null;
+  base_url: string | null;
+  url_template: string | null;
+  model_count: number;
+  status: 'connected' | 'not_connected' | string;
+}
+export interface ConnectProviderRequest {
+  api_key: string;
+}
+export interface ConnectProviderResponse {
+  status: 'connected';
+  provider_id: string;
+  models_synced: number;
+}
+export interface DisconnectProviderResponse {
+  status: 'disconnected';
+  provider_id: string;
+}
+
+// ---------- Models ----------
+export interface Model {
+  id: string;
+  name: string;
+  provider_id: string;
+  category: string;
+  capabilities: string[];
+  context_window: number;
+  input_price: number | null;
+  output_price: number | null;
+  accuracy_score: number | null;
+  agent_score: number | null;
+  is_active: boolean;
+  base_url: string | null;
+}
+export interface CustomModelRequest {
+  base_url: string;
+  category: string;
+  api_key: string;
+  model_id: string;
+  name: string;
+  context_window: number;
+  description: string;
+}
+
+// ---------- Benchmarks ----------
+export interface BenchmarkTask {
+  name: string;
+  value: string;
+}
+export interface Benchmark {
+  name: string;
+  description: string;
+  // ⚠️ Not always present on the real API response — normalized to [] at the
+  // fetch boundary (benchmarksApi.list), so consumers can trust these are
+  // always arrays. See spec §5 "Known data-contract gap".
+  tasks: BenchmarkTask[];
+  task_count: number;
+  required_capabilities: string[];
+  huggingface_dataset: string;
+  type: string;
+}
+export interface BenchmarksResponse {
+  benchmarks: Benchmark[];
+  total: number;
+}
+
+// ---------- Metrics ----------
+export interface MetricsResponse {
+  all_metrics: string[];
+  custom_agent_metrics: string[];
+}
+
+// ---------- Evaluations: create/start ----------
+export interface JudgeConfig {
+  model_id: string;
+  base_url: string;
+  // NOTE: populated with the judge model's own id, not a real credential —
+  // the Judge API Key field was removed from the UI entirely (spec §1.4).
+  api_key: string;
+}
+export interface CreateEvaluationRequest {
+  name: string;
+  description?: string;
+  eval_type: 'model' | 'agent' | 'rag' | string;
+  dataset_id: string;
+  benchmark?: string;
+  model_ids: string[];
+  metrics_config?: Record<string, unknown>;
+  selected_metrics: string[];
+  dataset_limit?: number;
+  run_samples: number;
+  selected_category?: string[];
+  judge_config?: JudgeConfig;
+}
+export interface CreateEvaluationResponse {
+  id?: string;
+  evaluation_id?: string;
+  [key: string]: unknown;
+}
+
+// ---------- Evaluations: list (History) ----------
+export type EvaluationStatusValue = 'pending' | 'running' | 'completed' | 'failed' | 'canceled';
+
+// Nested summary of the report generated for this evaluation, if any.
+// Only present once the backend has created a report row for the eval —
+// absent/undefined while the eval is still pending/running with no report yet.
+export interface EvaluationReportSummary {
+  report_id: string;
+  title: string;
+  status: string;
+  created_at: string;
+}
+
+export interface EvaluationListItem {
+  id: string;
+  name: string;
+  description: string;
+  eval_type: string;
+  dataset_id: string;
+  datasets_config: { dataset_id: string }[];
+  benchmark: string;
+  model_ids: string[];
+  selected_metrics: string[];
+  run_samples: number;
+  selected_category: string[];
+  status: EvaluationStatusValue;
+  progress: number;
+  total_questions: number;
+  top_model: string | null;
+  top_score: number | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  // Present once a report has been generated for this evaluation (spec: new
+  // "download from History" requirement). When `report.report_id` is set,
+  // History should offer the same download options as the Reports page.
+  report?: EvaluationReportSummary | null;
+}
+export interface EvaluationsListResponse {
+  evaluations: EvaluationListItem[];
+  // Total row count across all pages (not just the current page's length) —
+  // used to compute page count for History's pagination bar.
+  total: number;
+}
+
+// ---------- Evaluations: results ----------
+export interface TestDetail {
+  task: string;
+  input: string;
+  expected_output: string;
+  actual_output: string;
+  passed: boolean;
+}
+export interface ModelResult {
+  model_id: string;
+  provider: string | null;
+  rank: number;
+  score: number;
+  accuracy: number;
+  passed_tests: number;
+  failed_tests: number;
+  // Normalized from the API's `total_test` (singular) at the fetch boundary
+  // (evaluationsApi.results) — see benchmarksApi.list for the same pattern.
+  total_tests: number;
+  metric_scores: Record<string, number>;
+  details: TestDetail[];
+}
+export interface EvaluationResultsResponse {
+  evaluation_id: string;
+  name: string;
+  eval_type: string;
+  dataset_id: string;
+  benchmark: string;
+  model_ids: string[];
+  selected_metrics: string[];
+  status: EvaluationStatusValue;
+  total_questions: number;
+  top_model: string;
+  top_score: number;
+  started_at: string | null;
+  results: ModelResult[];
+}
+
+// UI-only draft built up across the wizard's 7 steps (spec §6).
+export interface EvaluationDraft {
+  name: string;
+  type: 'model' | 'agent' | 'rag' | null;
+  providers: string[];
+  models: string[];
+  dataset: string | null;
+  subgroup: string[];
+  runSamples: number; // default 10
+  metrics: string[];
+  judgeModelId: string | null;
+  // judgeApiKey intentionally omitted — no longer collected (spec §1.4)
+  agentFramework: string | null;
 }
