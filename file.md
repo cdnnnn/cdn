@@ -1,2656 +1,1426 @@
-@use '../../styles/_variables' as *;
+//History.tsx
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
+import {
+  Search, Sparkles, Bot, Layers, Loader2, Download, ListTree, Gauge, CheckCircle2, XCircle,
+  Award, ListChecks, Clock, History as HistoryIcon, SlidersHorizontal, CalendarDays, X, PlaySquare,
+  StopCircle, AlertTriangle, Trash2, ChevronLeft, ChevronRight,
+} from 'lucide-react';
+import { useAppDispatch, useAppSelector } from '../../hooks/redux';
+import {
+  fetchEvaluations, fetchEvaluationResults, cancelEvaluation, deleteEvaluation,
+} from '../../store/slices/evaluationsSlice';
+import { downloadReport } from '../../store/slices/reportsSlice';
+import type { ReportDownloadFormat } from '../../api/endpoints/reports';
+import type { EvaluationListItem, EvaluationStatusValue, ModelResult } from '../../types';
+import { SkeletonListRows } from '../common/Skeleton';
+import styles from './History.module.scss';
 
-// ===========================================================================
-// SemcoEval — Run Console
-// A precision "instrument panel" for assembling and launching an evaluation.
-// Signature: a live Run Manifest (mono spec sheet) threaded by a signal rail.
-// Header matches the History/Reports/Comparison/Sidebar design standard.
-//
-// All color tokens ($ink, $paper, $signal, $ok, $danger, $violet-ink,
-// $ink-solid, etc.) come from the shared "ink" design system in
-// ../../styles/_variables.scss (imported above) — this file no longer
-// redeclares them locally. Neutrals resolve to theme CSS vars (see
-// _theme.scss) for dark-mode support; $ink-solid/$ink-solid-hover are a
-// FIXED near-black used only for "always dark" chips/buttons (option
-// icons, the Continue button, the launch toast) — using themed $ink
-// there would turn them near-white (and invisible) in dark mode. See the
-// note above those two tokens in _theme.scss for why they're still CSS
-// vars despite not actually varying by theme.
-// ===========================================================================
+const TYPE_ICON: Record<string, typeof Sparkles> = { model: Sparkles, agent: Bot, rag: Layers };
+const TYPE_LABEL: Record<string, string> = { model: 'AI Model', agent: 'Agent', rag: 'RAG' };
 
-$mono:    $font-mono;
-$sans:    $font-body;
-$display: $font-display;
+// Mirrors Reports.tsx — same base four formats, same download endpoint.
+// HTML is agent-only (appended at render time — see the detail header
+// download buttons below) since it's not a meaningful export for
+// model/RAG evaluations.
+const DOWNLOAD_OPTIONS: { format: ReportDownloadFormat; label: string }[] = [
+  { format: 'json', label: 'JSON' },
+  { format: 'csv', label: 'CSV' },
+  { format: 'csv_detailed', label: 'CSV (Detailed)' },
+  { format: 'pdf', label: 'PDF' },
+];
+const HTML_DOWNLOAD_OPTION: { format: ReportDownloadFormat; label: string } = { format: 'html', label: 'HTML' };
 
-$soft:  0 1px 2px rgba(20, 22, 27, 0.05);
-$lift:  0 14px 30px -14px rgba(20, 22, 27, 0.22);
-$ring:  0 0 0 3px rgba(43, 43, 245, 0.16);
+const PAGE_SIZE_OPTIONS = [20, 30, 40, 50];
 
-// Base font-size every `em` font-size below is expressed relative to — same
-// convention as Model Catalog / Sidebar. Bumping this (e.g. on wide
-// screens, see the `@media (min-width: 1800px)` rules below) scales every
-// descendant font-size proportionally from one place. This value has four
-// independent application points since the component renders four separate
-// DOM subtrees (.ev__header, .page → .ev, .ev-toast, .ev-preview-overlay)
-// rather than one single wrapper — each sets `font-size: $ev-base-font;`
-// itself so inheritance covers everything nested inside it.
-$ev-base-font: 0.8125rem;
-
-%micro {
-  font-family: $mono;
-  font-size: 0.8462em; // 0.6875rem / 0.8125rem
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-
-// ===========================================================================
-// Header — matches History / Reports / Comparison / Sidebar header pattern
-// ===========================================================================
-.ev__header {
-  // master scale control for this subtree — see $ev-base-font above
-  font-size: $ev-base-font;
-
-  @media (min-width: 1800px) {
-    font-size: 1rem;
-  }
-
-  flex-shrink: 0;
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 24px 32px 20px;
-  border-bottom: 1px solid $line;
-  background: $card;
-
-  h1 {
-    font-family: $display;
-    font-size: 1.8462em; // 1.5rem / 0.8125rem
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    color: $ink;
-    line-height: 1.2;
+// Maps a raw status to the module status-pill variant suffix.
+function statusVariant(status: EvaluationStatusValue): string {
+  switch (status) {
+    case 'completed': return 'completed';
+    case 'running': return 'running';
+    case 'pending': return 'pending';
+    case 'failed': return 'failed';
+    case 'canceled': return 'canceled';
+    default: return 'pending';
   }
 }
 
-.ev__header-eyebrow {
-  @extend %micro;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: $signal;
-  margin-bottom: 6px;
-
-  &::before {
-    content: '';
-    width: 16px;
-    height: 2px;
-    border-radius: 2px;
-    background: $signal;
-  }
+function withinDateRange(iso: string | null | undefined, range: string): boolean {
+  if (range === 'all') return true;
+  if (!iso) return false;
+  const time = new Date(iso).getTime();
+  if (Number.isNaN(time)) return false;
+  const days = range === '7' ? 7 : 30;
+  const cutoff = Date.now() - days * 86400000;
+  return time >= cutoff;
 }
 
-.ev__header-sub {
-  margin-top: 4px;
-  font-size: 1.0385em; color: $ink-2; } // 0.84375rem / 0.8125rem
-
-.ev__header-meta {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 3px;
+// Formats an ISO date string for display, falling back to an em dash when
+// the value is missing or unparseable instead of showing "Invalid Date".
+function formatDate(iso: string | null | undefined, withTime = false): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return withTime ? d.toLocaleString() : d.toLocaleDateString();
 }
 
-.ev__header-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 7px 13px;
-  border-radius: 999px;
-  border: 1px solid $line;
-  background: $paper;
-  font-family: $mono;
-  font-size: 0.8846em; // 0.71875rem / 0.8125rem
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: $ink-2;
-  white-space: nowrap;
+export default function History() {
+  const dispatch = useAppDispatch();
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedId = searchParams.get('id');
 
-  &::before {
-    content: '';
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: $ink-3;
-  }
+  const { list: rawList, total, listStatus, listError, resultsByEvalId, resultsStatusByEvalId, resultsErrorByEvalId } = useAppSelector((s) => s.evaluations);
+  const list = rawList || [];
+  const models = useAppSelector((s) => s.models.items) || [];
+  const providers = useAppSelector((s) => s.providers.items) || [];
+  const downloadingId = useAppSelector((s) => s.reports.downloadingId);
+  const cancelingId = useAppSelector((s) => s.evaluations.cancelingId);
+  const deletingId = useAppSelector((s) => s.evaluations.deletingId);
 
-  &[data-state='draft']::before { background: $signal; box-shadow: 0 0 0 3px $wash; }
-  &[data-state='live'] { color: $signal; border-color: rgba($signal, 0.35); background: $wash; }
-  &[data-state='live']::before { background: $signal; animation: ev-pulse 1.1s ease-in-out infinite; }
-}
+  const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState('All');
+  const [dateFilter, setDateFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('All');
+  const [activeFilter, setActiveFilter] = useState<'search' | 'type' | 'date' | 'status' | null>(null);
+  const [detailsModel, setDetailsModel] = useState<ModelResult | null>(null);
+  const [drawerView, setDrawerView] = useState<'tests' | 'metrics'>('tests');
+  // Row + action awaiting "are you sure?" confirmation before calling the
+  // cancel/delete API — one dialog handles both.
+  const [confirmTarget, setConfirmTarget] = useState<{ evaluation: EvaluationListItem; action: 'cancel' | 'delete' } | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
-.ev__header-eta {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.9231em; // 0.75rem / 0.8125rem
-  font-weight: 600;
-  color: $ink-3;
-  white-space: nowrap;
-}
+  // typeFilter/statusFilter are now server-side (query params on GET
+  // /evaluations), so changing either means a genuinely different result
+  // set — jump back to page 1 rather than potentially landing on an
+  // out-of-range page for the new filter.
+  const changeTypeFilter = (value: string) => {
+    setTypeFilter(value);
+    setPage(1);
+  };
+  const changeStatusFilter = (value: string) => {
+    setStatusFilter(value);
+    setPage(1);
+  };
 
-.page {
-  // master scale control for this subtree — cascades down through .ev and
-  // every nested &__ selector below, since none of them reset font-size
-  // themselves (they're all expressed in em relative to whatever ancestor
-  // font-size is in effect). See $ev-base-font above.
-  font-size: $ev-base-font;
+  const toggleFilter = (key: 'search' | 'type' | 'date' | 'status') => {
+    setActiveFilter((prev) => (prev === key ? null : key));
+  };
 
-  @media (min-width: 1800px) {
-    font-size: 1rem;
-  }
+  useEffect(() => {
+    if (activeFilter === 'search') searchInputRef.current?.focus();
+  }, [activeFilter]);
 
-  flex: 1;
-  height: 100%;
-  min-height: 0;
-  padding: 22px 30px 26px;
-  display: flex;
-  flex-direction: column;
-  background: $paper;
-}
+  const DATE_LABEL: Record<string, string> = { all: 'All time', '30': 'Last 30 days', '7': 'Last 7 days' };
+  const STATUS_LABEL: Record<string, string> = {
+    All: 'All',
+    completed: 'Completed',
+    running: 'Running',
+    pending: 'Pending',
+    failed: 'Failed',
+  };
 
-// ===========================================================================
-// Root
-// ===========================================================================
-.ev {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
+  // Local page/page-size state drives the server request — Redux's `page`/
+  // `pageSize` (set above) just echo back whatever the most recent fetch
+  // actually requested, once it resolves.
+  const [pageState, setPage] = useState(1);
+  const [pageSizeState, setPageSizeState] = useState(20);
+  const changePageSize = (value: number) => {
+    setPageSizeState(value);
+    setPage(1);
+  };
 
-  // ---- shell (manifest + stage) ------------------------------------------
-  &__shell {
-    flex: 1;
-    min-height: 0;
-    display: grid;
-    grid-template-columns: 288px 1fr;
-    gap: 16px;
-  }
+  // Initial load + refetch on page/page-size/filter change, plus a silent
+  // 10s background poll of whatever's currently being viewed (spec §2.4) —
+  // the poll never disrupts the loading/error UI over data already on
+  // screen (see fetchEvaluations.pending in the slice).
+  useEffect(() => {
+    dispatch(fetchEvaluations({ page: pageState, pageSize: pageSizeState, status: statusFilter, evalType: typeFilter }));
+    const interval = setInterval(() => {
+      dispatch(fetchEvaluations({ page: pageState, pageSize: pageSizeState, status: statusFilter, evalType: typeFilter, silent: true }));
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [dispatch, pageState, pageSizeState, statusFilter, typeFilter]);
 
-  // ========================================================================
-  // SIGNATURE: Run Manifest
-  // ========================================================================
-  &__manifest {
-    background: $card;
-    border: 1px solid $line;
-    border-radius: 16px;
-    box-shadow: $soft;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    overflow: hidden;
-  }
+  const totalPages = Math.max(1, Math.ceil(total / pageSizeState));
+  const rangeStart = total === 0 ? 0 : (pageState - 1) * pageSizeState + 1;
+  const rangeEnd = Math.min(pageState * pageSizeState, total);
 
-  &__manifest-head {
-    flex-shrink: 0;
-    padding: 18px 20px 16px;
-    border-bottom: 1px solid $line-2;
-  }
+  // search/date remain client-side, applied only to the current page's rows
+  // — the API doesn't take a search or date-range param yet. type/status
+  // are now handled server-side (see the fetch effect above) rather than
+  // filtered here.
+  const filtered = useMemo(() => {
+    return list.filter((e) => {
+      if (search && !(e.name || '').toLowerCase().includes(search.toLowerCase())) return false;
+      if (!withinDateRange(e.created_at, dateFilter)) return false;
+      return true;
+    });
+  }, [list, search, dateFilter]);
 
-  &__manifest-eyebrow {
-    @extend %micro;
-    color: $ink-3;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
+  const selected = list.find((e) => e.id === selectedId) || filtered[0] || null;
 
-  &__manifest-pct {
-    color: $signal;
-    font-size: 0.9231em; letter-spacing: 0.06em; } // 0.75rem / 0.8125rem
-
-  &__manifest-title {
-    margin-top: 8px;
-    font-family: $display;
-    font-size: 1.2308em; // 1rem / 0.8125rem
-    font-weight: 800;
-    letter-spacing: -0.015em;
-    color: $ink;
-    line-height: 1.15;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-
-    &[data-empty='true'] { color: $ink-3; font-style: normal; }
-  }
-
-  &__meter {
-    margin-top: 12px;
-    height: 4px;
-    border-radius: 999px;
-    background: $line;
-    overflow: hidden;
-  }
-
-  &__meter-fill {
-    height: 100%;
-    border-radius: 999px;
-    background: linear-gradient(90deg, $signal, $signal-2);
-    transition: width 0.4s cubic-bezier(0.32, 0.72, 0, 1);
-  }
-
-  // ---- the spec list (each row = a step, with its live value) -------------
-  &__spec {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 14px 12px 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 24px;
-  }
-
-  &__spec-row {
-    position: relative;
-    display: grid;
-    grid-template-columns: 30px 1fr;
-    align-items: start;
-    gap: 12px;
-    width: 100%;
-    text-align: left;
-    border: 0;
-    background: transparent;
-    padding: 12px 12px 12px 4px;
-    border-radius: 12px;
-    cursor: pointer;
-    transition: background 0.15s ease;
-
-    // Extends past this row's own bottom edge by exactly the flex `gap`
-    // above (24px), so the line still reaches the next row's tick — the
-    // larger the gap, the more this needs to stretch to stay unbroken.
-    &::before {
-      content: '';
-      position: absolute;
-      left: 18px;
-      top: 38px;
-      bottom: -24px;
-      width: 2px;
-      background: $line;
-      transition: background 0.2s ease;
+  // Handles the initial/default selection (mount, or URL navigation to an
+  // id we haven't fetched yet). Explicit row clicks trigger their own fetch
+  // in selectRow below regardless of cache, so this only needs to cover the
+  // "selection changed without a click" case — hence the cache guard stays
+  // here, but not in selectRow.
+  useEffect(() => {
+    if (selected && selected.status === 'completed' && !resultsByEvalId[selected.id]) {
+      dispatch(fetchEvaluationResults(selected.id));
     }
-    &:last-child::before { display: none; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id, selected?.status]);
 
-    &:disabled { cursor: default; }
-    &:not(:disabled):hover { background: $paper; }
-  }
-
-  &__spec-tick {
-    position: relative;
-    z-index: 1;
-    width: 28px;
-    height: 28px;
-    border-radius: 9px;
-    display: grid;
-    place-items: center;
-    background: $card;
-    border: 1.5px solid $line;
-    color: $ink-3;
-    font-family: $mono;
-    font-size: 0.8462em; // 0.6875rem / 0.8125rem
-    font-weight: 700;
-    transition: all 0.18s ease;
-  }
-
-  &__spec-body {
-    min-width: 0;
-    padding-top: 1px;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  &__spec-label {
-    @extend %micro;
-    font-size: 0.9231em; // 0.75rem / 0.8125rem
-    color: $ink-3;
-    transition: color 0.18s ease;
-  }
-
-  &__spec-value {
-    font-size: 1.1538em; // 0.9375rem / 0.8125rem
-    font-weight: 600;
-    color: $ink;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-
-    &[data-empty='true'] {
-      color: $ink-3;
-      font-weight: 500;
-      font-family: $mono;
+  // Re-fetches on every click, including re-clicking the already-selected
+  // row — results can change server-side (e.g. a report finishing after the
+  // eval completed), so cached data shouldn't block a manual refresh.
+  const selectRow = (id: string) => {
+    const clicked = list.find((e) => e.id === id);
+    // Running evaluations aren't selectable — there's nothing to show yet
+    // (no results, no report), and the "Stop evaluation" button is the only
+    // interactive element on that card. Same for a card mid-delete.
+    if (clicked && (clicked.status === 'running' || deletingId === clicked.id)) return;
+    setSearchParams({ id });
+    setDetailsModel(null);
+    if (clicked && clicked.status === 'completed') {
+      dispatch(fetchEvaluationResults(id));
     }
-  }
+  };
 
-  &__spec-row--done {
-    &::before { background: $signal; }
-    .ev__spec-tick { background: $signal; border-color: $signal; color: #fff; }
-    .ev__spec-label { color: $ink-3; }
-  }
+  // Drives the delete animation: the row pulses (red border + sheen) while
+  // the API call is in flight, then — once it actually succeeds — collapses
+  // and fades out over ~320ms instead of disappearing the instant Redux
+  // removes it from `list`. We keep a stashed copy of the row (plus its
+  // original position) so it can keep rendering through both phases even
+  // after the real data is already gone from the store.
+  const [deleteAnim, setDeleteAnim] = useState<{ item: EvaluationListItem; index: number; exiting: boolean } | null>(null);
+  const DELETE_EXIT_MS = 320;
 
-  &__spec-row--active {
-    background: $wash;
-    .ev__spec-tick {
-      background: $card;
-      border-color: $signal;
-      color: $signal;
-      box-shadow: 0 0 0 4px rgba($signal, 0.14);
-    }
-    .ev__spec-label { color: $signal; }
-    &:not(:disabled):hover { background: $wash; }
-  }
+  // Confirm-and-act flow shared by the "Stop" (running cards) and "Delete"
+  // (non-running cards) buttons.
+  const requestConfirm = (e: React.MouseEvent, evaluation: EvaluationListItem, action: 'cancel' | 'delete') => {
+    e.stopPropagation(); // don't let this bubble into selectRow
+    setConfirmTarget({ evaluation, action });
+  };
+  const runConfirmedAction = async () => {
+    if (!confirmTarget) return;
+    const { evaluation, action } = confirmTarget;
+    setConfirmTarget(null);
 
-  &__spec-row--todo { opacity: 0.9; }
-
-  // ========================================================================
-  // Stage (the working area for the current step)
-  // ========================================================================
-  &__stage {
-    background: $card;
-    border: 1px solid $line;
-    border-radius: 16px;
-    box-shadow: $soft;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    overflow: hidden;
-  }
-
-  &__stage-head {
-    flex-shrink: 0;
-    padding: 22px 28px 18px;
-    border-bottom: 1px solid $line-2;
-  }
-
-  &__crumb {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    @extend %micro;
-    color: $ink-3;
-
-    b { color: $signal; font-weight: 700; }
-
-    span:first-child {
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-      color: $signal;
-    }
-  }
-
-  &__crumb-sep {
-    width: 3px;
-    height: 3px;
-    border-radius: 50%;
-    background: $ink-3;
-  }
-
-  &__stage-title {
-    margin-top: 12px;
-    font-family: $display;
-    font-size: 1.6923em; // 1.375rem / 0.8125rem
-    font-weight: 800;
-    letter-spacing: -0.025em;
-    color: $ink;
-    line-height: 1.1;
-  }
-
-  &__stage-sub {
-    margin-top: 6px;
-    font-size: 1.0385em; // 0.84375rem / 0.8125rem
-    color: $ink-2;
-    line-height: 1.5;
-    max-width: 60ch;
-  }
-
-  &__stage-body {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 22px 28px 26px;
-    display: flex;
-    flex-direction: column;
-  }
-
-  &__anim {
-    animation: ev-rise 0.34s cubic-bezier(0.22, 0.72, 0.16, 1) both;
-  }
-
-  // ---- footer nav ---------------------------------------------------------
-  &__footer {
-    flex-shrink: 0;
-    padding: 16px 28px;
-    border-top: 1px solid $line-2;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  &__hint {
-    font-size: 0.9231em; // 0.75rem / 0.8125rem
-    color: $ink-3;
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    min-width: 0;
-
-    kbd {
-      font-family: $mono;
-      font-size: 0.8462em; // 0.6875rem / 0.8125rem
-      color: $ink-2;
-      background: $paper;
-      border: 1px solid $line;
-      border-bottom-width: 2px;
-      border-radius: 5px;
-      padding: 1px 6px;
-    }
-  }
-
-  &__btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    font-family: $sans;
-    font-size: 1.0385em; // 0.84375rem / 0.8125rem
-    font-weight: 650;
-    border-radius: 10px;
-    padding: 10px 16px;
-    cursor: pointer;
-    border: 1px solid transparent;
-    transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease, transform 0.12s ease;
-
-    &:disabled { cursor: not-allowed; opacity: 0.5; }
-
-    &--ghost {
-      background: transparent;
-      border-color: $line;
-      color: $ink-2;
-      &:not(:disabled):hover { border-color: $ink-3; color: $ink; background: $paper; }
+    if (action === 'cancel') {
+      dispatch(cancelEvaluation(evaluation.id));
+      return;
     }
 
-    // fixed-dark chip — do NOT switch to $ink here, it would go near-white
-    // (and invisible) in dark mode since $ink is theme-aware.
-    &--primary {
-      background: $ink-solid;
-      color: #fff;
-      box-shadow: $soft;
-      &:not(:disabled):hover { background: $ink-solid-hover; transform: translateY(-1px); box-shadow: $lift; }
+    const index = filtered.findIndex((e) => e.id === evaluation.id);
+    setDeleteAnim({ item: evaluation, index: index === -1 ? filtered.length : index, exiting: false });
+
+    const result = await dispatch(deleteEvaluation(evaluation.id));
+    if (deleteEvaluation.fulfilled.match(result)) {
+      // If the row being deleted is currently selected/showing in the
+      // detail panel, clear the selection so it doesn't linger on screen.
+      if (selectedId === evaluation.id) setSearchParams({});
+      // Flip to the collapse/fade-out phase, then drop the stashed row
+      // once the CSS transition has had time to finish.
+      setDeleteAnim((prev) => (prev && prev.item.id === evaluation.id ? { ...prev, exiting: true } : prev));
+      window.setTimeout(() => {
+        setDeleteAnim((prev) => (prev && prev.item.id === evaluation.id ? null : prev));
+      }, DELETE_EXIT_MS);
+    } else {
+      // Delete failed — the row is still in the store, so just drop the
+      // stashed copy and let it re-render normally.
+      setDeleteAnim(null);
     }
+  };
 
-    &--launch {
-      background: $signal;
-      color: #fff;
-      box-shadow: 0 8px 20px -8px rgba($signal, 0.7);
-      &:not(:disabled):hover { background: $signal-2; transform: translateY(-1px); }
+  // Merges the stashed row back into the rendered list for as long as
+  // deleteAnim is active — covers both the brief window where the API call
+  // has already succeeded and Redux has removed it from `list`/`filtered`,
+  // and the exit-animation phase that follows.
+  const displayList = useMemo(() => {
+    if (!deleteAnim || filtered.some((e) => e.id === deleteAnim.item.id)) return filtered;
+    const merged = [...filtered];
+    merged.splice(Math.min(deleteAnim.index, merged.length), 0, deleteAnim.item);
+    return merged;
+  }, [filtered, deleteAnim]);
+
+  // Opens the details drawer for a model in a given view — reused by both
+  // the "test details" and "metric scores" icon buttons in the results table.
+  const openDrawer = (model: ModelResult, view: 'tests' | 'metrics') => {
+    setDetailsModel(model);
+    setDrawerView(view);
+  };
+
+  // Close the details drawer with Escape.
+  useEffect(() => {
+    if (!detailsModel) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDetailsModel(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [detailsModel]);
+
+  // Close the stop/delete confirm dialog with Escape.
+  useEffect(() => {
+    if (!confirmTarget) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setConfirmTarget(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [confirmTarget]);
+
+  const modelName = (id: string) => models.find((m) => m.id === id)?.name || id;
+  const providerName = (id: string) => {
+    const model = models.find((m) => m.id === id);
+    return providers.find((p) => p.id === model?.provider_id)?.name || model?.provider_id || '—';
+  };
+
+  const results = selected ? resultsByEvalId[selected.id] : undefined;
+  const resultsStatus = selected ? resultsStatusByEvalId[selected.id] : undefined;
+  const resultsError = selected ? resultsErrorByEvalId[selected.id] : undefined;
+
+  const StatusBadge = ({ status }: { status: EvaluationStatusValue }) => (
+    <span className={`${styles.status} ${styles[`status--${statusVariant(status)}`]}`}>
+      {status === 'running' && <span className={styles['live-dot']} />}
+      {status}
+    </span>
+  );
+
+  return (
+    <div className={`page-enter pg-shell ${styles.history}`}>
+      <div className={styles['history__header']}>
+        <div>
+          <p className={styles['history__header-eyebrow']}>Activity</p>
+          <h1>History</h1>
+          <p className={styles['history__header-sub']}>All past and in-progress evaluations</p>
+        </div>
+        <div className={styles['history__header-meta']}>
+          <HistoryIcon size={13} />
+          {list.length} evaluation{list.length === 1 ? '' : 's'} tracked
+        </div>
+      </div>
+
+      {/* List + detail panels scroll independently, so pg-body itself doesn't
+          scroll here — .shell fills it instead. */}
+      <div className={`pg-body ${styles['pg-body-fixed']}`}>
+        <div className={styles.shell}>
+          {/* ---------- Sidebar list ---------- */}
+          <div className={styles.sidebar}>
+            <div className={styles.filters}>
+              <div className={styles['filter-toolbar']}>
+                <span className={styles['filter-toolbar__label']}>Filters</span>
+                <div className={styles['filter-toolbar__divider']} />
+                <button
+                  type="button"
+                  className={`${styles['filter-toolbar__btn']} ${activeFilter === 'search' ? styles.on : ''}`}
+                  onClick={() => toggleFilter('search')}
+                  title="Search"
+                >
+                  <Search size={15} />
+                  {search && <span className={styles['filter-toolbar__dot']} />}
+                </button>
+                <button
+                  type="button"
+                  className={`${styles['filter-toolbar__btn']} ${activeFilter === 'type' ? styles.on : ''}`}
+                  onClick={() => toggleFilter('type')}
+                  title="Filter by type"
+                >
+                  <SlidersHorizontal size={15} />
+                  {typeFilter !== 'All' && <span className={styles['filter-toolbar__dot']} />}
+                </button>
+                <button
+                  type="button"
+                  className={`${styles['filter-toolbar__btn']} ${activeFilter === 'date' ? styles.on : ''}`}
+                  onClick={() => toggleFilter('date')}
+                  title="Filter by date"
+                >
+                  <CalendarDays size={15} />
+                  {dateFilter !== 'all' && <span className={styles['filter-toolbar__dot']} />}
+                </button>
+                <button
+                  type="button"
+                  className={`${styles['filter-toolbar__btn']} ${activeFilter === 'status' ? styles.on : ''}`}
+                  onClick={() => toggleFilter('status')}
+                  title="Filter by status"
+                >
+                  <ListChecks size={15} />
+                  {statusFilter !== 'All' && <span className={styles['filter-toolbar__dot']} />}
+                </button>
+
+                <div className={styles['filter-toolbar__summary']}>
+                  {search && (
+                    <span className={styles['filter-chip']}>
+                      <span>“{search}”</span>
+                      <X size={11} onClick={() => setSearch('')} />
+                    </span>
+                  )}
+                  {typeFilter !== 'All' && (
+                    <span className={styles['filter-chip']}>
+                      <span>{TYPE_LABEL[typeFilter]}</span>
+                      <X size={11} onClick={() => changeTypeFilter('All')} />
+                    </span>
+                  )}
+                  {dateFilter !== 'all' && (
+                    <span className={styles['filter-chip']}>
+                      <span>{DATE_LABEL[dateFilter]}</span>
+                      <X size={11} onClick={() => setDateFilter('all')} />
+                    </span>
+                  )}
+                  {statusFilter !== 'All' && (
+                    <span className={styles['filter-chip']}>
+                      <span>{STATUS_LABEL[statusFilter]}</span>
+                      <X size={11} onClick={() => changeStatusFilter('All')} />
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className={`${styles['filter-panel']} ${activeFilter ? styles['filter-panel--open'] : ''}`}>
+                {activeFilter === 'search' && (
+                  <div>
+                    <div className={styles['panel-search']}>
+                      <Search size={16} />
+                      <input
+                        ref={searchInputRef}
+                        placeholder="Search evaluations…"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                )}
+                {activeFilter === 'type' && (
+                  <div>
+                    <div className={styles['panel-pills']}>
+                      {['All', 'model', 'agent', 'rag'].map((t) => (
+                        <button
+                          key={t}
+                          className={`${styles['panel-pill']} ${typeFilter === t ? styles.on : ''}`}
+                          onClick={() => {
+                            changeTypeFilter(t);
+                            setActiveFilter(null);
+                          }}
+                        >
+                          {t === 'All' ? 'All' : TYPE_LABEL[t]}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {activeFilter === 'date' && (
+                  <div>
+                    <div className={styles['panel-pills']}>
+                      {Object.entries(DATE_LABEL).map(([value, label]) => (
+                        <button
+                          key={value}
+                          className={`${styles['panel-pill']} ${dateFilter === value ? styles.on : ''}`}
+                          onClick={() => {
+                            setDateFilter(value);
+                            setActiveFilter(null);
+                          }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {activeFilter === 'status' && (
+                  <div>
+                    <div className={styles['panel-pills']}>
+                      {Object.entries(STATUS_LABEL).map(([value, label]) => (
+                        <button
+                          key={value}
+                          className={`${styles['panel-pill']} ${statusFilter === value ? styles.on : ''}`}
+                          onClick={() => {
+                            changeStatusFilter(value);
+                            setActiveFilter(null);
+                          }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {listStatus === 'failed' && list.length === 0 && (
+                <div className={styles.empty}>{listError || 'Failed to load evaluations.'}</div>
+              )}
+              {listStatus !== 'loading' && total > 0 && (list.length === 0 || filtered.length === 0) && (
+                <div className={styles.empty}>No evaluations match your filters.</div>
+              )}
+            </div>
+
+            <div className={styles.rows}>
+              {listStatus === 'loading' && list.length === 0 && <SkeletonListRows count={5} />}
+
+              {/* True empty state — the account has no evaluations at all yet
+                  (total === 0), as opposed to "no evaluations match your
+                  current page/filters" (handled above via styles.empty),
+                  which can now happen even with list.length === 0 if a
+                  server-side status/type filter or a later page just has no
+                  rows while other pages/filters still do. */}
+              {listStatus === 'succeeded' && total === 0 && (
+                <div className={styles['sidebar-empty']}>
+                  <div className={styles['sidebar-empty__icon']}>
+                    <HistoryIcon size={22} />
+                  </div>
+                  <h3 className={styles['sidebar-empty__title']}>No evaluations yet</h3>
+                  <p className={styles['sidebar-empty__sub']}>
+                    Once you launch an evaluation, it'll show up here so you can track progress and review results.
+                  </p>
+                  <button type="button" className={styles['sidebar-empty__cta']} onClick={() => navigate('/evaluations/new')}>
+                    <PlaySquare size={14} />
+                    Start your first evaluation
+                  </button>
+                </div>
+              )}
+
+              {displayList.map((e) => {
+                const Icon = TYPE_ICON[e.eval_type] || Sparkles;
+                const isSelected = selected?.id === e.id;
+                const isRunning = e.status === 'running';
+                const isDeletingRow = deleteAnim?.item.id === e.id;
+                const isExitingRow = isDeletingRow && deleteAnim.exiting;
+                return (
+                  <div
+                    key={e.id}
+                    className={`${styles.row} ${isSelected ? styles.selected : ''} ${isRunning ? `${styles['row--running']} ${styles['row--unselectable']}` : ''} ${isDeletingRow && !isExitingRow ? `${styles['row--deleting']} ${styles['row--unselectable']}` : ''} ${isExitingRow ? styles['row--exiting'] : ''}`}
+                    onClick={() => selectRow(e.id)}
+                  >
+                    <div className={styles.row__top}>
+                      <div className={styles.row__icon}>
+                        <Icon size={16} />
+                      </div>
+                      <div className={styles.row__name}>{e.name}</div>
+                    </div>
+                    <div className={styles.row__badges}>
+                      <span className={styles['type-tag']}>{TYPE_LABEL[e.eval_type] || e.eval_type}</span>
+                      <StatusBadge status={e.status} />
+                      {isRunning ? (
+                        <button
+                          type="button"
+                          className={styles['row__stop-btn']}
+                          onClick={(evt) => requestConfirm(evt, e, 'cancel')}
+                          disabled={cancelingId === e.id}
+                          title="Stop this evaluation"
+                        >
+                          {cancelingId === e.id ? <Loader2 size={11} className={styles.spin} /> : <StopCircle size={11} />}
+                          {cancelingId === e.id ? 'Stopping…' : 'Stop'}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className={styles['row__delete-btn']}
+                          onClick={(evt) => requestConfirm(evt, e, 'delete')}
+                          disabled={deletingId === e.id}
+                          title="Delete this evaluation"
+                        >
+                          {deletingId === e.id ? <Loader2 size={12} className={styles.spin} /> : <Trash2 size={12} />}
+                        </button>
+                      )}
+                    </div>
+                    <div className={styles.row__meta}>{formatDate(e.created_at)}</div>
+                    <div className={styles.row__stats}>
+                      <span>{e.top_model ? `🏆 ${e.top_model}` : '—'}</span>
+                      <span>{e.top_score != null ? `${e.top_score}%` : '—'}</span>
+                      <span>{(e.model_ids || []).length} models</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Pagination bar — only worth showing once there's more than
+                one page, or the page-size control is worth exposing even at
+                exactly one page so it's discoverable before it's needed. */}
+            {total > 0 && (
+              <div className={styles.pagination}>
+                <div className={styles['pagination__info']}>
+                  {rangeStart}–{rangeEnd} of {total}
+                </div>
+                <div className={styles['pagination__controls']}>
+                  <select
+                    className={styles['pagination__size-select']}
+                    value={pageSizeState}
+                    onChange={(e) => changePageSize(Number(e.target.value))}
+                    title="Rows per page"
+                  >
+                    {PAGE_SIZE_OPTIONS.map((n) => (
+                      <option key={n} value={n}>
+                        {n} / page
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className={styles['pagination__nav-btn']}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={pageState <= 1 || listStatus === 'loading'}
+                    title="Previous page"
+                  >
+                    <ChevronLeft size={14} />
+                  </button>
+                  <span className={styles['pagination__page-label']}>
+                    {pageState} / {totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    className={styles['pagination__nav-btn']}
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={pageState >= totalPages || listStatus === 'loading'}
+                    title="Next page"
+                  >
+                    <ChevronRight size={14} />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ---------- Detail panel ---------- */}
+          <div className={styles.detail}>
+            {!selected ? (
+              <div className={styles['detail-empty']}>Select an evaluation to see its details.</div>
+            ) : (
+              <>
+                <div className={styles['detail-hdr']}>
+                  <div>
+                    <div className={styles['detail-hdr__badges']}>
+                      <span className={styles['type-tag']}>{TYPE_LABEL[selected.eval_type] || selected.eval_type}</span>
+                      <StatusBadge status={selected.status} />
+                    </div>
+                    <h2 className={styles['detail-hdr__name']}>{selected.name || 'Untitled evaluation'}</h2>
+                    <div className={styles['detail-hdr__date']}>Created {formatDate(selected.created_at, true)}</div>
+                  </div>
+                  {/* Only offered once the backend has generated a report row
+                      for this evaluation (selected.report.report_id present) —
+                      same options/behavior as the Reports page. HTML is only
+                      offered for agent-type evaluations. */}
+                  {selected.report?.report_id && (
+                    <div className={styles['detail-hdr__actions']}>
+                      {[...DOWNLOAD_OPTIONS, ...(selected.eval_type === 'agent' ? [HTML_DOWNLOAD_OPTION] : [])].map((opt) => (
+                        <button
+                          key={opt.format}
+                          className={styles['dl-btn']}
+                          disabled={downloadingId === selected.report!.report_id}
+                          onClick={() =>
+                            dispatch(
+                              downloadReport({
+                                reportId: selected.report!.report_id,
+                                format: opt.format,
+                                filenameHint: selected.report!.title || selected.name,
+                              })
+                            )
+                          }
+                        >
+                          {downloadingId === selected.report.report_id ? (
+                            <Loader2 size={12} className={styles.spin} />
+                          ) : (
+                            <Download size={12} />
+                          )}
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className={styles['summary-cards']}>
+                  <div className={styles['summary-card']}>
+                    <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--win']}`}>
+                      <Award size={16} />
+                    </span>
+                    <div>
+                      <div className={styles['summary-card__label']}>Winner</div>
+                      <div className={styles['summary-card__val']}>
+                        {selected.top_model || '—'}
+                        {selected.top_score != null ? ` · ${selected.top_score}%` : ''}
+                      </div>
+                    </div>
+                  </div>
+                  <div className={styles['summary-card']}>
+                    <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--info']}`}>
+                      <ListChecks size={16} />
+                    </span>
+                    <div>
+                      <div className={styles['summary-card__label']}>Questions / Models</div>
+                      <div className={styles['summary-card__val']}>
+                        {(selected.total_questions ?? 0).toLocaleString()} &middot; {(selected.model_ids || []).length} models
+                      </div>
+                    </div>
+                  </div>
+                  <div className={styles['summary-card']}>
+                    <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--status']}`}>
+                      <Clock size={16} />
+                    </span>
+                    <div>
+                      <div className={styles['summary-card__label']}>Status</div>
+                      <div className={styles['summary-card__val']}>
+                        {selected.status || '—'}
+                        {selected.completed_at ? ` · ${formatDate(selected.completed_at)}` : ''}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {selected.status === 'completed' ? (
+                  <>
+                    {resultsStatus === 'loading' && !results && (
+                      <div className={styles.empty}>
+                        <Loader2 size={16} className={styles.spin} /> Loading results…
+                      </div>
+                    )}
+                    {resultsStatus === 'failed' && !results && <div className={styles.empty}>{resultsError}</div>}
+                    {results && (
+                      <>
+                        {/* Extra fields from GET /evaluations/{id}/results — benchmark,
+                            dataset, metrics tested, and when the run actually started. */}
+                        <div className={styles['meta-strip']}>
+                          {results.benchmark && (
+                            <div className={styles['meta-strip__item']}>
+                              <span className={styles['meta-strip__label']}>Benchmark</span>
+                              <span className={styles['meta-strip__val']}>{results.benchmark}</span>
+                            </div>
+                          )}
+                          {results.dataset_id && (
+                            <div className={styles['meta-strip__item']}>
+                              <span className={styles['meta-strip__label']}>Dataset</span>
+                              <span className={styles['meta-strip__val']}>{results.dataset_id}</span>
+                            </div>
+                          )}
+                          {results.started_at && (
+                            <div className={styles['meta-strip__item']}>
+                              <span className={styles['meta-strip__label']}>Started</span>
+                              <span className={styles['meta-strip__val']}>{formatDate(results.started_at, true)}</span>
+                            </div>
+                          )}
+                          {(results.selected_metrics || []).length > 0 && (
+                            <div className={styles['meta-strip__item']}>
+                              <span className={styles['meta-strip__label']}>Metrics tested</span>
+                              <span className={styles['meta-strip__chips']}>
+                                {(results.selected_metrics || []).map((m) => (
+                                  <span key={m} className={styles['type-tag']}>{m}</span>
+                                ))}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className={styles.results}>
+                          <table className={styles['results-table']}>
+                            <thead>
+                              <tr>
+                                <th>Rank</th>
+                                <th>Model</th>
+                                <th>Provider</th>
+                                <th>Score</th>
+                                <th>Accuracy</th>
+                                <th>Passed</th>
+                                <th>Failed</th>
+                                <th />
+                                <th />
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {(results.results || []).map((r) => (
+                                <tr key={r.model_id} className={r.rank === 1 ? styles.winner : ''}>
+                                  <td className={styles['cell-rank']}>
+                                    {r.rank === 1 ? '🏆 ' : ''}
+                                    {r.rank ?? '—'}
+                                  </td>
+                                  <td className={styles['cell-model']}>{modelName(r.model_id)}</td>
+                                  <td className={styles['cell-provider']}>{r.provider || providerName(r.model_id)}</td>
+                                  <td className={styles['cell-num']}>{r.score ?? 0}%</td>
+                                  <td className={`${styles['cell-num']} ${styles['cell-num--muted']}`}>{r.accuracy ?? 0}%</td>
+                                  <td className={styles['cell-pass']}>{r.passed_tests ?? 0}</td>
+                                  <td className={styles['cell-fail']}>{r.failed_tests ?? 0}</td>
+                                  <td className={styles['cell-details']}>
+                                    {(r.details?.length ?? 0) > 0 && (
+                                      <button
+                                        type="button"
+                                        className={styles['details-btn']}
+                                        title="View test-by-test details"
+                                        onClick={() => openDrawer(r, 'tests')}
+                                      >
+                                        <ListTree size={14} />
+                                      </button>
+                                    )}
+                                  </td>
+                                  <td className={styles['cell-details']}>
+                                    {Object.keys(r.metric_scores || {}).length > 0 && (
+                                      <button
+                                        type="button"
+                                        className={styles['details-btn']}
+                                        title="View metric scores"
+                                        onClick={() => openDrawer(r, 'metrics')}
+                                      >
+                                        <Gauge size={14} />
+                                      </button>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <div className={styles['status-message']}>
+                    {selected.status === 'running' && 'This evaluation is still running — results will appear once it completes.'}
+                    {selected.status === 'pending' && 'This evaluation hasn\u2019t started yet.'}
+                    {selected.status === 'failed' && 'This evaluation failed to complete.'}
+                    {selected.status === 'canceled' && 'This evaluation was canceled.'}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ---------- Test-detail / metric-score slide-over ---------- */}
+      <div className={`${styles['drawer-overlay']} ${detailsModel ? styles['drawer-overlay--open'] : ''}`} onClick={() => setDetailsModel(null)} />
+      <div className={`${styles.drawer} ${detailsModel ? styles['drawer--open'] : ''}`} role="dialog" aria-hidden={!detailsModel}>
+        {detailsModel && (
+          <>
+            <div className={styles['drawer__header']}>
+              <div>
+                <div className={styles['drawer__eyebrow']}>
+                  {drawerView === 'tests' ? 'Test-by-test details' : 'Metric scores'}
+                </div>
+                <h3 className={styles['drawer__title']}>{modelName(detailsModel.model_id)}</h3>
+                <div className={styles['drawer__sub']}>
+                  {(detailsModel.provider || providerName(detailsModel.model_id))} · {detailsModel.score ?? 0}% score · {detailsModel.accuracy ?? 0}% accuracy
+                </div>
+              </div>
+              <button type="button" className={styles['drawer__close']} onClick={() => setDetailsModel(null)} title="Close">
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Tabs let you flip between the two views without closing the drawer. */}
+            <div className={styles['drawer__tabs']}>
+              <button
+                type="button"
+                className={`${styles['drawer__tab']} ${drawerView === 'tests' ? styles.on : ''}`}
+                onClick={() => setDrawerView('tests')}
+                disabled={!(detailsModel.details?.length)}
+              >
+                <ListTree size={13} /> Test details
+              </button>
+              <button
+                type="button"
+                className={`${styles['drawer__tab']} ${drawerView === 'metrics' ? styles.on : ''}`}
+                onClick={() => setDrawerView('metrics')}
+                disabled={!Object.keys(detailsModel.metric_scores || {}).length}
+              >
+                <Gauge size={13} /> Metric scores
+              </button>
+            </div>
+
+            {drawerView === 'tests' && (
+              <div className={styles['drawer__stats']}>
+                <span className={styles['drawer__stat']}>
+                  <CheckCircle2 size={13} className={styles['drawer__stat-icon--pass']} />
+                  {detailsModel.passed_tests ?? 0} passed
+                </span>
+                <span className={styles['drawer__stat']}>
+                  <XCircle size={13} className={styles['drawer__stat-icon--fail']} />
+                  {detailsModel.failed_tests ?? 0} failed
+                </span>
+              </div>
+            )}
+
+            <div className={styles['drawer__body']}>
+              {drawerView === 'tests' &&
+                (detailsModel.details || []).map((d, i) => (
+                  <div key={i} className={`${styles['detail-card']} ${d.passed ? styles['detail-card--pass'] : styles['detail-card--fail']}`}>
+                    <div className={styles['detail-card__hdr']}>
+                      <span className={styles['detail-card__task']}>{d.task || `Test ${i + 1}`}</span>
+                      <span className={`${styles['detail-card__badge']} ${d.passed ? styles['detail-card__badge--pass'] : styles['detail-card__badge--fail']}`}>
+                        {d.passed ? <CheckCircle2 size={12} /> : <XCircle size={12} />}
+                        {d.passed ? 'Passed' : 'Failed'}
+                      </span>
+                    </div>
+                    <div className={styles['detail-card__field']}>
+                      <span className={styles['detail-card__label']}>Input</span>
+                      <div className={styles['detail-card__text']}>{d.input || '—'}</div>
+                    </div>
+                    <div className={styles['detail-card__row']}>
+                      <div className={styles['detail-card__field']}>
+                        <span className={styles['detail-card__label']}>Expected</span>
+                        <div className={styles['detail-card__text']}>{d.expected_output || '—'}</div>
+                      </div>
+                      <div className={styles['detail-card__field']}>
+                        <span className={styles['detail-card__label']}>Actual</span>
+                        <div className={`${styles['detail-card__text']} ${!d.passed ? styles['detail-card__text--fail'] : ''}`}>
+                          {d.actual_output || '—'}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+              {/* Metric-scores view — one bar per metric (e.g. Answer
+                  Relevancy, Toxicity, Bias), values are 0-100. */}
+              {drawerView === 'metrics' &&
+                Object.entries(detailsModel.metric_scores || {}).map(([label, value]) => {
+                  const numeric = typeof value === 'number' && !Number.isNaN(value) ? value : 0;
+                  const pct = Math.max(0, Math.min(100, numeric));
+                  const tier = pct >= 80 ? 'good' : pct >= 50 ? 'mid' : 'low';
+                  return (
+                    <div key={label} className={styles['metric-card']}>
+                      <div className={styles['metric-card__hdr']}>
+                        <span className={styles['metric-card__label']}>{label}</span>
+                        <span className={`${styles['metric-card__value']} ${styles[`metric-card__value--${tier}`]}`}>
+                          {numeric}%
+                        </span>
+                      </div>
+                      <div className={styles['metric-card__track']}>
+                        <div
+                          className={`${styles['metric-card__fill']} ${styles[`metric-card__fill--${tier}`]}`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ---------- Stop / delete confirm dialog ---------- */}
+      {confirmTarget && (
+        <div className={styles['confirm-overlay']} onClick={() => setConfirmTarget(null)}>
+          <div className={styles['confirm-dialog']} role="alertdialog" aria-modal="true" onClick={(evt) => evt.stopPropagation()}>
+            <div className={styles['confirm-dialog__icon']}>
+              <AlertTriangle size={20} />
+            </div>
+            {confirmTarget.action === 'cancel' ? (
+              <>
+                <h3 className={styles['confirm-dialog__title']}>Stop this evaluation?</h3>
+                <p className={styles['confirm-dialog__body']}>
+                  <strong>{confirmTarget.evaluation.name || 'This evaluation'}</strong> is still running. Stopping it
+                  now will end the run early — progress made so far won't be recoverable.
+                </p>
+                <div className={styles['confirm-dialog__actions']}>
+                  <button type="button" className={styles['confirm-dialog__btn--ghost']} onClick={() => setConfirmTarget(null)}>
+                    Keep running
+                  </button>
+                  <button type="button" className={styles['confirm-dialog__btn--danger']} onClick={runConfirmedAction}>
+                    <StopCircle size={14} />
+                    Stop evaluation
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h3 className={styles['confirm-dialog__title']}>Delete this evaluation?</h3>
+                <p className={styles['confirm-dialog__body']}>
+                  <strong>{confirmTarget.evaluation.name || 'This evaluation'}</strong> and its results will be
+                  permanently deleted. This can't be undone.
+                </p>
+                <div className={styles['confirm-dialog__actions']}>
+                  <button type="button" className={styles['confirm-dialog__btn--ghost']} onClick={() => setConfirmTarget(null)}>
+                    Cancel
+                  </button>
+                  <button type="button" className={styles['confirm-dialog__btn--danger']} onClick={runConfirmedAction}>
+                    <Trash2 size={14} />
+                    Delete evaluation
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Reports.ts
+import api from '../axiosInstance';
+
+export type ReportStatus = 'running' | 'completed' | 'failed';
+
+export interface ReportListItem {
+  id: string;
+  title: string;
+  evaluation_id: string;
+  status: ReportStatus;
+  file_path: string | null;
+  top_model: string | null;
+  top_score: number | null;
+  eval_type: string;
+  eval_name: string;
+  metrics_tested: string[];
+  created_at: string;
+}
+
+export interface ReportModelResult {
+  model_id: string;
+  rank: number;
+  score: number;
+  passed: number;
+  failed: number;
+  total: number;
+  metrics: Record<string, unknown>;
+}
+
+export interface ReportDetail {
+  id: string;
+  title: string;
+  evaluation_id: string;
+  date: string;
+  summary: string;
+  topModel: string | null;
+  verdict: string | null;
+  metricsTested: string[];
+  downloadSize: number | null;
+  status: ReportStatus | 'pending';
+  file_path: string | null;
+  eval_type: string;
+  eval_name: string;
+  top_score: number | null;
+  total_questions: number;
+  passed_tests: number;
+  failed_tests: number;
+  models: ReportModelResult[];
+  created_at: string;
+}
+
+export type ReportDownloadFormat = 'json' | 'csv' | 'csv_detailed' | 'pdf' | 'html';
+
+const DOWNLOAD_MIME: Record<ReportDownloadFormat, string> = {
+  json: 'application/json',
+  csv: 'text/csv',
+  csv_detailed: 'text/csv',
+  pdf: 'application/pdf',
+  html: 'text/html',
+};
+
+const DOWNLOAD_EXT: Record<ReportDownloadFormat, string> = {
+  json: 'json',
+  csv: 'csv',
+  csv_detailed: 'csv',
+  pdf: 'pdf',
+  html: 'html',
+};
+
+export const reportsApi = {
+  list: () => api.get<{ reports: ReportListItem[] }>('/reports').then((r) => r.data.reports),
+
+  getById: (reportId: string) =>
+    api.get<ReportDetail>(`/reports/${reportId}`).then((r) => r.data),
+
+  // Downloads go through the shared axios instance (so the auth interceptor
+  // still attaches the bearer token) as a blob, then get saved client-side
+  // via an object URL — a plain <a href> to the API wouldn't carry auth.
+  download: async (
+    reportId: string,
+    format: ReportDownloadFormat,
+    filenameHint = reportId
+  ) => {
+    const response = await api.get(`/reports/${reportId}/download`, {
+      params: { format },
+      responseType: 'blob',
+    });
+    const blob = new Blob([response.data], { type: DOWNLOAD_MIME[format] });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${filenameHint}.${DOWNLOAD_EXT[format]}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Reports.tsx
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import {
+  Search, FileText, Loader2, Download, Award, ListChecks, Clock,
+  FileBarChart, SlidersHorizontal, X,
+} from 'lucide-react';
+import { useAppDispatch, useAppSelector } from '../../hooks/redux';
+import { fetchReports, fetchReportDetail, downloadReport } from '../../store/slices/reportsSlice';
+import type { ReportDownloadFormat } from '../../api/endpoints/reports';
+import styles from './Reports.module.scss';
+
+// Base four formats, always offered. HTML is agent-only (appended at
+// render time below) since it's not a meaningful export for model/RAG
+// evaluations — mirrors the same rule in History.tsx.
+const DOWNLOAD_OPTIONS: { format: ReportDownloadFormat; label: string }[] = [
+  { format: 'json', label: 'JSON' },
+  { format: 'csv', label: 'CSV' },
+  { format: 'csv_detailed', label: 'CSV (Detailed)' },
+  { format: 'pdf', label: 'PDF' },
+];
+const HTML_DOWNLOAD_OPTION: { format: ReportDownloadFormat; label: string } = { format: 'html', label: 'HTML' };
+
+// Maps a raw status to the module status-pill variant suffix (mirrors History).
+function statusVariant(status: string): string {
+  switch (status) {
+    case 'completed': return 'completed';
+    case 'running': return 'running';
+    case 'pending': return 'pending';
+    case 'failed': return 'failed';
+    default: return 'pending';
+  }
+}
+
+export default function Reports() {
+  const dispatch = useAppDispatch();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedId = searchParams.get('id');
+
+  const { list, listStatus, listError, detailById, detailStatusById, detailErrorById, downloadingId } =
+    useAppSelector((s) => s.reports);
+
+  const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState('All');
+  const [activeFilter, setActiveFilter] = useState<'search' | 'type' | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const toggleFilter = (key: 'search' | 'type') => {
+    setActiveFilter((prev) => (prev === key ? null : key));
+  };
+
+  useEffect(() => {
+    if (activeFilter === 'search') searchInputRef.current?.focus();
+  }, [activeFilter]);
+
+  useEffect(() => {
+    dispatch(fetchReports());
+  }, [dispatch]);
+
+  const types = useMemo(() => ['All', ...new Set(list.map((r) => r.eval_type))], [list]);
+
+  const filtered = useMemo(() => {
+    return list.filter((r) => {
+      if (search && !r.title.toLowerCase().includes(search.toLowerCase())) return false;
+      if (typeFilter !== 'All' && r.eval_type !== typeFilter) return false;
+      return true;
+    });
+  }, [list, search, typeFilter]);
+
+  const selected = list.find((r) => r.id === selectedId) || filtered[0] || null;
+
+  useEffect(() => {
+    if (selected && !detailById[selected.id] && detailStatusById[selected.id] !== 'loading') {
+      dispatch(fetchReportDetail(selected.id));
     }
-  }
-
-  // ========================================================================
-  // Shared field primitives
-  // ========================================================================
-  &__field {
-    max-width: 620px;
-
-    & + & { margin-top: 20px; }
-  }
-
-  &__label {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    @extend %micro;
-    font-size: 0.8462em; // 0.6875rem / 0.8125rem
-    color: $ink-2;
-    margin-bottom: 9px;
-
-    .opt {
-      font-family: $sans;
-      letter-spacing: 0;
-      text-transform: none;
-      font-weight: 500;
-      font-size: 0.9231em; color: $ink-3; } // 0.75rem / 0.8125rem
-  }
-
-  &__input {
-    width: 100%;
-    border: 1.5px solid $line;
-    border-radius: 11px;
-    padding: 12px 14px;
-    font-size: 1.1538em; // 0.9375rem / 0.8125rem
-    font-weight: 500;
-    font-family: $sans;
-    color: $ink;
-    background: $card;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
-
-    &::placeholder { color: $ink-3; font-weight: 400; }
-    &:focus { outline: none; border-color: $signal; box-shadow: $ring; }
-    &:disabled { background: $paper; color: $ink-2; }
-  }
-
-  &__input-wrap {
-    position: relative;
-    svg {
-      position: absolute;
-      top: 50%;
-      left: 15px;
-      transform: translateY(-50%);
-      color: $ink-3;
-      pointer-events: none;
-    }
-    input { padding-left: 42px; }
-  }
-
-  // ---- big "name your run" input -----------------------------------------
-  &__name-input {
-    width: 100%;
-    border: 0;
-    border-bottom: 2px solid $line;
-    border-radius: 0;
-    padding: 8px 2px 12px;
-    background: transparent;
-    font-family: $display;
-    font-size: 1.6923em; // 1.375rem / 0.8125rem
-    font-weight: 800;
-    letter-spacing: -0.03em;
-    color: $ink;
-    transition: border-color 0.16s ease;
-
-    &::placeholder { color: $ink-3; font-weight: 700; }
-    &:focus { outline: none; border-color: $signal; }
-  }
-
-  &__name-caption {
-    margin-top: 10px;
-    font-size: 0.9615em; // 0.78125rem / 0.8125rem
-    color: $ink-3;
-    display: flex;
-    align-items: center;
-    gap: 7px;
-  }
-
-  // ---- quick-start presets (mono chips) ----------------------------------
-  &__quick {
-    margin-top: 30px;
-    max-width: 620px;
-  }
-
-  &__quick-head {
-    @extend %micro;
-    font-size: 0.7692em; // 0.625rem / 0.8125rem
-    color: $ink-3;
-    margin-bottom: 11px;
-  }
-
-  &__quick-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  &__preset {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px 8px 11px;
-    border: 1px solid $line;
-    border-radius: 999px;
-    background: $card;
-    cursor: pointer;
-    font-family: $mono;
-    font-size: 0.9231em; // 0.75rem / 0.8125rem
-    font-weight: 600;
-    color: $ink-2;
-    transition: all 0.15s ease;
-
-    svg { color: $ink-3; transition: color 0.15s ease; }
-
-    &:hover {
-      border-color: $ink;
-      color: $ink;
-      transform: translateY(-1px);
-      svg { color: $signal; }
-    }
-
-    &--on {
-      border-color: $signal;
-      background: $wash;
-      color: $signal;
-      svg { color: $signal; }
-    }
-  }
-
-  // ---- tips note ----------------------------------------------------------
-  &__note {
-    margin-top: 28px;
-    max-width: 620px;
-    display: flex;
-    gap: 12px;
-    padding: 14px 16px;
-    border: 1px solid $line;
-    border-left: 2.5px solid $signal;
-    border-radius: 12px;
-    background: $card;
-  }
-
-  &__note-icon {
-    flex-shrink: 0;
-    color: $signal;
-    margin-top: 1px;
-  }
-
-  &__note-title {
-    font-size: 1em; // 0.8125rem / 0.8125rem (base)
-    font-weight: 700;
-    color: $ink;
-    margin-bottom: 6px;
-  }
-
-  &__note-list {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-    font-size: 0.9615em; // 0.78125rem / 0.8125rem
-    color: $ink-2;
-    line-height: 1.5;
-
-    li { display: flex; gap: 8px; }
-    li::before {
-      content: '—';
-      color: $signal;
-      flex-shrink: 0;
-    }
-  }
-
-  // ========================================================================
-  // Option rows (Type step) & framework
-  // ========================================================================
-  &__options {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    max-width: 720px;
-  }
-
-  &__option {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: 15px;
-    width: 100%;
-    text-align: left;
-    padding: 16px 52px 16px 16px;
-    border: 1.5px solid $line;
-    border-radius: 14px;
-    background: $card;
-    cursor: pointer;
-    transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease, background 0.18s ease;
-
-    &:hover {
-      border-color: $ink-3;
-      box-shadow: $lift;
-      transform: translateY(-2px);
-    }
-
-    &--on {
-      border-color: $signal;
-      background: $wash;
-      &:hover { border-color: $signal; }
-    }
-
-    &--off {
-      opacity: 0.55;
-      cursor: not-allowed;
-      &:hover { border-color: $line; box-shadow: none; transform: none; }
-    }
-  }
-
-  // fixed-dark chip — icon glyph is always white-on-dark regardless of theme
-  &__option-icon {
-    flex-shrink: 0;
-    width: 48px;
-    height: 48px;
-    border-radius: 13px;
-    display: grid;
-    place-items: center;
-    background: $ink-solid;
-    color: #fff;
-    position: relative;
-    overflow: hidden;
-
-    &::after {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(140deg, transparent 45%, rgba(255,255,255,0.16) 140%);
-    }
-    svg { position: relative; z-index: 1; }
-  }
-  &__option-icon--agent { background: $violet-ink; }
-  &__option-icon--rag   { background: $sky-ink; }
-
-  &__option-main {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  &__option-name {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    font-family: $display;
-    font-size: 1.3846em; // 1.125rem / 0.8125rem
-    font-weight: 700;
-    color: $ink;
-  }
-
-  &__badge {
-    @extend %micro;
-    font-size: 0.6923em; // 0.5625rem / 0.8125rem
-    color: $ink-3;
-    background: $paper;
-    border: 1px solid $line;
-    border-radius: 999px;
-    padding: 2px 8px;
-  }
-
-  &__option-desc {
-    font-size: 1.1538em; // 0.9375rem / 0.8125rem
-    color: $ink-2;
-    line-height: 1.5;
-  }
-
-  // selection marker (shared)
-  &__mark {
-    position: absolute;
-    top: 50%;
-    right: 16px;
-    transform: translateY(-50%);
-    width: 22px;
-    height: 22px;
-    border-radius: 50%;
-    display: grid;
-    place-items: center;
-    background: $signal;
-    color: #fff;
-    box-shadow: 0 2px 6px rgba($signal, 0.4);
-  }
-
-  &__section {
-    margin-top: 26px;
-    padding-top: 22px;
-    border-top: 1px solid $line-2;
-    max-width: 720px;
-  }
-
-  &__section-hint {
-    font-size: 0.9615em; // 0.78125rem / 0.8125rem
-    color: $ink-3;
-    margin: 4px 0 14px;
-  }
-
-  &__fw-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 10px;
-  }
-
-  &__fw {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    text-align: left;
-    padding: 13px 42px 13px 13px;
-    border: 1.5px solid $line;
-    border-radius: 12px;
-    background: $card;
-    cursor: pointer;
-    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
-
-    &:hover { border-color: $ink-3; transform: translateY(-2px); box-shadow: $lift; }
-    &--on { border-color: $signal; background: $wash; }
-  }
-
-  &__fw-icon {
-    flex-shrink: 0;
-    width: 36px;
-    height: 36px;
-    border-radius: 10px;
-    display: grid;
-    place-items: center;
-    background: $wash;
-    color: $signal;
-  }
-
-  &__fw-name { font-family: $display; font-size: 1.1538em; font-weight: 700; color: $ink; } // 0.9375rem / 0.8125rem
-  &__fw-desc { font-size: 1em; color: $ink-2; margin-top: 2px; line-height: 1.4; } // 0.8125rem / 0.8125rem (base)
-
-  // ========================================================================
-  // Per-step toolbar: search + refresh
-  // Used on the Providers, Models, Test Suite (browse tab), and Metrics
-  // steps. Search filters the already-fetched list client-side; refresh
-  // re-dispatches that step's existing fetch thunk.
-  // ========================================================================
-  &__step-toolbar {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 14px;
-  }
-
-  &__toolbar-search {
-    flex: 1;
-    min-width: 0;
-    max-width: 320px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    border: 1.5px solid $line;
-    border-radius: 10px;
-    background: $card;
-    color: $ink-3;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
-
-    &:focus-within {
-      border-color: $signal;
-      box-shadow: $ring;
-      color: $signal;
-    }
-
-    svg { flex-shrink: 0; }
-
-    input {
-      flex: 1;
-      min-width: 0;
-      border: 0;
-      background: transparent;
-      font-family: $sans;
-      font-size: 1em; // 0.8125rem / 0.8125rem (base)
-      font-weight: 500;
-      color: $ink;
-      outline: none;
-
-      &::placeholder { color: $ink-3; font-weight: 400; }
-    }
-  }
-
-  &__toolbar-refresh {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 34px;
-    height: 34px;
-    border: 1.5px solid $line;
-    border-radius: 10px;
-    background: $card;
-    color: $ink-2;
-    cursor: pointer;
-    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
-
-    &:hover:not(:disabled) { border-color: $signal; color: $signal; background: $wash; }
-    &:disabled { cursor: default; color: $signal; }
-  }
-
-  // ---- Test Suite: All / Custom / Deepeval filter (Change-1) -------------
-  &__filter-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-bottom: 14px;
-  }
-
-  &__filter-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    padding: 7px 8px 7px 13px;
-    border: 1.5px solid $line;
-    border-radius: 999px;
-    background: $card;
-    color: $ink-2;
-    font-family: $sans;
-    font-size: 0.9615em; // 0.78125rem / 0.8125rem
-    font-weight: 650;
-    cursor: pointer;
-    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
-
-    &:hover { border-color: $ink-3; color: $ink; }
-
-    &--on {
-      border-color: $signal;
-      background: $wash;
-      color: $signal;
-    }
-  }
-
-  &__filter-chip-count {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 20px;
-    height: 20px;
-    padding: 0 6px;
-    border-radius: 999px;
-    background: $paper;
-    color: $ink-3;
-    font-family: $mono;
-    font-size: 0.8077em; font-weight: 700; } // 0.65625rem / 0.8125rem
-  &__filter-chip--on &__filter-chip-count {
-    background: $signal;
-    color: #fff;
-  }
-
-  // ========================================================================
-  // Skeleton loaders (Change-3) — shown in place of a step's grid/chips
-  // while its "refresh" request is in flight. Shapes loosely echo each
-  // step's real card so the layout doesn't jump when data arrives.
-  // ========================================================================
-  &__skel-block {
-    display: block;
-    border-radius: 6px;
-    background: linear-gradient(90deg, $line 25%, $line-2 37%, $line 63%);
-    background-size: 400% 100%;
-    animation: ev-shimmer 1.4s ease infinite;
-
-    &--icon { width: 40px; height: 40px; border-radius: 11px; flex-shrink: 0; }
-    &--icon-sm { width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0; }
-    &--line { height: 11px; border-radius: 5px; }
-    &--pill { width: 72px; height: 16px; border-radius: 999px; margin-top: 2px; }
-    &--tag { width: 54px; height: 18px; border-radius: 6px; }
-    &--stat { width: 58px; height: 26px; border-radius: 7px; }
-    &--chip { height: 34px; border-radius: 999px; }
-  }
-
-  &__skel-pcard {
-    display: flex;
-    align-items: flex-start;
-    gap: 13px;
-    padding: 15px 42px 15px 15px;
-    border: 1.5px solid $line;
-    border-radius: 14px;
-    background: $card;
-  }
-  &__skel-lines {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  &__skel-mcard {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 15px 16px;
-    border: 1.5px solid $line;
-    border-radius: 14px;
-    background: $card;
-  }
-  &__skel-caps { display: flex; gap: 6px; }
-  &__skel-stats {
-    display: flex;
-    gap: 10px;
-    padding-top: 10px;
-    border-top: 1px solid $line-2;
-  }
-
-  &__skel-dcard {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding: 15px 16px;
-    border: 1.5px solid $line;
-    border-radius: 14px;
-    background: $card;
-  }
-  &__skel-dcard-top {
-    display: flex;
-    align-items: center;
-    gap: 11px;
-  }
-
-  // ========================================================================
-  // Card grids (providers / models / datasets)
-  // ========================================================================
-  &__scroll {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    margin: 0 -6px;
-    padding: 4px 6px;
-  }
-
-  &__grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(258px, 1fr));
-    gap: 12px;
-
-    @media (min-width: 1800px) {
-      grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
-    }
-  }
-
-  &__grid--wide {
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  }
-
-  // ---- provider card ------------------------------------------------------
-  &__pcard {
-    position: relative;
-    display: flex;
-    align-items: flex-start;
-    gap: 13px;
-    text-align: left;
-    padding: 15px 42px 15px 15px;
-    border: 1.5px solid $line;
-    border-radius: 14px;
-    background: $card;
-    cursor: pointer;
-    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
-
-    &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
-    &--on { border-color: $signal; background: $wash; &:hover { border-color: $signal; } }
-  }
-
-  &__pcard-icon {
-    flex-shrink: 0;
-    width: 40px;
-    height: 40px;
-    border-radius: 11px;
-    display: grid;
-    place-items: center;
-    background: $paper;
-    border: 1px solid $line;
-    color: $ink;
-    font-family: $display;
-    font-weight: 800;
-    font-size: 1.2308em; transition: all 0.16s ease; } // 1rem / 0.8125rem
-  &__pcard--on &__pcard-icon { background: $signal; border-color: $signal; color: #fff; }
-
-  &__pcard-body { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-  &__pcard-name { font-family: $display; font-size: 1.3846em; font-weight: 700; color: $ink; } // 1.125rem / 0.8125rem
-  &__pcard-meta { font-size: 1.1538em; color: $ink-3; } // 0.9375rem / 0.8125rem
-
-  &__pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    margin-top: 4px;
-    width: fit-content;
-    font-family: $mono;
-    font-size: 0.7692em; // 0.625rem / 0.8125rem
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: $ok;
-    background: $ok-wash;
-    border-radius: 999px;
-    padding: 3px 8px 3px 6px;
-
-    &::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: $ok; }
-  }
-
-  // ---- model card ---------------------------------------------------------
-  &__mcard {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    text-align: left;
-    padding: 15px 16px;
-    border: 1.5px solid $line;
-    border-radius: 14px;
-    background: $card;
-    cursor: pointer;
-    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
-
-    &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
-    &--on { border-color: $signal; background: $wash; &:hover { border-color: $signal; } }
-  }
-
-  // locked = provider chosen but health not yet confirmed successful;
-  // dims the interaction affordance so it doesn't read as clickable-to-select.
-  &__mcard--locked {
-    cursor: default;
-    &:hover { border-color: $line; box-shadow: none; transform: none; }
-  }
-
-  // checking = a health check (auto or manual) is currently in flight for
-  // this card — a soft pulsing border + sheen so it reads as "in progress"
-  // at a glance, on top of the "Checking…" badge text.
-  &__mcard--checking {
-    position: relative;
-    overflow: hidden;
-    border-color: rgba($signal, 0.35);
-    animation: ev-mcard-pulse 1.6s ease-in-out infinite;
-
-    &::after {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(100deg, transparent 30%, rgba($signal, 0.08) 50%, transparent 70%);
-      background-size: 200% 100%;
-      animation: ev-mcard-sheen 1.6s ease-in-out infinite;
-      pointer-events: none;
-    }
-  }
-
-  &__mcard-top {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 10px;
-  }
-
-  &__mcard-name { font-family: $display; font-size: 1.1154em; font-weight: 700; color: $ink; line-height: 1.25; } // 0.90625rem / 0.8125rem
-  &__mcard-provider { font-size: 0.8846em; color: $ink-3; } // 0.71875rem / 0.8125rem
-
-  // ---- provider row + manual health check (Step 3) -------------------------
-  &__mcard-provider-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    margin-top: 2px;
-  }
-
-  &__mcard-hint {
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px dashed $line-2;
-    font-size: 0.8846em; // 0.71875rem / 0.8125rem
-    color: $ink-3;
-    line-height: 1.4;
-  }
-
-  &__health-badge {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 3px 8px;
-    border-radius: 999px;
-    border: 1px solid transparent;
-    font-family: $mono;
-    font-size: 0.7692em; // 0.625rem / 0.8125rem
-    font-weight: 700;
-    letter-spacing: 0.02em;
-    white-space: nowrap;
-
-    &--success {
-      color: $ok;
-      background: $ok-wash;
-    }
-
-    &--failed {
-      color: $danger;
-      background: $danger-wash;
-      cursor: pointer;
-      border: 0;
-      &:hover { background: rgba($danger, 0.16); }
-    }
-
-    &--loading {
-      color: $ink-3;
-      background: $paper;
-    }
-  }
-
-  &__health-check-btn {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 3px 9px;
-    border-radius: 999px;
-    border: 1px solid $signal;
-    background: $card;
-    color: $signal;
-    font-family: $mono;
-    font-size: 0.7692em; // 0.625rem / 0.8125rem
-    font-weight: 700;
-    letter-spacing: 0.02em;
-    white-space: nowrap;
-    cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease;
-
-    &:hover { background: $wash; }
-  }
-
-  &__mcard-mark {
-    flex-shrink: 0;
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    display: grid;
-    place-items: center;
-    background: $signal;
-    color: #fff;
-  }
-
-  &__caps { display: flex; flex-wrap: wrap; gap: 5px; }
-  &__cap {
-    font-family: $mono;
-    font-size: 0.7692em; // 0.625rem / 0.8125rem
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    color: $ink-2;
-    background: $paper;
-    border: 1px solid $line;
-    border-radius: 6px;
-    padding: 2px 7px;
-  }
-
-  &__mcard-stats {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 14px;
-    padding-top: 10px;
-    border-top: 1px solid $line-2;
-  }
-
-  &__stat { display: flex; flex-direction: column; gap: 1px; }
-  &__stat-k { @extend %micro; font-size: 0.6923em; color: $ink-3; } // 0.5625rem / 0.8125rem
-  &__stat-v { font-family: $mono; font-size: 0.9615em; font-weight: 700; color: $ink; letter-spacing: -0.01em; } // 0.78125rem / 0.8125rem
-
-  // Per-model retry/timeout — shown on a model card once it's selected.
-  // Wrapped so clicks on the inputs (stopPropagation'd in the component)
-  // don't also toggle the card's selection.
-  &__mcard-retry {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid $line-2;
-    cursor: default;
-  }
-  &__mcard-retry-fields {
-    display: flex;
-    gap: 10px;
-  }
-  &__mcard-retry-hint {
-    display: flex;
-    align-items: flex-start;
-    gap: 5px;
-    font-size: 0.7692em; // 0.625rem / 0.8125rem
-    color: $ink-3;
-    line-height: 1.3;
-
-    svg { flex-shrink: 0; margin-top: 2px; }
-  }
-  &__mcard-retry-field {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-
-    label {
-      @extend %micro;
-      font-size: 0.6923em; // 0.5625rem / 0.8125rem
-      color: $ink-3;
-    }
-
-    input {
-      width: 100%;
-      border: 1.5px solid $line;
-      border-radius: 8px;
-      padding: 5px 8px;
-      font-family: $mono;
-      font-size: 0.8846em; // 0.71875rem / 0.8125rem
-      font-weight: 700;
-      color: $ink;
-      background: $card;
-      transition: border-color 0.15s ease, box-shadow 0.15s ease;
-
-      &:focus { outline: none; border-color: $signal; box-shadow: $ring; }
-    }
-  }
-
-  // ---- Retry/timeout mode: "Apply to all" vs "Individually" (Models step) -
-  &__retry-mode {
-    margin-top: 14px;
-    margin-bottom: 4px;
-    padding: 12px 14px;
-    border: 1px solid $line;
-    border-radius: 12px;
-    background: $paper;
-  }
-
-  &__retry-mode-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 10px;
-  }
-
-  &__retry-mode-all {
-    display: flex;
-    align-items: flex-end;
-    flex-wrap: wrap;
-    gap: 12px;
-    margin-top: 12px;
-
-    .ev__mcard-retry-field { flex: 0 0 130px; }
-  }
-
-  &__retry-mode-note {
-    display: flex;
-    align-items: flex-start;
-    gap: 5px;
-    flex: 1 1 100%;
-    margin-top: 10px;
-    font-size: 0.8846em; // 0.71875rem / 0.8125rem
-    color: $ink-3;
-    line-height: 1.4;
-
-    svg { flex-shrink: 0; margin-top: 2px; }
-  }
-
-  // ---- Retest on Wrong body (card wrapper is &__msec; header lives there
-  // too, with the Yes/No radio row as a head-action). The two controls
-  // (Rounds / Verify Metric) each get their own bordered, tinted panel so
-  // they read as clearly separate settings rather than two fields
-  // floating in the same open space. -------------------------------------
-  &__retest-fields {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: stretch;
-    gap: 16px;
-  }
-
-  &__retest-panel {
-    flex: 0 0 200px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 14px 16px;
-    border: 1px solid $line;
-    border-radius: 12px;
-    background: $card;
-    // Thin colored top edge distinguishes the two panels from each other
-    // at a glance (rounds vs. verify metric), on top of the shared card
-    // border/background separation.
-    border-top: 3px solid $signal;
-
-    input[type='number'] {
-      width: 100%;
-      border: 1.5px solid $line;
-      border-radius: 8px;
-      padding: 7px 10px;
-      font-family: $mono;
-      font-size: 1.0385em; // 0.84375rem / 0.8125rem
-      font-weight: 700;
-      color: $ink;
-      background: $paper;
-      transition: border-color 0.15s ease, box-shadow 0.15s ease;
-
-      &:focus { outline: none; border-color: $signal; box-shadow: $ring; }
-    }
-  }
-
-  &__retest-panel--verify {
-    flex: 1 1 280px;
-  }
-
-  &__retest-panel-label {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    @extend %micro;
-    font-size: 0.8462em; // 0.6875rem / 0.8125rem
-    color: $ink-2;
-
-    svg { flex-shrink: 0; color: $signal; }
-  }
-
-  &__retest-panel-hint {
-    font-size: 0.8462em; // 0.6875rem / 0.8125rem
-    color: $ink-3;
-    line-height: 1.4;
-  }
-
-  // ========================================================================
-  // Test-suite step: tabs, dataset grid, subgroup rail, upload
-  // ========================================================================
-  &__tabs {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 4px;
-    border: 1px solid $line;
-    border-radius: 12px;
-    background: $paper;
-    margin-bottom: 18px;
-  }
-
-  &__tab {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 16px;
-    border: 0;
-    border-radius: 9px;
-    background: transparent;
-    color: $ink-2;
-    font-family: $sans;
-    font-size: 1em; // 0.8125rem / 0.8125rem (base)
-    font-weight: 650;
-    cursor: pointer;
-    transition: all 0.16s ease;
-
-    &:hover { color: $ink; }
-    &--on { background: $card; color: $signal; box-shadow: $soft; }
-  }
-
-  &__suite {
-    flex: 1;
-    min-height: 0;
-    display: grid;
-    grid-template-columns: 1fr 300px;
-    gap: 16px;
-  }
-
-  &__suite-scroll {
-    min-width: 0;
-    min-height: 0;
-    overflow-y: auto;
-    margin: 0 -6px;
-    padding: 2px 6px 6px;
-  }
-
-  &__dgrid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 12px;
-
-    @media (min-width: 1800px) {
-      grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
-    }
-  }
-
-  &__dcard {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    gap: 11px;
-    text-align: left;
-    padding: 15px 16px;
-    border: 1.5px solid $line;
-    border-radius: 14px;
-    background: $card;
-    cursor: pointer;
-    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
-
-    &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
-    &--on { border-color: $signal; background: $wash; &:hover { border-color: $signal; } }
-
-    // A dataset with 0 questions can still be picked (so the info icon
-    // and warning banner are reachable), but reads visibly muted/flagged
-    // so it doesn't look identical to a usable suite at a glance.
-    &--empty {
-      border-color: rgba($danger, 0.3);
-
-      &:hover { border-color: rgba($danger, 0.5); }
-    }
-  }
-
-  &__dcard-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-  &__dcard-id { display: flex; align-items: center; gap: 11px; min-width: 0; }
-
-  &__dcard-icon {
-    flex-shrink: 0;
-    width: 36px;
-    height: 36px;
-    border-radius: 10px;
-    display: grid;
-    place-items: center;
-    background: $paper;
-    border: 1px solid $line;
-    color: $ink;
-    transition: all 0.16s ease;
-  }
-  &__dcard--on &__dcard-icon { background: $signal; border-color: $signal; color: #fff; }
-
-  &__dcard-name { font-family: $display; font-size: 1.0769em; font-weight: 700; color: $ink; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } // 0.875rem / 0.8125rem
-
-  &__dcard-warn-icon {
-    flex-shrink: 0;
-    display: inline-flex;
-    color: $danger;
-  }
-
-  &__dcard-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-
-  &__tag {
-    font-family: $mono;
-    font-size: 0.7692em; // 0.625rem / 0.8125rem
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    color: $ink-2;
-    background: $paper;
-    border: 1px solid $line;
-    border-radius: 6px;
-    padding: 2px 7px;
-  }
-  &__tag--custom { color: $signal; background: $wash; border-color: rgba($signal, 0.25); }
-  &__tag--deepeval { color: $ok; background: $ok-wash; border-color: rgba($ok, 0.25); }
-  &__tag--count { border: 0; background: transparent; color: $ink-3; padding-left: 0; }
-  &__tag--count-empty { color: $danger; font-weight: 700; }
-
-  // Full-width banner shown below the grid+subgroup-rail layout whenever
-  // the currently selected dataset has 0 questions — explains why
-  // Continue is disabled without the user having to guess.
-  &__dataset-empty-warning {
-    display: flex;
-    align-items: flex-start;
-    gap: 9px;
-    margin-top: 14px;
-    padding: 11px 14px;
-    border: 1px solid rgba($danger, 0.3);
-    border-radius: 12px;
-    background: $danger-wash;
-    color: $danger;
-    font-size: 0.9231em; // 0.75rem / 0.8125rem
-    line-height: 1.5;
-
-    svg { flex-shrink: 0; margin-top: 2px; }
-    strong { font-weight: 700; }
-  }
-
-  // ---- dcard header actions: preview button + selection mark (Change-2) --
-  &__dcard-actions {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  &__dcard-preview-btn {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 5px 10px;
-    border: 1px solid $line;
-    border-radius: 999px;
-    background: $paper;
-    color: $ink-2;
-    font-family: $sans;
-    font-size: 0.8846em; // 0.71875rem / 0.8125rem
-    font-weight: 650;
-    cursor: pointer;
-    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
-
-    &:hover { border-color: $signal; color: $signal; background: $wash; }
-  }
-
-  // ---- subgroup rail ------------------------------------------------------
-  &__rail {
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    border: 1px solid $line;
-    border-radius: 14px;
-    background: $paper;
-    min-height: 0;
-    overflow: hidden;
-  }
-
-  &__rail-head { flex-shrink: 0; padding: 15px 16px 13px; border-bottom: 1px solid $line; }
-  &__rail-head-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-  }
-  &__rail-title {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    font-family: $display;
-    font-size: 1em; // 0.8125rem / 0.8125rem (base)
-    font-weight: 800;
-    letter-spacing: -0.01em;
-    color: $ink;
-    svg { color: $signal; }
-  }
-  &__rail-actions {
-    flex-shrink: 0;
-    display: flex;
-    gap: 10px;
-  }
-  &__rail-sub { margin-top: 4px; font-size: 0.8846em; color: $ink-3; line-height: 1.45; } // 0.71875rem / 0.8125rem
-
-  &__rail-scroll {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  &__rail-empty {
-    margin: 10px;
-    padding: 18px 12px;
-    text-align: center;
-    border: 1px dashed $line;
-    border-radius: 10px;
-    font-size: 0.9231em; color: $ink-3; } // 0.75rem / 0.8125rem
-
-  &__check-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    width: 100%;
-    text-align: left;
-    padding: 9px 11px;
-    border: 1px solid $line;
-    border-radius: 10px;
-    background: $card;
-    cursor: pointer;
-    transition: border-color 0.15s ease, background 0.15s ease;
-
-    &:hover { border-color: $ink-3; }
-    &--on { border-color: $signal; background: $wash; }
-  }
-
-  &__check {
-    flex-shrink: 0;
-    width: 17px;
-    height: 17px;
-    border-radius: 5px;
-    border: 1.5px solid $ink-3;
-    background: $card;
-    display: grid;
-    place-items: center;
-    color: transparent;
-    transition: all 0.14s ease;
-
-    &--on { background: $signal; border-color: $signal; color: #fff; }
-  }
-
-  &__check-label {
-    font-size: 1em; // 0.8125rem / 0.8125rem (base)
-    font-weight: 600;
-    color: $ink;
-
-    // Extra boost beyond the automatic base-font scale-up (see
-    // $ev-base-font), since at this width the subgroup cards still read
-    // smaller than the surrounding provider/model/dataset cards otherwise.
-    @media (min-width: 1800px) {
-      font-size: 1.1538em; // 0.9375rem / 0.8125rem
-    }
-  }
-
-  // ---- upload panel -------------------------------------------------------
-  &__upload {
-    border: 1.5px solid $line;
-    border-radius: 14px;
-    background: $paper;
-    padding: 20px;
-    max-width: 560px;
-  }
-
-  &__drop {
-    display: flex;
-    align-items: center;
-    gap: 11px;
-    width: 100%;
-    border: 1.5px dashed $ink-3;
-    border-radius: 12px;
-    padding: 16px;
-    background: $card;
-    color: $ink-3;
-    font-size: 1.0385em; // 0.84375rem / 0.8125rem
-    font-weight: 500;
-    cursor: pointer;
-    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
-
-    &:hover { border-color: $signal; color: $signal; background: $wash; }
-
-    svg { flex-shrink: 0; }
-  }
-  &__drop-file { color: $ink; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  &__drop--has { border-style: solid; border-color: $signal; color: $ink; }
-
-  &__upload-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 10px;
-    margin-top: 20px;
-  }
-
-  // ========================================================================
-  // Metrics step: chips + judge rail
-  // ========================================================================
-  &__metrics {
-    flex: 1;
-    min-height: 0;
-    display: grid;
-    grid-template-columns: 1fr 300px;
-    // Without an explicit row height, the implicit single row sizes to
-    // its tallest column's content (auto/max-content) instead of being
-    // constrained to the space actually available — which is what was
-    // letting &__metrics-main's content grow past the bottom of the
-    // stage with no scrollbar appearing anywhere. minmax(0, 1fr) forces
-    // the row to the container's real height so &__metrics-main's own
-    // overflow-y: auto (below) can actually kick in.
-    grid-template-rows: minmax(0, 1fr);
-    gap: 16px;
-  }
-
-  &__metrics-main {
-    min-width: 0;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    // Independent scrollbar for the cards column — without this, overflow
-    // bubbles up to &__stage-body and scrolls the whole step (cards +
-    // Judge Model rail) as one unit. With it, only this column scrolls;
-    // &__judge keeps its own separate internal scroll region
-    // (&__judge-scroll) and its head/footer stay pinned in place.
-    overflow-y: auto;
-    padding-right: 4px;
-    margin-right: -4px;
-  }
-
-  // ---- Metrics step: one card per section -----------------------------
-  // Same visual language as &__judge (border/radius/paper background,
-  // header+body split) so the whole step reads as a consistent stack of
-  // cards instead of one long undifferentiated column.
-  &__msec {
-    border: 1px solid $line;
-    border-radius: 14px;
-    background: $paper;
-  }
-
-  &__msec-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 14px 16px 12px;
-    border-bottom: 1px solid $line;
-  }
-
-  &__msec-head-text { min-width: 0; }
-
-  &__msec-title {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    font-family: $display;
-    font-size: 1.0769em; // 0.875rem / 0.8125rem
-    font-weight: 800;
-    letter-spacing: -0.01em;
-    color: $ink;
-
-    svg { flex-shrink: 0; color: $signal; }
-  }
-
-  &__msec-sub { margin-top: 3px; font-size: 0.9231em; color: $ink-3; line-height: 1.4; } // 0.75rem / 0.8125rem
-
-  &__msec-head-action { flex-shrink: 0; }
-
-  &__msec-body { padding: 16px; }
-
-  // ---- Run Samples + Instruction side-by-side (top of Metrics step) -------
-  &__samples-instruction-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    align-items: start;
-    gap: 16px;
-  }
-
-  // Run Samples card body wraps the standalone runSamplesControl field
-  // directly — .ev__field--samples below sets its width; no wrapper class
-  // needed now that it isn't laid out side-by-side with a note anymore.
-  &__field--samples { max-width: 260px; }
-  // Top K (RAG-only, Test Suite step) — a simple number field, doesn't
-  // need the wide layout the samples control does.
-  // Top K (RAG-only, Test Suite step) — the field row is wide enough for
-  // the label's long hint text to stay on one line; the actual number
-  // input is kept narrow separately via &__input--topk below.
-  &__field--topk {
-    max-width: 480px;
-    margin-bottom: 20px;
-
-    .opt {
-      white-space: nowrap;
-      font-size: 0.85em;
-    }
-  }
-  &__input--topk { max-width: 140px; }
-
-  // Shown above the metrics chips when the catalog has entries but nothing
-  // is selected yet — mirrors .ev__judge-required's styling/tone.
-  &__metrics-required {
-    margin-bottom: 12px;
-    padding: 9px 11px;
-    border: 1px dashed rgba($danger, 0.35);
-    border-radius: 10px;
-    background: $danger-wash;
-    color: $danger;
-    font-size: 0.9231em; // 0.75rem / 0.8125rem
-    line-height: 1.4;
-  }
-
-  // ---- Run samples: Custom / Full radio row -------------------------------
-  &__radio-row {
-    display: inline-flex;
-    align-items: center;
-    gap: 16px;
-  }
-
-  &__radio-opt {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    border: 0;
-    background: transparent;
-    padding: 0;
-    cursor: pointer;
-    font-family: $sans;
-    font-size: 1em; // 0.8125rem / 0.8125rem (base)
-    font-weight: 600;
-    color: $ink-2;
-    transition: color 0.15s ease;
-
-    &:hover { color: $ink; }
-    &--on { color: $ink; }
-  }
-
-  &__radio-full-note {
-    margin-top: 10px;
-    font-size: 0.9231em; // 0.75rem / 0.8125rem
-    color: $ink-3;
-    line-height: 1.4;
-  }
-
-  &__metrics-count {
-    font-family: $mono;
-    font-size: 0.9615em; // 0.78125rem / 0.8125rem
-    color: $ink-2;
-    b { color: $signal; font-weight: 700; }
-  }
-
-  &__metrics-actions { display: flex; gap: 14px; }
-
-  &__link {
-    font-family: $sans;
-    font-size: 0.9615em; // 0.78125rem / 0.8125rem
-    font-weight: 600;
-    color: $signal;
-    background: none;
-    border: 0;
-    padding: 0;
-    cursor: pointer;
-    &:hover { text-decoration: underline; }
-  }
-
-  &__chips {
-    flex: 1;
-    margin: 0 -6px;
-    padding: 4px 6px;
-    align-content: flex-start;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-
-  &__chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 9px 14px;
-    border: 1.5px solid $line;
-    border-radius: 999px;
-    background: $card;
-    color: $ink-2;
-    font-size: 0.95em;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.15s ease;
-    height: fit-content;
-
-    &:hover { border-color: $ink-3; color: $ink; }
-
-    &--on {
-      border-color: $signal;
-      background: $signal;
-      color: #fff;
-    }
-
-    // Custom metrics (from GET /metrics's `custom` array) get a dashed
-    // border at rest so they read as a distinct category from the plain
-    // built-in metric chips above, even before the section header makes
-    // that explicit.
-    &--custom {
-      border-style: dashed;
-
-      &.ev__chip--on { border-style: solid; }
-    }
-  }
-
-  &__chip-tick {
-    display: grid;
-    place-items: center;
-    width: 14px;
-    height: 14px;
-  }
-
-  // Small gavel glyph on a custom metric chip that needs a judge model to
-  // grade it — purely informational, doesn't affect the always-shown/
-  // mandatory Judge Model rail itself.
-  &__chip-judge-icon {
-    flex-shrink: 0;
-    opacity: 0.6;
-  }
-  &__chip--on &__chip-judge-icon { opacity: 0.85; }
-
-  // ---- instruction (Metrics-step card; see &__msec for the header/body
-  // wrapper) — generate button sits in the card head as a head-action,
-  // textarea in the card body. ------------------------------------------
-  &__instruction-generate-btn {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 12px;
-    border: 1px solid $signal;
-    border-radius: 999px;
-    background: $card;
-    color: $signal;
-    font-family: $sans;
-    font-size: 0.8462em; // 0.6875rem / 0.8125rem
-    font-weight: 650;
-    cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease;
-
-    &:hover:not(:disabled) { background: $wash; }
-    &:disabled { cursor: not-allowed; opacity: 0.5; }
-  }
-
-  &__instruction-textarea {
-    width: 100%;
-    min-height: 110px;
-    border: 1.5px solid $line;
-    border-radius: 11px;
-    padding: 11px 13px;
-    font-family: $sans;
-    font-size: 0.9231em; // 0.75rem / 0.8125rem
-    font-weight: 500;
-    line-height: 1.55;
-    color: $ink;
-    background: $card;
-    resize: vertical;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
-
-    &::placeholder { color: $ink-3; font-weight: 400; }
-    &:focus { outline: none; border-color: $signal; box-shadow: $ring; }
-  }
-
-  // ---- judge rail ---------------------------------------------------------
-  &__judge {
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    border: 1px solid $line;
-    border-radius: 14px;
-    background: $paper;
-    min-height: 0;
-    overflow: hidden;
-  }
-
-  &__judge-head { flex-shrink: 0; padding: 15px 16px 13px; border-bottom: 1px solid $line; }
-  &__judge-title {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    font-family: $display;
-    font-size: 1.0769em; // 0.875rem / 0.8125rem
-    font-weight: 800;
-    letter-spacing: -0.01em;
-    color: $ink;
-    svg { color: $signal; }
-  }
-  &__judge-sub { margin-top: 4px; font-size: 0.9615em; color: $ink-3; line-height: 1.45; } // 0.78125rem / 0.8125rem
-
-  // Info card explaining that judge selection is mandatory but only
-  // actually *used* by metrics that need one — sits between the header
-  // and the model list.
-  &__judge-info {
-    flex-shrink: 0;
-    display: flex;
-    gap: 9px;
-    margin: 12px 12px 4px;
-    padding: 10px 11px;
-    border: 1px solid rgba($signal, 0.2);
-    border-radius: 10px;
-    background: $wash;
-    color: $ink-2;
-    font-size: 0.9231em; // 0.75rem / 0.8125rem
-    line-height: 1.45;
-
-    svg { flex-shrink: 0; color: $signal; margin-top: 1px; }
-  }
-
-  // Shown at the bottom of the judge rail whenever no judge model has been
-  // picked yet — mandatory for every evaluation type now, not gated on
-  // LLM_Judge or the agent framework anymore.
-  &__judge-required {
-    flex-shrink: 0;
-    margin: 0 10px 10px;
-    padding: 9px 11px;
-    border: 1px dashed rgba($danger, 0.35);
-    border-radius: 10px;
-    background: $danger-wash;
-    color: $danger;
-    font-size: 0.8846em; line-height: 1.4; } // 0.71875rem / 0.8125rem
-
-  &__judge-scroll {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  &__judge-empty {
-    margin: 10px;
-    padding: 18px 12px;
-    text-align: center;
-    border: 1px dashed $line;
-    border-radius: 10px;
-    font-size: 0.9231em; color: $ink-3; } // 0.75rem / 0.8125rem
-
-  &__judge-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    width: 100%;
-    text-align: left;
-    padding: 10px 11px;
-    border: 1px solid $line;
-    border-radius: 10px;
-    background: $card;
-    cursor: pointer;
-    transition: border-color 0.15s ease, background 0.15s ease;
-
-    &:hover { border-color: $ink-3; }
-    &--on { border-color: $signal; background: $wash; }
-  }
-
-  &__radio {
-    flex-shrink: 0;
-    width: 15px;
-    height: 15px;
-    border-radius: 50%;
-    border: 1.5px solid $ink-3;
-    background: $card;
-    transition: border-width 0.14s ease, border-color 0.14s ease;
-    &--on { border-color: $signal; border-width: 5px; }
-  }
-
-  &__judge-name {
-    font-size: 1.0769em; // 0.875rem / 0.8125rem
-    font-weight: 600;
-    color: $ink;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-
-    // Same extra wide-screen boost as the subgroup cards (.ev__check-label)
-    // above — otherwise the judge model list reads smaller than the rest
-    // of the metrics step at this width.
-    @media (min-width: 1800px) {
-      font-size: 1.2308em; // 1rem / 0.8125rem
-    }
-  }
-  &__judge-meta {
-    font-size: 0.9231em; // 0.75rem / 0.8125rem
-    color: $ink-3;
-
-    @media (min-width: 1800px) {
-      font-size: 1.0769em; // 0.875rem / 0.8125rem
-    }
-  }
-
-  // ========================================================================
-  // Review step
-  // ========================================================================
-  &__summary {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 12px;
-  }
-
-  &__summary-cell {
-    padding: 16px;
-    border: 1px solid $line;
-    border-radius: 14px;
-    background: $paper;
-  }
-
-  &__summary-k {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    @extend %micro;
-    font-size: 0.6923em; // 0.5625rem / 0.8125rem
-    color: $ink-3;
-    margin-bottom: 8px;
-    svg { color: $signal; }
-  }
-
-  &__summary-v { font-family: $mono; font-size: 1.8462em; font-weight: 700; color: $ink; letter-spacing: -0.02em; line-height: 1; } // 1.5rem / 0.8125rem
-  &__summary-v--muted { color: $ink-3; }
-
-  &__block { margin-top: 26px; }
-
-  &__block-title {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    @extend %micro;
-    font-size: 0.7692em; // 0.625rem / 0.8125rem
-    color: $ink-2;
-    margin-bottom: 12px;
-    svg { color: $signal; }
-    b { color: $ink-3; font-weight: 700; }
-  }
-
-  &__rows {
-    border: 1px solid $line;
-    border-radius: 12px;
-    overflow: hidden;
-  }
-
-  &__row {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 12px 15px;
-    border-bottom: 1px solid $line-2;
-    font-size: 1.0385em; &:last-child { border-bottom: 0; } // 0.84375rem / 0.8125rem
-
-    span:first-child { @extend %micro; font-size: 0.7692em; color: $ink-3; } // 0.625rem / 0.8125rem
-    span:last-child { color: $ink; font-weight: 600; text-align: right; }
-  }
-
-  &__review-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 10px;
-  }
-
-  &__review-card {
-    display: flex;
-    align-items: center;
-    gap: 11px;
-    padding: 12px 14px;
-    border: 1px solid $line;
-    border-radius: 12px;
-    background: $paper;
-  }
-  &__review-card-icon {
-    flex-shrink: 0;
-    width: 32px;
-    height: 32px;
-    border-radius: 9px;
-    display: grid;
-    place-items: center;
-    background: $card;
-    border: 1px solid $line;
-    color: $signal;
-  }
-  &__review-card-name { font-family: $display; font-size: 1em; font-weight: 700; color: $ink; } // 0.8125rem / 0.8125rem (base)
-  &__review-card-sub { font-size: 0.8846em; color: $ink-3; margin-top: 1px; } // 0.71875rem / 0.8125rem
-
-  &__metric-tags { display: flex; flex-wrap: wrap; gap: 7px; }
-  &__metric-tag {
-    font-size: 0.9615em; // 0.78125rem / 0.8125rem
-    font-weight: 600;
-    color: $signal;
-    background: $wash;
-    border: 1px solid rgba($signal, 0.2);
-    border-radius: 8px;
-    padding: 5px 11px;
-  }
-
-  &__empty {
-    padding: 20px;
-    text-align: center;
-    border: 1px dashed $line;
-    border-radius: 12px;
-    background: $paper;
-    color: $ink-3;
-    font-size: 1.0385em; } // 0.84375rem / 0.8125rem
-
-  &__error {
-    margin-top: 18px;
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    font-size: 1em; // 0.8125rem / 0.8125rem (base)
-    font-weight: 500;
-    color: $danger;
-    background: $danger-wash;
-    border: 1px solid rgba($danger, 0.2);
-    border-radius: 10px;
-    padding: 11px 14px;
-  }
-
-  &__spin { animation: ev-spin 0.8s linear infinite; }
-}
-
-// ===========================================================================
-// Dataset preview slider (Change-2) — right-to-left panel opened from a
-// Test Suite card's "Preview" button. Kept as top-level (non-&__) classes
-// since it's an overlay outside the .ev tree, same pattern as .ev-toast.
-// ===========================================================================
-.ev-preview-overlay {
-  // master scale control for this subtree — cascades to .ev-preview-panel
-  // and its descendants below. See $ev-base-font above.
-  font-size: $ev-base-font;
-
-  @media (min-width: 1800px) {
-    font-size: 1rem;
-  }
-
-  position: fixed;
-  inset: 0;
-  z-index: 70;
-  background: rgba(10, 11, 15, 0.38);
-  display: flex;
-  justify-content: flex-end;
-  animation: ev-fade-in 0.2s ease both;
-}
-
-.ev-preview-panel {
-  width: min(440px, 100vw);
-  height: 100%;
-  background: $card;
-  border-left: 1px solid $line;
-  box-shadow: -20px 0 40px -16px rgba(0, 0, 0, 0.28);
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  animation: ev-slide-in 0.28s cubic-bezier(0.22, 0.72, 0.16, 1) both;
-}
-
-.ev-preview-head {
-  flex-shrink: 0;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 20px 20px 16px;
-  border-bottom: 1px solid $line-2;
-}
-
-.ev-preview-head-main { min-width: 0; }
-
-.ev-preview-eyebrow {
-  @extend %micro;
-  font-size: 0.7692em; color: $signal; } // 0.625rem / 0.8125rem
-
-.ev-preview-title {
-  margin-top: 6px;
-  font-family: $display;
-  font-size: 1.3077em; // 1.0625rem / 0.8125rem
-  font-weight: 800;
-  letter-spacing: -0.015em;
-  color: $ink;
-  line-height: 1.25;
-  overflow-wrap: anywhere;
-}
-
-.ev-preview-close {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border: 1px solid $line;
-  border-radius: 9px;
-  background: $paper;
-  color: $ink-2;
-  cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
-
-  &:hover { border-color: $ink-3; color: $ink; }
-}
-
-.ev-preview-controls {
-  flex-shrink: 0;
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 16px 20px;
-  border-bottom: 1px solid $line-2;
-  background: $paper;
-}
-
-.ev-preview-limit { min-width: 0; }
-
-.ev-preview-limit-label {
-  @extend %micro;
-  font-size: 0.7692em; // 0.625rem / 0.8125rem
-  color: $ink-2;
-  display: block;
-  margin-bottom: 8px;
-}
-
-.ev-preview-limit-range {
-  font-family: $sans;
-  letter-spacing: 0;
-  text-transform: none;
-  font-weight: 500;
-  color: $ink-3;
-}
-
-.ev-preview-limit-controls {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.ev-preview-stepper-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: 1.5px solid $line;
-  border-radius: 8px;
-  background: $card;
-  color: $ink-2;
-  cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease;
-
-  &:hover:not(:disabled) { border-color: $signal; color: $signal; }
-  &:disabled { cursor: not-allowed; opacity: 0.4; }
-}
-
-.ev-preview-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 18px 20px 24px;
-}
-
-.ev-preview-skel-list,
-.ev-preview-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.ev-preview-skel-card {
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-  padding: 14px 15px;
-  border: 1px solid $line;
-  border-radius: 12px;
-  background: $paper;
-}
-
-.ev-preview-q {
-  padding: 14px 15px;
-  border: 1px solid $line;
-  border-radius: 12px;
-  background: $paper;
-}
-
-.ev-preview-q-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.ev-preview-q-index {
-  font-family: $mono;
-  font-size: 0.8462em; // 0.6875rem / 0.8125rem
-  font-weight: 700;
-  color: $signal;
-  background: $wash;
-  border-radius: 6px;
-  padding: 2px 7px;
-}
-
-.ev-preview-q-cat {
-  font-family: $mono;
-  font-size: 0.8077em; // 0.65625rem / 0.8125rem
-  font-weight: 600;
-  color: $ink-3;
-  background: $card;
-  border: 1px solid $line;
-  border-radius: 6px;
-  padding: 2px 7px;
-}
-
-.ev-preview-q-prompt {
-  font-size: 1.0385em; // 0.84375rem / 0.8125rem
-  color: $ink;
-  line-height: 1.5;
-}
-
-.ev-preview-q-source {
-  margin-top: 4px;
-  font-size: 0.9231em; // 0.75rem / 0.8125rem
-  color: $ink-2;
-  line-height: 1.4;
-
-  span {
-    @extend %micro;
-    font-size: 0.7308em; // 0.59375rem / 0.8125rem
-    color: $ink-3;
-    margin-right: 6px;
-  }
-}
-
-.ev-preview-q-choices {
-  margin-top: 9px;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-
-  li {
-    font-size: 0.9615em; // 0.78125rem / 0.8125rem
-    color: $ink-2;
-    padding: 6px 9px;
-    border: 1px solid $line;
-    border-radius: 8px;
-    background: $card;
-  }
-}
-
-.ev-preview-q-answer {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px dashed $line-2;
-  font-size: 1em; // 0.8125rem / 0.8125rem (base)
-  font-weight: 600;
-  color: $ok;
-
-  span {
-    @extend %micro;
-    font-size: 0.7308em; // 0.59375rem / 0.8125rem
-    color: $ink-3;
-    margin-right: 7px;
-  }
-
-  // A second .ev-preview-q-answer block (e.g. Expected followed by
-  // Reference) shouldn't repeat the divider directly under the first one.
-  & + & {
-    margin-top: 6px;
-    padding-top: 0;
-    border-top: 0;
-  }
-}
-
-.ev-preview-q-meta {
-  margin-top: 10px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.ev-preview-q-meta-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 0.8462em; // 0.6875rem / 0.8125rem
-  color: $ink-2;
-  background: $paper;
-  border: 1px solid $line;
-  border-radius: 6px;
-  padding: 3px 8px;
-
-  b {
-    @extend %micro;
-    font-size: 0.7692em; // 0.625rem / 0.8125rem
-    color: $ink-3;
-    font-weight: 700;
-  }
-}
-
-@keyframes ev-fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-@keyframes ev-slide-in {
-  from { transform: translateX(100%); }
-  to { transform: translateX(0); }
-}
-
-// ---- toast (fixed-dark chip, same reasoning as .ev__btn--primary) ---------
-.ev-toast {
-  // master scale control for this subtree — see $ev-base-font above
-  font-size: $ev-base-font;
-
-  @media (min-width: 1800px) {
-    font-size: 1rem;
-  }
-
-  position: fixed;
-  right: 24px;
-  bottom: 24px;
-  z-index: 60;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 18px 14px 14px;
-  background: $ink-solid;
-  color: #fff;
-  border-radius: 14px;
-  box-shadow: 0 20px 40px -16px rgba(0, 0, 0, 0.5);
-  animation: ev-toast-in 0.32s cubic-bezier(0.22, 0.72, 0.16, 1) both;
-
-  &__icon {
-    width: 34px;
-    height: 34px;
-    border-radius: 9px;
-    display: grid;
-    place-items: center;
-    background: rgba($ok, 0.2);
-    color: $ink-solid-ok;
-  }
-  &__title { font-family: $display; font-weight: 700; font-size: 1.0385em; } // 0.84375rem / 0.8125rem
-  &__sub { font-size: 0.9231em; color: rgba(255, 255, 255, 0.6); margin-top: 1px; } // 0.75rem / 0.8125rem
-}
-
-// ---- keyframes ------------------------------------------------------------
-@keyframes ev-spin { to { transform: rotate(360deg); } }
-@keyframes ev-shimmer {
-  0% { background-position: 100% 50%; }
-  100% { background-position: 0 50%; }
-}
-@keyframes ev-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(43, 43, 245, 0.5); }
-  50% { box-shadow: 0 0 0 4px rgba(43, 43, 245, 0); }
-}
-@keyframes ev-mcard-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(43, 43, 245, 0.16); }
-  50% { box-shadow: 0 0 0 5px rgba(43, 43, 245, 0); }
-}
-@keyframes ev-mcard-sheen {
-  0% { background-position: 140% 0; }
-  100% { background-position: -40% 0; }
-}
-@keyframes ev-rise {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: none; }
-}
-@keyframes ev-toast-in {
-  from { opacity: 0; transform: translateY(12px) scale(0.98); }
-  to { opacity: 1; transform: none; }
-}
-
-// ---- responsive -----------------------------------------------------------
-@media (max-width: 1040px) {
-  .ev__shell { grid-template-columns: 1fr; }
-  .ev__manifest { display: none; }
-  .ev__suite, .ev__metrics { grid-template-columns: 1fr; }
-  .ev__samples-instruction-row { grid-template-columns: 1fr; }
-  .ev__rail, .ev__judge { max-height: 15rem; }
-}
-
-@media (max-width: 640px) {
-  .ev__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
-  .page { padding: 16px 14px 22px; }
-  .ev__stage-head { padding: 18px 18px 15px; }
-  .ev__stage-body { padding: 18px; }
-  .ev__footer { padding: 14px 18px; }
-  .ev__fw-grid { grid-template-columns: 1fr; }
-  .ev__summary { grid-template-columns: 1fr; }
-  .ev__hint { display: none; }
-  .ev__name-input { font-size: 1.6923em; } // 1.375rem / 0.8125rem
-  .ev__step-toolbar { flex-direction: column; align-items: stretch; }
-  .ev__toolbar-search { max-width: none; }
-  .ev-preview-panel { width: 100vw; }
-  .ev-preview-controls { flex-direction: column; align-items: stretch; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .ev-preview-overlay, .ev-preview-panel { animation: none !important; }
-  .ev__skel-block { animation: none !important; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .ev *, .ev-toast { animation: none !important; transition: none !important; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id]);
+
+  const selectRow = (id: string) => setSearchParams({ id });
+
+  const detail = selected ? detailById[selected.id] : undefined;
+  const detailStatus = selected ? detailStatusById[selected.id] : undefined;
+  const detailError = selected ? detailErrorById[selected.id] : undefined;
+
+  // Base formats plus HTML when this report's evaluation is agent-type —
+  // same rule History.tsx applies to its own download buttons.
+  const downloadOptions = selected?.eval_type === 'agent'
+    ? [...DOWNLOAD_OPTIONS, HTML_DOWNLOAD_OPTION]
+    : DOWNLOAD_OPTIONS;
+
+  const StatusBadge = ({ status }: { status: string }) => (
+    <span className={`${styles.status} ${styles[`status--${statusVariant(status)}`]}`}>
+      {status === 'running' && <span className={styles['live-dot']} />}
+      {status}
+    </span>
+  );
+
+  return (
+    <div className="page-enter pg-shell">
+      <div className={styles['reports__header']}>
+        <div>
+          <p className={styles['reports__header-eyebrow']}>Output</p>
+          <h1>Reports</h1>
+          <p className={styles['reports__header-sub']}>Generated reports for completed and in-progress evaluations</p>
+        </div>
+        <div className={styles['reports__header-meta']}>
+          <FileBarChart size={13} />
+          {list.length} report{list.length === 1 ? '' : 's'} generated
+        </div>
+      </div>
+
+      <div className={`pg-body ${styles['pg-body-fixed']}`}>
+        <div className={styles.shell}>
+          {/* ---------- Sidebar list ---------- */}
+          <div className={styles.sidebar}>
+            <div className={styles.filters}>
+              <div className={styles['filter-toolbar']}>
+                <span className={styles['filter-toolbar__label']}>Filters</span>
+                <div className={styles['filter-toolbar__divider']} />
+                <button
+                  type="button"
+                  className={`${styles['filter-toolbar__btn']} ${activeFilter === 'search' ? styles.on : ''}`}
+                  onClick={() => toggleFilter('search')}
+                  title="Search"
+                >
+                  <Search size={15} />
+                  {search && <span className={styles['filter-toolbar__dot']} />}
+                </button>
+                <button
+                  type="button"
+                  className={`${styles['filter-toolbar__btn']} ${activeFilter === 'type' ? styles.on : ''}`}
+                  onClick={() => toggleFilter('type')}
+                  title="Filter by type"
+                >
+                  <SlidersHorizontal size={15} />
+                  {typeFilter !== 'All' && <span className={styles['filter-toolbar__dot']} />}
+                </button>
+
+                <div className={styles['filter-toolbar__summary']}>
+                  {search && (
+                    <span className={styles['filter-chip']}>
+                      <span>“{search}”</span>
+                      <X size={11} onClick={() => setSearch('')} />
+                    </span>
+                  )}
+                  {typeFilter !== 'All' && (
+                    <span className={styles['filter-chip']}>
+                      <span>{typeFilter}</span>
+                      <X size={11} onClick={() => setTypeFilter('All')} />
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className={`${styles['filter-panel']} ${activeFilter ? styles['filter-panel--open'] : ''}`}>
+                {activeFilter === 'search' && (
+                  <div>
+                    <div className={styles['panel-search']}>
+                      <Search size={16} />
+                      <input
+                        ref={searchInputRef}
+                        placeholder="Search reports…"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                )}
+                {activeFilter === 'type' && (
+                  <div>
+                    <div className={styles['panel-pills']}>
+                      {types.map((t) => (
+                        <button
+                          key={t}
+                          className={`${styles['panel-pill']} ${typeFilter === t ? styles.on : ''}`}
+                          onClick={() => {
+                            setTypeFilter(t);
+                            setActiveFilter(null);
+                          }}
+                        >
+                          {t}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {listStatus === 'loading' && list.length === 0 && (
+                <div className={styles.empty}><Loader2 size={16} className={styles.spin} /> Loading reports…</div>
+              )}
+              {listStatus === 'failed' && list.length === 0 && (
+                <div className={styles.empty}>{listError || 'Failed to load reports.'}</div>
+              )}
+              {listStatus !== 'loading' && filtered.length === 0 && list.length > 0 && (
+                <div className={styles.empty}>No reports match your filters.</div>
+              )}
+            </div>
+
+            <div className={styles.rows}>
+              {filtered.map((r) => {
+                const isSelected = selected?.id === r.id;
+                return (
+                  <div
+                    key={r.id}
+                    className={`${styles.row} ${isSelected ? styles.selected : ''}`}
+                    onClick={() => selectRow(r.id)}
+                  >
+                    <div className={styles.row__top}>
+                      <div className={styles.row__icon}><FileText size={16} /></div>
+                      <div className={styles.row__name}>{r.title}</div>
+                    </div>
+                    <div className={styles.row__badges}>
+                      <span className={styles['type-tag']}>{r.eval_type}</span>
+                      <StatusBadge status={r.status} />
+                    </div>
+                    <div className={styles.row__meta}>{new Date(r.created_at).toLocaleDateString()}</div>
+                    <div className={styles.row__stats}>
+                      <span>{r.top_model ? `🏆 ${r.top_model}` : '—'}</span>
+                      <span>{r.top_score != null ? `${Math.round(r.top_score * 100)}%` : '—'}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* ---------- Detail panel ---------- */}
+          <div className={styles.detail}>
+            {!selected ? (
+              <div className={styles['detail-empty']}>Select a report to see its details.</div>
+            ) : (
+              <>
+                <div className={styles['detail-hdr']}>
+                  <div>
+                    <div className={styles['detail-hdr__badges']}>
+                      <span className={styles['type-tag']}>{selected.eval_type}</span>
+                      <StatusBadge status={selected.status} />
+                    </div>
+                    <h2 className={styles['detail-hdr__name']}>{selected.title}</h2>
+                    <div className={styles['detail-hdr__date']}>Created {new Date(selected.created_at).toLocaleString()}</div>
+                  </div>
+                  <div className={styles['detail-hdr__actions']}>
+                    {downloadOptions.map((opt) => (
+                      <button
+                        key={opt.format}
+                        className={styles['dl-btn']}
+                        disabled={selected.status !== 'completed' || downloadingId === selected.id}
+                        onClick={() => dispatch(downloadReport({ reportId: selected.id, format: opt.format, filenameHint: selected.title }))}
+                      >
+                        {downloadingId === selected.id ? <Loader2 size={12} className={styles.spin} /> : <Download size={12} />}
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {detailStatus === 'loading' && (
+                  <div className={styles.empty}><Loader2 size={16} className={styles.spin} /> Loading report…</div>
+                )}
+                {detailStatus === 'failed' && <div className={styles.empty}>{detailError}</div>}
+
+                {detail && (
+                  <>
+                    <div className={styles['summary-cards']}>
+                      <div className={styles['summary-card']}>
+                        <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--win']}`}>
+                          <Award size={16} />
+                        </span>
+                        <div>
+                          <div className={styles['summary-card__label']}>Top Model</div>
+                          <div className={styles['summary-card__val']}>
+                            {detail.topModel || '—'}
+                            {detail.top_score != null ? ` · ${Math.round(detail.top_score * 100)}%` : ''}
+                          </div>
+                        </div>
+                      </div>
+                      <div className={styles['summary-card']}>
+                        <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--info']}`}>
+                          <ListChecks size={16} />
+                        </span>
+                        <div>
+                          <div className={styles['summary-card__label']}>Questions</div>
+                          <div className={styles['summary-card__val']}>
+                            {detail.total_questions.toLocaleString()} &middot; {detail.passed_tests} passed &middot; {detail.failed_tests} failed
+                          </div>
+                        </div>
+                      </div>
+                      <div className={styles['summary-card']}>
+                        <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--status']}`}>
+                          <Clock size={16} />
+                        </span>
+                        <div>
+                          <div className={styles['summary-card__label']}>Status</div>
+                          <div className={styles['summary-card__val']}>
+                            {detail.status}{detail.date ? ` · ${detail.date}` : ''}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {detail.summary && <div className={styles['summary-text']}>{detail.summary}</div>}
+
+                    {detail.models.length > 0 ? (
+                      <div className={styles.results}>
+                        <table className={styles['results-table']}>
+                          <thead>
+                            <tr>
+                              <th>Rank</th>
+                              <th>Model</th>
+                              <th>Score</th>
+                              <th>Passed</th>
+                              <th>Failed</th>
+                              <th>Total</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {detail.models.map((m) => (
+                              <tr key={m.model_id} className={m.rank === 1 ? styles.winner : ''}>
+                                <td className={styles['cell-rank']}>{m.rank === 1 ? '🏆 ' : ''}{m.rank}</td>
+                                <td className={styles['cell-model']}>{m.model_id}</td>
+                                <td className={styles['cell-num']}>{Math.round(m.score * 100)}%</td>
+                                <td className={styles['cell-pass']}>{m.passed}</td>
+                                <td className={styles['cell-fail']}>{m.failed}</td>
+                                <td className={`${styles['cell-num']} ${styles['cell-num--muted']}`}>{m.total}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <div className={styles['status-message']}>
+                        {detail.status === 'pending' && 'This report hasn\u2019t been generated yet.'}
+                        {detail.status === 'running' && 'This report is still being generated.'}
+                        {detail.status === 'failed' && 'Report generation failed.'}
+                      </div>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
