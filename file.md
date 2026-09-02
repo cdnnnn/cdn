@@ -1849,20 +1849,20 @@ export default function NewEvaluation() {
                                     the wrapper (and the inputs themselves) keeps clicks
                                     here from also toggling the card's selection via the
                                     outer onClick. */}
-                                {/* Per-model retry/timeout — only rendered when the user has
-                                    chosen "Individually" mode (in "Apply to all" mode, the
-                                    shared config above the grid covers every selected model,
-                                    so no per-card panel is needed at all). Rendered for every
-                                    card — not just selected ones — and hidden via visibility
-                                    (not conditional rendering) when the card isn't selected,
-                                    so every card reserves the same height up front instead of
-                                    growing/shrinking (and reflowing the whole grid row) as
-                                    cards get selected or deselected. stopPropagation on the
-                                    wrapper (and the inputs themselves) keeps clicks here from
-                                    also toggling the card's selection via the outer onClick. */}
-                                {draft.retryConfigMode === 'individual' && (
+                                {/* Per-model retry/timeout — only rendered once the card is
+                                    selected AND the user has chosen "Individually" mode (in
+                                    "Apply to all" mode, the shared config above the grid
+                                    covers every selected model, so no per-card panel is
+                                    needed at all). Unselected cards stay compact since this
+                                    only exists in the DOM for selected ones — &__grid's
+                                    align-items: start keeps the taller selected card from
+                                    stretching its unselected neighbors in the same row.
+                                    stopPropagation on the wrapper (and the inputs
+                                    themselves) keeps clicks here from also toggling the
+                                    card's selection via the outer onClick. */}
+                                {on && draft.retryConfigMode === 'individual' && (
                                   <div
-                                    className={`${styles['ev__mcard-retry']} ${!on ? styles['ev__mcard-retry--placeholder'] : ''}`}
+                                    className={styles['ev__mcard-retry']}
                                     onClick={(e) => e.stopPropagation()}
                                     onKeyDown={(e) => e.stopPropagation()}
                                   >
@@ -1878,8 +1878,6 @@ export default function NewEvaluation() {
                                             updateModelRetryConfig(m.id, 'max_retries', Number(e.target.value))
                                           }
                                           onBlur={() => clampModelRetryConfig(m.id, 'max_retries')}
-                                          disabled={!on}
-                                          tabIndex={on ? 0 : -1}
                                         />
                                       </div>
                                       <div className={styles['ev__mcard-retry-field']}>
@@ -1891,8 +1889,6 @@ export default function NewEvaluation() {
                                           value={draft.modelRetryConfig[m.id]?.timeout ?? DEFAULT_TIMEOUT}
                                           onChange={(e) => updateModelRetryConfig(m.id, 'timeout', Number(e.target.value))}
                                           onBlur={() => clampModelRetryConfig(m.id, 'timeout')}
-                                          disabled={!on}
-                                          tabIndex={on ? 0 : -1}
                                         />
                                       </div>
                                     </div>
@@ -3076,7 +3072,6 @@ export default function NewEvaluation() {
 
 
 
-
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
@@ -4123,6 +4118,11 @@ $ev-base-font: 0.8125rem;
   &__grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(258px, 1fr));
+    // Cards size to their own content instead of stretching to match the
+    // tallest card in the row — so selecting a model card (which reveals
+    // its retry/timeout panel and grows taller) doesn't also stretch its
+    // unselected neighbors in the same row to match.
+    align-items: start;
     gap: 12px;
 
     @media (min-width: 1800px) {
@@ -4365,14 +4365,6 @@ $ev-base-font: 0.8125rem;
     border-top: 1px solid $line-2;
     cursor: default;
   }
-  // Rendered on every card (not just selected ones) so each card reserves
-  // this space up front — visibility: hidden (rather than not rendering
-  // it at all) keeps the layout height identical whether or not the card
-  // is selected, so toggling selection no longer grows/shrinks the card
-  // and reflows the rest of its grid row.
-  &__mcard-retry--placeholder {
-    visibility: hidden;
-  }
   &__mcard-retry-fields {
     display: flex;
     gap: 10px;
@@ -4500,7 +4492,6 @@ $ev-base-font: 0.8125rem;
 
   &__retest-panel--verify {
     flex: 1 1 280px;
-    border-top-color: $sky-ink;
   }
 
   &__retest-panel-label {
@@ -4513,8 +4504,6 @@ $ev-base-font: 0.8125rem;
 
     svg { flex-shrink: 0; color: $signal; }
   }
-
-  &__retest-panel--verify &__retest-panel-label svg { color: $sky-ink; }
 
   &__retest-panel-hint {
     font-size: 0.8462em; // 0.6875rem / 0.8125rem
