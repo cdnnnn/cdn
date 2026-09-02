@@ -38,6 +38,7 @@ import {
   ListChecks,
   FlaskConical,
   RotateCcw,
+  Repeat2,
   type LucideIcon,
 } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
@@ -2535,8 +2536,11 @@ export default function NewEvaluation() {
                             <div className={styles['ev__msec-body']}>
                               {draft.retestOnWrong ? (
                                 <div className={styles['ev__retest-fields']}>
-                                  <div className={styles['ev__mcard-retry-field']}>
-                                    <label>Retest max rounds</label>
+                                  {/* Retest Max Rounds panel */}
+                                  <div className={styles['ev__retest-panel']}>
+                                    <span className={styles['ev__retest-panel-label']}>
+                                      <Repeat2 size={12} /> Retest Max Rounds
+                                    </span>
                                     <input
                                       type="number"
                                       min={MIN_RETEST_ROUNDS}
@@ -2545,10 +2549,16 @@ export default function NewEvaluation() {
                                       onChange={(e) => updateRetestMaxRounds(Number(e.target.value))}
                                       onBlur={clampRetestMaxRoundsOnBlur}
                                     />
+                                    <p className={styles['ev__retest-panel-hint']}>
+                                      {MIN_RETEST_ROUNDS}–{MAX_RETEST_ROUNDS} rounds allowed
+                                    </p>
                                   </div>
 
-                                  <div className={styles['ev__retest-verify']}>
-                                    <label className={styles.ev__label}>Retest verify metric</label>
+                                  {/* Retest Verify Metric panel */}
+                                  <div className={`${styles['ev__retest-panel']} ${styles['ev__retest-panel--verify']}`}>
+                                    <span className={styles['ev__retest-panel-label']}>
+                                      <Target size={12} /> Retest Verify Metric
+                                    </span>
                                     <div className={styles.ev__chips}>
                                       {metricsCatalog.map((name: string) => {
                                         const on = draft.retestVerifyMetric === name;
@@ -2574,11 +2584,8 @@ export default function NewEvaluation() {
                                         <p className={styles.ev__empty}>No metrics available to verify against.</p>
                                       )}
                                     </div>
+                                    <p className={styles['ev__retest-panel-hint']}>Pick exactly one metric to grade each retest.</p>
                                   </div>
-
-                                  <p className={styles['ev__retry-mode-note']}>
-                                    <Info size={11} /> Rounds {MIN_RETEST_ROUNDS}–{MAX_RETEST_ROUNDS}.
-                                  </p>
                                 </div>
                               ) : (
                                 <p className={styles['ev__retry-mode-note']} style={{ marginTop: 0 }}>
@@ -3030,8 +3037,6 @@ export default function NewEvaluation() {
     </div>
   );
 }
-
-
 
 
 
@@ -4420,20 +4425,69 @@ $ev-base-font: 0.8125rem;
   }
 
   // ---- Retest on Wrong body (card wrapper is &__msec; header lives there
-  // too, with the Yes/No radio row as a head-action) ----------------------
+  // too, with the Yes/No radio row as a head-action). The two controls
+  // (Rounds / Verify Metric) each get their own bordered, tinted panel so
+  // they read as clearly separate settings rather than two fields
+  // floating in the same open space. -------------------------------------
   &__retest-fields {
     display: flex;
     flex-wrap: wrap;
+    align-items: stretch;
     gap: 16px;
-
-    .ev__mcard-retry-field { flex: 0 0 150px; }
   }
 
-  &__retest-verify {
-    flex: 1 1 260px;
+  &__retest-panel {
+    flex: 0 0 200px;
     display: flex;
     flex-direction: column;
+    gap: 10px;
+    padding: 14px 16px;
+    border: 1px solid $line;
+    border-radius: 12px;
+    background: $card;
+    // Thin colored top edge distinguishes the two panels from each other
+    // at a glance (rounds vs. verify metric), on top of the shared card
+    // border/background separation.
+    border-top: 3px solid $signal;
+
+    input[type='number'] {
+      width: 100%;
+      border: 1.5px solid $line;
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-family: $mono;
+      font-size: 1.0385em; // 0.84375rem / 0.8125rem
+      font-weight: 700;
+      color: $ink;
+      background: $paper;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+
+      &:focus { outline: none; border-color: $signal; box-shadow: $ring; }
+    }
+  }
+
+  &__retest-panel--verify {
+    flex: 1 1 280px;
+    border-top-color: $sky-ink;
+  }
+
+  &__retest-panel-label {
+    display: flex;
+    align-items: center;
     gap: 6px;
+    @extend %micro;
+    font-size: 0.8462em; // 0.6875rem / 0.8125rem
+    color: $ink-2;
+
+    svg { flex-shrink: 0; color: $signal; }
+  }
+
+  &__retest-panel--verify &__retest-panel-label svg { color: $sky-ink; }
+
+  &__retest-panel-hint {
+    font-size: 0.8462em; // 0.6875rem / 0.8125rem
+    color: $ink-3;
+    line-height: 1.4;
   }
 
   // ========================================================================
@@ -4766,6 +4820,14 @@ $ev-base-font: 0.8125rem;
     display: flex;
     flex-direction: column;
     gap: 16px;
+    // Independent scrollbar for the cards column — without this, overflow
+    // bubbles up to &__stage-body and scrolls the whole step (cards +
+    // Judge Model rail) as one unit. With it, only this column scrolls;
+    // &__judge keeps its own separate internal scroll region
+    // (&__judge-scroll) and its head/footer stay pinned in place.
+    overflow-y: auto;
+    padding-right: 4px;
+    margin-right: -4px;
   }
 
   // ---- Metrics step: one card per section -----------------------------
