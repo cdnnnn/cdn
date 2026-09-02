@@ -1,4 +1,3 @@
-//History.tsx
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
@@ -140,8 +139,8 @@ export default function History() {
     const clicked = list.find((e) => e.id === id);
     // Running evaluations aren't selectable — there's nothing to show yet
     // (no results, no report), and the "Stop evaluation" button is the only
-    // interactive element on that card.
-    if (clicked && clicked.status === 'running') return;
+    // interactive element on that card. Same for a card mid-delete.
+    if (clicked && (clicked.status === 'running' || deletingId === clicked.id)) return;
     setSearchParams({ id });
     setDetailsModel(null);
     if (clicked && clicked.status === 'completed') {
@@ -149,25 +148,62 @@ export default function History() {
     }
   };
 
+  // Drives the delete animation: the row pulses (red border + sheen) while
+  // the API call is in flight, then — once it actually succeeds — collapses
+  // and fades out over ~320ms instead of disappearing the instant Redux
+  // removes it from `list`. We keep a stashed copy of the row (plus its
+  // original position) so it can keep rendering through both phases even
+  // after the real data is already gone from the store.
+  const [deleteAnim, setDeleteAnim] = useState<{ item: EvaluationListItem; index: number; exiting: boolean } | null>(null);
+  const DELETE_EXIT_MS = 320;
+
   // Confirm-and-act flow shared by the "Stop" (running cards) and "Delete"
   // (non-running cards) buttons.
   const requestConfirm = (e: React.MouseEvent, evaluation: EvaluationListItem, action: 'cancel' | 'delete') => {
     e.stopPropagation(); // don't let this bubble into selectRow
     setConfirmTarget({ evaluation, action });
   };
-  const runConfirmedAction = () => {
+  const runConfirmedAction = async () => {
     if (!confirmTarget) return;
     const { evaluation, action } = confirmTarget;
+    setConfirmTarget(null);
+
     if (action === 'cancel') {
       dispatch(cancelEvaluation(evaluation.id));
-    } else {
-      dispatch(deleteEvaluation(evaluation.id));
+      return;
+    }
+
+    const index = filtered.findIndex((e) => e.id === evaluation.id);
+    setDeleteAnim({ item: evaluation, index: index === -1 ? filtered.length : index, exiting: false });
+
+    const result = await dispatch(deleteEvaluation(evaluation.id));
+    if (deleteEvaluation.fulfilled.match(result)) {
       // If the row being deleted is currently selected/showing in the
       // detail panel, clear the selection so it doesn't linger on screen.
       if (selectedId === evaluation.id) setSearchParams({});
+      // Flip to the collapse/fade-out phase, then drop the stashed row
+      // once the CSS transition has had time to finish.
+      setDeleteAnim((prev) => (prev && prev.item.id === evaluation.id ? { ...prev, exiting: true } : prev));
+      window.setTimeout(() => {
+        setDeleteAnim((prev) => (prev && prev.item.id === evaluation.id ? null : prev));
+      }, DELETE_EXIT_MS);
+    } else {
+      // Delete failed — the row is still in the store, so just drop the
+      // stashed copy and let it re-render normally.
+      setDeleteAnim(null);
     }
-    setConfirmTarget(null);
   };
+
+  // Merges the stashed row back into the rendered list for as long as
+  // deleteAnim is active — covers both the brief window where the API call
+  // has already succeeded and Redux has removed it from `list`/`filtered`,
+  // and the exit-animation phase that follows.
+  const displayList = useMemo(() => {
+    if (!deleteAnim || filtered.some((e) => e.id === deleteAnim.item.id)) return filtered;
+    const merged = [...filtered];
+    merged.splice(Math.min(deleteAnim.index, merged.length), 0, deleteAnim.item);
+    return merged;
+  }, [filtered, deleteAnim]);
 
   // Opens the details drawer for a model in a given view — reused by both
   // the "test details" and "metric scores" icon buttons in the results table.
@@ -402,14 +438,16 @@ export default function History() {
                 </div>
               )}
 
-              {filtered.map((e) => {
+              {displayList.map((e) => {
                 const Icon = TYPE_ICON[e.eval_type] || Sparkles;
                 const isSelected = selected?.id === e.id;
                 const isRunning = e.status === 'running';
+                const isDeletingRow = deleteAnim?.item.id === e.id;
+                const isExitingRow = isDeletingRow && deleteAnim.exiting;
                 return (
                   <div
                     key={e.id}
-                    className={`${styles.row} ${isSelected ? styles.selected : ''} ${isRunning ? `${styles['row--running']} ${styles['row--unselectable']}` : ''}`}
+                    className={`${styles.row} ${isSelected ? styles.selected : ''} ${isRunning ? `${styles['row--running']} ${styles['row--unselectable']}` : ''} ${isDeletingRow && !isExitingRow ? `${styles['row--deleting']} ${styles['row--unselectable']}` : ''} ${isExitingRow ? styles['row--exiting'] : ''}`}
                     onClick={() => selectRow(e.id)}
                   >
                     <div className={styles.row__top}>
@@ -837,7 +875,18 @@ export default function History() {
 
 
 
-//History.module.scss
+
+
+
+
+
+
+
+
+
+
+
+
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
@@ -966,6 +1015,14 @@ $history-base-font: 0.8125rem;
   50% { opacity: 0.5; transform: scale(1.3); }
 }
 @keyframes history-spin { to { transform: rotate(360deg); } }
+@keyframes history-row-delete-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba($danger, 0.18); }
+  50% { box-shadow: 0 0 0 5px rgba($danger, 0.08); }
+}
+@keyframes history-row-delete-sheen {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
 
 // Fixed-shell override: list + detail scroll independently, so pg-body
 // itself must not scroll — plain flex:1/min-height:0 pass-through.
@@ -1273,7 +1330,13 @@ $history-base-font: 0.8125rem;
   padding: 14px;
   cursor: pointer;
   background: $card;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease, background 0.15s ease;
+  overflow: hidden;
+  // A concrete max-height (comfortably above real card content, ~130-160px)
+  // is required for the collapse transition in .row--exiting below to
+  // animate at all — CSS can't transition to/from `auto`.
+  max-height: 260px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease, background 0.15s ease,
+    max-height 0.32s ease, opacity 0.28s ease, padding 0.32s ease, margin 0.32s ease;
 }
 .row:hover { border-color: $ink-3; box-shadow: $soft; transform: translateY(-1px); }
 .row.selected { border-color: $signal; background: $wash; box-shadow: 0 0 0 1px $signal inset; }
@@ -1308,13 +1371,53 @@ $history-base-font: 0.8125rem;
     ) border-box;
 }
 
-// Running cards aren't clickable (nothing to show yet — no results, no
-// report) — the "Stop evaluation" button is the only interactive element,
-// so the card itself shouldn't hint at being clickable.
+// Running/deleting cards aren't clickable — the Stop/Delete confirm flow is
+// the only interactive element on them, so the card itself shouldn't hint
+// at being clickable.
 .row--unselectable {
   cursor: default;
 
   &:hover { transform: none; }
+}
+
+// Delete in flight: a red pulsing border + light sheen sweep, same pattern
+// as the running-state animation above but in the danger color, so it
+// visually reads as "something destructive is happening" rather than
+// "in progress" — while the DELETE request is out.
+.row--deleting {
+  position: relative;
+  border-color: rgba($danger, 0.35);
+  animation: history-row-delete-pulse 1.2s ease-in-out infinite;
+
+  &::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(100deg, transparent 30%, rgba($danger, 0.1) 50%, transparent 70%);
+    background-size: 200% 100%;
+    animation: history-row-delete-sheen 1.2s ease-in-out infinite;
+    pointer-events: none;
+  }
+
+  // Dim everything except the delete button itself (which shows its own
+  // spinner) so attention stays on the destructive action in progress.
+  > *:not(.row__badges) {
+    opacity: 0.55;
+    transition: opacity 0.2s ease;
+  }
+}
+
+// Delete succeeded: collapse the card away instead of having it vanish
+// the instant Redux removes it from the list — opacity + scale + the
+// max-height/padding collapse declared on .row above animate together.
+.row--exiting {
+  opacity: 0;
+  transform: scale(0.97);
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-width: 0;
+  pointer-events: none;
 }
 
 .row__stop-btn {
@@ -2054,515 +2157,3 @@ $history-base-font: 0.8125rem;
   .history__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
   .pg-body-fixed { padding: 16px 18px 22px; }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Evaluations.ts
-import api from '../axiosInstance';
-import type {
-  AgentBenchmarkRunMultiRequest,
-  AgentBenchmarkRunRequest,
-  CreateEvaluationRequest,
-  CreateEvaluationResponse,
-  DatasetPreviewResponse,
-  EvaluationsListResponse,
-  EvaluationResultsResponse,
-  EvaluationListItem,
-  ModelResult,
-  GenerateInstructionRequest,
-  GenerateInstructionResponse,
-} from '../../types';
-
-// Re-exported for convenience so existing imports of these two request
-// types from this module (e.g. in evaluationsSlice.ts) keep working —
-// the canonical definitions now live in ../../types.
-export type { AgentBenchmarkRunRequest, AgentBenchmarkRunMultiRequest };
-
-// Normalizes one list-item so array fields the UI iterates over
-// (model_ids.length, selected_metrics.map, etc.) are never null/undefined,
-// even if the backend omits them for a given row. Same normalize-at-the-
-// boundary pattern as benchmarksApi.list's `tasks`.
-function normalizeListItem(e: EvaluationListItem): EvaluationListItem {
-  return {
-    ...e,
-    model_ids: e.model_ids || [],
-    selected_metrics: e.selected_metrics || [],
-    selected_category: e.selected_category || [],
-    datasets_config: e.datasets_config || [],
-  };
-}
-
-export const evaluationsApi = {
-  // Populates the History sidebar list. Called on mount and every 10s
-  // (silent poll) — see History.tsx.
-  list: () =>
-    api.get<EvaluationsListResponse>('/evaluations').then((r) => (r.data.evaluations || []).map(normalizeListItem)),
-
-  create: (payload: CreateEvaluationRequest) =>
-    api.post<CreateEvaluationResponse>('/evaluations', payload).then((r) => r.data),
-
-  start: (evaluationId: string) =>
-    api.post<void>(`/evaluations/${evaluationId}/start`).then(() => undefined),
-
-  // Stops a running evaluation — used by the "Stop evaluation" button on a
-  // running card in History.tsx (behind a confirm dialog). The backend
-  // responds 200 with { status: 'cancelled', evaluation_id } on success.
-  cancel: (evaluationId: string) =>
-    api.post<{ status: string; evaluation_id: string }>(`/evaluations/${evaluationId}/cancel`).then((r) => r.data),
-
-  // Deletes an evaluation outright — used by the "Delete" action on a
-  // non-running card in History.tsx (behind a confirm dialog). The backend
-  // responds 200 with { status: 'deleted', evaluation_id } on success.
-  remove: (evaluationId: string) =>
-    api.delete<{ status: string; evaluation_id: string }>(`/evaluations/${evaluationId}`).then((r) => r.data),
-
-  // Only ever called when the selected evaluation's status === 'completed'.
-  // The backend returns 400 with { detail: "Execution not completed." } if
-  // called too early — callers should surface err.response.data.detail.
-  //
-  // Also normalizes at the boundary: `total_test` (singular, as sent by the
-  // API) -> `total_tests`; and `results`/`metric_scores`/`details`/
-  // `selected_metrics` default to []/{} when the backend omits them, so
-  // downstream code can rely on them always being iterable.
-  results: (evaluationId: string) =>
-    api.get<EvaluationResultsResponse>(`/evaluations/${evaluationId}/results`).then((r) => {
-      const data = r.data;
-      return {
-        ...data,
-        selected_metrics: data.selected_metrics || [],
-        results: (data.results || []).map((m) => {
-          const raw = m as unknown as ModelResult & { total_test?: number };
-          return {
-            ...raw,
-            total_tests: raw.total_tests ?? raw.total_test ?? 0,
-            metric_scores: raw.metric_scores || {},
-            details: raw.details || [],
-          };
-        }),
-      };
-    }),
-
-  // Convenience helper used by the wizard's "Start Evaluation" (step 7):
-  // create, then immediately start. Only for draft.type 'model' | 'rag'.
-  createAndStart: async (payload: CreateEvaluationRequest) => {
-    const created = await evaluationsApi.create(payload);
-    const id = created.id || created.evaluation_id;
-    if (!id) {
-      throw new Error('Evaluation was created but no id was returned by the server.');
-    }
-    await evaluationsApi.start(id);
-    return id;
-  },
-
-  // POST /agent-benchmark/run — draft.type === 'agent', no framework selected.
-  // 200 OK response means successful submission; no meaningful body is relied upon.
-  runAgentBenchmark: (payload: AgentBenchmarkRunRequest) =>
-    api.post<void>('/agent-benchmark/run', payload).then(() => undefined),
-
-  // POST /agent-benchmark/run-multi — draft.type === 'agent', framework selected.
-  // 200 OK response means successful submission; no meaningful body is relied upon.
-  runAgentBenchmarkMulti: (payload: AgentBenchmarkRunMultiRequest) =>
-    api.post<void>('/agent-benchmark/run-multi', payload).then(() => undefined),
-
-  // GET /datasets/{id}/preview?limit={limit}&offset={offset} — lives here
-  // (not in the datasets API module) since it's only ever used from the
-  // evaluation wizard's Test Suite step preview slider. Paginated, 20
-  // questions per page by default (limit=20, offset starts at 0). Total
-  // page count is derived on the caller's side from the dataset's own
-  // `question_count` (from the /datasets list), not from this response.
-  previewDataset: (datasetId: string, limit: number, offset: number) =>
-    api
-      .get<DatasetPreviewResponse>(`/datasets/${datasetId}/preview`, { params: { limit, offset } })
-      .then((r) => r.data),
-
-  // POST /evaluations/generate-instruction — Metrics step's "Generate
-  // Instruction" button. See NewEvaluation.tsx `generateInstruction` for
-  // how model_id/eval_type/questions are assembled.
-  generateInstruction: (payload: GenerateInstructionRequest) =>
-    api.post<GenerateInstructionResponse>('/evaluations/generate-instruction', payload).then((r) => r.data),
-};
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Evaluationsslice.ts
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import type { PayloadAction } from '@reduxjs/toolkit';
-import { evaluationsApi } from '../../api/endpoints/evaluations';
-import type { AgentBenchmarkRunMultiRequest, AgentBenchmarkRunRequest } from '../../api/endpoints/evaluations';
-import type {
-  CreateEvaluationRequest,
-  EvaluationDraft,
-  EvaluationListItem,
-  EvaluationResultsResponse,
-} from '../../types';
-
-type AsyncStatus = 'idle' | 'loading' | 'succeeded' | 'failed';
-
-interface EvaluationsState {
-  draft: EvaluationDraft;
-
-  // History list (GET /evaluations) — silently re-fetched every 10s from
-  // History.tsx. `listStatus` only gates the *initial* loading/error UI;
-  // components should check `list.length === 0` alongside it so a failed
-  // background poll never shows a spinner/error over existing data (spec §2.4).
-  list: EvaluationListItem[];
-  listStatus: AsyncStatus;
-  listError: string | null;
-
-  // Per-evaluation results (GET /evaluations/{id}/results), fetched lazily
-  // and only once status === 'completed' (spec §2.3).
-  resultsByEvalId: Record<string, EvaluationResultsResponse>;
-  resultsStatusByEvalId: Record<string, AsyncStatus>;
-  resultsErrorByEvalId: Record<string, string | null>;
-
-  launching: boolean;
-  launchError: string | null;
-
-  // Cancel-in-flight tracking for the "Stop evaluation" action on a running
-  // card in History.tsx (confirm dialog -> POST /evaluations/{id}/cancel).
-  cancelingId: string | null;
-  cancelError: string | null;
-
-  // Delete-in-flight tracking for the "Delete" action on a non-running card
-  // in History.tsx (confirm dialog -> DELETE /evaluations/{id}).
-  deletingId: string | null;
-  deleteError: string | null;
-}
-
-const initialDraft: EvaluationDraft = {
-  name: '',
-  type: null,
-  providers: [],
-  models: [],
-  retryConfigMode: 'individual',
-  retryConfigAll: { max_retries: 1, timeout: 60 },
-  modelRetryConfig: {},
-  dataset: null,
-  subgroup: [],
-  runSamplesMode: 'custom',
-  runSamples: 10,
-  metrics: [],
-  judgeModelId: null,
-  agentFramework: null,
-  topK: 5,
-  instruction: '',
-  retestOnWrong: false,
-  retestMaxRounds: 3,
-  retestVerifyMetric: null,
-};
-
-const initialState: EvaluationsState = {
-  draft: initialDraft,
-  list: [],
-  listStatus: 'idle',
-  listError: null,
-  resultsByEvalId: {},
-  resultsStatusByEvalId: {},
-  resultsErrorByEvalId: {},
-  launching: false,
-  launchError: null,
-  cancelingId: null,
-  cancelError: null,
-  deletingId: null,
-  deleteError: null,
-};
-
-export const fetchEvaluations = createAsyncThunk('evaluations/fetchList', () => evaluationsApi.list());
-
-export const fetchEvaluationResults = createAsyncThunk(
-  'evaluations/fetchResults',
-  async (evaluationId: string, { rejectWithValue }) => {
-    try {
-      const data = await evaluationsApi.results(evaluationId);
-      return { evaluationId, data };
-    } catch (err) {
-      const detail =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-        (err as Error)?.message ||
-        'Failed to load results';
-      return rejectWithValue({ evaluationId, message: detail });
-    }
-  }
-);
-
-// Shared across all three launch thunks below, cancelEvaluation,
-// deleteEvaluation, and fetchEvaluationResults above — the backend's error
-// body on 4xx responses is { detail: string }, so that's what should end up
-// in state, not axios's generic "Request failed with status code 400".
-function extractErrorDetail(err: unknown, fallback: string): string {
-  return (
-    (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-    (err as Error)?.message ||
-    fallback
-  );
-}
-
-// POST /evaluations then /evaluations/{id}/start — draft.type 'model' | 'rag'.
-export const launchEvaluation = createAsyncThunk(
-  'evaluations/launch',
-  async (payload: CreateEvaluationRequest, { rejectWithValue }) => {
-    try {
-      return await evaluationsApi.createAndStart(payload);
-    } catch (err) {
-      return rejectWithValue(extractErrorDetail(err, 'Failed to launch evaluation'));
-    }
-  }
-);
-
-// POST /agent-benchmark/run — draft.type 'agent', no agentFramework selected.
-export const runAgentBenchmark = createAsyncThunk(
-  'evaluations/runAgentBenchmark',
-  async (payload: AgentBenchmarkRunRequest, { rejectWithValue }) => {
-    try {
-      return await evaluationsApi.runAgentBenchmark(payload);
-    } catch (err) {
-      return rejectWithValue(extractErrorDetail(err, 'Failed to launch agent benchmark'));
-    }
-  }
-);
-
-// POST /agent-benchmark/run-multi — draft.type 'agent', agentFramework selected.
-export const runAgentBenchmarkMulti = createAsyncThunk(
-  'evaluations/runAgentBenchmarkMulti',
-  async (payload: AgentBenchmarkRunMultiRequest, { rejectWithValue }) => {
-    try {
-      return await evaluationsApi.runAgentBenchmarkMulti(payload);
-    } catch (err) {
-      return rejectWithValue(extractErrorDetail(err, 'Failed to launch agent benchmark'));
-    }
-  }
-);
-
-// POST /evaluations/{id}/cancel — "Stop evaluation" button on a running
-// card in History.tsx, behind a confirm dialog. `evaluationId` is threaded
-// through action.meta.arg (createAsyncThunk's default), so the reducers
-// below can key cancelingId/list updates off it without it being part of
-// the rejected payload.
-export const cancelEvaluation = createAsyncThunk(
-  'evaluations/cancel',
-  async (evaluationId: string, { rejectWithValue }) => {
-    try {
-      return await evaluationsApi.cancel(evaluationId);
-    } catch (err) {
-      return rejectWithValue(extractErrorDetail(err, 'Failed to stop evaluation'));
-    }
-  }
-);
-
-// DELETE /evaluations/{id} — "Delete" action on a non-running card in
-// History.tsx, behind a confirm dialog. Same evaluationId-via-meta.arg
-// pattern as cancelEvaluation above.
-export const deleteEvaluation = createAsyncThunk(
-  'evaluations/delete',
-  async (evaluationId: string, { rejectWithValue }) => {
-    try {
-      return await evaluationsApi.remove(evaluationId);
-    } catch (err) {
-      return rejectWithValue(extractErrorDetail(err, 'Failed to delete evaluation'));
-    }
-  }
-);
-
-const evaluationsSlice = createSlice({
-  name: 'evaluations',
-  initialState,
-  reducers: {
-    setDraft(state, action: PayloadAction<Partial<EvaluationDraft>>) {
-      state.draft = { ...state.draft, ...action.payload };
-    },
-    // Step 2: changing type invalidates everything chosen after it — the
-    // available providers/models/datasets/metrics all depend on type, so
-    // stale selections from a previous type must not silently carry over.
-    // Providers and models in particular are toggle-based multi-select
-    // (see NewEvaluation.tsx `toggle`), so without this reset, switching
-    // from e.g. Model -> Agent -> Model again and picking a *different*
-    // model each time would leave BOTH models checked (the old selection
-    // was never cleared, only added to) — that's the bug this fixes.
-    setDraftType(state, action: PayloadAction<EvaluationDraft['type']>) {
-      state.draft.type = action.payload;
-      state.draft.providers = [];
-      state.draft.models = [];
-      state.draft.retryConfigMode = 'individual';
-      state.draft.retryConfigAll = { max_retries: 1, timeout: 60 };
-      state.draft.modelRetryConfig = {};
-      state.draft.dataset = null;
-      state.draft.subgroup = [];
-      state.draft.metrics = [];
-      state.draft.judgeModelId = null;
-      state.draft.runSamplesMode = 'custom';
-      state.draft.runSamples = 10;
-      state.draft.topK = 5;
-      state.draft.instruction = '';
-      state.draft.retestOnWrong = false;
-      state.draft.retestMaxRounds = 3;
-      state.draft.retestVerifyMetric = null;
-      if (action.payload !== 'agent') {
-        state.draft.agentFramework = null;
-      }
-    },
-    resetDraft(state) {
-      state.draft = initialDraft;
-    },
-    // Local-only removal, kept as a manual escape hatch for edge cases (e.g.
-    // clearing a stale row the backend won't return anymore). The primary
-    // delete path is now the deleteEvaluation thunk below, which calls
-    // DELETE /evaluations/{id} and removes the row on success — this
-    // reducer does not call the API and does not persist.
-    removeEvaluationLocal(state, action: PayloadAction<string>) {
-      state.list = state.list.filter((e) => e.id !== action.payload);
-    },
-  },
-  extraReducers: (builder) => {
-    builder
-      .addCase(fetchEvaluations.pending, (state) => {
-        if (state.list.length === 0) state.listStatus = 'loading';
-      })
-      .addCase(fetchEvaluations.fulfilled, (state, action) => {
-        state.listStatus = 'succeeded';
-        state.listError = null;
-        state.list = action.payload;
-      })
-      .addCase(fetchEvaluations.rejected, (state, action) => {
-        // Background polls fail silently (spec §2.4) — only surface the
-        // error state when we have nothing on screen yet.
-        if (state.list.length === 0) {
-          state.listStatus = 'failed';
-          state.listError = action.error.message || 'Failed to load evaluations';
-        }
-      })
-      .addCase(fetchEvaluationResults.pending, (state, action) => {
-        state.resultsStatusByEvalId[action.meta.arg] = 'loading';
-        state.resultsErrorByEvalId[action.meta.arg] = null;
-      })
-      .addCase(fetchEvaluationResults.fulfilled, (state, action) => {
-        const { evaluationId, data } = action.payload;
-        state.resultsStatusByEvalId[evaluationId] = 'succeeded';
-        state.resultsByEvalId[evaluationId] = data;
-      })
-      .addCase(fetchEvaluationResults.rejected, (state, action) => {
-        const payload = action.payload as { evaluationId: string; message: string } | undefined;
-        const id = payload?.evaluationId ?? action.meta.arg;
-        state.resultsStatusByEvalId[id] = 'failed';
-        state.resultsErrorByEvalId[id] = payload?.message || 'Failed to load results';
-      })
-
-      // ---- launch: three thunks (Model/RAG, Agent-benchmark, Agent-multi) ---
-      // all share the same launching/launchError flags and all clear the
-      // draft on success, exactly like the original launchEvaluation did.
-      .addCase(launchEvaluation.pending, (state) => {
-        state.launching = true;
-        state.launchError = null;
-      })
-      .addCase(launchEvaluation.fulfilled, (state) => {
-        state.launching = false;
-        state.draft = initialDraft;
-      })
-      .addCase(launchEvaluation.rejected, (state, action) => {
-        state.launching = false;
-        state.launchError = (action.payload as string) || action.error.message || 'Failed to launch evaluation';
-      })
-
-      .addCase(runAgentBenchmark.pending, (state) => {
-        state.launching = true;
-        state.launchError = null;
-      })
-      .addCase(runAgentBenchmark.fulfilled, (state) => {
-        state.launching = false;
-        state.draft = initialDraft;
-      })
-      .addCase(runAgentBenchmark.rejected, (state, action) => {
-        state.launching = false;
-        state.launchError = (action.payload as string) || action.error.message || 'Failed to launch agent benchmark';
-      })
-
-      .addCase(runAgentBenchmarkMulti.pending, (state) => {
-        state.launching = true;
-        state.launchError = null;
-      })
-      .addCase(runAgentBenchmarkMulti.fulfilled, (state) => {
-        state.launching = false;
-        state.draft = initialDraft;
-      })
-      .addCase(runAgentBenchmarkMulti.rejected, (state, action) => {
-        state.launching = false;
-        state.launchError = (action.payload as string) || action.error.message || 'Failed to launch agent benchmark';
-      })
-
-      // ---- cancel (stop a running evaluation) --------------------------------
-      .addCase(cancelEvaluation.pending, (state, action) => {
-        state.cancelingId = action.meta.arg;
-        state.cancelError = null;
-      })
-      .addCase(cancelEvaluation.fulfilled, (state, action) => {
-        state.cancelingId = null;
-        // Optimistically flip the row to 'canceled' right away rather than
-        // waiting for the next 10s background poll to pick it up.
-        const item = state.list.find((e) => e.id === action.payload.evaluation_id);
-        if (item) item.status = 'canceled';
-      })
-      .addCase(cancelEvaluation.rejected, (state, action) => {
-        state.cancelingId = null;
-        state.cancelError = (action.payload as string) || action.error.message || 'Failed to stop evaluation';
-      })
-
-      // ---- delete ------------------------------------------------------------
-      .addCase(deleteEvaluation.pending, (state, action) => {
-        state.deletingId = action.meta.arg;
-        state.deleteError = null;
-      })
-      .addCase(deleteEvaluation.fulfilled, (state, action) => {
-        state.deletingId = null;
-        state.list = state.list.filter((e) => e.id !== action.payload.evaluation_id);
-      })
-      .addCase(deleteEvaluation.rejected, (state, action) => {
-        state.deletingId = null;
-        state.deleteError = (action.payload as string) || action.error.message || 'Failed to delete evaluation';
-      });
-  },
-});
-
-export const { setDraft, setDraftType, resetDraft, removeEvaluationLocal } = evaluationsSlice.actions;
-export default evaluationsSlice.reducer;
