@@ -898,10 +898,10 @@ $history-base-font: 0.8125rem;
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 12px;
+  padding: 12px;
   background: $card;
   border: 1px solid $line-2;
-  border-radius: 999px;
+  border-radius: 8px;
 }
 .config-panel__model-name {
   font-family: $font-display;
