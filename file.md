@@ -41,9 +41,6 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
-// Used only inside `launch()` to read the store's *current* state at
-// submit time — see the comment above `launch` for why this matters.
-import { useStore } from 'react-redux';
 import { fetchProviders } from '../../store/slices/providersSlice';
 import { fetchModels, checkModelHealth } from '../../store/slices/modelsSlice';
 import { fetchDatasets, uploadDataset, resetUploadStatus } from '../../store/slices/datasetsSlice';
@@ -343,9 +340,6 @@ class StepErrorBoundary extends Component<StepErrorBoundaryProps, StepErrorBound
 
 export default function NewEvaluation() {
   const dispatch = useAppDispatch();
-  // Only used inside `launch()` — see the comment there. Everywhere else
-  // in this component, `draft` from useAppSelector below is what to use.
-  const store = useStore();
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
   // Bumped by StepErrorBoundary's "Try again" button to force a fresh
@@ -1068,20 +1062,6 @@ export default function NewEvaluation() {
 
   // ---- (3) & (4) launch: three different endpoints depending on type ------
   const launch = async () => {
-    // Read the *current* store state rather than relying on the `draft`
-    // this render closed over. If the user is still typing in a number
-    // field (Max Retries/Timeout, Run Samples, Retest Max Rounds, etc.)
-    // and clicks Launch without clicking elsewhere first, the browser
-    // fires that field's blur (committing/clamping its value via
-    // dispatch) immediately before this button's click handler runs —
-    // but React may not have re-rendered in between, so the `draft` from
-    // useAppSelector above can still be one update behind at the moment
-    // this function body starts executing. store.getState() always
-    // reflects the latest dispatched value synchronously, so shadowing
-    // `draft` with it here guarantees the payload below is built from
-    // whatever is actually on screen, not a stale snapshot.
-    const draft: EvaluationDraft = store.getState().evaluations.draft;
-
     const dataset = datasets.find((d) => d?.id === draft.dataset);
     const judgeModelObj = draft.judgeModelId ? models.find((m) => m?.id === draft.judgeModelId) : undefined;
     // Change: "Full" mode means "use the whole dataset" — for the agent
