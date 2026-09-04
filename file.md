@@ -273,7 +273,10 @@ export default function History() {
 
   // ---- drawer width, drag-to-resize from the left edge -------------------
   const DRAWER_MIN_WIDTH = 380;
-  const DRAWER_MAX_WIDTH = 900;
+  // Matches the CSS max-width below (calc(100vw - 256px)) — 256px is the
+  // app's global sidebar width, so the drawer can never be dragged wide
+  // enough to sit underneath/behind it.
+  const getDrawerMaxWidth = () => window.innerWidth - 256;
   const [drawerWidth, setDrawerWidth] = useState(480);
   const [isResizingDrawer, setIsResizingDrawer] = useState(false);
   const resizeStartRef = useRef<{ x: number; width: number } | null>(null);
@@ -291,7 +294,7 @@ export default function History() {
       // Drawer is anchored to the right edge and the handle sits on its
       // left edge, so dragging left (clientX decreasing) should widen it.
       const delta = resizeStartRef.current.x - e.clientX;
-      const next = Math.min(DRAWER_MAX_WIDTH, Math.max(DRAWER_MIN_WIDTH, resizeStartRef.current.width + delta));
+      const next = Math.min(getDrawerMaxWidth(), Math.max(DRAWER_MIN_WIDTH, resizeStartRef.current.width + delta));
       setDrawerWidth(next);
     };
     const onUp = () => setIsResizingDrawer(false);
@@ -1121,19 +1124,6 @@ export default function History() {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -2150,7 +2140,7 @@ $history-base-font: 0.8125rem;
   right: 0;
   height: 100%;
   width: 480px;
-  max-width: 92vw;
+  max-width: calc(100vw - 256px);
   background: $card;
   border-left: 1px solid $line;
   box-shadow: -18px 0 40px -20px rgba(20, 22, 27, 0.35);
