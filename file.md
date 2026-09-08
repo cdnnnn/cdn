@@ -1,5 +1,4 @@
 //Datasets.tsx
-//Datasets.tsx
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import {
   RefreshCw, Search, Layers, AlertTriangle, Database, ListFilter, X,
@@ -477,8 +476,16 @@ function DetailView({ dataset: d, tagFilter, toggleTag, onDeleteClick, onPreview
             <h2>{d.name || 'Untitled dataset'}</h2>
           </div>
           <div className={styles['datasets__hero-actions']}>
-            <span className={styles['datasets__source-badge']}>{datasetType}</span>
-            {d.eval_type && <span className={styles['datasets__eval-badge']}>{d.eval_type}</span>}
+            <span className={styles['datasets__hero-badge-group']}>
+              <span className={styles['datasets__hero-badge-label']}>Dataset Type</span>
+              <span className={styles['datasets__source-badge']}>{datasetType}</span>
+            </span>
+            {d.eval_type && (
+              <span className={styles['datasets__hero-badge-group']}>
+                <span className={styles['datasets__hero-badge-label']}>Eval Type</span>
+                <span className={styles['datasets__eval-badge']}>{d.eval_type}</span>
+              </span>
+            )}
             {!previewUnavailable && (
               <button
                 type="button"
@@ -957,7 +964,9 @@ function PreviewDrawer({ dataset, preview, onClose, onChangeOffset, onChangeLimi
 
 
 
-//Datasets.module.scss
+
+
+
 //Datasets.module.scss
 @use 'sass:color';
 @use '../../styles/_variables' as *;
@@ -1573,8 +1582,26 @@ $datasets-base-font: 0.8125rem;
   &__hero-actions {
     flex-shrink: 0;
     display: inline-flex;
-    align-items: center;
-    gap: 8px;
+    align-items: flex-end;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  &__hero-badge-group {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  &__hero-badge-label {
+    font-family: $mono;
+    font-size: 0.6154em; // 0.5rem / 0.8125rem
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: $ink-3;
+    padding-left: 2px;
   }
 
   &__preview-btn {
