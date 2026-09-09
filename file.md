@@ -1,3 +1,517 @@
+//Mockdata.ts
+import type { Ticket, TicketUser } from '../types/tickets';
+
+// ─────────────────────────────────────────────────────────────────────────
+// Static seed data. Swap `api/tickets.ts` and `api/users.ts` back to real
+// axios calls once the backend exists — nothing outside this file and those
+// two need to change; the slice, components, and types are unaffected.
+// ─────────────────────────────────────────────────────────────────────────
+
+export const TEAM: TicketUser[] = [
+  { id: 'u1', name: 'Ava Patel' },
+  { id: 'u2', name: 'Marcus Lee' },
+  { id: 'u3', name: 'Sofia Nguyen' },
+  { id: 'u4', name: 'Jordan Reyes' },
+];
+
+/** The signed-in user for this static build. Swap for your real auth source
+ *  once it exists — see the note in `store/slices/authSlice.ts`. */
+export const CURRENT_USER: TicketUser = TEAM[0];
+
+let seq = 5;
+export const nextId = () => `t${seq++}`;
+export const nextKey = () => `REQ-${seq}`;
+
+export const SEED_TICKETS: Ticket[] = [
+  {
+    id: 't1',
+    key: 'REQ-1',
+    title: 'Add dark-mode toggle to the settings page',
+    description: 'Persist the choice per-user and respect prefers-color-scheme on first load.',
+    status: 'todo',
+    resolution: null,
+    priority: 'medium',
+    owner: TEAM[0],
+    assignee: TEAM[1],
+    labels: ['frontend', 'design-system'],
+    created_at: '2026-08-20T09:00:00Z',
+    updated_at: '2026-08-20T09:00:00Z',
+  },
+  {
+    id: 't2',
+    key: 'REQ-2',
+    title: 'Custom model discovery times out on slow endpoints',
+    description: 'Bump the discover request timeout and surface a retry affordance.',
+    status: 'in_progress',
+    resolution: null,
+    priority: 'high',
+    owner: TEAM[1],
+    assignee: TEAM[0],
+    labels: ['bug', 'models'],
+    created_at: '2026-08-18T14:20:00Z',
+    updated_at: '2026-09-01T11:00:00Z',
+  },
+  {
+    id: 't3',
+    key: 'REQ-3',
+    title: 'Export provider usage as CSV',
+    status: 'in_review',
+    resolution: null,
+    priority: 'low',
+    owner: TEAM[2],
+    assignee: TEAM[2],
+    labels: ['reporting'],
+    created_at: '2026-08-10T08:00:00Z',
+    updated_at: '2026-09-05T16:40:00Z',
+  },
+  {
+    id: 't4',
+    key: 'REQ-4',
+    title: 'Investigate flaky toast dismissal on Safari',
+    description: 'Toasts occasionally fail to auto-dismiss after ~4s on Safari 17.',
+    status: 'done',
+    resolution: 'completed',
+    priority: 'medium',
+    owner: TEAM[0],
+    assignee: TEAM[3],
+    labels: ['bug'],
+    created_at: '2026-07-30T10:00:00Z',
+    updated_at: '2026-08-02T09:15:00Z',
+  },
+  {
+    id: 't5',
+    key: 'REQ-5',
+    title: 'Explore moving verify-params to a background job',
+    status: 'done',
+    resolution: 'discarded',
+    priority: 'low',
+    owner: TEAM[3],
+    assignee: null,
+    labels: ['backend', 'exploration'],
+    created_at: '2026-07-15T12:00:00Z',
+    updated_at: '2026-07-22T17:30:00Z',
+  },
+];
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Ticketsapi.mock.ts
+import type {
+  Ticket,
+  CreateTicketRequest,
+  UpdateTicketRequest,
+  MoveTicketRequest,
+} from '../types/tickets';
+import { SEED_TICKETS, TEAM, CURRENT_USER, nextId, nextKey } from './mockData';
+
+// ─────────────────────────────────────────────────────────────────────────
+// Static, no-backend implementation of the tickets API. Same method names
+// and signatures as the real `ticketsApi` (api/endpoints/tickets.ts) so the
+// slice doesn't need to change — once the backend exists, delete this file,
+// restore the axios-based `ticketsApi`, and repoint the slice's import.
+//
+// Simulates network latency (250ms) so loading/spinner states are visible,
+// and enforces the owner-only "move to done" rule the same way the real
+// backend should — reject with an Error, not a silent no-op, so the slice's
+// rollback + toast path is exercised too.
+// ─────────────────────────────────────────────────────────────────────────
+
+const DELAY = 250;
+const wait = <T,>(value: T, delay = DELAY) =>
+  new Promise<T>((resolve) => window.setTimeout(() => resolve(value), delay));
+
+let db: Ticket[] = SEED_TICKETS.map((t) => ({ ...t }));
+
+const findOrThrow = (id: string) => {
+  const t = db.find((x) => x.id === id);
+  if (!t) throw new Error('Ticket not found');
+  return t;
+};
+
+export interface DeleteTicketResponse {
+  status: string;
+  id: string;
+}
+
+export const ticketsApi = {
+  list: () => wait(db.map((t) => ({ ...t }))),
+
+  create: (payload: CreateTicketRequest) => {
+    const now = new Date().toISOString();
+    const ticket: Ticket = {
+      id: nextId(),
+      key: nextKey(),
+      title: payload.title,
+      description: payload.description,
+      status: 'todo',
+      resolution: null,
+      priority: payload.priority,
+      owner: CURRENT_USER, // the creator is always the requester/owner
+      assignee: TEAM.find((m) => m.id === payload.assignee_id) ?? null,
+      labels: payload.labels ?? [],
+      created_at: now,
+      updated_at: now,
+    };
+    db = [ticket, ...db];
+    return wait({ ...ticket });
+  },
+
+  update: ({ id, ...rest }: UpdateTicketRequest) => {
+    const t = findOrThrow(id);
+    if (rest.title !== undefined) t.title = rest.title;
+    if (rest.description !== undefined) t.description = rest.description;
+    if (rest.priority !== undefined) t.priority = rest.priority;
+    if (rest.labels !== undefined) t.labels = rest.labels;
+    if (rest.assignee_id !== undefined) {
+      t.assignee = TEAM.find((m) => m.id === rest.assignee_id) ?? null;
+    }
+    t.updated_at = new Date().toISOString();
+    return wait({ ...t });
+  },
+
+  // Mirrors the server-side check the real endpoint MUST also perform:
+  // only the ticket's owner may transition it into `done`.
+  move: ({ id, status, resolution }: MoveTicketRequest) => {
+    const t = findOrThrow(id);
+    if (status === 'done' && t.owner.id !== CURRENT_USER.id) {
+      return wait(undefined, 200).then(() => {
+        throw new Error('Only the requester can close this ticket.');
+      });
+    }
+    t.status = status;
+    t.resolution = status === 'done' ? resolution ?? 'completed' : null;
+    t.updated_at = new Date().toISOString();
+    return wait({ ...t });
+  },
+
+  remove: (id: string) => {
+    findOrThrow(id);
+    db = db.filter((t) => t.id !== id);
+    return wait<DeleteTicketResponse>({ status: 'ok', id });
+  },
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Ticketsslice.ts
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+// STATIC BUILD: pointed at the in-memory mock API (no backend yet). Swap this
+// one import for '../../api/endpoints/tickets' once the real endpoints exist
+// — nothing else in this file needs to change.
+import { ticketsApi } from '../../mock/ticketsApi.mock';
+import type {
+  Ticket,
+  TicketStatus,
+  TicketResolution,
+  CreateTicketRequest,
+  UpdateTicketRequest,
+} from '../../types/tickets';
+
+type FetchStatus = 'idle' | 'loading' | 'succeeded' | 'failed';
+
+interface MoveArg {
+  id: string;
+  status: TicketStatus;
+  resolution?: TicketResolution | null;
+}
+
+interface TicketsState {
+  items: Ticket[];
+  status: FetchStatus;
+  error: string | null;
+  creating: boolean;
+  updatingId: string | null;
+  deletingId: string | null;
+  // Ids currently mid-move: optimistically applied in `pending`, confirmed in
+  // `fulfilled`, rolled back in `rejected`.
+  movingIds: string[];
+  // Snapshot of {status, resolution} captured at move-start, keyed by id, so a
+  // failed transition can be reverted to exactly where the card came from.
+  rollback: Record<string, { status: TicketStatus; resolution?: TicketResolution | null }>;
+}
+
+const initialState: TicketsState = {
+  items: [],
+  status: 'idle',
+  error: null,
+  creating: false,
+  updatingId: null,
+  deletingId: null,
+  movingIds: [],
+  rollback: {},
+};
+
+export const fetchTickets = createAsyncThunk('tickets/fetchAll', () => ticketsApi.list());
+
+export const createTicket = createAsyncThunk(
+  'tickets/create',
+  (payload: CreateTicketRequest) => ticketsApi.create(payload)
+);
+
+export const updateTicket = createAsyncThunk(
+  'tickets/update',
+  (payload: UpdateTicketRequest) => ticketsApi.update(payload)
+);
+
+// The board moves the card the instant you drop it (see `pending` below) and
+// only reconciles with the server response afterward, so drag-and-drop feels
+// immediate. A rejection snaps it back.
+export const moveTicket = createAsyncThunk(
+  'tickets/move',
+  (payload: MoveArg) => ticketsApi.move(payload)
+);
+
+export const deleteTicket = createAsyncThunk(
+  'tickets/delete',
+  async (id: string) => {
+    const res = await ticketsApi.remove(id);
+    return { id: res.id || id };
+  }
+);
+
+const upsert = (list: Ticket[], t: Ticket) => {
+  const i = list.findIndex((x) => x.id === t.id);
+  if (i === -1) return [t, ...list];
+  const next = list.slice();
+  next[i] = t;
+  return next;
+};
+
+const ticketsSlice = createSlice({
+  name: 'tickets',
+  initialState,
+  reducers: {},
+  extraReducers: (builder) => {
+    builder
+      // ---- fetch ----------------------------------------------------------
+      .addCase(fetchTickets.pending, (state) => {
+        state.status = 'loading';
+      })
+      .addCase(fetchTickets.fulfilled, (state, action) => {
+        state.status = 'succeeded';
+        state.items = action.payload ?? [];
+      })
+      .addCase(fetchTickets.rejected, (state, action) => {
+        state.status = 'failed';
+        state.error = action.error.message || 'Failed to load tickets';
+      })
+
+      // ---- create ---------------------------------------------------------
+      .addCase(createTicket.pending, (state) => {
+        state.creating = true;
+      })
+      .addCase(createTicket.fulfilled, (state, action) => {
+        state.creating = false;
+        state.items = upsert(state.items, action.payload);
+      })
+      .addCase(createTicket.rejected, (state, action) => {
+        state.creating = false;
+        state.error = action.error.message || 'Failed to create ticket';
+      })
+
+      // ---- update (metadata) ---------------------------------------------
+      .addCase(updateTicket.pending, (state, action) => {
+        state.updatingId = action.meta.arg.id;
+      })
+      .addCase(updateTicket.fulfilled, (state, action) => {
+        state.updatingId = null;
+        state.items = upsert(state.items, action.payload);
+      })
+      .addCase(updateTicket.rejected, (state, action) => {
+        state.updatingId = null;
+        state.error = action.error.message || 'Failed to update ticket';
+      })
+
+      // ---- move (optimistic) ---------------------------------------------
+      .addCase(moveTicket.pending, (state, action) => {
+        const { id, status, resolution } = action.meta.arg;
+        const t = state.items.find((x) => x.id === id);
+        if (!t) return;
+        state.rollback[id] = { status: t.status, resolution: t.resolution ?? null };
+        t.status = status;
+        t.resolution = status === 'done' ? resolution ?? 'completed' : null;
+        if (!state.movingIds.includes(id)) state.movingIds.push(id);
+      })
+      .addCase(moveTicket.fulfilled, (state, action) => {
+        const { id } = action.meta.arg;
+        state.movingIds = state.movingIds.filter((x) => x !== id);
+        delete state.rollback[id];
+        state.items = upsert(state.items, action.payload); // trust the server copy
+      })
+      .addCase(moveTicket.rejected, (state, action) => {
+        const { id } = action.meta.arg;
+        state.movingIds = state.movingIds.filter((x) => x !== id);
+        const snap = state.rollback[id];
+        const t = state.items.find((x) => x.id === id);
+        if (t && snap) {
+          t.status = snap.status;
+          t.resolution = snap.resolution ?? null;
+        }
+        delete state.rollback[id];
+        state.error = action.error.message || 'Failed to move ticket';
+      })
+
+      // ---- delete ---------------------------------------------------------
+      .addCase(deleteTicket.pending, (state, action) => {
+        state.deletingId = action.meta.arg;
+      })
+      .addCase(deleteTicket.fulfilled, (state, action) => {
+        state.deletingId = null;
+        state.items = state.items.filter((m) => m.id !== action.payload.id);
+      })
+      .addCase(deleteTicket.rejected, (state, action) => {
+        state.deletingId = null;
+        state.error = action.error.message || 'Failed to delete ticket';
+      });
+  },
+});
+
+export default ticketsSlice.reducer;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Usersslice.ts
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import type { TicketUser } from '../../types/tickets';
+import { TEAM } from '../../mock/mockData';
+
+// ─────────────────────────────────────────────────────────────────────────
+// STATIC BUILD: returns the mock roster instead of hitting `/users`. Swap
+// the thunk body for a real `api.get('/users')` call once the backend
+// exists — the slice shape (state.users.items / .status) doesn't change,
+// so nothing consuming this slice needs to change either.
+//
+// If the app already has a real users/team slice, delete this file and
+// point TicketBoard.tsx's `fetchTeamMembers` import and `state.users`
+// selector at that one instead.
+// ─────────────────────────────────────────────────────────────────────────
+
+type FetchStatus = 'idle' | 'loading' | 'succeeded' | 'failed';
+
+interface UsersState {
+  items: TicketUser[];
+  status: FetchStatus;
+}
+
+const initialState: UsersState = {
+  items: [],
+  status: 'idle',
+};
+
+export const fetchTeamMembers = createAsyncThunk('users/fetchAll', () =>
+  new Promise<TicketUser[]>((resolve) => window.setTimeout(() => resolve(TEAM), 150))
+);
+
+const usersSlice = createSlice({
+  name: 'users',
+  initialState,
+  reducers: {},
+  extraReducers: (builder) => {
+    builder
+      .addCase(fetchTeamMembers.pending, (state) => {
+        state.status = 'loading';
+      })
+      .addCase(fetchTeamMembers.fulfilled, (state, action) => {
+        state.status = 'succeeded';
+        state.items = action.payload ?? [];
+      })
+      .addCase(fetchTeamMembers.rejected, (state) => {
+        state.status = 'failed';
+      });
+  },
+});
+
+export default usersSlice.reducer;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 //Ticketboard.tsx
 import { useEffect, useMemo, useState } from 'react';
 import { Plus, Search, Lock, Loader2 } from 'lucide-react';
@@ -10,6 +524,7 @@ import {
   deleteTicket,
 } from '../../store/slices/ticketsSlice';
 import { fetchTeamMembers } from '../../store/slices/usersSlice';
+import { CURRENT_USER } from '../../mock/mockData';
 import type { Ticket, TicketStatus, TicketResolution, TicketPriority } from '../../types/tickets';
 import { useToast } from '../common/Toast';
 import { COLUMNS, PRIORITY_META, canTransition, OWNER_ONLY_HINT } from './ticketMeta';
@@ -19,16 +534,15 @@ import TicketDetailSidebar from './TicketDetailSidebar';
 import styles from './TicketBoard.module.scss';
 
 // ─────────────────────────────────────────────────────────────────────────
-// Self-contained: no props. Pulls the signed-in user from the auth slice
-// (drives the owner-only "move to Done" gate) and the assignee roster from
-// a `users` slice, the same way it already owns its own ticket-fetching.
+// Self-contained: no props. Fetches its own tickets and its own assignee
+// roster, same as before.
 //
-// ASSUMPTION — adjust to match your real store shape if it differs:
-//   • state.auth.currentUser : TicketUser   (id, name)
-//   • state.users.items      : TicketUser[]
-//   • fetchTeamMembers()     : async thunk that populates state.users.items
-// If auth instead lives in a context/provider, swap the `useAppSelector`
-// below for that context's hook — everything else is unaffected.
+// STATIC BUILD (no backend/auth yet): `currentUser` comes straight from the
+// mock seed data (`CURRENT_USER`) instead of an auth slice, so the owner-only
+// gate below is exercised against a real, stable identity. Once real auth
+// exists, replace the `const currentUser = CURRENT_USER;` line with your
+// actual selector/hook (e.g. `useAppSelector((s) => s.auth.currentUser)`)
+// — nothing else in this component needs to change.
 // ─────────────────────────────────────────────────────────────────────────
 
 export default function TicketBoard() {
@@ -37,7 +551,7 @@ export default function TicketBoard() {
   const { items, status, creating, updatingId, movingIds, deletingId } = useAppSelector(
     (s) => s.tickets
   );
-  const currentUser = useAppSelector((s) => s.auth.currentUser);
+  const currentUser = CURRENT_USER;
   const members = useAppSelector((s) => s.users.items);
   const membersStatus = useAppSelector((s) => s.users.status);
 
@@ -147,19 +661,6 @@ export default function TicketBoard() {
       })
       .catch((e) => toast.error(typeof e === 'string' ? e : 'Could not delete ticket'));
   };
-
-  // currentUser drives the owner-only "move to Done" gate everywhere below,
-  // so don't render the board until auth has resolved.
-  if (!currentUser) {
-    return (
-      <div className={styles['ticket-board']}>
-        <div className={styles['ticket-board__loading']}>
-          <Loader2 size={20} className={styles['ticket-board__spin']} />
-          <span>Loading…</span>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className={styles['ticket-board']}>
@@ -347,53 +848,60 @@ export default function TicketBoard() {
 
 
 
-//Usersslice.ts
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import api from '../../api/axiosInstance';
-import type { TicketUser } from '../../types/tickets';
 
+
+
+
+
+
+
+
+
+//Tickets.ts
 // ─────────────────────────────────────────────────────────────────────────
-// Minimal roster slice so TicketBoard can be fully self-contained (no props).
-// If the app already has a users/team/members slice, delete this file and
-// point the two `fetchTeamMembers` / `state.users` references in
-// TicketBoard.tsx at the existing one instead — this is a stand-in, not a
-// second source of truth.
+// The real, backend-backed implementation. NOT currently wired up — the
+// slice imports `mock/ticketsApi.mock.ts` instead until the backend exists.
+// Kept here so reconnecting later is a one-line import swap in
+// `store/slices/ticketsSlice.ts` (see README "Reconnecting the real backend").
 // ─────────────────────────────────────────────────────────────────────────
+import api from '../axiosInstance';
+import type {
+  Ticket,
+  CreateTicketRequest,
+  UpdateTicketRequest,
+  MoveTicketRequest,
+} from '../../types/tickets';
 
-type FetchStatus = 'idle' | 'loading' | 'succeeded' | 'failed';
-
-interface UsersState {
-  items: TicketUser[];
-  status: FetchStatus;
+export interface DeleteTicketResponse {
+  status: string;
+  id: string;
 }
 
-const initialState: UsersState = {
-  items: [],
-  status: 'idle',
+// Grouped the same way as modelsApi: one exported object, each method a thin
+// wrapper that unwraps the axios response to just the payload the callers care
+// about.
+export const ticketsApi = {
+  // GET /tickets — every ticket for the board
+  list: () =>
+    api.get<{ tickets: Ticket[] }>('/tickets').then((r) => r.data.tickets ?? []),
+
+  // POST /tickets — returns the created ticket (with server key + timestamps)
+  create: (payload: CreateTicketRequest) =>
+    api.post<Ticket>('/tickets', payload).then((r) => r.data),
+
+  // PATCH /tickets/:id — edit metadata (title/description/priority/labels/assignee)
+  update: ({ id, ...rest }: UpdateTicketRequest) =>
+    api.patch<Ticket>(`/tickets/${id}`, rest).then((r) => r.data),
+
+  // PATCH /tickets/:id/status — dedicated transition endpoint. The backend MUST
+  // re-check that the caller owns the ticket when `status === 'done'`; the UI
+  // gate is a convenience, not a security boundary.
+  move: ({ id, status, resolution }: MoveTicketRequest) =>
+    api
+      .patch<Ticket>(`/tickets/${id}/status`, { status, resolution })
+      .then((r) => r.data),
+
+  // DELETE /tickets/:id
+  remove: (id: string) =>
+    api.delete<DeleteTicketResponse>(`/tickets/${id}`).then((r) => r.data),
 };
-
-// GET /users — id + name for every assignable teammate
-export const fetchTeamMembers = createAsyncThunk('users/fetchAll', () =>
-  api.get<{ users: TicketUser[] }>('/users').then((r) => r.data.users ?? [])
-);
-
-const usersSlice = createSlice({
-  name: 'users',
-  initialState,
-  reducers: {},
-  extraReducers: (builder) => {
-    builder
-      .addCase(fetchTeamMembers.pending, (state) => {
-        state.status = 'loading';
-      })
-      .addCase(fetchTeamMembers.fulfilled, (state, action) => {
-        state.status = 'succeeded';
-        state.items = action.payload ?? [];
-      })
-      .addCase(fetchTeamMembers.rejected, (state) => {
-        state.status = 'failed';
-      });
-  },
-});
-
-export default usersSlice.reducer;
