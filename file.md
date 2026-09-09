@@ -1,4 +1,3 @@
-//Newevaluation.tsx
 import { Component, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -370,6 +369,8 @@ export default function NewEvaluation() {
   // per searchable step: Providers, Models, Test Suite, Metrics. ----------
   const [providerSearch, setProviderSearch] = useState('');
   const [modelSearch, setModelSearch] = useState('');
+  const [judgeSearch, setJudgeSearch] = useState('');
+  const [judgeInfoOpen, setJudgeInfoOpen] = useState(false);
   const [datasetSearch, setDatasetSearch] = useState('');
   const [metricSearch, setMetricSearch] = useState('');
 
@@ -1030,16 +1031,45 @@ export default function NewEvaluation() {
 
   const isModelSelectable = (modelId: string) => healthById?.[modelId] === 'success';
 
-  // Judge model options — reuse the exact same "available" definition as
-  // Step 3 (health check passed), scoped to the same provider selection,
-  // instead of filtering by is_active. Previously this used
-  // `models.filter(is_active)`, which could surface models that never
-  // passed (or never ran) a health check, or exclude ones that did but
-  // happen to have is_active === false.
-  const judgeCandidateModels = useMemo(
-    () => availableModels.filter((m) => isModelSelectable(m.id)),
-    [availableModels, healthById]
+  // Judge model options — every model that's actually usable (health check
+  // passed), regardless of whether its provider was selected in Step 2 or
+  // the model itself was picked in Step 3 for evaluation. Judge model
+  // selection is independent of both — previously this was scoped to
+  // availableModels (draft.providers-filtered), which meant a perfectly
+  // usable model could be missing from the Judge Model list just because
+  // its provider wasn't chosen for the eval models themselves.
+  const judgeCandidateModels = useMemo(() => models.filter((m) => isModelSelectable(m?.id)), [models, healthById]);
+
+  const filteredJudgeModels = useMemo(
+    () => judgeCandidateModels.filter((m) => (m?.name ?? '').toLowerCase().includes(judgeSearch.trim().toLowerCase())),
+    [judgeCandidateModels, judgeSearch]
   );
+
+  // Closes the Judge Model info popover on any click outside it (the
+  // toggle button itself is excluded so clicking it again still just
+  // toggles, rather than closing-then-immediately-reopening).
+  const judgeInfoRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!judgeInfoOpen) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (judgeInfoRef.current && !judgeInfoRef.current.contains(e.target as Node)) {
+        setJudgeInfoOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [judgeInfoOpen]);
+
+  // Auto-scrolls down to the launch error message on the Review & Launch
+  // step whenever a launch attempt fails — the error renders at the very
+  // bottom of that step's content, below the whole review summary, so
+  // without this the person has to notice it needs scrolling themselves.
+  const launchErrorRef = useRef<HTMLParagraphElement | null>(null);
+  useEffect(() => {
+    if (launchError && step === totalSteps - 1) {
+      launchErrorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
+  }, [launchError, step, totalSteps]);
 
   useEffect(() => {
     if (draft.judgeModelId && !judgeCandidateModels.some((m) => m.id === draft.judgeModelId)) {
@@ -1734,7 +1764,7 @@ export default function NewEvaluation() {
                   {/* STEP 3 — MODELS */}
                   {step === 3 &&
                     (availableModels.length > 0 ? (
-                      <div className={styles.ev__scroll}>
+                      <div className={styles['ev__models-panel']}>
                         <div className={styles['ev__step-toolbar']}>
                           <div className={styles['ev__toolbar-search']}>
                             <Search size={14} />
@@ -1834,6 +1864,7 @@ export default function NewEvaluation() {
                             )}
                           </div>
                         )}
+                        <div className={styles['ev__models-scroll']}>
                         {modelsLoading ? (
                           <div className={`${styles.ev__grid} ${styles['ev__grid--wide']}`} aria-busy="true" aria-label="Refreshing models">
                             {Array.from({ length: SKELETON_CARD_COUNT }).map((_, i) => (
@@ -2039,6 +2070,7 @@ export default function NewEvaluation() {
                           )}
                         </div>
                         )}
+                        </div>
                       </div>
                     ) : (
                       <p className={styles.ev__empty}>Select providers first to see their available models.</p>
@@ -2753,25 +2785,47 @@ export default function NewEvaluation() {
                           section itself is shown. */}
                       <aside className={styles.ev__judge}>
                         <div className={styles['ev__judge-head']}>
-                          <p className={styles['ev__judge-title']}>
-                            <Gavel size={13} /> Judge model
-                          </p>
+                          <div className={styles['ev__judge-head-row']} ref={judgeInfoRef}>
+                            <p className={styles['ev__judge-title']}>
+                              <Gavel size={13} /> Judge model
+                            </p>
+                            <button
+                              type="button"
+                              className={`${styles['ev__judge-info-btn']} ${judgeInfoOpen ? styles['ev__judge-info-btn--on'] : ''}`}
+                              onClick={() => setJudgeInfoOpen((v) => !v)}
+                              title="What does the judge model do?"
+                              aria-expanded={judgeInfoOpen}
+                            >
+                              <Info size={13} />
+                            </button>
+
+                            {judgeInfoOpen && (
+                              <div className={styles['ev__judge-info-popover']} role="tooltip">
+                                The judge model only actually grades metrics that need one (e.g. LLM-graded metrics)
+                                — for everything else it's simply ignored, but a selection is still required to
+                                launch.
+                              </div>
+                            )}
+                          </div>
                           <p className={styles['ev__judge-sub']}>Required to launch, for every evaluation type.</p>
                         </div>
 
-                        <div className={styles['ev__judge-info']}>
-                          <Info size={13} />
-                          <span>
-                            The judge model only actually grades metrics that need one (e.g. LLM-graded metrics) — for
-                            everything else it's simply ignored, but a selection is still required to launch.
-                          </span>
+                        <div className={styles['ev__judge-search']}>
+                          <Search size={13} />
+                          <input
+                            placeholder="Search models…"
+                            value={judgeSearch}
+                            onChange={(e) => setJudgeSearch(e.target.value)}
+                          />
                         </div>
 
                         <div className={styles['ev__judge-scroll']}>
                           {judgeCandidateModels.length === 0 ? (
                             <div className={styles['ev__judge-empty']}>No available models yet.</div>
+                          ) : filteredJudgeModels.length === 0 ? (
+                            <div className={styles['ev__judge-empty']}>No models match "{judgeSearch}".</div>
                           ) : (
-                            judgeCandidateModels.map((m) => {
+                            filteredJudgeModels.map((m) => {
                                 const on = draft.judgeModelId === m.id;
                                 return (
                                   <button
@@ -2948,7 +3002,11 @@ export default function NewEvaluation() {
                         </div>
                       </div>
 
-                      {launchError && <p className={styles.ev__error}>{launchError}</p>}
+                      {launchError && (
+                        <p className={styles.ev__error} ref={launchErrorRef}>
+                          {launchError}
+                        </p>
+                      )}
                     </>
                   )}
                 </div>
@@ -3309,919 +3367,2903 @@ export default function NewEvaluation() {
 
 
 
-
-
-
-
-
-
-
-
-//Evaluationsslice.ts
-//Evaluationsslice.ts
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import type { PayloadAction } from '@reduxjs/toolkit';
-import { evaluationsApi } from '../../api/endpoints/evaluations';
-import type { AgentBenchmarkRunMultiRequest, AgentBenchmarkRunRequest } from '../../api/endpoints/evaluations';
-import type {
-  CreateEvaluationRequest,
-  EvaluationDraft,
-  EvaluationListItem,
-  EvaluationResultsResponse,
-} from '../../types';
-
-type AsyncStatus = 'idle' | 'loading' | 'succeeded' | 'failed';
-
-interface EvaluationsState {
-  draft: EvaluationDraft;
-
-  // History list (GET /evaluations) — silently re-fetched every 10s from
-  // History.tsx. `listStatus` only gates the *initial* loading/error UI;
-  // components should check `list.length === 0` alongside it so a failed
-  // background poll never shows a spinner/error over existing data (spec §2.4).
-  list: EvaluationListItem[];
-  listStatus: AsyncStatus;
-  listError: string | null;
-
-  // Per-evaluation results (GET /evaluations/{id}/results), fetched lazily
-  // and only once status === 'completed' (spec §2.3).
-  resultsByEvalId: Record<string, EvaluationResultsResponse>;
-  resultsStatusByEvalId: Record<string, AsyncStatus>;
-  resultsErrorByEvalId: Record<string, string | null>;
-
-  launching: boolean;
-  launchError: string | null;
-}
-
-const initialDraft: EvaluationDraft = {
-  name: '',
-  type: null,
-  providers: [],
-  models: [],
-  retryConfigMode: 'individual',
-  retryConfigAll: { max_retries: 1, timeout: 60 },
-  modelRetryConfig: {},
-  dataset: null,
-  subgroup: [],
-  runSamplesMode: 'custom',
-  runSamples: 10,
-  metrics: [],
-  judgeModelId: null,
-  agentFramework: null,
-  topK: 5,
-  instruction: '',
-  retestOnWrong: false,
-  retestMaxRounds: 3,
-  retestVerifyMetric: null,
-};
-
-const initialState: EvaluationsState = {
-  draft: initialDraft,
-  list: [],
-  listStatus: 'idle',
-  listError: null,
-  resultsByEvalId: {},
-  resultsStatusByEvalId: {},
-  resultsErrorByEvalId: {},
-  launching: false,
-  launchError: null,
-};
-
-export const fetchEvaluations = createAsyncThunk('evaluations/fetchList', () => evaluationsApi.list());
-
-export const fetchEvaluationResults = createAsyncThunk(
-  'evaluations/fetchResults',
-  async (evaluationId: string, { rejectWithValue }) => {
-    try {
-      const data = await evaluationsApi.results(evaluationId);
-      return { evaluationId, data };
-    } catch (err) {
-      const detail =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-        (err as Error)?.message ||
-        'Failed to load results';
-      return rejectWithValue({ evaluationId, message: detail });
-    }
-  }
-);
-
-// Shared across all three launch thunks below (and fetchEvaluationResults
-// above) — the backend's error body on 4xx responses is { detail: string },
-// so that's what should end up in state.launchError, not axios's generic
-// "Request failed with status code 400".
-function extractErrorDetail(err: unknown, fallback: string): string {
-  return (
-    (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-    (err as Error)?.message ||
-    fallback
-  );
-}
-
-// POST /evaluations then /evaluations/{id}/start — draft.type 'model' | 'rag'.
-export const launchEvaluation = createAsyncThunk(
-  'evaluations/launch',
-  async (payload: CreateEvaluationRequest, { rejectWithValue }) => {
-    try {
-      return await evaluationsApi.createAndStart(payload);
-    } catch (err) {
-      return rejectWithValue(extractErrorDetail(err, 'Failed to launch evaluation'));
-    }
-  }
-);
-
-// POST /agent-benchmark/run — draft.type 'agent', no agentFramework selected.
-export const runAgentBenchmark = createAsyncThunk(
-  'evaluations/runAgentBenchmark',
-  async (payload: AgentBenchmarkRunRequest, { rejectWithValue }) => {
-    try {
-      return await evaluationsApi.runAgentBenchmark(payload);
-    } catch (err) {
-      return rejectWithValue(extractErrorDetail(err, 'Failed to launch agent benchmark'));
-    }
-  }
-);
-
-// POST /agent-benchmark/run-multi — draft.type 'agent', agentFramework selected.
-export const runAgentBenchmarkMulti = createAsyncThunk(
-  'evaluations/runAgentBenchmarkMulti',
-  async (payload: AgentBenchmarkRunMultiRequest, { rejectWithValue }) => {
-    try {
-      return await evaluationsApi.runAgentBenchmarkMulti(payload);
-    } catch (err) {
-      return rejectWithValue(extractErrorDetail(err, 'Failed to launch agent benchmark'));
-    }
-  }
-);
-
-const evaluationsSlice = createSlice({
-  name: 'evaluations',
-  initialState,
-  reducers: {
-    setDraft(state, action: PayloadAction<Partial<EvaluationDraft>>) {
-      state.draft = { ...state.draft, ...action.payload };
-    },
-    // Step 2: changing type invalidates everything chosen after it — the
-    // available providers/models/datasets/metrics all depend on type, so
-    // stale selections from a previous type must not silently carry over.
-    // Providers and models in particular are toggle-based multi-select
-    // (see NewEvaluation.tsx `toggle`), so without this reset, switching
-    // from e.g. Model -> Agent -> Model again and picking a *different*
-    // model each time would leave BOTH models checked (the old selection
-    // was never cleared, only added to) — that's the bug this fixes.
-    setDraftType(state, action: PayloadAction<EvaluationDraft['type']>) {
-      state.draft.type = action.payload;
-      state.draft.providers = [];
-      state.draft.models = [];
-      state.draft.retryConfigMode = 'individual';
-      state.draft.retryConfigAll = { max_retries: 1, timeout: 60 };
-      state.draft.modelRetryConfig = {};
-      state.draft.dataset = null;
-      state.draft.subgroup = [];
-      state.draft.metrics = [];
-      state.draft.judgeModelId = null;
-      state.draft.runSamplesMode = 'custom';
-      state.draft.runSamples = 10;
-      state.draft.topK = 5;
-      state.draft.instruction = '';
-      state.draft.retestOnWrong = false;
-      state.draft.retestMaxRounds = 3;
-      state.draft.retestVerifyMetric = null;
-      if (action.payload !== 'agent') {
-        state.draft.agentFramework = null;
-      }
-    },
-    resetDraft(state) {
-      state.draft = initialDraft;
-    },
-    // Local-only removal — no DELETE /evaluations/{id} endpoint exists yet
-    // (spec §4.6). Does not persist; a background poll will bring it back
-    // if the backend still has it.
-    removeEvaluationLocal(state, action: PayloadAction<string>) {
-      state.list = state.list.filter((e) => e.id !== action.payload);
-    },
-    // Plain synchronous setters for the launching/launchError flags —
-    // used by NewEvaluation.tsx's multimodal pre-flight check (POST
-    // /models/check-multimodal), which runs *before* any of the three
-    // launch thunks below and needs to drive the same loading/error UI
-    // without going through a thunk itself.
-    setLaunching(state, action: PayloadAction<boolean>) {
-      state.launching = action.payload;
-    },
-    setLaunchError(state, action: PayloadAction<string | null>) {
-      state.launchError = action.payload;
-    },
-  },
-  extraReducers: (builder) => {
-    builder
-      .addCase(fetchEvaluations.pending, (state) => {
-        if (state.list.length === 0) state.listStatus = 'loading';
-      })
-      .addCase(fetchEvaluations.fulfilled, (state, action) => {
-        state.listStatus = 'succeeded';
-        state.listError = null;
-        state.list = action.payload;
-      })
-      .addCase(fetchEvaluations.rejected, (state, action) => {
-        // Background polls fail silently (spec §2.4) — only surface the
-        // error state when we have nothing on screen yet.
-        if (state.list.length === 0) {
-          state.listStatus = 'failed';
-          state.listError = action.error.message || 'Failed to load evaluations';
-        }
-      })
-      .addCase(fetchEvaluationResults.pending, (state, action) => {
-        state.resultsStatusByEvalId[action.meta.arg] = 'loading';
-        state.resultsErrorByEvalId[action.meta.arg] = null;
-      })
-      .addCase(fetchEvaluationResults.fulfilled, (state, action) => {
-        const { evaluationId, data } = action.payload;
-        state.resultsStatusByEvalId[evaluationId] = 'succeeded';
-        state.resultsByEvalId[evaluationId] = data;
-      })
-      .addCase(fetchEvaluationResults.rejected, (state, action) => {
-        const payload = action.payload as { evaluationId: string; message: string } | undefined;
-        const id = payload?.evaluationId ?? action.meta.arg;
-        state.resultsStatusByEvalId[id] = 'failed';
-        state.resultsErrorByEvalId[id] = payload?.message || 'Failed to load results';
-      })
-
-      // ---- launch: three thunks (Model/RAG, Agent-benchmark, Agent-multi) ---
-      // all share the same launching/launchError flags and all clear the
-      // draft on success, exactly like the original launchEvaluation did.
-      .addCase(launchEvaluation.pending, (state) => {
-        state.launching = true;
-        state.launchError = null;
-      })
-      .addCase(launchEvaluation.fulfilled, (state) => {
-        state.launching = false;
-        state.draft = initialDraft;
-      })
-      .addCase(launchEvaluation.rejected, (state, action) => {
-        state.launching = false;
-        state.launchError = (action.payload as string) || action.error.message || 'Failed to launch evaluation';
-      })
-
-      .addCase(runAgentBenchmark.pending, (state) => {
-        state.launching = true;
-        state.launchError = null;
-      })
-      .addCase(runAgentBenchmark.fulfilled, (state) => {
-        state.launching = false;
-        state.draft = initialDraft;
-      })
-      .addCase(runAgentBenchmark.rejected, (state, action) => {
-        state.launching = false;
-        state.launchError = (action.payload as string) || action.error.message || 'Failed to launch agent benchmark';
-      })
-
-      .addCase(runAgentBenchmarkMulti.pending, (state) => {
-        state.launching = true;
-        state.launchError = null;
-      })
-      .addCase(runAgentBenchmarkMulti.fulfilled, (state) => {
-        state.launching = false;
-        state.draft = initialDraft;
-      })
-      .addCase(runAgentBenchmarkMulti.rejected, (state, action) => {
-        state.launching = false;
-        state.launchError = (action.payload as string) || action.error.message || 'Failed to launch agent benchmark';
-      });
-  },
-});
-
-export const { setDraft, setDraftType, resetDraft, removeEvaluationLocal, setLaunching, setLaunchError } =
-  evaluationsSlice.actions;
-export default evaluationsSlice.reducer;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Evaluations.ts
-//Evaluations.ts
-import api from '../axiosInstance';
-import type {
-  AgentBenchmarkRunMultiRequest,
-  AgentBenchmarkRunRequest,
-  CreateEvaluationRequest,
-  CreateEvaluationResponse,
-  DatasetPreviewResponse,
-  EvaluationsListResponse,
-  EvaluationResultsResponse,
-  EvaluationListItem,
-  ModelResult,
-  GenerateInstructionRequest,
-  GenerateInstructionResponse,
-  MetricsResponse,
-} from '../../types';
-
-// Re-exported for convenience so existing imports of these two request
-// types from this module (e.g. in evaluationsSlice.ts) keep working —
-// the canonical definitions now live in ../../types.
-export type { AgentBenchmarkRunRequest, AgentBenchmarkRunMultiRequest };
-
-// Normalizes one list-item so array fields the UI iterates over
-// (model_ids.length, selected_metrics.map, etc.) are never null/undefined,
-// even if the backend omits them for a given row. Same normalize-at-the-
-// boundary pattern as benchmarksApi.list's `tasks`.
-function normalizeListItem(e: EvaluationListItem): EvaluationListItem {
-  return {
-    ...e,
-    model_ids: e.model_ids || [],
-    selected_metrics: e.selected_metrics || [],
-    selected_category: e.selected_category || [],
-    datasets_config: e.datasets_config || [],
-  };
-}
-
-export const evaluationsApi = {
-  // Populates the History sidebar list. Called on mount and every 10s
-  // (silent poll) — see History.tsx.
-  list: () =>
-    api.get<EvaluationsListResponse>('/evaluations').then((r) => (r.data.evaluations || []).map(normalizeListItem)),
-
-  create: (payload: CreateEvaluationRequest) =>
-    api.post<CreateEvaluationResponse>('/evaluations', payload).then((r) => r.data),
-
-  start: (evaluationId: string) =>
-    api.post<void>(`/evaluations/${evaluationId}/start`).then(() => undefined),
-
-  // Only ever called when the selected evaluation's status === 'completed'.
-  // The backend returns 400 with { detail: "Execution not completed." } if
-  // called too early — callers should surface err.response.data.detail.
-  //
-  // Also normalizes at the boundary: `total_test` (singular, as sent by the
-  // API) -> `total_tests`; and `results`/`metric_scores`/`details`/
-  // `selected_metrics` default to []/{} when the backend omits them, so
-  // downstream code can rely on them always being iterable.
-  results: (evaluationId: string) =>
-    api.get<EvaluationResultsResponse>(`/evaluations/${evaluationId}/results`).then((r) => {
-      const data = r.data;
-      return {
-        ...data,
-        selected_metrics: data.selected_metrics || [],
-        results: (data.results || []).map((m) => {
-          const raw = m as unknown as ModelResult & { total_test?: number };
-          return {
-            ...raw,
-            total_tests: raw.total_tests ?? raw.total_test ?? 0,
-            metric_scores: raw.metric_scores || {},
-            details: raw.details || [],
-          };
-        }),
-      };
-    }),
-
-  // Convenience helper used by the wizard's "Start Evaluation" (step 7):
-  // create, then immediately start. Only for draft.type 'model' | 'rag'.
-  createAndStart: async (payload: CreateEvaluationRequest) => {
-    const created = await evaluationsApi.create(payload);
-    const id = created.id || created.evaluation_id;
-    if (!id) {
-      throw new Error('Evaluation was created but no id was returned by the server.');
-    }
-    await evaluationsApi.start(id);
-    return id;
-  },
-
-  // POST /agent-benchmark/run — draft.type === 'agent', no framework selected.
-  // 200 OK response means successful submission; no meaningful body is relied upon.
-  runAgentBenchmark: (payload: AgentBenchmarkRunRequest) =>
-    api.post<void>('/agent-benchmark/run', payload).then(() => undefined),
-
-  // POST /agent-benchmark/run-multi — draft.type === 'agent', framework selected.
-  // 200 OK response means successful submission; no meaningful body is relied upon.
-  runAgentBenchmarkMulti: (payload: AgentBenchmarkRunMultiRequest) =>
-    api.post<void>('/agent-benchmark/run-multi', payload).then(() => undefined),
-
-  // GET /datasets/{id}/preview?limit={limit}&offset={offset} — lives here
-  // (not in the datasets API module) since it's only ever used from the
-  // evaluation wizard's Test Suite step preview slider. Paginated, 20
-  // questions per page by default (limit=20, offset starts at 0). Total
-  // page count is derived on the caller's side from the dataset's own
-  // `question_count` (from the /datasets list), not from this response.
-  previewDataset: (datasetId: string, limit: number, offset: number) =>
-    api
-      .get<DatasetPreviewResponse>(`/datasets/${datasetId}/preview`, { params: { limit, offset } })
-      .then((r) => r.data),
-
-  // POST /evaluations/generate-instruction — Metrics step's "Generate
-  // Instruction" button. See NewEvaluation.tsx `generateInstruction` for
-  // how model_id/eval_type/questions are assembled.
-  generateInstruction: (payload: GenerateInstructionRequest) =>
-    api.post<GenerateInstructionResponse>('/evaluations/generate-instruction', payload).then((r) => r.data),
-
-  // POST /datasets/image — resolves a MinIO object key (as seen in a
-  // preview question's input.images[]) to the actual image bytes. Response
-  // is a raw blob, so this is fetched with responseType 'blob' and turned
-  // into an object URL for the <img> tag; the caller (the image lightbox
-  // in NewEvaluation.tsx) revokes it on close/navigate.
-  getImageBlobUrl: async (imagePath: string): Promise<string> => {
-    const { data } = await api.post('/datasets/image', { path: imagePath }, { responseType: 'blob' });
-    return URL.createObjectURL(data as Blob);
-  },
-
-  // GET /code-execution-metrics — used instead of GET /metrics?eval_type=
-  // {type} on the Metrics step, but ONLY when eval_type is 'model' and the
-  // selected Test Suite dataset's `name` is one of the two code-execution
-  // built-ins ('new_live' / 'new_mdeval') — see NewEvaluation.tsx's
-  // metrics-fetch effect for that gating. Same response shape as GET
-  // /metrics?eval_type={type} (MetricsResponse).
-  getCodeExecutionMetrics: () =>
-    api.get<MetricsResponse>('/code-execution-metrics').then((r) => r.data),
-
-  // POST /models/check-multimodal — pre-flight check run by NewEvaluation.
-  // tsx's `launch` before creating/starting ANY evaluation (Model, Agent,
-  // or RAG) whose dataset has has_images: true (GET /datasets?eval_type=
-  // {type}). model_ids is every selected model plus the judge model. A
-  // non-2xx response (thrown by axios) means at least one model can't
-  // handle image input — the caller catches that and skips the create/run
-  // call entirely rather than calling this for its response body, since
-  // only the status code carries meaning here.
-  checkMultimodal: (modelIds: string[]) =>
-    api.post<void>('/models/check-multimodal', { model_ids: modelIds }).then(() => undefined),
-};
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//index.ts
-// ---------- Auth ----------
-export interface SsoLoginRequest {
-  token: string;
-  data: string;
-}
-export interface SsoLoginResult {
-  token: string;
-  username: string;
-  email: string;
-  language: string;
-  profile_name: string;
-}
-export interface SsoLoginResponse {
-  status: string;
-  message: string;
-  result: SsoLoginResult;
-}
-
-// ---------- Providers ----------
-export interface Provider {
-  id: string;
-  name: string;
-  description: string;
-  logo_url: string | null;
-  base_url: string | null;
-  url_template: string | null;
-  model_count: number;
-  status: 'connected' | 'not_connected' | string;
-}
-export interface ConnectProviderRequest {
-  api_key: string;
-}
-export interface ConnectProviderResponse {
-  status: 'connected';
-  provider_id: string;
-  models_synced: number;
-}
-export interface DisconnectProviderResponse {
-  status: 'disconnected';
-  provider_id: string;
-}
-
-// ---------- Models ----------
-export interface Model {
-  id: string;
-  name: string;
-  provider_id: string;
-  category: string;
-  capabilities: string[];
-  context_window: number;
-  input_price: number | null;
-  output_price: number | null;
-  accuracy_score: number | null;
-  agent_score: number | null;
-  is_active: boolean;
-  base_url: string | null;
-}
-export interface CustomModelRequest {
-  base_url: string;
-  category: string;
-  api_key: string;
-  model_id: string;
-  name: string;
-  context_window: number;
-  description: string;
-}
-
-// ---------- Benchmarks ----------
-export interface BenchmarkTask {
-  name: string;
-  value: string;
-}
-export interface Benchmark {
-  name: string;
-  description: string;
-  // ⚠️ Not always present on the real API response — normalized to [] at the
-  // fetch boundary (benchmarksApi.list), so consumers can trust these are
-  // always arrays. See spec §5 "Known data-contract gap".
-  tasks: BenchmarkTask[];
-  task_count: number;
-  required_capabilities: string[];
-  huggingface_dataset: string;
-  type: string;
-}
-export interface BenchmarksResponse {
-  benchmarks: Benchmark[];
-  total: number;
-}
-
-// ---------- Datasets (Test Suite step) ----------
-// `dataset_type` distinguishes the built-in DeepEval suites from datasets a
-// user uploaded themselves. Both are shown in the Test Suite grid; only
-// 'custom' gets the "Custom" tag, and both are filterable via the
-// All / Custom / Deepeval chip group in the step header (spec: Test Suite
-// Change-1).
-export type DatasetType = 'custom' | 'deepeval' | string;
-
-export interface Dataset {
-  id: string;
-  name: string;
-  description?: string;
-  category: string;
-  eval_type: string;
-  dataset_type: DatasetType;
-  question_count: number;
-  dataset_categories: string[];
-  // When true, this dataset's questions include images (MinIO object keys
-  // under input.images[] — see DatasetPreviewQuestion below). Selecting
-  // such a dataset triggers a POST /models/check-multimodal pre-flight
-  // check (every selected model + the judge model) before the evaluation
-  // is created — see NewEvaluation.tsx `launch`. Optional/absent on
-  // datasets that predate this field, treated the same as false.
-  has_images?: boolean;
-}
-export interface DatasetsResponse {
-  datasets: Dataset[];
-}
-
-// GET /datasets/{id}/preview?limit={limit}&offset={offset} — paginated,
-// 20 per page by default. Powers the right-to-left preview slider on each
-// dataset card.
+@use '../../styles/_variables' as *;
+
+// ===========================================================================
+// SemcoEval — Run Console
+// A precision "instrument panel" for assembling and launching an evaluation.
+// Signature: a live Run Manifest (mono spec sheet) threaded by a signal rail.
+// Header matches the History/Reports/Comparison/Sidebar design standard.
 //
-// Two response shapes are both observed in practice for `input`/`expected`
-// (and whether `choices`/`metadata`/`subgroup` are present at all depends
-// on the dataset), so every field below is optional except `id` — the UI
-// renders whichever subset actually shows up rather than assuming one
-// fixed shape:
-//   Shape A (e.g. multiple-choice): input.prompt, expected.answer, choices
-//   Shape B (e.g. RAG/retrieval):   input.question/source/type,
-//                                   expected.answer/doc_id/section_id,
-//                                   metadata, subgroup
-//   Shape C (e.g. vision/multimodal): input.prompt, input.images (MinIO
-//                                   object keys — see evaluationsApi.
-//                                   getImageBlobUrl and NewEvaluation.tsx's
-//                                   image lightbox), input.language
-export interface DatasetPreviewQuestion {
-  id: string;
-  input?: {
-    prompt?: string;
-    question?: string;
-    source?: string;
-    type?: string;
-    // MinIO object keys (e.g. "datasets/ds-001/images/image1.jpg"), not
-    // usable directly as <img src> — resolve each one to a blob URL via
-    // evaluationsApi.getImageBlobUrl (POST /datasets/image) first.
-    images?: string[];
-    language?: string;
-    [key: string]: unknown;
-  };
-  expected?: {
-    answer?: string;
-    doc_id?: string;
-    section_id?: number;
-    [key: string]: unknown;
-  };
-  metadata?: Record<string, unknown>;
-  category?: string;
-  subgroup?: string;
-  choices?: string[];
-  // Seen alongside the Shape C vision payload — a free-text tag, not to be
-  // confused with input.type.
-  question_type?: string;
-}
-export interface DatasetPreviewResponse {
-  dataset_id: string;
-  questions: DatasetPreviewQuestion[];
+// All color tokens ($ink, $paper, $signal, $ok, $danger, $violet-ink,
+// $ink-solid, etc.) come from the shared "ink" design system in
+// ../../styles/_variables.scss (imported above) — this file no longer
+// redeclares them locally. Neutrals resolve to theme CSS vars (see
+// _theme.scss) for dark-mode support; $ink-solid/$ink-solid-hover are a
+// FIXED near-black used only for "always dark" chips/buttons (option
+// icons, the Continue button, the launch toast) — using themed $ink
+// there would turn them near-white (and invisible) in dark mode. See the
+// note above those two tokens in _theme.scss for why they're still CSS
+// vars despite not actually varying by theme.
+// ===========================================================================
+
+$mono:    $font-mono;
+$sans:    $font-body;
+$display: $font-display;
+
+$soft:  0 1px 2px rgba(20, 22, 27, 0.05);
+$lift:  0 14px 30px -14px rgba(20, 22, 27, 0.22);
+$ring:  0 0 0 3px rgba(43, 43, 245, 0.16);
+
+// Base font-size every `em` font-size below is expressed relative to — same
+// convention as Model Catalog / Sidebar. Bumping this (e.g. on wide
+// screens, see the `@media (min-width: 1800px)` rules below) scales every
+// descendant font-size proportionally from one place. This value has four
+// independent application points since the component renders four separate
+// DOM subtrees (.ev__header, .page → .ev, .ev-toast, .ev-preview-overlay)
+// rather than one single wrapper — each sets `font-size: $ev-base-font;`
+// itself so inheritance covers everything nested inside it.
+$ev-base-font: 0.8125rem;
+
+%micro {
+  font-family: $mono;
+  font-size: 0.8462em; // 0.6875rem / 0.8125rem
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
 }
 
-// ---------- Metrics ----------
-// GET /metrics?eval_type={type}
-export interface CustomMetric {
-  id: string;
-  name: string;
-  metrics_type: string;
-  // When true, this specific custom metric needs a judge model to grade
-  // it — surfaced as a small indicator on its chip. Doesn't gate whether
-  // the Judge Model picker itself shows (that's now always shown/mandatory
-  // regardless of metric selection — see NewEvaluation.tsx).
-  required_judge: boolean;
-  eval_types: string[];
-  description: string;
-}
-export interface MetricsResponse {
-  eval_type: string;
-  all_metrics: string[];
-  custom: CustomMetric[];
+// ===========================================================================
+// Header — matches History / Reports / Comparison / Sidebar header pattern
+// ===========================================================================
+.ev__header {
+  // master scale control for this subtree — see $ev-base-font above
+  font-size: $ev-base-font;
+
+  @media (min-width: 1800px) {
+    font-size: 1rem;
+  }
+
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 24px 32px 20px;
+  border-bottom: 1px solid $line;
+  background: $card;
+
+  h1 {
+    font-family: $display;
+    font-size: 1.8462em; // 1.5rem / 0.8125rem
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: $ink;
+    line-height: 1.2;
+  }
 }
 
-// ---------- Evaluations: create/start ----------
-// Per-model retry/timeout config, set in the Models step. max_retries: 1–8.
-// timeout: 60–600 (seconds). Also reused verbatim inside judge_config below.
-export interface ModelRetryConfig {
-  max_retries: number;
-  timeout: number;
-}
-export interface JudgeConfig extends ModelRetryConfig {
-  model_id: string;
-  base_url: string;
-  // NOTE: populated with the judge model's own id, not a real credential —
-  // the Judge API Key field was removed from the UI entirely (spec §1.4).
-  api_key: string;
-}
-export interface CreateEvaluationRequest {
-  name: string;
-  description?: string;
-  eval_type: 'model' | 'agent' | 'rag' | string;
-  dataset_id: string;
-  benchmark?: string;
-  model_ids: string[];
-  // The Models step lets the user apply retry/timeout either the same way
-  // to every selected model, or individually per model — exactly one of
-  // these two shapes is sent, never both:
-  //   "Apply to all" -> top-level max_retries/timeout, no model_retry_config
-  //   "Individually"  -> model_retry_config (one entry per id in model_ids),
-  //                       no top-level max_retries/timeout
-  max_retries?: number;
-  timeout?: number;
-  model_retry_config?: Record<string, ModelRetryConfig>;
-  metrics_config?: Record<string, unknown>;
-  selected_metrics: string[];
-  // The subset of selected_metrics that are custom metrics (their `id`s,
-  // as opposed to the plain name strings used for built-in metrics) —
-  // selected_metrics itself still contains both mixed together (see
-  // NewEvaluation.tsx draft.metrics), this is purely additive so the
-  // backend can tell which entries are custom. Omitted when no custom
-  // metric is selected.
-  selected_metric_ids?: string[];
-  dataset_limit?: number;
-  // null when the wizard's Run Samples is set to "Full" — the backend
-  // treats a null run_samples as "use the whole dataset" for this endpoint
-  // (POST /evaluations), distinct from the agent-benchmark endpoints below
-  // which use 0 for the same "full" concept.
-  run_samples: number | null;
-  selected_category?: string[];
-  judge_config?: JudgeConfig;
-  // RAG-only — how many retrieved documents/chunks to consider per query.
-  // Test Suite step shows this input only when draft.type === 'rag'
-  // (default 5, 1–50); omitted entirely for Model/Agent.
-  top_k?: number;
-  // Free-text evaluation instruction — optional. Either typed by the user
-  // directly or pre-filled via POST /evaluations/generate-instruction and
-  // then edited. See GenerateInstructionRequest/Response below.
-  instruction?: string;
-  // Model and RAG — Metrics step's "Retest on Wrong" control. Always sent
-  // for eval_type 'model'/'rag'; retest_max_rounds/retest_verify_metric
-  // are only included when retest_on_wrong is true.
-  retest_on_wrong?: boolean;
-  retest_max_rounds?: number;
-  retest_verify_metric?: string;
-}
-export interface CreateEvaluationResponse {
-  id?: string;
-  evaluation_id?: string;
-  [key: string]: unknown;
+.ev__header-eyebrow {
+  @extend %micro;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: $signal;
+  margin-bottom: 6px;
+
+  &::before {
+    content: '';
+    width: 16px;
+    height: 2px;
+    border-radius: 2px;
+    background: $signal;
+  }
 }
 
-// POST /evaluations/generate-instruction — Metrics step's "Generate
-// Instruction" button. `questions` is built from a 5-question dataset
-// preview (see NewEvaluation.tsx `generateInstruction`), reusing the same
-// `input`/`expected` shapes as DatasetPreviewQuestion.
-export interface GenerateInstructionQuestion {
-  input?: DatasetPreviewQuestion['input'];
-  expected?: DatasetPreviewQuestion['expected'];
-}
-export interface GenerateInstructionRequest {
-  model_id: string;
-  eval_type: string;
-  questions: GenerateInstructionQuestion[];
-}
-export interface GenerateInstructionResponse {
-  instruction: string;
+.ev__header-sub {
+  margin-top: 4px;
+  font-size: 1.0385em; color: $ink-2; } // 0.84375rem / 0.8125rem
+
+.ev__header-meta {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 3px;
 }
 
-// ---------- Evaluations: agent-benchmark launch ----------
-// draft.type === 'agent'. Which request shape is sent depends on whether
-// an agent framework was chosen in Step 2 (see NewEvaluation.tsx `launch`):
-//   no framework  -> POST /agent-benchmark/run       (AgentBenchmarkRunRequest)
-//   framework set -> POST /agent-benchmark/run-multi (AgentBenchmarkRunMultiRequest)
-export interface AgentBenchmarkRunRequest {
-  dataset_id: string;
-  model_ids: string[];
-  evaluation_name: string;
-  run_samples: number;
-  // Same retry/timeout shape as CreateEvaluationRequest — exactly one of
-  // the two is sent, matching the Models step's "Apply to all" /
-  // "Individually" toggle. See NewEvaluation.tsx `launch`.
-  max_retries?: number;
-  timeout?: number;
-  model_retry_config?: Record<string, ModelRetryConfig>;
-}
-export interface AgentBenchmarkRunMultiRequest {
-  dataset_id: string;
-  model_ids: string[];
-  evaluation_name: string;
-  selected_metrics: string[];
-  // Same as CreateEvaluationRequest.selected_metric_ids — the subset of
-  // selected_metrics that are custom metric ids. Omitted when none selected.
-  selected_metric_ids?: string[];
-  selected_categories: string[];
-  run_samples: number;
-  // Same retry/timeout shape as CreateEvaluationRequest — exactly one of
-  // the two is sent, matching the Models step's "Apply to all" /
-  // "Individually" toggle. See NewEvaluation.tsx `launch`.
-  max_retries?: number;
-  timeout?: number;
-  model_retry_config?: Record<string, ModelRetryConfig>;
-  // Same as CreateEvaluationRequest's Retest on Wrong control — always
-  // sent for this endpoint (an agent framework is selected, so metrics
-  // config applies); retest_max_rounds/retest_verify_metric only included
-  // when retest_on_wrong is true. See NewEvaluation.tsx `launch`.
-  retest_on_wrong?: boolean;
-  retest_max_rounds?: number;
-  retest_verify_metric?: string;
+.ev__header-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 13px;
+  border-radius: 999px;
+  border: 1px solid $line;
+  background: $paper;
+  font-family: $mono;
+  font-size: 0.8846em; // 0.71875rem / 0.8125rem
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: $ink-2;
+  white-space: nowrap;
+
+  &::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: $ink-3;
+  }
+
+  &[data-state='draft']::before { background: $signal; box-shadow: 0 0 0 3px $wash; }
+  &[data-state='live'] { color: $signal; border-color: rgba($signal, 0.35); background: $wash; }
+  &[data-state='live']::before { background: $signal; animation: ev-pulse 1.1s ease-in-out infinite; }
 }
 
-// ---------- Evaluations: list (History) ----------
-export type EvaluationStatusValue = 'pending' | 'running' | 'completed' | 'failed' | 'canceled';
-
-// Nested summary of the report generated for this evaluation, if any.
-// Only present once the backend has created a report row for the eval —
-// absent/undefined while the eval is still pending/running with no report yet.
-export interface EvaluationReportSummary {
-  report_id: string;
-  title: string;
-  status: string;
-  created_at: string;
+.ev__header-eta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.9231em; // 0.75rem / 0.8125rem
+  font-weight: 600;
+  color: $ink-3;
+  white-space: nowrap;
 }
 
-export interface EvaluationListItem {
-  id: string;
-  name: string;
-  description: string;
-  eval_type: string;
-  dataset_id: string;
-  datasets_config: { dataset_id: string }[];
-  benchmark: string;
-  model_ids: string[];
-  selected_metrics: string[];
-  run_samples: number;
-  selected_category: string[];
-  status: EvaluationStatusValue;
-  progress: number;
-  total_questions: number;
-  top_model: string | null;
-  top_score: number | null;
-  created_at: string;
-  started_at: string | null;
-  completed_at: string | null;
-  // Present once a report has been generated for this evaluation (spec: new
-  // "download from History" requirement). When `report.report_id` is set,
-  // History should offer the same download options as the Reports page.
-  report?: EvaluationReportSummary | null;
-}
-export interface EvaluationsListResponse {
-  evaluations: EvaluationListItem[];
+.page {
+  // master scale control for this subtree — cascades down through .ev and
+  // every nested &__ selector below, since none of them reset font-size
+  // themselves (they're all expressed in em relative to whatever ancestor
+  // font-size is in effect). See $ev-base-font above.
+  font-size: $ev-base-font;
+
+  @media (min-width: 1800px) {
+    font-size: 1rem;
+  }
+
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  padding: 22px 30px 26px;
+  display: flex;
+  flex-direction: column;
+  background: $paper;
 }
 
-// ---------- Evaluations: results ----------
-export interface TestDetail {
-  task: string;
-  input: string;
-  expected_output: string;
-  actual_output: string;
-  passed: boolean;
-}
-export interface ModelResult {
-  model_id: string;
-  provider: string | null;
-  rank: number;
-  score: number;
-  accuracy: number;
-  passed_tests: number;
-  failed_tests: number;
-  // Normalized from the API's `total_test` (singular) at the fetch boundary
-  // (evaluationsApi.results) — see benchmarksApi.list for the same pattern.
-  total_tests: number;
-  metric_scores: Record<string, number>;
-  details: TestDetail[];
-}
-export interface EvaluationResultsResponse {
-  evaluation_id: string;
-  name: string;
-  eval_type: string;
-  dataset_id: string;
-  benchmark: string;
-  model_ids: string[];
-  selected_metrics: string[];
-  status: EvaluationStatusValue;
-  total_questions: number;
-  top_model: string;
-  top_score: number;
-  started_at: string | null;
-  results: ModelResult[];
+// ===========================================================================
+// Root
+// ===========================================================================
+.ev {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+
+  // ---- shell (manifest + stage) ------------------------------------------
+  &__shell {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 288px 1fr;
+    gap: 16px;
+  }
+
+  // ========================================================================
+  // SIGNATURE: Run Manifest
+  // ========================================================================
+  &__manifest {
+    background: $card;
+    border: 1px solid $line;
+    border-radius: 16px;
+    box-shadow: $soft;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  &__manifest-head {
+    flex-shrink: 0;
+    padding: 18px 20px 16px;
+    border-bottom: 1px solid $line-2;
+  }
+
+  &__manifest-eyebrow {
+    @extend %micro;
+    color: $ink-3;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  &__manifest-pct {
+    color: $signal;
+    font-size: 0.9231em; letter-spacing: 0.06em; } // 0.75rem / 0.8125rem
+
+  &__manifest-title {
+    margin-top: 8px;
+    font-family: $display;
+    font-size: 1.2308em; // 1rem / 0.8125rem
+    font-weight: 800;
+    letter-spacing: -0.015em;
+    color: $ink;
+    line-height: 1.15;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+
+    &[data-empty='true'] { color: $ink-3; font-style: normal; }
+  }
+
+  &__meter {
+    margin-top: 12px;
+    height: 4px;
+    border-radius: 999px;
+    background: $line;
+    overflow: hidden;
+  }
+
+  &__meter-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, $signal, $signal-2);
+    transition: width 0.4s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  // ---- the spec list (each row = a step, with its live value) -------------
+  &__spec {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 14px 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  &__spec-row {
+    position: relative;
+    display: grid;
+    grid-template-columns: 30px 1fr;
+    align-items: start;
+    gap: 12px;
+    width: 100%;
+    text-align: left;
+    border: 0;
+    background: transparent;
+    padding: 12px 12px 12px 4px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+
+    // Extends past this row's own bottom edge by exactly the flex `gap`
+    // above (24px), so the line still reaches the next row's tick — the
+    // larger the gap, the more this needs to stretch to stay unbroken.
+    &::before {
+      content: '';
+      position: absolute;
+      left: 18px;
+      top: 38px;
+      bottom: -24px;
+      width: 2px;
+      background: $line;
+      transition: background 0.2s ease;
+    }
+    &:last-child::before { display: none; }
+
+    &:disabled { cursor: default; }
+    &:not(:disabled):hover { background: $paper; }
+  }
+
+  &__spec-tick {
+    position: relative;
+    z-index: 1;
+    width: 28px;
+    height: 28px;
+    border-radius: 9px;
+    display: grid;
+    place-items: center;
+    background: $card;
+    border: 1.5px solid $line;
+    color: $ink-3;
+    font-family: $mono;
+    font-size: 0.8462em; // 0.6875rem / 0.8125rem
+    font-weight: 700;
+    transition: all 0.18s ease;
+  }
+
+  &__spec-body {
+    min-width: 0;
+    padding-top: 1px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  &__spec-label {
+    @extend %micro;
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    color: $ink-3;
+    transition: color 0.18s ease;
+  }
+
+  &__spec-value {
+    font-size: 1.1538em; // 0.9375rem / 0.8125rem
+    font-weight: 600;
+    color: $ink;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    &[data-empty='true'] {
+      color: $ink-3;
+      font-weight: 500;
+      font-family: $mono;
+    }
+  }
+
+  &__spec-row--done {
+    &::before { background: $signal; }
+    .ev__spec-tick { background: $signal; border-color: $signal; color: #fff; }
+    .ev__spec-label { color: $ink-3; }
+  }
+
+  &__spec-row--active {
+    background: $wash;
+    .ev__spec-tick {
+      background: $card;
+      border-color: $signal;
+      color: $signal;
+      box-shadow: 0 0 0 4px rgba($signal, 0.14);
+    }
+    .ev__spec-label { color: $signal; }
+    &:not(:disabled):hover { background: $wash; }
+  }
+
+  &__spec-row--todo { opacity: 0.9; }
+
+  // ========================================================================
+  // Stage (the working area for the current step)
+  // ========================================================================
+  &__stage {
+    background: $card;
+    border: 1px solid $line;
+    border-radius: 16px;
+    box-shadow: $soft;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  &__stage-head {
+    flex-shrink: 0;
+    padding: 22px 28px 18px;
+    border-bottom: 1px solid $line-2;
+  }
+
+  &__crumb {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    @extend %micro;
+    color: $ink-3;
+
+    b { color: $signal; font-weight: 700; }
+
+    span:first-child {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: $signal;
+    }
+  }
+
+  &__crumb-sep {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: $ink-3;
+  }
+
+  &__stage-title {
+    margin-top: 12px;
+    font-family: $display;
+    font-size: 1.6923em; // 1.375rem / 0.8125rem
+    font-weight: 800;
+    letter-spacing: -0.025em;
+    color: $ink;
+    line-height: 1.1;
+  }
+
+  &__stage-sub {
+    margin-top: 6px;
+    font-size: 1.0385em; // 0.84375rem / 0.8125rem
+    color: $ink-2;
+    line-height: 1.5;
+    max-width: 60ch;
+  }
+
+  &__stage-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 22px 28px 26px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  &__anim {
+    animation: ev-rise 0.34s cubic-bezier(0.22, 0.72, 0.16, 1) both;
+  }
+
+  // ---- footer nav ---------------------------------------------------------
+  &__footer {
+    flex-shrink: 0;
+    padding: 16px 28px;
+    border-top: 1px solid $line-2;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  &__hint {
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    color: $ink-3;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+
+    kbd {
+      font-family: $mono;
+      font-size: 0.8462em; // 0.6875rem / 0.8125rem
+      color: $ink-2;
+      background: $paper;
+      border: 1px solid $line;
+      border-bottom-width: 2px;
+      border-radius: 5px;
+      padding: 1px 6px;
+    }
+  }
+
+  &__btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: $sans;
+    font-size: 1.0385em; // 0.84375rem / 0.8125rem
+    font-weight: 650;
+    border-radius: 10px;
+    padding: 10px 16px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease, transform 0.12s ease;
+
+    &:disabled { cursor: not-allowed; opacity: 0.5; }
+
+    &--ghost {
+      background: transparent;
+      border-color: $line;
+      color: $ink-2;
+      &:not(:disabled):hover { border-color: $ink-3; color: $ink; background: $paper; }
+    }
+
+    // fixed-dark chip — do NOT switch to $ink here, it would go near-white
+    // (and invisible) in dark mode since $ink is theme-aware.
+    &--primary {
+      background: $ink-solid;
+      color: #fff;
+      box-shadow: $soft;
+      &:not(:disabled):hover { background: $ink-solid-hover; transform: translateY(-1px); box-shadow: $lift; }
+    }
+
+    &--launch {
+      background: $signal;
+      color: #fff;
+      box-shadow: 0 8px 20px -8px rgba($signal, 0.7);
+      &:not(:disabled):hover { background: $signal-2; transform: translateY(-1px); }
+    }
+  }
+
+  // ========================================================================
+  // Shared field primitives
+  // ========================================================================
+  &__field {
+    max-width: 620px;
+
+    & + & { margin-top: 20px; }
+  }
+
+  &__label {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    @extend %micro;
+    font-size: 0.8462em; // 0.6875rem / 0.8125rem
+    color: $ink-2;
+    margin-bottom: 9px;
+
+    .opt {
+      font-family: $sans;
+      letter-spacing: 0;
+      text-transform: none;
+      font-weight: 500;
+      font-size: 0.9231em; color: $ink-3; } // 0.75rem / 0.8125rem
+  }
+
+  &__input {
+    width: 100%;
+    border: 1.5px solid $line;
+    border-radius: 11px;
+    padding: 12px 14px;
+    font-size: 1.1538em; // 0.9375rem / 0.8125rem
+    font-weight: 500;
+    font-family: $sans;
+    color: $ink;
+    background: $card;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+
+    &::placeholder { color: $ink-3; font-weight: 400; }
+    &:focus { outline: none; border-color: $signal; box-shadow: $ring; }
+    &:disabled { background: $paper; color: $ink-2; }
+  }
+
+  &__input-wrap {
+    position: relative;
+    svg {
+      position: absolute;
+      top: 50%;
+      left: 15px;
+      transform: translateY(-50%);
+      color: $ink-3;
+      pointer-events: none;
+    }
+    input { padding-left: 42px; }
+  }
+
+  // ---- big "name your run" input -----------------------------------------
+  &__name-input {
+    width: 100%;
+    border: 0;
+    border-bottom: 2px solid $line;
+    border-radius: 0;
+    padding: 8px 2px 12px;
+    background: transparent;
+    font-family: $display;
+    font-size: 1.6923em; // 1.375rem / 0.8125rem
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    color: $ink;
+    transition: border-color 0.16s ease;
+
+    &::placeholder { color: $ink-3; font-weight: 700; }
+    &:focus { outline: none; border-color: $signal; }
+  }
+
+  &__name-caption {
+    margin-top: 10px;
+    font-size: 0.9615em; // 0.78125rem / 0.8125rem
+    color: $ink-3;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  // ---- quick-start presets (mono chips) ----------------------------------
+  &__quick {
+    margin-top: 30px;
+    max-width: 620px;
+  }
+
+  &__quick-head {
+    @extend %micro;
+    font-size: 0.7692em; // 0.625rem / 0.8125rem
+    color: $ink-3;
+    margin-bottom: 11px;
+  }
+
+  &__quick-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  &__preset {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px 8px 11px;
+    border: 1px solid $line;
+    border-radius: 999px;
+    background: $card;
+    cursor: pointer;
+    font-family: $mono;
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    font-weight: 600;
+    color: $ink-2;
+    transition: all 0.15s ease;
+
+    svg { color: $ink-3; transition: color 0.15s ease; }
+
+    &:hover {
+      border-color: $ink;
+      color: $ink;
+      transform: translateY(-1px);
+      svg { color: $signal; }
+    }
+
+    &--on {
+      border-color: $signal;
+      background: $wash;
+      color: $signal;
+      svg { color: $signal; }
+    }
+  }
+
+  // ---- tips note ----------------------------------------------------------
+  &__note {
+    margin-top: 28px;
+    max-width: 620px;
+    display: flex;
+    gap: 12px;
+    padding: 14px 16px;
+    border: 1px solid $line;
+    border-left: 2.5px solid $signal;
+    border-radius: 12px;
+    background: $card;
+  }
+
+  &__note-icon {
+    flex-shrink: 0;
+    color: $signal;
+    margin-top: 1px;
+  }
+
+  &__note-title {
+    font-size: 1em; // 0.8125rem / 0.8125rem (base)
+    font-weight: 700;
+    color: $ink;
+    margin-bottom: 6px;
+  }
+
+  &__note-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    font-size: 0.9615em; // 0.78125rem / 0.8125rem
+    color: $ink-2;
+    line-height: 1.5;
+
+    li { display: flex; gap: 8px; }
+    li::before {
+      content: '—';
+      color: $signal;
+      flex-shrink: 0;
+    }
+  }
+
+  // ========================================================================
+  // Option rows (Type step) & framework
+  // ========================================================================
+  &__options {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-width: 720px;
+  }
+
+  &__option {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    width: 100%;
+    text-align: left;
+    padding: 16px 52px 16px 16px;
+    border: 1.5px solid $line;
+    border-radius: 14px;
+    background: $card;
+    cursor: pointer;
+    transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease, background 0.18s ease;
+
+    &:hover {
+      border-color: $ink-3;
+      box-shadow: $lift;
+      transform: translateY(-2px);
+    }
+
+    &--on {
+      border-color: $signal;
+      background: $wash;
+      &:hover { border-color: $signal; }
+    }
+
+    &--off {
+      opacity: 0.55;
+      cursor: not-allowed;
+      &:hover { border-color: $line; box-shadow: none; transform: none; }
+    }
+  }
+
+  // fixed-dark chip — icon glyph is always white-on-dark regardless of theme
+  &__option-icon {
+    flex-shrink: 0;
+    width: 48px;
+    height: 48px;
+    border-radius: 13px;
+    display: grid;
+    place-items: center;
+    background: $ink-solid;
+    color: #fff;
+    position: relative;
+    overflow: hidden;
+
+    &::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(140deg, transparent 45%, rgba(255,255,255,0.16) 140%);
+    }
+    svg { position: relative; z-index: 1; }
+  }
+  &__option-icon--agent { background: $violet-ink; }
+  &__option-icon--rag   { background: $sky-ink; }
+
+  &__option-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  &__option-name {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-family: $display;
+    font-size: 1.3846em; // 1.125rem / 0.8125rem
+    font-weight: 700;
+    color: $ink;
+  }
+
+  &__badge {
+    @extend %micro;
+    font-size: 0.6923em; // 0.5625rem / 0.8125rem
+    color: $ink-3;
+    background: $paper;
+    border: 1px solid $line;
+    border-radius: 999px;
+    padding: 2px 8px;
+  }
+
+  &__option-desc {
+    font-size: 1.1538em; // 0.9375rem / 0.8125rem
+    color: $ink-2;
+    line-height: 1.5;
+  }
+
+  // selection marker (shared)
+  &__mark {
+    position: absolute;
+    top: 50%;
+    right: 16px;
+    transform: translateY(-50%);
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: $signal;
+    color: #fff;
+    box-shadow: 0 2px 6px rgba($signal, 0.4);
+  }
+
+  &__section {
+    margin-top: 26px;
+    padding-top: 22px;
+    border-top: 1px solid $line-2;
+    max-width: 720px;
+  }
+
+  &__section-hint {
+    font-size: 0.9615em; // 0.78125rem / 0.8125rem
+    color: $ink-3;
+    margin: 4px 0 14px;
+  }
+
+  &__fw-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
+  &__fw {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    text-align: left;
+    padding: 13px 42px 13px 13px;
+    border: 1.5px solid $line;
+    border-radius: 12px;
+    background: $card;
+    cursor: pointer;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
+
+    &:hover { border-color: $ink-3; transform: translateY(-2px); box-shadow: $lift; }
+    &--on { border-color: $signal; background: $wash; }
+  }
+
+  &__fw-icon {
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    display: grid;
+    place-items: center;
+    background: $wash;
+    color: $signal;
+  }
+
+  &__fw-name { font-family: $display; font-size: 1.1538em; font-weight: 700; color: $ink; } // 0.9375rem / 0.8125rem
+  &__fw-desc { font-size: 1em; color: $ink-2; margin-top: 2px; line-height: 1.4; } // 0.8125rem / 0.8125rem (base)
+
+  // ========================================================================
+  // Per-step toolbar: search + refresh
+  // Used on the Providers, Models, Test Suite (browse tab), and Metrics
+  // steps. Search filters the already-fetched list client-side; refresh
+  // re-dispatches that step's existing fetch thunk.
+  // ========================================================================
+  &__step-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  &__toolbar-search {
+    flex: 1;
+    min-width: 0;
+    max-width: 320px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border: 1.5px solid $line;
+    border-radius: 10px;
+    background: $card;
+    color: $ink-3;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
+
+    &:focus-within {
+      border-color: $signal;
+      box-shadow: $ring;
+      color: $signal;
+    }
+
+    svg { flex-shrink: 0; }
+
+    input {
+      flex: 1;
+      min-width: 0;
+      border: 0;
+      background: transparent;
+      font-family: $sans;
+      font-size: 1em; // 0.8125rem / 0.8125rem (base)
+      font-weight: 500;
+      color: $ink;
+      outline: none;
+
+      &::placeholder { color: $ink-3; font-weight: 400; }
+    }
+  }
+
+  &__toolbar-refresh {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border: 1.5px solid $line;
+    border-radius: 10px;
+    background: $card;
+    color: $ink-2;
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+    &:hover:not(:disabled) { border-color: $signal; color: $signal; background: $wash; }
+    &:disabled { cursor: default; color: $signal; }
+  }
+
+  // ---- Test Suite: All / Custom / Deepeval filter (Change-1) -------------
+  &__filter-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+
+  &__filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 8px 7px 13px;
+    border: 1.5px solid $line;
+    border-radius: 999px;
+    background: $card;
+    color: $ink-2;
+    font-family: $sans;
+    font-size: 0.9615em; // 0.78125rem / 0.8125rem
+    font-weight: 650;
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+    &:hover { border-color: $ink-3; color: $ink; }
+
+    &--on {
+      border-color: $signal;
+      background: $wash;
+      color: $signal;
+    }
+  }
+
+  &__filter-chip-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: $paper;
+    color: $ink-3;
+    font-family: $mono;
+    font-size: 0.8077em; font-weight: 700; } // 0.65625rem / 0.8125rem
+  &__filter-chip--on &__filter-chip-count {
+    background: $signal;
+    color: #fff;
+  }
+
+  // ========================================================================
+  // Skeleton loaders (Change-3) — shown in place of a step's grid/chips
+  // while its "refresh" request is in flight. Shapes loosely echo each
+  // step's real card so the layout doesn't jump when data arrives.
+  // ========================================================================
+  &__skel-block {
+    display: block;
+    border-radius: 6px;
+    background: linear-gradient(90deg, $line 25%, $line-2 37%, $line 63%);
+    background-size: 400% 100%;
+    animation: ev-shimmer 1.4s ease infinite;
+
+    &--icon { width: 40px; height: 40px; border-radius: 11px; flex-shrink: 0; }
+    &--icon-sm { width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0; }
+    &--line { height: 11px; border-radius: 5px; }
+    &--pill { width: 72px; height: 16px; border-radius: 999px; margin-top: 2px; }
+    &--tag { width: 54px; height: 18px; border-radius: 6px; }
+    &--stat { width: 58px; height: 26px; border-radius: 7px; }
+    &--chip { height: 34px; border-radius: 999px; }
+  }
+
+  &__skel-pcard {
+    display: flex;
+    align-items: flex-start;
+    gap: 13px;
+    padding: 15px 42px 15px 15px;
+    border: 1.5px solid $line;
+    border-radius: 14px;
+    background: $card;
+  }
+  &__skel-lines {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  &__skel-mcard {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 15px 16px;
+    border: 1.5px solid $line;
+    border-radius: 14px;
+    background: $card;
+  }
+  &__skel-caps { display: flex; gap: 6px; }
+  &__skel-stats {
+    display: flex;
+    gap: 10px;
+    padding-top: 10px;
+    border-top: 1px solid $line-2;
+  }
+
+  &__skel-dcard {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 15px 16px;
+    border: 1.5px solid $line;
+    border-radius: 14px;
+    background: $card;
+  }
+  &__skel-dcard-top {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+  }
+
+  // ========================================================================
+  // Card grids (providers / models / datasets)
+  // ========================================================================
+  &__scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    margin: 0 -6px;
+    padding: 4px 6px;
+  }
+
+  // ---- Models step (Step 3): search toolbar + Retries & timeout panel
+  // stay fixed; only the card grid below them scrolls. -------------------
+  &__models-panel {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  &__models-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    margin: 8px -6px 0;
+    padding: 4px 6px;
+  }
+
+  &__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(258px, 1fr));
+    gap: 12px;
+
+    @media (min-width: 1800px) {
+      grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+    }
+  }
+
+  &__grid--wide {
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  }
+
+  // ---- provider card ------------------------------------------------------
+  &__pcard {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 13px;
+    text-align: left;
+    padding: 15px 42px 15px 15px;
+    border: 1.5px solid $line;
+    border-radius: 14px;
+    background: $card;
+    cursor: pointer;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
+
+    &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
+    &--on { border-color: $signal; background: $wash; &:hover { border-color: $signal; } }
+  }
+
+  &__pcard-icon {
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    border-radius: 11px;
+    display: grid;
+    place-items: center;
+    background: $paper;
+    border: 1px solid $line;
+    color: $ink;
+    font-family: $display;
+    font-weight: 800;
+    font-size: 1.2308em; transition: all 0.16s ease; } // 1rem / 0.8125rem
+  &__pcard--on &__pcard-icon { background: $signal; border-color: $signal; color: #fff; }
+
+  &__pcard-body { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  &__pcard-name { font-family: $display; font-size: 1.3846em; font-weight: 700; color: $ink; } // 1.125rem / 0.8125rem
+  &__pcard-meta { font-size: 1.1538em; color: $ink-3; } // 0.9375rem / 0.8125rem
+
+  &__pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 4px;
+    width: fit-content;
+    font-family: $mono;
+    font-size: 0.7692em; // 0.625rem / 0.8125rem
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: $ok;
+    background: $ok-wash;
+    border-radius: 999px;
+    padding: 3px 8px 3px 6px;
+
+    &::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: $ok; }
+  }
+
+  // ---- model card ---------------------------------------------------------
+  &__mcard {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    text-align: left;
+    padding: 15px 16px;
+    border: 1.5px solid $line;
+    border-radius: 14px;
+    background: $card;
+    cursor: pointer;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
+
+    &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
+    &--on { border-color: $signal; background: $wash; &:hover { border-color: $signal; } }
+  }
+
+  // locked = provider chosen but health not yet confirmed successful;
+  // dims the interaction affordance so it doesn't read as clickable-to-select.
+  &__mcard--locked {
+    cursor: default;
+    &:hover { border-color: $line; box-shadow: none; transform: none; }
+  }
+
+  // checking = a health check (auto or manual) is currently in flight for
+  // this card — a soft pulsing border + sheen so it reads as "in progress"
+  // at a glance, on top of the "Checking…" badge text.
+  &__mcard--checking {
+    position: relative;
+    overflow: hidden;
+    border-color: rgba($signal, 0.35);
+    animation: ev-mcard-pulse 1.6s ease-in-out infinite;
+
+    &::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(100deg, transparent 30%, rgba($signal, 0.08) 50%, transparent 70%);
+      background-size: 200% 100%;
+      animation: ev-mcard-sheen 1.6s ease-in-out infinite;
+      pointer-events: none;
+    }
+  }
+
+  &__mcard-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  &__mcard-name { font-family: $display; font-size: 1.1154em; font-weight: 700; color: $ink; line-height: 1.25; } // 0.90625rem / 0.8125rem
+  &__mcard-provider { font-size: 0.8846em; color: $ink-3; } // 0.71875rem / 0.8125rem
+
+  // ---- provider row + manual health check (Step 3) -------------------------
+  &__mcard-provider-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 2px;
+  }
+
+  &__mcard-hint {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed $line-2;
+    font-size: 0.8846em; // 0.71875rem / 0.8125rem
+    color: $ink-3;
+    line-height: 1.4;
+  }
+
+  &__health-badge {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    font-family: $mono;
+    font-size: 0.7692em; // 0.625rem / 0.8125rem
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+
+    &--success {
+      color: $ok;
+      background: $ok-wash;
+    }
+
+    &--failed {
+      color: $danger;
+      background: $danger-wash;
+      cursor: pointer;
+      border: 0;
+      &:hover { background: rgba($danger, 0.16); }
+    }
+
+    &--loading {
+      color: $ink-3;
+      background: $paper;
+    }
+  }
+
+  &__health-check-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    border: 1px solid $signal;
+    background: $card;
+    color: $signal;
+    font-family: $mono;
+    font-size: 0.7692em; // 0.625rem / 0.8125rem
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+
+    &:hover { background: $wash; }
+  }
+
+  &__mcard-mark {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: $signal;
+    color: #fff;
+  }
+
+  &__caps { display: flex; flex-wrap: wrap; gap: 5px; }
+  &__cap {
+    font-family: $mono;
+    font-size: 0.7692em; // 0.625rem / 0.8125rem
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: $ink-2;
+    background: $paper;
+    border: 1px solid $line;
+    border-radius: 6px;
+    padding: 2px 7px;
+  }
+
+  &__mcard-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    padding-top: 10px;
+    border-top: 1px solid $line-2;
+  }
+
+  &__stat { display: flex; flex-direction: column; gap: 1px; }
+  &__stat-k { @extend %micro; font-size: 0.6923em; color: $ink-3; } // 0.5625rem / 0.8125rem
+  &__stat-v { font-family: $mono; font-size: 0.9615em; font-weight: 700; color: $ink; letter-spacing: -0.01em; } // 0.78125rem / 0.8125rem
+
+  // Per-model retry/timeout — shown on a model card once it's selected.
+  // Wrapped so clicks on the inputs (stopPropagation'd in the component)
+  // don't also toggle the card's selection.
+  &__mcard-retry {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid $line-2;
+    cursor: default;
+  }
+  &__mcard-retry-fields {
+    display: flex;
+    gap: 10px;
+  }
+  &__mcard-retry-hint {
+    display: flex;
+    align-items: flex-start;
+    gap: 5px;
+    font-size: 0.7692em; // 0.625rem / 0.8125rem
+    color: $ink-3;
+    line-height: 1.3;
+
+    svg { flex-shrink: 0; margin-top: 2px; }
+  }
+  &__mcard-retry-field {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+
+    label {
+      @extend %micro;
+      font-size: 0.6923em; // 0.5625rem / 0.8125rem
+      color: $ink-3;
+    }
+
+    input {
+      width: 100%;
+      border: 1.5px solid $line;
+      border-radius: 8px;
+      padding: 5px 8px;
+      font-family: $mono;
+      font-size: 0.8846em; // 0.71875rem / 0.8125rem
+      font-weight: 700;
+      color: $ink;
+      background: $card;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+
+      &:focus { outline: none; border-color: $signal; box-shadow: $ring; }
+    }
+  }
+
+  // ---- Retry/timeout mode: "Apply to all" vs "Individually" (Models step) -
+  &__retry-mode {
+    margin-top: 14px;
+    margin-bottom: 4px;
+    padding: 12px 14px;
+    border: 1px solid $line;
+    border-radius: 12px;
+    background: $paper;
+  }
+
+  &__retry-mode-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  &__retry-mode-all {
+    display: flex;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 12px;
+
+    .ev__mcard-retry-field { flex: 0 0 130px; }
+  }
+
+  &__retry-mode-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 5px;
+    flex: 1 1 100%;
+    margin-top: 10px;
+    font-size: 0.8846em; // 0.71875rem / 0.8125rem
+    color: $ink-3;
+    line-height: 1.4;
+
+    svg { flex-shrink: 0; margin-top: 2px; }
+  }
+
+  // ---- Retest on Wrong body (card wrapper is &__msec; header lives there
+  // too, with the Yes/No radio row as a head-action). The two controls
+  // (Rounds / Verify Metric) each get their own bordered, tinted panel so
+  // they read as clearly separate settings rather than two fields
+  // floating in the same open space. -------------------------------------
+  &__retest-fields {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 16px;
+  }
+
+  &__retest-panel {
+    flex: 0 0 200px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px 16px;
+    border: 1px solid $line;
+    border-radius: 12px;
+    background: $card;
+    // Thin colored top edge distinguishes the two panels from each other
+    // at a glance (rounds vs. verify metric), on top of the shared card
+    // border/background separation.
+    border-top: 3px solid $signal;
+
+    input[type='number'] {
+      width: 100%;
+      border: 1.5px solid $line;
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-family: $mono;
+      font-size: 1.0385em; // 0.84375rem / 0.8125rem
+      font-weight: 700;
+      color: $ink;
+      background: $paper;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+
+      &:focus { outline: none; border-color: $signal; box-shadow: $ring; }
+    }
+  }
+
+  &__retest-panel--verify {
+    flex: 1 1 280px;
+  }
+
+  &__retest-panel-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    @extend %micro;
+    font-size: 0.8462em; // 0.6875rem / 0.8125rem
+    color: $ink-2;
+
+    svg { flex-shrink: 0; color: $signal; }
+  }
+
+  &__retest-panel-hint {
+    font-size: 0.8462em; // 0.6875rem / 0.8125rem
+    color: $ink-3;
+    line-height: 1.4;
+  }
+
+  // ========================================================================
+  // Test-suite step: tabs, dataset grid, subgroup rail, upload
+  // ========================================================================
+  &__tabs {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px;
+    border: 1px solid $line;
+    border-radius: 12px;
+    background: $paper;
+    margin-bottom: 18px;
+  }
+
+  &__tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: $ink-2;
+    font-family: $sans;
+    font-size: 1em; // 0.8125rem / 0.8125rem (base)
+    font-weight: 650;
+    cursor: pointer;
+    transition: all 0.16s ease;
+
+    &:hover { color: $ink; }
+    &--on { background: $card; color: $signal; box-shadow: $soft; }
+  }
+
+  &__suite {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 1fr 300px;
+    gap: 16px;
+  }
+
+  &__suite-scroll {
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    margin: 0 -6px;
+    padding: 2px 6px 6px;
+  }
+
+  &__dgrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+
+    @media (min-width: 1800px) {
+      grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+    }
+  }
+
+  &__dcard {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 11px;
+    text-align: left;
+    padding: 15px 16px;
+    border: 1.5px solid $line;
+    border-radius: 14px;
+    background: $card;
+    cursor: pointer;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
+
+    &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
+    &--on { border-color: $signal; background: $wash; &:hover { border-color: $signal; } }
+
+    // A dataset with 0 questions can still be picked (so the info icon
+    // and warning banner are reachable), but reads visibly muted/flagged
+    // so it doesn't look identical to a usable suite at a glance.
+    &--empty {
+      border-color: rgba($danger, 0.3);
+
+      &:hover { border-color: rgba($danger, 0.5); }
+    }
+  }
+
+  &__dcard-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  &__dcard-id { display: flex; align-items: center; gap: 11px; min-width: 0; }
+
+  &__dcard-icon {
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    display: grid;
+    place-items: center;
+    background: $paper;
+    border: 1px solid $line;
+    color: $ink;
+    transition: all 0.16s ease;
+  }
+  &__dcard--on &__dcard-icon { background: $signal; border-color: $signal; color: #fff; }
+
+  &__dcard-name { font-family: $display; font-size: 1.0769em; font-weight: 700; color: $ink; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } // 0.875rem / 0.8125rem
+
+  &__dcard-warn-icon {
+    flex-shrink: 0;
+    display: inline-flex;
+    color: $danger;
+  }
+
+  &__dcard-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+
+  &__tag {
+    font-family: $mono;
+    font-size: 0.7692em; // 0.625rem / 0.8125rem
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: $ink-2;
+    background: $paper;
+    border: 1px solid $line;
+    border-radius: 6px;
+    padding: 2px 7px;
+  }
+  &__tag--custom { color: $signal; background: $wash; border-color: rgba($signal, 0.25); }
+  &__tag--deepeval { color: $ok; background: $ok-wash; border-color: rgba($ok, 0.25); }
+  &__tag--count { border: 0; background: transparent; color: $ink-3; padding-left: 0; }
+  &__tag--count-empty { color: $danger; font-weight: 700; }
+
+  // Full-width banner shown below the grid+subgroup-rail layout whenever
+  // the currently selected dataset has 0 questions — explains why
+  // Continue is disabled without the user having to guess.
+  &__dataset-empty-warning {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    margin-top: 14px;
+    padding: 11px 14px;
+    border: 1px solid rgba($danger, 0.3);
+    border-radius: 12px;
+    background: $danger-wash;
+    color: $danger;
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    line-height: 1.5;
+
+    svg { flex-shrink: 0; margin-top: 2px; }
+    strong { font-weight: 700; }
+  }
+
+  // ---- dcard header actions: preview button + selection mark (Change-2) --
+  &__dcard-actions {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  &__dcard-preview-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px;
+    border: 1px solid $line;
+    border-radius: 999px;
+    background: $paper;
+    color: $ink-2;
+    font-family: $sans;
+    font-size: 0.8846em; // 0.71875rem / 0.8125rem
+    font-weight: 650;
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+    &:hover { border-color: $signal; color: $signal; background: $wash; }
+  }
+
+  // ---- subgroup rail ------------------------------------------------------
+  &__rail {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid $line;
+    border-radius: 14px;
+    background: $paper;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  &__rail-head { flex-shrink: 0; padding: 15px 16px 13px; border-bottom: 1px solid $line; }
+  &__rail-head-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  &__rail-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-family: $display;
+    font-size: 1em; // 0.8125rem / 0.8125rem (base)
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: $ink;
+    svg { color: $signal; }
+  }
+  &__rail-actions {
+    flex-shrink: 0;
+    display: flex;
+    gap: 10px;
+  }
+  &__rail-sub { margin-top: 4px; font-size: 0.8846em; color: $ink-3; line-height: 1.45; } // 0.71875rem / 0.8125rem
+
+  &__rail-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  &__rail-empty {
+    margin: 10px;
+    padding: 18px 12px;
+    text-align: center;
+    border: 1px dashed $line;
+    border-radius: 10px;
+    font-size: 0.9231em; color: $ink-3; } // 0.75rem / 0.8125rem
+
+  &__check-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    text-align: left;
+    padding: 9px 11px;
+    border: 1px solid $line;
+    border-radius: 10px;
+    background: $card;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+
+    &:hover { border-color: $ink-3; }
+    &--on { border-color: $signal; background: $wash; }
+  }
+
+  &__check {
+    flex-shrink: 0;
+    width: 17px;
+    height: 17px;
+    border-radius: 5px;
+    border: 1.5px solid $ink-3;
+    background: $card;
+    display: grid;
+    place-items: center;
+    color: transparent;
+    transition: all 0.14s ease;
+
+    &--on { background: $signal; border-color: $signal; color: #fff; }
+  }
+
+  &__check-label {
+    font-size: 1em; // 0.8125rem / 0.8125rem (base)
+    font-weight: 600;
+    color: $ink;
+
+    // Extra boost beyond the automatic base-font scale-up (see
+    // $ev-base-font), since at this width the subgroup cards still read
+    // smaller than the surrounding provider/model/dataset cards otherwise.
+    @media (min-width: 1800px) {
+      font-size: 1.1538em; // 0.9375rem / 0.8125rem
+    }
+  }
+
+  // ---- upload panel -------------------------------------------------------
+  &__upload {
+    border: 1.5px solid $line;
+    border-radius: 14px;
+    background: $paper;
+    padding: 20px;
+    max-width: 560px;
+  }
+
+  &__drop {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    width: 100%;
+    border: 1.5px dashed $ink-3;
+    border-radius: 12px;
+    padding: 16px;
+    background: $card;
+    color: $ink-3;
+    font-size: 1.0385em; // 0.84375rem / 0.8125rem
+    font-weight: 500;
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+    &:hover { border-color: $signal; color: $signal; background: $wash; }
+
+    svg { flex-shrink: 0; }
+  }
+  &__drop-file { color: $ink; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  &__drop--has { border-style: solid; border-color: $signal; color: $ink; }
+
+  &__upload-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 20px;
+  }
+
+  // ========================================================================
+  // Metrics step: chips + judge rail
+  // ========================================================================
+  &__metrics {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 1fr 300px;
+    // Without an explicit row height, the implicit single row sizes to
+    // its tallest column's content (auto/max-content) instead of being
+    // constrained to the space actually available — which is what was
+    // letting &__metrics-main's content grow past the bottom of the
+    // stage with no scrollbar appearing anywhere. minmax(0, 1fr) forces
+    // the row to the container's real height so &__metrics-main's own
+    // overflow-y: auto (below) can actually kick in.
+    grid-template-rows: minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  &__metrics-main {
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    // Independent scrollbar for the cards column — without this, overflow
+    // bubbles up to &__stage-body and scrolls the whole step (cards +
+    // Judge Model rail) as one unit. With it, only this column scrolls;
+    // &__judge keeps its own separate internal scroll region
+    // (&__judge-scroll) and its head/footer stay pinned in place.
+    overflow-y: auto;
+    padding-right: 4px;
+    margin-right: -4px;
+  }
+
+  // ---- Metrics step: one card per section -----------------------------
+  // Same visual language as &__judge (border/radius/paper background,
+  // header+body split) so the whole step reads as a consistent stack of
+  // cards instead of one long undifferentiated column.
+  &__msec {
+    border: 1px solid $line;
+    border-radius: 14px;
+    background: $paper;
+  }
+
+  &__msec-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px 12px;
+    border-bottom: 1px solid $line;
+  }
+
+  &__msec-head-text { min-width: 0; }
+
+  &__msec-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-family: $display;
+    font-size: 1.0769em; // 0.875rem / 0.8125rem
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: $ink;
+
+    svg { flex-shrink: 0; color: $signal; }
+  }
+
+  &__msec-sub { margin-top: 3px; font-size: 0.9231em; color: $ink-3; line-height: 1.4; } // 0.75rem / 0.8125rem
+
+  &__msec-head-action { flex-shrink: 0; }
+
+  &__msec-body { padding: 16px; }
+
+  // ---- Run Samples + Instruction side-by-side (top of Metrics step) -------
+  &__samples-instruction-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    align-items: start;
+    gap: 16px;
+  }
+
+  // Run Samples card body wraps the standalone runSamplesControl field
+  // directly — .ev__field--samples below sets its width; no wrapper class
+  // needed now that it isn't laid out side-by-side with a note anymore.
+  &__field--samples { max-width: 260px; }
+  // Top K (RAG-only, Test Suite step) — a simple number field, doesn't
+  // need the wide layout the samples control does.
+  // Top K (RAG-only, Test Suite step) — the field row is wide enough for
+  // the label's long hint text to stay on one line; the actual number
+  // input is kept narrow separately via &__input--topk below.
+  &__field--topk {
+    max-width: 480px;
+    margin-bottom: 20px;
+
+    .opt {
+      white-space: nowrap;
+      font-size: 0.85em;
+    }
+  }
+  &__input--topk { max-width: 140px; }
+
+  // Shown above the metrics chips when the catalog has entries but nothing
+  // is selected yet — mirrors .ev__judge-required's styling/tone.
+  &__metrics-required {
+    margin-bottom: 12px;
+    padding: 9px 11px;
+    border: 1px dashed rgba($danger, 0.35);
+    border-radius: 10px;
+    background: $danger-wash;
+    color: $danger;
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    line-height: 1.4;
+  }
+
+  // ---- Run samples: Custom / Full radio row -------------------------------
+  &__radio-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  &__radio-opt {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border: 0;
+    background: transparent;
+    padding: 0;
+    cursor: pointer;
+    font-family: $sans;
+    font-size: 1em; // 0.8125rem / 0.8125rem (base)
+    font-weight: 600;
+    color: $ink-2;
+    transition: color 0.15s ease;
+
+    &:hover { color: $ink; }
+    &--on { color: $ink; }
+  }
+
+  &__radio-full-note {
+    margin-top: 10px;
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    color: $ink-3;
+    line-height: 1.4;
+  }
+
+  &__metrics-count {
+    font-family: $mono;
+    font-size: 0.9615em; // 0.78125rem / 0.8125rem
+    color: $ink-2;
+    b { color: $signal; font-weight: 700; }
+  }
+
+  &__metrics-actions { display: flex; gap: 14px; }
+
+  &__link {
+    font-family: $sans;
+    font-size: 0.9615em; // 0.78125rem / 0.8125rem
+    font-weight: 600;
+    color: $signal;
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    &:hover { text-decoration: underline; }
+  }
+
+  &__chips {
+    flex: 1;
+    margin: 0 -6px;
+    padding: 4px 6px;
+    align-content: flex-start;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  &__chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 14px;
+    border: 1.5px solid $line;
+    border-radius: 999px;
+    background: $card;
+    color: $ink-2;
+    font-size: 0.95em;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    height: fit-content;
+
+    &:hover { border-color: $ink-3; color: $ink; }
+
+    &--on {
+      border-color: $signal;
+      background: $signal;
+      color: #fff;
+    }
+
+    // Custom metrics (from GET /metrics's `custom` array) get a dashed
+    // border at rest so they read as a distinct category from the plain
+    // built-in metric chips above, even before the section header makes
+    // that explicit.
+    &--custom {
+      border-style: dashed;
+
+      &.ev__chip--on { border-style: solid; }
+    }
+  }
+
+  &__chip-tick {
+    display: grid;
+    place-items: center;
+    width: 14px;
+    height: 14px;
+  }
+
+  // Small gavel glyph on a custom metric chip that needs a judge model to
+  // grade it — purely informational, doesn't affect the always-shown/
+  // mandatory Judge Model rail itself.
+  &__chip-judge-icon {
+    flex-shrink: 0;
+    opacity: 0.6;
+  }
+  &__chip--on &__chip-judge-icon { opacity: 0.85; }
+
+  // ---- instruction (Metrics-step card; see &__msec for the header/body
+  // wrapper) — generate button sits in the card head as a head-action,
+  // textarea in the card body. ------------------------------------------
+  &__instruction-generate-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border: 1px solid $signal;
+    border-radius: 999px;
+    background: $card;
+    color: $signal;
+    font-family: $sans;
+    font-size: 0.8462em; // 0.6875rem / 0.8125rem
+    font-weight: 650;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+
+    &:hover:not(:disabled) { background: $wash; }
+    &:disabled { cursor: not-allowed; opacity: 0.5; }
+  }
+
+  &__instruction-textarea {
+    width: 100%;
+    min-height: 110px;
+    border: 1.5px solid $line;
+    border-radius: 11px;
+    padding: 11px 13px;
+    font-family: $sans;
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    font-weight: 500;
+    line-height: 1.55;
+    color: $ink;
+    background: $card;
+    resize: vertical;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+
+    &::placeholder { color: $ink-3; font-weight: 400; }
+    &:focus { outline: none; border-color: $signal; box-shadow: $ring; }
+  }
+
+  // ---- judge rail ---------------------------------------------------------
+  &__judge {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid $line;
+    border-radius: 14px;
+    background: $paper;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  &__judge-head { flex-shrink: 0; padding: 15px 16px 13px; border-bottom: 1px solid $line; }
+
+  &__judge-head-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  &__judge-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-family: $display;
+    font-size: 1.0769em; // 0.875rem / 0.8125rem
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: $ink;
+    svg { color: $signal; }
+  }
+  &__judge-sub { margin-top: 4px; font-size: 0.9615em; color: $ink-3; line-height: 1.45; } // 0.78125rem / 0.8125rem
+
+  // Small toggle button + popover replacing the old always-open info card
+  // — same explanatory copy, but collapsed by default so it doesn't eat
+  // into the rail's limited vertical space.
+  &__judge-info-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: 1px solid $line;
+    border-radius: 999px;
+    background: $paper;
+    color: $ink-3;
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+    &:hover { border-color: $signal; color: $signal; }
+  }
+  &__judge-info-btn--on { border-color: $signal; color: $signal; background: $wash; }
+
+  &__judge-info-popover {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 5;
+    width: 240px;
+    padding: 10px 11px;
+    border: 1px solid rgba($signal, 0.2);
+    border-radius: 10px;
+    background: $wash;
+    color: $ink-2;
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    line-height: 1.45;
+    box-shadow: 0 12px 28px -12px rgba(0, 0, 0, 0.25);
+    animation: ev-fade-in 0.15s ease both;
+  }
+
+  &__judge-search {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 12px 12px 0;
+    padding: 8px 11px;
+    border: 1px solid $line;
+    border-radius: 10px;
+    background: $card;
+
+    svg { flex-shrink: 0; color: $ink-3; }
+
+    input {
+      flex: 1;
+      min-width: 0;
+      border: 0;
+      background: transparent;
+      font-family: $sans;
+      font-size: 0.9231em; // 0.75rem / 0.8125rem
+      color: $ink;
+
+      &:focus { outline: none; }
+      &::placeholder { color: $ink-3; }
+    }
+  }
+
+  // Shown at the bottom of the judge rail whenever no judge model has been
+  // picked yet — mandatory for every evaluation type now, not gated on
+  // LLM_Judge or the agent framework anymore.
+  &__judge-required {
+    flex-shrink: 0;
+    margin: 0 10px 10px;
+    padding: 9px 11px;
+    border: 1px dashed rgba($danger, 0.35);
+    border-radius: 10px;
+    background: $danger-wash;
+    color: $danger;
+    font-size: 0.8846em; line-height: 1.4; } // 0.71875rem / 0.8125rem
+
+  &__judge-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  &__judge-empty {
+    margin: 10px;
+    padding: 18px 12px;
+    text-align: center;
+    border: 1px dashed $line;
+    border-radius: 10px;
+    font-size: 0.9231em; color: $ink-3; } // 0.75rem / 0.8125rem
+
+  &__judge-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    text-align: left;
+    padding: 10px 11px;
+    border: 1px solid $line;
+    border-radius: 10px;
+    background: $card;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+
+    &:hover { border-color: $ink-3; }
+    &--on { border-color: $signal; background: $wash; }
+  }
+
+  &__radio {
+    flex-shrink: 0;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    border: 1.5px solid $ink-3;
+    background: $card;
+    transition: border-width 0.14s ease, border-color 0.14s ease;
+    &--on { border-color: $signal; border-width: 5px; }
+  }
+
+  &__judge-name {
+    font-size: 1.0769em; // 0.875rem / 0.8125rem
+    font-weight: 600;
+    color: $ink;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    // Same extra wide-screen boost as the subgroup cards (.ev__check-label)
+    // above — otherwise the judge model list reads smaller than the rest
+    // of the metrics step at this width.
+    @media (min-width: 1800px) {
+      font-size: 1.2308em; // 1rem / 0.8125rem
+    }
+  }
+  &__judge-meta {
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    color: $ink-3;
+
+    @media (min-width: 1800px) {
+      font-size: 1.0769em; // 0.875rem / 0.8125rem
+    }
+  }
+
+  // ========================================================================
+  // Review step
+  // ========================================================================
+  &__summary {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+  }
+
+  &__summary-cell {
+    padding: 16px;
+    border: 1px solid $line;
+    border-radius: 14px;
+    background: $paper;
+  }
+
+  &__summary-k {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    @extend %micro;
+    font-size: 0.6923em; // 0.5625rem / 0.8125rem
+    color: $ink-3;
+    margin-bottom: 8px;
+    svg { color: $signal; }
+  }
+
+  &__summary-v { font-family: $mono; font-size: 1.8462em; font-weight: 700; color: $ink; letter-spacing: -0.02em; line-height: 1; } // 1.5rem / 0.8125rem
+  &__summary-v--muted { color: $ink-3; }
+
+  &__block { margin-top: 26px; }
+
+  &__block-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    @extend %micro;
+    font-size: 0.7692em; // 0.625rem / 0.8125rem
+    color: $ink-2;
+    margin-bottom: 12px;
+    svg { color: $signal; }
+    b { color: $ink-3; font-weight: 700; }
+  }
+
+  &__rows {
+    border: 1px solid $line;
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  &__row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 15px;
+    border-bottom: 1px solid $line-2;
+    font-size: 1.0385em; &:last-child { border-bottom: 0; } // 0.84375rem / 0.8125rem
+
+    span:first-child { @extend %micro; font-size: 0.7692em; color: $ink-3; } // 0.625rem / 0.8125rem
+    span:last-child { color: $ink; font-weight: 600; text-align: right; }
+  }
+
+  &__review-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 10px;
+  }
+
+  &__review-card {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    padding: 12px 14px;
+    border: 1px solid $line;
+    border-radius: 12px;
+    background: $paper;
+  }
+  &__review-card-icon {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+    display: grid;
+    place-items: center;
+    background: $card;
+    border: 1px solid $line;
+    color: $signal;
+  }
+  &__review-card-name { font-family: $display; font-size: 1em; font-weight: 700; color: $ink; } // 0.8125rem / 0.8125rem (base)
+  &__review-card-sub { font-size: 0.8846em; color: $ink-3; margin-top: 1px; } // 0.71875rem / 0.8125rem
+
+  &__metric-tags { display: flex; flex-wrap: wrap; gap: 7px; }
+  &__metric-tag {
+    font-size: 0.9615em; // 0.78125rem / 0.8125rem
+    font-weight: 600;
+    color: $signal;
+    background: $wash;
+    border: 1px solid rgba($signal, 0.2);
+    border-radius: 8px;
+    padding: 5px 11px;
+  }
+
+  &__empty {
+    padding: 20px;
+    text-align: center;
+    border: 1px dashed $line;
+    border-radius: 12px;
+    background: $paper;
+    color: $ink-3;
+    font-size: 1.0385em; } // 0.84375rem / 0.8125rem
+
+  &__error {
+    margin-top: 18px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 1em; // 0.8125rem / 0.8125rem (base)
+    font-weight: 500;
+    color: $danger;
+    background: $danger-wash;
+    border: 1px solid rgba($danger, 0.2);
+    border-radius: 10px;
+    padding: 11px 14px;
+  }
+
+  &__spin { animation: ev-spin 0.8s linear infinite; }
 }
 
-// UI-only draft built up across the wizard's 7 steps (spec §6).
-export interface EvaluationDraft {
-  name: string;
-  type: 'model' | 'agent' | 'rag' | null;
-  providers: string[];
-  models: string[];
-  // How the Models step's max_retries/timeout are applied: 'all' sends one
-  // shared value for every selected model (top-level max_retries/timeout
-  // on the request); 'individual' sends model_retry_config, one entry per
-  // model. retryConfigAll is only meaningful in 'all' mode; modelRetryConfig
-  // entries are still kept in sync with `models` regardless of mode, so
-  // switching modes never loses previously-entered per-model values.
-  retryConfigMode: 'all' | 'individual'; // default 'individual'
-  retryConfigAll: ModelRetryConfig; // default { max_retries: 1, timeout: 60 }
-  modelRetryConfig: Record<string, ModelRetryConfig>;
-  dataset: string | null;
-  subgroup: string[];
-  // 'custom': runSamples is a user-entered count, sent as-is.
-  // 'full': the whole dataset is used — runSamples is sent as 0 regardless
-  // of the last custom value entered (see NewEvaluation.tsx `launch`).
-  runSamplesMode: 'custom' | 'full'; // default 'custom'
-  runSamples: number; // default 10 — only meaningful when runSamplesMode === 'custom'
-  metrics: string[];
-  judgeModelId: string | null;
-  // judgeApiKey intentionally omitted — no longer collected (spec §1.4)
-  agentFramework: string | null;
-  // RAG-only — see CreateEvaluationRequest.top_k. Only meaningful (and
-  // only shown in the UI) when type === 'rag'.
-  topK: number; // default 5, 1–50
-  // Optional free-text evaluation instruction (Metrics step). Either
-  // typed directly or pre-filled via the "Generate Instruction" button
-  // and then edited — always editable either way.
-  instruction: string; // default ''
-  // Model-only (Metrics step) — retest a wrong answer against the judge up
-  // to retestMaxRounds times, using retestVerifyMetric (a single built-in
-  // metric name) to decide pass/fail on each retest. retestMaxRounds/
-  // retestVerifyMetric are only meaningful — and only shown in the UI —
-  // when retestOnWrong is true.
-  retestOnWrong: boolean; // default false
-  retestMaxRounds: number; // default 3, 1–15
-  retestVerifyMetric: string | null; // default null
+// ===========================================================================
+// Dataset preview slider (Change-2) — right-to-left panel opened from a
+// Test Suite card's "Preview" button. Kept as top-level (non-&__) classes
+// since it's an overlay outside the .ev tree, same pattern as .ev-toast.
+// ===========================================================================
+.ev-preview-overlay {
+  // master scale control for this subtree — cascades to .ev-preview-panel
+  // and its descendants below. See $ev-base-font above.
+  font-size: $ev-base-font;
+
+  @media (min-width: 1800px) {
+    font-size: 1rem;
+  }
+
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(10, 11, 15, 0.38);
+  display: flex;
+  justify-content: flex-end;
+  animation: ev-fade-in 0.2s ease both;
+}
+
+.ev-preview-panel {
+  width: min(440px, 100vw);
+  height: 100%;
+  background: $card;
+  border-left: 1px solid $line;
+  box-shadow: -20px 0 40px -16px rgba(0, 0, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  animation: ev-slide-in 0.28s cubic-bezier(0.22, 0.72, 0.16, 1) both;
+}
+
+.ev-preview-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid $line-2;
+}
+
+.ev-preview-head-main { min-width: 0; }
+
+.ev-preview-eyebrow {
+  @extend %micro;
+  font-size: 0.7692em; color: $signal; } // 0.625rem / 0.8125rem
+
+.ev-preview-title {
+  margin-top: 6px;
+  font-family: $display;
+  font-size: 1.3077em; // 1.0625rem / 0.8125rem
+  font-weight: 800;
+  letter-spacing: -0.015em;
+  color: $ink;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.ev-preview-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid $line;
+  border-radius: 9px;
+  background: $paper;
+  color: $ink-2;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+  &:hover { border-color: $ink-3; color: $ink; }
+}
+
+// ---- image lightbox (MinIO object-preview style) — a centered modal for
+// viewing a question's input.images[], distinct from the slide-in
+// .ev-preview-* panel it's launched from. ------------------------------
+.ev-imgview-overlay {
+  font-size: $ev-base-font;
+
+  @media (min-width: 1800px) {
+    font-size: 1rem;
+  }
+
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(10, 11, 15, 0.62);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  animation: ev-fade-in 0.18s ease both;
+}
+
+.ev-imgview-panel {
+  width: min(720px, 100%);
+  max-height: 100%;
+  background: $ink-solid;
+  border-radius: 16px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 30px 60px -20px rgba(0, 0, 0, 0.55);
+  animation: ev-toast-in 0.22s cubic-bezier(0.22, 0.72, 0.16, 1) both;
+}
+
+.ev-imgview-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 12px 12px 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ev-imgview-path {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: $mono;
+  font-size: 0.9231em; // 0.75rem / 0.8125rem
+  font-weight: 600;
+  color: #fff;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+
+  svg { flex-shrink: 0; color: rgba(255, 255, 255, 0.55); }
+}
+
+.ev-imgview-count {
+  flex-shrink: 0;
+  font-family: $mono;
+  font-size: 0.8462em; // 0.6875rem / 0.8125rem
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.ev-imgview-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+  &:hover { border-color: rgba(255, 255, 255, 0.4); color: #fff; background: rgba(255, 255, 255, 0.08); }
+}
+
+.ev-imgview-body {
+  position: relative;
+  min-height: 260px;
+  max-height: calc(100vh - 180px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  overflow: auto;
+}
+
+.ev-imgview-img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100vh - 220px);
+  border-radius: 6px;
+  object-fit: contain;
+}
+
+.ev-imgview-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.9231em; // 0.75rem / 0.8125rem
+
+  .ev__error { color: $danger; }
+}
+
+.ev-imgview-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.35);
+  color: #fff;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, opacity 0.15s ease;
+
+  &:hover:not(:disabled) { border-color: rgba(255, 255, 255, 0.4); background: rgba(0, 0, 0, 0.55); }
+  &:disabled { opacity: 0.3; cursor: not-allowed; }
+}
+.ev-imgview-nav--prev { left: 12px; }
+.ev-imgview-nav--next { right: 12px; }
+
+.ev-preview-controls {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 20px;
+  border-bottom: 1px solid $line-2;
+  background: $paper;
+}
+
+.ev-preview-limit { min-width: 0; }
+
+.ev-preview-limit-label {
+  @extend %micro;
+  font-size: 0.7692em; // 0.625rem / 0.8125rem
+  color: $ink-2;
+  display: block;
+  margin-bottom: 8px;
+}
+
+.ev-preview-limit-range {
+  font-family: $sans;
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: 500;
+  color: $ink-3;
+}
+
+.ev-preview-limit-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ev-preview-stepper-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1.5px solid $line;
+  border-radius: 8px;
+  background: $card;
+  color: $ink-2;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+
+  &:hover:not(:disabled) { border-color: $signal; color: $signal; }
+  &:disabled { cursor: not-allowed; opacity: 0.4; }
+}
+
+.ev-preview-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 20px 24px;
+}
+
+.ev-preview-skel-list,
+.ev-preview-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ev-preview-skel-card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 14px 15px;
+  border: 1px solid $line;
+  border-radius: 12px;
+  background: $paper;
+}
+
+.ev-preview-q {
+  padding: 14px 15px;
+  border: 1px solid $line;
+  border-radius: 12px;
+  background: $paper;
+}
+
+.ev-preview-q-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.ev-preview-q-index {
+  font-family: $mono;
+  font-size: 0.8462em; // 0.6875rem / 0.8125rem
+  font-weight: 700;
+  color: $signal;
+  background: $wash;
+  border-radius: 6px;
+  padding: 2px 7px;
+}
+
+.ev-preview-q-cat {
+  font-family: $mono;
+  font-size: 0.8077em; // 0.65625rem / 0.8125rem
+  font-weight: 600;
+  color: $ink-3;
+  background: $card;
+  border: 1px solid $line;
+  border-radius: 6px;
+  padding: 2px 7px;
+}
+
+.ev-preview-q-prompt {
+  font-size: 1.0385em; // 0.84375rem / 0.8125rem
+  color: $ink;
+  line-height: 1.5;
+}
+
+.ev-preview-q-source {
+  margin-top: 4px;
+  font-size: 0.9231em; // 0.75rem / 0.8125rem
+  color: $ink-2;
+  line-height: 1.4;
+
+  span {
+    @extend %micro;
+    font-size: 0.7308em; // 0.59375rem / 0.8125rem
+    color: $ink-3;
+    margin-right: 6px;
+  }
+}
+
+// Thumbnail-style trigger buttons for a question's input.images[] — click
+// opens the MinIO image lightbox (.ev-imgview-* below) for that image.
+.ev-preview-q-images {
+  margin-top: 9px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ev-preview-q-image-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 5px 10px;
+  border: 1px solid $line;
+  border-radius: 8px;
+  background: $card;
+  color: $ink-2;
+  font-family: $sans;
+  font-size: 0.8462em; // 0.6875rem / 0.8125rem
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+  svg { flex-shrink: 0; color: $signal; }
+
+  // Truncate a long filename rather than wrapping/overflowing the pill.
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+
+  &:hover { border-color: $signal; color: $signal; background: $wash; }
+}
+
+.ev-preview-q-choices {
+  margin-top: 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+
+  li {
+    font-size: 0.9615em; // 0.78125rem / 0.8125rem
+    color: $ink-2;
+    padding: 6px 9px;
+    border: 1px solid $line;
+    border-radius: 8px;
+    background: $card;
+  }
+}
+
+.ev-preview-q-answer {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed $line-2;
+  font-size: 1em; // 0.8125rem / 0.8125rem (base)
+  font-weight: 600;
+  color: $ok;
+
+  span {
+    @extend %micro;
+    font-size: 0.7308em; // 0.59375rem / 0.8125rem
+    color: $ink-3;
+    margin-right: 7px;
+  }
+
+  // A second .ev-preview-q-answer block (e.g. Expected followed by
+  // Reference) shouldn't repeat the divider directly under the first one.
+  & + & {
+    margin-top: 6px;
+    padding-top: 0;
+    border-top: 0;
+  }
+}
+
+.ev-preview-q-meta {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ev-preview-q-meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.8462em; // 0.6875rem / 0.8125rem
+  color: $ink-2;
+  background: $paper;
+  border: 1px solid $line;
+  border-radius: 6px;
+  padding: 3px 8px;
+
+  b {
+    @extend %micro;
+    font-size: 0.7692em; // 0.625rem / 0.8125rem
+    color: $ink-3;
+    font-weight: 700;
+  }
+}
+
+@keyframes ev-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes ev-slide-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+// ---- toast (fixed-dark chip, same reasoning as .ev__btn--primary) ---------
+.ev-toast {
+  // master scale control for this subtree — see $ev-base-font above
+  font-size: $ev-base-font;
+
+  @media (min-width: 1800px) {
+    font-size: 1rem;
+  }
+
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px 14px 14px;
+  background: $ink-solid;
+  color: #fff;
+  border-radius: 14px;
+  box-shadow: 0 20px 40px -16px rgba(0, 0, 0, 0.5);
+  animation: ev-toast-in 0.32s cubic-bezier(0.22, 0.72, 0.16, 1) both;
+
+  &__icon {
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    display: grid;
+    place-items: center;
+    background: rgba($ok, 0.2);
+    color: $ink-solid-ok;
+  }
+  &__title { font-family: $display; font-weight: 700; font-size: 1.0385em; } // 0.84375rem / 0.8125rem
+  &__sub { font-size: 0.9231em; color: rgba(255, 255, 255, 0.6); margin-top: 1px; } // 0.75rem / 0.8125rem
+}
+
+// ---- keyframes ------------------------------------------------------------
+@keyframes ev-spin { to { transform: rotate(360deg); } }
+@keyframes ev-shimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+@keyframes ev-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(43, 43, 245, 0.5); }
+  50% { box-shadow: 0 0 0 4px rgba(43, 43, 245, 0); }
+}
+@keyframes ev-mcard-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(43, 43, 245, 0.16); }
+  50% { box-shadow: 0 0 0 5px rgba(43, 43, 245, 0); }
+}
+@keyframes ev-mcard-sheen {
+  0% { background-position: 140% 0; }
+  100% { background-position: -40% 0; }
+}
+@keyframes ev-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes ev-toast-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+// ---- responsive -----------------------------------------------------------
+@media (max-width: 1040px) {
+  .ev__shell { grid-template-columns: 1fr; }
+  .ev__manifest { display: none; }
+  .ev__suite, .ev__metrics { grid-template-columns: 1fr; }
+  .ev__samples-instruction-row { grid-template-columns: 1fr; }
+  .ev__rail, .ev__judge { max-height: 15rem; }
+}
+
+@media (max-width: 640px) {
+  .ev__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
+  .page { padding: 16px 14px 22px; }
+  .ev__stage-head { padding: 18px 18px 15px; }
+  .ev__stage-body { padding: 18px; }
+  .ev__footer { padding: 14px 18px; }
+  .ev__fw-grid { grid-template-columns: 1fr; }
+  .ev__summary { grid-template-columns: 1fr; }
+  .ev__hint { display: none; }
+  .ev__name-input { font-size: 1.6923em; } // 1.375rem / 0.8125rem
+  .ev__step-toolbar { flex-direction: column; align-items: stretch; }
+  .ev__toolbar-search { max-width: none; }
+  .ev-preview-panel { width: 100vw; }
+  .ev-preview-controls { flex-direction: column; align-items: stretch; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ev-preview-overlay, .ev-preview-panel { animation: none !important; }
+  .ev__skel-block { animation: none !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ev *, .ev-toast { animation: none !important; transition: none !important; }
 }
