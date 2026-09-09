@@ -1,335 +1,16 @@
-//Metrics.ts
-import api from '../axiosInstance';
-
-// ---- Evaluation type & metric type (client-side only, no API) -----------
-export type EvalType = 'model' | 'agent' | 'rag';
-export type MetricType = 'visual' | 'prompt' | 'code' | 'simple';
-// Agent evaluations split into two sub-categories server-side; selecting
-// one changes which templates/code-templates endpoint gets called.
-export type AgentSubcategory = 'tools' | 'answer';
-
-// ---- Prompt Builder — GET /metrics/templates -----------------------------
-export interface PromptTemplate {
-  category: string; // "llm" | "agent" | "rag"
-  description: string;
-  label: string;
-  name: string;
-  template: string;
-  uses_placeholders: string[];
-}
-
-// A placeholder token available for use inside a judge prompt (e.g. {input}).
-export interface PromptTemplatePlaceholder {
-  name: string;
-  label: string;
-  description: string;
-  syntax: string; // e.g. "{input}"
-  category: string;
-}
-
-// A built-in, pre-defined check the backend already knows how to score —
-// the user just picks one and fills in its params (no prompt/code needed).
-export interface BuiltinCheckParam {
-  key: string;
-  label: string;
-  type: string; // "bool" | "number" | "string" | ...
-  default_value: unknown;
-  required: boolean;
-}
-
-export interface BuiltinCheck {
-  id: string;
-  name: string;
-  description: string;
-  applicable_eval_types: EvalType[];
-  params: BuiltinCheckParam[];
-}
-
-// Full /metrics/templates response — templates, the placeholder reference
-// list, and the built-in check catalog all arrive together.
-export interface PromptTemplatesData {
-  templates: PromptTemplate[];
-  placeholders: PromptTemplatePlaceholder[];
-  builtin_checks: BuiltinCheck[];
-}
-
-// ---- Code Editor — GET /metrics/code-templates/{eval_type} ----------------
-export interface CodeTemplateData {
-  eval_type: string;
-  code: string;
-}
-
-// ---- Judge model (Prompt Builder) — GET /models ---------------------------
-export interface ModelSummary {
-  id: string;
-  name: string;
-  provider_id: string;
-  category: string;
-  capabilities: string[];
-  context_window: number;
-  input_price: number | null;
-  output_price: number | null;
-  accuracy_score: number | null;
-  agent_score: number | null;
-  is_active: boolean;
-  base_url: string;
-}
-
-export interface ModelHealthData {
-  success: boolean;
-  message: string;
-  model_id: string;
-  response: string;
-}
-
-// ---- Datasets ---------------------------------------------------------
-export interface DatasetSummary {
-  id: string;
-  name: string;
-  question_count: number;
-}
-
-export interface PreviewQuestion {
-  id: string;
-  input: { prompt: string };
-  expected: { answer: string };
-}
-
-export interface DatasetPreviewData {
-  dataset_id: string;
-  questions: PreviewQuestion[];
-}
-
-// ---- Validate (dry run) — POST /metrics/custom/preview --------------------
-export interface RuleDef {
-  field: string;
-  operator: string;
-  value: string;
-  compare_to_field: boolean;
-}
-
-export interface MetricDefinition {
-  rules?: RuleDef[];
-  // NB: the spec's own example literally spells this "prompt_tenplate" —
-  // treating that as a typo and using the correct spelling here.
-  prompt_template?: string;
-  code?: string;
-  skip_validation?: boolean;
-  // Built-in check selection (Simple metric type): which check, and the
-  // param values the user filled in for it.
-  subtype?: string;
-  params?: Record<string, unknown>;
-}
-
-export interface TestCasePayload {
-  input: string;
-  actual_output: string;
-  expected_output: string;
-  context: string[];
-  retrieval_context: string[];
-  tools_called: string[];
-  expected_tools: string[];
-}
-
-export interface JudgeConfig {
-  model_id: string;
-}
-
-export interface ValidateMetricRequest {
-  actual_output: string;
-  context: string[];
-  definition: MetricDefinition;
-  description: string;
-  eval_types: EvalType[];
-  expected_output: string;
-  expected_tools: string[];
-  gates: string[];
-  input: string;
-  judge_config: JudgeConfig | null;
-  metric_type: string; // "condition" | "prompt" | "code" | "simple"
-  name: string;
-  retrieval_context: string[];
-  test_cases: TestCasePayload[];
-  threshold: string; // sent as a string, e.g. "0.70"
-  tools_called: string[];
-}
-
-export interface ValidateResultItem {
-  score: number;
-  reason: string;
-  success: boolean;
-  test_case: TestCasePayload;
-}
-
-export interface ValidateMetricData {
-  results: ValidateResultItem[];
-  total: number;
-  passed: number;
-}
-
-// ---- Save — POST /metrics/custom -------------------------------------
-export interface SaveMetricRequest {
-  definition: MetricDefinition;
-  description: string;
-  eval_types: EvalType[];
-  metric_type: string;
-  name: string;
-  threshold: string;
-  // Not shown in the spec's request sample, but included defensively since
-  // Prompt Builder metrics can't be scored without a judge model — drop
-  // this if the backend rejects the extra field.
-  judge_config?: JudgeConfig | null;
-}
-
-export interface SaveMetricData {
-  id?: string;
-  name?: string;
-}
-
-// ---- Delete — DELETE /metrics/custom/{metric_id} --------------------------
-export interface DeleteMetricData {
-  status: string;
-  metric_id: string;
-}
-
-// ---- Dashboard: saved custom metrics ---------------------------------
-export interface CustomMetricRuleDef {
-  field: string;
-  operator: string;
-  value: string;
-  compared_to_field: boolean;
-}
-
-export interface CustomMetricDefinition {
-  subtype?: string;
-  params?: Record<string, unknown>;
-  rules?: CustomMetricRuleDef[];
-}
-
-export interface CustomMetric {
-  id: string;
-  name: string;
-  description: string;
-  metric_type: string;
-  eval_types: string[];
-  definition: CustomMetricDefinition;
-  requires_judge: boolean;
-  threshold: number;
-  is_active: boolean;
-  created_by_id: number;
-  created_at: string;
-  updated_at: string;
-}
-
-// None of these endpoints wrap their body in a { status, data } envelope —
-// every response below is the payload itself, so each call just unwraps
-// axios's own `r.data` and normalizes array fields to [] where the backend
-// might omit them.
-export const metricsApi = {
-  // Dashboard — GET /metrics/custom -> { metrics: [...] }
-  list: () =>
-    api.get<{ metrics: CustomMetric[] }>('/metrics/custom').then((r) => r.data.metrics || []),
-
-  // Prompt Builder & Code Editor reference data — GET /metrics/templates.
-  // For Agent evaluations, the caller must also pass which sub-category
-  // (tools vs answer) is selected; that swaps in
-  // ?eval_type=agent&subcategory=<tools|answer>. For Model/RAG, no query
-  // params are sent (unchanged from before).
-  getPromptTemplates: (evalType?: EvalType, subcategory?: AgentSubcategory) =>
-    api
-      .get<PromptTemplatesData>('/metrics/templates', {
-        params: evalType === 'agent' && subcategory ? { eval_type: evalType, subcategory } : undefined,
-      })
-      .then((r) => ({
-        templates: r.data.templates || [],
-        placeholders: r.data.placeholders || [],
-        builtin_checks: r.data.builtin_checks || [],
-      })),
-
-  // Code Editor — GET /metrics/code-templates/{eval_type}. For Agent, also
-  // passes ?subcategory=<tools|answer> once the sub-category is chosen.
-  getCodeTemplate: (evalType: EvalType, subcategory?: AgentSubcategory) =>
-    api
-      .get<CodeTemplateData>(`/metrics/code-templates/${evalType}`, {
-        params: evalType === 'agent' && subcategory ? { subcategory } : undefined,
-      })
-      .then((r) => r.data),
-
-  // Prompt Builder — GET /models
-  listModels: () =>
-    api.get<{ models: ModelSummary[] }>('/models').then((r) => r.data.models || []),
-
-  // Prompt Builder — per-model health ping. Failures (network error, or a
-  // body missing `success`) resolve to an "unreachable" fallback instead
-  // of throwing, since an offline model is a normal UI state, not an
-  // exceptional one.
-  checkModelHealth: (modelId: string) =>
-    api
-      .get<ModelHealthData>(`/models/health/${modelId}`)
-      .then((r) => ('success' in r.data ? r.data : { success: false, message: 'Unreachable', model_id: modelId, response: '' }))
-      .catch(() => ({ success: false, message: 'Unreachable', model_id: modelId, response: '' })),
-
-  // Dataset selection — GET /datasets?eval_type={evalType}
-  listDatasets: (evalType: EvalType) =>
-    api
-      .get<{ total_count: number; datasets: DatasetSummary[] }>('/datasets', { params: { eval_type: evalType } })
-      .then((r) => r.data.datasets || []),
-
-  // GET /datasets/{dataset_id}/preview
-  previewDataset: (datasetId: string) =>
-    api.get<DatasetPreviewData>(`/datasets/${datasetId}/preview`).then((r) => ({
-      ...r.data,
-      questions: r.data.questions || [],
-    })),
-
-  // Footer "Validate Metric" — POST /metrics/custom/preview. Doesn't
-  // persist anything; a successful response with results unlocks Save.
-  validate: (payload: ValidateMetricRequest) =>
-    api.post<ValidateMetricData>('/metrics/custom/preview', payload).then((r) => ({
-      ...r.data,
-      results: r.data.results || [],
-    })),
-
-  // "Save Metric" — POST /metrics/custom. Response body beyond "200 OK"
-  // isn't specified, so `id`/`name` are optional here.
-  create: (payload: SaveMetricRequest) =>
-    api.post<SaveMetricData | void>('/metrics/custom', payload).then((r) => r.data || {}),
-
-  // Dashboard "Delete" — DELETE /metrics/custom/{metric_id} -> { status, metric_id }
-  remove: (metricId: string) =>
-    api.delete<DeleteMetricData>(`/metrics/custom/${metricId}`).then((r) => r.data),
-};
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 //Createmetric.tsx
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle, ArrowRight, Check, CheckCircle2, ChevronRight, Code2, Cpu, Database,
-  ListChecks, Loader2, MessageSquare, Plus, ScrollText, SlidersHorizontal, Sparkles, Target,
-  Wrench, X, XCircle, Zap,
+  ListChecks, Loader2, MessageSquare, Plus, Repeat, ScrollText, SlidersHorizontal, Sparkles,
+  Target, TextSearch, Wrench, X, XCircle, Zap,
 } from 'lucide-react';
 import styles from './CreateMetric.module.scss';
 import { useToast } from './useToast';
 import CustomSelect from './CustomSelect';
 import {
-  metricsApi, EvalType, MetricType, AgentSubcategory, PromptTemplate, PromptTemplatePlaceholder,
-  BuiltinCheck, ModelSummary, DatasetSummary, PreviewQuestion, ValidateMetricData, RuleDef,
+  metricsApi, AgentSubcategory, BuiltinCheckDef, EvalType, MetricType, PromptTemplate,
+  ModelSummary, DatasetSummary, PreviewQuestion, ValidateMetricData, RuleDef,
 } from '../../api/endpoints/metrics';
 
 interface CreateMetricProps {
@@ -348,14 +29,7 @@ const METRIC_TYPE_CARDS: { key: MetricType; label: string; desc: string; icon: J
   { key: 'visual', label: 'Visual Builder', desc: 'Field comparisons joined with AND/OR logic. No code.', icon: <SlidersHorizontal size={18} /> },
   { key: 'prompt', label: 'Prompt Builder', desc: 'An LLM judge scored with a prompt template.', icon: <Sparkles size={18} /> },
   { key: 'code', label: 'Code Editor', desc: 'A custom Python scoring function.', icon: <Code2 size={18} /> },
-  { key: 'simple', label: 'Simple', desc: 'Pick a built-in check and configure it.', icon: <Target size={18} /> },
-];
-
-// Agent evaluations split into two focuses server-side — picking one
-// changes which /metrics/templates and /metrics/code-templates call runs.
-const AGENT_SUBCATEGORY_CARDS: { key: AgentSubcategory; label: string; desc: string; icon: JSX.Element }[] = [
-  { key: 'tools', label: 'Tool Evaluation', desc: 'Score how the agent selects and calls tools.', icon: <Wrench size={18} /> },
-  { key: 'answer', label: 'Answer Evaluation', desc: 'Score the agent\u2019s final answer to the user.', icon: <MessageSquare size={18} /> },
+  { key: 'simple', label: 'Simple', desc: 'A built-in pass/fail check — no prompt or code needed.', icon: <Target size={18} /> },
 ];
 
 const FIELDS_BY_EVAL_TYPE: Record<EvalType, string[]> = {
@@ -386,6 +60,27 @@ const METRIC_TYPE_TO_API: Record<MetricType, string> = {
 
 const EVAL_TYPE_TO_CATEGORY: Record<EvalType, string> = { model: 'llm', agent: 'agent', rag: 'rag' };
 
+// Agent-only: which part of the agent's behavior this metric evaluates —
+// scopes both the Prompt Builder templates and the Code Editor starter
+// code via a `subcategory` query param.
+const AGENT_SUBCATEGORY_CARDS: { key: AgentSubcategory; label: string; desc: string; icon: JSX.Element }[] = [
+  { key: 'tools', label: 'Tool Evaluation', desc: 'Score which tools the agent called and how.', icon: <Wrench size={18} /> },
+  { key: 'answer', label: 'Answer Evaluation', desc: 'Score the agent\u2019s final response.', icon: <MessageSquare size={18} /> },
+];
+
+// ---- Simple metric type — Built-in Check icons --------------------------
+// Built-in checks themselves now come from the API (GET /metrics/templates
+// -> builtin_checks), since their id/params can vary server-side. Icons
+// aren't part of that response, so map known ids to one and fall back to
+// a generic icon for anything unrecognized.
+const BUILTIN_CHECK_ICONS: Record<string, JSX.Element> = {
+  contains_keywords: <TextSearch size={18} />,
+  exact_match: <Target size={18} />,
+  agent_loop_detection: <Repeat size={18} />,
+  tool_correctness: <Wrench size={18} />,
+};
+const builtinCheckIcon = (id: string) => BUILTIN_CHECK_ICONS[id] || <ListChecks size={18} />;
+
 type CompareType = 'field' | 'literal';
 interface RuleRow { id: number; field: string; operator: string; compareType: CompareType; value: string; }
 let ruleSeq = 1;
@@ -413,21 +108,24 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
 
   // type
   const [evalType, setEvalType] = useState<EvalType | null>(null);
-  const [agentSubcategory, setAgentSubcategory] = useState<AgentSubcategory | null>(null);
   const [metricType, setMetricType] = useState<MetricType | null>(null);
+  // Agent-only sub-scope (Tool Evaluation / Answer Evaluation) — required
+  // before Prompt Builder templates or Code Editor starter code can load
+  // when evalType === 'agent'.
+  const [agentSubcategory, setAgentSubcategory] = useState<AgentSubcategory | null>(null);
 
   // config: visual
   const [rules, setRules] = useState<RuleRow[]>([{ id: ruleSeq, field: 'actual_output', operator: 'contains', compareType: 'field', value: 'input' }]);
   const [gates, setGates] = useState<('AND' | 'OR')[]>([]);
 
-  // template/reference data — shared by Prompt Builder (templates +
-  // placeholders) and Simple (builtin_checks), all from one API call keyed
-  // off evalType (+ agentSubcategory for agent).
-  const [promptTemplates, setPromptTemplates] = useState<PromptTemplate[]>([]);
-  const [placeholders, setPlaceholders] = useState<PromptTemplatePlaceholder[]>([]);
-  const [builtinChecks, setBuiltinChecks] = useState<BuiltinCheck[]>([]);
-  const [promptTemplatesLoading, setPromptTemplatesLoading] = useState(false);
-  const [promptTemplatesError, setPromptTemplatesError] = useState('');
+  // templates data — GET /metrics/templates. Serves both the Prompt
+  // Builder (templates + placeholders) and the Simple/Built-in Check
+  // config (builtin_checks), since both live behind the same endpoint
+  // and both depend on evalType (and, for agent, agentSubcategory).
+  const [templates, setTemplates] = useState<PromptTemplate[]>([]);
+  const [builtinChecks, setBuiltinChecks] = useState<BuiltinCheckDef[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [templatesError, setTemplatesError] = useState('');
 
   // config: prompt
   const [selectedTemplateName, setSelectedTemplateName] = useState('');
@@ -443,9 +141,11 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
   const [codeLoading, setCodeLoading] = useState(false);
   const [codeError, setCodeError] = useState('');
 
-  // config: simple (built-in check + its params)
-  const [selectedCheckId, setSelectedCheckId] = useState('');
-  const [checkParams, setCheckParams] = useState<Record<string, unknown>>({});
+  // config: simple — selected built-in check id + its params, keyed
+  // dynamically off whatever `params` the API returned for that check
+  // (no more hardcoded per-check fields).
+  const [builtinCheck, setBuiltinCheck] = useState<string | null>(null);
+  const [builtinParams, setBuiltinParams] = useState<Record<string, unknown>>({});
 
   // threshold (shared across all config types)
   const [threshold, setThreshold] = useState(0.7);
@@ -477,20 +177,53 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
     setAgentSubcategory(null);
     setDatasets([]); setSelectedDatasetId(''); setPreviewQuestions([]); setSelectedQuestionIds(new Set());
     setCode(''); setPromptText(''); setSelectedTemplateName(''); setValidateResult(null); setSavedId('');
-    setPromptTemplates([]); setPlaceholders([]); setBuiltinChecks([]);
-    setSelectedCheckId(''); setCheckParams({});
+    setTemplates([]); setBuiltinChecks([]);
+    // Built-in check availability depends on eval type (e.g. Agent Loop
+    // Detection / Tool Correctness are agent-only) — clear the selection
+    // so a now-unavailable check can't stay silently selected.
+    setBuiltinCheck(null); setBuiltinParams({});
   };
-  const handleAgentSubcategory = (sub: AgentSubcategory) => {
-    if (sub === agentSubcategory) return;
-    setAgentSubcategory(sub);
+  const handleAgentSubcategory = (s: AgentSubcategory) => {
+    if (s === agentSubcategory) return;
+    setAgentSubcategory(s);
     setCode(''); setPromptText(''); setSelectedTemplateName(''); setValidateResult(null); setSavedId('');
-    setPromptTemplates([]); setPlaceholders([]); setBuiltinChecks([]);
-    setSelectedCheckId(''); setCheckParams({});
+    setTemplates([]); setBuiltinChecks([]);
+    setBuiltinCheck(null); setBuiltinParams({});
   };
   const handleMetricType = (t: MetricType) => {
     if (t === metricType) return;
     setMetricType(t); setValidateResult(null); setSavedId('');
+    if (t !== 'simple') { setBuiltinCheck(null); setBuiltinParams({}); }
   };
+
+  const handleBuiltinCheck = (check: BuiltinCheckDef) => {
+    if (check.id === builtinCheck) return;
+    setBuiltinCheck(check.id); setValidateResult(null); setSavedId('');
+    // Seed params from each field's default_value so the form (and a
+    // preview run without touching anything) starts from a sane state.
+    const init: Record<string, unknown> = {};
+    check.params.forEach((p) => {
+      if (p.type === 'list' || p.type === 'string_list') {
+        init[p.key] = Array.isArray(p.default_value) ? (p.default_value as string[]).join(', ') : (p.default_value ?? '');
+      } else if (p.type === 'bool') {
+        init[p.key] = Boolean(p.default_value);
+      } else if (p.type === 'number') {
+        init[p.key] = typeof p.default_value === 'number' ? p.default_value : 0;
+      } else {
+        init[p.key] = p.default_value ?? '';
+      }
+    });
+    setBuiltinParams(init);
+  };
+
+  const availableBuiltinChecks = useMemo(
+    () => (evalType ? builtinChecks.filter((c) => c.applicable_eval_types.includes(evalType)) : []),
+    [evalType, builtinChecks],
+  );
+  const selectedBuiltinCheckDef = useMemo(
+    () => availableBuiltinChecks.find((c) => c.id === builtinCheck) || null,
+    [availableBuiltinChecks, builtinCheck],
+  );
 
   // ---- visual rules ------------------------------------------------------
   const addRule = () => {
@@ -509,37 +242,28 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
   const updateRule = (id: number, patch: Partial<RuleRow>) => setRules((r) => r.map((row) => (row.id === id ? { ...row, ...patch } : row)));
   const toggleGate = (idx: number) => setGates((g) => g.map((v, i) => (i === idx ? (v === 'AND' ? 'OR' : 'AND') : v)));
 
-  // ---- templates / placeholders / builtin checks -------------------------
-  // One shared fetch, keyed on evalType (+ agentSubcategory for agent),
-  // since Prompt Builder (templates + placeholders) and Simple
-  // (builtin_checks) both read from this same /metrics/templates response.
+  // ---- templates (Prompt Builder templates + Simple built-in checks) ----
+  // Both Prompt Builder and Simple need this same endpoint, scoped by
+  // evalType and — for agent — by agentSubcategory. Waits for the
+  // subcategory pick before fetching when evalType is 'agent'.
   useEffect(() => {
-    if (!evalType) return;
-    if (evalType === 'agent' && !agentSubcategory) return; // wait for Tool/Answer pick
-    setPromptTemplatesLoading(true); setPromptTemplatesError('');
-    metricsApi.getPromptTemplates(evalType, agentSubcategory ?? undefined)
-      .then((res) => {
-        setPromptTemplates(res.templates);
-        setPlaceholders(res.placeholders);
-        setBuiltinChecks(res.builtin_checks);
-      })
-      .catch((e) => setPromptTemplatesError(e.message || 'Failed to load templates'))
-      .finally(() => setPromptTemplatesLoading(false));
+    if (!evalType) { setTemplates([]); setBuiltinChecks([]); return; }
+    if (evalType === 'agent' && !agentSubcategory) { setTemplates([]); setBuiltinChecks([]); return; }
+    setTemplatesLoading(true); setTemplatesError('');
+    const scope = evalType === 'agent' && agentSubcategory ? { evalType, subcategory: agentSubcategory } : undefined;
+    metricsApi.getPromptTemplates(scope)
+      .then((res) => { setTemplates(res.templates); setBuiltinChecks(res.builtin_checks); })
+      .catch((e) => setTemplatesError(e.message || 'Failed to load templates'))
+      .finally(() => setTemplatesLoading(false));
   }, [evalType, agentSubcategory]);
 
-  const matchingTemplates = useMemo(() => {
-    // For Agent, the server already scopes results by eval_type+subcategory;
-    // for Model/RAG it returns everything, so filter by category client-side.
-    if (evalType === 'agent') return promptTemplates;
-    return promptTemplates.filter((t) => t.category === (evalType ? EVAL_TYPE_TO_CATEGORY[evalType] : ''));
-  }, [promptTemplates, evalType]);
-  const allowsCustomPrompt = evalType === 'agent' || evalType === 'rag';
-
-  const applicableChecks = useMemo(
-    () => builtinChecks.filter((c) => !evalType || (c.applicable_eval_types ?? []).includes(evalType)),
-    [builtinChecks, evalType],
+  const matchingTemplates = useMemo(
+    () => templates.filter((t) => t.category === (evalType ? EVAL_TYPE_TO_CATEGORY[evalType] : '')),
+    [templates, evalType],
   );
-  const selectedCheck = useMemo(() => applicableChecks.find((c) => c.id === selectedCheckId) ?? null, [applicableChecks, selectedCheckId]);
+  // Custom Prompt is available for every evaluation type — Model included,
+  // same as Agent and RAG.
+  const allowsCustomPrompt = evalType === 'agent' || evalType === 'rag' || evalType === 'model';
 
   useEffect(() => {
     if (metricType !== 'prompt' || models.length) return;
@@ -560,12 +284,13 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
   // ---- code template -----------------------------------------------------
   useEffect(() => {
     if (metricType !== 'code' || !evalType) return;
-    if (evalType === 'agent' && !agentSubcategory) return; // wait for Tool/Answer pick
-    setCodeLoading(true); setCodeError('');
-    metricsApi.getCodeTemplate(evalType, agentSubcategory ?? undefined)
+    if (evalType === 'agent' && !agentSubcategory) return;
+    setCodeLoading(true); setCodeError(''); setCode('');
+    metricsApi.getCodeTemplate(evalType, evalType === 'agent' ? agentSubcategory ?? undefined : undefined)
       .then((res) => setCode(res.code))
       .catch((e) => setCodeError(e.message || 'Failed to load starter code'))
       .finally(() => setCodeLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [metricType, evalType, agentSubcategory]);
 
   // ---- datasets ----------------------------------------------------------
@@ -621,11 +346,19 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
     if (metricType === 'prompt') return !!promptText.trim() && !!selectedModelId;
     if (metricType === 'code') return !!code.trim();
     if (metricType === 'simple') {
-      if (!selectedCheck) return false;
-      return selectedCheck.params.every((p) => !p.required || (checkParams[p.key] !== undefined && checkParams[p.key] !== ''));
+      if (!selectedBuiltinCheckDef) return false;
+      return selectedBuiltinCheckDef.params
+        .filter((p) => p.required)
+        .every((p) => {
+          const v = builtinParams[p.key];
+          if (p.type === 'bool') return v !== undefined;
+          if (p.type === 'number') return typeof v === 'number' && !Number.isNaN(v) && v > 0;
+          if (p.type === 'list' || p.type === 'string_list') return typeof v === 'string' && v.trim().length > 0;
+          return typeof v === 'string' && v.trim().length > 0;
+        });
     }
     return true;
-  }, [metricType, rules, promptText, selectedModelId, code, selectedCheck, checkParams]);
+  }, [metricType, rules, promptText, selectedModelId, code, selectedBuiltinCheckDef, builtinParams]);
   const datasetComplete = !!selectedDatasetId && selectedQuestionIds.size > 0;
   const canValidate = detailsComplete && typeComplete && configComplete && datasetComplete && threshold >= 0 && threshold <= 1;
   const validateSucceeded = !!validateResult && validateResult.passed > 0;
@@ -647,10 +380,57 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
   const sectionValue: Record<SectionKey, string> = {
     details: name || 'Not set',
     type: evalType && metricType
-      ? `${evalType.toUpperCase()}${agentSubcategory ? ` · ${agentSubcategory === 'tools' ? 'Tools' : 'Answer'}` : ''} · ${METRIC_TYPE_CARDS.find((c) => c.key === metricType)!.label}`
+      ? `${evalType.toUpperCase()}${evalType === 'agent' && agentSubcategory ? ` · ${agentSubcategory === 'tools' ? 'Tool Eval' : 'Answer Eval'}` : ''} · ${METRIC_TYPE_CARDS.find((c) => c.key === metricType)!.label}`
       : 'Not set',
     config: metricType ? (configComplete ? 'Configured' : 'Incomplete') : '—',
     dataset: validateResult ? `${validateResult.passed}/${validateResult.total} passed` : (selectedDatasetId ? `${selectedQuestionIds.size} selected` : 'Not set'),
+  };
+
+  // What's still missing for each incomplete section, surfaced in the rail
+  // so the user knows exactly what to do next instead of just seeing
+  // "Incomplete" / "Not set".
+  const sectionMissing: Record<SectionKey, string> = {
+    details: !name.trim() ? 'Add a metric name' : '',
+
+    type: (() => {
+      if (!evalType && !metricType) return 'Choose an evaluation type and a metric type';
+      if (!evalType) return 'Choose an evaluation type';
+      if (evalType === 'agent' && !agentSubcategory) return 'Choose Tool Evaluation or Answer Evaluation';
+      if (!metricType) return 'Choose a metric type';
+      return '';
+    })(),
+
+    config: (() => {
+      if (!metricType) return 'Pick a metric type in the section above first';
+      if (configComplete) return '';
+      if (metricType === 'visual') return 'Fill in every rule\u2019s field, operator, and value';
+      if (metricType === 'prompt') {
+        if (!promptText.trim() && !selectedModelId) return 'Write a judge prompt and choose a judge model';
+        if (!promptText.trim()) return 'Write a judge prompt';
+        return 'Choose a judge model';
+      }
+      if (metricType === 'code') return 'Add your scoring code';
+      if (metricType === 'simple') {
+        if (!selectedBuiltinCheckDef) return 'Select a built-in check';
+        const missingParam = selectedBuiltinCheckDef.params.find((p) => {
+          const v = builtinParams[p.key];
+          if (!p.required) return false;
+          if (p.type === 'bool') return v === undefined;
+          if (p.type === 'number') return !(typeof v === 'number' && v > 0);
+          return !(typeof v === 'string' && v.trim().length > 0);
+        });
+        if (missingParam) return `Set ${missingParam.label}`;
+      }
+      return '';
+    })(),
+
+    dataset: (() => {
+      if (!evalType) return 'Choose an evaluation type to load datasets';
+      if (!selectedDatasetId) return 'Select a dataset';
+      if (selectedQuestionIds.size === 0) return 'Select at least one test question';
+      if (!validateResult) return 'Run validation to complete this step';
+      return '';
+    })(),
   };
 
   const completedCount = SECTIONS.filter((s) => sectionDone[s.key]).length;
@@ -660,7 +440,26 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
     if (metricType === 'visual') return { rules: rules.map<RuleDef>((r) => ({ field: r.field, operator: r.operator, value: r.value, compare_to_field: r.compareType === 'field' })) };
     if (metricType === 'prompt') return { prompt_template: promptText };
     if (metricType === 'code') return { code, skip_validation: true };
-    if (metricType === 'simple') return { subtype: selectedCheckId, params: checkParams };
+    if (metricType === 'simple') {
+      if (!selectedBuiltinCheckDef) return {};
+      // Convert each param to its API-facing value: list/string_list
+      // params are edited as a comma-separated string but sent as an
+      // array; number params sent as numbers; everything else as-is.
+      const params: Record<string, unknown> = {};
+      selectedBuiltinCheckDef.params.forEach((p) => {
+        const raw = builtinParams[p.key];
+        if (p.type === 'list' || p.type === 'string_list') {
+          params[p.key] = typeof raw === 'string' ? raw.split(',').map((v) => v.trim()).filter(Boolean) : [];
+        } else if (p.type === 'number') {
+          params[p.key] = Number(raw);
+        } else if (p.type === 'bool') {
+          params[p.key] = Boolean(raw);
+        } else {
+          params[p.key] = raw;
+        }
+      });
+      return { subtype: selectedBuiltinCheckDef.id, params };
+    }
     return {};
   };
 
@@ -699,11 +498,11 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
   };
 
   const resetForm = () => {
-    setName(''); setDescription(''); setEvalType(null); setAgentSubcategory(null); setMetricType(null);
+    setName(''); setDescription(''); setEvalType(null); setMetricType(null); setAgentSubcategory(null);
     setRules([{ id: ++ruleSeq, field: 'actual_output', operator: 'contains', compareType: 'field', value: 'input' }]); setGates([]);
-    setPromptTemplates([]); setPlaceholders([]); setBuiltinChecks([]); setSelectedTemplateName(''); setPromptText('');
+    setTemplates([]); setBuiltinChecks([]); setSelectedTemplateName(''); setPromptText('');
     setModels([]); setModelHealth({}); setSelectedModelId(''); setCode(''); setThreshold(0.7);
-    setSelectedCheckId(''); setCheckParams({});
+    setBuiltinCheck(null); setBuiltinParams({});
     setDatasets([]); setSelectedDatasetId(''); setPreviewQuestions([]); setSelectedQuestionIds(new Set());
     setValidateResult(null); setValidateError(''); setSavedId('');
     sectionRefs.details.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -737,6 +536,12 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
                   <span className={styles['rail-step__body']}>
                     <span className={styles['rail-step__label']}>{s.label}</span>
                     <span className={styles['rail-step__value']}>{sectionValue[s.key]}</span>
+                    {!done && sectionMissing[s.key] && (
+                      <span className={styles['rail-step__missing']}>
+                        <AlertCircle size={11} />
+                        {sectionMissing[s.key]}
+                      </span>
+                    )}
                   </span>
                   <ChevronRight size={14} className={styles['rail-step__arrow']} />
                 </button>
@@ -756,13 +561,15 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
                 <h1 className={styles['work__title']}>Name your metric</h1>
                 <p className={styles['work__desc']}>Give it a clear name and, optionally, a short description of what it measures.</p>
 
-                <div className={styles.field}>
-                  <label className={styles['field__label']}>Metric Name</label>
-                  <input className={styles.input} placeholder="e.g., Answer Faithfulness" value={name} onChange={(e) => setName(e.target.value)} />
-                </div>
-                <div className={styles.field}>
-                  <label className={styles['field__label']}>Description</label>
-                  <textarea className={styles.textarea} placeholder="What does this metric measure? (optional)" value={description} onChange={(e) => setDescription(e.target.value)} />
+                <div className={styles['field-row']}>
+                  <div className={styles.field}>
+                    <label className={styles['field__label']}>Metric Name</label>
+                    <input className={styles.input} placeholder="e.g., Answer Faithfulness" value={name} onChange={(e) => setName(e.target.value)} />
+                  </div>
+                  <div className={styles.field}>
+                    <label className={styles['field__label']}>Description</label>
+                    <input className={styles.input} placeholder="What does this metric measure? (optional)" value={description} onChange={(e) => setDescription(e.target.value)} />
+                  </div>
                 </div>
               </div>
 
@@ -788,8 +595,8 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
 
                 {evalType === 'agent' && (
                   <div className={styles.field}>
-                    <label className={styles['field__label']}>Agent Evaluation Focus</label>
-                    <div className={styles['opt-grid']}>
+                    <label className={styles['field__label']}>Agent Focus</label>
+                    <div className={`${styles['opt-grid']} ${styles['opt-grid--3']}`}>
                       {AGENT_SUBCATEGORY_CARDS.map((c) => (
                         <button key={c.key} className={`${styles.opt} ${agentSubcategory === c.key ? styles['opt--selected'] : ''}`} onClick={() => handleAgentSubcategory(c.key)}>
                           {agentSubcategory === c.key && <span className={styles['opt__check']}><Check size={12} /></span>}
@@ -804,7 +611,7 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
 
                 <div className={styles.field}>
                   <label className={styles['field__label']}>Metric Type</label>
-                  <div className={styles['opt-grid']}>
+                  <div className={`${styles['opt-grid']} ${styles['opt-grid--4']}`}>
                     {METRIC_TYPE_CARDS.map((c) => (
                       <button key={c.key} className={`${styles.opt} ${metricType === c.key ? styles['opt--selected'] : ''}`} onClick={() => handleMetricType(c.key)}>
                         {metricType === c.key && <span className={styles['opt__check']}><Check size={12} /></span>}
@@ -885,8 +692,10 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
                   <>
                     <p className={styles['work__desc']}>Pick a judge prompt template (or write your own), then choose a judge model.</p>
 
-                    {promptTemplatesError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {promptTemplatesError}</div>}
-                    {promptTemplatesLoading ? (
+                    {templatesError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {templatesError}</div>}
+                    {evalType === 'agent' && !agentSubcategory ? (
+                      <div className={styles.empty}>Choose Tool Evaluation or Answer Evaluation above first.</div>
+                    ) : templatesLoading ? (
                       <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading templates…</div>
                     ) : (
                       <div className={styles['tpl-list']}>
@@ -895,7 +704,7 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
                           <label key={t.name} className={`${styles.tpl} ${selectedTemplateName === t.name ? styles['tpl--selected'] : ''}`}>
                             <input type="radio" name="tpl" hidden checked={selectedTemplateName === t.name} onChange={() => { setSelectedTemplateName(t.name); setPromptText(t.template); }} />
                             <span className={styles['tpl__radio']} />
-                            <span>
+                            <span className={styles['tpl__body']}>
                               <span className={styles['tpl__label']}>{t.label}</span>
                               <span className={styles['tpl__desc']}>{t.description}</span>
                               {t.uses_placeholders?.length > 0 && (
@@ -910,7 +719,7 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
                           <label className={`${styles.tpl} ${selectedTemplateName === '__custom__' ? styles['tpl--selected'] : ''}`}>
                             <input type="radio" name="tpl" hidden checked={selectedTemplateName === '__custom__'} onChange={() => { setSelectedTemplateName('__custom__'); setPromptText(''); }} />
                             <span className={styles['tpl__radio']} />
-                            <span>
+                            <span className={styles['tpl__body']}>
                               <span className={styles['tpl__label']}>Custom Prompt</span>
                               <span className={styles['tpl__desc']}>Write your own judge prompt from scratch.</span>
                             </span>
@@ -923,25 +732,6 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
                       <div className={styles.field}>
                         <label className={styles['field__label']}>Prompt</label>
                         <textarea className={styles.textarea} style={{ minHeight: '150px' }} value={promptText} onChange={(e) => setPromptText(e.target.value)} placeholder="Enter your judge prompt…" />
-                      </div>
-                    )}
-
-                    {selectedTemplateName && placeholders.length > 0 && (
-                      <div className={styles.field}>
-                        <label className={styles['field__label']}>Available Placeholders</label>
-                        <div className={styles['tpl__tags']} style={{ marginTop: 0 }}>
-                          {placeholders.map((ph) => (
-                            <button
-                              key={ph.name}
-                              type="button"
-                              className={styles.token}
-                              title={ph.description}
-                              onClick={() => setPromptText((prev) => `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}${ph.syntax}`)}
-                            >
-                              {ph.syntax}
-                            </button>
-                          ))}
-                        </div>
                       </div>
                     )}
 
@@ -961,7 +751,7 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
                               <label key={m.id} className={`${styles.model} ${selectedModelId === m.id ? styles['model--selected'] : ''} ${disabled ? styles['model--disabled'] : ''}`}>
                                 <input type="radio" name="judge" hidden checked={selectedModelId === m.id} disabled={disabled} onChange={() => setSelectedModelId(m.id)} />
                                 <span className={styles['model__radio']} />
-                                <span>
+                                <span className={styles['model__body']}>
                                   <span className={styles['model__name']}>{m.name}</span>
                                   <span className={styles['model__meta']}>{m.provider_id}</span>
                                 </span>
@@ -983,91 +773,108 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
                   <>
                     <p className={styles['work__desc']}>Starter code is tailored to the evaluation type. Edit it to suit your metric.</p>
                     {codeError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {codeError}</div>}
-                    <div className={styles.code}>
-                      <div className={styles['code__bar']}>
-                        <span className={styles['code__lang']}>Python</span>
-                        {codeLoading && <Loader2 size={13} className={styles.spin} />}
+                    {evalType === 'agent' && !agentSubcategory ? (
+                      <div className={styles.empty}>Choose Tool Evaluation or Answer Evaluation above first.</div>
+                    ) : (
+                      <div className={styles.code}>
+                        <div className={styles['code__bar']}>
+                          <span className={styles['code__lang']}>Python</span>
+                          {codeLoading && <Loader2 size={13} className={styles.spin} />}
+                        </div>
+                        <textarea className={styles['code__area']} spellCheck={false} value={code} onChange={(e) => setCode(e.target.value)} placeholder="# scoring function" />
                       </div>
-                      <textarea className={styles['code__area']} spellCheck={false} value={code} onChange={(e) => setCode(e.target.value)} placeholder="# scoring function" />
-                    </div>
+                    )}
                   </>
                 )}
 
-                {/* simple — pick a built-in check, then fill in its params */}
+                {/* simple — Built-in Check (checks + params come from the API) */}
                 {metricType === 'simple' && (
                   <>
-                    <p className={styles['work__desc']}>Pick a built-in check for this evaluation type, then fill in its parameters.</p>
+                    <p className={styles['work__desc']}>Pick a built-in check. Available checks depend on the evaluation type selected above.</p>
 
-                    {promptTemplatesError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {promptTemplatesError}</div>}
-                    {promptTemplatesLoading ? (
+                    {templatesError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {templatesError}</div>}
+
+                    {!evalType ? (
+                      <div className={styles.empty}>Choose an evaluation type above to see available checks.</div>
+                    ) : evalType === 'agent' && !agentSubcategory ? (
+                      <div className={styles.empty}>Choose Tool Evaluation or Answer Evaluation above first.</div>
+                    ) : templatesLoading ? (
                       <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading checks…</div>
+                    ) : availableBuiltinChecks.length === 0 ? (
+                      <div className={styles.empty}>No built-in checks for this evaluation type.</div>
                     ) : (
-                      <div className={styles['tpl-list']}>
-                        {applicableChecks.length === 0 && <div className={styles.empty}>No built-in checks for this evaluation type.</div>}
-                        {applicableChecks.map((c) => (
-                          <label key={c.id} className={`${styles.tpl} ${selectedCheckId === c.id ? styles['tpl--selected'] : ''}`}>
-                            <input
-                              type="radio"
-                              name="check"
-                              hidden
-                              checked={selectedCheckId === c.id}
-                              onChange={() => {
-                                setSelectedCheckId(c.id);
-                                const defaults: Record<string, unknown> = {};
-                                c.params.forEach((p) => { defaults[p.key] = p.default_value; });
-                                setCheckParams(defaults);
-                              }}
-                            />
-                            <span className={styles['tpl__radio']} />
-                            <span>
-                              <span className={styles['tpl__label']}>{c.name}</span>
-                              <span className={styles['tpl__desc']}>{c.description}</span>
-                            </span>
-                          </label>
+                      <div className={`${styles['opt-grid']} ${availableBuiltinChecks.length >= 4 ? styles['opt-grid--4'] : ''}`}>
+                        {availableBuiltinChecks.map((c) => (
+                          <button
+                            key={c.id}
+                            className={`${styles.opt} ${builtinCheck === c.id ? styles['opt--selected'] : ''}`}
+                            onClick={() => handleBuiltinCheck(c)}
+                          >
+                            {builtinCheck === c.id && <span className={styles['opt__check']}><Check size={12} /></span>}
+                            <span className={styles['opt__icon']}>{builtinCheckIcon(c.id)}</span>
+                            <div className={styles['opt__title']}>{c.name}</div>
+                            <div className={styles['opt__desc']}>{c.description}</div>
+                          </button>
                         ))}
                       </div>
                     )}
 
-                    {selectedCheck && selectedCheck.params.length > 0 && (
-                      <div className={styles.field}>
-                        <label className={styles['field__label']}>Check Parameters</label>
-                        <div className={styles.models}>
-                          {selectedCheck.params.map((p) => (
-                            <div key={p.key} className={styles.model} style={{ cursor: 'default' }}>
-                              <span>
-                                <span className={styles['model__name']}>{p.label}{p.required ? ' *' : ''}</span>
-                                <span className={styles['model__meta']}>{p.key} · {p.type}</span>
-                              </span>
-                              <span style={{ marginLeft: 'auto' }}>
-                                {p.type === 'bool' ? (
-                                  <input
-                                    type="checkbox"
-                                    checked={!!checkParams[p.key]}
-                                    onChange={(e) => setCheckParams((prev) => ({ ...prev, [p.key]: e.target.checked }))}
-                                  />
-                                ) : p.type === 'number' ? (
-                                  <input
-                                    type="number"
-                                    className={styles.input}
-                                    style={{ width: '100px' }}
-                                    value={checkParams[p.key] === undefined ? '' : String(checkParams[p.key])}
-                                    onChange={(e) => setCheckParams((prev) => ({ ...prev, [p.key]: e.target.value === '' ? '' : Number(e.target.value) }))}
-                                  />
-                                ) : (
-                                  <input
-                                    type="text"
-                                    className={styles.input}
-                                    style={{ width: '160px' }}
-                                    value={checkParams[p.key] === undefined ? '' : String(checkParams[p.key])}
-                                    onChange={(e) => setCheckParams((prev) => ({ ...prev, [p.key]: e.target.value }))}
-                                  />
-                                )}
-                              </span>
+                    {selectedBuiltinCheckDef?.params.map((p) => (
+                      <div key={p.key} className={`${styles.field} ${styles['field--fit']}`} style={{ marginTop: '18px' }}>
+                        {p.type === 'bool' ? (
+                          <div className={styles['switch-row']}>
+                            <div>
+                              <div className={styles['switch-row__label']}>{p.label}</div>
                             </div>
-                          ))}
-                        </div>
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={Boolean(builtinParams[p.key])}
+                              className={`${styles.switch} ${builtinParams[p.key] ? styles['switch--on'] : ''}`}
+                              onClick={() => setBuiltinParams((prev) => ({ ...prev, [p.key]: !prev[p.key] }))}
+                            >
+                              <span className={styles['switch__thumb']} />
+                            </button>
+                          </div>
+                        ) : p.type === 'number' ? (
+                          <>
+                            <label className={styles['field__label']}>{p.label}</label>
+                            <input
+                              type="number"
+                              min={1}
+                              step={1}
+                              className={styles.input}
+                              value={typeof builtinParams[p.key] === 'number' ? (builtinParams[p.key] as number) : ''}
+                              onChange={(e) => {
+                                const raw = e.target.value;
+                                if (raw === '') { setBuiltinParams((prev) => ({ ...prev, [p.key]: '' })); return; }
+                                const n = Math.floor(Number(raw));
+                                setBuiltinParams((prev) => ({ ...prev, [p.key]: Number.isFinite(n) && n > 0 ? n : 1 }));
+                              }}
+                            />
+                          </>
+                        ) : p.type === 'list' || p.type === 'string_list' ? (
+                          <>
+                            <label className={styles['field__label']}>{p.label} (comma-separated)</label>
+                            <input
+                              className={styles.input}
+                              placeholder="Enter one or more values, separated by commas"
+                              value={typeof builtinParams[p.key] === 'string' ? (builtinParams[p.key] as string) : ''}
+                              onChange={(e) => setBuiltinParams((prev) => ({ ...prev, [p.key]: e.target.value }))}
+                            />
+                          </>
+                        ) : (
+                          <>
+                            <label className={styles['field__label']}>{p.label}</label>
+                            <input
+                              className={styles.input}
+                              value={typeof builtinParams[p.key] === 'string' ? (builtinParams[p.key] as string) : ''}
+                              onChange={(e) => setBuiltinParams((prev) => ({ ...prev, [p.key]: e.target.value }))}
+                            />
+                          </>
+                        )}
                       </div>
-                    )}
+                    ))}
                   </>
                 )}
 
@@ -1075,9 +882,11 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
                 {metricType && (
                   <div className={styles.field} style={{ marginTop: '26px' }}>
                     <label className={styles['field__label']}>Pass Threshold</label>
-                    <div className={styles.thr}>
-                      <div className={styles['thr__value']}>{threshold.toFixed(2)}</div>
-                      <div className={styles['thr__cap']}>Minimum score required to pass</div>
+                    <div className={`${styles.thr} ${styles['field--fit']}`}>
+                      <div className={styles['thr__row']}>
+                        <span className={styles['thr__cap']}>Minimum score required to pass</span>
+                        <span className={styles['thr__value']}>{threshold.toFixed(2)}</span>
+                      </div>
                       <input type="range" className={styles['thr__slider']} min={0} max={1} step={0.01} value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} />
                       <div className={styles['thr__scale']}><span>0.00</span><span>0.50</span><span>1.00</span></div>
                     </div>
@@ -1278,1149 +1087,303 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
 
 
 
+//Metrics.ts
+import api from '../axiosInstance';
+
+// ---- Evaluation type & metric type (client-side only, no API) -----------
+export type EvalType = 'model' | 'agent' | 'rag';
+export type MetricType = 'visual' | 'prompt' | 'code' | 'simple';
+
+// ---- Prompt Builder — GET /metrics/templates -----------------------------
+export interface PromptTemplate {
+  category: string; // "llm" | "agent" | "rag"
+  description: string;
+  label: string;
+  name: string;
+  template: string;
+  uses_placeholders: string[];
+}
+
+// A reusable {placeholder} the judge prompt can reference — returned
+// alongside templates so the Prompt Builder can show what each token means.
+export interface PromptPlaceholder {
+  name: string;
+  label: string;
+  description: string;
+  syntax: string; // e.g. "{input}"
+  category: string;
+}
+
+// One configurable parameter of a Built-in Check (Simple metric type),
+// rendered as a form field whose input type is driven by `type`.
+export interface BuiltinCheckParam {
+  key: string;
+  label: string;
+  type: 'bool' | 'number' | 'string' | 'list' | 'string_list';
+  default_value: unknown;
+  required: boolean;
+}
+
+export interface BuiltinCheckDef {
+  id: string; // e.g. "contains_keywords" — used as definition.subtype
+  name: string;
+  description: string;
+  applicable_eval_types: EvalType[];
+  params: BuiltinCheckParam[];
+}
+
+export interface TemplatesResponse {
+  templates: PromptTemplate[];
+  placeholders: PromptPlaceholder[];
+  builtin_checks: BuiltinCheckDef[];
+}
+
+// Agent-only sub-scoping for both /metrics/templates and
+// /metrics/code-templates/agent — Tool Evaluation vs Answer Evaluation.
+export type AgentSubcategory = 'tools' | 'answer';
+
+// ---- Code Editor — GET /metrics/code-templates/{eval_type} ----------------
+export interface CodeTemplateData {
+  eval_type: string;
+  code: string;
+}
+
+// ---- Judge model (Prompt Builder) — GET /models ---------------------------
+export interface ModelSummary {
+  id: string;
+  name: string;
+  provider_id: string;
+  category: string;
+  capabilities: string[];
+  context_window: number;
+  input_price: number | null;
+  output_price: number | null;
+  accuracy_score: number | null;
+  agent_score: number | null;
+  is_active: boolean;
+  base_url: string;
+}
+
+export interface ModelHealthData {
+  success: boolean;
+  message: string;
+  model_id: string;
+  response: string;
+}
+
+// ---- Datasets ---------------------------------------------------------
+export interface DatasetSummary {
+  id: string;
+  name: string;
+  question_count: number;
+}
+
+export interface PreviewQuestion {
+  id: string;
+  input: { prompt: string };
+  expected: { answer: string };
+}
+
+export interface DatasetPreviewData {
+  dataset_id: string;
+  questions: PreviewQuestion[];
+}
 
-
-
-
-//Createmetric.module.scss
-@use '../../styles/_variables' as *;
-
-// ===========================================================================
-// Create Metric — single-page builder (all sections visible at once).
-// Left: overview rail with a redesigned "living timeline" stepper.
-// Right: every section stacked, separated by dashed dividers, capped at
-// a wider 1000px reading column.
-//
-// Font scaling follows the same convention as Model Catalog: `.cm` sets a
-// single base font-size, every descendant font-size is expressed in `em`
-// relative to that base, so bumping `.cm`'s font-size on wide screens
-// scales the whole builder proportionally from one place.
-// ===========================================================================
-
-$ink:      var(--ink-1);
-$ink-2:    var(--ink-2);
-$ink-3:    var(--ink-3);
-$paper:    var(--paper);
-$card:     var(--card);
-$line:     var(--line);
-$line-2:   var(--line-2);
-$signal:   #2B2BF5;
-$signal-2: #1C1CC7;
-$wash:     var(--signal-wash);
-$ok:       #0FA968;
-$ok-wash:  var(--ok-wash);
-$amber:    #E08600;
-$amber-wash: var(--amber-wash);
-$danger:   #DC2626;
-$danger-wash: var(--danger-wash);
-$violet:   #6D28D9;
-$violet-wash: rgba(109, 40, 217, 0.1);
-$sky:      #0369A1;
-$sky-wash: var(--sky-wash);
-$ink-wash: var(--ink-wash);
-$ink-solid: var(--ink-solid);
-
-$mono:    $font-mono;
-$sans:    $font-body;
-$display: $font-display;
-
-$soft: 0 1px 2px rgba(20, 22, 27, 0.05);
-$lift: 0 18px 40px -20px rgba(20, 22, 27, 0.30);
-
-// base font-size the whole builder's internal `em` scale is built on
-$base-font: 0.875rem;
-
-%micro {
-  font-family: $mono;
-  font-size: 0.7857em; // 0.6875rem / 0.875rem
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-
-@keyframes cm-spin { to { transform: rotate(360deg); } }
-@keyframes cm-fade-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes cm-pop { 0% { transform: scale(0.7); opacity: 0; } 60% { transform: scale(1.08); } 100% { transform: scale(1); opacity: 1; } }
-@keyframes cm-modal-in { from { opacity: 0; transform: translateY(12px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
-@keyframes cm-check-pop { 0% { transform: scale(0.4); opacity: 0; } 70% { transform: scale(1.15); } 100% { transform: scale(1); opacity: 1; } }
-
-.spin { animation: cm-spin 0.8s linear infinite; }
-
-// ---------------------------------------------------------------------------
-// shell — master scale control. Every em-based font-size below responds
-// to this. On very wide screens, bumping it to 1rem scales everything.
-// ---------------------------------------------------------------------------
-.cm {
-  font-size: $base-font;
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-
-  @media (min-width: 1800px) { font-size: 1rem; }
-}
-
-.builder {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: 300px 1fr;
-  gap: 0;
-  overflow: hidden;
-}
-
-// ---------------------------------------------------------------------------
-// LEFT RAIL — vertical stepper with a connecting line that tracks the
-// 12px gap between rows, flat solid colors (no gradients), and a clear
-// done/active state — jump to any section, any time.
-// ---------------------------------------------------------------------------
-.rail {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  background: $card;
-  border-right: 1px solid $line;
-  overflow-y: auto;
-}
-
-.rail__head {
-  padding: 26px 22px 20px;
-  border-bottom: 1px solid $line;
-}
-
-.rail__eyebrow {
-  @extend %micro;
-  font-size: 0.7143em; // 0.625rem / 0.875rem
-  color: $signal;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin-bottom: 10px;
-
-  &::before { content: ''; width: 14px; height: 2px; border-radius: 2px; background: $signal; }
-}
-
-.rail__sub {
-  margin-top: 4px;
-  font-size: 0.8929em; // 0.78125rem / 0.875rem
-  color: $ink-3;
-  line-height: 1.5;
-}
-
-.rail__steps {
-  flex: 1;
-  padding: 18px 14px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.rail-step {
-  position: relative;
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-  width: 100%;
-  text-align: left;
-  padding: 13px 14px 13px 12px;
-  border-radius: 16px;
-  border: 1.5px solid transparent;
-  background: transparent;
-  cursor: pointer;
-  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
-
-  &:hover {
-    background: $paper;
-    border-color: $line;
-    transform: translateX(3px);
-
-    .rail-step__arrow { opacity: 1; transform: translateX(0); }
-  }
-
-  &--done {
-    background: $wash;
-    border-color: rgba($signal, 0.16);
-
-    &:hover { border-color: rgba($signal, 0.35); }
-  }
-
-  // vertical connector: starts right below this marker, and reaches all
-  // the way through the 12px row gap into the top of the next marker.
-  &:not(:last-child)::after {
-    content: '';
-    position: absolute;
-    left: 30px;
-    top: 49px;
-    bottom: -25px; // 12px row gap + 13px next step's top padding
-    width: 2px;
-    border-radius: 2px;
-    background: $line;
-    z-index: 0;
-    transition: background 0.25s ease;
-  }
-  &--done:not(:last-child)::after {
-    background: $signal;
-  }
-}
-
-.rail-step__marker {
-  position: relative;
-  z-index: 1;
-  flex-shrink: 0;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: $mono;
-  font-size: 1.1429em; // 1rem / 0.875rem
-  font-weight: 800;
-  color: $ink-3;
-  background: $paper;
-  border: 2px solid $line;
-  transition: all 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
-
-  .rail-step--done & {
-    color: #fff;
-    background: $signal;
-    border-color: $signal;
-    box-shadow: 0 4px 12px -3px rgba(43, 43, 245, 0.45);
-    animation: cm-check-pop 0.3s ease;
-  }
-
-  .rail-step:hover:not(.rail-step--done) & {
-    border-color: $ink-3;
-    color: $ink-2;
-    transform: scale(1.08);
-  }
-}
-
-.rail-step__body {
-  min-width: 0;
-  flex: 1;
-  padding-top: 5px;
-}
-
-.rail-step__label {
-  display: block;
-  font-size: 1.1429em; // 1rem / 0.875rem
-  font-weight: 700;
-  color: $ink-2;
-  transition: color 0.2s ease;
-
-  .rail-step--done & { color: $ink; }
-}
-
-.rail-step__value {
-  display: block;
-  font-family: $mono;
-  font-size: 0.9286em; // 0.8125rem / 0.875rem
-  color: $ink-3;
-  margin-top: 5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-
-  .rail-step--done & { color: $signal; font-weight: 700; }
-}
-
-.rail-step__arrow {
-  flex-shrink: 0;
-  align-self: center;
-  color: $ink-3;
-  opacity: 0;
-  transform: translateX(-4px);
-  transition: all 0.2s ease;
-
-  .rail-step--done & { color: $signal; }
-}
-
-// ---------------------------------------------------------------------------
-// RIGHT WORKSPACE — all sections stacked
-// ---------------------------------------------------------------------------
-.work {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  background: $paper;
-}
-
-.work__scroll {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 32px 36px;
-}
-
-.work__inner {
-  max-width: 1000px;
-  margin: 0 auto;
-}
-
-.section {
-  padding-bottom: 40px;
-  margin-bottom: 40px;
-  border-bottom: 1px dashed $line;
-  animation: cm-fade-up 0.28s ease;
-}
-.section--last { margin-bottom: 0; }
-
-.work__eyebrow {
-  @extend %micro;
-  font-size: 0.7143em; // 0.625rem / 0.875rem
-  color: $ink-3;
-  margin-bottom: 8px;
-}
-
-.work__title {
-  font-family: $display;
-  font-size: 1.5714em; // 1.375rem / 0.875rem
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  color: $ink;
-  line-height: 1.2;
-}
-
-.work__desc {
-  margin-top: 6px;
-  margin-bottom: 26px;
-  font-size: 1.0714em; // 0.9375rem / 0.875rem
-  color: $ink-2;
-  line-height: 1.5;
-}
-
-// ---------------------------------------------------------------------------
-// sticky footer (Cancel / Run Validation / Save)
-// ---------------------------------------------------------------------------
-.work__foot {
-  flex-shrink: 0;
-  position: sticky;
-  bottom: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 16px 36px;
-  background: $card;
-  border-top: 1px solid $line;
-  z-index: 5;
-}
-
-.work__foot-info {
-  font-family: $mono;
-  font-size: 0.8571em; // 0.75rem / 0.875rem
-  font-weight: 700;
-  color: $ink-3;
-}
-
-.work__foot-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-// ---------------------------------------------------------------------------
-// buttons
-// ---------------------------------------------------------------------------
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 10px 18px;
-  border-radius: 10px;
-  border: 1px solid $line;
-  background: $card;
-  color: $ink-2;
-  font-family: $sans;
-  font-size: 0.9643em; // 0.84375rem / 0.875rem
-  font-weight: 650;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  white-space: nowrap;
-
-  &:hover:not(:disabled) { border-color: $ink-3; color: $ink; }
-  &:disabled { opacity: 0.45; cursor: not-allowed; }
-}
-
-.btn--sm { padding: 7px 12px; font-size: 0.8929em; border-radius: 8px; } // 0.78125rem / 0.875rem
-
-.btn--primary {
-  border-color: $signal;
-  background: $signal;
-  color: #fff;
-  &:hover:not(:disabled) { background: $signal-2; border-color: $signal-2; color: #fff; transform: translateY(-1px); box-shadow: $lift; }
-}
-
-.btn--ghost { background: transparent; border-color: transparent; &:hover:not(:disabled) { background: $paper; border-color: $line; } }
-
-.btn--ok {
-  border-color: $ok; background: $ok; color: #fff;
-  &:hover:not(:disabled) { filter: brightness(0.95); color: #fff; transform: translateY(-1px); box-shadow: $lift; }
-}
-
-.btn-icon {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 30px; height: 30px; border-radius: 8px;
-  border: 1px solid transparent; background: transparent; color: $ink-3; cursor: pointer;
-  transition: all 0.15s ease;
-  &:hover { background: $danger-wash; border-color: rgba($danger, 0.2); color: $danger; }
-}
-
-// ---------------------------------------------------------------------------
-// forms
-// ---------------------------------------------------------------------------
-.field { margin-bottom: 20px; }
-
-.field__label {
-  display: block;
-  @extend %micro;
-  font-size: 0.7857em; // 0.6875rem / 0.875rem
-  color: $ink-2;
-  margin-bottom: 8px;
-}
-.field__hint { font-size: 0.8929em; color: $ink-3; margin-top: 6px; } // 0.78125rem / 0.875rem
-
-.input, .textarea {
-  width: 100%;
-  border: 1.5px solid $line;
-  border-radius: 10px;
-  padding: 11px 13px;
-  font-size: 1.0714em; // 0.9375rem / 0.875rem
-  font-family: $sans;
-  color: $ink;
-  background: $card;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-
-  &::placeholder { color: $ink-3; }
-  &:focus { outline: none; border-color: $signal; box-shadow: 0 0 0 3px $wash; }
-}
-.textarea { resize: vertical; min-height: 92px; line-height: 1.55; }
-
-// ---------------------------------------------------------------------------
-// selectable option cards (eval type / metric type)
-// ---------------------------------------------------------------------------
-.opt-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
-}
-.opt-grid--3 { grid-template-columns: repeat(3, 1fr); }
-
-.opt {
-  position: relative;
-  text-align: left;
-  border: 1.5px solid $line;
-  border-radius: 16px;
-  padding: 18px;
-  cursor: pointer;
-  background: $card;
-  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
-
-  &:hover:not(&--disabled) { border-color: $ink-3; transform: translateY(-2px); box-shadow: $lift; }
-
-  &--selected {
-    border-color: $signal;
-    background: $wash;
-    box-shadow: 0 0 0 1px $signal inset;
-  }
-  &--disabled { opacity: 0.5; cursor: not-allowed; }
-}
-
-.opt__icon {
-  width: 42px;
-  height: 42px;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: $paper;
-  border: 1px solid $line;
-  color: $signal;
-  margin-bottom: 12px;
-  transition: all 0.16s ease;
-
-  .opt--selected & { background: $signal; border-color: $signal; color: #fff; }
-}
-
-.opt__title {
-  font-family: $display;
-  font-weight: 700;
-  font-size: 1.1429em; // 1rem / 0.875rem
-  color: $ink;
-  margin-bottom: 4px;
-}
-.opt__desc { font-size: 0.9286em; color: $ink-2; line-height: 1.45; } // 0.8125rem / 0.875rem
-
-.opt__check {
-  position: absolute;
-  top: 14px; right: 14px;
-  width: 20px; height: 20px;
-  border-radius: 50%;
-  background: $signal;
-  color: #fff;
-  display: flex; align-items: center; justify-content: center;
-  animation: cm-pop 0.22s ease;
-}
-
-// ---------------------------------------------------------------------------
-// rule builder — each rule is its own card with a solid accent bar, a
-// header row (index pill + remove), and a clean fields grid underneath.
-// ---------------------------------------------------------------------------
-.rules { display: flex; flex-direction: column; gap: 14px; }
-
-.rule {
-  position: relative;
-  padding: 16px 18px 18px;
-  border: 1.5px solid $line;
-  border-radius: 16px;
-  background: $card;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-
-  &:hover { border-color: $ink-3; box-shadow: $soft; }
-}
-
-.rule__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 14px;
-  padding-bottom: 12px;
-  border-bottom: 1px dashed $line;
-}
-
-.rule__index {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-family: $mono;
-  font-size: 0.8571em; // 0.75rem / 0.875rem
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: $signal;
-
-  &::before {
-    content: '';
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: $signal;
-  }
-}
-
-.rule__grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr 1fr;
-  gap: 12px;
-  min-width: 0;
-}
-
-.rule__field {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  min-width: 0;
-}
-
-.rule__field-label {
-  @extend %micro;
-  font-size: 0.7857em; // 0.6875rem / 0.875rem
-  color: $ink-3;
-}
-
-.gate {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 4px 0;
-
-  &::before, &::after { content: ''; flex: 1; height: 1px; background: $line; }
-}
-
-.gate__toggle {
-  display: inline-flex;
-  padding: 2px;
-  background: $card;
-  border: 1px solid $line;
-  border-radius: 8px;
-  gap: 1px;
-}
-
-.gate__opt {
-  padding: 4px 12px;
-  border-radius: 6px;
-  border: none;
-  background: transparent;
-  color: $ink-2;
-  font-family: $mono;
-  font-size: 0.7857em; // 0.6875rem / 0.875rem
-  font-weight: 700;
-  cursor: pointer;
-  &.on { background: $signal; color: #fff; }
-}
-
-.add-rule { align-self: flex-start; margin-top: 14px; }
-
-.summary {
-  margin-top: 18px;
-  padding: 16px;
-  border-radius: 12px;
-  background: $paper;
-  border: 1px solid $line;
-}
-.summary__label {
-  @extend %micro;
-  font-size: 0.6429em; // 0.5625rem / 0.875rem
-  color: $ink-3;
-  margin-bottom: 8px;
-}
-.summary__code {
-  font-family: $mono;
-  font-size: 0.9643em; // 0.84375rem / 0.875rem
-  color: $ink;
-  line-height: 1.7;
-  word-break: break-word;
-}
-.summary__token { color: $signal; font-weight: 700; }
-.summary__gate { color: $amber; font-weight: 700; padding: 0 4px; }
-
-
-// ---------------------------------------------------------------------------
-// prompt templates
-// ---------------------------------------------------------------------------
-.tpl-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
-
-.tpl {
-  display: flex;
-  gap: 12px;
-  padding: 14px;
-  border: 1.5px solid $line;
-  border-radius: 12px;
-  cursor: pointer;
-  background: $card;
-  transition: border-color 0.15s ease, background 0.15s ease;
-
-  &:hover { border-color: $ink-3; }
-  &--selected { border-color: $signal; background: $wash; }
-}
-
-.tpl__radio {
-  flex-shrink: 0;
-  width: 18px; height: 18px;
-  margin-top: 1px;
-  border-radius: 50%;
-  border: 1.5px solid $line-2;
-  display: flex; align-items: center; justify-content: center;
-
-  .tpl--selected & { border-color: $signal; }
-  &::after { content: ''; width: 9px; height: 9px; border-radius: 50%; background: $signal; opacity: 0; transition: opacity 0.15s ease; }
-  .tpl--selected &::after { opacity: 1; }
-}
-
-.tpl__label { font-weight: 700; font-size: 1.0714em; color: $ink; } // 0.9375rem / 0.875rem
-.tpl__desc { font-size: 0.9286em; color: $ink-2; margin-top: 3px; line-height: 1.4; } // 0.8125rem / 0.875rem
-.tpl__tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
-
-.token {
-  display: inline-flex;
-  align-items: center;
-  font-family: $mono;
-  font-size: 0.7857em; // 0.6875rem / 0.875rem
-  font-weight: 700;
-  color: $signal;
-  background: $wash;
-  border: 1px solid rgba($signal, 0.16);
-  border-radius: 999px;
-  padding: 3px 9px;
-  transition: all 0.15s ease;
-}
-
-button.token {
-  cursor: pointer;
-
-  &:hover { background: $signal; color: #fff; border-color: $signal; }
-}
-
-// ---------------------------------------------------------------------------
-// judge model list
-// ---------------------------------------------------------------------------
-.models { display: flex; flex-direction: column; gap: 8px; }
-
-.model {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 13px 15px;
-  border: 1.5px solid $line;
-  border-radius: 12px;
-  cursor: pointer;
-  background: $card;
-  transition: border-color 0.15s ease, background 0.15s ease, opacity 0.15s ease;
-
-  &:hover:not(&--disabled) { border-color: $ink-3; }
-  &--selected { border-color: $signal; background: $wash; }
-  &--disabled { opacity: 0.5; cursor: not-allowed; }
-}
-
-.model__radio {
-  flex-shrink: 0;
-  width: 18px; height: 18px;
-  border-radius: 50%;
-  border: 1.5px solid $line-2;
-  display: flex; align-items: center; justify-content: center;
-  .model--selected & { border-color: $signal; }
-  &::after { content: ''; width: 9px; height: 9px; border-radius: 50%; background: $signal; opacity: 0; transition: opacity 0.15s ease; }
-  .model--selected &::after { opacity: 1; }
-}
-
-.model__name { font-family: $display; font-weight: 700; font-size: 1.0714em; color: $ink; } // 0.9375rem / 0.875rem
-.model__meta { font-family: $mono; font-size: 0.7857em; color: $ink-3; margin-top: 1px; } // 0.6875rem / 0.875rem
-
-.model__health {
-  margin-left: auto;
-  display: inline-flex; align-items: center; gap: 6px;
-  font-family: $mono; font-size: 0.7143em; font-weight: 700; text-transform: uppercase; // 0.625rem / 0.875rem
-}
-.health-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-.health--healthy { color: $ok; .health-dot { background: $ok; } }
-.health--unhealthy { color: $danger; .health-dot { background: $danger; } }
-.health--checking { color: $ink-3; .health-dot { background: $ink-3; animation: cm-spin 1s linear infinite; border-radius: 2px; } }
-
-// ---------------------------------------------------------------------------
-// code editor
-// ---------------------------------------------------------------------------
-.code {
-  border: 1px solid $line;
-  border-radius: 14px;
-  overflow: hidden;
-}
-.code__bar {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 14px;
-  background: $ink-solid;
-  color: rgba(255, 255, 255, 0.7);
-}
-.code__lang {
-  @extend %micro;
-  font-size: 0.7143em; // 0.625rem / 0.875rem
-  color: #9db2ff;
-}
-.code__area {
-  width: 100%;
-  min-height: 340px;
-  border: none;
-  resize: vertical;
-  padding: 16px;
-  font-family: $mono;
-  font-size: 0.9286em; // 0.8125rem / 0.875rem
-  line-height: 1.65;
-  color: $ink;
-  background: $card;
-  &:focus { outline: none; }
-}
-
-// ---------------------------------------------------------------------------
-// threshold slider
-// ---------------------------------------------------------------------------
-.thr {
-  padding: 24px;
-  border: 1px solid $line;
-  border-radius: 16px;
-  background: $card;
-}
-.thr__value {
-  font-family: $mono;
-  font-size: 2.8571em; // 2.5rem / 0.875rem
-  font-weight: 700;
-  color: $signal;
-  line-height: 1;
-  text-align: center;
-  margin-bottom: 4px;
-}
-.thr__cap { text-align: center; font-size: 0.8929em; color: $ink-3; margin-bottom: 20px; } // 0.78125rem / 0.875rem
-.thr__slider {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 100%;
-  height: 6px;
-  border-radius: 999px;
-  background: $line;
-  outline: none;
-  cursor: pointer;
-
-  &::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 22px; height: 22px;
-    border-radius: 50%;
-    background: $signal;
-    border: 3px solid $card;
-    box-shadow: 0 2px 6px rgba(43, 43, 245, 0.4);
-    cursor: pointer;
-  }
-  &::-moz-range-thumb {
-    width: 22px; height: 22px;
-    border-radius: 50%;
-    background: $signal;
-    border: 3px solid $card;
-    cursor: pointer;
-  }
-}
-.thr__scale {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 8px;
-  font-family: $mono;
-  font-size: 0.7143em; // 0.625rem / 0.875rem
-  color: $ink-3;
-}
-
-// ---------------------------------------------------------------------------
-// dataset + preview (side by side, card-style columns)
-// ---------------------------------------------------------------------------
-.data-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
-  align-items: start;
-  margin-bottom: 8px;
-}
-
-.data-col {
-  min-width: 0;
-  border: 1px solid $line;
-  border-radius: 16px;
-  background: $card;
-  overflow: hidden;
-  box-shadow: $soft;
-}
-
-.data-col__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 16px;
-  background: $paper;
-  border-bottom: 1px solid $line;
-}
-
-.data-col__head-title {
-  @extend %micro;
-  font-size: 0.7143em; // 0.625rem / 0.875rem
-  color: $ink-3;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.data-col__count {
-  font-family: $mono;
-  font-size: 0.7857em; // 0.6875rem / 0.875rem
-  font-weight: 700;
-  color: $signal;
-  background: $wash;
-  border: 1px solid rgba($signal, 0.18);
-  border-radius: 999px;
-  padding: 2px 9px;
-}
-
-.data-col__body {
-  padding: 12px;
-  max-height: 400px;
-  overflow-y: auto;
-}
-
-// ---- dataset cards — grid of self-sizing tiles; as many fit per row as
-// space allows, wrapping to the next row otherwise. Name and count are
-// stacked (not squeezed onto one line), with a top icon chip and a
-// corner check badge that pops in when selected. ----------------------
-.ds-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 10px;
-}
-
-.ds {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 10px;
-  min-width: 0;
-  padding: 14px 14px 13px;
-  border: 1.5px solid $line;
-  border-radius: 14px;
-  background: $card;
-  cursor: pointer;
-  transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
-
-  &:hover { border-color: $ink-3; transform: translateY(-2px); box-shadow: $soft; }
-
-  &--selected {
-    border-color: $signal;
-    background: $wash;
-    box-shadow: 0 0 0 1px $signal inset;
-  }
-}
-
-.ds__icon {
-  flex-shrink: 0;
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: $paper;
-  border: 1px solid $line;
-  color: $signal;
-  transition: all 0.16s ease;
-
-  .ds--selected & { background: $signal; border-color: $signal; color: #fff; }
-}
-
-.ds__name {
-  width: 100%;
-  font-family: $display;
-  font-weight: 700;
-  font-size: 1em; // 0.875rem / 0.875rem
-  color: $ink;
-  line-height: 1.3;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ds__count {
-  align-self: flex-start;
-  display: inline-flex;
-  align-items: center;
-  font-family: $mono;
-  font-size: 0.7857em; // 0.6875rem / 0.875rem
-  font-weight: 700;
-  color: $ink-3;
-  background: $paper;
-  border: 1px solid $line;
-  border-radius: 999px;
-  padding: 3px 9px;
-  white-space: nowrap;
-  transition: all 0.16s ease;
-
-  .ds--selected & { color: $signal; background: rgba(255, 255, 255, 0.6); border-color: rgba($signal, 0.3); }
-}
-
-.ds__check {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: $signal;
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  transform: scale(0.5);
-  transition: all 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
-
-  .ds--selected & { opacity: 1; transform: scale(1); }
-}
-
-.q-list { display: flex; flex-direction: column; gap: 8px; }
-
-.q {
-  display: flex; gap: 10px;
-  padding: 12px 14px;
-  border: 1px solid $line;
-  border-radius: 12px;
-  background: $card;
-  cursor: pointer;
-  transition: border-color 0.13s ease, background 0.13s ease;
-  &:hover { border-color: $ink-3; background: $paper; }
-  &--on { border-color: $signal; background: $wash; }
-}
-.q__check {
-  flex-shrink: 0; width: 17px; height: 17px; margin-top: 2px;
-  border-radius: 5px; border: 1.5px solid $line-2;
-  display: flex; align-items: center; justify-content: center;
-  color: #fff;
-  transition: all 0.13s ease;
-  .q--on & { background: $signal; border-color: $signal; }
-}
-.q__body { min-width: 0; }
-.q__q { display: block; font-size: 0.9643em; color: $ink; font-weight: 600; margin-bottom: 3px; } // 0.84375rem / 0.875rem
-.q__a { display: block; font-size: 0.8929em; color: $ink-2; } // 0.78125rem / 0.875rem
-.q__a-label { font-family: $mono; font-size: 0.7143em; color: $ink-3; margin-right: 5px; } // 0.625rem / 0.875rem
-
-.link-btn {
-  border: none; background: none; padding: 0;
-  color: $signal; font-size: 0.8214em; font-weight: 650; cursor: pointer; // 0.71875rem / 0.875rem
-  &:hover { text-decoration: underline; }
-}
-
-// ---------------------------------------------------------------------------
-// validate & save
-// ---------------------------------------------------------------------------
-.validate-section {
-  margin-top: 32px;
-  padding-top: 24px;
-  border-top: 1px dashed $line;
-}
-
-.validate-section__label {
-  @extend %micro;
-  font-size: 0.7857em; // 0.6875rem / 0.875rem
-  color: $ink-2;
-  margin-bottom: 6px;
-}
-
-.validate-section__desc {
-  font-size: 0.9643em; // 0.84375rem / 0.875rem
-  color: $ink-2;
-  margin-bottom: 16px;
-}
-
-// ---------------------------------------------------------------------------
-// validation results
-// ---------------------------------------------------------------------------
-.banner {
-  display: flex; align-items: center; gap: 8px;
-  padding: 12px 16px; border-radius: 12px;
-  font-size: 0.9643em; font-weight: 600; // 0.84375rem / 0.875rem
-  margin-bottom: 18px;
-}
-.banner--ok { background: $ok-wash; color: $ok; border: 1px solid rgba($ok, 0.2); }
-.banner--err { background: $danger-wash; color: $danger; border: 1px solid rgba($danger, 0.2); }
-.banner--info { background: $wash; color: $signal; border: 1px solid rgba($signal, 0.18); }
-
-.results {
-  border: 1px solid $line;
-  border-radius: 14px;
-  overflow: hidden;
-}
-.results__row {
-  display: flex; align-items: flex-start; gap: 14px;
-  padding: 14px 16px;
-  border-bottom: 1px solid $line-2;
-  &:last-child { border-bottom: none; }
-}
-.results__score {
-  flex-shrink: 0;
-  font-family: $mono; font-weight: 700; font-size: 1.1429em; // 1rem / 0.875rem
-  width: 48px; text-align: center;
-}
-.results__score--pass { color: $ok; }
-.results__score--fail { color: $danger; }
-.results__body { min-width: 0; flex: 1; }
-.results__io { font-size: 0.9286em; color: $ink; } // 0.8125rem / 0.875rem
-.results__reason { font-size: 0.8929em; color: $ink-2; margin-top: 4px; font-style: italic; } // 0.78125rem / 0.875rem
-.results__pill {
-  flex-shrink: 0;
-  @extend %micro;
-  font-size: 0.6429em; // 0.5625rem / 0.875rem
-  padding: 3px 9px; border-radius: 999px;
-}
-.results__pill--pass { color: $ok; background: $ok-wash; }
-.results__pill--fail { color: $danger; background: $danger-wash; }
-.results__summary {
-  display: flex; gap: 20px;
-  padding: 12px 16px;
-  background: $paper;
-  border-top: 1px solid $line;
-  font-size: 0.9643em; color: $ink-2; // 0.84375rem / 0.875rem
-  strong { color: $ink; font-family: $mono; }
-}
-
-// ---------------------------------------------------------------------------
-// misc states
-// ---------------------------------------------------------------------------
-.loading, .empty {
-  display: flex; align-items: center; justify-content: center; gap: 8px;
-  padding: 28px; text-align: center;
-  color: $ink-3; font-size: 0.9643em; // 0.84375rem / 0.875rem
-  border: 1px dashed $line;
-  border-radius: 12px;
-}
-
-// ---------------------------------------------------------------------------
-// success modal
-// ---------------------------------------------------------------------------
-.overlay {
-  position: fixed; inset: 0; z-index: 300;
-  display: flex; align-items: center; justify-content: center;
-  background: rgba(10, 12, 18, 0.55);
-  padding: 20px;
-}
-.modal {
-  width: 100%; max-width: 400px;
-  background: $card;
-  border-radius: 20px;
-  box-shadow: $lift;
-  padding: 32px 28px 24px;
-  text-align: center;
-  animation: cm-modal-in 0.24s ease;
-}
-.modal__icon {
-  width: 56px; height: 56px; margin: 0 auto 16px;
-  border-radius: 50%;
-  background: $ok-wash; color: $ok;
-  display: flex; align-items: center; justify-content: center;
-  animation: cm-pop 0.3s ease;
-}
-.modal__title { font-family: $display; font-size: 1.4286em; font-weight: 800; color: $ink; margin-bottom: 6px; } // 1.25rem / 0.875rem
-.modal__text { font-size: 1em; color: $ink-2; margin-bottom: 8px; } // 0.875rem / 0.875rem
-.modal__id {
-  display: inline-block;
-  font-family: $mono; font-size: 0.8571em; font-weight: 700; // 0.75rem / 0.875rem
-  color: $signal; background: $wash;
-  border-radius: 8px; padding: 4px 10px; margin-bottom: 22px;
-}
-.modal__actions { display: flex; gap: 10px; }
-.modal__actions .btn { flex: 1; justify-content: center; }
-
-// ---------------------------------------------------------------------------
-// toast (save error)
-// ---------------------------------------------------------------------------
-.toast {
-  position: fixed;
-  left: 50%; bottom: 26px;
-  transform: translateX(-50%);
-  z-index: 320;
-  display: flex; align-items: center; gap: 8px;
-  padding: 12px 18px;
-  border-radius: 12px;
-  background: $ink-solid; color: #fff;
-  font-size: 0.9643em; font-weight: 600; // 0.84375rem / 0.875rem
-  box-shadow: $lift;
-  animation: cm-fade-up 0.2s ease;
-}
-
-// ---------------------------------------------------------------------------
-// responsive
-// ---------------------------------------------------------------------------
-@media (max-width: 1080px) {
-  .builder { grid-template-columns: 1fr; }
-  .rail {
-    border-right: none;
-    border-bottom: 1px solid $line;
-    max-height: none;
-  }
-  .rail__steps { flex-direction: row; overflow-x: auto; }
-  .rail-step { flex-direction: column; align-items: flex-start; min-width: 130px; }
-  .rail-step:not(:last-child)::after { display: none; }
-}
-
-@media (max-width: 760px) {
-  .page-header { padding: 16px 18px; flex-direction: column; align-items: flex-start; gap: 10px; }
-  .work__scroll { padding: 22px 18px; }
-  .work__foot { padding: 14px 18px; }
-  .opt-grid, .opt-grid--3 { grid-template-columns: 1fr; }
-  .data-row { grid-template-columns: 1fr; }
-  .ds-list { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
-  .rule__grid { grid-template-columns: 1fr 1fr; }
-}
+// ---- Validate (dry run) — POST /metrics/custom/preview --------------------
+export interface RuleDef {
+  field: string;
+  operator: string;
+  value: string;
+  compare_to_field: boolean;
+}
+
+export interface MetricDefinition {
+  rules?: RuleDef[];
+  // NB: the spec's own example literally spells this "prompt_tenplate" —
+  // treating that as a typo and using the correct spelling here.
+  prompt_template?: string;
+  code?: string;
+  skip_validation?: boolean;
+  // Simple metric type — Built-in Check (contains_keyword / exact_match /
+  // agent_loop_detection / tool_correctness).
+  subtype?: string;
+  params?: Record<string, unknown>;
+}
+
+export interface TestCasePayload {
+  input: string;
+  actual_output: string;
+  expected_output: string;
+  context: string[];
+  retrieval_context: string[];
+  tools_called: string[];
+  expected_tools: string[];
+}
+
+export interface JudgeConfig {
+  model_id: string;
+}
+
+export interface ValidateMetricRequest {
+  actual_output: string;
+  context: string[];
+  definition: MetricDefinition;
+  description: string;
+  eval_types: EvalType[];
+  expected_output: string;
+  expected_tools: string[];
+  gates: string[];
+  input: string;
+  judge_config: JudgeConfig | null;
+  metric_type: string; // "condition" | "prompt" | "code" | "simple"
+  name: string;
+  retrieval_context: string[];
+  test_cases: TestCasePayload[];
+  threshold: string; // sent as a string, e.g. "0.70"
+  tools_called: string[];
+}
+
+export interface ValidateResultItem {
+  score: number;
+  reason: string;
+  success: boolean;
+  test_case: TestCasePayload;
+}
+
+export interface ValidateMetricData {
+  results: ValidateResultItem[];
+  total: number;
+  passed: number;
+}
+
+// ---- Save — POST /metrics/custom -------------------------------------
+export interface SaveMetricRequest {
+  definition: MetricDefinition;
+  description: string;
+  eval_types: EvalType[];
+  metric_type: string;
+  name: string;
+  threshold: string;
+  // Not shown in the spec's request sample, but included defensively since
+  // Prompt Builder metrics can't be scored without a judge model — drop
+  // this if the backend rejects the extra field.
+  judge_config?: JudgeConfig | null;
+}
+
+export interface SaveMetricData {
+  id?: string;
+  name?: string;
+}
+
+// ---- Delete — DELETE /metrics/custom/{metric_id} --------------------------
+export interface DeleteMetricData {
+  status: string;
+  metric_id: string;
+}
+
+// ---- Dashboard: saved custom metrics ---------------------------------
+export interface CustomMetricRuleDef {
+  field: string;
+  operator: string;
+  value: string;
+  compared_to_field: boolean;
+}
+
+export interface CustomMetricDefinition {
+  subtype?: string;
+  params?: Record<string, unknown>;
+  rules?: CustomMetricRuleDef[];
+}
+
+export interface CustomMetric {
+  id: string;
+  name: string;
+  description: string;
+  metric_type: string;
+  eval_types: string[];
+  definition: CustomMetricDefinition;
+  requires_judge: boolean;
+  threshold: number;
+  is_active: boolean;
+  created_by_id: number;
+  created_at: string;
+  updated_at: string;
+}
+
+// None of these endpoints wrap their body in a { status, data } envelope —
+// every response below is the payload itself, so each call just unwraps
+// axios's own `r.data` and normalizes array fields to [] where the backend
+// might omit them.
+export const metricsApi = {
+  // Dashboard — GET /metrics/custom -> { metrics: [...] }
+  list: () =>
+    api.get<{ metrics: CustomMetric[] }>('/metrics/custom').then((r) => r.data.metrics || []),
+
+  // Prompt Builder + Simple/Built-in Check — GET /metrics/templates ->
+  // { templates, placeholders, builtin_checks }. Agent eval type further
+  // scopes the response by subcategory (Tool Evaluation vs Answer
+  // Evaluation) via query params instead of the plain unscoped call.
+  getPromptTemplates: (scope?: { evalType: EvalType; subcategory: AgentSubcategory }) =>
+    api
+      .get<TemplatesResponse>('/metrics/templates', {
+        params: scope ? { eval_type: scope.evalType, subcategory: scope.subcategory } : undefined,
+      })
+      .then((r) => ({
+        templates: r.data.templates || [],
+        placeholders: r.data.placeholders || [],
+        builtin_checks: r.data.builtin_checks || [],
+      })),
+
+  // Code Editor — GET /metrics/code-templates/{eval_type}, same agent
+  // subcategory scoping as getPromptTemplates above.
+  getCodeTemplate: (evalType: EvalType, subcategory?: AgentSubcategory) =>
+    api
+      .get<CodeTemplateData>(`/metrics/code-templates/${evalType}`, {
+        params: evalType === 'agent' && subcategory ? { subcategory } : undefined,
+      })
+      .then((r) => r.data),
+
+  // Prompt Builder — GET /models
+  listModels: () =>
+    api.get<{ models: ModelSummary[] }>('/models').then((r) => r.data.models || []),
+
+  // Prompt Builder — per-model health ping. Failures (network error, or a
+  // body missing `success`) resolve to an "unreachable" fallback instead
+  // of throwing, since an offline model is a normal UI state, not an
+  // exceptional one.
+  checkModelHealth: (modelId: string) =>
+    api
+      .get<ModelHealthData>(`/models/health/${modelId}`)
+      .then((r) => ('success' in r.data ? r.data : { success: false, message: 'Unreachable', model_id: modelId, response: '' }))
+      .catch(() => ({ success: false, message: 'Unreachable', model_id: modelId, response: '' })),
+
+  // Dataset selection — GET /datasets?eval_type={evalType}
+  listDatasets: (evalType: EvalType) =>
+    api
+      .get<{ total_count: number; datasets: DatasetSummary[] }>('/datasets', { params: { eval_type: evalType } })
+      .then((r) => r.data.datasets || []),
+
+  // GET /datasets/{dataset_id}/preview
+  previewDataset: (datasetId: string) =>
+    api.get<DatasetPreviewData>(`/datasets/${datasetId}/preview`).then((r) => ({
+      ...r.data,
+      questions: r.data.questions || [],
+    })),
+
+  // Footer "Validate Metric" — POST /metrics/custom/preview. Doesn't
+  // persist anything; a successful response with results unlocks Save.
+  validate: (payload: ValidateMetricRequest) =>
+    api.post<ValidateMetricData>('/metrics/custom/preview', payload).then((r) => ({
+      ...r.data,
+      results: r.data.results || [],
+    })),
+
+  // "Save Metric" — POST /metrics/custom. Response body beyond "200 OK"
+  // isn't specified, so `id`/`name` are optional here.
+  create: (payload: SaveMetricRequest) =>
+    api.post<SaveMetricData | void>('/metrics/custom', payload).then((r) => r.data || {}),
+
+  // Dashboard "Delete" — DELETE /metrics/custom/{metric_id} -> { status, metric_id }
+  remove: (metricId: string) =>
+    api.delete<DeleteMetricData>(`/metrics/custom/${metricId}`).then((r) => r.data),
+};
