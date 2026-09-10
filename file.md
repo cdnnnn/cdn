@@ -17,6 +17,11 @@ $sans:    $font-body;
 $display: $font-display;
 $radius:  12px;
 
+@keyframes sheetUpIn {
+  from { transform: translateY(24px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
 $soft: 0 1px 2px rgba(20, 22, 27, 0.05);
 $lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
 
@@ -322,10 +327,9 @@ $board-base-font: 0.8125rem;
 // ---- card -----------------------------------------------------------------
 .ticket-card {
   --priority-accent: #{$ink-3};
-  // Cards sit inside a padded column; give card text its own base so it
-  // reads at the same density as Providers' `__card` content instead of
-  // shrinking further relative to the page base.
-  font-size: 1.0385em; // 0.84375rem / 0.8125rem — matches Providers' body copy
+  // Slightly below page body size — dense enough for a kanban card without
+  // reading oversized next to the column chrome around it.
+  font-size: 0.92em;
   position: relative;
   background: $card;
   border: 1px solid $line;
@@ -392,7 +396,7 @@ $board-base-font: 0.8125rem;
 }
 .ticket-card__title {
   margin: 0;
-  font-size: 1.1em;
+  font-size: 1.03em;
   font-weight: 600;
   line-height: 1.35;
   color: $ink;
@@ -557,29 +561,36 @@ $board-base-font: 0.8125rem;
 }
 
 // ===========================================================================
-// Detail sidebar (shares this module, like ProviderModelsSidebar shares
-// Providers.module.scss)
+// Detail sheet — slides up from the bottom, inset from the app's left nav
+// ($sidebar-width) and leaving 300px of the board visible above it, rather
+// than covering the full viewport.
 // ===========================================================================
 .ticket-detail__overlay {
   position: fixed;
-  inset: 0;
+  top: 300px;
+  left: $sidebar-width;
+  right: 0;
   bottom: $footer-height;
   background: rgba(17, 24, 39, 0.4);
   z-index: 100;
 }
 .ticket-detail {
   position: fixed;
-  top: 0;
+  top: 300px;
+  left: $sidebar-width;
   right: 0;
   bottom: $footer-height;
-  width: 400px;
-  max-width: 100%;
+  width: auto;
+  max-width: none;
   background: $surface;
+  border-top: 1px solid $line;
+  border-top-left-radius: 16px;
+  border-top-right-radius: 16px;
   box-shadow: $shadow-4;
   z-index: 101;
   display: flex;
   flex-direction: column;
-  animation: drawerIn 0.25s ease both;
+  animation: sheetUpIn 0.25s cubic-bezier(0.22, 0.72, 0.16, 1) both;
 }
 .ticket-detail__header {
   display: flex;
