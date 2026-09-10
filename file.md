@@ -1,1155 +1,331 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+//Ticketdetailsidebar.tsx
+import { useState } from 'react';
+import { X, Pencil, Trash2, Loader2, Lock, Check, Ban, Send, Paperclip } from 'lucide-react';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import { addTicketComment } from '../../store/slices/ticketsSlice';
+import type { Ticket, TicketStatus, TicketResolution, TicketUser } from '../../types/tickets';
+import ConfirmDialog from '../common/ConfirmDialog';
+import { useToast } from '../common/Toast';
 import {
-  AlertCircle, ArrowRight, Check, CheckCircle2, ChevronRight, Code2, Cpu, Database,
-  ListChecks, Loader2, MessageSquare, Plus, Repeat, ScrollText, Search, SlidersHorizontal,
-  Sparkles, Target, TextSearch, Wrench, X, XCircle, Zap,
-} from 'lucide-react';
-import styles from './CreateMetric.module.scss';
-import { useToast } from './useToast';
-import CustomSelect from './CustomSelect';
-import { useAppDispatch, useAppSelector } from '../../hooks/redux';
-import { fetchProviders } from '../../store/slices/providersSlice';
-import {
-  metricsApi, AgentSubcategory, BuiltinCheckDef, EvalType, MetricType, PromptTemplate,
-  ModelSummary, DatasetSummary, PreviewQuestion, ValidateMetricData, RuleDef,
-} from '../../api/endpoints/metrics';
+  COLUMNS,
+  PRIORITY_META,
+  isOwner,
+  OWNER_ONLY_HINT,
+  initials,
+  avatarAccent,
+} from './ticketMeta';
+import styles from './TicketBoard.module.scss';
 
-interface CreateMetricProps {
-  onCancel: () => void;
-  onSaved: (id: string) => void;
+interface TicketDetailSidebarProps {
+  ticket: Ticket;
+  currentUser: TicketUser;
+  moving?: boolean;
+  deleting?: boolean;
+  onClose: () => void;
+  onMove: (id: string, status: TicketStatus, resolution?: TicketResolution | null) => void;
+  onEdit: (ticket: Ticket) => void;
+  onDelete: (id: string) => void;
 }
 
-// ---- static config -----------------------------------------------------
-const EVAL_TYPE_CARDS: { key: EvalType; label: string; desc: string; icon: JSX.Element }[] = [
-  { key: 'model', label: 'Model', desc: 'Score a model\u2019s output against an expected answer.', icon: <Cpu size={20} /> },
-  { key: 'agent', label: 'Agent', desc: 'Evaluate tool calls and task completion for agents.', icon: <Zap size={20} /> },
-  { key: 'rag', label: 'RAG', desc: 'Check answers grounded in retrieved context.', icon: <ScrollText size={20} /> },
-];
-
-const METRIC_TYPE_CARDS: { key: MetricType; label: string; desc: string; icon: JSX.Element }[] = [
-  { key: 'visual', label: 'Visual Builder', desc: 'Field comparisons joined with AND/OR logic. No code.', icon: <SlidersHorizontal size={18} /> },
-  { key: 'prompt', label: 'Prompt Builder', desc: 'An LLM judge scored with a prompt template.', icon: <Sparkles size={18} /> },
-  { key: 'code', label: 'Code Editor', desc: 'A custom Python scoring function.', icon: <Code2 size={18} /> },
-  { key: 'simple', label: 'Simple', desc: 'A built-in pass/fail check — no prompt or code needed.', icon: <Target size={18} /> },
-];
-
-const FIELDS_BY_EVAL_TYPE: Record<EvalType, string[]> = {
-  model: ['input', 'actual_output', 'expected_output'],
-  agent: ['input', 'actual_output', 'expected_output', 'tools_called', 'expected_tools'],
-  rag: ['input', 'actual_output', 'expected_output', 'tools_called', 'expected_tools'],
+const formatTime = (iso: string) => {
+  try {
+    return new Date(iso).toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  } catch {
+    return iso;
+  }
 };
 
-const OPERATORS = [
-  { value: 'contains', label: 'contains' },
-  { value: 'not_contains', label: 'not contains' },
-  { value: 'equals', label: 'equals' },
-  { value: 'starts_with', label: 'starts with' },
-  { value: 'ends_with', label: 'ends with' },
-  { value: 'greater_than', label: 'greater than' },
-  { value: 'less_than', label: 'less than' },
-  { value: 'regex_match', label: 'regex match' },
-];
-
-const OP_SYMBOL: Record<string, string> = {
-  contains: 'contains', not_contains: 'does not contain', equals: '==', starts_with: 'starts with',
-  ends_with: 'ends with', greater_than: '>', less_than: '<', regex_match: 'matches',
-};
-
-const METRIC_TYPE_TO_API: Record<MetricType, string> = {
-  visual: 'condition', prompt: 'prompt', code: 'code', simple: 'simple',
-};
-
-const EVAL_TYPE_TO_CATEGORY: Record<EvalType, string> = { model: 'llm', agent: 'agent', rag: 'rag' };
-
-// Agent-only: which part of the agent's behavior this metric evaluates —
-// scopes both the Prompt Builder templates and the Code Editor starter
-// code via a `subcategory` query param.
-const AGENT_SUBCATEGORY_CARDS: { key: AgentSubcategory; label: string; desc: string; icon: JSX.Element }[] = [
-  { key: 'tools', label: 'Tool Evaluation', desc: 'Score which tools the agent called and how.', icon: <Wrench size={18} /> },
-  { key: 'answer', label: 'Answer Evaluation', desc: 'Score the agent\u2019s final response.', icon: <MessageSquare size={18} /> },
-];
-
-// ---- Simple metric type — Built-in Check icons --------------------------
-// Built-in checks themselves now come from the API (GET /metrics/templates
-// -> builtin_checks), since their id/params can vary server-side. Icons
-// aren't part of that response, so map known ids to one and fall back to
-// a generic icon for anything unrecognized.
-const BUILTIN_CHECK_ICONS: Record<string, JSX.Element> = {
-  contains_keywords: <TextSearch size={18} />,
-  exact_match: <Target size={18} />,
-  agent_loop_detection: <Repeat size={18} />,
-  tool_correctness: <Wrench size={18} />,
-};
-const builtinCheckIcon = (id: string) => BUILTIN_CHECK_ICONS[id] || <ListChecks size={18} />;
-
-type CompareType = 'field' | 'literal';
-interface RuleRow { id: number; field: string; operator: string; compareType: CompareType; value: string; }
-let ruleSeq = 1;
-
-type SectionKey = 'details' | 'type' | 'config' | 'dataset';
-interface SectionDef { key: SectionKey; label: string; }
-
-export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
-  const { showToast, ToastEl } = useToast();
+export default function TicketDetailSidebar({
+  ticket,
+  currentUser,
+  moving = false,
+  deleting = false,
+  onClose,
+  onMove,
+  onEdit,
+  onDelete,
+}: TicketDetailSidebarProps) {
   const dispatch = useAppDispatch();
-  const providers = useAppSelector((s) => s.providers.items);
+  const toast = useToast();
+  const commentingId = useAppSelector((s) => s.tickets.commentingId);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [commentDraft, setCommentDraft] = useState('');
 
-  // section refs for the rail's "jump to" links
-  const sectionRefs = {
-    details: useRef<HTMLDivElement>(null),
-    type: useRef<HTMLDivElement>(null),
-    config: useRef<HTMLDivElement>(null),
-    dataset: useRef<HTMLDivElement>(null),
-  };
-  const scrollToSection = (key: SectionKey) => {
-    sectionRefs[key].current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
+  const owner = isOwner(ticket, currentUser.id);
+  const priority = PRIORITY_META[ticket.priority];
+  const posting = commentingId === ticket.id;
+  const comments = ticket.comments ?? [];
 
-  // details
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-
-  // type
-  const [evalType, setEvalType] = useState<EvalType | null>(null);
-  const [metricType, setMetricType] = useState<MetricType | null>(null);
-  // Agent-only sub-scope (Tool Evaluation / Answer Evaluation) — required
-  // before Prompt Builder templates or Code Editor starter code can load
-  // when evalType === 'agent'.
-  const [agentSubcategory, setAgentSubcategory] = useState<AgentSubcategory | null>(null);
-
-  // config: visual
-  const [rules, setRules] = useState<RuleRow[]>([{ id: ruleSeq, field: 'actual_output', operator: 'contains', compareType: 'field', value: 'input' }]);
-  const [gates, setGates] = useState<('AND' | 'OR')[]>([]);
-
-  // templates data — GET /metrics/templates. Serves both the Prompt
-  // Builder (templates + placeholders) and the Simple/Built-in Check
-  // config (builtin_checks), since both live behind the same endpoint
-  // and both depend on evalType (and, for agent, agentSubcategory).
-  const [templates, setTemplates] = useState<PromptTemplate[]>([]);
-  const [builtinChecks, setBuiltinChecks] = useState<BuiltinCheckDef[]>([]);
-  const [templatesLoading, setTemplatesLoading] = useState(false);
-  const [templatesError, setTemplatesError] = useState('');
-
-  // config: prompt
-  const [selectedTemplateName, setSelectedTemplateName] = useState('');
-  const [promptText, setPromptText] = useState('');
-  const [models, setModels] = useState<ModelSummary[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
-  const [modelsError, setModelsError] = useState('');
-  const [modelHealth, setModelHealth] = useState<Record<string, 'checking' | 'healthy' | 'unhealthy'>>({});
-  const [selectedModelId, setSelectedModelId] = useState('');
-
-  // config: code
-  const [code, setCode] = useState('');
-  const [codeLoading, setCodeLoading] = useState(false);
-  const [codeError, setCodeError] = useState('');
-
-  // config: simple — selected built-in check id + its params, keyed
-  // dynamically off whatever `params` the API returned for that check
-  // (no more hardcoded per-check fields).
-  const [builtinCheck, setBuiltinCheck] = useState<string | null>(null);
-  const [builtinParams, setBuiltinParams] = useState<Record<string, unknown>>({});
-
-  // threshold (shared across all config types)
-  const [threshold, setThreshold] = useState(0.7);
-
-  // dataset
-  const [datasets, setDatasets] = useState<DatasetSummary[]>([]);
-  const [datasetsLoading, setDatasetsLoading] = useState(false);
-  const [datasetsError, setDatasetsError] = useState('');
-  const [selectedDatasetId, setSelectedDatasetId] = useState('');
-  const [previewQuestions, setPreviewQuestions] = useState<PreviewQuestion[]>([]);
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewError, setPreviewError] = useState('');
-  const [selectedQuestionIds, setSelectedQuestionIds] = useState<Set<string>>(new Set());
-
-  // validate / save
-  const [validating, setValidating] = useState(false);
-  const [validateError, setValidateError] = useState('');
-  const [validateResult, setValidateResult] = useState<ValidateMetricData | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState('');
-  const [savedId, setSavedId] = useState('');
-
-  const fields = evalType ? FIELDS_BY_EVAL_TYPE[evalType] : [];
-
-  // ---- reset chains ------------------------------------------------------
-  const handleEvalType = (t: EvalType) => {
-    if (t === evalType) return;
-    setEvalType(t);
-    setAgentSubcategory(null);
-    setDatasets([]); setSelectedDatasetId(''); setPreviewQuestions([]); setSelectedQuestionIds(new Set());
-    setCode(''); setPromptText(''); setSelectedTemplateName(''); setValidateResult(null); setSavedId('');
-    setTemplates([]); setBuiltinChecks([]);
-    // Built-in check availability depends on eval type (e.g. Agent Loop
-    // Detection / Tool Correctness are agent-only) — clear the selection
-    // so a now-unavailable check can't stay silently selected.
-    setBuiltinCheck(null); setBuiltinParams({});
-  };
-  const handleAgentSubcategory = (s: AgentSubcategory) => {
-    if (s === agentSubcategory) return;
-    setAgentSubcategory(s);
-    setCode(''); setPromptText(''); setSelectedTemplateName(''); setValidateResult(null); setSavedId('');
-    setTemplates([]); setBuiltinChecks([]);
-    setBuiltinCheck(null); setBuiltinParams({});
-  };
-  const handleMetricType = (t: MetricType) => {
-    if (t === metricType) return;
-    setMetricType(t); setValidateResult(null); setSavedId('');
-    if (t !== 'simple') { setBuiltinCheck(null); setBuiltinParams({}); }
+  const submitComment = () => {
+    const text = commentDraft.trim();
+    if (!text) return;
+    dispatch(addTicketComment({ ticket_id: ticket.id, text }))
+      .unwrap()
+      .then(() => setCommentDraft(''))
+      .catch((e) => toast.error(typeof e === 'string' ? e : 'Could not post comment'));
   };
 
-  const handleBuiltinCheck = (check: BuiltinCheckDef) => {
-    if (check.id === builtinCheck) return;
-    setBuiltinCheck(check.id); setValidateResult(null); setSavedId('');
-    // Seed params from each field's default_value so the form (and a
-    // preview run without touching anything) starts from a sane state.
-    const init: Record<string, unknown> = {};
-    check.params.forEach((p) => {
-      if (p.type === 'list' || p.type === 'string_list') {
-        init[p.key] = Array.isArray(p.default_value) ? (p.default_value as string[]).join(', ') : (p.default_value ?? '');
-      } else if (p.type === 'bool') {
-        init[p.key] = Boolean(p.default_value);
-      } else if (p.type === 'number') {
-        init[p.key] = typeof p.default_value === 'number' ? p.default_value : 0;
-      } else {
-        init[p.key] = p.default_value ?? '';
-      }
-    });
-    setBuiltinParams(init);
-  };
-
-  const availableBuiltinChecks = useMemo(
-    () => (evalType ? builtinChecks.filter((c) => c.applicable_eval_types.includes(evalType)) : []),
-    [evalType, builtinChecks],
-  );
-  const selectedBuiltinCheckDef = useMemo(
-    () => availableBuiltinChecks.find((c) => c.id === builtinCheck) || null,
-    [availableBuiltinChecks, builtinCheck],
-  );
-
-  // ---- visual rules ------------------------------------------------------
-  const addRule = () => {
-    ruleSeq += 1;
-    setRules((r) => [...r, { id: ruleSeq, field: fields[0] || 'input', operator: 'contains', compareType: 'literal', value: '' }]);
-    setGates((g) => [...g, 'AND']);
-  };
-  const removeRule = (id: number) => {
-    setRules((r) => {
-      if (r.length <= 1) return r;
-      const idx = r.findIndex((row) => row.id === id);
-      setGates((g) => g.filter((_, i) => i !== Math.max(0, idx - 1)));
-      return r.filter((row) => row.id !== id);
-    });
-  };
-  const updateRule = (id: number, patch: Partial<RuleRow>) => setRules((r) => r.map((row) => (row.id === id ? { ...row, ...patch } : row)));
-  const toggleGate = (idx: number) => setGates((g) => g.map((v, i) => (i === idx ? (v === 'AND' ? 'OR' : 'AND') : v)));
-
-  // ---- templates (Prompt Builder templates + Simple built-in checks) ----
-  // Both Prompt Builder and Simple need this same endpoint, scoped by
-  // evalType and — for agent — by agentSubcategory. Waits for the
-  // subcategory pick before fetching when evalType is 'agent'.
-  useEffect(() => {
-    if (!evalType) { setTemplates([]); setBuiltinChecks([]); return; }
-    if (evalType === 'agent' && !agentSubcategory) { setTemplates([]); setBuiltinChecks([]); return; }
-    setTemplatesLoading(true); setTemplatesError('');
-    const scope = evalType === 'agent' && agentSubcategory ? { evalType, subcategory: agentSubcategory } : undefined;
-    metricsApi.getPromptTemplates(scope)
-      .then((res) => { setTemplates(res.templates); setBuiltinChecks(res.builtin_checks); })
-      .catch((e) => setTemplatesError(e.message || 'Failed to load templates'))
-      .finally(() => setTemplatesLoading(false));
-  }, [evalType, agentSubcategory]);
-
-  const matchingTemplates = useMemo(
-    () => templates.filter((t) => t.category === (evalType ? EVAL_TYPE_TO_CATEGORY[evalType] : '')),
-    [templates, evalType],
-  );
-  // Custom Prompt is available for every evaluation type — Model included,
-  // same as Agent and RAG.
-  const allowsCustomPrompt = evalType === 'agent' || evalType === 'rag' || evalType === 'model';
-
-  useEffect(() => {
-    if (metricType !== 'prompt' || models.length) return;
-    setModelsLoading(true); setModelsError('');
-    metricsApi.listModels()
-      .then((list) => {
-        setModels(list);
-        const init: Record<string, 'checking'> = {};
-        list.forEach((m) => { init[m.id] = 'checking'; });
-        setModelHealth(init);
-        list.forEach((m) => metricsApi.checkModelHealth(m.id).then((h) =>
-          setModelHealth((prev) => ({ ...prev, [m.id]: h.success ? 'healthy' : 'unhealthy' }))));
-      })
-      .catch((e) => setModelsError(e.message || 'Failed to load models'))
-      .finally(() => setModelsLoading(false));
-  }, [metricType, models.length]);
-
-  // Provider names for the Judge Model columns — fetched once, same
-  // pattern Model Catalog uses to resolve provider_id -> display name.
-  useEffect(() => {
-    if (metricType !== 'prompt' || providers.length) return;
-    dispatch(fetchProviders());
-  }, [metricType, providers.length, dispatch]);
-
-  const providerName = (id: string) => providers.find((p) => p.id === id)?.name || id || 'Unknown provider';
-
-  // Judge Model list grouped by provider, one column per provider, sorted
-  // alphabetically by display name.
-  const modelsByProvider = useMemo(() => {
-    const map = new Map<string, ModelSummary[]>();
-    models.forEach((m) => {
-      const key = m.provider_id || 'unknown';
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(m);
-    });
-    return [...map.entries()].sort((a, b) => providerName(a[0]).localeCompare(providerName(b[0])));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [models, providers]);
-
-  const [modelSearch, setModelSearch] = useState<Record<string, string>>({});
-
-  // ---- code template -----------------------------------------------------
-  useEffect(() => {
-    if (metricType !== 'code' || !evalType) return;
-    if (evalType === 'agent' && !agentSubcategory) return;
-    setCodeLoading(true); setCodeError(''); setCode('');
-    metricsApi.getCodeTemplate(evalType, evalType === 'agent' ? agentSubcategory ?? undefined : undefined)
-      .then((res) => setCode(res.code))
-      .catch((e) => setCodeError(e.message || 'Failed to load starter code'))
-      .finally(() => setCodeLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [metricType, evalType, agentSubcategory]);
-
-  // ---- datasets ----------------------------------------------------------
-  useEffect(() => {
-    if (!evalType) return;
-    setDatasetsLoading(true); setDatasetsError(''); setSelectedDatasetId(''); setPreviewQuestions([]);
-    metricsApi.listDatasets(evalType)
-      .then(setDatasets)
-      .catch((e) => setDatasetsError(e.message || 'Failed to load datasets'))
-      .finally(() => setDatasetsLoading(false));
-  }, [evalType]);
-
-  const selectDataset = (id: string) => {
-    setSelectedDatasetId(id); setValidateResult(null); setSavedId('');
-    setPreviewLoading(true); setPreviewError('');
-    metricsApi.previewDataset(id)
-      .then((res) => {
-        const qs = res.questions.slice(0, 5);
-        setPreviewQuestions(qs);
-        setSelectedQuestionIds(new Set(qs.map((q) => q.id)));
-      })
-      .catch((e) => setPreviewError(e.message || 'Failed to load preview'))
-      .finally(() => setPreviewLoading(false));
-  };
-  const toggleQuestion = (id: string) => setSelectedQuestionIds((prev) => {
-    const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next;
-  });
-  const selectAllQuestions = () => setSelectedQuestionIds(new Set(previewQuestions.map((q) => q.id)));
-  const clearAllQuestions = () => setSelectedQuestionIds(new Set());
-
-  // ---- rule summary ------------------------------------------------------
-  const ruleSummary = useMemo(() => {
-    if (!rules.length) return null;
-    return rules.map((r, i) => {
-      const compare = r.compareType === 'field' ? (r.value || '<field>') : `"${r.value || '…'}"`;
-      return (
-        <span key={r.id}>
-          {i > 0 && <span className={styles['summary__gate']}>{gates[i - 1] || 'AND'}</span>}
-          <span className={styles['summary__token']}>{r.field}</span>
-          {' '}{OP_SYMBOL[r.operator] || r.operator}{' '}
-          <span className={styles['summary__token']}>{compare}</span>
-        </span>
-      );
-    });
-  }, [rules, gates]);
-
-  // ---- gating (used for status dots + validate button, not for hiding UI) ---
-  const detailsComplete = !!name.trim();
-  const typeComplete = !!evalType && !!metricType && (evalType !== 'agent' || !!agentSubcategory);
-  const configComplete = useMemo(() => {
-    if (!metricType) return false;
-    if (metricType === 'visual') return rules.every((r) => r.field && r.operator && (r.compareType === 'field' ? r.value : r.value.trim()));
-    if (metricType === 'prompt') return !!promptText.trim() && !!selectedModelId;
-    if (metricType === 'code') return !!code.trim();
-    if (metricType === 'simple') {
-      if (!selectedBuiltinCheckDef) return false;
-      return selectedBuiltinCheckDef.params
-        .filter((p) => p.required)
-        .every((p) => {
-          const v = builtinParams[p.key];
-          if (p.type === 'bool') return v !== undefined;
-          if (p.type === 'number') return typeof v === 'number' && !Number.isNaN(v) && v > 0;
-          if (p.type === 'list' || p.type === 'string_list') return typeof v === 'string' && v.trim().length > 0;
-          return typeof v === 'string' && v.trim().length > 0;
-        });
-    }
-    return true;
-  }, [metricType, rules, promptText, selectedModelId, code, selectedBuiltinCheckDef, builtinParams]);
-  const datasetComplete = !!selectedDatasetId && selectedQuestionIds.size > 0;
-  const canValidate = detailsComplete && typeComplete && configComplete && datasetComplete && threshold >= 0 && threshold <= 1;
-  const validateSucceeded = !!validateResult && validateResult.passed > 0;
-
-  const SECTIONS: SectionDef[] = [
-    { key: 'details', label: 'Metric Details' },
-    { key: 'type', label: 'Type & Target' },
-    { key: 'config', label: metricType === 'prompt' ? 'Judge Prompt' : metricType === 'code' ? 'Scoring Code' : metricType === 'simple' ? 'Configuration' : 'Rules' },
-    { key: 'dataset', label: 'Dataset · Validate & Save' },
-  ];
-
-  const sectionDone: Record<SectionKey, boolean> = {
-    details: detailsComplete,
-    type: typeComplete,
-    config: configComplete,
-    dataset: datasetComplete && !!validateResult,
-  };
-
-  const sectionValue: Record<SectionKey, string> = {
-    details: name || 'Not set',
-    type: evalType && metricType
-      ? `${evalType.toUpperCase()}${evalType === 'agent' && agentSubcategory ? ` · ${agentSubcategory === 'tools' ? 'Tool Eval' : 'Answer Eval'}` : ''} · ${METRIC_TYPE_CARDS.find((c) => c.key === metricType)!.label}`
-      : 'Not set',
-    config: metricType ? (configComplete ? 'Configured' : 'Incomplete') : '—',
-    dataset: validateResult ? `${validateResult.passed}/${validateResult.total} passed` : (selectedDatasetId ? `${selectedQuestionIds.size} selected` : 'Not set'),
-  };
-
-  // What's still missing for each incomplete section, surfaced in the rail
-  // so the user knows exactly what to do next instead of just seeing
-  // "Incomplete" / "Not set".
-  const sectionMissing: Record<SectionKey, string> = {
-    details: !name.trim() ? 'Add a metric name' : '',
-
-    type: (() => {
-      if (!evalType && !metricType) return 'Choose an evaluation type and a metric type';
-      if (!evalType) return 'Choose an evaluation type';
-      if (evalType === 'agent' && !agentSubcategory) return 'Choose Tool Evaluation or Answer Evaluation';
-      if (!metricType) return 'Choose a metric type';
-      return '';
-    })(),
-
-    config: (() => {
-      if (!metricType) return 'Pick a metric type in the section above first';
-      if (configComplete) return '';
-      if (metricType === 'visual') return 'Fill in every rule\u2019s field, operator, and value';
-      if (metricType === 'prompt') {
-        if (!promptText.trim() && !selectedModelId) return 'Write a judge prompt and choose a judge model';
-        if (!promptText.trim()) return 'Write a judge prompt';
-        return 'Choose a judge model';
-      }
-      if (metricType === 'code') return 'Add your scoring code';
-      if (metricType === 'simple') {
-        if (!selectedBuiltinCheckDef) return 'Select a built-in check';
-        const missingParam = selectedBuiltinCheckDef.params.find((p) => {
-          const v = builtinParams[p.key];
-          if (!p.required) return false;
-          if (p.type === 'bool') return v === undefined;
-          if (p.type === 'number') return !(typeof v === 'number' && v > 0);
-          return !(typeof v === 'string' && v.trim().length > 0);
-        });
-        if (missingParam) return `Set ${missingParam.label}`;
-      }
-      return '';
-    })(),
-
-    dataset: (() => {
-      if (!evalType) return 'Choose an evaluation type to load datasets';
-      if (!selectedDatasetId) return 'Select a dataset';
-      if (selectedQuestionIds.size === 0) return 'Select at least one test question';
-      if (!validateResult) return 'Run validation to complete this step';
-      return '';
-    })(),
-  };
-
-  const completedCount = SECTIONS.filter((s) => sectionDone[s.key]).length;
-
-  // ---- validate / save ---------------------------------------------------
-  const buildDefinition = () => {
-    if (metricType === 'visual') return { rules: rules.map<RuleDef>((r) => ({ field: r.field, operator: r.operator, value: r.value, compare_to_field: r.compareType === 'field' })) };
-    if (metricType === 'prompt') return { prompt_template: promptText };
-    if (metricType === 'code') return { code, skip_validation: true };
-    if (metricType === 'simple') {
-      if (!selectedBuiltinCheckDef) return {};
-      // Convert each param to its API-facing value: list/string_list
-      // params are edited as a comma-separated string but sent as an
-      // array; number params sent as numbers; everything else as-is.
-      const params: Record<string, unknown> = {};
-      selectedBuiltinCheckDef.params.forEach((p) => {
-        const raw = builtinParams[p.key];
-        if (p.type === 'list' || p.type === 'string_list') {
-          params[p.key] = typeof raw === 'string' ? raw.split(',').map((v) => v.trim()).filter(Boolean) : [];
-        } else if (p.type === 'number') {
-          params[p.key] = Number(raw);
-        } else if (p.type === 'bool') {
-          params[p.key] = Boolean(raw);
-        } else {
-          params[p.key] = raw;
-        }
-      });
-      return { subtype: selectedBuiltinCheckDef.id, params };
-    }
-    return {};
-  };
-
-  const runValidate = () => {
-    if (!canValidate || !evalType || !metricType) { showToast('Complete every section first', 'error'); return; }
-    setValidating(true); setValidateError(''); setValidateResult(null);
-    const selectedQs = previewQuestions.filter((q) => selectedQuestionIds.has(q.id));
-    metricsApi.validate({
-      actual_output: '', context: [], definition: buildDefinition(), description,
-      eval_types: [evalType], expected_output: '', expected_tools: [],
-      gates: metricType === 'visual' ? gates : [], input: '',
-      judge_config: metricType === 'prompt' ? { model_id: selectedModelId } : null,
-      metric_type: METRIC_TYPE_TO_API[metricType], name, retrieval_context: [],
-      test_cases: selectedQs.map((q) => ({
-        input: q.input?.prompt || '', actual_output: '', expected_output: q.expected?.answer || '',
-        context: [], retrieval_context: [], tools_called: [],
-        expected_tools: (q.expected?.expected_tools || q.expected?.tool_calls || []).map((t) => t.name),
-        available_tools: q.input?.available_tools || [],
-      })),
-      threshold: threshold.toFixed(2), tools_called: [],
-    })
-      .then(setValidateResult)
-      .catch((e) => setValidateError(e.message || 'Validation failed'))
-      .finally(() => setValidating(false));
-  };
-
-  const handleSave = () => {
-    if (!validateResult || !evalType || !metricType) { showToast('Run validation before saving', 'error'); return; }
-    setSaving(true); setSaveError('');
-    metricsApi.create({
-      definition: buildDefinition(), description, eval_types: [evalType],
-      metric_type: METRIC_TYPE_TO_API[metricType], name, threshold: threshold.toFixed(2),
-      judge_config: metricType === 'prompt' ? { model_id: selectedModelId } : null,
-    })
-      .then((res) => setSavedId(res.id || 'saved'))
-      .catch((e) => setSaveError(e.message || 'Failed to save metric'))
-      .finally(() => setSaving(false));
-  };
-
-  const resetForm = () => {
-    setName(''); setDescription(''); setEvalType(null); setMetricType(null); setAgentSubcategory(null);
-    setRules([{ id: ++ruleSeq, field: 'actual_output', operator: 'contains', compareType: 'field', value: 'input' }]); setGates([]);
-    setTemplates([]); setBuiltinChecks([]); setSelectedTemplateName(''); setPromptText('');
-    setModels([]); setModelHealth({}); setSelectedModelId(''); setCode(''); setThreshold(0.7);
-    setBuiltinCheck(null); setBuiltinParams({});
-    setDatasets([]); setSelectedDatasetId(''); setPreviewQuestions([]); setSelectedQuestionIds(new Set());
-    setValidateResult(null); setValidateError(''); setSavedId('');
-    sectionRefs.details.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
-
-  // =========================================================================
   return (
-    <div className={styles.cm}>
-
-      <div className={styles.builder}>
-
-        {/* ============ LEFT RAIL — jump-to links, all sections visible ============ */}
-        <aside className={styles.rail}>
-          <div className={styles['rail__head']}>
-            <div className={styles['rail__eyebrow']}>Overview</div>
-            <div className={styles['rail__sub']}>Everything is on this page — jump to any section.</div>
+    <>
+      <div className={styles['ticket-detail__overlay']} onClick={onClose} />
+      <aside className={styles['ticket-detail']} role="dialog" aria-label="Ticket detail">
+        <header className={styles['ticket-detail__header']}>
+          <div>
+            <span className={styles['ticket-detail__key']}>{ticket.key}</span>
+            <span
+              className={styles['ticket-card__priority']}
+              style={{ ['--priority-accent' as string]: priority.accent }}
+            >
+              {priority.label}
+            </span>
           </div>
+          <div className={styles['ticket-detail__header-actions']}>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={() => onEdit(ticket)}
+              aria-label="Edit ticket"
+              title="Edit"
+            >
+              <Pencil size={15} />
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={() => setConfirmDelete(true)}
+              disabled={deleting}
+              aria-label="Delete ticket"
+              title="Delete"
+            >
+              {deleting ? <Loader2 size={15} className={styles['ticket-board__spin']} /> : <Trash2 size={15} />}
+            </button>
+            <button className="btn btn-sm btn-ghost" onClick={onClose} aria-label="Close">
+              <X size={16} />
+            </button>
+          </div>
+        </header>
 
-          <nav className={styles['rail__steps']}>
-            {SECTIONS.map((s, i) => {
-              const done = sectionDone[s.key];
-              return (
-                <button
-                  key={s.key}
-                  onClick={() => scrollToSection(s.key)}
-                  className={`${styles['rail-step']} ${done ? styles['rail-step--done'] : ''}`}
-                >
-                  <span className={styles['rail-step__marker']}>
-                    {done ? <Check size={15} /> : i + 1}
+        <div className={styles['ticket-detail__body']}>
+          {/* ---- main: title, description, attachments, comments ---- */}
+          <div className={styles['ticket-detail__main']}>
+            <h3 className={styles['ticket-detail__title']}>{ticket.title}</h3>
+
+            {ticket.description ? (
+              <p className={styles['ticket-detail__desc']}>{ticket.description}</p>
+            ) : (
+              <p className={styles['ticket-detail__desc--empty']}>No description.</p>
+            )}
+
+            {(ticket.labels ?? []).length > 0 && (
+              <div className={styles['ticket-card__labels']}>
+                {(ticket.labels ?? []).map((l) => (
+                  <span key={l} className={styles['ticket-card__label']}>
+                    {l}
                   </span>
-                  <span className={styles['rail-step__body']}>
-                    <span className={styles['rail-step__label']}>{s.label}</span>
-                    <span className={styles['rail-step__value']}>{sectionValue[s.key]}</span>
-                    {!done && sectionMissing[s.key] && (
-                      <span className={styles['rail-step__missing']}>
-                        <AlertCircle size={11} />
-                        {sectionMissing[s.key]}
-                      </span>
-                    )}
-                  </span>
-                  <ChevronRight size={14} className={styles['rail-step__arrow']} />
-                </button>
-              );
-            })}
-          </nav>
-        </aside>
+                ))}
+              </div>
+            )}
 
-        {/* ============ RIGHT WORKSPACE — all sections rendered together ============ */}
-        <section className={styles.work}>
-          <div className={styles['work__scroll']}>
-            <div className={styles['work__inner']}>
-
-              {/* ---- SECTION: DETAILS ---- */}
-              <div className={styles.section} ref={sectionRefs.details}>
-                <div className={styles['work__eyebrow']}>Section 1</div>
-                <h1 className={styles['work__title']}>Name your metric</h1>
-                <p className={styles['work__desc']}>Give it a clear name and, optionally, a short description of what it measures.</p>
-
-                <div className={styles['field-row']}>
-                  <div className={styles.field}>
-                    <label className={styles['field__label']}>Metric Name</label>
-                    <input className={styles.input} placeholder="e.g., Answer Faithfulness" value={name} onChange={(e) => setName(e.target.value)} />
-                  </div>
-                  <div className={styles.field}>
-                    <label className={styles['field__label']}>Description</label>
-                    <input className={styles.input} placeholder="What does this metric measure? (optional)" value={description} onChange={(e) => setDescription(e.target.value)} />
-                  </div>
+            {(ticket.attachments ?? []).length > 0 && (
+              <div>
+                <div className={styles['ticket-detail__section-label']}>
+                  <Paperclip size={11} />
+                  Attachments ({ticket.attachments!.length})
+                </div>
+                <div className={styles['ticket-detail__attachments']} style={{ marginTop: '0.6em' }}>
+                  {ticket.attachments!.map((a) => (
+                    <a
+                      key={a.id}
+                      className={styles['ticket-detail__attachment']}
+                      href={a.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={a.name}
+                    >
+                      <img src={a.url} alt={a.name} />
+                    </a>
+                  ))}
                 </div>
               </div>
+            )}
 
-              {/* ---- SECTION: TYPE & TARGET ---- */}
-              <div className={styles.section} ref={sectionRefs.type}>
-                <div className={styles['work__eyebrow']}>Section 2</div>
-                <h1 className={styles['work__title']}>Evaluation type &amp; approach</h1>
-                <p className={styles['work__desc']}>Choose what you’re evaluating, then how the metric should score it.</p>
-
-                <div className={styles.field}>
-                  <label className={styles['field__label']}>Evaluation Type</label>
-                  <div className={`${styles['opt-grid']} ${styles['opt-grid--3']}`}>
-                    {EVAL_TYPE_CARDS.map((c) => (
-                      <button key={c.key} className={`${styles.opt} ${evalType === c.key ? styles['opt--selected'] : ''}`} onClick={() => handleEvalType(c.key)}>
-                        {evalType === c.key && <span className={styles['opt__check']}><Check size={12} /></span>}
-                        <span className={styles['opt__icon']}>{c.icon}</span>
-                        <div className={styles['opt__title']}>{c.label}</div>
-                        <div className={styles['opt__desc']}>{c.desc}</div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {evalType === 'agent' && (
-                  <div className={styles.field}>
-                    <label className={styles['field__label']}>Agent Focus</label>
-                    <div className={`${styles['opt-grid']} ${styles['opt-grid--3']}`}>
-                      {AGENT_SUBCATEGORY_CARDS.map((c) => (
-                        <button key={c.key} className={`${styles.opt} ${agentSubcategory === c.key ? styles['opt--selected'] : ''}`} onClick={() => handleAgentSubcategory(c.key)}>
-                          {agentSubcategory === c.key && <span className={styles['opt__check']}><Check size={12} /></span>}
-                          <span className={styles['opt__icon']}>{c.icon}</span>
-                          <div className={styles['opt__title']}>{c.label}</div>
-                          <div className={styles['opt__desc']}>{c.desc}</div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                <div className={styles.field}>
-                  <label className={styles['field__label']}>Metric Type</label>
-                  <div className={`${styles['opt-grid']} ${styles['opt-grid--4']}`}>
-                    {METRIC_TYPE_CARDS.map((c) => (
-                      <button key={c.key} className={`${styles.opt} ${metricType === c.key ? styles['opt--selected'] : ''}`} onClick={() => handleMetricType(c.key)}>
-                        {metricType === c.key && <span className={styles['opt__check']}><Check size={12} /></span>}
-                        <span className={styles['opt__icon']}>{c.icon}</span>
-                        <div className={styles['opt__title']}>{c.label}</div>
-                        <div className={styles['opt__desc']}>{c.desc}</div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
+            <div>
+              <div className={styles['ticket-detail__section-label']}>
+                Comments {comments.length > 0 && `(${comments.length})`}
               </div>
-
-              {/* ---- SECTION: CONFIG ---- */}
-              <div className={styles.section} ref={sectionRefs.config}>
-                <div className={styles['work__eyebrow']}>Section 3</div>
-                <h1 className={styles['work__title']}>{SECTIONS[2].label}</h1>
-
-                {!metricType && (
-                  <div className={styles.empty}>Pick a metric type above to configure it here.</div>
+              <div className={styles['ticket-detail__comments']} style={{ marginTop: '0.7em' }}>
+                {comments.length === 0 && (
+                  <p className={styles['ticket-detail__comment-empty']}>
+                    No comments yet — start the discussion.
+                  </p>
                 )}
-
-                {/* visual */}
-                {metricType === 'visual' && (
-                  <>
-                    <p className={styles['work__desc']}>Build one or more field comparisons. Combine them with AND / OR.</p>
-                    <div className={styles.rules}>
-                      {rules.map((rule, i) => (
-                        <div key={rule.id}>
-                          {i > 0 && (
-                            <div className={styles.gate}>
-                              <div className={styles['gate__toggle']}>
-                                {(['AND', 'OR'] as const).map((g) => (
-                                  <button key={g} className={`${styles['gate__opt']} ${gates[i - 1] === g ? styles.on : ''}`} onClick={() => toggleGate(i - 1)}>{g}</button>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                          <div className={styles.rule}>
-                            <div className={styles['rule__head']}>
-                              <span className={styles['rule__index']}>Rule {i + 1}</span>
-                              <button className={styles['btn-icon']} title="Remove" onClick={() => removeRule(rule.id)}><X size={15} /></button>
-                            </div>
-                            <div className={styles['rule__grid']}>
-                              <div className={styles['rule__field']}>
-                                <span className={styles['rule__field-label']}>Field</span>
-                                <CustomSelect value={rule.field} onChange={(v) => updateRule(rule.id, { field: v })} options={fields.map((f) => ({ value: f, label: f }))} />
-                              </div>
-                              <div className={styles['rule__field']}>
-                                <span className={styles['rule__field-label']}>Operator</span>
-                                <CustomSelect value={rule.operator} onChange={(v) => updateRule(rule.id, { operator: v })} options={OPERATORS} />
-                              </div>
-                              <div className={styles['rule__field']}>
-                                <span className={styles['rule__field-label']}>Compare To</span>
-                                <CustomSelect value={rule.compareType} onChange={(v) => updateRule(rule.id, { compareType: v as CompareType, value: '' })} options={[{ value: 'field', label: 'Field' }, { value: 'literal', label: 'Literal Value' }]} />
-                              </div>
-                              <div className={styles['rule__field']}>
-                                <span className={styles['rule__field-label']}>Value</span>
-                                {rule.compareType === 'literal'
-                                  ? <input className={styles.input} placeholder="value" value={rule.value} onChange={(e) => updateRule(rule.id, { value: e.target.value })} />
-                                  : <CustomSelect value={rule.value} onChange={(v) => updateRule(rule.id, { value: v })} placeholder="field…" options={fields.map((f) => ({ value: f, label: f }))} />}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    <button className={`${styles.btn} ${styles['btn--sm']} ${styles['add-rule']}`} onClick={addRule}><Plus size={14} /> Add Rule</button>
-
-                    <div className={styles.summary}>
-                      <div className={styles['summary__label']}>Summary</div>
-                      <div className={styles['summary__code']}>{ruleSummary || 'No rules defined'}</div>
-                    </div>
-                  </>
-                )}
-
-                {/* prompt */}
-                {metricType === 'prompt' && (
-                  <>
-                    <p className={styles['work__desc']}>Pick a judge prompt template (or write your own), then choose a judge model.</p>
-
-                    {templatesError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {templatesError}</div>}
-                    {evalType === 'agent' && !agentSubcategory ? (
-                      <div className={styles.empty}>Choose Tool Evaluation or Answer Evaluation above first.</div>
-                    ) : templatesLoading ? (
-                      <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading templates…</div>
-                    ) : (
-                      <div className={styles['tpl-list']}>
-                        {matchingTemplates.length === 0 && !allowsCustomPrompt && <div className={styles.empty}>No templates for this evaluation type.</div>}
-                        {matchingTemplates.map((t) => (
-                          <label key={t.name} className={`${styles.tpl} ${selectedTemplateName === t.name ? styles['tpl--selected'] : ''}`}>
-                            <input type="radio" name="tpl" hidden checked={selectedTemplateName === t.name} onChange={() => { setSelectedTemplateName(t.name); setPromptText(t.template); }} />
-                            <span className={styles['tpl__radio']} />
-                            <span className={styles['tpl__body']}>
-                              <span className={styles['tpl__label']}>{t.label}</span>
-                              <span className={styles['tpl__desc']}>{t.description}</span>
-                              {t.uses_placeholders?.length > 0 && (
-                                <span className={styles['tpl__tags']}>
-                                  {t.uses_placeholders.map((p) => <span key={p} className={styles.token}>{`{${p}}`}</span>)}
-                                </span>
-                              )}
-                            </span>
-                          </label>
-                        ))}
-                        {allowsCustomPrompt && (
-                          <label className={`${styles.tpl} ${selectedTemplateName === '__custom__' ? styles['tpl--selected'] : ''}`}>
-                            <input type="radio" name="tpl" hidden checked={selectedTemplateName === '__custom__'} onChange={() => { setSelectedTemplateName('__custom__'); setPromptText(''); }} />
-                            <span className={styles['tpl__radio']} />
-                            <span className={styles['tpl__body']}>
-                              <span className={styles['tpl__label']}>Custom Prompt</span>
-                              <span className={styles['tpl__desc']}>Write your own judge prompt from scratch.</span>
-                            </span>
-                          </label>
-                        )}
-                      </div>
-                    )}
-
-                    {selectedTemplateName && (
-                      <div className={styles.field}>
-                        <label className={styles['field__label']}>Prompt</label>
-                        <textarea className={styles.textarea} style={{ minHeight: '150px' }} value={promptText} onChange={(e) => setPromptText(e.target.value)} placeholder="Enter your judge prompt…" />
-                      </div>
-                    )}
-
-                    <div className={styles.field}>
-                      <label className={styles['field__label']}>Judge Model</label>
-                      {modelsError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {modelsError}</div>}
-                      {modelsLoading ? (
-                        <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading models…</div>
-                      ) : models.length === 0 ? (
-                        <div className={styles.empty}>No models available.</div>
-                      ) : (
-                        <div className={styles['provider-cols']}>
-                          {modelsByProvider.map(([providerId, list]) => {
-                            const search = (modelSearch[providerId] || '').toLowerCase();
-                            const filtered = search ? list.filter((m) => m.name.toLowerCase().includes(search)) : list;
-                            return (
-                              <div key={providerId} className={styles['provider-col']}>
-                                <div className={styles['provider-col__head']}>
-                                  {providerName(providerId)}
-                                  <span className={styles['provider-col__count']}>{list.length}</span>
-                                </div>
-                                <div className={styles['provider-col__search']}>
-                                  <Search size={13} />
-                                  <input
-                                    placeholder="Search model…"
-                                    value={modelSearch[providerId] || ''}
-                                    onChange={(e) => setModelSearch((prev) => ({ ...prev, [providerId]: e.target.value }))}
-                                  />
-                                </div>
-                                <div className={styles['provider-col__list']}>
-                                  {filtered.length === 0 ? (
-                                    <div className={styles.empty}>No matching models.</div>
-                                  ) : filtered.map((m) => {
-                                    const health = modelHealth[m.id] || 'checking';
-                                    const disabled = health === 'unhealthy';
-                                    return (
-                                      <label key={m.id} className={`${styles.model} ${selectedModelId === m.id ? styles['model--selected'] : ''} ${disabled ? styles['model--disabled'] : ''}`}>
-                                        <input type="radio" name="judge" hidden checked={selectedModelId === m.id} disabled={disabled} onChange={() => setSelectedModelId(m.id)} />
-                                        <span className={styles['model__radio']} />
-                                        <span className={styles['model__body']}>
-                                          <span className={styles['model__name']} title={m.name}>{m.name}</span>
-                                          {health === 'checking' && <span className={styles['model__checking']}>Checking…</span>}
-                                        </span>
-                                        <span className={`${styles['model__health']} ${styles[`health--${health}`]}`} title={health === 'checking' ? 'Checking' : health === 'healthy' ? 'Healthy' : 'Offline'}>
-                                          <span className={styles['health-dot']} />
-                                        </span>
-                                      </label>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  </>
-                )}
-
-                {/* code */}
-                {metricType === 'code' && (
-                  <>
-                    <p className={styles['work__desc']}>Starter code is tailored to the evaluation type. Edit it to suit your metric.</p>
-                    {codeError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {codeError}</div>}
-                    {evalType === 'agent' && !agentSubcategory ? (
-                      <div className={styles.empty}>Choose Tool Evaluation or Answer Evaluation above first.</div>
-                    ) : (
-                      <div className={styles.code}>
-                        <div className={styles['code__bar']}>
-                          <span className={styles['code__lang']}>Python</span>
-                          {codeLoading && <Loader2 size={13} className={styles.spin} />}
-                        </div>
-                        <textarea className={styles['code__area']} spellCheck={false} value={code} onChange={(e) => setCode(e.target.value)} placeholder="# scoring function" />
-                      </div>
-                    )}
-                  </>
-                )}
-
-                {/* simple — Built-in Check (checks + params come from the API) */}
-                {metricType === 'simple' && (
-                  <>
-                    <p className={styles['work__desc']}>Pick a built-in check. Available checks depend on the evaluation type selected above.</p>
-
-                    {templatesError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {templatesError}</div>}
-
-                    {!evalType ? (
-                      <div className={styles.empty}>Choose an evaluation type above to see available checks.</div>
-                    ) : evalType === 'agent' && !agentSubcategory ? (
-                      <div className={styles.empty}>Choose Tool Evaluation or Answer Evaluation above first.</div>
-                    ) : templatesLoading ? (
-                      <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading checks…</div>
-                    ) : availableBuiltinChecks.length === 0 ? (
-                      <div className={styles.empty}>No built-in checks for this evaluation type.</div>
-                    ) : (
-                      <div className={`${styles['opt-grid']} ${availableBuiltinChecks.length >= 4 ? styles['opt-grid--4'] : ''}`}>
-                        {availableBuiltinChecks.map((c) => (
-                          <button
-                            key={c.id}
-                            className={`${styles.opt} ${builtinCheck === c.id ? styles['opt--selected'] : ''}`}
-                            onClick={() => handleBuiltinCheck(c)}
-                          >
-                            {builtinCheck === c.id && <span className={styles['opt__check']}><Check size={12} /></span>}
-                            <span className={styles['opt__icon']}>{builtinCheckIcon(c.id)}</span>
-                            <div className={styles['opt__title']}>{c.name}</div>
-                            <div className={styles['opt__desc']}>{c.description}</div>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-
-                    {selectedBuiltinCheckDef?.params.map((p) => (
-                      <div key={p.key} className={`${styles.field} ${styles['field--fit']}`} style={{ marginTop: '18px' }}>
-                        {p.type === 'bool' ? (
-                          <div className={styles['switch-row']}>
-                            <div>
-                              <div className={styles['switch-row__label']}>{p.label}</div>
-                            </div>
-                            <button
-                              type="button"
-                              role="switch"
-                              aria-checked={Boolean(builtinParams[p.key])}
-                              className={`${styles.switch} ${builtinParams[p.key] ? styles['switch--on'] : ''}`}
-                              onClick={() => setBuiltinParams((prev) => ({ ...prev, [p.key]: !prev[p.key] }))}
-                            >
-                              <span className={styles['switch__thumb']} />
-                            </button>
-                          </div>
-                        ) : p.type === 'number' ? (
-                          <>
-                            <label className={styles['field__label']}>{p.label}</label>
-                            <input
-                              type="number"
-                              min={1}
-                              step={1}
-                              className={styles.input}
-                              value={typeof builtinParams[p.key] === 'number' ? (builtinParams[p.key] as number) : ''}
-                              onChange={(e) => {
-                                const raw = e.target.value;
-                                if (raw === '') { setBuiltinParams((prev) => ({ ...prev, [p.key]: '' })); return; }
-                                const n = Math.floor(Number(raw));
-                                setBuiltinParams((prev) => ({ ...prev, [p.key]: Number.isFinite(n) && n > 0 ? n : 1 }));
-                              }}
-                            />
-                          </>
-                        ) : p.type === 'list' || p.type === 'string_list' ? (
-                          <>
-                            <label className={styles['field__label']}>{p.label} (comma-separated)</label>
-                            <input
-                              className={styles.input}
-                              placeholder="Enter one or more values, separated by commas"
-                              value={typeof builtinParams[p.key] === 'string' ? (builtinParams[p.key] as string) : ''}
-                              onChange={(e) => setBuiltinParams((prev) => ({ ...prev, [p.key]: e.target.value }))}
-                            />
-                          </>
-                        ) : (
-                          <>
-                            <label className={styles['field__label']}>{p.label}</label>
-                            <input
-                              className={styles.input}
-                              value={typeof builtinParams[p.key] === 'string' ? (builtinParams[p.key] as string) : ''}
-                              onChange={(e) => setBuiltinParams((prev) => ({ ...prev, [p.key]: e.target.value }))}
-                            />
-                          </>
-                        )}
-                      </div>
-                    ))}
-                  </>
-                )}
-
-                {/* threshold — shared across all config types */}
-                {metricType && (
-                  <div className={styles.field} style={{ marginTop: '26px' }}>
-                    <label className={styles['field__label']}>Pass Threshold</label>
-                    <div className={`${styles.thr} ${styles['field--fit']}`}>
-                      <div className={styles['thr__row']}>
-                        <span className={styles['thr__cap']}>Minimum score required to pass</span>
-                        <span className={styles['thr__value']}>{threshold.toFixed(2)}</span>
-                      </div>
-                      <input type="range" className={styles['thr__slider']} min={0} max={1} step={0.01} value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} />
-                      <div className={styles['thr__scale']}><span>0.00</span><span>0.50</span><span>1.00</span></div>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* ---- SECTION: DATASET ---- */}
-              <div className={`${styles.section} ${styles['section--last']}`} ref={sectionRefs.dataset}>
-                <div className={styles['work__eyebrow']}>Section 4</div>
-                <h1 className={styles['work__title']}>Choose test data &amp; validate</h1>
-                <p className={styles['work__desc']}>Pick a dataset and questions, run validation, then save your metric.</p>
-
-                {!evalType ? (
-                  <div className={styles.empty}>Choose an evaluation type above to load datasets.</div>
-                ) : (
-                  <div className={styles['data-row']}>
-                    <div className={styles['data-col']}>
-                      <div className={styles['data-col__head']}>
-                        <span className={styles['data-col__head-title']}><Database size={12} /> Datasets</span>
-                        {datasets.length > 0 && <span className={styles['data-col__count']}>{datasets.length}</span>}
-                      </div>
-                      <div className={styles['data-col__body']}>
-                        {datasetsError ? <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {datasetsError}</div>
-                          : datasetsLoading ? <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading…</div>
-                          : datasets.length === 0 ? <div className={styles.empty}>No datasets for this type.</div>
-                          : (
-                            <div className={styles['ds-list']}>
-                              {datasets.map((d) => {
-                                const selected = selectedDatasetId === d.id;
-                                return (
-                                  <div
-                                    key={d.id}
-                                    className={`${styles.ds} ${selected ? styles['ds--selected'] : ''}`}
-                                    onClick={() => selectDataset(d.id)}
-                                    title={d.name}
-                                  >
-                                    <span className={styles['ds__check']}><Check size={11} /></span>
-                                    <span className={styles['ds__icon']}><Database size={14} /></span>
-                                    <span className={styles['ds__name']}>{d.name}</span>
-                                    <span className={styles['ds__count']}>{d.question_count} {d.question_count === 1 ? 'question' : 'questions'}</span>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                      </div>
-                    </div>
-
-                    <div className={styles['data-col']}>
-                      <div className={styles['data-col__head']}>
-                        <span className={styles['data-col__head-title']}>
-                          <ListChecks size={12} /> Questions
+                {comments.map((c) => (
+                  <div key={c.id} className={styles['ticket-detail__comment']}>
+                    <span
+                      className={styles['ticket-card__avatar']}
+                      style={{ background: avatarAccent(c.author) }}
+                    >
+                      {initials(c.author)}
+                    </span>
+                    <div className={styles['ticket-detail__comment-body']}>
+                      <div className={styles['ticket-detail__comment-head']}>
+                        <span className={styles['ticket-detail__comment-author']}>
+                          {c.author.name}
                         </span>
-                        {previewQuestions.length > 0 && (
-                          <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                            <span className={styles['data-col__count']}>{selectedQuestionIds.size}/{previewQuestions.length}</span>
-                            <span style={{ display: 'flex', gap: '8px' }}>
-                              <button className={styles['link-btn']} onClick={selectAllQuestions}>All</button>
-                              <button className={styles['link-btn']} onClick={clearAllQuestions}>Clear</button>
-                            </span>
-                          </span>
-                        )}
+                        <span className={styles['ticket-detail__comment-time']}>
+                          {formatTime(c.created_at)}
+                        </span>
                       </div>
-                      <div className={styles['data-col__body']}>
-                        {previewError ? <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {previewError}</div>
-                          : previewLoading ? <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading…</div>
-                          : previewQuestions.length === 0 ? <div className={styles.empty}>Select a dataset to preview.</div>
-                          : (
-                            <div className={styles['q-list']}>
-                              {previewQuestions.map((q) => {
-                                const on = selectedQuestionIds.has(q.id);
-                                const tools = q.input?.available_tools || [];
-                                const expectedCalls = (q.expected?.expected_tools?.length ? q.expected.expected_tools : q.expected?.tool_calls) || [];
-                                return (
-                                  <div key={q.id} className={`${styles.q} ${on ? styles['q--on'] : ''}`} onClick={() => toggleQuestion(q.id)}>
-                                    <span className={styles['q__check']}>{on && <Check size={12} />}</span>
-                                    <span className={styles['q__body']}>
-                                      {q.category && <span className={styles['q__category']}>{q.category}</span>}
-                                      <span className={styles['q__q']}>{q.input?.prompt}</span>
-                                      <span className={styles['q__a']}><span className={styles['q__a-label']}>Expected:</span>{q.expected?.answer}</span>
-
-                                      {tools.length > 0 && (
-                                        <span className={styles['q__tools']}>
-                                          <span className={styles['q__tools-label']}>Available tools</span>
-                                          <span className={styles['q__tool-tags']}>
-                                            {tools.map((t) => (
-                                              <span key={t.name} className={styles['q__tool-tag']} title={t.description}>
-                                                <span className={styles['q__tool-method']}>{t.method}</span>
-                                                {t.name}
-                                              </span>
-                                            ))}
-                                          </span>
-                                        </span>
-                                      )}
-
-                                      {expectedCalls.length > 0 && (
-                                        <span className={styles['q__calls']}>
-                                          <span className={styles['q__tools-label']}>Expected tool calls</span>
-                                          {expectedCalls.map((c, i) => (
-                                            <span key={`${c.name}-${i}`} className={styles['q__call']}>
-                                              <span className={styles['q__call-name']}>{c.name}</span>
-                                              {Object.entries(c.arguments || {}).length > 0 && (
-                                                <span className={styles['q__call-args']}>
-                                                  {Object.entries(c.arguments).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ')}
-                                                </span>
-                                              )}
-                                            </span>
-                                          ))}
-                                        </span>
-                                      )}
-                                    </span>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                      </div>
+                      <p className={styles['ticket-detail__comment-text']}>{c.text}</p>
                     </div>
                   </div>
-                )}
+                ))}
 
-                {/* ---- validate & save ---- */}
-                <div className={styles['validate-section']}>
-                  <div className={styles['validate-section__label']}>Validate &amp; Save</div>
-                  <p className={styles['validate-section__desc']}>Run a dry-run against your selected questions. Saving unlocks once it passes.</p>
-
-                  {validateError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {validateError}</div>}
-
-                  {!validateResult && !validating && (
-                    <div className={`${styles.banner} ${styles['banner--info']}`}><Sparkles size={15} /> Ready to validate {selectedQuestionIds.size} test case{selectedQuestionIds.size === 1 ? '' : 's'}.</div>
-                  )}
-
-                  {validateResult && (
-                    <div style={{ marginBottom: '18px' }}>
-                      {validateSucceeded
-                        ? <div className={`${styles.banner} ${styles['banner--ok']}`}><CheckCircle2 size={15} /> Metric is valid — ready to save.</div>
-                        : <div className={`${styles.banner} ${styles['banner--err']}`}><XCircle size={15} /> No test cases passed. You can still save, or adjust your metric and re-run.</div>}
-
-                      <div className={styles.results}>
-                        {validateResult.results.map((r, i) => (
-                          <div key={i} className={styles['results__row']}>
-                            <span className={`${styles['results__score']} ${r.success ? styles['results__score--pass'] : styles['results__score--fail']}`}>{r.score.toFixed(2)}</span>
-                            <span className={styles['results__body']}>
-                              <span className={styles['results__io']}>{r.test_case.input}</span>
-                              {r.reason && <span className={styles['results__reason']}>{r.reason}</span>}
-                            </span>
-                            <span className={`${styles['results__pill']} ${r.success ? styles['results__pill--pass'] : styles['results__pill--fail']}`}>{r.success ? 'Pass' : 'Fail'}</span>
-                          </div>
-                        ))}
-                        <div className={styles['results__summary']}>
-                          <span>Passed: <strong>{validateResult.passed}/{validateResult.total}</strong></span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
+                <div className={styles['ticket-detail__comment-form']}>
+                  <textarea
+                    className={styles['ticket-detail__comment-input']}
+                    value={commentDraft}
+                    onChange={(e) => setCommentDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                        e.preventDefault();
+                        submitComment();
+                      }
+                    }}
+                    placeholder="Add a comment… (⌘/Ctrl + Enter to send)"
+                    disabled={posting}
+                  />
+                  <button
+                    type="button"
+                    className={styles['ticket-detail__comment-send']}
+                    onClick={submitComment}
+                    disabled={posting || !commentDraft.trim()}
+                    aria-label="Post comment"
+                  >
+                    {posting ? (
+                      <Loader2 size={15} className={styles['ticket-board__spin']} />
+                    ) : (
+                      <Send size={15} />
+                    )}
+                  </button>
                 </div>
               </div>
-
             </div>
           </div>
 
-          {/* ---- sticky footer ---- */}
-          <div className={styles['work__foot']}>
-            <span className={styles['work__foot-info']}>
-              {completedCount}/{SECTIONS.length} sections ready
-            </span>
+          {/* ---- rail: requester/assignee, status, terminal actions ---- */}
+          <div className={styles['ticket-detail__rail']}>
+            <div className={styles['ticket-detail__people']}>
+              <div className={styles['ticket-detail__person']}>
+                <span className={styles['ticket-detail__person-label']}>Requester</span>
+                <div className={styles['ticket-detail__person-val']}>
+                  <span
+                    className={styles['ticket-card__avatar']}
+                    style={{ background: avatarAccent(ticket.owner) }}
+                  >
+                    {initials(ticket.owner)}
+                  </span>
+                  {ticket.owner.name}
+                  {owner && <span className={styles['ticket-detail__you']}>you</span>}
+                </div>
+              </div>
+              <div className={styles['ticket-detail__person']}>
+                <span className={styles['ticket-detail__person-label']}>Assignee</span>
+                {ticket.assignee ? (
+                  <div className={styles['ticket-detail__person-val']}>
+                    <span
+                      className={styles['ticket-card__avatar']}
+                      style={{ background: avatarAccent(ticket.assignee) }}
+                    >
+                      {initials(ticket.assignee)}
+                    </span>
+                    {ticket.assignee.name}
+                  </div>
+                ) : (
+                  <span className={styles['ticket-detail__muted']}>Unassigned</span>
+                )}
+              </div>
+            </div>
 
-            <div className={styles['work__foot-actions']}>
-              {!validateResult ? (
-                <>
-                  <button className={`${styles.btn} ${styles['btn--primary']}`} onClick={runValidate} disabled={validating || !canValidate}>
-                    {validating ? <Loader2 size={15} className={styles.spin} /> : <Sparkles size={15} />}
-                    {validating ? 'Validating…' : 'Run Validation'}
-                    {!validating && <ArrowRight size={15} />}
-                  </button>
-                  <button className={`${styles.btn} ${styles['btn--ghost']}`} onClick={onCancel}>Cancel</button>
-                </>
-              ) : (
-                <>
-                  <button className={`${styles.btn} ${styles['btn--ok']}`} onClick={handleSave} disabled={saving}>
-                    {saving ? <Loader2 size={15} className={styles.spin} /> : <Check size={15} />}
-                    Save Metric
-                  </button>
-                  <button className={`${styles.btn} ${styles['btn--ghost']}`} onClick={onCancel}>Cancel</button>
-                </>
+            <div>
+              <div className={styles['ticket-detail__section-label']}>
+                Status
+                {moving && <Loader2 size={13} className={styles['ticket-board__spin']} />}
+              </div>
+              <div className={styles['ticket-detail__stepper']} style={{ marginTop: '0.5em' }}>
+                {COLUMNS.filter((c) => c.status !== 'done').map((c) => {
+                  const isCurrent = ticket.status === c.status;
+                  return (
+                    <button
+                      key={c.status}
+                      type="button"
+                      className={[
+                        styles['ticket-detail__step'],
+                        isCurrent ? styles['ticket-detail__step--current'] : '',
+                      ].join(' ')}
+                      style={{ ['--step-accent' as string]: c.accent }}
+                      disabled={isCurrent || moving}
+                      onClick={() => onMove(ticket.id, c.status)}
+                    >
+                      {isCurrent && <Check size={13} />}
+                      {c.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <div className={styles['ticket-detail__section-label']}>Close ticket</div>
+              <div className={styles['ticket-detail__terminal']} style={{ marginTop: '0.5em' }}>
+                <button
+                  type="button"
+                  className={styles['ticket-detail__done-btn']}
+                  disabled={!owner || moving || (ticket.status === 'done' && ticket.resolution === 'completed')}
+                  title={owner ? undefined : OWNER_ONLY_HINT}
+                  onClick={() => onMove(ticket.id, 'done', 'completed')}
+                >
+                  {owner ? <Check size={14} /> : <Lock size={14} />}
+                  Mark Done
+                </button>
+                <button
+                  type="button"
+                  className={styles['ticket-detail__discard-btn']}
+                  disabled={!owner || moving || (ticket.status === 'done' && ticket.resolution === 'discarded')}
+                  title={owner ? undefined : OWNER_ONLY_HINT}
+                  onClick={() => onMove(ticket.id, 'done', 'discarded')}
+                >
+                  {owner ? <Ban size={14} /> : <Lock size={14} />}
+                  Discard
+                </button>
+              </div>
+              {!owner && (
+                <p className={styles['ticket-detail__gate-note']} style={{ marginTop: '0.5em' }}>
+                  <Lock size={12} /> {OWNER_ONLY_HINT}
+                </p>
               )}
             </div>
           </div>
-        </section>
-      </div>
-
-      {saveError && <div className={styles.toast}><AlertCircle size={15} /> {saveError}</div>}
-
-      {savedId && (
-        <div className={styles.overlay}>
-          <div className={styles.modal}>
-            <div className={styles['modal__icon']}><CheckCircle2 size={26} /></div>
-            <div className={styles['modal__title']}>Metric created!</div>
-            <div className={styles['modal__text']}>Your metric is now available for evaluations.</div>
-            <div className={styles['modal__id']}>ID: {savedId}</div>
-            <div className={styles['modal__actions']}>
-              <button className={styles.btn} onClick={resetForm}>Create Another</button>
-              <button className={`${styles.btn} ${styles['btn--primary']}`} onClick={() => onSaved(savedId)}>Go to Dashboard</button>
-            </div>
-          </div>
         </div>
-      )}
+      </aside>
 
-      {ToastEl}
-    </div>
+      {confirmDelete && (
+        <ConfirmDialog
+          title="Delete this ticket?"
+          message={`"${ticket.title}" will be permanently removed. This can't be undone.`}
+          confirmLabel="Delete"
+          tone="danger"
+          loading={deleting}
+          onCancel={() => setConfirmDelete(false)}
+          onConfirm={() => onDelete(ticket.id)}
+        />
+      )}
+    </>
   );
 }
 
@@ -1171,47 +347,37 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
 
 
 
-
-
-
-
-
-
+//Ticketboard.module.scss
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
-// Create Metric — single-page builder (all sections visible at once).
-// Left: overview rail with a redesigned "living timeline" stepper.
-// Right: every section stacked, separated by dashed dividers, capped at
-// a wider 1000px reading column.
+// Ticket board — same ink/paper design system as Providers/Dashboard:
+// theme-aware neutrals from _variables, flat accent constants, hover-lift
+// cards, mono-ish instrument labels.
 //
-// Font scaling follows the same convention as Model Catalog: `.cm` sets a
-// single base font-size, every descendant font-size is expressed in `em`
-// relative to that base, so bumping `.cm`'s font-size on wide screens
-// scales the whole builder proportionally from one place.
+// Header/toolbar structure and font-scaling convention are copied 1:1 from
+// Providers.module.scss: `.ticket-board` sets one base font-size that every
+// descendant `em` value is relative to, bumped to 1rem at wide (>1800px)
+// viewports so the whole page reads larger on big monitors without any
+// individual rule changing.
 // ===========================================================================
-
-// Neutrals, accents, and washes all come from the shared "ink" block in
-// _variables.scss (theme-aware via _theme.scss custom properties) — same
-// tokens Model Catalog uses, no locally-declared colors. $amber is kept
-// as a local alias only because this file's selectors were written
-// against that name; it points at the same $amber-ink token as everyone
-// else.
-$amber: $amber-ink;
-// Toast needs to stay legible against its own dark chip in both themes
-// (unlike page surfaces, which flip), so it uses the ink-1 dark value
-// directly rather than the theme-flipping $ink token.
-$ink-solid: #14161B;
 
 $mono:    $font-mono;
 $sans:    $font-body;
 $display: $font-display;
+$radius:  12px;
+
+@keyframes sheetUpIn {
+  from { transform: translateY(24px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
 
 $soft: 0 1px 2px rgba(20, 22, 27, 0.05);
-$lift: 0 18px 40px -20px rgba(20, 22, 27, 0.30);
+$lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
 
-// base font-size the whole builder's internal `em` scale is built on
-$base-font: 0.8125rem; // matches Model Catalog / Custom Metrics Dashboard base
+// base font-size the board's internal `em` scale is built on — same value
+// Providers uses, so the two pages feel identical in density.
+$board-base-font: 0.8125rem;
 
 %micro {
   font-family: $mono;
@@ -1221,768 +387,109 @@ $base-font: 0.8125rem; // matches Model Catalog / Custom Metrics Dashboard base
   text-transform: uppercase;
 }
 
-@keyframes cm-spin { to { transform: rotate(360deg); } }
-@keyframes cm-fade-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes cm-pop { 0% { transform: scale(0.7); opacity: 0; } 60% { transform: scale(1.08); } 100% { transform: scale(1); opacity: 1; } }
-@keyframes cm-modal-in { from { opacity: 0; transform: translateY(12px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
-@keyframes cm-check-pop { 0% { transform: scale(0.4); opacity: 0; } 70% { transform: scale(1.15); } 100% { transform: scale(1); opacity: 1; } }
+.ticket-board {
+  // master scale control — every em-based font-size below responds to this
+  font-size: $board-base-font;
 
-.spin { animation: cm-spin 0.8s linear infinite; }
+  @media (min-width: 1800px) {
+    font-size: 1rem;
+  }
 
-// ---------------------------------------------------------------------------
-// shell — master scale control. Every em-based font-size below responds
-// to this. On very wide screens, bumping it to 1rem scales everything.
-// ---------------------------------------------------------------------------
-.cm {
-  font-size: $base-font;
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-
-  @media (min-width: 1800px) { font-size: 1rem; }
-}
-
-.builder {
-  flex: 1;
-  min-height: 0;
-  display: grid;
-  grid-template-columns: 300px 1fr;
-  gap: 0;
-  overflow: hidden;
-}
-
-// ---------------------------------------------------------------------------
-// LEFT RAIL — vertical stepper with a connecting line that tracks the
-// 12px gap between rows, flat solid colors (no gradients), and a clear
-// done/active state — jump to any section, any time.
-// ---------------------------------------------------------------------------
-.rail {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: $card;
-  border-right: 1px solid $line;
-  overflow-y: auto;
+  flex: 1;
+  color: $ink;
 }
 
-.rail__head {
-  padding: 26px 22px 20px;
+// ---- header -----------------------------------------------------------
+.ticket-board__header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 24px 32px 20px;
+  margin-bottom: 20px;
   border-bottom: 1px solid $line;
+  background: $card;
+
+  h1 {
+    font-family: $display;
+    font-size: 1.8462em; // 1.5rem / 0.8125rem
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: $ink;
+    line-height: 1.2;
+  }
 }
 
-.rail__eyebrow {
+.ticket-board__header-eyebrow {
   @extend %micro;
-  font-size: 0.7692em; // 0.625rem / 0.8125rem
+  display: flex;
+  align-items: center;
+  gap: 8px;
   color: $signal;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin-bottom: 10px;
-
-  &::before { content: ''; width: 14px; height: 2px; border-radius: 2px; background: $signal; }
-}
-
-.rail__sub {
-  margin-top: 4px;
-  font-size: 0.9615em; // 0.78125rem / 0.8125rem
-  color: $ink-3;
-  line-height: 1.5;
-}
-
-.rail__steps {
-  flex: 1;
-  padding: 18px 14px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.rail-step {
-  position: relative;
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-  width: 100%;
-  text-align: left;
-  padding: 13px 14px 13px 12px;
-  border-radius: 16px;
-  border: 1.5px solid transparent;
-  background: transparent;
-  cursor: pointer;
-  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
-
-  &:hover {
-    background: $paper;
-    border-color: $line;
-    transform: translateX(3px);
-
-    .rail-step__arrow { opacity: 1; transform: translateX(0); }
-  }
-
-  &--done {
-    background: $wash;
-    border-color: rgba($signal, 0.16);
-
-    &:hover { border-color: rgba($signal, 0.35); }
-  }
-
-  // vertical connector: starts right below this marker, and reaches all
-  // the way through the 12px row gap into the top of the next marker.
-  &:not(:last-child)::after {
-    content: '';
-    position: absolute;
-    left: 30px;
-    top: 49px;
-    bottom: -25px; // 12px row gap + 13px next step's top padding
-    width: 2px;
-    border-radius: 2px;
-    background: $line;
-    z-index: 0;
-    transition: background 0.25s ease;
-  }
-  &--done:not(:last-child)::after {
-    background: $signal;
-  }
-}
-
-.rail-step__marker {
-  position: relative;
-  z-index: 1;
-  flex-shrink: 0;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: $mono;
-  font-size: 1.2308em; // 1.0rem / 0.8125rem
-  font-weight: 800;
-  color: $ink-3;
-  background: $paper;
-  border: 2px solid $line;
-  transition: all 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
-
-  .rail-step--done & {
-    color: #fff;
-    background: $signal;
-    border-color: $signal;
-    box-shadow: 0 4px 12px -3px rgba(43, 43, 245, 0.45);
-    animation: cm-check-pop 0.3s ease;
-  }
-
-  .rail-step:hover:not(.rail-step--done) & {
-    border-color: $ink-3;
-    color: $ink-2;
-    transform: scale(1.08);
-  }
-}
-
-.rail-step__body {
-  min-width: 0;
-  flex: 1;
-  padding-top: 5px;
-}
-
-.rail-step__label {
-  display: block;
-  font-size: 1.2308em; // 1.0rem / 0.8125rem
-  font-weight: 700;
-  color: $ink-2;
-  transition: color 0.2s ease;
-
-  .rail-step--done & { color: $ink; }
-}
-
-.rail-step__value {
-  display: block;
-  font-family: $mono;
-  font-size: 1.0000em; // 0.8125rem / 0.8125rem
-  color: $ink-3;
-  margin-top: 5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-
-  .rail-step--done & { color: $signal; font-weight: 700; }
-}
-
-.rail-step__missing {
-  display: flex;
-  align-items: flex-start;
-  gap: 5px;
-  margin-top: 6px;
-  font-family: $sans;
-  font-size: 0.9231em; // 0.75rem / 0.8125rem
-  font-weight: 600;
-  color: $amber;
-  line-height: 1.35;
-  white-space: normal;
-
-  svg { flex-shrink: 0; margin-top: 1px; }
-}
-
-.rail-step__arrow {
-  flex-shrink: 0;
-  align-self: center;
-  color: $ink-3;
-  opacity: 0;
-  transform: translateX(-4px);
-  transition: all 0.2s ease;
-
-  .rail-step--done & { color: $signal; }
-}
-
-// ---------------------------------------------------------------------------
-// RIGHT WORKSPACE — all sections stacked
-// ---------------------------------------------------------------------------
-.work {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  background: $paper;
-}
-
-.work__scroll {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 32px 36px;
-}
-
-.work__inner {
-  margin: 0 auto;
-}
-
-.section {
-  background: $card;
-  border: 1px solid $line;
-  border-radius: 18px;
-  box-shadow: $soft;
-  padding: 28px 32px 32px;
-  margin-bottom: 18px;
-  animation: cm-fade-up 0.28s ease;
-}
-.section--last { margin-bottom: 0; }
-
-.work__eyebrow {
-  @extend %micro;
-  font-size: 0.7692em; // 0.625rem / 0.8125rem
-  color: $ink-3;
-  margin-bottom: 8px;
-}
-
-.work__title {
-  font-family: $display;
-  font-size: 1.6923em; // 1.375rem / 0.8125rem
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  color: $ink;
-  line-height: 1.2;
-}
-
-.work__desc {
-  margin-top: 6px;
-  margin-bottom: 26px;
-  font-size: 1.1538em; // 0.9375rem / 0.8125rem
-  color: $ink-2;
-  line-height: 1.5;
-}
-
-// ---------------------------------------------------------------------------
-// sticky footer (Cancel / Run Validation / Save)
-// ---------------------------------------------------------------------------
-.work__foot {
-  flex-shrink: 0;
-  position: sticky;
-  bottom: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 16px 36px;
-  background: $card;
-  border-top: 1px solid $line;
-  z-index: 5;
-}
-
-.work__foot-info {
-  font-family: $mono;
-  font-size: 0.9231em; // 0.75rem / 0.8125rem
-  font-weight: 700;
-  color: $ink-3;
-}
-
-.work__foot-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-// ---------------------------------------------------------------------------
-// buttons
-// ---------------------------------------------------------------------------
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 10px 18px;
-  border-radius: 10px;
-  border: 1px solid $line;
-  background: $card;
-  color: $ink-2;
-  font-family: $sans;
-  font-size: 1.0385em; // 0.84375rem / 0.8125rem
-  font-weight: 650;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  white-space: nowrap;
-
-  &:hover:not(:disabled) { border-color: $ink-3; color: $ink; }
-  &:disabled { opacity: 0.45; cursor: not-allowed; }
-}
-
-.btn--sm { padding: 7px 12px; font-size: 0.9615em; border-radius: 8px; } // 0.78125rem / 0.8125rem
-
-.btn--primary {
-  border-color: $signal;
-  background: $signal;
-  color: #fff;
-  &:hover:not(:disabled) { background: $signal-2; border-color: $signal-2; color: #fff; transform: translateY(-1px); box-shadow: $lift; }
-}
-
-.btn--ghost { background: transparent; border-color: transparent; &:hover:not(:disabled) { background: $paper; border-color: $line; } }
-
-.btn--ok {
-  border-color: $ok; background: $ok; color: #fff;
-  &:hover:not(:disabled) { filter: brightness(0.95); color: #fff; transform: translateY(-1px); box-shadow: $lift; }
-}
-
-.btn-icon {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 30px; height: 30px; border-radius: 8px;
-  border: 1px solid transparent; background: transparent; color: $ink-3; cursor: pointer;
-  transition: all 0.15s ease;
-  &:hover { background: $danger-wash; border-color: rgba($danger, 0.2); color: $danger; }
-}
-
-// ---------------------------------------------------------------------------
-// forms
-// ---------------------------------------------------------------------------
-.field { margin-bottom: 20px; }
-
-// constrains a field to its natural content width instead of stretching
-// across the (now unconstrained) workspace width — used for compact
-// single-value inputs/toggles like the Built-in Check params.
-.field--fit {
-  max-width: 360px;
-
-  .input { width: 100%; }
-}
-
-// side-by-side fields (e.g. Metric Name / Description) to use the wider
-// workspace now that .work__inner has no max-width cap
-.field-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-
-  .field { margin-bottom: 20px; }
-}
-
-.field__label {
-  display: block;
-  @extend %micro;
-  font-size: 0.8462em; // 0.6875rem / 0.8125rem
-  color: $ink-2;
-  margin-bottom: 8px;
-}
-.field__hint { font-size: 0.9615em; color: $ink-3; margin-top: 6px; } // 0.78125rem / 0.8125rem
-
-.input, .textarea {
-  width: 100%;
-  border: 1.5px solid $line;
-  border-radius: 10px;
-  padding: 11px 13px;
-  font-size: 1.1538em; // 0.9375rem / 0.8125rem
-  font-family: $sans;
-  color: $ink;
-  background: $card;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-
-  &::placeholder { color: $ink-3; }
-  &:focus { outline: none; border-color: $signal; box-shadow: 0 0 0 3px $wash; }
-}
-.textarea { resize: vertical; min-height: 92px; line-height: 1.55; }
-
-// ---------------------------------------------------------------------------
-// selectable option cards (eval type / metric type)
-// ---------------------------------------------------------------------------
-.opt-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
-}
-.opt-grid--3 { grid-template-columns: repeat(3, 1fr); }
-.opt-grid--4 { grid-template-columns: repeat(4, 1fr); }
-
-.opt {
-  position: relative;
-  text-align: left;
-  border: 1.5px solid $line;
-  border-radius: 16px;
-  padding: 18px;
-  cursor: pointer;
-  background: $card;
-  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
-
-  &:hover:not(&--disabled) { border-color: $ink-3; transform: translateY(-2px); box-shadow: $lift; }
-
-  &--selected {
-    border-color: $signal;
-    background: $wash;
-    box-shadow: 0 0 0 1px $signal inset;
-  }
-  &--disabled { opacity: 0.5; cursor: not-allowed; }
-}
-
-.opt__icon {
-  width: 42px;
-  height: 42px;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: $paper;
-  border: 1px solid $line;
-  color: $signal;
-  margin-bottom: 12px;
-  transition: all 0.16s ease;
-
-  .opt--selected & { background: $signal; border-color: $signal; color: #fff; }
-}
-
-.opt__title {
-  font-family: $display;
-  font-weight: 700;
-  font-size: 1.2308em; // 1.0rem / 0.8125rem
-  color: $ink;
-  margin-bottom: 4px;
-}
-.opt__desc { font-size: 1em; color: $ink-2; line-height: 1.45; } // 0.8125rem / 0.8125rem
-
-.opt__check {
-  position: absolute;
-  top: 14px; right: 14px;
-  width: 20px; height: 20px;
-  border-radius: 50%;
-  background: $signal;
-  color: #fff;
-  display: flex; align-items: center; justify-content: center;
-  animation: cm-pop 0.22s ease;
-}
-
-// ---------------------------------------------------------------------------
-// rule builder — each rule is its own card with a solid accent bar, a
-// header row (index pill + remove), and a clean fields grid underneath.
-// ---------------------------------------------------------------------------
-.rules { display: flex; flex-direction: column; gap: 14px; }
-
-.rule {
-  position: relative;
-  padding: 16px 18px 18px;
-  border: 1.5px solid $line;
-  border-radius: 16px;
-  background: $card;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-
-  &:hover { border-color: $ink-3; box-shadow: $soft; }
-}
-
-.rule__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 14px;
-  padding-bottom: 12px;
-  border-bottom: 1px dashed $line;
-}
-
-.rule__index {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-family: $mono;
-  font-size: 0.9231em; // 0.75rem / 0.8125rem
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: $signal;
+  margin-bottom: 6px;
 
   &::before {
     content: '';
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
+    width: 16px;
+    height: 2px;
+    border-radius: 2px;
     background: $signal;
   }
 }
 
-.rule__grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr 1fr;
-  gap: 12px;
-  min-width: 0;
+.ticket-board__header-sub {
+  margin-top: 4px;
+  font-size: 1.0385em; // 0.84375rem / 0.8125rem
+  color: $ink-2;
 }
 
-.rule__field {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  min-width: 0;
-}
-
-.rule__field-label {
-  @extend %micro;
-  font-size: 0.8462em; // 0.6875rem / 0.8125rem
-  color: $ink-3;
-}
-
-.gate {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 4px 0;
-
-  &::before, &::after { content: ''; flex: 1; height: 1px; background: $line; }
-}
-
-.gate__toggle {
+.ticket-board__header-meta {
+  flex-shrink: 0;
   display: inline-flex;
-  padding: 2px;
-  background: $card;
-  border: 1px solid $line;
-  border-radius: 8px;
-  gap: 1px;
-}
-
-.gate__opt {
-  padding: 4px 12px;
-  border-radius: 6px;
-  border: none;
-  background: transparent;
-  color: $ink-2;
-  font-family: $mono;
-  font-size: 0.8462em; // 0.6875rem / 0.8125rem
-  font-weight: 700;
-  cursor: pointer;
-  &.on { background: $signal; color: #fff; }
-}
-
-.add-rule { align-self: flex-start; margin-top: 14px; }
-
-// ---------------------------------------------------------------------------
-// boolean switch — used by Simple/Built-in Check params (case sensitive,
-// check arguments) wherever a plain true/false toggle is needed.
-// ---------------------------------------------------------------------------
-.switch {
-  position: relative;
-  flex-shrink: 0;
-  width: 40px;
-  height: 24px;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 13px;
   border-radius: 999px;
-  border: 1.5px solid $line;
+  border: 1px solid $line;
   background: $paper;
-  cursor: pointer;
-  transition: background 0.16s ease, border-color 0.16s ease;
-  padding: 0;
-
-  &--on {
-    background: $signal;
-    border-color: $signal;
-  }
+  font-family: $mono;
+  font-size: 0.8846em; // 0.71875rem / 0.8125rem
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: $ink-2;
+  white-space: nowrap;
+  margin-bottom: 3px;
 }
 
-.switch__thumb {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 17px;
-  height: 17px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: $soft;
-  transition: transform 0.16s ease;
-
-  .switch--on & { transform: translateX(16px); }
-}
-
-.switch-row {
+// ---- toolbar ------------------------------------------------------------
+.ticket-board__toolbar {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-}
-
-.switch-row__label {
-  font-size: 1em; // 0.8125rem / 0.8125rem
-  font-weight: 650;
-  color: $ink;
-}
-.switch-row__hint {
-  font-size: 0.9231em; // 0.75rem / 0.8125rem
-  color: $ink-2;
-  margin-top: 2px;
-}
-
-.summary {
-  margin-top: 18px;
-  padding: 16px;
-  border-radius: 12px;
-  background: $paper;
-  border: 1px solid $line;
-}
-.summary__label {
-  @extend %micro;
-  font-size: 0.6923em; // 0.5625rem / 0.8125rem
-  color: $ink-3;
-  margin-bottom: 8px;
-}
-.summary__code {
-  font-family: $mono;
-  font-size: 1.0385em; // 0.84375rem / 0.8125rem
-  color: $ink;
-  line-height: 1.7;
-  word-break: break-word;
-}
-.summary__token { color: $signal; font-weight: 700; }
-.summary__gate { color: $amber; font-weight: 700; padding: 0 4px; }
-
-
-// ---------------------------------------------------------------------------
-// prompt templates
-// ---------------------------------------------------------------------------
-.tpl-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 18px;
-}
-
-.tpl {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 14px 16px;
-  border: 1.5px solid $line;
-  border-radius: 12px;
-  cursor: pointer;
-  background: $card;
-  transition: border-color 0.15s ease, background 0.15s ease;
-  // horizontal flow: each card takes a natural share of the row and wraps
-  // to the next line once it no longer fits, instead of always stacking
-  flex: 1 1 280px;
-  max-width: 380px;
-
-  &:hover { border-color: $ink-3; }
-  &--selected { border-color: $signal; background: $wash; }
-}
-
-.tpl__radio {
-  flex-shrink: 0;
-  width: 18px; height: 18px;
-  margin-top: 3px;
-  border-radius: 50%;
-  border: 1.5px solid $line-2;
-  display: flex; align-items: center; justify-content: center;
-
-  .tpl--selected & { border-color: $signal; }
-  &::after { content: ''; width: 9px; height: 9px; border-radius: 50%; background: $signal; opacity: 0; transition: opacity 0.15s ease; }
-  .tpl--selected &::after { opacity: 1; }
-}
-
-.tpl__body {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  flex: 1;
-}
-.tpl__label { display: block; font-weight: 700; font-size: 1.1538em; color: $ink; line-height: 1.3; } // 0.9375rem / 0.8125rem
-.tpl__desc { display: block; font-size: 1em; color: $ink-2; margin-top: 4px; line-height: 1.45; } // 0.8125rem / 0.8125rem
-.tpl__tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
-
-.token {
-  font-family: $mono;
-  font-size: 0.8462em; // 0.6875rem / 0.8125rem
-  font-weight: 700;
-  color: $signal;
-  background: $wash;
-  border: 1px solid rgba($signal, 0.16);
-  border-radius: 999px;
-  padding: 3px 9px;
-}
-
-// ---------------------------------------------------------------------------
-// judge model list
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// Judge Model — grouped by provider, one column per provider with its own
-// search box and a scrollable, height-capped model list.
-// ---------------------------------------------------------------------------
-.provider-cols {
-  display: flex;
-  flex-wrap: wrap;
   gap: 14px;
-}
-
-.provider-col {
-  flex: 1 1 300px;
-  max-width: 380px;
-  display: flex;
-  flex-direction: column;
-  border: 1px solid $line;
-  border-radius: 14px;
-  background: $paper;
-  overflow: hidden;
-}
-
-.provider-col__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 12px 14px;
-  font-family: $display;
-  font-weight: 700;
-  font-size: 1.0385em; // 0.84375rem / 0.8125rem
-  color: $ink;
+  padding: 14px 32px;
   background: $card;
   border-bottom: 1px solid $line;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
 }
 
-.provider-col__count {
-  flex-shrink: 0;
-  font-family: $mono;
-  font-size: 0.7692em; // 0.625rem / 0.8125rem
-  font-weight: 700;
-  color: $ink-3;
-  background: $paper;
-  border: 1px solid $line;
-  border-radius: 999px;
-  padding: 1px 8px;
-}
-
-.provider-col__search {
+.ticket-board__search {
   position: relative;
-  padding: 10px 12px 8px;
-  flex-shrink: 0;
+  flex: 1;
+  max-width: 340px;
+  min-width: 200px;
 
   svg {
     position: absolute;
     top: 50%;
-    left: 22px;
+    left: 13px;
     transform: translateY(-50%);
     color: $ink-3;
     pointer-events: none;
@@ -1991,592 +498,1945 @@ $base-font: 0.8125rem; // matches Model Catalog / Custom Metrics Dashboard base
   input {
     width: 100%;
     border: 1.5px solid $line;
-    border-radius: 8px;
-    padding: 7px 10px 7px 30px;
-    font-size: 0.9615em; // 0.78125rem / 0.8125rem
+    border-radius: 10px;
+    padding: 9px 12px 9px 38px;
+    font-size: 1.0385em; // 0.84375rem / 0.8125rem
     font-family: $sans;
     color: $ink;
-    background: $card;
-    transition: border-color 0.15s ease;
+    background: $paper;
+    transition: border-color 0.15s ease, background 0.15s ease;
 
     &::placeholder { color: $ink-3; }
-    &:focus { outline: none; border-color: $signal; box-shadow: 0 0 0 3px $wash; }
+    &:focus {
+      outline: none;
+      border-color: $signal;
+      background: $card;
+    }
   }
 }
 
-.provider-col__list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 4px 10px 10px;
-  max-height: 340px;
-  overflow-y: auto;
-
-  .empty { padding: 16px 4px; font-size: 0.9231em; } // 0.75rem / 0.8125rem
-}
-
-.model {
+.ticket-board__toolbar-right {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border: 1.5px solid $line;
-  border-radius: 10px;
-  cursor: pointer;
-  background: $card;
-  transition: border-color 0.15s ease, background 0.15s ease, opacity 0.15s ease;
-  flex-shrink: 0;
-
-  &:hover:not(&--disabled) { border-color: $ink-3; }
-  &--selected { border-color: $signal; background: $wash; }
-  &--disabled { opacity: 0.5; cursor: not-allowed; }
+  gap: 14px;
+  flex-wrap: wrap;
 }
 
-.model__radio {
-  flex-shrink: 0;
-  width: 18px; height: 18px;
-  border-radius: 50%;
-  border: 1.5px solid $line-2;
-  display: flex; align-items: center; justify-content: center;
-  .model--selected & { border-color: $signal; }
-  &::after { content: ''; width: 9px; height: 9px; border-radius: 50%; background: $signal; opacity: 0; transition: opacity 0.15s ease; }
-  .model--selected &::after { opacity: 1; }
-}
-
-.model__body { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.model__name { font-family: $display; font-weight: 700; font-size: 1.1538em; color: $ink; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } // 0.9375rem / 0.8125rem
-.model__checking {
-  display: block;
-  font-family: $mono;
-  font-size: 0.8462em; // 0.6875rem / 0.8125rem
-  color: $ink-3;
-  margin-top: 2px;
-}
-
-.model__health {
-  flex-shrink: 0;
-  display: inline-flex; align-items: center; gap: 6px;
-  font-family: $mono; font-size: 0.7692em; font-weight: 700; text-transform: uppercase; // 0.625rem / 0.8125rem
-}
-.health-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-.health--healthy { color: $ok; .health-dot { background: $ok; } }
-.health--unhealthy { color: $danger; .health-dot { background: $danger; } }
-.health--checking { color: $ink-3; .health-dot { background: $ink-3; animation: cm-spin 1s linear infinite; border-radius: 2px; } }
-
-// ---------------------------------------------------------------------------
-// code editor
-// ---------------------------------------------------------------------------
-.code {
-  border: 1px solid $line;
-  border-radius: 14px;
-  overflow: hidden;
-}
-.code__bar {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 14px;
-  background: $ink-solid;
-  color: rgba(255, 255, 255, 0.7);
-}
-.code__lang {
-  @extend %micro;
-  font-size: 0.7692em; // 0.625rem / 0.8125rem
-  color: rgba(255, 255, 255, 0.55);
-}
-.code__area {
-  width: 100%;
-  min-height: 520px;
-  border: none;
-  resize: vertical;
-  padding: 16px;
-  font-family: $mono;
-  font-size: 1.0000em; // 0.8125rem / 0.8125rem
-  line-height: 1.65;
-  color: $ink;
-  background: $card;
-  &:focus { outline: none; }
-}
-
-// ---------------------------------------------------------------------------
-// threshold slider
-// ---------------------------------------------------------------------------
-.thr {
-  padding: 14px 16px;
-  border: 1px solid $line;
-  border-radius: 12px;
-  background: $card;
-}
-.thr__row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-.thr__value {
-  font-family: $mono;
-  font-size: 1.2308em; // 1rem / 0.8125rem
-  font-weight: 700;
-  color: $signal;
-  line-height: 1;
-  flex-shrink: 0;
-}
-.thr__cap { font-size: 0.9231em; color: $ink-3; } // 0.75rem / 0.8125rem
-.thr__slider {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 100%;
-  height: 5px;
-  border-radius: 999px;
-  background: $line;
-  outline: none;
-  cursor: pointer;
-
-  &::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 17px; height: 17px;
-    border-radius: 50%;
-    background: $signal;
-    border: 2.5px solid $card;
-    box-shadow: 0 2px 6px rgba(43, 43, 245, 0.4);
-    cursor: pointer;
-  }
-  &::-moz-range-thumb {
-    width: 17px; height: 17px;
-    border-radius: 50%;
-    background: $signal;
-    border: 2.5px solid $card;
-    cursor: pointer;
-  }
-}
-.thr__scale {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 6px;
-  font-family: $mono;
-  font-size: 0.7692em; // 0.625rem / 0.8125rem
-  color: $ink-3;
-}
-
-// ---------------------------------------------------------------------------
-// dataset + preview (side by side, card-style columns)
-// ---------------------------------------------------------------------------
-.data-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
-  align-items: start;
-  margin-bottom: 8px;
-}
-
-.data-col {
-  min-width: 0;
-  border: 1px solid $line;
-  border-radius: 16px;
-  background: $card;
-  overflow: hidden;
-  box-shadow: $soft;
-}
-
-.data-col__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 16px;
-  background: $paper;
-  border-bottom: 1px solid $line;
-}
-
-.data-col__head-title {
-  @extend %micro;
-  font-size: 0.7692em; // 0.625rem / 0.8125rem
-  color: $ink-3;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.data-col__count {
-  font-family: $mono;
-  font-size: 0.8462em; // 0.6875rem / 0.8125rem
-  font-weight: 700;
-  color: $signal;
-  background: $wash;
-  border: 1px solid rgba($signal, 0.18);
-  border-radius: 999px;
-  padding: 2px 9px;
-}
-
-.data-col__body {
-  padding: 12px;
-  max-height: 400px;
-  overflow-y: auto;
-}
-
-// ---- dataset cards — grid of self-sizing tiles; as many fit per row as
-// space allows, wrapping to the next row otherwise. Name and count are
-// stacked (not squeezed onto one line), with a top icon chip and a
-// corner check badge that pops in when selected. ----------------------
-.ds-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 10px;
-}
-
-.ds {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 10px;
-  min-width: 0;
-  padding: 14px 14px 13px;
-  border: 1.5px solid $line;
-  border-radius: 14px;
-  background: $card;
-  cursor: pointer;
-  transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
-
-  &:hover { border-color: $ink-3; transform: translateY(-2px); box-shadow: $soft; }
-
-  &--selected {
-    border-color: $signal;
-    background: $wash;
-    box-shadow: 0 0 0 1px $signal inset;
-  }
-}
-
-.ds__icon {
-  flex-shrink: 0;
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: $paper;
-  border: 1px solid $line;
-  color: $signal;
-  transition: all 0.16s ease;
-
-  .ds--selected & { background: $signal; border-color: $signal; color: #fff; }
-}
-
-.ds__name {
-  width: 100%;
-  font-family: $display;
-  font-weight: 700;
-  font-size: 1.0769em; // 0.875rem / 0.8125rem
-  color: $ink;
-  line-height: 1.3;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ds__count {
-  align-self: flex-start;
+.ticket-board__filter-group {
   display: inline-flex;
   align-items: center;
-  font-family: $mono;
-  font-size: 0.8462em; // 0.6875rem / 0.8125rem
-  font-weight: 700;
-  color: $ink-3;
+  gap: 8px;
+  padding: 4px;
   background: $paper;
   border: 1px solid $line;
   border-radius: 999px;
-  padding: 3px 9px;
-  white-space: nowrap;
-  transition: all 0.16s ease;
-
-  .ds--selected & { color: $signal; background: rgba(255, 255, 255, 0.6); border-color: rgba($signal, 0.3); }
 }
 
-.ds__check {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: $signal;
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  transform: scale(0.5);
-  transition: all 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
-
-  .ds--selected & { opacity: 1; transform: scale(1); }
-}
-
-.q-list { display: flex; flex-direction: column; gap: 8px; }
-
-.q {
-  display: flex; gap: 10px;
-  padding: 12px 14px;
-  border: 1px solid $line;
-  border-radius: 12px;
-  background: $card;
-  cursor: pointer;
-  transition: border-color 0.13s ease, background 0.13s ease;
-  &:hover { border-color: $ink-3; background: $paper; }
-  &--on { border-color: $signal; background: $wash; }
-}
-.q__check {
-  flex-shrink: 0; width: 17px; height: 17px; margin-top: 2px;
-  border-radius: 5px; border: 1.5px solid $line-2;
-  display: flex; align-items: center; justify-content: center;
-  color: #fff;
-  transition: all 0.13s ease;
-  .q--on & { background: $signal; border-color: $signal; }
-}
-.q__body { min-width: 0; }
-.q__category {
-  display: inline-block;
-  font-family: $mono;
-  font-size: 0.7692em; // 0.625rem / 0.8125rem
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: $signal;
-  background: $wash;
-  border-radius: 5px;
-  padding: 2px 7px;
-  margin-bottom: 6px;
-}
-.q__q { display: block; font-size: 1.0385em; color: $ink; font-weight: 600; margin-bottom: 3px; } // 0.84375rem / 0.8125rem
-.q__a { display: block; font-size: 0.9615em; color: $ink-2; } // 0.78125rem / 0.8125rem
-.q__a-label { font-family: $mono; font-size: 0.7692em; color: $ink-3; margin-right: 5px; } // 0.625rem / 0.8125rem
-
-.q__tools-label {
-  display: block;
-  font-family: $mono;
-  font-size: 0.7692em; // 0.625rem / 0.8125rem
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: $ink-3;
-  margin-top: 10px;
-  margin-bottom: 5px;
-}
-
-.q__tools { display: block; }
-.q__tool-tags { display: flex; flex-wrap: wrap; gap: 5px; }
-.q__tool-tag {
+.ticket-board__toolbar-label {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-family: $mono;
-  font-size: 0.8462em; // 0.6875rem / 0.8125rem
-  color: $ink-2;
-  background: $paper;
-  border: 1px solid $line;
-  border-radius: 6px;
-  padding: 2px 8px 2px 6px;
-}
-.q__tool-method {
-  font-size: 0.9em;
-  font-weight: 700;
-  color: $sky-ink;
-  background: $sky-ink-wash;
-  border-radius: 4px;
-  padding: 1px 5px;
+  padding: 5px 10px 5px 11px;
+  @extend %micro;
+  font-size: 0.7692em; // 0.625rem / 0.8125rem
+  color: $ink-3;
+  white-space: nowrap;
 }
 
-.q__calls { display: flex; flex-direction: column; gap: 5px; }
-.q__call {
+.ticket-board__filter-pill {
+  padding: 6px 13px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: $ink-2;
+  font-size: 0.9615em; // 0.78125rem / 0.8125rem
+  font-weight: 650;
+  cursor: pointer;
+  transition: all 0.15s ease;
+
+  &:hover { color: $ink; }
+
+  &--on {
+    background: $card;
+    color: $signal;
+    box-shadow: $soft;
+  }
+}
+
+.ticket-board__toolbar-divider {
+  flex-shrink: 0;
+  width: 1px;
+  height: 26px;
+  background: $line;
+}
+
+.ticket-board__add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 15px;
+  border: 1px solid $signal;
+  border-radius: 10px;
+  background: $signal;
+  color: #fff;
+  font-family: $sans;
+  font-size: 1em; // 0.8125rem / 0.8125rem (base)
+  font-weight: 650;
+  cursor: pointer;
+  box-shadow: $soft;
+  transition: background 0.16s ease, border-color 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
+
+  &:hover { background: $signal-2; border-color: $signal-2; transform: translateY(-1px); box-shadow: $lift; }
+}
+
+// ---- columns --------------------------------------------------------------
+.ticket-board__columns {
+  padding: 0 32px 28px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1em;
+  align-items: start;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.ticket-board__column {
+  background: $paper;
+  border: 1px solid $line-2;
+  border-radius: $radius;
+  padding: 0.75em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6em;
+  min-height: 8em;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+.ticket-board__column--over {
+  border-color: $signal;
+  border-style: dashed;
+  background: $wash;
+  box-shadow: inset 0 0 0 1px $signal;
+}
+.ticket-board__column--locked {
+  border-color: $danger;
+  background: $danger-wash;
+  box-shadow: inset 0 0 0 1px $danger;
+  cursor: not-allowed;
+}
+.ticket-board__column-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  padding: 0.1em 0.25em;
+}
+.ticket-board__column-dot {
+  width: 0.6em;
+  height: 0.6em;
+  border-radius: 50%;
+  flex: none;
+}
+.ticket-board__column-title {
+  font-weight: 600;
+  font-size: 0.92em;
+  letter-spacing: 0.01em;
+}
+.ticket-board__column-count {
+  margin-left: auto;
+  min-width: 1.6em;
+  height: 1.6em;
+  padding: 0 0.4em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: $ink-wash;
+  color: $ink-2;
+  font-size: 0.78em;
+  font-weight: 600;
+  font-family: $mono;
+}
+.ticket-board__column-lock {
+  color: $ink-3;
+}
+.ticket-board__column-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6em;
+  min-height: 2em;
+}
+.ticket-board__column-empty {
+  padding: 1.5em 0.5em;
+  text-align: center;
+  color: $ink-3;
+  font-size: 0.82em;
+  border: 1px dashed $line;
+  border-radius: 8px;
+}
+
+// ---- card -----------------------------------------------------------------
+.ticket-card {
+  --priority-accent: #{$ink-3};
+  // Slightly below page body size — dense enough for a kanban card without
+  // reading oversized next to the column chrome around it.
+  font-size: 0.92em;
+  position: relative;
+  background: $card;
+  border: 1px solid $line;
+  border-left: 3px solid var(--priority-accent);
+  border-radius: 10px;
+  padding: 0.75em 0.8em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55em;
+  cursor: grab;
+  box-shadow: $shadow-2;
+  transition: transform 0.12s, box-shadow 0.12s, border-color 0.12s;
+  &:hover {
+    transform: translateY(-1px);
+    box-shadow: $shadow-3;
+  }
+  &:active {
+    cursor: grabbing;
+  }
+}
+.ticket-card--moving {
+  opacity: 0.6;
+  cursor: default;
+}
+.ticket-card--discarded {
+  opacity: 0.72;
+  .ticket-card__title {
+    text-decoration: line-through;
+    color: $ink-2;
+  }
+}
+.ticket-card__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5em;
+}
+.ticket-card__key {
+  font-family: $mono;
+  font-size: 0.85em;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: $ink-3;
+}
+.ticket-card__top-right {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+}
+.ticket-card__priority {
+  --priority-accent: #{$ink-3};
+  font-size: 0.8em;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 0.25em 0.5em;
+  border-radius: 5px;
+  color: var(--priority-accent);
+  background: color-mix(in srgb, var(--priority-accent) 12%, transparent);
+}
+.ticket-card__spin {
+  animation: spin 1.5s linear infinite;
+  color: $signal;
+}
+.ticket-card__title {
+  margin: 0;
+  font-size: 1.03em;
+  font-weight: 600;
+  line-height: 1.35;
+  color: $ink;
+}
+.ticket-card__labels {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 6px;
-  font-size: 0.9231em; // 0.75rem / 0.8125rem
+  gap: 0.35em;
 }
-.q__call-name {
-  font-family: $mono;
+.ticket-card__label {
+  font-size: 0.82em;
+  padding: 0.2em 0.5em;
+  border-radius: 5px;
+  background: $ink-wash;
+  color: $ink-2;
+}
+.ticket-card__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5em;
+  margin-top: 0.1em;
+}
+.ticket-card__resolution {
+  font-size: 0.78em;
   font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0.2em 0.5em;
+  border-radius: 5px;
+}
+.ticket-card__resolution--done {
   color: $ok;
   background: $ok-wash;
+}
+.ticket-card__resolution--discarded {
+  color: $rose-ink;
+  background: $rose-ink-wash;
+}
+.ticket-card__avatars {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+}
+.ticket-card__avatar {
+  width: 1.7em;
+  height: 1.7em;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72em;
+  font-weight: 700;
+  color: #fff;
+  border: 2px solid $card;
+  & + & {
+    margin-left: -0.5em;
+  }
+}
+.ticket-card__avatar--owner {
+  box-shadow: 0 0 0 1px $line;
+}
+
+// ---- card menu ------------------------------------------------------------
+.ticket-card__menu-wrap {
+  position: relative;
+}
+.ticket-card__menu-btn {
+  border: 0;
+  background: transparent;
+  color: $ink-3;
+  padding: 0.15em;
   border-radius: 5px;
-  padding: 2px 7px;
+  cursor: pointer;
+  display: inline-flex;
+  &:hover {
+    background: $ink-wash;
+    color: $ink;
+  }
 }
-.q__call-args {
+.ticket-card__menu {
+  position: absolute;
+  right: 0;
+  top: 1.7em;
+  z-index: 20;
+  min-width: 12em;
+  background: $card;
+  border: 1px solid $line;
+  border-radius: 9px;
+  box-shadow: $shadow-3;
+  padding: 0.35em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1em;
+  animation: drawerIn 0.12s ease both;
+}
+.ticket-card__menu-label {
+  font-size: 0.66em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: $ink-3;
+  padding: 0.35em 0.55em 0.15em;
+}
+.ticket-card__menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: $ink;
+  font-size: 0.82em;
+  text-align: left;
+  padding: 0.5em 0.55em;
+  border-radius: 6px;
+  cursor: pointer;
+  &:hover:not(:disabled) {
+    background: $wash;
+  }
+  &:disabled {
+    color: $ink-3;
+    cursor: not-allowed;
+  }
+}
+.ticket-card__menu-item--danger:not(:disabled) {
+  color: $danger;
+  &:hover {
+    background: $danger-wash;
+  }
+}
+.ticket-card__menu-dot {
+  width: 0.55em;
+  height: 0.55em;
+  border-radius: 50%;
+  flex: none;
+}
+.ticket-card__menu-lead {
+  flex: none;
+}
+.ticket-card__menu-check {
+  margin-left: auto;
+  color: $signal;
+}
+.ticket-card__menu-sep {
+  height: 1px;
+  background: $line-2;
+  margin: 0.2em 0.3em;
+}
+
+// ---- loading --------------------------------------------------------------
+.ticket-board__loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6em;
+  padding: 4em;
+  color: $ink-3;
+}
+.ticket-board__spin {
+  animation: spin 1.5s linear infinite;
+  color: $signal;
+}
+
+// ===========================================================================
+// Detail sheet — fixed-height panel pinned to the bottom, inset from the
+// app's left nav. The area above it (down to where the sheet starts) is the
+// dimmed backdrop; the sheet itself has square corners, not rounded ones.
+// ===========================================================================
+$sheet-height: 580px;
+$sheet-left: 267px;
+
+.ticket-detail__overlay {
+  position: fixed;
+  top: 0;
+  left: $sheet-left;
+  right: 0;
+  bottom: calc(#{$footer-height} + #{$sheet-height});
+  background: rgba(17, 24, 39, 0.4);
+  z-index: 100;
+}
+.ticket-detail {
+  position: fixed;
+  left: $sheet-left;
+  right: 0;
+  bottom: $footer-height;
+  height: $sheet-height;
+  background: $surface;
+  border-top: 1px solid $line;
+  box-shadow: $shadow-4;
+  z-index: 101;
+  display: flex;
+  flex-direction: column;
+  animation: sheetUpIn 0.22s cubic-bezier(0.22, 0.72, 0.16, 1) both;
+}
+.ticket-detail__header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5em;
+  padding: 1em 1.25em;
+  border-bottom: 1px solid $line;
+}
+.ticket-detail__key {
   font-family: $mono;
+  font-size: 0.8em;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: $ink-3;
+  margin-right: 0.6em;
+}
+.ticket-detail__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.2em;
+}
+
+// Two-pane body: scrollable content on the left, a narrow fixed-width meta
+// rail on the right holding requester/assignee/status/actions — so those
+// no longer stretch to the panel's full width.
+.ticket-detail__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.ticket-detail__main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 1.1em 1.25em;
+  display: flex;
+  flex-direction: column;
+  gap: 1.1em;
+}
+.ticket-detail__rail {
+  flex: none;
+  width: 230px;
+  border-left: 1px solid $line;
+  background: $paper;
+  overflow-y: auto;
+  padding: 1.1em;
+  display: flex;
+  flex-direction: column;
+  gap: 1.2em;
+}
+
+.ticket-detail__title {
+  margin: 0;
+  font-size: 1.15em;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.ticket-detail__desc {
+  margin: 0;
   color: $ink-2;
-  word-break: break-word;
+  font-size: 0.9em;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.ticket-detail__desc--empty {
+  margin: 0;
+  color: $ink-3;
+  font-size: 0.88em;
+  font-style: italic;
 }
 
-.link-btn {
-  border: none; background: none; padding: 0;
-  color: $signal; font-size: 0.8846em; font-weight: 650; cursor: pointer; // 0.71875rem / 0.8125rem
-  &:hover { text-decoration: underline; }
+// ---- rail: compact people chips (auto-width, not stretched) --------------
+.ticket-detail__people {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8em;
+}
+.ticket-detail__person {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35em;
+}
+.ticket-detail__person-label {
+  font-size: 0.68em;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: $ink-3;
+}
+.ticket-detail__person-val {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45em;
+  width: fit-content;
+  max-width: 100%;
+  font-size: 0.86em;
+  font-weight: 500;
+  padding: 0.3em 0.55em 0.3em 0.3em;
+  border-radius: 999px;
+  background: $card;
+  border: 1px solid $line;
+}
+.ticket-detail__you {
+  font-size: 0.72em;
+  font-weight: 700;
+  color: $signal;
+  background: $wash;
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+}
+.ticket-detail__muted {
+  color: $ink-3;
+}
+.ticket-detail__section-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  font-size: 0.68em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: $ink-3;
 }
 
-// ---------------------------------------------------------------------------
-// validate & save
-// ---------------------------------------------------------------------------
-.validate-section {
-  margin-top: 32px;
-  padding-top: 24px;
+// ---- rail: status — compact auto-width pills, not a full-width grid ------
+.ticket-detail__stepper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4em;
+}
+.ticket-detail__step {
+  --step-accent: #{$signal};
+  flex: none;
+  border: 1px solid $line;
+  background: $card;
+  color: $ink-2;
+  font-size: 0.78em;
+  font-weight: 600;
+  padding: 0.45em 0.65em;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3em;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+  &:hover:not(:disabled) {
+    border-color: var(--step-accent);
+    color: $ink;
+  }
+  &:disabled {
+    cursor: default;
+  }
+}
+.ticket-detail__step--current {
+  border-color: var(--step-accent);
+  background: color-mix(in srgb, var(--step-accent) 12%, transparent);
+  color: var(--step-accent);
+}
+
+// ---- rail: terminal actions — compact auto-width buttons, side by side ---
+.ticket-detail__terminal {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5em;
+}
+.ticket-detail__done-btn,
+.ticket-detail__discard-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4em;
+  padding: 0.5em 0.8em;
+  border-radius: 999px;
+  font-size: 0.8em;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: filter 0.12s, opacity 0.12s;
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  &:not(:disabled):hover {
+    filter: brightness(0.96);
+  }
+}
+.ticket-detail__done-btn {
+  background: $ok;
+  color: #fff;
+}
+.ticket-detail__discard-btn {
+  background: $card;
+  border-color: $danger;
+  color: $danger;
+}
+.ticket-detail__gate-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4em;
+  margin: 0;
+  font-size: 0.75em;
+  line-height: 1.4;
+  color: $ink-3;
+}
+
+// ---- main: attachments -----------------------------------------------------
+.ticket-detail__attachments {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 0.5em;
+}
+.ticket-detail__attachment {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid $line;
+  background: $paper;
+  display: block;
+
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+}
+
+// ---- main: comments ---------------------------------------------------------
+.ticket-detail__comments {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9em;
+}
+.ticket-detail__comment {
+  display: flex;
+  gap: 0.6em;
+}
+.ticket-detail__comment-body {
+  flex: 1;
+  min-width: 0;
+  background: $paper;
+  border: 1px solid $line-2;
+  border-radius: 10px;
+  padding: 0.6em 0.75em;
+}
+.ticket-detail__comment-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5em;
+  margin-bottom: 0.2em;
+}
+.ticket-detail__comment-author {
+  font-size: 0.85em;
+  font-weight: 700;
+  color: $ink;
+}
+.ticket-detail__comment-time {
+  font-size: 0.72em;
+  color: $ink-3;
+}
+.ticket-detail__comment-text {
+  margin: 0;
+  font-size: 0.86em;
+  line-height: 1.5;
+  color: $ink-2;
+  white-space: pre-wrap;
+}
+.ticket-detail__comment-empty {
+  font-size: 0.85em;
+  color: $ink-3;
+  font-style: italic;
+}
+.ticket-detail__comment-form {
+  display: flex;
+  gap: 0.6em;
+  align-items: flex-start;
+}
+.ticket-detail__comment-input {
+  flex: 1;
+  min-height: 2.6em;
+  max-height: 8em;
+  resize: vertical;
+  border: 1px solid $line;
+  border-radius: 10px;
+  padding: 0.55em 0.7em;
+  font-family: $sans;
+  font-size: 0.86em;
+  color: $ink;
+  background: $card;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  &::placeholder { color: $ink-3; }
+  &:focus {
+    outline: none;
+    border-color: $signal;
+    box-shadow: 0 0 0 3px $wash;
+  }
+}
+.ticket-detail__comment-send {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.6em;
+  height: 2.6em;
+  border-radius: 10px;
+  border: 1px solid $signal;
+  background: $signal;
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.15s;
+  &:hover:not(:disabled) { background: $signal-2; }
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+}
+
+@media (max-width: 768px) {
+  .ticket-board__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
+  .ticket-board__toolbar { padding: 12px 18px; }
+  .ticket-board__columns { padding: 0 18px 20px; grid-template-columns: 1fr; }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Createticketdrawer.tsx
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { X, Loader2, ImagePlus, FileText } from 'lucide-react';
+import type { Ticket, TicketAttachment, TicketPriority, TicketUser } from '../../types/tickets';
+import { PRIORITY_META } from './ticketMeta';
+import styles from './CreateTicketDrawer.module.scss';
+
+/** What the drawer hands back on submit — no id/status, the board adds those. */
+export interface TicketSubmitPayload {
+  title: string;
+  description?: string;
+  priority: TicketPriority;
+  labels?: string[];
+  assignee_id?: string | null;
+  attachments?: TicketAttachment[];
+}
+
+interface CreateTicketDrawerProps {
+  mode: 'create' | 'edit';
+  initialTicket?: Ticket;
+  members?: TicketUser[];
+  submitting?: boolean;
+  onClose: () => void;
+  /** Return a Promise to keep the sheet open on failure and close it on success. */
+  onSubmit: (payload: TicketSubmitPayload) => Promise<unknown> | void;
+}
+
+const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024; // 5MB per image, static/mock build
+
+const readAsDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+
+const formatSize = (bytes: number) =>
+  bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+
+export default function CreateTicketDrawer({
+  mode,
+  initialTicket,
+  members = [],
+  submitting = false,
+  onClose,
+  onSubmit,
+}: CreateTicketDrawerProps) {
+  const [title, setTitle] = useState(initialTicket?.title ?? '');
+  const [description, setDescription] = useState(initialTicket?.description ?? '');
+  const [priority, setPriority] = useState<TicketPriority>(initialTicket?.priority ?? 'medium');
+  const [labels, setLabels] = useState<string[]>(initialTicket?.labels ?? []);
+  const [labelDraft, setLabelDraft] = useState('');
+  const [assigneeId, setAssigneeId] = useState<string>(initialTicket?.assignee?.id ?? '');
+  const [attachments, setAttachments] = useState<TicketAttachment[]>(initialTicket?.attachments ?? []);
+  const [attachError, setAttachError] = useState('');
+  const [touched, setTouched] = useState(false);
+
+  const firstFieldRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    firstFieldRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !submitting) onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose, submitting]);
+
+  const titleError = touched && !title.trim() ? 'Title is required' : '';
+  const valid = title.trim().length > 0;
+
+  const addLabel = () => {
+    const v = labelDraft.trim();
+    if (!v) return;
+    if (!labels.includes(v)) setLabels((prev) => [...prev, v]);
+    setLabelDraft('');
+  };
+
+  const handleFiles = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    setAttachError('');
+    const files = Array.from(fileList);
+    const oversized = files.find((f) => f.size > MAX_ATTACHMENT_BYTES);
+    if (oversized) {
+      setAttachError(`"${oversized.name}" is over 5MB — pick a smaller image.`);
+      return;
+    }
+    const nonImage = files.find((f) => !f.type.startsWith('image/'));
+    if (nonImage) {
+      setAttachError('Only image files can be attached.');
+      return;
+    }
+    const next: TicketAttachment[] = await Promise.all(
+      files.map(async (f) => ({
+        id: `a${Date.now()}${Math.random().toString(36).slice(2, 7)}`,
+        name: f.name,
+        url: await readAsDataUrl(f),
+        size: f.size,
+      }))
+    );
+    setAttachments((prev) => [...prev, ...next]);
+  };
+
+  const submit = () => {
+    setTouched(true);
+    if (!valid) return;
+    onSubmit({
+      title: title.trim(),
+      description: description.trim() || undefined,
+      priority,
+      labels: labels.length ? labels : undefined,
+      assignee_id: assigneeId || null,
+      attachments: attachments.length ? attachments : undefined,
+    });
+  };
+
+  const heading = mode === 'edit' ? 'Edit requirement' : 'New requirement';
+  const cta = mode === 'edit' ? 'Save changes' : 'Create requirement';
+
+  const priorities = useMemo(() => Object.keys(PRIORITY_META) as TicketPriority[], []);
+
+  return (
+    <>
+      <div className={styles['sheet__overlay']} onClick={() => !submitting && onClose()} />
+      <aside className={styles['sheet']} role="dialog" aria-modal="true" aria-label={heading}>
+        <header className={styles['sheet__header']}>
+          <div className={styles['sheet__header-text']}>
+            <span className={styles['sheet__eyebrow']}>{mode === 'edit' ? 'Editing' : 'New'}</span>
+            <span className={styles['sheet__title']}>{heading}</span>
+          </div>
+          <button
+            className="btn btn-sm btn-ghost"
+            onClick={onClose}
+            disabled={submitting}
+            aria-label="Close"
+          >
+            <X size={16} />
+          </button>
+        </header>
+
+        <div className={styles['sheet__body']}>
+          {/* ---- main column: title, description, attachments ---- */}
+          <div className={styles['sheet__main']}>
+            <label className={styles['sheet__field']}>
+              <span className={styles['sheet__label']}>
+                Title <span className={styles['sheet__req']}>*</span>
+              </span>
+              <input
+                ref={firstFieldRef}
+                className={`${styles['sheet__input']} ${styles['sheet__input--lg']} ${titleError ? styles['sheet__input--error'] : ''}`}
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                onBlur={() => setTouched(true)}
+                placeholder="Short summary of the requirement"
+              />
+              {titleError && <span className={styles['sheet__error']}>{titleError}</span>}
+            </label>
+
+            <label className={styles['sheet__field']}>
+              <span className={styles['sheet__label']}>Description</span>
+              <textarea
+                className={styles['sheet__textarea']}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                rows={7}
+                placeholder="Context, acceptance criteria, links…"
+              />
+            </label>
+
+            <div className={styles['sheet__field']}>
+              <span className={styles['sheet__label']}>Attachments</span>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                hidden
+                onChange={(e) => {
+                  handleFiles(e.target.files);
+                  e.target.value = '';
+                }}
+              />
+              <div className={styles['sheet__attach-zone']}>
+                {attachments.map((a) => (
+                  <div key={a.id} className={styles['sheet__attach-thumb']}>
+                    <img src={a.url} alt={a.name} />
+                    <button
+                      type="button"
+                      className={styles['sheet__attach-remove']}
+                      onClick={() => setAttachments((prev) => prev.filter((x) => x.id !== a.id))}
+                      aria-label={`Remove ${a.name}`}
+                    >
+                      <X size={11} />
+                    </button>
+                    <span className={styles['sheet__attach-meta']}>{formatSize(a.size)}</span>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className={styles['sheet__attach-add']}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <ImagePlus size={18} />
+                  Add image
+                </button>
+              </div>
+              {attachError && <span className={styles['sheet__error']}>{attachError}</span>}
+            </div>
+          </div>
+
+          {/* ---- meta column: priority, assignee, labels ---- */}
+          <div className={styles['sheet__rail']}>
+            <label className={styles['sheet__field']}>
+              <span className={styles['sheet__label']}>Priority</span>
+              <select
+                className={styles['sheet__input']}
+                value={priority}
+                onChange={(e) => setPriority(e.target.value as TicketPriority)}
+              >
+                {priorities.map((p) => (
+                  <option key={p} value={p}>
+                    {PRIORITY_META[p].label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className={styles['sheet__field']}>
+              <span className={styles['sheet__label']}>Assignee</span>
+              <select
+                className={styles['sheet__input']}
+                value={assigneeId}
+                onChange={(e) => setAssigneeId(e.target.value)}
+                disabled={members.length === 0}
+              >
+                <option value="">Unassigned</option>
+                {members.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className={styles['sheet__field']}>
+              <span className={styles['sheet__label']}>Labels</span>
+              <div className={styles['sheet__chip-input']}>
+                {labels.map((l) => (
+                  <span key={l} className={styles['sheet__chip']}>
+                    {l}
+                    <button
+                      type="button"
+                      onClick={() => setLabels((prev) => prev.filter((x) => x !== l))}
+                      aria-label={`Remove ${l}`}
+                    >
+                      <X size={12} />
+                    </button>
+                  </span>
+                ))}
+                <input
+                  className={styles['sheet__chip-field']}
+                  value={labelDraft}
+                  onChange={(e) => setLabelDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ',') {
+                      e.preventDefault();
+                      addLabel();
+                    } else if (e.key === 'Backspace' && !labelDraft && labels.length) {
+                      setLabels((prev) => prev.slice(0, -1));
+                    }
+                  }}
+                  placeholder={labels.length ? 'Add another…' : 'Type, press Enter'}
+                />
+              </div>
+            </div>
+
+            {mode === 'edit' && initialTicket && (
+              <div className={styles['sheet__meta-note']}>
+                <FileText size={12} />
+                {initialTicket.key} · created{' '}
+                {new Date(initialTicket.created_at).toLocaleDateString()}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <footer className={styles['sheet__footer']}>
+          <button className="btn btn-ghost" onClick={onClose} disabled={submitting}>
+            Cancel
+          </button>
+          <button className="btn btn-primary" onClick={submit} disabled={submitting || !valid}>
+            {submitting ? (
+              <>
+                <Loader2 size={15} className={styles['sheet__spin']} />
+                Saving…
+              </>
+            ) : (
+              cta
+            )}
+          </button>
+        </footer>
+      </aside>
+    </>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Createticketdrawer.module.scss
+@use '../../styles/_variables' as *;
+
+// Bottom sheet — same fixed geometry as the ticket-detail sheet in
+// TicketBoard.module.scss (267px inset from the left nav, 580px tall,
+// square corners), so create/edit/detail all feel like the same surface
+// sliding up from the same place.
+
+$mono:    $font-mono;
+$sans:    $font-body;
+$display: $font-display;
+
+$sheet-height: 580px;
+$sheet-left: 267px;
+
+@keyframes sheetUpIn {
+  from { transform: translateY(24px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.sheet__overlay {
+  position: fixed;
+  top: 0;
+  left: $sheet-left;
+  right: 0;
+  bottom: calc(#{$footer-height} + #{$sheet-height});
+  background: rgba(17, 24, 39, 0.4);
+  z-index: 100;
+}
+.sheet {
+  position: fixed;
+  left: $sheet-left;
+  right: 0;
+  bottom: $footer-height;
+  height: $sheet-height;
+  background: $surface;
+  border-top: 1px solid $line;
+  box-shadow: $shadow-4;
+  z-index: 101;
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  animation: sheetUpIn 0.22s cubic-bezier(0.22, 0.72, 0.16, 1) both;
+}
+
+// ---- header -----------------------------------------------------------
+.sheet__header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.1em 1.25em;
+  border-bottom: 1px solid $line;
+}
+.sheet__header-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15em;
+}
+.sheet__eyebrow {
+  font-family: $mono;
+  font-size: 0.68em;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: $signal;
+}
+.sheet__title {
+  font-size: 1.2em;
+  font-weight: 700;
+  color: $ink;
+}
+
+// ---- two-column body ----------------------------------------------------
+.sheet__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.sheet__main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 1.25em;
+  display: flex;
+  flex-direction: column;
+  gap: 1.1em;
+}
+.sheet__rail {
+  flex: none;
+  width: 260px;
+  border-left: 1px solid $line;
+  background: $paper;
+  overflow-y: auto;
+  padding: 1.25em;
+  display: flex;
+  flex-direction: column;
+  gap: 1.1em;
+}
+
+.sheet__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4em;
+}
+.sheet__label {
+  font-size: 0.78em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: $ink-2;
+}
+.sheet__req {
+  color: $danger;
+}
+.sheet__input,
+.sheet__textarea {
+  width: 100%;
+  border: 1px solid $line;
+  border-radius: 8px;
+  background: $card;
+  color: $ink;
+  font-size: 0.92em;
+  font-family: inherit;
+  padding: 0.65em 0.7em;
+  outline: 0;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  &:focus {
+    border-color: $signal;
+    box-shadow: 0 0 0 3px $wash;
+  }
+  &::placeholder {
+    color: $ink-3;
+  }
+}
+.sheet__input--lg {
+  font-size: 1.15em;
+  font-weight: 600;
+  padding: 0.6em 0.7em;
+}
+.sheet__textarea {
+  resize: vertical;
+  line-height: 1.55;
+  flex: 1;
+}
+.sheet__input--error {
+  border-color: $danger;
+  &:focus {
+    box-shadow: 0 0 0 3px $danger-wash;
+  }
+}
+.sheet__error {
+  font-size: 0.78em;
+  color: $danger;
+}
+.sheet__meta-note {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  font-size: 0.76em;
+  color: $ink-3;
+  padding-top: 0.8em;
   border-top: 1px dashed $line;
 }
 
-.validate-section__label {
-  @extend %micro;
-  font-size: 0.8462em; // 0.6875rem / 0.8125rem
-  color: $ink-2;
-  margin-bottom: 6px;
+// ---- attachments ----------------------------------------------------------
+.sheet__attach-zone {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6em;
 }
-
-.validate-section__desc {
-  font-size: 1.0385em; // 0.84375rem / 0.8125rem
-  color: $ink-2;
-  margin-bottom: 16px;
-}
-
-// ---------------------------------------------------------------------------
-// validation results
-// ---------------------------------------------------------------------------
-.banner {
-  display: flex; align-items: center; gap: 8px;
-  padding: 12px 16px; border-radius: 12px;
-  font-size: 1.0385em; font-weight: 600; // 0.84375rem / 0.8125rem
-  margin-bottom: 18px;
-}
-.banner--ok { background: $ok-wash; color: $ok; border: 1px solid rgba($ok, 0.2); }
-.banner--err { background: $danger-wash; color: $danger; border: 1px solid rgba($danger, 0.2); }
-.banner--info { background: $wash; color: $signal; border: 1px solid rgba($signal, 0.18); }
-
-.results {
-  border: 1px solid $line;
-  border-radius: 14px;
+.sheet__attach-thumb {
+  position: relative;
+  width: 84px;
+  height: 84px;
+  border-radius: 8px;
   overflow: hidden;
-}
-.results__row {
-  display: flex; align-items: flex-start; gap: 14px;
-  padding: 14px 16px;
-  border-bottom: 1px solid $line-2;
-  &:last-child { border-bottom: none; }
-}
-.results__score {
-  flex-shrink: 0;
-  font-family: $mono; font-weight: 700; font-size: 1.2308em; // 1.0rem / 0.8125rem
-  width: 48px; text-align: center;
-}
-.results__score--pass { color: $ok; }
-.results__score--fail { color: $danger; }
-.results__body { min-width: 0; flex: 1; }
-.results__io { font-size: 1em; color: $ink; } // 0.8125rem / 0.8125rem
-.results__reason { font-size: 0.9615em; color: $ink-2; margin-top: 4px; font-style: italic; } // 0.78125rem / 0.8125rem
-.results__pill {
-  flex-shrink: 0;
-  @extend %micro;
-  font-size: 0.6923em; // 0.5625rem / 0.8125rem
-  padding: 3px 9px; border-radius: 999px;
-}
-.results__pill--pass { color: $ok; background: $ok-wash; }
-.results__pill--fail { color: $danger; background: $danger-wash; }
-.results__summary {
-  display: flex; gap: 20px;
-  padding: 12px 16px;
+  border: 1px solid $line;
   background: $paper;
-  border-top: 1px solid $line;
-  font-size: 1.0385em; color: $ink-2; // 0.84375rem / 0.8125rem
-  strong { color: $ink; font-family: $mono; }
-}
 
-// ---------------------------------------------------------------------------
-// misc states
-// ---------------------------------------------------------------------------
-.loading, .empty {
-  display: flex; align-items: center; justify-content: center; gap: 8px;
-  padding: 28px; text-align: center;
-  color: $ink-3; font-size: 1.0385em; // 0.84375rem / 0.8125rem
-  border: 1px dashed $line;
-  border-radius: 12px;
-}
-
-// ---------------------------------------------------------------------------
-// success modal
-// ---------------------------------------------------------------------------
-.overlay {
-  position: fixed; inset: 0; z-index: 300;
-  display: flex; align-items: center; justify-content: center;
-  background: rgba(10, 12, 18, 0.55);
-  padding: 20px;
-}
-.modal {
-  width: 100%; max-width: 400px;
-  background: $card;
-  border-radius: 20px;
-  box-shadow: $lift;
-  padding: 32px 28px 24px;
-  text-align: center;
-  animation: cm-modal-in 0.24s ease;
-}
-.modal__icon {
-  width: 56px; height: 56px; margin: 0 auto 16px;
-  border-radius: 50%;
-  background: $ok-wash; color: $ok;
-  display: flex; align-items: center; justify-content: center;
-  animation: cm-pop 0.3s ease;
-}
-.modal__title { font-family: $display; font-size: 1.5385em; font-weight: 800; color: $ink; margin-bottom: 6px; } // 1.25rem / 0.8125rem
-.modal__text { font-size: 1.0769em; color: $ink-2; margin-bottom: 8px; } // 0.8125rem / 0.8125rem
-.modal__id {
-  display: inline-block;
-  font-family: $mono; font-size: 0.9231em; font-weight: 700; // 0.75rem / 0.8125rem
-  color: $signal; background: $wash;
-  border-radius: 8px; padding: 4px 10px; margin-bottom: 22px;
-}
-.modal__actions { display: flex; gap: 10px; }
-.modal__actions .btn { flex: 1; justify-content: center; }
-
-// ---------------------------------------------------------------------------
-// toast (save error)
-// ---------------------------------------------------------------------------
-.toast {
-  position: fixed;
-  left: 50%; bottom: 26px;
-  transform: translateX(-50%);
-  z-index: 320;
-  display: flex; align-items: center; gap: 8px;
-  padding: 12px 18px;
-  border-radius: 12px;
-  background: $ink-solid; color: #fff;
-  font-size: 1.0385em; font-weight: 600; // 0.84375rem / 0.8125rem
-  box-shadow: $lift;
-  animation: cm-fade-up 0.2s ease;
-}
-
-// ---------------------------------------------------------------------------
-// responsive
-// ---------------------------------------------------------------------------
-@media (max-width: 1080px) {
-  .builder { grid-template-columns: 1fr; }
-  .rail {
-    border-right: none;
-    border-bottom: 1px solid $line;
-    max-height: none;
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
   }
-  .rail__steps { flex-direction: row; overflow-x: auto; }
-  .rail-step { flex-direction: column; align-items: flex-start; min-width: 130px; }
-  .rail-step:not(:last-child)::after { display: none; }
-  .opt-grid--4 { grid-template-columns: repeat(2, 1fr); }
-  .field-row { grid-template-columns: 1fr; }
+}
+.sheet__attach-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 0;
+  background: rgba(17, 24, 39, 0.65);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  &:hover {
+    background: $danger;
+  }
+}
+.sheet__attach-meta {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 0.15em 0.35em;
+  font-size: 0.6em;
+  color: #fff;
+  background: rgba(17, 24, 39, 0.55);
+  text-align: center;
+}
+.sheet__attach-add {
+  width: 84px;
+  height: 84px;
+  border-radius: 8px;
+  border: 1.5px dashed $line;
+  background: $paper;
+  color: $ink-3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3em;
+  font-size: 0.72em;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  &:hover {
+    border-color: $signal;
+    color: $signal;
+    background: $wash;
+  }
 }
 
-@media (max-width: 760px) {
-  .page-header { padding: 16px 18px; flex-direction: column; align-items: flex-start; gap: 10px; }
-  .work__scroll { padding: 22px 18px; }
-  .work__foot { padding: 14px 18px; }
-  .opt-grid, .opt-grid--3, .opt-grid--4 { grid-template-columns: 1fr; }
-  .data-row { grid-template-columns: 1fr; }
-  .ds-list { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
-  .rule__grid { grid-template-columns: 1fr 1fr; }
-  .tpl { flex-basis: 100%; max-width: none; }
-  .model { flex-basis: 100%; }
-  .provider-col { flex-basis: 100%; max-width: none; }
+// ---- chip input -----------------------------------------------------------
+.sheet__chip-input {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4em;
+  border: 1px solid $line;
+  border-radius: 8px;
+  background: $card;
+  padding: 0.45em 0.5em;
+  min-height: 2.6em;
+  &:focus-within {
+    border-color: $signal;
+    box-shadow: 0 0 0 3px $wash;
+  }
 }
+.sheet__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  font-size: 0.8em;
+  padding: 0.25em 0.3em 0.25em 0.55em;
+  border-radius: 6px;
+  background: $ink-wash;
+  color: $ink-2;
+  button {
+    border: 0;
+    background: transparent;
+    color: $ink-3;
+    display: inline-flex;
+    cursor: pointer;
+    padding: 0.1em;
+    border-radius: 4px;
+    &:hover {
+      color: $danger;
+      background: $danger-wash;
+    }
+  }
+}
+.sheet__chip-field {
+  flex: 1;
+  min-width: 6em;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: $ink;
+  font-size: 0.9em;
+  &::placeholder {
+    color: $ink-3;
+  }
+}
+
+// ---- footer -----------------------------------------------------------
+.sheet__footer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6em;
+  padding: 1em 1.25em;
+  border-top: 1px solid $line;
+  background: $surface;
+}
+.sheet__spin {
+  animation: spin 1.5s linear infinite;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Ticketsslice.ts
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+// STATIC BUILD: pointed at the in-memory mock API (no backend yet). Swap this
+// one import for '../../api/endpoints/tickets' once the real endpoints exist
+// — nothing else in this file needs to change.
+import { ticketsApi } from '../../mock/ticketsApi.mock';
+import type {
+  Ticket,
+  TicketStatus,
+  TicketResolution,
+  CreateTicketRequest,
+  UpdateTicketRequest,
+  AddCommentRequest,
+} from '../../types/tickets';
+
+type FetchStatus = 'idle' | 'loading' | 'succeeded' | 'failed';
+
+interface MoveArg {
+  id: string;
+  status: TicketStatus;
+  resolution?: TicketResolution | null;
+}
+
+interface TicketsState {
+  items: Ticket[];
+  status: FetchStatus;
+  error: string | null;
+  creating: boolean;
+  updatingId: string | null;
+  deletingId: string | null;
+  commentingId: string | null;
+  // Ids currently mid-move: optimistically applied in `pending`, confirmed in
+  // `fulfilled`, rolled back in `rejected`.
+  movingIds: string[];
+  // Snapshot of {status, resolution} captured at move-start, keyed by id, so a
+  // failed transition can be reverted to exactly where the card came from.
+  rollback: Record<string, { status: TicketStatus; resolution?: TicketResolution | null }>;
+}
+
+const initialState: TicketsState = {
+  items: [],
+  status: 'idle',
+  error: null,
+  creating: false,
+  updatingId: null,
+  deletingId: null,
+  commentingId: null,
+  movingIds: [],
+  rollback: {},
+};
+
+export const fetchTickets = createAsyncThunk('tickets/fetchAll', () => ticketsApi.list());
+
+export const createTicket = createAsyncThunk(
+  'tickets/create',
+  (payload: CreateTicketRequest) => ticketsApi.create(payload)
+);
+
+export const updateTicket = createAsyncThunk(
+  'tickets/update',
+  (payload: UpdateTicketRequest) => ticketsApi.update(payload)
+);
+
+// The board moves the card the instant you drop it (see `pending` below) and
+// only reconciles with the server response afterward, so drag-and-drop feels
+// immediate. A rejection snaps it back.
+export const moveTicket = createAsyncThunk(
+  'tickets/move',
+  (payload: MoveArg) => ticketsApi.move(payload)
+);
+
+export const deleteTicket = createAsyncThunk(
+  'tickets/delete',
+  async (id: string) => {
+    const res = await ticketsApi.remove(id);
+    return { id: res.id || id };
+  }
+);
+
+export const addTicketComment = createAsyncThunk(
+  'tickets/addComment',
+  (payload: AddCommentRequest) => ticketsApi.addComment(payload)
+);
+
+const upsert = (list: Ticket[], t: Ticket) => {
+  const i = list.findIndex((x) => x.id === t.id);
+  if (i === -1) return [t, ...list];
+  const next = list.slice();
+  next[i] = t;
+  return next;
+};
+
+const ticketsSlice = createSlice({
+  name: 'tickets',
+  initialState,
+  reducers: {},
+  extraReducers: (builder) => {
+    builder
+      // ---- fetch ----------------------------------------------------------
+      .addCase(fetchTickets.pending, (state) => {
+        state.status = 'loading';
+      })
+      .addCase(fetchTickets.fulfilled, (state, action) => {
+        state.status = 'succeeded';
+        state.items = action.payload ?? [];
+      })
+      .addCase(fetchTickets.rejected, (state, action) => {
+        state.status = 'failed';
+        state.error = action.error.message || 'Failed to load tickets';
+      })
+
+      // ---- create ---------------------------------------------------------
+      .addCase(createTicket.pending, (state) => {
+        state.creating = true;
+      })
+      .addCase(createTicket.fulfilled, (state, action) => {
+        state.creating = false;
+        state.items = upsert(state.items, action.payload);
+      })
+      .addCase(createTicket.rejected, (state, action) => {
+        state.creating = false;
+        state.error = action.error.message || 'Failed to create ticket';
+      })
+
+      // ---- update (metadata) ---------------------------------------------
+      .addCase(updateTicket.pending, (state, action) => {
+        state.updatingId = action.meta.arg.id;
+      })
+      .addCase(updateTicket.fulfilled, (state, action) => {
+        state.updatingId = null;
+        state.items = upsert(state.items, action.payload);
+      })
+      .addCase(updateTicket.rejected, (state, action) => {
+        state.updatingId = null;
+        state.error = action.error.message || 'Failed to update ticket';
+      })
+
+      // ---- move (optimistic) ---------------------------------------------
+      .addCase(moveTicket.pending, (state, action) => {
+        const { id, status, resolution } = action.meta.arg;
+        const t = state.items.find((x) => x.id === id);
+        if (!t) return;
+        state.rollback[id] = { status: t.status, resolution: t.resolution ?? null };
+        t.status = status;
+        t.resolution = status === 'done' ? resolution ?? 'completed' : null;
+        if (!state.movingIds.includes(id)) state.movingIds.push(id);
+      })
+      .addCase(moveTicket.fulfilled, (state, action) => {
+        const { id } = action.meta.arg;
+        state.movingIds = state.movingIds.filter((x) => x !== id);
+        delete state.rollback[id];
+        state.items = upsert(state.items, action.payload); // trust the server copy
+      })
+      .addCase(moveTicket.rejected, (state, action) => {
+        const { id } = action.meta.arg;
+        state.movingIds = state.movingIds.filter((x) => x !== id);
+        const snap = state.rollback[id];
+        const t = state.items.find((x) => x.id === id);
+        if (t && snap) {
+          t.status = snap.status;
+          t.resolution = snap.resolution ?? null;
+        }
+        delete state.rollback[id];
+        state.error = action.error.message || 'Failed to move ticket';
+      })
+
+      // ---- delete ---------------------------------------------------------
+      .addCase(deleteTicket.pending, (state, action) => {
+        state.deletingId = action.meta.arg;
+      })
+      .addCase(deleteTicket.fulfilled, (state, action) => {
+        state.deletingId = null;
+        state.items = state.items.filter((m) => m.id !== action.payload.id);
+      })
+      .addCase(deleteTicket.rejected, (state, action) => {
+        state.deletingId = null;
+        state.error = action.error.message || 'Failed to delete ticket';
+      })
+
+      // ---- add comment ------------------------------------------------------
+      .addCase(addTicketComment.pending, (state, action) => {
+        state.commentingId = action.meta.arg.ticket_id;
+      })
+      .addCase(addTicketComment.fulfilled, (state, action) => {
+        state.commentingId = null;
+        state.items = upsert(state.items, action.payload);
+      })
+      .addCase(addTicketComment.rejected, (state, action) => {
+        state.commentingId = null;
+        state.error = action.error.message || 'Failed to post comment';
+      });
+  },
+});
+
+export default ticketsSlice.reducer;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Ticketsapi.mock.ts
+import type {
+  Ticket,
+  TicketComment,
+  CreateTicketRequest,
+  UpdateTicketRequest,
+  MoveTicketRequest,
+  AddCommentRequest,
+} from '../types/tickets';
+import { SEED_TICKETS, TEAM, CURRENT_USER, nextId, nextKey } from './mockData';
+
+// ─────────────────────────────────────────────────────────────────────────
+// Static, no-backend implementation of the tickets API. Same method names
+// and signatures as the real `ticketsApi` (api/endpoints/tickets.ts) so the
+// slice doesn't need to change — once the backend exists, delete this file,
+// restore the axios-based `ticketsApi`, and repoint the slice's import.
+//
+// Simulates network latency (250ms) so loading/spinner states are visible,
+// and enforces the owner-only "move to done" rule the same way the real
+// backend should — reject with an Error, not a silent no-op, so the slice's
+// rollback + toast path is exercised too.
+// ─────────────────────────────────────────────────────────────────────────
+
+const DELAY = 250;
+const wait = <T,>(value: T, delay = DELAY) =>
+  new Promise<T>((resolve) => window.setTimeout(() => resolve(value), delay));
+
+let db: Ticket[] = SEED_TICKETS.map((t) => ({ ...t }));
+
+const findOrThrow = (id: string) => {
+  const t = db.find((x) => x.id === id);
+  if (!t) throw new Error('Ticket not found');
+  return t;
+};
+
+export interface DeleteTicketResponse {
+  status: string;
+  id: string;
+}
+
+export const ticketsApi = {
+  list: () => wait(db.map((t) => ({ ...t }))),
+
+  create: (payload: CreateTicketRequest) => {
+    const now = new Date().toISOString();
+    const ticket: Ticket = {
+      id: nextId(),
+      key: nextKey(),
+      title: payload.title,
+      description: payload.description,
+      status: 'todo',
+      resolution: null,
+      priority: payload.priority,
+      owner: CURRENT_USER, // the creator is always the requester/owner
+      assignee: TEAM.find((m) => m.id === payload.assignee_id) ?? null,
+      labels: payload.labels ?? [],
+      attachments: payload.attachments ?? [],
+      comments: [],
+      created_at: now,
+      updated_at: now,
+    };
+    db = [ticket, ...db];
+    return wait({ ...ticket });
+  },
+
+  update: ({ id, ...rest }: UpdateTicketRequest) => {
+    const t = findOrThrow(id);
+    if (rest.title !== undefined) t.title = rest.title;
+    if (rest.description !== undefined) t.description = rest.description;
+    if (rest.priority !== undefined) t.priority = rest.priority;
+    if (rest.labels !== undefined) t.labels = rest.labels;
+    if (rest.attachments !== undefined) t.attachments = rest.attachments;
+    if (rest.assignee_id !== undefined) {
+      t.assignee = TEAM.find((m) => m.id === rest.assignee_id) ?? null;
+    }
+    t.updated_at = new Date().toISOString();
+    return wait({ ...t });
+  },
+
+  // Mirrors the server-side check the real endpoint MUST also perform:
+  // only the ticket's owner may transition it into `done`.
+  move: ({ id, status, resolution }: MoveTicketRequest) => {
+    const t = findOrThrow(id);
+    if (status === 'done' && t.owner.id !== CURRENT_USER.id) {
+      return wait(undefined, 200).then(() => {
+        throw new Error('Only the requester can close this ticket.');
+      });
+    }
+    t.status = status;
+    t.resolution = status === 'done' ? resolution ?? 'completed' : null;
+    t.updated_at = new Date().toISOString();
+    return wait({ ...t });
+  },
+
+  remove: (id: string) => {
+    findOrThrow(id);
+    db = db.filter((t) => t.id !== id);
+    return wait<DeleteTicketResponse>({ status: 'ok', id });
+  },
+
+  // Real backend: POST /tickets/:id/comments. Appends a comment authored by
+  // the current user and returns the updated ticket.
+  addComment: ({ ticket_id, text }: AddCommentRequest) => {
+    const t = findOrThrow(ticket_id);
+    const comment: TicketComment = {
+      id: `c${Date.now()}`,
+      author: CURRENT_USER,
+      text,
+      created_at: new Date().toISOString(),
+    };
+    t.comments = [...(t.comments ?? []), comment];
+    t.updated_at = new Date().toISOString();
+    return wait({ ...t });
+  },
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Tickets.ts
+// ─────────────────────────────────────────────────────────────────────────
+// Ticket domain types.
+//
+// Kept in their own file rather than widening the shared ../../types barrel,
+// same approach used for CustomModelRequestWithParams in api/endpoints/models.
+// Re-export these from your central `types` index if you'd rather import them
+// alongside Model/Provider.
+// ─────────────────────────────────────────────────────────────────────────
+
+/** The four board columns. `done` is the single terminal column; whether the
+ *  work was completed or dropped is captured by `resolution`. */
+export type TicketStatus = 'todo' | 'in_progress' | 'in_review' | 'done';
+
+/** Only meaningful when status === 'done'. */
+export type TicketResolution = 'completed' | 'discarded';
+
+export type TicketPriority = 'low' | 'medium' | 'high' | 'urgent';
+
+export interface TicketUser {
+  id: string;
+  name: string;
+}
+
+export interface TicketAttachment {
+  id: string;
+  name: string;
+  /** Data URL in this static/mock build; a real backend would return a hosted URL. */
+  url: string;
+  size: number;
+}
+
+export interface TicketComment {
+  id: string;
+  author: TicketUser;
+  text: string;
+  created_at: string;
+}
+
+export interface Ticket {
+  id: string;
+  /** Human-friendly key shown on the card, e.g. "REQ-42". Server-assigned. */
+  key: string;
+  title: string;
+  description?: string;
+  status: TicketStatus;
+  resolution?: TicketResolution | null;
+  priority: TicketPriority;
+  /** The requester. Only this user may move the ticket into `done`. */
+  owner: TicketUser;
+  assignee?: TicketUser | null;
+  labels?: string[];
+  attachments?: TicketAttachment[];
+  comments?: TicketComment[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateTicketRequest {
+  title: string;
+  description?: string;
+  priority: TicketPriority;
+  labels?: string[];
+  assignee_id?: string | null;
+  attachments?: TicketAttachment[];
+}
+
+/** Partial edit of an existing ticket (title/description/priority/labels/assignee/attachments). */
+export interface UpdateTicketRequest extends Partial<CreateTicketRequest> {
+  id: string;
+}
+
+export interface AddCommentRequest {
+  ticket_id: string;
+  text: string;
+}
+
+/** Status transitions go through their own endpoint so the backend can apply
+ *  the owner-only rule for entering `done`. */
+export interface MoveTicketRequest {
+  id: string;
+  status: TicketStatus;
+  resolution?: TicketResolution | null;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Tickets.ts
+// ─────────────────────────────────────────────────────────────────────────
+// The real, backend-backed implementation. NOT currently wired up — the
+// slice imports `mock/ticketsApi.mock.ts` instead until the backend exists.
+// Kept here so reconnecting later is a one-line import swap in
+// `store/slices/ticketsSlice.ts` (see README "Reconnecting the real backend").
+// ─────────────────────────────────────────────────────────────────────────
+import api from '../axiosInstance';
+import type {
+  Ticket,
+  CreateTicketRequest,
+  UpdateTicketRequest,
+  MoveTicketRequest,
+  AddCommentRequest,
+} from '../../types/tickets';
+
+export interface DeleteTicketResponse {
+  status: string;
+  id: string;
+}
+
+// Grouped the same way as modelsApi: one exported object, each method a thin
+// wrapper that unwraps the axios response to just the payload the callers care
+// about.
+export const ticketsApi = {
+  // GET /tickets — every ticket for the board
+  list: () =>
+    api.get<{ tickets: Ticket[] }>('/tickets').then((r) => r.data.tickets ?? []),
+
+  // POST /tickets — returns the created ticket (with server key + timestamps)
+  create: (payload: CreateTicketRequest) =>
+    api.post<Ticket>('/tickets', payload).then((r) => r.data),
+
+  // PATCH /tickets/:id — edit metadata (title/description/priority/labels/assignee)
+  update: ({ id, ...rest }: UpdateTicketRequest) =>
+    api.patch<Ticket>(`/tickets/${id}`, rest).then((r) => r.data),
+
+  // PATCH /tickets/:id/status — dedicated transition endpoint. The backend MUST
+  // re-check that the caller owns the ticket when `status === 'done'`; the UI
+  // gate is a convenience, not a security boundary.
+  move: ({ id, status, resolution }: MoveTicketRequest) =>
+    api
+      .patch<Ticket>(`/tickets/${id}/status`, { status, resolution })
+      .then((r) => r.data),
+
+  // DELETE /tickets/:id
+  remove: (id: string) =>
+    api.delete<DeleteTicketResponse>(`/tickets/${id}`).then((r) => r.data),
+
+  // POST /tickets/:id/comments — appends a comment, returns the updated ticket
+  addComment: ({ ticket_id, text }: AddCommentRequest) =>
+    api.post<Ticket>(`/tickets/${ticket_id}/comments`, { text }).then((r) => r.data),
+};
