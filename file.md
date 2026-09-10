@@ -1,4 +1,3 @@
-//Createmetric.tsx
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle, ArrowRight, Check, CheckCircle2, ChevronRight, Code2, Cpu, Database,
@@ -802,7 +801,8 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
                                         <input type="radio" name="judge" hidden checked={selectedModelId === m.id} disabled={disabled} onChange={() => setSelectedModelId(m.id)} />
                                         <span className={styles['model__radio']} />
                                         <span className={styles['model__body']}>
-                                          <span className={styles['model__name']}>{m.name}</span>
+                                          <span className={styles['model__name']} title={m.name}>{m.name}</span>
+                                          {health === 'checking' && <span className={styles['model__checking']}>Checking…</span>}
                                         </span>
                                         <span className={`${styles['model__health']} ${styles[`health--${health}`]}`} title={health === 'checking' ? 'Checking' : health === 'healthy' ? 'Healthy' : 'Offline'}>
                                           <span className={styles['health-dot']} />
@@ -1167,7 +1167,16 @@ export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
 
 
 
-//Createmetric.module.scss
+
+
+
+
+
+
+
+
+
+
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
@@ -1929,8 +1938,8 @@ $base-font: 0.8125rem; // matches Model Catalog / Custom Metrics Dashboard base
 }
 
 .provider-col {
-  flex: 1 1 260px;
-  max-width: 320px;
+  flex: 1 1 300px;
+  max-width: 380px;
   display: flex;
   flex-direction: column;
   border: 1px solid $line;
@@ -2000,7 +2009,7 @@ $base-font: 0.8125rem; // matches Model Catalog / Custom Metrics Dashboard base
   flex-direction: column;
   gap: 6px;
   padding: 4px 10px 10px;
-  max-height: 260px;
+  max-height: 340px;
   overflow-y: auto;
 
   .empty { padding: 16px 4px; font-size: 0.9231em; } // 0.75rem / 0.8125rem
@@ -2036,6 +2045,13 @@ $base-font: 0.8125rem; // matches Model Catalog / Custom Metrics Dashboard base
 
 .model__body { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .model__name { font-family: $display; font-weight: 700; font-size: 1.1538em; color: $ink; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } // 0.9375rem / 0.8125rem
+.model__checking {
+  display: block;
+  font-family: $mono;
+  font-size: 0.8462em; // 0.6875rem / 0.8125rem
+  color: $ink-3;
+  margin-top: 2px;
+}
 
 .model__health {
   flex-shrink: 0;
