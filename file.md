@@ -1,3 +1,2302 @@
+//Ticketboard.tsx
+import { useEffect, useMemo, useState } from 'react';
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  closestCenter,
+  MeasuringStrategy,
+  type DragEndEvent,
+  type DragStartEvent,
+} from '@dnd-kit/core';
+import { Plus, Search, Loader2, Layers, ListFilter } from 'lucide-react';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import {
+  fetchTickets,
+  createTicket,
+  updateTicket,
+  moveTicket,
+  deleteTicket,
+} from '../../store/slices/ticketsSlice';
+import { fetchTeamMembers } from '../../store/slices/usersSlice';
+import type { Ticket, TicketStatus, TicketResolution, TicketPriority } from '../../types/tickets';
+import { useToast } from '../common/Toast';
+import { COLUMNS, PRIORITY_META, canDropTicket, toTicketUser } from './ticketMeta';
+import TicketCard from './TicketCard';
+import TicketColumn from './TicketColumn';
+import CreateTicketDrawer, { type TicketSubmitPayload } from './CreateTicketDrawer';
+import TicketDetailSidebar from './TicketDetailSidebar';
+import TicketCloseConfirm from './TicketCloseConfirm';
+import styles from './TicketBoard.module.scss';
+
+// Columns are static (no layout shift) during a drag, so measuring droppable
+// rects once at drag-start — instead of dnd-kit's default of continuously
+// re-measuring every frame while dragging — cuts out unnecessary work on
+// each pointer move and keeps the drag feeling smooth rather than janky.
+const MEASURING = { droppable: { strategy: MeasuringStrategy.BeforeDragging } };
+
+// ─────────────────────────────────────────────────────────────────────────
+// Self-contained: no props. Fetches its own tickets and its own assignee
+// roster. Current-user identity comes from the app's existing authSlice
+// (state.auth.user, an SsoLoginResult) — this board never dispatches a
+// login itself, it just reads whatever the app's SSO flow already put
+// there and adapts it to the minimal { id, name } shape this feature needs
+// via `toTicketUser` (see ticketMeta.ts).
+// ─────────────────────────────────────────────────────────────────────────
+
+export default function TicketBoard() {
+  const dispatch = useAppDispatch();
+  const toast = useToast();
+  const { items, status, creating, updatingId, movingIds, deletingId } = useAppSelector(
+    (s) => s.tickets
+  );
+  const currentUser = useAppSelector((s) => toTicketUser(s.auth.user));
+  const authSliceStatus = useAppSelector((s) => s.auth.status);
+  const members = useAppSelector((s) => s.users.items);
+  const membersStatus = useAppSelector((s) => s.users.status);
+
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [editing, setEditing] = useState<Ticket | null>(null);
+  // Only the id is kept here — TicketDetailSidebar selects the live ticket
+  // straight out of the store by this id, so it can never go stale (e.g.
+  // after posting a comment) the way a locally-cached ticket snapshot could.
+  const [detailId, setDetailId] = useState<string | null>(null);
+
+  const [query, setQuery] = useState('');
+  const [priorityFilter, setPriorityFilter] = useState<TicketPriority | 'all'>('all');
+
+  // The ticket id currently being dragged, driving both the floating
+  // DragOverlay clone and each column's locked/over highlighting.
+  const [activeId, setActiveId] = useState<string | null>(null);
+
+  // The dragged card's actual on-screen width, captured the instant the
+  // drag starts. Without this, the floating overlay clone (see DragOverlay
+  // below) sizes itself independently and can end up a different width than
+  // the real card — which is exactly what made the drag "ghost" look offset
+  // from the cursor instead of feeling like the card itself. Height isn't
+  // captured separately: same content + same styles at the same width
+  // naturally produces the same height.
+  const [activeWidth, setActiveWidth] = useState<number | undefined>(undefined);
+
+  // Set whenever a move would land a ticket in the terminal column; renders
+  // TicketCloseConfirm instead of moving immediately. Cleared on choose/cancel.
+  const [pendingClose, setPendingClose] = useState<{ id: string; key: string; title: string } | null>(
+    null
+  );
+
+  // A short activation distance keeps ordinary clicks (opening a card)
+  // working normally — a drag only "activates" once the pointer has moved
+  // a few pixels past its starting point.
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+
+  useEffect(() => {
+    if (status === 'idle') dispatch(fetchTickets());
+  }, [status, dispatch]);
+
+  useEffect(() => {
+    if (membersStatus === 'idle') dispatch(fetchTeamMembers());
+  }, [membersStatus, dispatch]);
+
+  const activeTicket = activeId ? items.find((t) => t.id === activeId) ?? null : null;
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return items.filter((t) => {
+      if (priorityFilter !== 'all' && t.priority !== priorityFilter) return false;
+      if (!q) return true;
+      return (
+        t.title.toLowerCase().includes(q) ||
+        t.key.toLowerCase().includes(q) ||
+        (t.labels ?? []).some((l) => l.toLowerCase().includes(q))
+      );
+    });
+  }, [items, query, priorityFilter]);
+
+  const byStatus = useMemo(() => {
+    const map: Record<TicketStatus, Ticket[]> = {
+      todo: [],
+      in_progress: [],
+      in_review: [],
+      done: [],
+    };
+    for (const t of filtered) map[t.status].push(t);
+    return map;
+  }, [filtered]);
+
+  // currentUser drives the owner-only "move to Done" gate everywhere below,
+  // so don't render the interactive board until it's resolved. Placed after
+  // every hook above (rules of hooks) — TypeScript also narrows `currentUser`
+  // from `TicketUser | null` to `TicketUser` for the rest of this function
+  // once this guard has passed. In practice this should resolve near-
+  // instantly since the app's SSO flow almost certainly finishes before a
+  // user can reach this route at all — this guard is just a safety net for
+  // the brief window (or a genuinely logged-out edge case) where it hasn't.
+  if (!currentUser) {
+    return (
+      <div className={`page-enter pg-shell ${styles['ticket-board']}`}>
+        <div className={styles['ticket-board__loading']}>
+          <Loader2 size={20} className={styles['ticket-board__spin']} />
+          <span>
+            {authSliceStatus === 'failed'
+              ? "Couldn't load your account — refresh to retry."
+              : 'Loading…'}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  const runMove = (id: string, to: TicketStatus, resolution?: TicketResolution | null) => {
+    const ticket = items.find((t) => t.id === id);
+    if (!ticket || (ticket.status === to && !resolution)) return;
+    const check = canDropTicket(ticket, to, currentUser.id);
+    if (!check.ok) {
+      toast.warning(check.reason ?? "That move isn't allowed.");
+      return;
+    }
+    dispatch(moveTicket({ id, status: to, resolution }))
+      .unwrap()
+      .then(() => {
+        if (to === 'done') {
+          toast.success(resolution === 'discarded' ? 'Ticket discarded' : 'Ticket marked done');
+        }
+      })
+      .catch((e) => toast.error(typeof e === 'string' ? e : 'Could not move ticket'));
+  };
+
+  // Entry point for every move request (drag, detail-view stepper/close
+  // buttons). Moves into the terminal column always pause for an explicit
+  // Done/Discard choice instead of executing immediately. Every other move
+  // is checked against the sequence + owner rules before it's attempted.
+  const requestMove = (id: string, to: TicketStatus) => {
+    const ticket = items.find((t) => t.id === id);
+    if (!ticket) return;
+    const check = canDropTicket(ticket, to, currentUser.id);
+    if (!check.ok) {
+      toast.warning(check.reason ?? "That move isn't allowed.");
+      return;
+    }
+    if (to === 'done') {
+      setPendingClose({ id, key: ticket.key, title: ticket.title });
+      return;
+    }
+    runMove(id, to);
+  };
+
+  const handleDragStart = (event: DragStartEvent) => {
+    setActiveId(String(event.active.id));
+    setActiveWidth(event.active.rect.current.initial?.width);
+  };
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    setActiveId(null);
+    setActiveWidth(undefined);
+    if (!over) return;
+    const to = over.id as TicketStatus;
+    const ticket = items.find((t) => t.id === active.id);
+    if (!ticket || ticket.status === to) return;
+    requestMove(String(active.id), to);
+  };
+
+  const handleSubmit = (payload: TicketSubmitPayload) => {
+    const action = editing
+      ? updateTicket({ id: editing.id, ...payload })
+      : createTicket(payload);
+    return dispatch(action)
+      .unwrap()
+      .then(() => {
+        toast.success(editing ? 'Ticket updated' : 'Requirement created');
+        setDrawerOpen(false);
+        setEditing(null);
+      })
+      .catch((e) => {
+        toast.error(typeof e === 'string' ? e : 'Could not save ticket');
+        throw e; // keep the drawer open
+      });
+  };
+
+  const handleDelete = (id: string) => {
+    dispatch(deleteTicket(id))
+      .unwrap()
+      .then(() => {
+        toast.success('Ticket deleted');
+        setDetailId(null);
+      })
+      .catch((e) => toast.error(typeof e === 'string' ? e : 'Could not delete ticket'));
+  };
+
+  return (
+    <div className={`page-enter pg-shell ${styles['ticket-board']}`}>
+      <div className={styles['ticket-board__header']}>
+        <div>
+          <p className={styles['ticket-board__header-eyebrow']}>Delivery</p>
+          <h1>Requirements</h1>
+          <p className={styles['ticket-board__header-sub']}>
+            Drag a card between columns to change its status
+          </p>
+        </div>
+        <div className={styles['ticket-board__header-meta']}>
+          <Layers size={13} />
+          {items.length} ticket{items.length === 1 ? '' : 's'}
+        </div>
+      </div>
+
+      <div className={styles['ticket-board__toolbar']}>
+        <div className={styles['ticket-board__search']}>
+          <Search size={16} />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search key, title, label…"
+            aria-label="Search tickets"
+          />
+        </div>
+
+        <div className={styles['ticket-board__toolbar-right']}>
+          <div className={styles['ticket-board__filter-group']}>
+            <span className={styles['ticket-board__toolbar-label']}>
+              <ListFilter size={11} /> Priority
+            </span>
+            {(['all', ...Object.keys(PRIORITY_META)] as (TicketPriority | 'all')[]).map((p) => (
+              <button
+                key={p}
+                className={`${styles['ticket-board__filter-pill']} ${
+                  priorityFilter === p ? styles['ticket-board__filter-pill--on'] : ''
+                }`}
+                onClick={() => setPriorityFilter(p)}
+              >
+                {p === 'all' ? 'All' : PRIORITY_META[p].label}
+              </button>
+            ))}
+          </div>
+
+          <div className={styles['ticket-board__toolbar-divider']} />
+
+          <button
+            className={styles['ticket-board__add-btn']}
+            onClick={() => {
+              setEditing(null);
+              setDrawerOpen(true);
+            }}
+          >
+            <Plus size={16} />
+            New Requirement
+          </button>
+        </div>
+      </div>
+
+      {status === 'loading' && items.length === 0 ? (
+        <div className={styles['ticket-board__loading']}>
+          <Loader2 size={20} className={styles['ticket-board__spin']} />
+          <span>Loading board…</span>
+        </div>
+      ) : (
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          measuring={MEASURING}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+          onDragCancel={() => {
+            setActiveId(null);
+            setActiveWidth(undefined);
+          }}
+        >
+          <div className={styles['ticket-board__columns']}>
+            {COLUMNS.map((col) => (
+              <TicketColumn
+                key={col.status}
+                col={col}
+                tickets={byStatus[col.status]}
+                currentUser={currentUser}
+                movingIds={movingIds}
+                activeTicket={activeTicket}
+                onOpen={(t) => setDetailId(t.id)}
+              />
+            ))}
+          </div>
+
+          {/* The floating clone that actually follows the cursor — sized to
+              exactly match the source card's width (see handleDragStart) so
+              it stays pixel-aligned under the pointer instead of looking
+              offset. Rendered directly as DragOverlay's child (no extra
+              wrapper div) so there's no nested box-sizing ambiguity between
+              what dnd-kit measured and what's actually drawn. */}
+          <DragOverlay dropAnimation={{ duration: 180, easing: 'cubic-bezier(0.18, 0.67, 0.6, 1.22)' }}>
+            {activeTicket ? (
+              <TicketCard
+                ticket={activeTicket}
+                currentUser={currentUser}
+                onOpen={() => {}}
+                overlay
+                overlayWidth={activeWidth}
+              />
+            ) : null}
+          </DragOverlay>
+        </DndContext>
+      )}
+
+      {drawerOpen && (
+        <CreateTicketDrawer
+          mode={editing ? 'edit' : 'create'}
+          initialTicket={editing ?? undefined}
+          members={members}
+          submitting={editing ? updatingId === editing.id : creating}
+          onClose={() => {
+            setDrawerOpen(false);
+            setEditing(null);
+          }}
+          onSubmit={handleSubmit}
+        />
+      )}
+
+      {detailId && (
+        <TicketDetailSidebar
+          ticketId={detailId}
+          currentUser={currentUser}
+          moving={movingIds.includes(detailId)}
+          deleting={deletingId === detailId}
+          onClose={() => setDetailId(null)}
+          onMove={requestMove}
+          onEdit={(t) => {
+            setDetailId(null);
+            setEditing(t);
+            setDrawerOpen(true);
+          }}
+          onDelete={handleDelete}
+        />
+      )}
+
+      {pendingClose && (
+        <TicketCloseConfirm
+          ticketKey={pendingClose.key}
+          title={pendingClose.title}
+          onCancel={() => setPendingClose(null)}
+          onConfirm={(resolution) => {
+            runMove(pendingClose.id, 'done', resolution);
+            setPendingClose(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Ticketdetailsidebar.tsx
+import { useState } from 'react';
+import DOMPurify from 'dompurify';
+import { X, Pencil, Trash2, Loader2, Lock, Check, Ban } from 'lucide-react';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import { addTicketComment } from '../../store/slices/ticketsSlice';
+import type { Ticket, TicketStatus, TicketResolution, TicketUser } from '../../types/tickets';
+import ConfirmDialog from '../common/ConfirmDialog';
+import { useToast } from '../common/Toast';
+import TicketDescriptionEditor from './TicketDescriptionEditor';
+import {
+  COLUMNS,
+  PRIORITY_META,
+  isOwner,
+  isSequentialMove,
+  canDropTicket,
+  isEmptyHtml,
+  OWNER_ONLY_HINT,
+  SEQUENCE_HINT,
+  initials,
+  avatarAccent,
+} from './ticketMeta';
+import styles from './TicketBoard.module.scss';
+
+interface TicketDetailSidebarProps {
+  /** Looked up live from the store below — never a cached snapshot, so this
+   *  view can't go stale after a comment/move/edit the way passing the
+   *  whole `Ticket` object down as a static prop could. */
+  ticketId: string;
+  currentUser: TicketUser;
+  moving?: boolean;
+  deleting?: boolean;
+  onClose: () => void;
+  onMove: (id: string, status: TicketStatus, resolution?: TicketResolution | null) => void;
+  onEdit: (ticket: Ticket) => void;
+  onDelete: (id: string) => void;
+}
+
+const formatTime = (iso: string) => {
+  try {
+    return new Date(iso).toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  } catch {
+    return iso;
+  }
+};
+
+// Centered modal, same shell as the rest of the app's dialogs (see
+// .modal-overlay / .modal in TicketBoard.module.scss). Rendered inline —
+// no portal — position:fixed + flex-centering is sufficient here.
+export default function TicketDetailSidebar({
+  ticketId,
+  currentUser,
+  moving = false,
+  deleting = false,
+  onClose,
+  onMove,
+  onEdit,
+  onDelete,
+}: TicketDetailSidebarProps) {
+  const dispatch = useAppDispatch();
+  const toast = useToast();
+  // Selected live from the store on every render — this is the fix for
+  // "posting a comment doesn't show up until I refresh": previously this
+  // component received a `ticket` object as a prop that was only synced
+  // back up from the store via a separate effect in TicketBoard, which is
+  // an extra hop that can (and did) go stale. Reading directly from the
+  // store here removes that hop entirely.
+  const ticket = useAppSelector((s) => s.tickets.items.find((t) => t.id === ticketId));
+  const commentingId = useAppSelector((s) => s.tickets.commentingId);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [commentDraft, setCommentDraft] = useState('');
+
+  if (!ticket) return null; // e.g. deleted from another tab/session
+
+  const owner = isOwner(ticket, currentUser.id);
+  const priority = PRIORITY_META[ticket.priority];
+  const posting = commentingId === ticket.id;
+  const comments = ticket.comments ?? [];
+
+  const submitComment = () => {
+    if (isEmptyHtml(commentDraft)) return;
+    dispatch(addTicketComment({ ticket_id: ticket.id, text: commentDraft }))
+      .unwrap()
+      .then(() => setCommentDraft(''))
+      .catch((e) => toast.error(typeof e === 'string' ? e : 'Could not post comment'));
+  };
+
+  return (
+    <div className={styles['modal-overlay']} onClick={onClose}>
+      <div
+        className={styles['modal']}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Ticket detail"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className={styles['modal-hdr']}>
+          <div>
+            <span className={styles['modal-key']}>{ticket.key}</span>
+            <span
+              className={styles['ticket-card__priority']}
+              style={{ ['--priority-accent' as string]: priority.accent }}
+            >
+              {priority.label}
+            </span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4em' }}>
+            <button
+              type="button"
+              className={styles['modal-close']}
+              onClick={() => onEdit(ticket)}
+              aria-label="Edit ticket"
+              title="Edit"
+            >
+              <Pencil size={14} />
+            </button>
+            <button
+              type="button"
+              className={styles['modal-close']}
+              onClick={() => setConfirmDelete(true)}
+              disabled={deleting}
+              aria-label="Delete ticket"
+              title="Delete"
+            >
+              {deleting ? <Loader2 size={14} className={styles['ticket-board__spin']} /> : <Trash2 size={14} />}
+            </button>
+            <button className={styles['modal-close']} onClick={onClose} aria-label="Close">
+              <X size={16} />
+            </button>
+          </div>
+        </header>
+
+        <div className={styles['modal-body']}>
+          {/* ---- main: title, description (with inline images), comments ---- */}
+          <div className={styles['modal-main']}>
+            <h3 className={styles['ticket-detail__title']}>{ticket.title}</h3>
+
+            {!isEmptyHtml(ticket.description) ? (
+              <div
+                className={styles['ticket-detail__desc']}
+                // Description is rich-text HTML from the description editor
+                // (images the requester pasted/dropped/inserted are already
+                // embedded inline as <img> tags) — sanitize before ever
+                // injecting it, since this is otherwise-untrusted content.
+                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(ticket.description ?? '') }}
+              />
+            ) : (
+              <p className={styles['ticket-detail__desc--empty']}>No description.</p>
+            )}
+
+            {(ticket.labels ?? []).length > 0 && (
+              <div className={styles['ticket-card__labels']}>
+                {(ticket.labels ?? []).map((l) => (
+                  <span key={l} className={styles['ticket-card__label']}>
+                    {l}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            <div>
+              <div className={styles['ticket-detail__section-label']}>
+                Comments {comments.length > 0 && `(${comments.length})`}
+              </div>
+              <div className={styles['ticket-detail__comments']} style={{ marginTop: '0.7em' }}>
+                {comments.length === 0 && (
+                  <p className={styles['ticket-detail__comment-empty']}>
+                    No comments yet — start the discussion.
+                  </p>
+                )}
+                {comments.map((c) => (
+                  <div key={c.id} className={styles['ticket-detail__comment']}>
+                    <span
+                      className={styles['ticket-card__avatar']}
+                      style={{ background: avatarAccent(c.author) }}
+                    >
+                      {initials(c.author)}
+                    </span>
+                    <div className={styles['ticket-detail__comment-body']}>
+                      <div className={styles['ticket-detail__comment-head']}>
+                        <span className={styles['ticket-detail__comment-author']}>
+                          {c.author.name}
+                        </span>
+                        <span className={styles['ticket-detail__comment-time']}>
+                          {formatTime(c.created_at)}
+                        </span>
+                      </div>
+                      {/* Comment text is rich-text HTML too (same editor as
+                          the description) — sanitize before rendering. */}
+                      <div
+                        className={styles['ticket-detail__comment-text']}
+                        dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(c.text) }}
+                      />
+                    </div>
+                  </div>
+                ))}
+
+                <div className={styles['ticket-detail__comment-form']}>
+                  <TicketDescriptionEditor
+                    value={commentDraft}
+                    onChange={setCommentDraft}
+                    placeholder="Add a comment… paste or drag an image in."
+                    disabled={posting}
+                    compact
+                  />
+                  <button
+                    type="button"
+                    className={styles['ticket-detail__comment-submit']}
+                    onClick={submitComment}
+                    disabled={posting || isEmptyHtml(commentDraft)}
+                  >
+                    {posting ? (
+                      <Loader2 size={14} className={styles['ticket-board__spin']} />
+                    ) : (
+                      'Post comment'
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ---- rail: requester/assignee, status, terminal actions ---- */}
+          <div className={styles['modal-rail']}>
+            <div className={styles['ticket-detail__people']}>
+              <div className={styles['ticket-detail__person']}>
+                <span className={styles['ticket-detail__person-label']}>Requester</span>
+                <div className={styles['ticket-detail__person-val']}>
+                  <span
+                    className={styles['ticket-card__avatar']}
+                    style={{ background: avatarAccent(ticket.owner) }}
+                  >
+                    {initials(ticket.owner)}
+                  </span>
+                  {ticket.owner.name}
+                  {owner && <span className={styles['ticket-detail__you']}>you</span>}
+                </div>
+              </div>
+              <div className={styles['ticket-detail__person']}>
+                <span className={styles['ticket-detail__person-label']}>Assignee</span>
+                {ticket.assignee ? (
+                  <div className={styles['ticket-detail__person-val']}>
+                    <span
+                      className={styles['ticket-card__avatar']}
+                      style={{ background: avatarAccent(ticket.assignee) }}
+                    >
+                      {initials(ticket.assignee)}
+                    </span>
+                    {ticket.assignee.name}
+                  </div>
+                ) : (
+                  <span className={styles['ticket-detail__muted']}>Unassigned</span>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <div className={styles['ticket-detail__section-label']}>
+                Status
+                {moving && <Loader2 size={13} className={styles['ticket-board__spin']} />}
+              </div>
+              <div className={styles['ticket-detail__stepper']} style={{ marginTop: '0.5em' }}>
+                {COLUMNS.filter((c) => c.status !== 'done').map((c) => {
+                  const isCurrent = ticket.status === c.status;
+                  const skipsAhead = !isCurrent && !isSequentialMove(ticket.status, c.status);
+                  return (
+                    <button
+                      key={c.status}
+                      type="button"
+                      className={[
+                        styles['ticket-detail__step'],
+                        isCurrent ? styles['ticket-detail__step--current'] : '',
+                      ].join(' ')}
+                      style={{ ['--step-accent' as string]: c.accent }}
+                      disabled={isCurrent || moving || skipsAhead}
+                      title={skipsAhead ? SEQUENCE_HINT : undefined}
+                      onClick={() => onMove(ticket.id, c.status)}
+                    >
+                      {isCurrent && <Check size={13} />}
+                      {c.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <div className={styles['ticket-detail__section-label']}>Close ticket</div>
+              <div className={styles['ticket-detail__terminal']} style={{ marginTop: '0.5em' }}>
+                {(() => {
+                  const closeCheck = canDropTicket(ticket, 'done', currentUser.id);
+                  const alreadyDone = ticket.status === 'done' && ticket.resolution === 'completed';
+                  const alreadyDiscarded = ticket.status === 'done' && ticket.resolution === 'discarded';
+                  return (
+                    <>
+                      <button
+                        type="button"
+                        className={styles['ticket-detail__done-btn']}
+                        disabled={!closeCheck.ok || moving || alreadyDone}
+                        title={closeCheck.ok ? undefined : closeCheck.reason}
+                        onClick={() => onMove(ticket.id, 'done', 'completed')}
+                      >
+                        {owner ? <Check size={14} /> : <Lock size={14} />}
+                        Mark Done
+                      </button>
+                      <button
+                        type="button"
+                        className={styles['ticket-detail__discard-btn']}
+                        disabled={!closeCheck.ok || moving || alreadyDiscarded}
+                        title={closeCheck.ok ? undefined : closeCheck.reason}
+                        onClick={() => onMove(ticket.id, 'done', 'discarded')}
+                      >
+                        {owner ? <Ban size={14} /> : <Lock size={14} />}
+                        Discard
+                      </button>
+                    </>
+                  );
+                })()}
+              </div>
+              {!owner && (
+                <p className={styles['ticket-detail__gate-note']} style={{ marginTop: '0.5em' }}>
+                  <Lock size={12} /> {OWNER_ONLY_HINT}
+                </p>
+              )}
+              {owner && ticket.status !== 'in_review' && ticket.status !== 'done' && (
+                <p className={styles['ticket-detail__gate-note']} style={{ marginTop: '0.5em' }}>
+                  {SEQUENCE_HINT}
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {confirmDelete && (
+          <ConfirmDialog
+            title="Delete this ticket?"
+            message={`"${ticket.title}" will be permanently removed. This can't be undone.`}
+            confirmLabel="Delete"
+            tone="danger"
+            loading={deleting}
+            onCancel={() => setConfirmDelete(false)}
+            onConfirm={() => onDelete(ticket.id)}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+//Ticketdescriptioneditor.tsx
+import { useEffect, useRef, type ReactNode } from 'react';
+import { useEditor, EditorContent, type Editor } from '@tiptap/react';
+import StarterKit from '@tiptap/starter-kit';
+import Image from '@tiptap/extension-image';
+import Placeholder from '@tiptap/extension-placeholder';
+import {
+  Bold as BoldIcon,
+  Italic as ItalicIcon,
+  List as ListIcon,
+  ListOrdered,
+  ImagePlus,
+} from 'lucide-react';
+import { useToast } from '../common/Toast';
+import styles from './TicketDescriptionEditor.module.scss';
+
+interface TicketDescriptionEditorProps {
+  /** HTML content — same shape TipTap emits and consumes. Any images the
+   *  user has added are embedded directly as base64 `data:` URIs inside
+   *  this string — there's no separate upload step or hosted URL. */
+  value: string;
+  onChange: (html: string) => void;
+  placeholder?: string;
+  disabled?: boolean;
+  /** Smaller toolbar/padding/max-height — used for the comment composer,
+   *  which needs the same paste/drag/insert-image capability as the
+   *  description but shouldn't dominate the layout the way a full
+   *  description field does. */
+  compact?: boolean;
+}
+
+// Base64-encoded images run roughly a third larger than the original file,
+// so this cap is intentionally stricter than a typical raw-upload limit —
+// it exists purely to keep the description field (and the request/response
+// bodies carrying it) from ballooning, not to protect an upload endpoint.
+const MAX_IMAGE_BYTES = 2 * 1024 * 1024; // 2MB
+
+const readAsDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+
+/**
+ * A Jira-style rich-text description field: type normally, and images can
+ * be pasted straight from the clipboard, dragged in from the desktop, or
+ * inserted via the toolbar button — there's no separate "attachments" field
+ * and no upload API call. Every image is embedded directly as a base64
+ * `data:` URI inside the description's own HTML, so image + text are a
+ * single self-contained field with nothing else to fetch or host.
+ */
+export default function TicketDescriptionEditor({
+  value,
+  onChange,
+  placeholder = 'Context, acceptance criteria, links… paste or drag an image in.',
+  disabled = false,
+  compact = false,
+}: TicketDescriptionEditorProps) {
+  const toast = useToast();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const editor = useEditor({
+    extensions: [
+      StarterKit.configure({ heading: false }),
+      // allowBase64 is the whole trick here — the stock Image extension
+      // otherwise rejects data: URIs and expects a hosted src.
+      Image.configure({ inline: false, allowBase64: true }),
+      Placeholder.configure({ placeholder }),
+    ],
+    content: value,
+    editable: !disabled,
+    onUpdate: ({ editor: e }) => onChange(e.getHTML()),
+    editorProps: {
+      attributes: {
+        class: styles['editor-body'],
+      },
+      handlePaste: (_view, event) => {
+        const files = Array.from(event.clipboardData?.items ?? [])
+          .map((item) => item.getAsFile())
+          .filter((f): f is File => !!f && f.type.startsWith('image/'));
+        if (files.length === 0) return false;
+        event.preventDefault();
+        files.forEach((f) => insertImage(editor, f, toast));
+        return true;
+      },
+      handleDrop: (_view, event) => {
+        const files = Array.from(event.dataTransfer?.files ?? []).filter((f) =>
+          f.type.startsWith('image/')
+        );
+        if (files.length === 0) return false;
+        event.preventDefault();
+        files.forEach((f) => insertImage(editor, f, toast));
+        return true;
+      },
+    },
+  });
+
+  // Keep the editor's content in sync if `value` changes from outside (e.g.
+  // switching from "create" to "edit" mode with a different initial ticket)
+  // without fighting the user's own typing on every render.
+  useEffect(() => {
+    if (!editor) return;
+    if (value !== editor.getHTML()) {
+      editor.commands.setContent(value || '', false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editor]);
+
+  useEffect(() => {
+    editor?.setEditable(!disabled);
+  }, [editor, disabled]);
+
+  if (!editor) return null;
+
+  const pickImage = () => fileInputRef.current?.click();
+
+  return (
+    <div
+      className={`${styles['editor']} ${disabled ? styles['editor--disabled'] : ''} ${compact ? styles['editor--compact'] : ''}`}
+    >
+      <div className={styles['toolbar']}>
+        <ToolbarButton
+          active={editor.isActive('bold')}
+          onClick={() => editor.chain().focus().toggleBold().run()}
+          label="Bold"
+        >
+          <BoldIcon size={14} />
+        </ToolbarButton>
+        <ToolbarButton
+          active={editor.isActive('italic')}
+          onClick={() => editor.chain().focus().toggleItalic().run()}
+          label="Italic"
+        >
+          <ItalicIcon size={14} />
+        </ToolbarButton>
+        <span className={styles['toolbar-sep']} />
+        <ToolbarButton
+          active={editor.isActive('bulletList')}
+          onClick={() => editor.chain().focus().toggleBulletList().run()}
+          label="Bullet list"
+        >
+          <ListIcon size={14} />
+        </ToolbarButton>
+        <ToolbarButton
+          active={editor.isActive('orderedList')}
+          onClick={() => editor.chain().focus().toggleOrderedList().run()}
+          label="Numbered list"
+        >
+          <ListOrdered size={14} />
+        </ToolbarButton>
+        <span className={styles['toolbar-sep']} />
+        <ToolbarButton onClick={pickImage} label="Insert image">
+          <ImagePlus size={14} />
+        </ToolbarButton>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          hidden
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) insertImage(editor, file, toast);
+            e.target.value = '';
+          }}
+        />
+      </div>
+      <EditorContent editor={editor} className={styles['editor-scroll']} />
+    </div>
+  );
+}
+
+function ToolbarButton({
+  children,
+  onClick,
+  active,
+  label,
+}: {
+  children: ReactNode;
+  onClick: () => void;
+  active?: boolean;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      className={`${styles['toolbar-btn']} ${active ? styles['toolbar-btn--active'] : ''}`}
+      onMouseDown={(e) => e.preventDefault()} // keep editor selection/focus intact
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+    >
+      {children}
+    </button>
+  );
+}
+
+// Reads the file straight to a base64 data: URI (no network round-trip) and
+// inserts it as an <img> at the cursor. Purely local — nothing to upload,
+// nothing that can fail on the network, just FileReader.
+function insertImage(editor: Editor | null, file: File, toast: ReturnType<typeof useToast>) {
+  if (!editor) return;
+  if (file.size > MAX_IMAGE_BYTES) {
+    toast.error(`"${file.name}" is over 2MB — pick a smaller image.`);
+    return;
+  }
+  readAsDataUrl(file)
+    .then((dataUrl) => {
+      editor.chain().focus().setImage({ src: dataUrl, alt: file.name }).run();
+    })
+    .catch(() => {
+      toast.error(`Couldn't read "${file.name}".`);
+    });
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Ticketdescriptioneditor.module.scss
+@use '../../styles/_variables' as *;
+
+// Jira-style rich-text description field: a small toolbar + an editable
+// area that accepts typed text, pasted/dropped images, and toolbar-
+// inserted images. Images are embedded as base64 data: URIs directly in
+// the field's own HTML — no upload request, no separate attachments field.
+
+$mono: $font-mono;
+$sans: $font-body;
+
+.editor {
+  border: 1px solid $line;
+  border-radius: 8px;
+  background: $card;
+  overflow: hidden;
+  transition: border-color 0.15s, box-shadow 0.15s;
+
+  &:focus-within {
+    border-color: $signal;
+    box-shadow: 0 0 0 3px $wash;
+  }
+}
+.editor--disabled {
+  opacity: 0.6;
+  pointer-events: none;
+}
+// Smaller footprint for the comment composer — same capability (toolbar,
+// paste/drag/insert images), just less visually dominant than the full
+// description field.
+.editor--compact {
+  .toolbar {
+    padding: 0.25em 0.35em;
+  }
+  .toolbar-btn {
+    width: 1.6em;
+    height: 1.6em;
+  }
+  .editor-body {
+    padding: 0.5em 0.6em;
+    font-size: 0.86em;
+    min-height: 2.4em;
+  }
+  .editor-scroll {
+    max-height: 140px;
+  }
+}
+
+// ---- toolbar ----------------------------------------------------------
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.2em;
+  padding: 0.4em 0.5em;
+  border-bottom: 1px solid $line;
+  background: $paper;
+}
+.toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9em;
+  height: 1.9em;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: $ink-2;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  &:hover {
+    background: $ink-wash;
+    color: $ink;
+  }
+}
+.toolbar-btn--active {
+  background: $wash;
+  color: $signal;
+}
+.toolbar-sep {
+  width: 1px;
+  height: 1.2em;
+  background: $line;
+  margin: 0 0.3em;
+}
+
+// ---- editable body ------------------------------------------------------
+.editor-scroll {
+  max-height: 260px;
+  overflow-y: auto;
+}
+.editor-body {
+  padding: 0.7em 0.8em;
+  font-family: $sans;
+  font-size: 0.92em;
+  line-height: 1.6;
+  color: $ink;
+  outline: none;
+  min-height: 5.5em;
+
+  p {
+    margin: 0 0 0.5em;
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+  ul,
+  ol {
+    margin: 0 0 0.5em;
+    padding-left: 1.4em;
+  }
+  li {
+    margin-bottom: 0.2em;
+  }
+  strong {
+    font-weight: 700;
+  }
+
+  // TipTap's placeholder-free empty-state: shown via a pseudo-element on
+  // the first empty paragraph, driven by ProseMirror's own `is-empty`
+  // class plus the `data-placeholder` we set in editorProps.attributes.
+  p.is-editor-empty:first-child::before {
+    content: attr(data-placeholder);
+    float: left;
+    height: 0;
+    color: $ink-3;
+    pointer-events: none;
+  }
+
+  img {
+    display: block;
+    max-width: 100%;
+    max-height: 320px;
+    height: auto;
+    border-radius: 8px;
+    border: 1px solid $line;
+    margin: 0.4em 0;
+    object-fit: contain;
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+//Ticketboard.module.scss
+@use '../../styles/_variables' as *;
+
+// ===========================================================================
+// Ticket board — same ink/paper design system as Providers/Dashboard:
+// theme-aware neutrals from _variables, flat accent constants, hover-lift
+// cards, mono-ish instrument labels.
+//
+// Header/toolbar structure and font-scaling convention are copied 1:1 from
+// Providers.module.scss: `.ticket-board` sets one base font-size that every
+// descendant `em` value is relative to, bumped to 1rem at wide (>1800px)
+// viewports so the whole page reads larger on big monitors without any
+// individual rule changing.
+// ===========================================================================
+
+$mono:    $font-mono;
+$sans:    $font-body;
+$display: $font-display;
+$radius:  12px;
+
+$soft: 0 1px 2px rgba(20, 22, 27, 0.05);
+$lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
+
+// base font-size the board's internal `em` scale is built on — same value
+// Providers uses, so the two pages feel identical in density.
+$board-base-font: 0.8125rem;
+
+%micro {
+  font-family: $mono;
+  font-size: 0.8462em; // 0.6875rem / 0.8125rem
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.ticket-board {
+  // master scale control — every em-based font-size below responds to this
+  font-size: $board-base-font;
+
+  @media (min-width: 1800px) {
+    font-size: 1rem;
+  }
+
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  color: $ink;
+
+  // Fallback bounded height: `flex:1;min-height:0` only produces a real
+  // height when an ancestor (the app's .pg-shell) is itself a bounded-
+  // height flex container. `height: 100%` is a harmless no-op when that's
+  // already true (100% of an already-correct height is the same height),
+  // but keeps this component's own columns scrolling internally instead of
+  // silently growing with content if it's ever rendered without pg-shell.
+  height: 100%;
+}
+
+// ---- header -----------------------------------------------------------
+.ticket-board__header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 24px 32px 20px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid $line;
+  background: $card;
+
+  h1 {
+    font-family: $display;
+    font-size: 1.8462em; // 1.5rem / 0.8125rem
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: $ink;
+    line-height: 1.2;
+  }
+}
+
+.ticket-board__header-eyebrow {
+  @extend %micro;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: $signal;
+  margin-bottom: 6px;
+
+  &::before {
+    content: '';
+    width: 16px;
+    height: 2px;
+    border-radius: 2px;
+    background: $signal;
+  }
+}
+
+.ticket-board__header-sub {
+  margin-top: 4px;
+  font-size: 1.0385em; // 0.84375rem / 0.8125rem
+  color: $ink-2;
+}
+
+.ticket-board__header-meta {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 13px;
+  border-radius: 999px;
+  border: 1px solid $line;
+  background: $paper;
+  font-family: $mono;
+  font-size: 0.8846em; // 0.71875rem / 0.8125rem
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: $ink-2;
+  white-space: nowrap;
+  margin-bottom: 3px;
+}
+
+// ---- toolbar ------------------------------------------------------------
+.ticket-board__toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 32px;
+  background: $card;
+  border-bottom: 1px solid $line;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.ticket-board__search {
+  position: relative;
+  flex: 1;
+  max-width: 340px;
+  min-width: 200px;
+
+  svg {
+    position: absolute;
+    top: 50%;
+    left: 13px;
+    transform: translateY(-50%);
+    color: $ink-3;
+    pointer-events: none;
+  }
+
+  input {
+    width: 100%;
+    border: 1.5px solid $line;
+    border-radius: 10px;
+    padding: 9px 12px 9px 38px;
+    font-size: 1.0385em; // 0.84375rem / 0.8125rem
+    font-family: $sans;
+    color: $ink;
+    background: $paper;
+    transition: border-color 0.15s ease, background 0.15s ease;
+
+    &::placeholder { color: $ink-3; }
+    &:focus {
+      outline: none;
+      border-color: $signal;
+      background: $card;
+    }
+  }
+}
+
+.ticket-board__toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.ticket-board__filter-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px;
+  background: $paper;
+  border: 1px solid $line;
+  border-radius: 999px;
+}
+
+.ticket-board__toolbar-label {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px 5px 11px;
+  @extend %micro;
+  font-size: 0.7692em; // 0.625rem / 0.8125rem
+  color: $ink-3;
+  white-space: nowrap;
+}
+
+.ticket-board__filter-pill {
+  padding: 6px 13px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: $ink-2;
+  font-size: 0.9615em; // 0.78125rem / 0.8125rem
+  font-weight: 650;
+  cursor: pointer;
+  transition: all 0.15s ease;
+
+  &:hover { color: $ink; }
+
+  &--on {
+    background: $card;
+    color: $signal;
+    box-shadow: $soft;
+  }
+}
+
+.ticket-board__toolbar-divider {
+  flex-shrink: 0;
+  width: 1px;
+  height: 26px;
+  background: $line;
+}
+
+.ticket-board__add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 15px;
+  border: 1px solid $signal;
+  border-radius: 10px;
+  background: $signal;
+  color: #fff;
+  font-family: $sans;
+  font-size: 1em; // 0.8125rem / 0.8125rem (base)
+  font-weight: 650;
+  cursor: pointer;
+  box-shadow: $soft;
+  transition: background 0.16s ease, border-color 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
+
+  &:hover { background: $signal-2; border-color: $signal-2; transform: translateY(-1px); box-shadow: $lift; }
+}
+
+// ---- columns --------------------------------------------------------------
+.ticket-board__columns {
+  padding: 0 32px 28px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1em;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
+}
+.ticket-board__column {
+  height: 100%;
+  min-height: 0;
+  background: $paper;
+  border: 1px solid $line-2;
+  border-radius: $radius;
+  padding: 0.75em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6em;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+.ticket-board__column--over {
+  border-color: $signal;
+  border-style: dashed;
+  background: $wash;
+  box-shadow: inset 0 0 0 1px $signal;
+}
+.ticket-board__column--locked {
+  border-color: $danger;
+  background: $danger-wash;
+  box-shadow: inset 0 0 0 1px $danger;
+  cursor: not-allowed;
+}
+.ticket-board__column-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  padding: 0.1em 0.25em;
+}
+.ticket-board__column-dot {
+  width: 0.6em;
+  height: 0.6em;
+  border-radius: 50%;
+  flex: none;
+}
+.ticket-board__column-title {
+  font-weight: 600;
+  font-size: 0.92em;
+  letter-spacing: 0.01em;
+}
+.ticket-board__column-count {
+  margin-left: auto;
+  min-width: 1.6em;
+  height: 1.6em;
+  padding: 0 0.4em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: $ink-wash;
+  color: $ink-2;
+  font-size: 0.78em;
+  font-weight: 600;
+  font-family: $mono;
+}
+.ticket-board__column-lock {
+  color: $ink-3;
+}
+.ticket-board__column-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6em;
+  // small inset so the scrollbar doesn't sit flush against the cards
+  padding-right: 0.15em;
+  margin-right: -0.15em;
+}
+.ticket-board__column-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: $ink-3;
+  font-size: 0.82em;
+  border: 1px dashed $line;
+  border-radius: 8px;
+  padding: 1em;
+}
+
+// ---- card -----------------------------------------------------------------
+.ticket-card {
+  --priority-accent: #{$ink-3};
+  // Slightly below page body size — dense enough for a kanban card without
+  // reading oversized next to the column chrome around it.
+  font-size: 0.92em;
+  box-sizing: border-box;
+  position: relative;
+  background: $card;
+  border: 1px solid $line;
+  border-radius: 10px;
+  padding: 0.75em 0.8em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55em;
+  cursor: grab;
+  box-shadow: $shadow-2;
+  transition: transform 0.12s, box-shadow 0.12s, border-color 0.12s, opacity 0.12s;
+  &:hover {
+    transform: translateY(-1px);
+    box-shadow: $shadow-3;
+  }
+  &:active {
+    cursor: grabbing;
+  }
+}
+.ticket-card--moving {
+  opacity: 0.6;
+  cursor: default;
+}
+.ticket-card--dragging {
+  opacity: 0.35;
+  border-style: dashed;
+  border-color: $signal;
+  box-shadow: none;
+  transform: scale(0.98);
+  cursor: grabbing;
+  &:hover {
+    transform: scale(0.98);
+  }
+}
+// The floating clone rendered inside <DragOverlay> — this is the element
+// that actually follows the pointer, giving drag-and-drop its "the card
+// itself is moving" feel instead of leaving the source card static.
+// `transition: none` is deliberate and important: dnd-kit repositions this
+// element every frame via its own transform, and any CSS transition here
+// would ease/animate toward each new position instead of snapping to it
+// instantly — that's what made the card visibly lag behind the cursor.
+// No decorative rotate/scale either, since any extra transform shifts the
+// element's visual box relative to its actual (pointer-aligned) position.
+.ticket-card--overlay {
+  cursor: grabbing;
+  box-shadow: $shadow-4;
+  opacity: 0.98;
+  pointer-events: none;
+  transition: none !important;
+  transform: none !important;
+  &:hover {
+    transform: none !important;
+  }
+}
+.ticket-card--discarded {
+  opacity: 0.72;
+  .ticket-card__title {
+    text-decoration: line-through;
+    color: $ink-2;
+  }
+}
+.ticket-card__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5em;
+}
+.ticket-card__key {
+  font-family: $mono;
+  font-size: 0.85em;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: $ink-3;
+}
+.ticket-card__top-right {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+}
+.ticket-card__priority {
+  --priority-accent: #{$ink-3};
+  font-size: 0.8em;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 0.25em 0.5em;
+  border-radius: 5px;
+  color: var(--priority-accent);
+  background: color-mix(in srgb, var(--priority-accent) 12%, transparent);
+}
+.ticket-card__spin {
+  animation: spin 1.5s linear infinite;
+  color: $signal;
+}
+.ticket-card__title {
+  margin: 0;
+  font-size: 1.03em;
+  font-weight: 600;
+  line-height: 1.35;
+  color: $ink;
+}
+.ticket-card__labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35em;
+}
+.ticket-card__label {
+  font-size: 0.82em;
+  padding: 0.2em 0.5em;
+  border-radius: 5px;
+  background: $ink-wash;
+  color: $ink-2;
+}
+.ticket-card__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5em;
+  margin-top: 0.1em;
+}
+.ticket-card__resolution {
+  font-size: 0.78em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0.2em 0.5em;
+  border-radius: 5px;
+}
+.ticket-card__resolution--done {
+  color: $ok;
+  background: $ok-wash;
+}
+.ticket-card__resolution--discarded {
+  color: $rose-ink;
+  background: $rose-ink-wash;
+}
+.ticket-card__avatars {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+}
+.ticket-card__avatar {
+  width: 1.7em;
+  height: 1.7em;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72em;
+  font-weight: 700;
+  color: #fff;
+  border: 2px solid $card;
+  & + & {
+    margin-left: -0.5em;
+  }
+}
+.ticket-card__avatar--owner {
+  box-shadow: 0 0 0 1px $line;
+}
+
+// ---- loading --------------------------------------------------------------
+.ticket-board__loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6em;
+  padding: 4em;
+  color: $ink-3;
+}
+.ticket-board__spin {
+  animation: spin 1.5s linear infinite;
+  color: $signal;
+}
+
+
+@keyframes ticket-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes ticket-modal-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+// ===========================================================================
+// Modal shell — shared by the ticket detail view and the close-confirm
+// dialog. Same pattern used elsewhere in the app (see Datasets): a
+// full-viewport fixed overlay that centers its content with flexbox, and a
+// separate fade-in vs scale-in animation for the scrim and the panel.
+// Rendered inline (no portal) — position:fixed + flex centering is enough
+// as long as no ancestor sets transform/filter/perspective, which nothing
+// in this component tree does.
+// ===========================================================================
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(20, 22, 27, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  animation: ticket-fade-in 0.15s ease;
+}
+.modal {
+  width: min(980px, 100%);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  background: $card;
+  border: 1px solid $line;
+  border-radius: 18px;
+  box-shadow: 0 24px 60px -20px rgba(20, 22, 27, 0.4);
+  overflow: hidden;
+  animation: ticket-modal-in 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+  // Own base size, slightly larger than the page base at very wide
+  // viewports — a focused modal reads better a touch bigger than the
+  // dense board sitting behind it.
+  font-size: 0.8125rem;
+  @media (min-width: 1800px) {
+    font-size: 1.0625rem;
+  }
+}
+.modal--sm {
+  width: min(380px, 100%);
+}
+.modal-hdr {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5em;
+  padding: 1.1em 1.25em;
+  border-bottom: 1px solid $line;
+}
+.modal-key {
+  font-family: $mono;
+  font-size: 0.8em;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: $ink-3;
+  margin-right: 0.6em;
+}
+.modal-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid $line;
+  background: $paper;
+  color: $ink-2;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+  &:hover:not(:disabled) { border-color: $ink-3; color: $ink; }
+  &:disabled { opacity: 0.4; cursor: not-allowed; }
+}
+
+// Two-pane body used by the detail modal: scrollable main content on the
+// left, a narrow fixed-width meta rail on the right.
+.modal-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+.modal-main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 1.25em;
+  display: flex;
+  flex-direction: column;
+  gap: 1.1em;
+}
+.modal-rail {
+  flex: none;
+  width: 230px;
+  border-left: 1px solid $line;
+  background: $paper;
+  overflow-y: auto;
+  padding: 1.1em;
+  display: flex;
+  flex-direction: column;
+  gap: 1.2em;
+}
+
+// ===========================================================================
+// Detail view content (renders inside .modal-main / .modal-rail above)
+// ===========================================================================
+.ticket-detail__title {
+  margin: 0;
+  font-size: 1.15em;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.ticket-detail__desc {
+  margin: 0;
+  color: $ink-2;
+  font-size: 0.9em;
+  line-height: 1.55;
+
+  p {
+    margin: 0 0 0.6em;
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+  ul,
+  ol {
+    margin: 0 0 0.6em;
+    padding-left: 1.4em;
+  }
+  li {
+    margin-bottom: 0.25em;
+  }
+  strong {
+    font-weight: 700;
+    color: $ink;
+  }
+  img {
+    display: block;
+    max-width: 100%;
+    max-height: 420px;
+    height: auto;
+    border-radius: 8px;
+    border: 1px solid $line;
+    margin: 0.5em 0;
+    object-fit: contain;
+    cursor: zoom-in;
+  }
+}
+.ticket-detail__desc--empty {
+  margin: 0;
+  color: $ink-3;
+  font-size: 0.88em;
+  font-style: italic;
+}
+
+// ---- rail: compact people chips (auto-width, not stretched) --------------
+.ticket-detail__people {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8em;
+}
+.ticket-detail__person {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35em;
+}
+.ticket-detail__person-label {
+  font-size: 0.68em;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: $ink-3;
+}
+.ticket-detail__person-val {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45em;
+  width: fit-content;
+  max-width: 100%;
+  font-size: 0.86em;
+  font-weight: 500;
+  padding: 0.3em 0.55em 0.3em 0.3em;
+  border-radius: 999px;
+  background: $card;
+  border: 1px solid $line;
+}
+.ticket-detail__you {
+  font-size: 0.72em;
+  font-weight: 700;
+  color: $signal;
+  background: $wash;
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+}
+.ticket-detail__muted {
+  color: $ink-3;
+}
+.ticket-detail__section-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  font-size: 0.68em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: $ink-3;
+}
+
+// ---- rail: status — compact auto-width pills, not a full-width grid ------
+.ticket-detail__stepper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4em;
+}
+.ticket-detail__step {
+  --step-accent: #{$signal};
+  flex: none;
+  border: 1px solid $line;
+  background: $card;
+  color: $ink-2;
+  font-size: 0.78em;
+  font-weight: 600;
+  padding: 0.45em 0.65em;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3em;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+  &:hover:not(:disabled) {
+    border-color: var(--step-accent);
+    color: $ink;
+  }
+  &:disabled {
+    cursor: default;
+  }
+}
+.ticket-detail__step--current {
+  border-color: var(--step-accent);
+  background: color-mix(in srgb, var(--step-accent) 12%, transparent);
+  color: var(--step-accent);
+}
+
+// ---- rail: terminal actions — compact auto-width buttons, side by side ---
+.ticket-detail__terminal {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5em;
+}
+.ticket-detail__done-btn,
+.ticket-detail__discard-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4em;
+  padding: 0.5em 0.8em;
+  border-radius: 999px;
+  font-size: 0.8em;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: filter 0.12s, opacity 0.12s;
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  &:not(:disabled):hover {
+    filter: brightness(0.96);
+  }
+}
+.ticket-detail__done-btn {
+  background: $ok;
+  color: #fff;
+}
+.ticket-detail__discard-btn {
+  background: $card;
+  border-color: $danger;
+  color: $danger;
+}
+.ticket-detail__gate-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4em;
+  margin: 0;
+  font-size: 0.75em;
+  line-height: 1.4;
+  color: $ink-3;
+}
+
+// ---- main: comments ---------------------------------------------------------
+.ticket-detail__comments {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9em;
+}
+.ticket-detail__comment {
+  display: flex;
+  gap: 0.6em;
+}
+.ticket-detail__comment-body {
+  flex: 1;
+  min-width: 0;
+  background: $paper;
+  border: 1px solid $line-2;
+  border-radius: 10px;
+  padding: 0.6em 0.75em;
+}
+.ticket-detail__comment-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5em;
+  margin-bottom: 0.2em;
+}
+.ticket-detail__comment-author {
+  font-size: 0.85em;
+  font-weight: 700;
+  color: $ink;
+}
+.ticket-detail__comment-time {
+  font-size: 0.72em;
+  color: $ink-3;
+}
+// Comment text is rich-text HTML now (same editor as the description), so
+// this needs the same paragraph/list/image handling — not just plain
+// pre-wrapped text.
+.ticket-detail__comment-text {
+  font-size: 0.86em;
+  line-height: 1.5;
+  color: $ink-2;
+
+  p {
+    margin: 0 0 0.5em;
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+  ul,
+  ol {
+    margin: 0 0 0.5em;
+    padding-left: 1.3em;
+  }
+  li {
+    margin-bottom: 0.2em;
+  }
+  strong {
+    font-weight: 700;
+    color: $ink;
+  }
+  img {
+    display: block;
+    max-width: 100%;
+    max-height: 280px;
+    height: auto;
+    border-radius: 8px;
+    border: 1px solid $line;
+    margin: 0.4em 0;
+    object-fit: contain;
+  }
+}
+.ticket-detail__comment-empty {
+  font-size: 0.85em;
+  color: $ink-3;
+  font-style: italic;
+}
+
+// Stacked, not a single row: the composer is a full rich-text editor now
+// (paste/drag/insert images, same as the description), so it needs its own
+// line — a "Post comment" button sits below it, right-aligned.
+.ticket-detail__comment-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5em;
+}
+.ticket-detail__comment-submit {
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4em;
+  padding: 0.5em 0.9em;
+  border-radius: 8px;
+  border: 1px solid $signal;
+  background: $signal;
+  color: #fff;
+  font-size: 0.82em;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 0.15s;
+  &:hover:not(:disabled) {
+    background: $signal-2;
+  }
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+// ===========================================================================
+// Close-ticket confirmation — reuses .modal-overlay / .modal.modal--sm
+// above, just with its own inner content.
+// ===========================================================================
+.close-confirm-body {
+  padding: 1.5em 1.5em 1.25em;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.3em;
+}
+.close-confirm__key {
+  font-family: $mono;
+  font-size: 0.75em;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: $ink-3;
+}
+.close-confirm__title {
+  margin: 0.3em 0 0;
+  font-size: 1.15em;
+  font-weight: 700;
+  color: $ink;
+}
+.close-confirm__msg {
+  margin: 0;
+  font-size: 0.9em;
+  color: $ink-2;
+  max-width: 26em;
+}
+.close-confirm__actions {
+  display: flex;
+  gap: 0.6em;
+  width: 100%;
+  margin-top: 1em;
+}
+.close-confirm__done,
+.close-confirm__discard {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4em;
+  padding: 0.7em 0.8em;
+  border-radius: 10px;
+  font-size: 0.9em;
+  font-weight: 650;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: filter 0.12s, transform 0.12s;
+  &:hover {
+    filter: brightness(0.96);
+    transform: translateY(-1px);
+  }
+}
+.close-confirm__done {
+  background: $ok;
+  color: #fff;
+}
+.close-confirm__discard {
+  background: $card;
+  border-color: $danger;
+  color: $danger;
+}
+.close-confirm__cancel {
+  margin-top: 0.6em;
+  border: 0;
+  background: transparent;
+  color: $ink-3;
+  font-size: 0.84em;
+  cursor: pointer;
+  padding: 0.3em 0.6em;
+  &:hover {
+    color: $ink;
+  }
+}
+
+@media (max-width: 820px) {
+  .ticket-board__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
+  .ticket-board__toolbar { padding: 12px 18px; }
+  .ticket-board__columns { padding: 0 18px 20px; grid-template-columns: 1fr; }
+  .modal-overlay { padding: 12px; }
+  .modal { width: 100%; max-height: 94vh; border-radius: 14px; }
+  .modal-body { flex-direction: column; overflow-y: auto; }
+  .modal-rail { width: auto; border-left: 0; border-top: 1px solid $line; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-overlay,
+  .modal,
+  .ticket-board__spin,
+  .ticket-card__spin {
+    animation: none;
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Tickets.ts
+// ─────────────────────────────────────────────────────────────────────────
+// Ticket domain types.
+//
+// Kept in their own file rather than widening the shared ../../types barrel,
+// same approach used for CustomModelRequestWithParams in api/endpoints/models.
+// Re-export these from your central `types` index if you'd rather import them
+// alongside Model/Provider.
+// ─────────────────────────────────────────────────────────────────────────
+
+/** The four board columns. `done` is the single terminal column; whether the
+ *  work was completed or dropped is captured by `resolution`. */
+export type TicketStatus = 'todo' | 'in_progress' | 'in_review' | 'done';
+
+/** Only meaningful when status === 'done'. */
+export type TicketResolution = 'completed' | 'discarded';
+
+export type TicketPriority = 'low' | 'medium' | 'high' | 'urgent';
+
+export interface TicketUser {
+  id: string;
+  name: string;
+}
+
+export interface TicketComment {
+  id: string;
+  author: TicketUser;
+  /** Rich-text HTML from the same editor used for the description — any
+   *  pasted/dropped/inserted images are embedded inline as base64
+   *  `<img src="data:image/...">` tags. Sanitize before rendering. */
+  text: string;
+  created_at: string;
+}
+
+export interface Ticket {
+  id: string;
+  /** Human-friendly key shown on the card, e.g. "REQ-42". Server-assigned. */
+  key: string;
+  title: string;
+  /** Rich-text HTML from the description editor. Any images the user
+   *  pasted/dropped/inserted are embedded inline as base64
+   *  `<img src="data:image/...">` tags — there's no separate upload step,
+   *  hosted URL, or attachments array; image + text are one field.
+   *  Sanitize before rendering (see TicketDetailSidebar.tsx). */
+  description?: string;
+  status: TicketStatus;
+  resolution?: TicketResolution | null;
+  priority: TicketPriority;
+  /** The requester. Only this user may move the ticket into `done`. */
+  owner: TicketUser;
+  assignee?: TicketUser | null;
+  labels?: string[];
+  comments?: TicketComment[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateTicketRequest {
+  title: string;
+  description?: string;
+  priority: TicketPriority;
+  labels?: string[];
+  assignee_id?: string | null;
+}
+
+/** Partial edit of an existing ticket (title/description/priority/labels/assignee). */
+export interface UpdateTicketRequest extends Partial<CreateTicketRequest> {
+  id: string;
+}
+
+export interface AddCommentRequest {
+  ticket_id: string;
+  text: string;
+}
+
+/** Status transitions go through their own endpoint so the backend can apply
+ *  the owner-only rule for entering `done`. */
+export interface MoveTicketRequest {
+  id: string;
+  status: TicketStatus;
+  resolution?: TicketResolution | null;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # Requirements / Tickets — API Specification
 
 Every endpoint the frontend calls, with sample request and response bodies. The
@@ -65,28 +2364,31 @@ instead of asking you to change the backend to match this doc.
 
 ---
 
-## ⚠️ Important: `description` can be large
+## ⚠️ Important: `description` and comment `text` can be large
 
 Because images are embedded as base64 rather than uploaded separately and
-referenced by URL, a description with a few screenshots in it can easily run
-into the hundreds of KB to low MB — base64 encoding alone adds ~33% over the
-original file size on top of whatever images the user pastes in. Practical
-implications for the backend:
+referenced by URL, a description or comment with a few screenshots in it can
+easily run into the hundreds of KB to low MB — base64 encoding alone adds
+~33% over the original file size on top of whatever images the user pastes
+in. This applies equally to `Ticket.description` (§2/§3) and
+`TicketComment.text` (§6), since both go through the same rich-text editor
+with the same paste/drag/insert-image capability. Practical implications for
+the backend:
 
 - **Request body size limits** — make sure whatever sits in front of these
   endpoints (reverse proxy, framework body-parser, API gateway) allows a
   request body of at least a few MB, not just a typical small-JSON default.
-- **Database column type** — `description` needs a `TEXT`/`LONGTEXT` (or
-  equivalent) column, not a short `VARCHAR`.
-- **List endpoint (§1) response size** — if descriptions routinely carry
-  images, `GET /tickets` returning every ticket's *full* description
-  (images and all) could get expensive as the ticket count grows. If that
-  becomes a real problem, the cleanest fix is having §1 return a
-  truncated/stripped description (or omit it) and having the frontend fetch
-  the full one lazily when a ticket's detail view actually opens — that
-  would need a `GET /tickets/:id` endpoint added and a small frontend
-  change to call it on demand. Flag it if you want that; not needed at
-  current expected scale.
+- **Database column types** — both `description` and each comment's `text`
+  need a `TEXT`/`LONGTEXT` (or equivalent) column, not a short `VARCHAR`.
+- **List endpoint (§1) response size** — if descriptions and comments
+  routinely carry images, `GET /tickets` returning every ticket's *full*
+  description and *every* comment (images and all) could get expensive as
+  the ticket count grows. If that becomes a real problem, the cleanest fix
+  is having §1 return a truncated/stripped description and omit comments
+  entirely, with the frontend fetching the full ticket (comments included)
+  lazily when its detail view actually opens — that would need a
+  `GET /tickets/:id` endpoint added and a small frontend change to call it
+  on demand. Flag it if you want that; not needed at current expected scale.
 
 The frontend caps individual images at 2MB client-side (stricter than a
 typical raw-upload limit specifically because of the base64 size penalty),
@@ -295,12 +2597,17 @@ button beyond normal access to the detail view); `404` if not found.
 `POST /tickets/:id/comments`
 
 The comment's `author` is the authenticated caller, set server-side — the
-request body only carries the text.
+request body only carries the text. Like `description` (§2/§3), `text` is
+**rich-text HTML from the same comment editor**, not plain text — it can
+contain `<p>`, `<strong>`, `<em>`, lists, and inline `<img src="data:image/...">`
+tags for any images the commenter pasted, dragged in, or inserted. The same
+sanitize-server-side requirement and size implications from the callout at
+the top of this doc apply here too.
 
 **Request**
 
 ```json
-{ "text": "Looks good — can we also cover the Safari edge case from REQ-4?" }
+{ "text": "<p>Looks good — can we also cover the Safari edge case from <strong>REQ-4</strong>?</p>" }
 ```
 
 **Response 201** — recommended: return the **full updated ticket** (so the
@@ -322,7 +2629,7 @@ special-casing for comments):
     {
       "id": "c1",
       "author": { "id": "ava.patel", "name": "Ava Patel" },
-      "text": "Looks good — can we also cover the Safari edge case from REQ-4?",
+      "text": "<p>Looks good — can we also cover the Safari edge case from <strong>REQ-4</strong>?</p>",
       "created_at": "2026-09-11T10:20:00Z"
     }
   ],
