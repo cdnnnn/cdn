@@ -230,6 +230,34 @@ const CODE_EXECUTION_DATASET_NAMES = new Set(['Livecodebench_code_generation_lit
 // for them even under agent_benchmark.
 const AGENT_BENCHMARK_PREVIEWABLE_DATASETS = new Set(['ToolBench', 'BFCLv3', 'GAIA']);
 
+// A preview question's `metadata` is usually flat (e.g. { level: "1",
+// source: "..." }), but some datasets nest an object inside it (e.g.
+// { level: "1", annotator: { steps: "...", number_of_steps: "4", tools:
+// "..." } }). Rendered naively with String(value), a nested object would
+// show up as the useless literal "[object Object]" — this flattens any
+// such nesting into dot-notation key/value pairs (annotator.steps,
+// annotator.number_of_steps, ...) so every field is still visible as its
+// own chip. Arrays are joined into a single readable string rather than
+// flattened by index.
+function flattenMetadata(obj: Record<string, unknown>, prefix = ''): [string, string][] {
+  const entries: [string, string][] = [];
+  for (const [key, value] of Object.entries(obj)) {
+    if (value === null || value === undefined) continue;
+    const label = prefix ? `${prefix}.${key}` : key;
+    if (Array.isArray(value)) {
+      entries.push([
+        label,
+        value.map((v) => (v !== null && typeof v === 'object' ? JSON.stringify(v) : String(v))).join(', '),
+      ]);
+    } else if (typeof value === 'object') {
+      entries.push(...flattenMetadata(value as Record<string, unknown>, label));
+    } else {
+      entries.push([label, String(value)]);
+    }
+  }
+  return entries;
+}
+
 const SUGGESTED_NAMES = [
   'Q3 Model Selection',
   'Support Bot Regression',
@@ -3184,7 +3212,7 @@ export default function NewEvaluation() {
                         const expectedDocId = q?.expected?.doc_id;
                         const expectedSectionId = q?.expected?.section_id;
                         const metadataEntries =
-                          q?.metadata && typeof q.metadata === 'object' ? Object.entries(q.metadata) : [];
+                          q?.metadata && typeof q.metadata === 'object' ? flattenMetadata(q.metadata) : [];
                         const questionImages = Array.isArray(q?.input?.images) ? (q.input!.images as string[]) : [];
 
                         return (
