@@ -1,232 +1,3 @@
-//Ticketcard.tsx
-import { useDraggable } from '@dnd-kit/core';
-import { Loader2 } from 'lucide-react';
-import type { Ticket, TicketUser } from '../../types/tickets';
-import { PRIORITY_META, isOwner, initials, avatarAccent } from './ticketMeta';
-import styles from './TicketBoard.module.scss';
-
-interface TicketCardProps {
-  ticket: Ticket;
-  currentUser: TicketUser;
-  moving?: boolean;
-  onOpen: (ticket: Ticket) => void;
-  /** True only for the clone rendered inside <DragOverlay> — static, no
-   *  drag hook of its own. */
-  overlay?: boolean;
-}
-
-// Move actions live only in the detail view's status stepper and Done/Discard
-// buttons (plus drag-and-drop) — there's no per-card "⋯" quick-move menu.
-export default function TicketCard({
-  ticket,
-  currentUser,
-  moving = false,
-  onOpen,
-  overlay = false,
-}: TicketCardProps) {
-  const owner = isOwner(ticket, currentUser.id);
-  const priority = PRIORITY_META[ticket.priority];
-
-  // The real drag-and-drop wiring. Listeners go on the card's root element;
-  // dnd-kit's activation distance means an ordinary click (open the card)
-  // still fires normally — a drag only "activates" once the pointer has
-  // moved a few pixels. No live `transform` is applied here — the source
-  // card stays put (just dimmed via isDragging); the <DragOverlay> clone in
-  // TicketBoard is what actually follows the cursor.
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: ticket.id,
-    disabled: overlay || moving,
-  });
-
-  return (
-    <article
-      ref={overlay ? undefined : setNodeRef}
-      {...(overlay ? {} : attributes)}
-      {...(overlay ? {} : listeners)}
-      className={[
-        styles['ticket-card'],
-        moving ? styles['ticket-card--moving'] : '',
-        isDragging ? styles['ticket-card--dragging'] : '',
-        overlay ? styles['ticket-card--overlay'] : '',
-        ticket.resolution === 'discarded' ? styles['ticket-card--discarded'] : '',
-      ].join(' ')}
-      style={{
-        ['--priority-accent' as string]: priority.accent,
-        ...(overlay ? {} : { touchAction: 'none' }),
-      }}
-      onClick={() => !overlay && onOpen(ticket)}
-    >
-      <header className={styles['ticket-card__top']}>
-        <span className={styles['ticket-card__key']}>{ticket.key}</span>
-        <div className={styles['ticket-card__top-right']}>
-          <span
-            className={styles['ticket-card__priority']}
-            style={{ ['--priority-accent' as string]: priority.accent }}
-          >
-            {priority.label}
-          </span>
-          {moving && <Loader2 size={14} className={styles['ticket-card__spin']} />}
-        </div>
-      </header>
-
-      <h4 className={styles['ticket-card__title']}>{ticket.title}</h4>
-
-      {(ticket.labels ?? []).length > 0 && (
-        <div className={styles['ticket-card__labels']}>
-          {(ticket.labels ?? []).slice(0, 4).map((l) => (
-            <span key={l} className={styles['ticket-card__label']}>
-              {l}
-            </span>
-          ))}
-        </div>
-      )}
-
-      <footer className={styles['ticket-card__foot']}>
-        {ticket.resolution && (
-          <span
-            className={[
-              styles['ticket-card__resolution'],
-              ticket.resolution === 'discarded'
-                ? styles['ticket-card__resolution--discarded']
-                : styles['ticket-card__resolution--done'],
-            ].join(' ')}
-          >
-            {ticket.resolution === 'discarded' ? 'Discarded' : 'Completed'}
-          </span>
-        )}
-        <div className={styles['ticket-card__avatars']}>
-          {ticket.assignee && (
-            <span
-              className={styles['ticket-card__avatar']}
-              style={{ background: avatarAccent(ticket.assignee) }}
-              title={`Assignee: ${ticket.assignee.name}`}
-            >
-              {initials(ticket.assignee)}
-            </span>
-          )}
-          <span
-            className={`${styles['ticket-card__avatar']} ${styles['ticket-card__avatar--owner']}`}
-            style={{ background: avatarAccent(ticket.owner) }}
-            title={`Requester: ${ticket.owner.name}${owner ? ' (you)' : ''}`}
-          >
-            {initials(ticket.owner)}
-          </span>
-        </div>
-      </footer>
-    </article>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Ticketcolumn.tsx
-import { useDroppable } from '@dnd-kit/core';
-import { Lock } from 'lucide-react';
-import type { Ticket, TicketUser } from '../../types/tickets';
-import { canDropTicket, type ColumnMeta } from './ticketMeta';
-import TicketCard from './TicketCard';
-import styles from './TicketBoard.module.scss';
-
-interface TicketColumnProps {
-  col: ColumnMeta;
-  tickets: Ticket[];
-  currentUser: TicketUser;
-  movingIds: string[];
-  /** The ticket currently being dragged anywhere on the board (or null). */
-  activeTicket: Ticket | null;
-  onOpen: (ticket: Ticket) => void;
-}
-
-/**
- * One droppable column. Split out from TicketBoard so `useDroppable` — a
- * hook — gets its own component instance per column instead of being
- * called inside a .map() callback, which the rules of hooks don't allow.
- */
-export default function TicketColumn({
-  col,
-  tickets,
-  currentUser,
-  movingIds,
-  activeTicket,
-  onOpen,
-}: TicketColumnProps) {
-  const { setNodeRef, isOver } = useDroppable({ id: col.status });
-
-  // Would the currently-dragged ticket be rejected if dropped here? Covers
-  // both rules: the sequence rule (no skipping a column forward) and the
-  // owner-only rule (closing into Done/Discard).
-  const dropCheck = activeTicket ? canDropTicket(activeTicket, col.status, currentUser.id) : null;
-  const locked = !!activeTicket && isOver && !!dropCheck && !dropCheck.ok;
-  const active = isOver && !locked;
-
-  return (
-    <section
-      ref={setNodeRef}
-      className={[
-        styles['ticket-board__column'],
-        active ? styles['ticket-board__column--over'] : '',
-        locked ? styles['ticket-board__column--locked'] : '',
-      ].join(' ')}
-    >
-      <div className={styles['ticket-board__column-head']}>
-        <span className={styles['ticket-board__column-dot']} style={{ background: col.accent }} />
-        <span className={styles['ticket-board__column-title']}>{col.label}</span>
-        <span className={styles['ticket-board__column-count']}>{tickets.length}</span>
-        {col.status === 'done' && (
-          <Lock size={12} className={styles['ticket-board__column-lock']} aria-label="Owner-only column" />
-        )}
-      </div>
-
-      <div className={styles['ticket-board__column-body']}>
-        {tickets.map((t) => (
-          <TicketCard
-            key={t.id}
-            ticket={t}
-            currentUser={currentUser}
-            moving={movingIds.includes(t.id)}
-            onOpen={onOpen}
-          />
-        ))}
-
-        {tickets.length === 0 && (
-          <div className={styles['ticket-board__column-empty']}>
-            {locked && dropCheck?.reason ? dropCheck.reason : 'Nothing here'}
-          </div>
-        )}
-      </div>
-    </section>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 //Ticketboard.tsx
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -236,6 +7,7 @@ import {
   useSensor,
   useSensors,
   closestCenter,
+  MeasuringStrategy,
   type DragEndEvent,
   type DragStartEvent,
 } from '@dnd-kit/core';
@@ -258,6 +30,12 @@ import CreateTicketDrawer, { type TicketSubmitPayload } from './CreateTicketDraw
 import TicketDetailSidebar from './TicketDetailSidebar';
 import TicketCloseConfirm from './TicketCloseConfirm';
 import styles from './TicketBoard.module.scss';
+
+// Columns are static (no layout shift) during a drag, so measuring droppable
+// rects once at drag-start — instead of dnd-kit's default of continuously
+// re-measuring every frame while dragging — cuts out unnecessary work on
+// each pointer move and keeps the drag feeling smooth rather than janky.
+const MEASURING = { droppable: { strategy: MeasuringStrategy.BeforeDragging } };
 
 // ─────────────────────────────────────────────────────────────────────────
 // Self-contained: no props. Fetches its own tickets and its own assignee
@@ -290,13 +68,14 @@ export default function TicketBoard() {
   // DragOverlay clone and each column's locked/over highlighting.
   const [activeId, setActiveId] = useState<string | null>(null);
 
-  // The dragged card's actual on-screen size, captured the instant the drag
-  // starts. Without this, the floating overlay clone (see DragOverlay below)
-  // would render at some arbitrary fixed size that doesn't match the real
-  // card — which is exactly what made the drag "ghost" look offset from the
-  // cursor instead of feeling like the card itself. Matching the captured
-  // size keeps the overlay pixel-aligned with wherever the pointer grabbed it.
-  const [activeSize, setActiveSize] = useState<{ width: number; height: number } | null>(null);
+  // The dragged card's actual on-screen width, captured the instant the
+  // drag starts. Without this, the floating overlay clone (see DragOverlay
+  // below) sizes itself independently and can end up a different width than
+  // the real card — which is exactly what made the drag "ghost" look offset
+  // from the cursor instead of feeling like the card itself. Height isn't
+  // captured separately: same content + same styles at the same width
+  // naturally produces the same height.
+  const [activeWidth, setActiveWidth] = useState<number | undefined>(undefined);
 
   // Set whenever a move would land a ticket in the terminal column; renders
   // TicketCloseConfirm instead of moving immediately. Cleared on choose/cancel.
@@ -413,14 +192,13 @@ export default function TicketBoard() {
 
   const handleDragStart = (event: DragStartEvent) => {
     setActiveId(String(event.active.id));
-    const rect = event.active.rect.current.initial;
-    setActiveSize(rect ? { width: rect.width, height: rect.height } : null);
+    setActiveWidth(event.active.rect.current.initial?.width);
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     setActiveId(null);
-    setActiveSize(null);
+    setActiveWidth(undefined);
     if (!over) return;
     const to = over.id as TicketStatus;
     const ticket = items.find((t) => t.id === active.id);
@@ -524,11 +302,12 @@ export default function TicketBoard() {
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
+          measuring={MEASURING}
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
           onDragCancel={() => {
             setActiveId(null);
-            setActiveSize(null);
+            setActiveWidth(undefined);
           }}
         >
           <div className={styles['ticket-board__columns']}>
@@ -546,18 +325,20 @@ export default function TicketBoard() {
           </div>
 
           {/* The floating clone that actually follows the cursor — sized to
-              exactly match the source card (see handleDragStart) so it stays
-              pixel-aligned under the pointer instead of looking offset. This
-              is what makes the drag read as "the card itself is moving"
-              instead of the browser's native drag snapshot. */}
+              exactly match the source card's width (see handleDragStart) so
+              it stays pixel-aligned under the pointer instead of looking
+              offset. Rendered directly as DragOverlay's child (no extra
+              wrapper div) so there's no nested box-sizing ambiguity between
+              what dnd-kit measured and what's actually drawn. */}
           <DragOverlay dropAnimation={{ duration: 180, easing: 'cubic-bezier(0.18, 0.67, 0.6, 1.22)' }}>
             {activeTicket ? (
-              <div
-                className={styles['ticket-board__drag-overlay']}
-                style={activeSize ? { width: activeSize.width, height: activeSize.height } : undefined}
-              >
-                <TicketCard ticket={activeTicket} currentUser={currentUser} onOpen={() => {}} overlay />
-              </div>
+              <TicketCard
+                ticket={activeTicket}
+                currentUser={currentUser}
+                onOpen={() => {}}
+                overlay
+                overlayWidth={activeWidth}
+              />
             ) : null}
           </DragOverlay>
         </DndContext>
@@ -626,509 +407,133 @@ export default function TicketBoard() {
 
 
 
-
-//Ticketdetailsidebar.tsx
-import { useState } from 'react';
-import { X, Pencil, Trash2, Loader2, Lock, Check, Ban, Send, Paperclip } from 'lucide-react';
-import { useAppDispatch, useAppSelector } from '../../store/hooks';
-import { addTicketComment } from '../../store/slices/ticketsSlice';
-import type { Ticket, TicketStatus, TicketResolution, TicketUser } from '../../types/tickets';
-import ConfirmDialog from '../common/ConfirmDialog';
-import { useToast } from '../common/Toast';
-import {
-  COLUMNS,
-  PRIORITY_META,
-  isOwner,
-  isSequentialMove,
-  canDropTicket,
-  OWNER_ONLY_HINT,
-  SEQUENCE_HINT,
-  initials,
-  avatarAccent,
-} from './ticketMeta';
+//Ticketcard.tsx
+import { useDraggable } from '@dnd-kit/core';
+import { Loader2 } from 'lucide-react';
+import type { Ticket, TicketUser } from '../../types/tickets';
+import { PRIORITY_META, isOwner, initials, avatarAccent } from './ticketMeta';
 import styles from './TicketBoard.module.scss';
 
-interface TicketDetailSidebarProps {
+interface TicketCardProps {
   ticket: Ticket;
   currentUser: TicketUser;
   moving?: boolean;
-  deleting?: boolean;
-  onClose: () => void;
-  onMove: (id: string, status: TicketStatus, resolution?: TicketResolution | null) => void;
-  onEdit: (ticket: Ticket) => void;
-  onDelete: (id: string) => void;
+  onOpen: (ticket: Ticket) => void;
+  /** True only for the clone rendered inside <DragOverlay> — static, no
+   *  drag hook of its own. */
+  overlay?: boolean;
+  /** Overlay mode only: the exact width (px) of the card that's actually
+   *  being dragged, captured at drag-start. Without this the clone sizes
+   *  itself independently and can end up narrower/wider than the real
+   *  card, which is what makes a dragged card look offset from the
+   *  cursor instead of feeling like the card itself is being carried. */
+  overlayWidth?: number;
 }
 
-const formatTime = (iso: string) => {
-  try {
-    return new Date(iso).toLocaleString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    });
-  } catch {
-    return iso;
-  }
-};
-
-// Centered modal, same shell as the rest of the app's dialogs (see
-// .modal-overlay / .modal in TicketBoard.module.scss). Rendered inline —
-// no portal — position:fixed + flex-centering is sufficient here.
-export default function TicketDetailSidebar({
+// Move actions live only in the detail view's status stepper and Done/Discard
+// buttons (plus drag-and-drop) — there's no per-card "⋯" quick-move menu.
+export default function TicketCard({
   ticket,
   currentUser,
   moving = false,
-  deleting = false,
-  onClose,
-  onMove,
-  onEdit,
-  onDelete,
-}: TicketDetailSidebarProps) {
-  const dispatch = useAppDispatch();
-  const toast = useToast();
-  const commentingId = useAppSelector((s) => s.tickets.commentingId);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [commentDraft, setCommentDraft] = useState('');
-
+  onOpen,
+  overlay = false,
+  overlayWidth,
+}: TicketCardProps) {
   const owner = isOwner(ticket, currentUser.id);
   const priority = PRIORITY_META[ticket.priority];
-  const posting = commentingId === ticket.id;
-  const comments = ticket.comments ?? [];
 
-  const submitComment = () => {
-    const text = commentDraft.trim();
-    if (!text) return;
-    dispatch(addTicketComment({ ticket_id: ticket.id, text }))
-      .unwrap()
-      .then(() => setCommentDraft(''))
-      .catch((e) => toast.error(typeof e === 'string' ? e : 'Could not post comment'));
-  };
+  // The real drag-and-drop wiring. Listeners go on the card's root element;
+  // dnd-kit's activation distance means an ordinary click (open the card)
+  // still fires normally — a drag only "activates" once the pointer has
+  // moved a few pixels. No live `transform` is applied here — the source
+  // card stays put (just dimmed via isDragging); the <DragOverlay> clone in
+  // TicketBoard is what actually follows the cursor.
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: ticket.id,
+    disabled: overlay || moving,
+  });
 
   return (
-    <div className={styles['modal-overlay']} onClick={onClose}>
-      <div
-        className={styles['modal']}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Ticket detail"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className={styles['modal-hdr']}>
-          <div>
-            <span className={styles['modal-key']}>{ticket.key}</span>
-            <span
-              className={styles['ticket-card__priority']}
-              style={{ ['--priority-accent' as string]: priority.accent }}
-            >
-              {priority.label}
-            </span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4em' }}>
-            <button
-              type="button"
-              className={styles['modal-close']}
-              onClick={() => onEdit(ticket)}
-              aria-label="Edit ticket"
-              title="Edit"
-            >
-              <Pencil size={14} />
-            </button>
-            <button
-              type="button"
-              className={styles['modal-close']}
-              onClick={() => setConfirmDelete(true)}
-              disabled={deleting}
-              aria-label="Delete ticket"
-              title="Delete"
-            >
-              {deleting ? <Loader2 size={14} className={styles['ticket-board__spin']} /> : <Trash2 size={14} />}
-            </button>
-            <button className={styles['modal-close']} onClick={onClose} aria-label="Close">
-              <X size={16} />
-            </button>
-          </div>
-        </header>
-
-        <div className={styles['modal-body']}>
-          {/* ---- main: title, description, attachments, comments ---- */}
-          <div className={styles['modal-main']}>
-            <h3 className={styles['ticket-detail__title']}>{ticket.title}</h3>
-
-            {ticket.description ? (
-              <p className={styles['ticket-detail__desc']}>{ticket.description}</p>
-            ) : (
-              <p className={styles['ticket-detail__desc--empty']}>No description.</p>
-            )}
-
-            {(ticket.labels ?? []).length > 0 && (
-              <div className={styles['ticket-card__labels']}>
-                {(ticket.labels ?? []).map((l) => (
-                  <span key={l} className={styles['ticket-card__label']}>
-                    {l}
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {(ticket.attachments ?? []).length > 0 && (
-              <div>
-                <div className={styles['ticket-detail__section-label']}>
-                  <Paperclip size={11} />
-                  Attachments ({ticket.attachments!.length})
-                </div>
-                <div className={styles['ticket-detail__attachments']} style={{ marginTop: '0.6em' }}>
-                  {ticket.attachments!.map((a) => (
-                    <a
-                      key={a.id}
-                      className={styles['ticket-detail__attachment']}
-                      href={a.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      title={a.name}
-                    >
-                      <img src={a.url} alt={a.name} />
-                    </a>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div>
-              <div className={styles['ticket-detail__section-label']}>
-                Comments {comments.length > 0 && `(${comments.length})`}
-              </div>
-              <div className={styles['ticket-detail__comments']} style={{ marginTop: '0.7em' }}>
-                {comments.length === 0 && (
-                  <p className={styles['ticket-detail__comment-empty']}>
-                    No comments yet — start the discussion.
-                  </p>
-                )}
-                {comments.map((c) => (
-                  <div key={c.id} className={styles['ticket-detail__comment']}>
-                    <span
-                      className={styles['ticket-card__avatar']}
-                      style={{ background: avatarAccent(c.author) }}
-                    >
-                      {initials(c.author)}
-                    </span>
-                    <div className={styles['ticket-detail__comment-body']}>
-                      <div className={styles['ticket-detail__comment-head']}>
-                        <span className={styles['ticket-detail__comment-author']}>
-                          {c.author.name}
-                        </span>
-                        <span className={styles['ticket-detail__comment-time']}>
-                          {formatTime(c.created_at)}
-                        </span>
-                      </div>
-                      <p className={styles['ticket-detail__comment-text']}>{c.text}</p>
-                    </div>
-                  </div>
-                ))}
-
-                <div className={styles['ticket-detail__comment-form']}>
-                  <textarea
-                    className={styles['ticket-detail__comment-input']}
-                    value={commentDraft}
-                    onChange={(e) => setCommentDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                        e.preventDefault();
-                        submitComment();
-                      }
-                    }}
-                    placeholder="Add a comment… (⌘/Ctrl + Enter to send)"
-                    disabled={posting}
-                  />
-                  <button
-                    type="button"
-                    className={styles['ticket-detail__comment-send']}
-                    onClick={submitComment}
-                    disabled={posting || !commentDraft.trim()}
-                    aria-label="Post comment"
-                  >
-                    {posting ? (
-                      <Loader2 size={15} className={styles['ticket-board__spin']} />
-                    ) : (
-                      <Send size={15} />
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* ---- rail: requester/assignee, status, terminal actions ---- */}
-          <div className={styles['modal-rail']}>
-            <div className={styles['ticket-detail__people']}>
-              <div className={styles['ticket-detail__person']}>
-                <span className={styles['ticket-detail__person-label']}>Requester</span>
-                <div className={styles['ticket-detail__person-val']}>
-                  <span
-                    className={styles['ticket-card__avatar']}
-                    style={{ background: avatarAccent(ticket.owner) }}
-                  >
-                    {initials(ticket.owner)}
-                  </span>
-                  {ticket.owner.name}
-                  {owner && <span className={styles['ticket-detail__you']}>you</span>}
-                </div>
-              </div>
-              <div className={styles['ticket-detail__person']}>
-                <span className={styles['ticket-detail__person-label']}>Assignee</span>
-                {ticket.assignee ? (
-                  <div className={styles['ticket-detail__person-val']}>
-                    <span
-                      className={styles['ticket-card__avatar']}
-                      style={{ background: avatarAccent(ticket.assignee) }}
-                    >
-                      {initials(ticket.assignee)}
-                    </span>
-                    {ticket.assignee.name}
-                  </div>
-                ) : (
-                  <span className={styles['ticket-detail__muted']}>Unassigned</span>
-                )}
-              </div>
-            </div>
-
-            <div>
-              <div className={styles['ticket-detail__section-label']}>
-                Status
-                {moving && <Loader2 size={13} className={styles['ticket-board__spin']} />}
-              </div>
-              <div className={styles['ticket-detail__stepper']} style={{ marginTop: '0.5em' }}>
-                {COLUMNS.filter((c) => c.status !== 'done').map((c) => {
-                  const isCurrent = ticket.status === c.status;
-                  const skipsAhead = !isCurrent && !isSequentialMove(ticket.status, c.status);
-                  return (
-                    <button
-                      key={c.status}
-                      type="button"
-                      className={[
-                        styles['ticket-detail__step'],
-                        isCurrent ? styles['ticket-detail__step--current'] : '',
-                      ].join(' ')}
-                      style={{ ['--step-accent' as string]: c.accent }}
-                      disabled={isCurrent || moving || skipsAhead}
-                      title={skipsAhead ? SEQUENCE_HINT : undefined}
-                      onClick={() => onMove(ticket.id, c.status)}
-                    >
-                      {isCurrent && <Check size={13} />}
-                      {c.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div>
-              <div className={styles['ticket-detail__section-label']}>Close ticket</div>
-              <div className={styles['ticket-detail__terminal']} style={{ marginTop: '0.5em' }}>
-                {(() => {
-                  const closeCheck = canDropTicket(ticket, 'done', currentUser.id);
-                  const alreadyDone = ticket.status === 'done' && ticket.resolution === 'completed';
-                  const alreadyDiscarded = ticket.status === 'done' && ticket.resolution === 'discarded';
-                  return (
-                    <>
-                      <button
-                        type="button"
-                        className={styles['ticket-detail__done-btn']}
-                        disabled={!closeCheck.ok || moving || alreadyDone}
-                        title={closeCheck.ok ? undefined : closeCheck.reason}
-                        onClick={() => onMove(ticket.id, 'done', 'completed')}
-                      >
-                        {owner ? <Check size={14} /> : <Lock size={14} />}
-                        Mark Done
-                      </button>
-                      <button
-                        type="button"
-                        className={styles['ticket-detail__discard-btn']}
-                        disabled={!closeCheck.ok || moving || alreadyDiscarded}
-                        title={closeCheck.ok ? undefined : closeCheck.reason}
-                        onClick={() => onMove(ticket.id, 'done', 'discarded')}
-                      >
-                        {owner ? <Ban size={14} /> : <Lock size={14} />}
-                        Discard
-                      </button>
-                    </>
-                  );
-                })()}
-              </div>
-              {!owner && (
-                <p className={styles['ticket-detail__gate-note']} style={{ marginTop: '0.5em' }}>
-                  <Lock size={12} /> {OWNER_ONLY_HINT}
-                </p>
-              )}
-              {owner && ticket.status !== 'in_review' && ticket.status !== 'done' && (
-                <p className={styles['ticket-detail__gate-note']} style={{ marginTop: '0.5em' }}>
-                  {SEQUENCE_HINT}
-                </p>
-              )}
-            </div>
-          </div>
+    <article
+      ref={overlay ? undefined : setNodeRef}
+      {...(overlay ? {} : attributes)}
+      {...(overlay ? {} : listeners)}
+      className={[
+        styles['ticket-card'],
+        moving ? styles['ticket-card--moving'] : '',
+        isDragging ? styles['ticket-card--dragging'] : '',
+        overlay ? styles['ticket-card--overlay'] : '',
+        ticket.resolution === 'discarded' ? styles['ticket-card--discarded'] : '',
+      ].join(' ')}
+      style={{
+        ['--priority-accent' as string]: priority.accent,
+        ...(overlay
+          ? { width: overlayWidth, flexShrink: 0 }
+          : { touchAction: 'none' }),
+      }}
+      onClick={() => !overlay && onOpen(ticket)}
+    >
+      <header className={styles['ticket-card__top']}>
+        <span className={styles['ticket-card__key']}>{ticket.key}</span>
+        <div className={styles['ticket-card__top-right']}>
+          <span
+            className={styles['ticket-card__priority']}
+            style={{ ['--priority-accent' as string]: priority.accent }}
+          >
+            {priority.label}
+          </span>
+          {moving && <Loader2 size={14} className={styles['ticket-card__spin']} />}
         </div>
+      </header>
 
-        {confirmDelete && (
-          <ConfirmDialog
-            title="Delete this ticket?"
-            message={`"${ticket.title}" will be permanently removed. This can't be undone.`}
-            confirmLabel="Delete"
-            tone="danger"
-            loading={deleting}
-            onCancel={() => setConfirmDelete(false)}
-            onConfirm={() => onDelete(ticket.id)}
-          />
+      <h4 className={styles['ticket-card__title']}>{ticket.title}</h4>
+
+      {(ticket.labels ?? []).length > 0 && (
+        <div className={styles['ticket-card__labels']}>
+          {(ticket.labels ?? []).slice(0, 4).map((l) => (
+            <span key={l} className={styles['ticket-card__label']}>
+              {l}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <footer className={styles['ticket-card__foot']}>
+        {ticket.resolution && (
+          <span
+            className={[
+              styles['ticket-card__resolution'],
+              ticket.resolution === 'discarded'
+                ? styles['ticket-card__resolution--discarded']
+                : styles['ticket-card__resolution--done'],
+            ].join(' ')}
+          >
+            {ticket.resolution === 'discarded' ? 'Discarded' : 'Completed'}
+          </span>
         )}
-      </div>
-    </div>
+        <div className={styles['ticket-card__avatars']}>
+          {ticket.assignee && (
+            <span
+              className={styles['ticket-card__avatar']}
+              style={{ background: avatarAccent(ticket.assignee) }}
+              title={`Assignee: ${ticket.assignee.name}`}
+            >
+              {initials(ticket.assignee)}
+            </span>
+          )}
+          <span
+            className={`${styles['ticket-card__avatar']} ${styles['ticket-card__avatar--owner']}`}
+            style={{ background: avatarAccent(ticket.owner) }}
+            title={`Requester: ${ticket.owner.name}${owner ? ' (you)' : ''}`}
+          >
+            {initials(ticket.owner)}
+          </span>
+        </div>
+      </footer>
+    </article>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Ticketmeta.ts
-import type { TicketStatus, TicketPriority, Ticket, TicketUser } from '../../types/tickets';
-
-// ─────────────────────────────────────────────────────────────────────────
-// Adapter from the app's existing SsoLoginResult (state.auth.user, from
-// authSlice.ts) to this feature's minimal TicketUser shape ({ id, name }).
-//
-// ⚠️ Confirm `.id` and `.name` are SsoLoginResult's actual field names —
-// that's the only assumption this file makes about your auth internals.
-// If they're named differently, this is the one line to change; nothing
-// downstream (the owner check, avatar initials, comment authorship) ever
-// touches SsoLoginResult directly, only this function's return value.
-// ─────────────────────────────────────────────────────────────────────────
-export function toTicketUser(sso: { id: string; name: string } | null | undefined): TicketUser | null {
-  if (!sso) return null;
-  return { id: sso.id, name: sso.name };
-}
-
-export interface ColumnMeta {
-  status: TicketStatus;
-  label: string;
-  /** Accent hex used for the column dot + card left-border. */
-  accent: string;
-}
-
-// Order here is the left-to-right order on the board.
-export const COLUMNS: ColumnMeta[] = [
-  { status: 'todo', label: 'To Do', accent: '#8A909B' },
-  { status: 'in_progress', label: 'In Progress', accent: '#2B2BF5' },
-  { status: 'in_review', label: 'In Review', accent: '#E08600' },
-  { status: 'done', label: 'Done / Discard', accent: '#0FA968' },
-];
-
-export const PRIORITY_META: Record<TicketPriority, { label: string; accent: string }> = {
-  low: { label: 'Low', accent: '#8A909B' },
-  medium: { label: 'Medium', accent: '#0369A1' },
-  high: { label: 'High', accent: '#E08600' },
-  urgent: { label: 'Urgent', accent: '#DC2626' },
-};
-
-// ─────────────────────────────────────────────────────────────────────────
-// Permission model.
-//
-// Requirement: only the requester (ticket owner) may move a ticket into the
-// terminal `done` column. Any user may move it among todo / in_progress /
-// in_review. `done` covers both "completed" and "discarded" resolutions —
-// both are owner-only since both close the ticket.
-//
-// This is a UX gate only. The /tickets/:id/status endpoint MUST re-check
-// ownership server-side; never rely on the disabled button alone.
-// ─────────────────────────────────────────────────────────────────────────
-
-export const isOwner = (ticket: Ticket, currentUserId: string) =>
-  ticket.owner?.id === currentUserId;
-
-/** Can `currentUserId` move `ticket` into `target`? (owner rule only — see
- *  `canDropTicket` for the combined owner + sequence check used everywhere
- *  a move is actually attempted.) */
-export const canTransition = (
-  ticket: Ticket,
-  target: TicketStatus,
-  currentUserId: string
-): boolean => {
-  if (target === 'done') return isOwner(ticket, currentUserId);
-  return true;
-};
-
-export const OWNER_ONLY_HINT = 'Only the requester can close this ticket.';
-
-// ─────────────────────────────────────────────────────────────────────────
-// Sequence rule: a ticket may only advance one column at a time — a
-// forward move (e.g. To Do → In Review, or In Progress → Done) that skips
-// over an intermediate column is not allowed. Moving *backward* to any
-// earlier column, from anywhere, is always allowed — e.g. Done → To Do,
-// In Review → To Do, In Progress → To Do are all fine.
-// ─────────────────────────────────────────────────────────────────────────
-
-const COLUMN_ORDER: TicketStatus[] = ['todo', 'in_progress', 'in_review', 'done'];
-
-export const isSequentialMove = (from: TicketStatus, to: TicketStatus): boolean => {
-  const fromIndex = COLUMN_ORDER.indexOf(from);
-  const toIndex = COLUMN_ORDER.indexOf(to);
-  if (toIndex <= fromIndex) return true; // backward (or no-op) — always fine
-  return toIndex === fromIndex + 1; // forward — only one step at a time
-};
-
-export const SEQUENCE_HINT = "Move one step at a time — you can't skip a column.";
-
-export interface DropCheck {
-  ok: boolean;
-  reason?: string;
-}
-
-/** The single source of truth for "can this ticket move to this column right
- *  now" — combines the sequence rule and the owner-only-close rule. Use this
- *  (not `canTransition`/`isSequentialMove` individually) at every point a
- *  move is attempted or a drop target's valid/locked state is computed. */
-export const canDropTicket = (
-  ticket: Ticket,
-  target: TicketStatus,
-  currentUserId: string
-): DropCheck => {
-  if (!isSequentialMove(ticket.status, target)) {
-    return { ok: false, reason: SEQUENCE_HINT };
-  }
-  if (!canTransition(ticket, target, currentUserId)) {
-    return { ok: false, reason: OWNER_ONLY_HINT };
-  }
-  return { ok: true };
-};
-
-/** Two-letter initials for an avatar chip. */
-export const initials = (user?: TicketUser | null) => {
-  if (!user?.name) return '?';
-  const parts = user.name.trim().split(/\s+/);
-  return (parts[0][0] + (parts[1]?.[0] ?? '')).toUpperCase();
-};
-
-/** Deterministic accent for an avatar, derived from the user id. */
-export const avatarAccent = (user?: TicketUser | null) => {
-  const palette = ['#2B2BF5', '#0FA968', '#E08600', '#DC2626', '#0369A1', '#DB2777'];
-  if (!user?.id) return palette[0];
-  let h = 0;
-  for (let i = 0; i < user.id.length; i++) h = (h * 31 + user.id.charCodeAt(i)) >>> 0;
-  return palette[h % palette.length];
-};
-
 
 
 
@@ -1493,6 +898,7 @@ $board-base-font: 0.8125rem;
   // Slightly below page body size — dense enough for a kanban card without
   // reading oversized next to the column chrome around it.
   font-size: 0.92em;
+  box-sizing: border-box;
   position: relative;
   background: $card;
   border: 1px solid $line;
@@ -1530,18 +936,21 @@ $board-base-font: 0.8125rem;
 // The floating clone rendered inside <DragOverlay> — this is the element
 // that actually follows the pointer, giving drag-and-drop its "the card
 // itself is moving" feel instead of leaving the source card static.
-.ticket-board__drag-overlay {
-  width: 300px;
-  cursor: grabbing;
-}
+// `transition: none` is deliberate and important: dnd-kit repositions this
+// element every frame via its own transform, and any CSS transition here
+// would ease/animate toward each new position instead of snapping to it
+// instantly — that's what made the card visibly lag behind the cursor.
+// No decorative rotate/scale either, since any extra transform shifts the
+// element's visual box relative to its actual (pointer-aligned) position.
 .ticket-card--overlay {
   cursor: grabbing;
   box-shadow: $shadow-4;
-  transform: rotate(-2deg) scale(1.02);
   opacity: 0.98;
   pointer-events: none;
+  transition: none !important;
+  transform: none !important;
   &:hover {
-    transform: rotate(-2deg) scale(1.02);
+    transform: none !important;
   }
 }
 .ticket-card--discarded {
