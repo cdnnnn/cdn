@@ -1,1782 +1,1162 @@
-//Ticketcard.tsx
-import { useDraggable } from '@dnd-kit/core';
-import { Loader2 } from 'lucide-react';
-import type { Ticket, TicketUser } from '../../types/tickets';
-import { PRIORITY_META, isOwner, initials, avatarAccent } from './ticketMeta';
-import styles from './TicketBoard.module.scss';
-
-interface TicketCardProps {
-  ticket: Ticket;
-  currentUser: TicketUser;
-  moving?: boolean;
-  onOpen: (ticket: Ticket) => void;
-  /** True only for the clone rendered inside <DragOverlay> — static, no
-   *  drag hook of its own. */
-  overlay?: boolean;
-  /** Overlay mode only: the exact width (px) of the card that's actually
-   *  being dragged, captured at drag-start. Without this the clone sizes
-   *  itself independently and can end up narrower/wider than the real
-   *  card, which is what makes a dragged card look offset from the
-   *  cursor instead of feeling like the card itself is being carried. */
-  overlayWidth?: number;
-}
-
-// Move actions live only in the detail view's status stepper and Done/Discard
-// buttons (plus drag-and-drop) — there's no per-card "⋯" quick-move menu.
-export default function TicketCard({
-  ticket,
-  currentUser,
-  moving = false,
-  onOpen,
-  overlay = false,
-  overlayWidth,
-}: TicketCardProps) {
-  const owner = isOwner(ticket, currentUser.id);
-  const priority = PRIORITY_META[ticket.priority];
-
-  // The real drag-and-drop wiring. Listeners go on the card's root element;
-  // dnd-kit's activation distance means an ordinary click (open the card)
-  // still fires normally — a drag only "activates" once the pointer has
-  // moved a few pixels. No live `transform` is applied here — the source
-  // card stays put (just dimmed via isDragging); the <DragOverlay> clone in
-  // TicketBoard is what actually follows the cursor.
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: ticket.id,
-    disabled: overlay || moving,
-  });
-
-  return (
-    <article
-      ref={overlay ? undefined : setNodeRef}
-      {...(overlay ? {} : attributes)}
-      {...(overlay ? {} : listeners)}
-      className={[
-        styles['ticket-card'],
-        moving ? styles['ticket-card--moving'] : '',
-        isDragging ? styles['ticket-card--dragging'] : '',
-        overlay ? styles['ticket-card--overlay'] : '',
-        ticket.resolution === 'discarded' ? styles['ticket-card--discarded'] : '',
-      ].join(' ')}
-      style={{
-        ['--priority-accent' as string]: priority.accent,
-        ...(overlay
-          ? { width: overlayWidth, flexShrink: 0 }
-          : { touchAction: 'none' }),
-      }}
-      onClick={() => !overlay && onOpen(ticket)}
-    >
-      <header className={styles['ticket-card__top']}>
-        <span className={styles['ticket-card__key']}>{ticket.key}</span>
-        <div className={styles['ticket-card__top-right']}>
-          <span
-            className={styles['ticket-card__priority']}
-            style={{ ['--priority-accent' as string]: priority.accent }}
-          >
-            {priority.label}
-          </span>
-          {moving && <Loader2 size={14} className={styles['ticket-card__spin']} />}
-        </div>
-      </header>
-
-      <h4 className={styles['ticket-card__title']}>{ticket.title}</h4>
-
-      {(ticket.labels ?? []).length > 0 && (
-        <div className={styles['ticket-card__labels']}>
-          {(ticket.labels ?? []).slice(0, 4).map((l) => (
-            <span key={l} className={styles['ticket-card__label']}>
-              {l}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {ticket.resolution && (
-        <footer className={styles['ticket-card__foot']}>
-          <span
-            className={[
-              styles['ticket-card__resolution'],
-              ticket.resolution === 'discarded'
-                ? styles['ticket-card__resolution--discarded']
-                : styles['ticket-card__resolution--done'],
-            ].join(' ')}
-          >
-            {ticket.resolution === 'discarded' ? 'Discarded' : 'Completed'}
-          </span>
-        </footer>
-      )}
-
-      <div className={styles['ticket-card__people']}>
-        <div
-          className={styles['ticket-card__person']}
-          title={ticket.assignee ? `Assignee: ${ticket.assignee.name}` : 'Unassigned'}
-        >
-          {ticket.assignee ? (
-            <span
-              className={styles['ticket-card__person-avatar']}
-              style={{ background: avatarAccent(ticket.assignee) }}
-            >
-              {initials(ticket.assignee)}
-            </span>
-          ) : (
-            <span className={styles['ticket-card__person-avatar--empty']} aria-hidden="true" />
-          )}
-          <span className={styles['ticket-card__person-name']}>
-            {ticket.assignee ? ticket.assignee.name : 'Unassigned'}
-          </span>
-          <span
-            className={[
-              styles['ticket-role-badge'],
-              ticket.assignee ? styles['ticket-role-badge--assignee'] : styles['ticket-role-badge--unassigned'],
-            ].join(' ')}
-          >
-            {ticket.assignee ? 'Assignee' : 'Unassigned'}
-          </span>
-        </div>
-        <div
-          className={styles['ticket-card__person']}
-          title={`Reporter: ${ticket.owner.name}${owner ? ' (you)' : ''}`}
-        >
-          <span
-            className={`${styles['ticket-card__person-avatar']} ${styles['ticket-card__person-avatar--owner']}`}
-            style={{ background: avatarAccent(ticket.owner) }}
-          >
-            {initials(ticket.owner)}
-          </span>
-          <span className={styles['ticket-card__person-name']}>
-            {ticket.owner.name}
-            {owner && <span className={styles['ticket-card__you']}>you</span>}
-          </span>
-          <span className={`${styles['ticket-role-badge']} ${styles['ticket-role-badge--reporter']}`}>
-            Reporter
-          </span>
-        </div>
-      </div>
-    </article>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Ticketdetailsidebar.tsx
-import { useState } from 'react';
-import DOMPurify from 'dompurify';
-import { X, Pencil, Trash2, Loader2, Lock, Check, Ban } from 'lucide-react';
-import { useAppDispatch, useAppSelector } from '../../store/hooks';
-import { addTicketComment } from '../../store/slices/ticketsSlice';
-import type { Ticket, TicketStatus, TicketResolution, TicketUser } from '../../types/tickets';
-import ConfirmDialog from '../common/ConfirmDialog';
-import { useToast } from '../common/Toast';
-import TicketDescriptionEditor from './TicketDescriptionEditor';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  COLUMNS,
-  PRIORITY_META,
-  isOwner,
-  isSequentialMove,
-  canDropTicket,
-  isEmptyHtml,
-  OWNER_ONLY_HINT,
-  OWNER_ONLY_DELETE_HINT,
-  SEQUENCE_HINT,
-  initials,
-  avatarAccent,
-} from './ticketMeta';
-import styles from './TicketBoard.module.scss';
+  AlertCircle, ArrowRight, Check, CheckCircle2, ChevronRight, Code2, Cpu, Database,
+  ListChecks, Loader2, MessageSquare, Plus, Repeat, ScrollText, Search, SlidersHorizontal,
+  Sparkles, Target, TextSearch, Wrench, X, XCircle, Zap,
+} from 'lucide-react';
+import styles from './CreateMetric.module.scss';
+import { useToast } from './useToast';
+import CustomSelect from './CustomSelect';
+import { useAppDispatch, useAppSelector } from '../../hooks/redux';
+import { fetchProviders } from '../../store/slices/providersSlice';
+import {
+  metricsApi, AgentSubcategory, BuiltinCheckDef, EvalType, MetricType, PromptTemplate,
+  ModelSummary, DatasetSummary, PreviewQuestion, ValidateMetricData, RuleDef,
+} from '../../api/endpoints/metrics';
 
-interface TicketDetailSidebarProps {
-  /** Looked up live from the store below — never a cached snapshot, so this
-   *  view can't go stale after a comment/move/edit the way passing the
-   *  whole `Ticket` object down as a static prop could. */
-  ticketId: string;
-  currentUser: TicketUser;
-  moving?: boolean;
-  deleting?: boolean;
-  onClose: () => void;
-  onMove: (id: string, status: TicketStatus, resolution?: TicketResolution | null) => void;
-  onEdit: (ticket: Ticket) => void;
-  onDelete: (id: string) => void;
+interface CreateMetricProps {
+  onCancel: () => void;
+  onSaved: (id: string) => void;
 }
 
-const formatTime = (iso: string) => {
-  try {
-    return new Date(iso).toLocaleString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    });
-  } catch {
-    return iso;
-  }
+// ---- static config -----------------------------------------------------
+const EVAL_TYPE_CARDS: { key: EvalType; label: string; desc: string; icon: JSX.Element }[] = [
+  { key: 'model', label: 'Model', desc: 'Score a model\u2019s output against an expected answer.', icon: <Cpu size={20} /> },
+  { key: 'agent', label: 'Agent', desc: 'Evaluate tool calls and task completion for agents.', icon: <Zap size={20} /> },
+  { key: 'rag', label: 'RAG', desc: 'Check answers grounded in retrieved context.', icon: <ScrollText size={20} /> },
+];
+
+const METRIC_TYPE_CARDS: { key: MetricType; label: string; desc: string; icon: JSX.Element }[] = [
+  { key: 'visual', label: 'Visual Builder', desc: 'Field comparisons joined with AND/OR logic. No code.', icon: <SlidersHorizontal size={18} /> },
+  { key: 'prompt', label: 'Prompt Builder', desc: 'An LLM judge scored with a prompt template.', icon: <Sparkles size={18} /> },
+  { key: 'code', label: 'Code Editor', desc: 'A custom Python scoring function.', icon: <Code2 size={18} /> },
+  { key: 'simple', label: 'Simple', desc: 'A built-in pass/fail check — no prompt or code needed.', icon: <Target size={18} /> },
+];
+
+const FIELDS_BY_EVAL_TYPE: Record<EvalType, string[]> = {
+  model: ['input', 'actual_output', 'expected_output'],
+  agent: ['input', 'actual_output', 'expected_output', 'tools_called', 'expected_tools'],
+  rag: ['input', 'actual_output', 'expected_output', 'tools_called', 'expected_tools'],
 };
 
-// Centered modal, same shell as the rest of the app's dialogs (see
-// .modal-overlay / .modal in TicketBoard.module.scss). Rendered inline —
-// no portal — position:fixed + flex-centering is sufficient here.
-export default function TicketDetailSidebar({
-  ticketId,
-  currentUser,
-  moving = false,
-  deleting = false,
-  onClose,
-  onMove,
-  onEdit,
-  onDelete,
-}: TicketDetailSidebarProps) {
+const OPERATORS = [
+  { value: 'contains', label: 'contains' },
+  { value: 'not_contains', label: 'not contains' },
+  { value: 'equals', label: 'equals' },
+  { value: 'starts_with', label: 'starts with' },
+  { value: 'ends_with', label: 'ends with' },
+  { value: 'greater_than', label: 'greater than' },
+  { value: 'less_than', label: 'less than' },
+  { value: 'regex_match', label: 'regex match' },
+];
+
+const OP_SYMBOL: Record<string, string> = {
+  contains: 'contains', not_contains: 'does not contain', equals: '==', starts_with: 'starts with',
+  ends_with: 'ends with', greater_than: '>', less_than: '<', regex_match: 'matches',
+};
+
+const METRIC_TYPE_TO_API: Record<MetricType, string> = {
+  visual: 'condition', prompt: 'prompt', code: 'code', simple: 'simple',
+};
+
+const EVAL_TYPE_TO_CATEGORY: Record<EvalType, string> = { model: 'llm', agent: 'agent', rag: 'rag' };
+
+// Agent-only: which part of the agent's behavior this metric evaluates —
+// scopes both the Prompt Builder templates and the Code Editor starter
+// code via a `subcategory` query param.
+const AGENT_SUBCATEGORY_CARDS: { key: AgentSubcategory; label: string; desc: string; icon: JSX.Element }[] = [
+  { key: 'tools', label: 'Tool Evaluation', desc: 'Score which tools the agent called and how.', icon: <Wrench size={18} /> },
+  { key: 'answer', label: 'Answer Evaluation', desc: 'Score the agent\u2019s final response.', icon: <MessageSquare size={18} /> },
+];
+
+// ---- Simple metric type — Built-in Check icons --------------------------
+// Built-in checks themselves now come from the API (GET /metrics/templates
+// -> builtin_checks), since their id/params can vary server-side. Icons
+// aren't part of that response, so map known ids to one and fall back to
+// a generic icon for anything unrecognized.
+const BUILTIN_CHECK_ICONS: Record<string, JSX.Element> = {
+  contains_keywords: <TextSearch size={18} />,
+  exact_match: <Target size={18} />,
+  agent_loop_detection: <Repeat size={18} />,
+  tool_correctness: <Wrench size={18} />,
+};
+const builtinCheckIcon = (id: string) => BUILTIN_CHECK_ICONS[id] || <ListChecks size={18} />;
+
+type CompareType = 'field' | 'literal';
+interface RuleRow { id: number; field: string; operator: string; compareType: CompareType; value: string; }
+let ruleSeq = 1;
+
+type SectionKey = 'details' | 'type' | 'config' | 'dataset';
+interface SectionDef { key: SectionKey; label: string; }
+
+export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
+  const { showToast, ToastEl } = useToast();
   const dispatch = useAppDispatch();
-  const toast = useToast();
-  // Selected live from the store on every render — this is the fix for
-  // "posting a comment doesn't show up until I refresh": previously this
-  // component received a `ticket` object as a prop that was only synced
-  // back up from the store via a separate effect in TicketBoard, which is
-  // an extra hop that can (and did) go stale. Reading directly from the
-  // store here removes that hop entirely.
-  const ticket = useAppSelector((s) => s.tickets.items.find((t) => t.id === ticketId));
-  const commentingId = useAppSelector((s) => s.tickets.commentingId);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [commentDraft, setCommentDraft] = useState('');
+  const providers = useAppSelector((s) => s.providers.items);
 
-  if (!ticket) return null; // e.g. deleted from another tab/session
-
-  const owner = isOwner(ticket, currentUser.id);
-  const priority = PRIORITY_META[ticket.priority];
-  const posting = commentingId === ticket.id;
-  const comments = ticket.comments ?? [];
-
-  const submitComment = () => {
-    if (isEmptyHtml(commentDraft)) return;
-    dispatch(addTicketComment({ ticket_id: ticket.id, text: commentDraft }))
-      .unwrap()
-      .then(() => setCommentDraft(''))
-      .catch((e) => toast.error(typeof e === 'string' ? e : 'Could not post comment'));
+  // section refs for the rail's "jump to" links
+  const sectionRefs = {
+    details: useRef<HTMLDivElement>(null),
+    type: useRef<HTMLDivElement>(null),
+    config: useRef<HTMLDivElement>(null),
+    dataset: useRef<HTMLDivElement>(null),
+  };
+  const scrollToSection = (key: SectionKey) => {
+    sectionRefs[key].current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
+  // details
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+
+  // type
+  const [evalType, setEvalType] = useState<EvalType | null>(null);
+  const [metricType, setMetricType] = useState<MetricType | null>(null);
+  // Agent-only sub-scope (Tool Evaluation / Answer Evaluation) — required
+  // before Prompt Builder templates or Code Editor starter code can load
+  // when evalType === 'agent'.
+  const [agentSubcategory, setAgentSubcategory] = useState<AgentSubcategory | null>(null);
+
+  // config: visual
+  const [rules, setRules] = useState<RuleRow[]>([{ id: ruleSeq, field: 'actual_output', operator: 'contains', compareType: 'field', value: 'input' }]);
+  const [gates, setGates] = useState<('AND' | 'OR')[]>([]);
+
+  // templates data — GET /metrics/templates. Serves both the Prompt
+  // Builder (templates + placeholders) and the Simple/Built-in Check
+  // config (builtin_checks), since both live behind the same endpoint
+  // and both depend on evalType (and, for agent, agentSubcategory).
+  const [templates, setTemplates] = useState<PromptTemplate[]>([]);
+  const [builtinChecks, setBuiltinChecks] = useState<BuiltinCheckDef[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [templatesError, setTemplatesError] = useState('');
+
+  // config: prompt
+  const [selectedTemplateName, setSelectedTemplateName] = useState('');
+  const [promptText, setPromptText] = useState('');
+  const [models, setModels] = useState<ModelSummary[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState('');
+  const [modelHealth, setModelHealth] = useState<Record<string, 'checking' | 'healthy' | 'unhealthy'>>({});
+  const [selectedModelId, setSelectedModelId] = useState('');
+
+  // config: code
+  const [code, setCode] = useState('');
+  const [codeLoading, setCodeLoading] = useState(false);
+  const [codeError, setCodeError] = useState('');
+
+  // config: simple — selected built-in check id + its params, keyed
+  // dynamically off whatever `params` the API returned for that check
+  // (no more hardcoded per-check fields).
+  const [builtinCheck, setBuiltinCheck] = useState<string | null>(null);
+  const [builtinParams, setBuiltinParams] = useState<Record<string, unknown>>({});
+
+  // threshold (shared across all config types)
+  const [threshold, setThreshold] = useState(0.7);
+
+  // dataset
+  const [datasets, setDatasets] = useState<DatasetSummary[]>([]);
+  const [datasetsLoading, setDatasetsLoading] = useState(false);
+  const [datasetsError, setDatasetsError] = useState('');
+  const [selectedDatasetId, setSelectedDatasetId] = useState('');
+  const [previewQuestions, setPreviewQuestions] = useState<PreviewQuestion[]>([]);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState('');
+  const [selectedQuestionIds, setSelectedQuestionIds] = useState<Set<string>>(new Set());
+
+  // validate / save
+  const [validating, setValidating] = useState(false);
+  const [validateError, setValidateError] = useState('');
+  const [validateResult, setValidateResult] = useState<ValidateMetricData | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [savedId, setSavedId] = useState('');
+
+  const fields = evalType ? FIELDS_BY_EVAL_TYPE[evalType] : [];
+
+  // ---- reset chains ------------------------------------------------------
+  const handleEvalType = (t: EvalType) => {
+    if (t === evalType) return;
+    setEvalType(t);
+    setAgentSubcategory(null);
+    setDatasets([]); setSelectedDatasetId(''); setPreviewQuestions([]); setSelectedQuestionIds(new Set());
+    setCode(''); setPromptText(''); setSelectedTemplateName(''); setValidateResult(null); setSavedId('');
+    setTemplates([]); setBuiltinChecks([]);
+    // Built-in check availability depends on eval type (e.g. Agent Loop
+    // Detection / Tool Correctness are agent-only) — clear the selection
+    // so a now-unavailable check can't stay silently selected.
+    setBuiltinCheck(null); setBuiltinParams({});
+  };
+  const handleAgentSubcategory = (s: AgentSubcategory) => {
+    if (s === agentSubcategory) return;
+    setAgentSubcategory(s);
+    setCode(''); setPromptText(''); setSelectedTemplateName(''); setValidateResult(null); setSavedId('');
+    setTemplates([]); setBuiltinChecks([]);
+    setBuiltinCheck(null); setBuiltinParams({});
+  };
+  const handleMetricType = (t: MetricType) => {
+    if (t === metricType) return;
+    setMetricType(t); setValidateResult(null); setSavedId('');
+    if (t !== 'simple') { setBuiltinCheck(null); setBuiltinParams({}); }
+  };
+
+  const handleBuiltinCheck = (check: BuiltinCheckDef) => {
+    if (check.id === builtinCheck) return;
+    setBuiltinCheck(check.id); setValidateResult(null); setSavedId('');
+    // Seed params from each field's default_value so the form (and a
+    // preview run without touching anything) starts from a sane state.
+    const init: Record<string, unknown> = {};
+    check.params.forEach((p) => {
+      if (p.type === 'list' || p.type === 'string_list') {
+        init[p.key] = Array.isArray(p.default_value) ? (p.default_value as string[]).join(', ') : (p.default_value ?? '');
+      } else if (p.type === 'bool') {
+        init[p.key] = Boolean(p.default_value);
+      } else if (p.type === 'number') {
+        init[p.key] = typeof p.default_value === 'number' ? p.default_value : 0;
+      } else {
+        init[p.key] = p.default_value ?? '';
+      }
+    });
+    setBuiltinParams(init);
+  };
+
+  const availableBuiltinChecks = useMemo(
+    () => (evalType ? builtinChecks.filter((c) => c.applicable_eval_types.includes(evalType)) : []),
+    [evalType, builtinChecks],
+  );
+  const selectedBuiltinCheckDef = useMemo(
+    () => availableBuiltinChecks.find((c) => c.id === builtinCheck) || null,
+    [availableBuiltinChecks, builtinCheck],
+  );
+
+  // ---- visual rules ------------------------------------------------------
+  const addRule = () => {
+    ruleSeq += 1;
+    setRules((r) => [...r, { id: ruleSeq, field: fields[0] || 'input', operator: 'contains', compareType: 'literal', value: '' }]);
+    setGates((g) => [...g, 'AND']);
+  };
+  const removeRule = (id: number) => {
+    setRules((r) => {
+      if (r.length <= 1) return r;
+      const idx = r.findIndex((row) => row.id === id);
+      setGates((g) => g.filter((_, i) => i !== Math.max(0, idx - 1)));
+      return r.filter((row) => row.id !== id);
+    });
+  };
+  const updateRule = (id: number, patch: Partial<RuleRow>) => setRules((r) => r.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+  const toggleGate = (idx: number) => setGates((g) => g.map((v, i) => (i === idx ? (v === 'AND' ? 'OR' : 'AND') : v)));
+
+  // ---- templates (Prompt Builder templates + Simple built-in checks) ----
+  // Both Prompt Builder and Simple need this same endpoint, scoped by
+  // evalType and — for agent — by agentSubcategory. Waits for the
+  // subcategory pick before fetching when evalType is 'agent'.
+  useEffect(() => {
+    if (!evalType) { setTemplates([]); setBuiltinChecks([]); return; }
+    if (evalType === 'agent' && !agentSubcategory) { setTemplates([]); setBuiltinChecks([]); return; }
+    setTemplatesLoading(true); setTemplatesError('');
+    const scope = evalType === 'agent' && agentSubcategory ? { evalType, subcategory: agentSubcategory } : undefined;
+    metricsApi.getPromptTemplates(scope)
+      .then((res) => { setTemplates(res.templates); setBuiltinChecks(res.builtin_checks); })
+      .catch((e) => setTemplatesError(e.message || 'Failed to load templates'))
+      .finally(() => setTemplatesLoading(false));
+  }, [evalType, agentSubcategory]);
+
+  const matchingTemplates = useMemo(
+    () => templates.filter((t) => t.category === (evalType ? EVAL_TYPE_TO_CATEGORY[evalType] : '')),
+    [templates, evalType],
+  );
+  // Custom Prompt is available for every evaluation type — Model included,
+  // same as Agent and RAG.
+  const allowsCustomPrompt = evalType === 'agent' || evalType === 'rag' || evalType === 'model';
+
+  useEffect(() => {
+    if (metricType !== 'prompt' || models.length) return;
+    setModelsLoading(true); setModelsError('');
+    metricsApi.listModels()
+      .then((list) => {
+        setModels(list);
+        const init: Record<string, 'checking'> = {};
+        list.forEach((m) => { init[m.id] = 'checking'; });
+        setModelHealth(init);
+        list.forEach((m) => metricsApi.checkModelHealth(m.id).then((h) =>
+          setModelHealth((prev) => ({ ...prev, [m.id]: h.success ? 'healthy' : 'unhealthy' }))));
+      })
+      .catch((e) => setModelsError(e.message || 'Failed to load models'))
+      .finally(() => setModelsLoading(false));
+  }, [metricType, models.length]);
+
+  // Provider names for the Judge Model columns — fetched once, same
+  // pattern Model Catalog uses to resolve provider_id -> display name.
+  useEffect(() => {
+    if (metricType !== 'prompt' || providers.length) return;
+    dispatch(fetchProviders());
+  }, [metricType, providers.length, dispatch]);
+
+  const providerName = (id: string) => providers.find((p) => p.id === id)?.name || id || 'Unknown provider';
+
+  // Judge Model list grouped by provider, one column per provider, sorted
+  // alphabetically by display name.
+  const modelsByProvider = useMemo(() => {
+    const map = new Map<string, ModelSummary[]>();
+    models.forEach((m) => {
+      const key = m.provider_id || 'unknown';
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(m);
+    });
+    return [...map.entries()].sort((a, b) => providerName(a[0]).localeCompare(providerName(b[0])));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [models, providers]);
+
+  const [modelSearch, setModelSearch] = useState<Record<string, string>>({});
+
+  // ---- code template -----------------------------------------------------
+  useEffect(() => {
+    if (metricType !== 'code' || !evalType) return;
+    if (evalType === 'agent' && !agentSubcategory) return;
+    setCodeLoading(true); setCodeError(''); setCode('');
+    metricsApi.getCodeTemplate(evalType, evalType === 'agent' ? agentSubcategory ?? undefined : undefined)
+      .then((res) => setCode(res.code))
+      .catch((e) => setCodeError(e.message || 'Failed to load starter code'))
+      .finally(() => setCodeLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [metricType, evalType, agentSubcategory]);
+
+  // ---- datasets ----------------------------------------------------------
+  useEffect(() => {
+    if (!evalType) return;
+    setDatasetsLoading(true); setDatasetsError(''); setSelectedDatasetId(''); setPreviewQuestions([]);
+    metricsApi.listDatasets(evalType)
+      .then((list) => {
+        // These agent datasets are tool-calling benchmarks that don't fit
+        // the metric-building flow here — hide them for eval type Agent.
+        if (evalType === 'agent') {
+          const hidden = new Set(['ToolBench', 'BFCLv3', 'GAIA']);
+          list = list.filter((d) => !hidden.has(d.name));
+        }
+        setDatasets(list);
+      })
+      .catch((e) => setDatasetsError(e.message || 'Failed to load datasets'))
+      .finally(() => setDatasetsLoading(false));
+  }, [evalType]);
+
+  const selectDataset = (id: string) => {
+    setSelectedDatasetId(id); setValidateResult(null); setSavedId('');
+    setPreviewLoading(true); setPreviewError('');
+    metricsApi.previewDataset(id)
+      .then((res) => {
+        const qs = res.questions.slice(0, 5);
+        setPreviewQuestions(qs);
+        setSelectedQuestionIds(new Set(qs.map((q) => q.id)));
+      })
+      .catch((e) => setPreviewError(e.message || 'Failed to load preview'))
+      .finally(() => setPreviewLoading(false));
+  };
+  const toggleQuestion = (id: string) => setSelectedQuestionIds((prev) => {
+    const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next;
+  });
+  const selectAllQuestions = () => setSelectedQuestionIds(new Set(previewQuestions.map((q) => q.id)));
+  const clearAllQuestions = () => setSelectedQuestionIds(new Set());
+
+  // ---- rule summary ------------------------------------------------------
+  const ruleSummary = useMemo(() => {
+    if (!rules.length) return null;
+    return rules.map((r, i) => {
+      const compare = r.compareType === 'field' ? (r.value || '<field>') : `"${r.value || '…'}"`;
+      return (
+        <span key={r.id}>
+          {i > 0 && <span className={styles['summary__gate']}>{gates[i - 1] || 'AND'}</span>}
+          <span className={styles['summary__token']}>{r.field}</span>
+          {' '}{OP_SYMBOL[r.operator] || r.operator}{' '}
+          <span className={styles['summary__token']}>{compare}</span>
+        </span>
+      );
+    });
+  }, [rules, gates]);
+
+  // ---- gating (used for status dots + validate button, not for hiding UI) ---
+  const detailsComplete = !!name.trim();
+  const typeComplete = !!evalType && !!metricType && (evalType !== 'agent' || !!agentSubcategory);
+  const configComplete = useMemo(() => {
+    if (!metricType) return false;
+    if (metricType === 'visual') return rules.every((r) => r.field && r.operator && (r.compareType === 'field' ? r.value : r.value.trim()));
+    if (metricType === 'prompt') return !!promptText.trim() && !!selectedModelId;
+    if (metricType === 'code') return !!code.trim();
+    if (metricType === 'simple') {
+      if (!selectedBuiltinCheckDef) return false;
+      return selectedBuiltinCheckDef.params
+        .filter((p) => p.required)
+        .every((p) => {
+          const v = builtinParams[p.key];
+          if (p.type === 'bool') return v !== undefined;
+          if (p.type === 'number') return typeof v === 'number' && !Number.isNaN(v) && v > 0;
+          if (p.type === 'list' || p.type === 'string_list') return typeof v === 'string' && v.trim().length > 0;
+          return typeof v === 'string' && v.trim().length > 0;
+        });
+    }
+    return true;
+  }, [metricType, rules, promptText, selectedModelId, code, selectedBuiltinCheckDef, builtinParams]);
+  const datasetComplete = !!selectedDatasetId && selectedQuestionIds.size > 0;
+  const canValidate = detailsComplete && typeComplete && configComplete && datasetComplete && threshold >= 0 && threshold <= 1;
+  const validateSucceeded = !!validateResult && validateResult.passed > 0;
+
+  const SECTIONS: SectionDef[] = [
+    { key: 'details', label: 'Metric Details' },
+    { key: 'type', label: 'Type & Target' },
+    { key: 'config', label: metricType === 'prompt' ? 'Judge Prompt' : metricType === 'code' ? 'Scoring Code' : metricType === 'simple' ? 'Configuration' : 'Rules' },
+    { key: 'dataset', label: 'Dataset · Validate & Save' },
+  ];
+
+  const sectionDone: Record<SectionKey, boolean> = {
+    details: detailsComplete,
+    type: typeComplete,
+    config: configComplete,
+    dataset: datasetComplete && !!validateResult,
+  };
+
+  const sectionValue: Record<SectionKey, string> = {
+    details: name || 'Not set',
+    type: evalType && metricType
+      ? `${evalType.toUpperCase()}${evalType === 'agent' && agentSubcategory ? ` · ${agentSubcategory === 'tools' ? 'Tool Eval' : 'Answer Eval'}` : ''} · ${METRIC_TYPE_CARDS.find((c) => c.key === metricType)!.label}`
+      : 'Not set',
+    config: metricType ? (configComplete ? 'Configured' : 'Incomplete') : '—',
+    dataset: validateResult ? `${validateResult.passed}/${validateResult.total} passed` : (selectedDatasetId ? `${selectedQuestionIds.size} selected` : 'Not set'),
+  };
+
+  // What's still missing for each incomplete section, surfaced in the rail
+  // so the user knows exactly what to do next instead of just seeing
+  // "Incomplete" / "Not set".
+  const sectionMissing: Record<SectionKey, string> = {
+    details: !name.trim() ? 'Add a metric name' : '',
+
+    type: (() => {
+      if (!evalType && !metricType) return 'Choose an evaluation type and a metric type';
+      if (!evalType) return 'Choose an evaluation type';
+      if (evalType === 'agent' && !agentSubcategory) return 'Choose Tool Evaluation or Answer Evaluation';
+      if (!metricType) return 'Choose a metric type';
+      return '';
+    })(),
+
+    config: (() => {
+      if (!metricType) return 'Pick a metric type in the section above first';
+      if (configComplete) return '';
+      if (metricType === 'visual') return 'Fill in every rule\u2019s field, operator, and value';
+      if (metricType === 'prompt') {
+        if (!promptText.trim() && !selectedModelId) return 'Write a judge prompt and choose a judge model';
+        if (!promptText.trim()) return 'Write a judge prompt';
+        return 'Choose a judge model';
+      }
+      if (metricType === 'code') return 'Add your scoring code';
+      if (metricType === 'simple') {
+        if (!selectedBuiltinCheckDef) return 'Select a built-in check';
+        const missingParam = selectedBuiltinCheckDef.params.find((p) => {
+          const v = builtinParams[p.key];
+          if (!p.required) return false;
+          if (p.type === 'bool') return v === undefined;
+          if (p.type === 'number') return !(typeof v === 'number' && v > 0);
+          return !(typeof v === 'string' && v.trim().length > 0);
+        });
+        if (missingParam) return `Set ${missingParam.label}`;
+      }
+      return '';
+    })(),
+
+    dataset: (() => {
+      if (!evalType) return 'Choose an evaluation type to load datasets';
+      if (!selectedDatasetId) return 'Select a dataset';
+      if (selectedQuestionIds.size === 0) return 'Select at least one test question';
+      if (!validateResult) return 'Run validation to complete this step';
+      return '';
+    })(),
+  };
+
+  const completedCount = SECTIONS.filter((s) => sectionDone[s.key]).length;
+
+  // ---- validate / save ---------------------------------------------------
+  const buildDefinition = () => {
+    if (metricType === 'visual') return { rules: rules.map<RuleDef>((r) => ({ field: r.field, operator: r.operator, value: r.value, compare_to_field: r.compareType === 'field' })) };
+    if (metricType === 'prompt') return { prompt_template: promptText };
+    if (metricType === 'code') return { code, skip_validation: true };
+    if (metricType === 'simple') {
+      if (!selectedBuiltinCheckDef) return {};
+      // Convert each param to its API-facing value: list/string_list
+      // params are edited as a comma-separated string but sent as an
+      // array; number params sent as numbers; everything else as-is.
+      const params: Record<string, unknown> = {};
+      selectedBuiltinCheckDef.params.forEach((p) => {
+        const raw = builtinParams[p.key];
+        if (p.type === 'list' || p.type === 'string_list') {
+          params[p.key] = typeof raw === 'string' ? raw.split(',').map((v) => v.trim()).filter(Boolean) : [];
+        } else if (p.type === 'number') {
+          params[p.key] = Number(raw);
+        } else if (p.type === 'bool') {
+          params[p.key] = Boolean(raw);
+        } else {
+          params[p.key] = raw;
+        }
+      });
+      return { subtype: selectedBuiltinCheckDef.id, params };
+    }
+    return {};
+  };
+
+  const runValidate = () => {
+    if (!canValidate || !evalType || !metricType) { showToast('Complete every section first', 'error'); return; }
+    setValidating(true); setValidateError(''); setValidateResult(null);
+    const selectedQs = previewQuestions.filter((q) => selectedQuestionIds.has(q.id));
+    metricsApi.validate({
+      actual_output: '', context: [], definition: buildDefinition(), description,
+      eval_types: [evalType], expected_output: '', expected_tools: [],
+      gates: metricType === 'visual' ? gates : [], input: '',
+      judge_config: metricType === 'prompt' ? { model_id: selectedModelId } : null,
+      metric_type: METRIC_TYPE_TO_API[metricType], name, retrieval_context: [],
+      test_cases: selectedQs.map((q) => ({
+        input: q.input?.prompt || '', actual_output: '', expected_output: q.expected?.answer || '',
+        context: [], retrieval_context: [], tools_called: [],
+        expected_tools: (q.expected?.expected_tools || q.expected?.tool_calls || []).map((t) => t.name),
+        available_tools: q.input?.available_tools || [],
+      })),
+      threshold: threshold.toFixed(2), tools_called: [],
+    })
+      .then(setValidateResult)
+      .catch((e) => setValidateError(e.message || 'Validation failed'))
+      .finally(() => setValidating(false));
+  };
+
+  const handleSave = () => {
+    if (!validateResult || !evalType || !metricType) { showToast('Run validation before saving', 'error'); return; }
+    setSaving(true); setSaveError('');
+    metricsApi.create({
+      definition: buildDefinition(), description, eval_types: [evalType],
+      metric_type: METRIC_TYPE_TO_API[metricType], name, threshold: threshold.toFixed(2),
+      judge_config: metricType === 'prompt' ? { model_id: selectedModelId } : null,
+    })
+      .then((res) => setSavedId(res.id || 'saved'))
+      .catch((e) => setSaveError(e.message || 'Failed to save metric'))
+      .finally(() => setSaving(false));
+  };
+
+  const resetForm = () => {
+    setName(''); setDescription(''); setEvalType(null); setMetricType(null); setAgentSubcategory(null);
+    setRules([{ id: ++ruleSeq, field: 'actual_output', operator: 'contains', compareType: 'field', value: 'input' }]); setGates([]);
+    setTemplates([]); setBuiltinChecks([]); setSelectedTemplateName(''); setPromptText('');
+    setModels([]); setModelHealth({}); setSelectedModelId(''); setCode(''); setThreshold(0.7);
+    setBuiltinCheck(null); setBuiltinParams({});
+    setDatasets([]); setSelectedDatasetId(''); setPreviewQuestions([]); setSelectedQuestionIds(new Set());
+    setValidateResult(null); setValidateError(''); setSavedId('');
+    sectionRefs.details.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  // =========================================================================
   return (
-    <div className={styles['modal-overlay']} onClick={onClose}>
-      <div
-        className={styles['modal']}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Ticket detail"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className={styles['modal-hdr']}>
-          <div>
-            <span className={styles['modal-key']}>{ticket.key}</span>
-            <span
-              className={styles['ticket-card__priority']}
-              style={{ ['--priority-accent' as string]: priority.accent }}
-            >
-              {priority.label}
-            </span>
+    <div className={styles.cm}>
+
+      <div className={styles.builder}>
+
+        {/* ============ LEFT RAIL — jump-to links, all sections visible ============ */}
+        <aside className={styles.rail}>
+          <div className={styles['rail__head']}>
+            <div className={styles['rail__eyebrow']}>Overview</div>
+            <div className={styles['rail__sub']}>Everything is on this page — jump to any section.</div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4em' }}>
-            <button
-              type="button"
-              className={styles['modal-close']}
-              onClick={() => onEdit(ticket)}
-              aria-label="Edit ticket"
-              title="Edit"
-            >
-              <Pencil size={14} />
-            </button>
-            <button
-              type="button"
-              className={styles['modal-close']}
-              onClick={() => setConfirmDelete(true)}
-              disabled={deleting || !owner}
-              aria-label="Delete ticket"
-              title={owner ? 'Delete' : OWNER_ONLY_DELETE_HINT}
-            >
-              {deleting ? <Loader2 size={14} className={styles['ticket-board__spin']} /> : <Trash2 size={14} />}
-            </button>
-            <button className={styles['modal-close']} onClick={onClose} aria-label="Close">
-              <X size={16} />
-            </button>
-          </div>
-        </header>
 
-        <div className={styles['modal-body']}>
-          {/* ---- main: title, description (with inline images), comments ---- */}
-          <div className={styles['modal-main']}>
-            <h3 className={styles['ticket-detail__title']}>{ticket.title}</h3>
-
-            {!isEmptyHtml(ticket.description) ? (
-              <div
-                className={styles['ticket-detail__desc']}
-                // Description is rich-text HTML from the description editor
-                // (images the requester pasted/dropped/inserted are already
-                // embedded inline as <img> tags) — sanitize before ever
-                // injecting it, since this is otherwise-untrusted content.
-                dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(ticket.description ?? '') }}
-              />
-            ) : (
-              <p className={styles['ticket-detail__desc--empty']}>No description.</p>
-            )}
-
-            {(ticket.labels ?? []).length > 0 && (
-              <div className={styles['ticket-card__labels']}>
-                {(ticket.labels ?? []).map((l) => (
-                  <span key={l} className={styles['ticket-card__label']}>
-                    {l}
+          <nav className={styles['rail__steps']}>
+            {SECTIONS.map((s, i) => {
+              const done = sectionDone[s.key];
+              return (
+                <button
+                  key={s.key}
+                  onClick={() => scrollToSection(s.key)}
+                  className={`${styles['rail-step']} ${done ? styles['rail-step--done'] : ''}`}
+                >
+                  <span className={styles['rail-step__marker']}>
+                    {done ? <Check size={15} /> : i + 1}
                   </span>
-                ))}
-              </div>
-            )}
+                  <span className={styles['rail-step__body']}>
+                    <span className={styles['rail-step__label']}>{s.label}</span>
+                    <span className={styles['rail-step__value']}>{sectionValue[s.key]}</span>
+                    {!done && sectionMissing[s.key] && (
+                      <span className={styles['rail-step__missing']}>
+                        <AlertCircle size={11} />
+                        {sectionMissing[s.key]}
+                      </span>
+                    )}
+                  </span>
+                  <ChevronRight size={14} className={styles['rail-step__arrow']} />
+                </button>
+              );
+            })}
+          </nav>
+        </aside>
 
-            <div>
-              <div className={styles['ticket-detail__section-label']}>
-                Comments {comments.length > 0 && `(${comments.length})`}
+        {/* ============ RIGHT WORKSPACE — all sections rendered together ============ */}
+        <section className={styles.work}>
+          <div className={styles['work__scroll']}>
+            <div className={styles['work__inner']}>
+
+              {/* ---- SECTION: DETAILS ---- */}
+              <div className={styles.section} ref={sectionRefs.details}>
+                <div className={styles['work__eyebrow']}>Section 1</div>
+                <h1 className={styles['work__title']}>Name your metric</h1>
+                <p className={styles['work__desc']}>Give it a clear name and, optionally, a short description of what it measures.</p>
+
+                <div className={styles['field-row']}>
+                  <div className={styles.field}>
+                    <label className={styles['field__label']}>Metric Name</label>
+                    <input className={styles.input} placeholder="e.g., Answer Faithfulness" value={name} onChange={(e) => setName(e.target.value)} />
+                  </div>
+                  <div className={styles.field}>
+                    <label className={styles['field__label']}>Description</label>
+                    <input className={styles.input} placeholder="What does this metric measure? (optional)" value={description} onChange={(e) => setDescription(e.target.value)} />
+                  </div>
+                </div>
               </div>
-              <div className={styles['ticket-detail__comments']} style={{ marginTop: '0.7em' }}>
-                {comments.length === 0 && (
-                  <p className={styles['ticket-detail__comment-empty']}>
-                    No comments yet — start the discussion.
-                  </p>
-                )}
-                {comments.map((c) => (
-                  <div key={c.id} className={styles['ticket-detail__comment']}>
-                    <span
-                      className={styles['ticket-card__avatar']}
-                      style={{ background: avatarAccent(c.author) }}
-                    >
-                      {initials(c.author)}
-                    </span>
-                    <div className={styles['ticket-detail__comment-body']}>
-                      <div className={styles['ticket-detail__comment-head']}>
-                        <span className={styles['ticket-detail__comment-author']}>
-                          {c.author.name}
-                        </span>
-                        <span className={styles['ticket-detail__comment-time']}>
-                          {formatTime(c.created_at)}
-                        </span>
-                      </div>
-                      {/* Comment text is rich-text HTML too (same editor as
-                          the description) — sanitize before rendering. */}
-                      <div
-                        className={styles['ticket-detail__comment-text']}
-                        dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(c.text) }}
-                      />
+
+              {/* ---- SECTION: TYPE & TARGET ---- */}
+              <div className={styles.section} ref={sectionRefs.type}>
+                <div className={styles['work__eyebrow']}>Section 2</div>
+                <h1 className={styles['work__title']}>Evaluation type &amp; approach</h1>
+                <p className={styles['work__desc']}>Choose what you’re evaluating, then how the metric should score it.</p>
+
+                <div className={styles.field}>
+                  <label className={styles['field__label']}>Evaluation Type</label>
+                  <div className={`${styles['opt-grid']} ${styles['opt-grid--3']}`}>
+                    {EVAL_TYPE_CARDS.map((c) => (
+                      <button key={c.key} className={`${styles.opt} ${evalType === c.key ? styles['opt--selected'] : ''}`} onClick={() => handleEvalType(c.key)}>
+                        {evalType === c.key && <span className={styles['opt__check']}><Check size={12} /></span>}
+                        <span className={styles['opt__icon']}>{c.icon}</span>
+                        <div className={styles['opt__title']}>{c.label}</div>
+                        <div className={styles['opt__desc']}>{c.desc}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {evalType === 'agent' && (
+                  <div className={styles.field}>
+                    <label className={styles['field__label']}>Agent Focus</label>
+                    <div className={`${styles['opt-grid']} ${styles['opt-grid--3']}`}>
+                      {AGENT_SUBCATEGORY_CARDS.map((c) => (
+                        <button key={c.key} className={`${styles.opt} ${agentSubcategory === c.key ? styles['opt--selected'] : ''}`} onClick={() => handleAgentSubcategory(c.key)}>
+                          {agentSubcategory === c.key && <span className={styles['opt__check']}><Check size={12} /></span>}
+                          <span className={styles['opt__icon']}>{c.icon}</span>
+                          <div className={styles['opt__title']}>{c.label}</div>
+                          <div className={styles['opt__desc']}>{c.desc}</div>
+                        </button>
+                      ))}
                     </div>
                   </div>
-                ))}
+                )}
 
-                <div className={styles['ticket-detail__comment-form']}>
-                  <TicketDescriptionEditor
-                    value={commentDraft}
-                    onChange={setCommentDraft}
-                    placeholder="Add a comment… paste or drag an image in."
-                    disabled={posting}
-                    compact
-                  />
-                  <button
-                    type="button"
-                    className={styles['ticket-detail__comment-submit']}
-                    onClick={submitComment}
-                    disabled={posting || isEmptyHtml(commentDraft)}
-                  >
-                    {posting ? (
-                      <Loader2 size={14} className={styles['ticket-board__spin']} />
-                    ) : (
-                      'Post comment'
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* ---- rail: requester/assignee, status, terminal actions ---- */}
-          <div className={styles['modal-rail']}>
-            <div className={styles['ticket-detail__people']}>
-              <div className={styles['ticket-detail__person']}>
-                <span className={styles['ticket-detail__person-label']}>Requester</span>
-                <div className={styles['ticket-detail__person-val']}>
-                  <span
-                    className={styles['ticket-card__avatar']}
-                    style={{ background: avatarAccent(ticket.owner) }}
-                  >
-                    {initials(ticket.owner)}
-                  </span>
-                  {ticket.owner.name}
-                  {owner && <span className={styles['ticket-detail__you']}>you</span>}
-                  <span className={`${styles['ticket-role-badge']} ${styles['ticket-role-badge--reporter']}`}>
-                    Reporter
-                  </span>
-                </div>
-              </div>
-              <div className={styles['ticket-detail__person']}>
-                <span className={styles['ticket-detail__person-label']}>Assignee</span>
-                {ticket.assignee ? (
-                  <div className={styles['ticket-detail__person-val']}>
-                    <span
-                      className={styles['ticket-card__avatar']}
-                      style={{ background: avatarAccent(ticket.assignee) }}
-                    >
-                      {initials(ticket.assignee)}
-                    </span>
-                    {ticket.assignee.name}
-                    <span className={`${styles['ticket-role-badge']} ${styles['ticket-role-badge--assignee']}`}>
-                      Assignee
-                    </span>
+                <div className={styles.field}>
+                  <label className={styles['field__label']}>Metric Type</label>
+                  <div className={`${styles['opt-grid']} ${styles['opt-grid--4']}`}>
+                    {METRIC_TYPE_CARDS.map((c) => (
+                      <button key={c.key} className={`${styles.opt} ${metricType === c.key ? styles['opt--selected'] : ''}`} onClick={() => handleMetricType(c.key)}>
+                        {metricType === c.key && <span className={styles['opt__check']}><Check size={12} /></span>}
+                        <span className={styles['opt__icon']}>{c.icon}</span>
+                        <div className={styles['opt__title']}>{c.label}</div>
+                        <div className={styles['opt__desc']}>{c.desc}</div>
+                      </button>
+                    ))}
                   </div>
-                ) : (
-                  <div className={styles['ticket-detail__person-val']}>
-                    <span className={styles['ticket-card__person-avatar--empty']} aria-hidden="true" />
-                    Unassigned
-                    <span
-                      className={`${styles['ticket-role-badge']} ${styles['ticket-role-badge--unassigned']}`}
-                    >
-                      Unassigned
-                    </span>
+                </div>
+              </div>
+
+              {/* ---- SECTION: CONFIG ---- */}
+              <div className={styles.section} ref={sectionRefs.config}>
+                <div className={styles['work__eyebrow']}>Section 3</div>
+                <h1 className={styles['work__title']}>{SECTIONS[2].label}</h1>
+
+                {!metricType && (
+                  <div className={styles.empty}>Pick a metric type above to configure it here.</div>
+                )}
+
+                {/* visual */}
+                {metricType === 'visual' && (
+                  <>
+                    <p className={styles['work__desc']}>Build one or more field comparisons. Combine them with AND / OR.</p>
+                    <div className={styles.rules}>
+                      {rules.map((rule, i) => (
+                        <div key={rule.id}>
+                          {i > 0 && (
+                            <div className={styles.gate}>
+                              <div className={styles['gate__toggle']}>
+                                {(['AND', 'OR'] as const).map((g) => (
+                                  <button key={g} className={`${styles['gate__opt']} ${gates[i - 1] === g ? styles.on : ''}`} onClick={() => toggleGate(i - 1)}>{g}</button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          <div className={styles.rule}>
+                            <div className={styles['rule__head']}>
+                              <span className={styles['rule__index']}>Rule {i + 1}</span>
+                              <button className={styles['btn-icon']} title="Remove" onClick={() => removeRule(rule.id)}><X size={15} /></button>
+                            </div>
+                            <div className={styles['rule__grid']}>
+                              <div className={styles['rule__field']}>
+                                <span className={styles['rule__field-label']}>Field</span>
+                                <CustomSelect value={rule.field} onChange={(v) => updateRule(rule.id, { field: v })} options={fields.map((f) => ({ value: f, label: f }))} />
+                              </div>
+                              <div className={styles['rule__field']}>
+                                <span className={styles['rule__field-label']}>Operator</span>
+                                <CustomSelect value={rule.operator} onChange={(v) => updateRule(rule.id, { operator: v })} options={OPERATORS} />
+                              </div>
+                              <div className={styles['rule__field']}>
+                                <span className={styles['rule__field-label']}>Compare To</span>
+                                <CustomSelect value={rule.compareType} onChange={(v) => updateRule(rule.id, { compareType: v as CompareType, value: '' })} options={[{ value: 'field', label: 'Field' }, { value: 'literal', label: 'Literal Value' }]} />
+                              </div>
+                              <div className={styles['rule__field']}>
+                                <span className={styles['rule__field-label']}>Value</span>
+                                {rule.compareType === 'literal'
+                                  ? <input className={styles.input} placeholder="value" value={rule.value} onChange={(e) => updateRule(rule.id, { value: e.target.value })} />
+                                  : <CustomSelect value={rule.value} onChange={(v) => updateRule(rule.id, { value: v })} placeholder="field…" options={fields.map((f) => ({ value: f, label: f }))} />}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <button className={`${styles.btn} ${styles['btn--sm']} ${styles['add-rule']}`} onClick={addRule}><Plus size={14} /> Add Rule</button>
+
+                    <div className={styles.summary}>
+                      <div className={styles['summary__label']}>Summary</div>
+                      <div className={styles['summary__code']}>{ruleSummary || 'No rules defined'}</div>
+                    </div>
+                  </>
+                )}
+
+                {/* prompt */}
+                {metricType === 'prompt' && (
+                  <>
+                    <p className={styles['work__desc']}>Pick a judge prompt template (or write your own), then choose a judge model.</p>
+
+                    {templatesError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {templatesError}</div>}
+                    {evalType === 'agent' && !agentSubcategory ? (
+                      <div className={styles.empty}>Choose Tool Evaluation or Answer Evaluation above first.</div>
+                    ) : templatesLoading ? (
+                      <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading templates…</div>
+                    ) : (
+                      <div className={styles['tpl-list']}>
+                        {matchingTemplates.length === 0 && !allowsCustomPrompt && <div className={styles.empty}>No templates for this evaluation type.</div>}
+                        {matchingTemplates.map((t) => (
+                          <label key={t.name} className={`${styles.tpl} ${selectedTemplateName === t.name ? styles['tpl--selected'] : ''}`}>
+                            <input type="radio" name="tpl" hidden checked={selectedTemplateName === t.name} onChange={() => { setSelectedTemplateName(t.name); setPromptText(t.template); }} />
+                            <span className={styles['tpl__radio']} />
+                            <span className={styles['tpl__body']}>
+                              <span className={styles['tpl__label']}>{t.label}</span>
+                              <span className={styles['tpl__desc']}>{t.description}</span>
+                              {t.uses_placeholders?.length > 0 && (
+                                <span className={styles['tpl__tags']}>
+                                  {t.uses_placeholders.map((p) => <span key={p} className={styles.token}>{`{${p}}`}</span>)}
+                                </span>
+                              )}
+                            </span>
+                          </label>
+                        ))}
+                        {allowsCustomPrompt && (
+                          <label className={`${styles.tpl} ${selectedTemplateName === '__custom__' ? styles['tpl--selected'] : ''}`}>
+                            <input type="radio" name="tpl" hidden checked={selectedTemplateName === '__custom__'} onChange={() => { setSelectedTemplateName('__custom__'); setPromptText(''); }} />
+                            <span className={styles['tpl__radio']} />
+                            <span className={styles['tpl__body']}>
+                              <span className={styles['tpl__label']}>Custom Prompt</span>
+                              <span className={styles['tpl__desc']}>Write your own judge prompt from scratch.</span>
+                            </span>
+                          </label>
+                        )}
+                      </div>
+                    )}
+
+                    {selectedTemplateName && (
+                      <div className={styles.field}>
+                        <label className={styles['field__label']}>Prompt</label>
+                        <textarea className={styles.textarea} style={{ minHeight: '150px' }} value={promptText} onChange={(e) => setPromptText(e.target.value)} placeholder="Enter your judge prompt…" />
+                      </div>
+                    )}
+
+                    <div className={styles.field}>
+                      <label className={styles['field__label']}>Judge Model</label>
+                      {modelsError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {modelsError}</div>}
+                      {modelsLoading ? (
+                        <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading models…</div>
+                      ) : models.length === 0 ? (
+                        <div className={styles.empty}>No models available.</div>
+                      ) : (
+                        <div className={styles['provider-cols']}>
+                          {modelsByProvider.map(([providerId, list]) => {
+                            const search = (modelSearch[providerId] || '').toLowerCase();
+                            const filtered = search ? list.filter((m) => m.name.toLowerCase().includes(search)) : list;
+                            return (
+                              <div key={providerId} className={styles['provider-col']}>
+                                <div className={styles['provider-col__head']}>
+                                  {providerName(providerId)}
+                                  <span className={styles['provider-col__count']}>{list.length}</span>
+                                </div>
+                                <div className={styles['provider-col__search']}>
+                                  <Search size={13} />
+                                  <input
+                                    placeholder="Search model…"
+                                    value={modelSearch[providerId] || ''}
+                                    onChange={(e) => setModelSearch((prev) => ({ ...prev, [providerId]: e.target.value }))}
+                                  />
+                                </div>
+                                <div className={styles['provider-col__list']}>
+                                  {filtered.length === 0 ? (
+                                    <div className={styles.empty}>No matching models.</div>
+                                  ) : filtered.map((m) => {
+                                    const health = modelHealth[m.id] || 'checking';
+                                    const disabled = health === 'unhealthy';
+                                    return (
+                                      <label key={m.id} className={`${styles.model} ${selectedModelId === m.id ? styles['model--selected'] : ''} ${disabled ? styles['model--disabled'] : ''}`}>
+                                        <input type="radio" name="judge" hidden checked={selectedModelId === m.id} disabled={disabled} onChange={() => setSelectedModelId(m.id)} />
+                                        <span className={styles['model__radio']} />
+                                        <span className={styles['model__body']}>
+                                          <span className={styles['model__name']} title={m.name}>{m.name}</span>
+                                          {health === 'checking' && <span className={styles['model__checking']}>Checking…</span>}
+                                        </span>
+                                        <span className={`${styles['model__health']} ${styles[`health--${health}`]}`} title={health === 'checking' ? 'Checking' : health === 'healthy' ? 'Healthy' : 'Offline'}>
+                                          <span className={styles['health-dot']} />
+                                        </span>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+
+                {/* code */}
+                {metricType === 'code' && (
+                  <>
+                    <p className={styles['work__desc']}>Starter code is tailored to the evaluation type. Edit it to suit your metric.</p>
+                    {codeError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {codeError}</div>}
+                    {evalType === 'agent' && !agentSubcategory ? (
+                      <div className={styles.empty}>Choose Tool Evaluation or Answer Evaluation above first.</div>
+                    ) : (
+                      <div className={styles.code}>
+                        <div className={styles['code__bar']}>
+                          <span className={styles['code__lang']}>Python</span>
+                          {codeLoading && <Loader2 size={13} className={styles.spin} />}
+                        </div>
+                        <textarea className={styles['code__area']} spellCheck={false} value={code} onChange={(e) => setCode(e.target.value)} placeholder="# scoring function" />
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {/* simple — Built-in Check (checks + params come from the API) */}
+                {metricType === 'simple' && (
+                  <>
+                    <p className={styles['work__desc']}>Pick a built-in check. Available checks depend on the evaluation type selected above.</p>
+
+                    {templatesError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {templatesError}</div>}
+
+                    {!evalType ? (
+                      <div className={styles.empty}>Choose an evaluation type above to see available checks.</div>
+                    ) : evalType === 'agent' && !agentSubcategory ? (
+                      <div className={styles.empty}>Choose Tool Evaluation or Answer Evaluation above first.</div>
+                    ) : templatesLoading ? (
+                      <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading checks…</div>
+                    ) : availableBuiltinChecks.length === 0 ? (
+                      <div className={styles.empty}>No built-in checks for this evaluation type.</div>
+                    ) : (
+                      <div className={`${styles['opt-grid']} ${availableBuiltinChecks.length >= 4 ? styles['opt-grid--4'] : ''}`}>
+                        {availableBuiltinChecks.map((c) => (
+                          <button
+                            key={c.id}
+                            className={`${styles.opt} ${builtinCheck === c.id ? styles['opt--selected'] : ''}`}
+                            onClick={() => handleBuiltinCheck(c)}
+                          >
+                            {builtinCheck === c.id && <span className={styles['opt__check']}><Check size={12} /></span>}
+                            <span className={styles['opt__icon']}>{builtinCheckIcon(c.id)}</span>
+                            <div className={styles['opt__title']}>{c.name}</div>
+                            <div className={styles['opt__desc']}>{c.description}</div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {selectedBuiltinCheckDef?.params.map((p) => (
+                      <div key={p.key} className={`${styles.field} ${styles['field--fit']}`} style={{ marginTop: '18px' }}>
+                        {p.type === 'bool' ? (
+                          <div className={styles['switch-row']}>
+                            <div>
+                              <div className={styles['switch-row__label']}>{p.label}</div>
+                            </div>
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={Boolean(builtinParams[p.key])}
+                              className={`${styles.switch} ${builtinParams[p.key] ? styles['switch--on'] : ''}`}
+                              onClick={() => setBuiltinParams((prev) => ({ ...prev, [p.key]: !prev[p.key] }))}
+                            >
+                              <span className={styles['switch__thumb']} />
+                            </button>
+                          </div>
+                        ) : p.type === 'number' ? (
+                          <>
+                            <label className={styles['field__label']}>{p.label}</label>
+                            <input
+                              type="number"
+                              min={1}
+                              step={1}
+                              className={styles.input}
+                              value={typeof builtinParams[p.key] === 'number' ? (builtinParams[p.key] as number) : ''}
+                              onChange={(e) => {
+                                const raw = e.target.value;
+                                if (raw === '') { setBuiltinParams((prev) => ({ ...prev, [p.key]: '' })); return; }
+                                const n = Math.floor(Number(raw));
+                                setBuiltinParams((prev) => ({ ...prev, [p.key]: Number.isFinite(n) && n > 0 ? n : 1 }));
+                              }}
+                            />
+                          </>
+                        ) : p.type === 'list' || p.type === 'string_list' ? (
+                          <>
+                            <label className={styles['field__label']}>{p.label} (comma-separated)</label>
+                            <input
+                              className={styles.input}
+                              placeholder="Enter one or more values, separated by commas"
+                              value={typeof builtinParams[p.key] === 'string' ? (builtinParams[p.key] as string) : ''}
+                              onChange={(e) => setBuiltinParams((prev) => ({ ...prev, [p.key]: e.target.value }))}
+                            />
+                          </>
+                        ) : (
+                          <>
+                            <label className={styles['field__label']}>{p.label}</label>
+                            <input
+                              className={styles.input}
+                              value={typeof builtinParams[p.key] === 'string' ? (builtinParams[p.key] as string) : ''}
+                              onChange={(e) => setBuiltinParams((prev) => ({ ...prev, [p.key]: e.target.value }))}
+                            />
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </>
+                )}
+
+                {/* threshold — shared across all config types */}
+                {metricType && (
+                  <div className={styles.field} style={{ marginTop: '26px' }}>
+                    <label className={styles['field__label']}>Pass Threshold</label>
+                    <div className={`${styles.thr} ${styles['field--fit']}`}>
+                      <div className={styles['thr__row']}>
+                        <span className={styles['thr__cap']}>Minimum score required to pass</span>
+                        <span className={styles['thr__value']}>{threshold.toFixed(2)}</span>
+                      </div>
+                      <input type="range" className={styles['thr__slider']} min={0} max={1} step={0.01} value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} />
+                      <div className={styles['thr__scale']}><span>0.00</span><span>0.50</span><span>1.00</span></div>
+                    </div>
                   </div>
                 )}
               </div>
-            </div>
 
-            <div>
-              <div className={styles['ticket-detail__section-label']}>
-                Status
-                {moving && <Loader2 size={13} className={styles['ticket-board__spin']} />}
-              </div>
-              <div className={styles['ticket-detail__stepper']} style={{ marginTop: '0.5em' }}>
-                {COLUMNS.filter((c) => c.status !== 'done').map((c) => {
-                  const isCurrent = ticket.status === c.status;
-                  const skipsAhead = !isCurrent && !isSequentialMove(ticket.status, c.status);
-                  return (
-                    <button
-                      key={c.status}
-                      type="button"
-                      className={[
-                        styles['ticket-detail__step'],
-                        isCurrent ? styles['ticket-detail__step--current'] : '',
-                      ].join(' ')}
-                      style={{ ['--step-accent' as string]: c.accent }}
-                      disabled={isCurrent || moving || skipsAhead}
-                      title={skipsAhead ? SEQUENCE_HINT : undefined}
-                      onClick={() => onMove(ticket.id, c.status)}
-                    >
-                      {isCurrent && <Check size={13} />}
-                      {c.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+              {/* ---- SECTION: DATASET ---- */}
+              <div className={`${styles.section} ${styles['section--last']}`} ref={sectionRefs.dataset}>
+                <div className={styles['work__eyebrow']}>Section 4</div>
+                <h1 className={styles['work__title']}>Choose test data &amp; validate</h1>
+                <p className={styles['work__desc']}>Pick a dataset and questions, run validation, then save your metric.</p>
 
-            <div>
-              <div className={styles['ticket-detail__section-label']}>Close ticket</div>
-              <div className={styles['ticket-detail__terminal']} style={{ marginTop: '0.5em' }}>
-                {(() => {
-                  const closeCheck = canDropTicket(ticket, 'done', currentUser.id);
-                  const alreadyDone = ticket.status === 'done' && ticket.resolution === 'completed';
-                  const alreadyDiscarded = ticket.status === 'done' && ticket.resolution === 'discarded';
-                  return (
-                    <>
-                      <button
-                        type="button"
-                        className={styles['ticket-detail__done-btn']}
-                        disabled={!closeCheck.ok || moving || alreadyDone}
-                        title={closeCheck.ok ? undefined : closeCheck.reason}
-                        onClick={() => onMove(ticket.id, 'done', 'completed')}
-                      >
-                        {owner ? <Check size={14} /> : <Lock size={14} />}
-                        Mark Done
-                      </button>
-                      <button
-                        type="button"
-                        className={styles['ticket-detail__discard-btn']}
-                        disabled={!closeCheck.ok || moving || alreadyDiscarded}
-                        title={closeCheck.ok ? undefined : closeCheck.reason}
-                        onClick={() => onMove(ticket.id, 'done', 'discarded')}
-                      >
-                        {owner ? <Ban size={14} /> : <Lock size={14} />}
-                        Discard
-                      </button>
-                    </>
-                  );
-                })()}
+                {!evalType ? (
+                  <div className={styles.empty}>Choose an evaluation type above to load datasets.</div>
+                ) : (
+                  <div className={styles['data-row']}>
+                    <div className={styles['data-col']}>
+                      <div className={styles['data-col__head']}>
+                        <span className={styles['data-col__head-title']}><Database size={12} /> Datasets</span>
+                        {datasets.length > 0 && <span className={styles['data-col__count']}>{datasets.length}</span>}
+                      </div>
+                      <div className={styles['data-col__body']}>
+                        {datasetsError ? <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {datasetsError}</div>
+                          : datasetsLoading ? <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading…</div>
+                          : datasets.length === 0 ? <div className={styles.empty}>No datasets for this type.</div>
+                          : (
+                            <div className={styles['ds-list']}>
+                              {datasets.map((d) => {
+                                const selected = selectedDatasetId === d.id;
+                                return (
+                                  <div
+                                    key={d.id}
+                                    className={`${styles.ds} ${selected ? styles['ds--selected'] : ''}`}
+                                    onClick={() => selectDataset(d.id)}
+                                    title={d.name}
+                                  >
+                                    <span className={styles['ds__check']}><Check size={11} /></span>
+                                    <span className={styles['ds__icon']}><Database size={14} /></span>
+                                    <span className={styles['ds__name']}>{d.name}</span>
+                                    <span className={styles['ds__count']}>{d.question_count} {d.question_count === 1 ? 'question' : 'questions'}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                      </div>
+                    </div>
+
+                    <div className={styles['data-col']}>
+                      <div className={styles['data-col__head']}>
+                        <span className={styles['data-col__head-title']}>
+                          <ListChecks size={12} /> Questions
+                        </span>
+                        {previewQuestions.length > 0 && (
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <span className={styles['data-col__count']}>{selectedQuestionIds.size}/{previewQuestions.length}</span>
+                            <span style={{ display: 'flex', gap: '8px' }}>
+                              <button className={styles['link-btn']} onClick={selectAllQuestions}>All</button>
+                              <button className={styles['link-btn']} onClick={clearAllQuestions}>Clear</button>
+                            </span>
+                          </span>
+                        )}
+                      </div>
+                      <div className={styles['data-col__body']}>
+                        {previewError ? <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {previewError}</div>
+                          : previewLoading ? <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading…</div>
+                          : previewQuestions.length === 0 ? <div className={styles.empty}>Select a dataset to preview.</div>
+                          : (
+                            <div className={styles['q-list']}>
+                              {previewQuestions.map((q) => {
+                                const on = selectedQuestionIds.has(q.id);
+                                const tools = q.input?.available_tools || [];
+                                const expectedCalls = (q.expected?.expected_tools?.length ? q.expected.expected_tools : q.expected?.tool_calls) || [];
+                                return (
+                                  <div key={q.id} className={`${styles.q} ${on ? styles['q--on'] : ''}`} onClick={() => toggleQuestion(q.id)}>
+                                    <span className={styles['q__check']}>{on && <Check size={12} />}</span>
+                                    <span className={styles['q__body']}>
+                                      {q.category && <span className={styles['q__category']}>{q.category}</span>}
+                                      <span className={styles['q__q']}>{q.input?.prompt}</span>
+                                      <span className={styles['q__a']}><span className={styles['q__a-label']}>Expected:</span>{q.expected?.answer}</span>
+
+                                      {tools.length > 0 && (
+                                        <span className={styles['q__tools']}>
+                                          <span className={styles['q__tools-label']}>Available tools</span>
+                                          <span className={styles['q__tool-tags']}>
+                                            {tools.map((t) => (
+                                              <span key={t.name} className={styles['q__tool-tag']} title={t.description}>
+                                                <span className={styles['q__tool-method']}>{t.method}</span>
+                                                {t.name}
+                                              </span>
+                                            ))}
+                                          </span>
+                                        </span>
+                                      )}
+
+                                      {expectedCalls.length > 0 && (
+                                        <span className={styles['q__calls']}>
+                                          <span className={styles['q__tools-label']}>Expected tool calls</span>
+                                          {expectedCalls.map((c, i) => (
+                                            <span key={`${c.name}-${i}`} className={styles['q__call']}>
+                                              <span className={styles['q__call-name']}>{c.name}</span>
+                                              {Object.entries(c.arguments || {}).length > 0 && (
+                                                <span className={styles['q__call-args']}>
+                                                  {Object.entries(c.arguments).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ')}
+                                                </span>
+                                              )}
+                                            </span>
+                                          ))}
+                                        </span>
+                                      )}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ---- validate & save ---- */}
+                <div className={styles['validate-section']}>
+                  <div className={styles['validate-section__label']}>Validate &amp; Save</div>
+                  <p className={styles['validate-section__desc']}>Run a dry-run against your selected questions. Saving unlocks once it passes.</p>
+
+                  {validateError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {validateError}</div>}
+
+                  {!validateResult && !validating && (
+                    <div className={`${styles.banner} ${styles['banner--info']}`}><Sparkles size={15} /> Ready to validate {selectedQuestionIds.size} test case{selectedQuestionIds.size === 1 ? '' : 's'}.</div>
+                  )}
+
+                  {validateResult && (
+                    <div style={{ marginBottom: '18px' }}>
+                      {validateSucceeded
+                        ? <div className={`${styles.banner} ${styles['banner--ok']}`}><CheckCircle2 size={15} /> Metric is valid — ready to save.</div>
+                        : <div className={`${styles.banner} ${styles['banner--err']}`}><XCircle size={15} /> No test cases passed. You can still save, or adjust your metric and re-run.</div>}
+
+                      <div className={styles.results}>
+                        {validateResult.results.map((r, i) => (
+                          <div key={i} className={styles['results__row']}>
+                            <span className={`${styles['results__score']} ${r.success ? styles['results__score--pass'] : styles['results__score--fail']}`}>{r.score.toFixed(2)}</span>
+                            <span className={styles['results__body']}>
+                              <span className={styles['results__io']}>{r.test_case.input}</span>
+                              {r.reason && <span className={styles['results__reason']}>{r.reason}</span>}
+                            </span>
+                            <span className={`${styles['results__pill']} ${r.success ? styles['results__pill--pass'] : styles['results__pill--fail']}`}>{r.success ? 'Pass' : 'Fail'}</span>
+                          </div>
+                        ))}
+                        <div className={styles['results__summary']}>
+                          <span>Passed: <strong>{validateResult.passed}/{validateResult.total}</strong></span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
-              {!owner && (
-                <p className={styles['ticket-detail__gate-note']} style={{ marginTop: '0.5em' }}>
-                  <Lock size={12} /> {OWNER_ONLY_HINT}
-                </p>
+
+            </div>
+          </div>
+
+          {/* ---- sticky footer ---- */}
+          <div className={styles['work__foot']}>
+            <span className={styles['work__foot-info']}>
+              {completedCount}/{SECTIONS.length} sections ready
+            </span>
+
+            <div className={styles['work__foot-actions']}>
+              {!validateResult ? (
+                <>
+                  <button className={`${styles.btn} ${styles['btn--primary']}`} onClick={runValidate} disabled={validating || !canValidate}>
+                    {validating ? <Loader2 size={15} className={styles.spin} /> : <Sparkles size={15} />}
+                    {validating ? 'Validating…' : 'Run Validation'}
+                    {!validating && <ArrowRight size={15} />}
+                  </button>
+                  <button className={`${styles.btn} ${styles['btn--ghost']}`} onClick={onCancel}>Cancel</button>
+                </>
+              ) : (
+                <>
+                  <button className={`${styles.btn} ${styles['btn--ok']}`} onClick={handleSave} disabled={saving}>
+                    {saving ? <Loader2 size={15} className={styles.spin} /> : <Check size={15} />}
+                    Save Metric
+                  </button>
+                  <button className={`${styles.btn} ${styles['btn--ghost']}`} onClick={onCancel}>Cancel</button>
+                </>
               )}
-              {owner && ticket.status !== 'in_review' && ticket.status !== 'done' && (
-                <p className={styles['ticket-detail__gate-note']} style={{ marginTop: '0.5em' }}>
-                  {SEQUENCE_HINT}
-                </p>
-              )}
+            </div>
+          </div>
+        </section>
+      </div>
+
+      {saveError && <div className={styles.toast}><AlertCircle size={15} /> {saveError}</div>}
+
+      {savedId && (
+        <div className={styles.overlay}>
+          <div className={styles.modal}>
+            <div className={styles['modal__icon']}><CheckCircle2 size={26} /></div>
+            <div className={styles['modal__title']}>Metric created!</div>
+            <div className={styles['modal__text']}>Your metric is now available for evaluations.</div>
+            <div className={styles['modal__id']}>ID: {savedId}</div>
+            <div className={styles['modal__actions']}>
+              <button className={styles.btn} onClick={resetForm}>Create Another</button>
+              <button className={`${styles.btn} ${styles['btn--primary']}`} onClick={() => onSaved(savedId)}>Go to Dashboard</button>
             </div>
           </div>
         </div>
+      )}
 
-        {confirmDelete && (
-          <ConfirmDialog
-            title="Delete this ticket?"
-            message={`"${ticket.title}" will be permanently removed. This can't be undone.`}
-            confirmLabel="Delete"
-            tone="danger"
-            loading={deleting}
-            onCancel={() => setConfirmDelete(false)}
-            onConfirm={() => onDelete(ticket.id)}
-          />
-        )}
-      </div>
+      {ToastEl}
     </div>
   );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-//Ticketboard.module.scss
-@use '../../styles/_variables' as *;
-
-// ===========================================================================
-// Ticket board — same ink/paper design system as Providers/Dashboard:
-// theme-aware neutrals from _variables, flat accent constants, hover-lift
-// cards, mono-ish instrument labels.
-//
-// Header/toolbar structure and font-scaling convention are copied 1:1 from
-// Providers.module.scss: `.ticket-board` sets one base font-size that every
-// descendant `em` value is relative to, bumped to 1rem at wide (>1800px)
-// viewports so the whole page reads larger on big monitors without any
-// individual rule changing.
-// ===========================================================================
-
-$mono:    $font-mono;
-$sans:    $font-body;
-$display: $font-display;
-$radius:  12px;
-
-$soft: 0 1px 2px rgba(20, 22, 27, 0.05);
-$lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
-
-// base font-size the board's internal `em` scale is built on — same value
-// Providers uses, so the two pages feel identical in density.
-$board-base-font: 0.8125rem;
-
-%micro {
-  font-family: $mono;
-  font-size: 0.8462em; // 0.6875rem / 0.8125rem
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-
-.ticket-board {
-  // master scale control — every em-based font-size below responds to this
-  font-size: $board-base-font;
-
-  @media (min-width: 1800px) {
-    font-size: 1rem;
-  }
-
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  flex: 1;
-  color: $ink;
-
-  // Fallback bounded height: `flex:1;min-height:0` only produces a real
-  // height when an ancestor (the app's .pg-shell) is itself a bounded-
-  // height flex container. `height: 100%` is a harmless no-op when that's
-  // already true (100% of an already-correct height is the same height),
-  // but keeps this component's own columns scrolling internally instead of
-  // silently growing with content if it's ever rendered without pg-shell.
-  height: 100%;
-}
-
-// ---- header -----------------------------------------------------------
-.ticket-board__header {
-  flex-shrink: 0;
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 24px 32px 20px;
-  margin-bottom: 20px;
-  border-bottom: 1px solid $line;
-  background: $card;
-
-  h1 {
-    font-family: $display;
-    font-size: 1.8462em; // 1.5rem / 0.8125rem
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    color: $ink;
-    line-height: 1.2;
-  }
-}
-
-.ticket-board__header-eyebrow {
-  @extend %micro;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: $signal;
-  margin-bottom: 6px;
-
-  &::before {
-    content: '';
-    width: 16px;
-    height: 2px;
-    border-radius: 2px;
-    background: $signal;
-  }
-}
-
-.ticket-board__header-sub {
-  margin-top: 4px;
-  font-size: 1.0385em; // 0.84375rem / 0.8125rem
-  color: $ink-2;
-}
-
-.ticket-board__header-meta {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 7px 13px;
-  border-radius: 999px;
-  border: 1px solid $line;
-  background: $paper;
-  font-family: $mono;
-  font-size: 0.8846em; // 0.71875rem / 0.8125rem
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: $ink-2;
-  white-space: nowrap;
-  margin-bottom: 3px;
-}
-
-// ---- toolbar ------------------------------------------------------------
-.ticket-board__toolbar {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 14px 32px;
-  background: $card;
-  border-bottom: 1px solid $line;
-  margin-bottom: 20px;
-  flex-wrap: wrap;
-}
-
-.ticket-board__search {
-  position: relative;
-  flex: 1;
-  max-width: 340px;
-  min-width: 200px;
-
-  svg {
-    position: absolute;
-    top: 50%;
-    left: 13px;
-    transform: translateY(-50%);
-    color: $ink-3;
-    pointer-events: none;
-  }
-
-  input {
-    width: 100%;
-    border: 1.5px solid $line;
-    border-radius: 10px;
-    padding: 9px 12px 9px 38px;
-    font-size: 1.0385em; // 0.84375rem / 0.8125rem
-    font-family: $sans;
-    color: $ink;
-    background: $paper;
-    transition: border-color 0.15s ease, background 0.15s ease;
-
-    &::placeholder { color: $ink-3; }
-    &:focus {
-      outline: none;
-      border-color: $signal;
-      background: $card;
-    }
-  }
-}
-
-.ticket-board__toolbar-right {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-}
-
-.ticket-board__filter-group {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px;
-  background: $paper;
-  border: 1px solid $line;
-  border-radius: 999px;
-}
-
-.ticket-board__toolbar-label {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 5px 10px 5px 11px;
-  @extend %micro;
-  font-size: 0.7692em; // 0.625rem / 0.8125rem
-  color: $ink-3;
-  white-space: nowrap;
-}
-
-.ticket-board__filter-pill {
-  padding: 6px 13px;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: $ink-2;
-  font-size: 0.9615em; // 0.78125rem / 0.8125rem
-  font-weight: 650;
-  cursor: pointer;
-  transition: all 0.15s ease;
-
-  &:hover { color: $ink; }
-
-  &--on {
-    background: $card;
-    color: $signal;
-    box-shadow: $soft;
-  }
-}
-
-.ticket-board__toolbar-divider {
-  flex-shrink: 0;
-  width: 1px;
-  height: 26px;
-  background: $line;
-}
-
-.ticket-board__add-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 9px 15px;
-  border: 1px solid $signal;
-  border-radius: 10px;
-  background: $signal;
-  color: #fff;
-  font-family: $sans;
-  font-size: 1em; // 0.8125rem / 0.8125rem (base)
-  font-weight: 650;
-  cursor: pointer;
-  box-shadow: $soft;
-  transition: background 0.16s ease, border-color 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
-
-  &:hover { background: $signal-2; border-color: $signal-2; transform: translateY(-1px); box-shadow: $lift; }
-}
-
-// ---- columns --------------------------------------------------------------
-.ticket-board__columns {
-  padding: 0 32px 28px;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1em;
-  align-items: stretch;
-  flex: 1;
-  min-height: 0;
-}
-.ticket-board__column {
-  height: 100%;
-  min-height: 0;
-  background: $paper;
-  border: 1px solid $line-2;
-  border-radius: $radius;
-  padding: 0.75em;
-  display: flex;
-  flex-direction: column;
-  gap: 0.6em;
-  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
-}
-.ticket-board__column--over {
-  border-color: $signal;
-  border-style: dashed;
-  background: $wash;
-  box-shadow: inset 0 0 0 1px $signal;
-}
-.ticket-board__column--locked {
-  border-color: $danger;
-  background: $danger-wash;
-  box-shadow: inset 0 0 0 1px $danger;
-  cursor: not-allowed;
-}
-.ticket-board__column-head {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 0.5em;
-  padding: 0.1em 0.25em;
-}
-.ticket-board__column-dot {
-  width: 0.6em;
-  height: 0.6em;
-  border-radius: 50%;
-  flex: none;
-}
-.ticket-board__column-title {
-  font-weight: 600;
-  font-size: 0.92em;
-  letter-spacing: 0.01em;
-}
-.ticket-board__column-count {
-  margin-left: auto;
-  min-width: 1.6em;
-  height: 1.6em;
-  padding: 0 0.4em;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 6px;
-  background: $ink-wash;
-  color: $ink-2;
-  font-size: 0.78em;
-  font-weight: 600;
-  font-family: $mono;
-}
-.ticket-board__column-lock {
-  color: $ink-3;
-}
-.ticket-board__column-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 0.6em;
-  // small inset so the scrollbar doesn't sit flush against the cards
-  padding-right: 0.15em;
-  margin-right: -0.15em;
-}
-.ticket-board__column-empty {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  color: $ink-3;
-  font-size: 0.82em;
-  border: 1px dashed $line;
-  border-radius: 8px;
-  padding: 1em;
-}
-
-// ---- card -----------------------------------------------------------------
-.ticket-card {
-  --priority-accent: #{$ink-3};
-  // Slightly below page body size — dense enough for a kanban card without
-  // reading oversized next to the column chrome around it.
-  font-size: 0.92em;
-  box-sizing: border-box;
-  position: relative;
-  background: $card;
-  border: 1px solid $line;
-  border-radius: 10px;
-  padding: 0.75em 0.8em;
-  display: flex;
-  flex-direction: column;
-  gap: 0.55em;
-  cursor: grab;
-  box-shadow: $shadow-2;
-  transition: transform 0.12s, box-shadow 0.12s, border-color 0.12s, opacity 0.12s;
-  &:hover {
-    transform: translateY(-1px);
-    box-shadow: $shadow-3;
-  }
-  &:active {
-    cursor: grabbing;
-  }
-}
-.ticket-card--moving {
-  opacity: 0.6;
-  cursor: default;
-}
-.ticket-card--dragging {
-  opacity: 0.35;
-  border-style: dashed;
-  border-color: $signal;
-  box-shadow: none;
-  transform: scale(0.98);
-  cursor: grabbing;
-  &:hover {
-    transform: scale(0.98);
-  }
-}
-// The floating clone rendered inside <DragOverlay> — this is the element
-// that actually follows the pointer, giving drag-and-drop its "the card
-// itself is moving" feel instead of leaving the source card static.
-// `transition: none` is deliberate and important: dnd-kit repositions this
-// element every frame via its own transform, and any CSS transition here
-// would ease/animate toward each new position instead of snapping to it
-// instantly — that's what made the card visibly lag behind the cursor.
-// No decorative rotate/scale either, since any extra transform shifts the
-// element's visual box relative to its actual (pointer-aligned) position.
-.ticket-card--overlay {
-  cursor: grabbing;
-  box-shadow: $shadow-4;
-  opacity: 0.98;
-  pointer-events: none;
-  transition: none !important;
-  transform: none !important;
-  &:hover {
-    transform: none !important;
-  }
-}
-.ticket-card--discarded {
-  opacity: 0.72;
-  .ticket-card__title {
-    text-decoration: line-through;
-    color: $ink-2;
-  }
-}
-.ticket-card__top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5em;
-}
-.ticket-card__key {
-  font-family: $mono;
-  font-size: 0.85em;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: $ink-3;
-}
-.ticket-card__top-right {
-  display: flex;
-  align-items: center;
-  gap: 0.4em;
-}
-.ticket-card__priority {
-  --priority-accent: #{$ink-3};
-  font-size: 0.8em;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  padding: 0.25em 0.5em;
-  border-radius: 5px;
-  color: var(--priority-accent);
-  background: color-mix(in srgb, var(--priority-accent) 12%, transparent);
-}
-.ticket-card__spin {
-  animation: spin 1.5s linear infinite;
-  color: $signal;
-}
-.ticket-card__title {
-  margin: 0;
-  font-size: 1.03em;
-  font-weight: 600;
-  line-height: 1.35;
-  color: $ink;
-}
-.ticket-card__labels {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35em;
-}
-.ticket-card__label {
-  font-size: 0.82em;
-  padding: 0.2em 0.5em;
-  border-radius: 5px;
-  background: $ink-wash;
-  color: $ink-2;
-}
-.ticket-card__foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5em;
-  margin-top: 0.1em;
-}
-.ticket-card__resolution {
-  font-size: 0.78em;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  padding: 0.2em 0.5em;
-  border-radius: 5px;
-}
-.ticket-card__resolution--done {
-  color: $ok;
-  background: $ok-wash;
-}
-.ticket-card__resolution--discarded {
-  color: $rose-ink;
-  background: $rose-ink-wash;
-}
-// Still used elsewhere (comment avatars, detail rail) — not card-specific.
-.ticket-card__avatar {
-  width: 1.7em;
-  height: 1.7em;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.72em;
-  font-weight: 700;
-  color: #fff;
-  border: 2px solid $card;
-  & + & {
-    margin-left: -0.5em;
-  }
-}
-
-// ---- card: assignee/requester rows, full name (not just initials) --------
-.ticket-card__people {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35em;
-  margin-top: 0.15em;
-}
-.ticket-card__person {
-  display: flex;
-  align-items: center;
-  gap: 0.4em;
-  min-width: 0;
-}
-.ticket-card__person-avatar {
-  flex: none;
-  width: 1.5em;
-  height: 1.5em;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.64em;
-  font-weight: 700;
-  color: #fff;
-}
-.ticket-card__person-avatar--owner {
-  box-shadow: 0 0 0 1px $line;
-}
-.ticket-card__person-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.8em;
-  color: $ink-2;
-  display: flex;
-  align-items: center;
-  gap: 0.35em;
-}
-.ticket-card__you {
-  flex: none;
-  font-size: 0.72em;
-  font-weight: 700;
-  color: $signal;
-  background: $wash;
-  padding: 0.05em 0.4em;
-  border-radius: 4px;
-}
-
-// ---- loading --------------------------------------------------------------
-.ticket-board__loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.6em;
-  padding: 4em;
-  color: $ink-3;
-}
-.ticket-board__spin {
-  animation: spin 1.5s linear infinite;
-  color: $signal;
-}
-
-
-@keyframes ticket-fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-@keyframes ticket-modal-in {
-  from { opacity: 0; transform: translateY(8px) scale(0.98); }
-  to { opacity: 1; transform: none; }
-}
-
-// ===========================================================================
-// Modal shell — shared by the ticket detail view and the close-confirm
-// dialog. Same pattern used elsewhere in the app (see Datasets): a
-// full-viewport fixed overlay that centers its content with flexbox, and a
-// separate fade-in vs scale-in animation for the scrim and the panel.
-// Rendered inline (no portal) — position:fixed + flex centering is enough
-// as long as no ancestor sets transform/filter/perspective, which nothing
-// in this component tree does.
-// ===========================================================================
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 200;
-  background: rgba(20, 22, 27, 0.45);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  animation: ticket-fade-in 0.15s ease;
-}
-.modal {
-  width: min(980px, 100%);
-  max-height: 88vh;
-  display: flex;
-  flex-direction: column;
-  background: $card;
-  border: 1px solid $line;
-  border-radius: 18px;
-  box-shadow: 0 24px 60px -20px rgba(20, 22, 27, 0.4);
-  overflow: hidden;
-  animation: ticket-modal-in 0.18s cubic-bezier(0.22, 1, 0.36, 1);
-  // Own base size, slightly larger than the page base at very wide
-  // viewports — a focused modal reads better a touch bigger than the
-  // dense board sitting behind it.
-  font-size: 0.8125rem;
-  @media (min-width: 1800px) {
-    font-size: 1.0625rem;
-  }
-}
-.modal--sm {
-  width: min(380px, 100%);
-}
-.modal-hdr {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5em;
-  padding: 1.1em 1.25em;
-  border-bottom: 1px solid $line;
-}
-.modal-key {
-  font-family: $mono;
-  font-size: 0.8em;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: $ink-3;
-  margin-right: 0.6em;
-}
-.modal-close {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  border: 1px solid $line;
-  background: $paper;
-  color: $ink-2;
-  cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease;
-  &:hover:not(:disabled) { border-color: $ink-3; color: $ink; }
-  &:disabled { opacity: 0.4; cursor: not-allowed; }
-}
-
-// Two-pane body used by the detail modal: scrollable main content on the
-// left, a narrow fixed-width meta rail on the right.
-.modal-body {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  overflow: hidden;
-}
-.modal-main {
-  flex: 1;
-  min-width: 0;
-  overflow-y: auto;
-  padding: 1.25em;
-  display: flex;
-  flex-direction: column;
-  gap: 1.1em;
-}
-.modal-rail {
-  flex: none;
-  width: 230px;
-  border-left: 1px solid $line;
-  background: $paper;
-  overflow-y: auto;
-  padding: 1.1em;
-  display: flex;
-  flex-direction: column;
-  gap: 1.2em;
-}
-
-// ===========================================================================
-// Detail view content (renders inside .modal-main / .modal-rail above)
-// ===========================================================================
-.ticket-detail__title {
-  margin: 0;
-  font-size: 1.15em;
-  font-weight: 700;
-  line-height: 1.35;
-}
-.ticket-detail__desc {
-  margin: 0;
-  color: $ink-2;
-  font-size: 0.9em;
-  line-height: 1.55;
-
-  p {
-    margin: 0 0 0.6em;
-    &:last-child {
-      margin-bottom: 0;
-    }
-  }
-  ul,
-  ol {
-    margin: 0 0 0.6em;
-    padding-left: 1.4em;
-  }
-  li {
-    margin-bottom: 0.25em;
-  }
-  strong {
-    font-weight: 700;
-    color: $ink;
-  }
-  img {
-    display: block;
-    max-width: 100%;
-    max-height: 420px;
-    height: auto;
-    border-radius: 8px;
-    border: 1px solid $line;
-    margin: 0.5em 0;
-    object-fit: contain;
-    cursor: zoom-in;
-  }
-}
-.ticket-detail__desc--empty {
-  margin: 0;
-  color: $ink-3;
-  font-size: 0.88em;
-  font-style: italic;
-}
-
-// ---- rail: compact people chips (auto-width, not stretched) --------------
-.ticket-detail__people {
-  display: flex;
-  flex-direction: column;
-  gap: 0.8em;
-}
-.ticket-detail__person {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35em;
-}
-.ticket-detail__person-label {
-  font-size: 0.68em;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: $ink-3;
-}
-.ticket-detail__person-val {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45em;
-  width: fit-content;
-  max-width: 100%;
-  font-size: 0.86em;
-  font-weight: 500;
-  padding: 0.3em 0.55em 0.3em 0.3em;
-  border-radius: 999px;
-  background: $card;
-  border: 1px solid $line;
-}
-.ticket-detail__you {
-  font-size: 0.72em;
-  font-weight: 700;
-  color: $signal;
-  background: $wash;
-  padding: 0.1em 0.4em;
-  border-radius: 4px;
-}
-.ticket-detail__muted {
-  color: $ink-3;
-}
-.ticket-detail__section-label {
-  display: flex;
-  align-items: center;
-  gap: 0.4em;
-  font-size: 0.68em;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: $ink-3;
-}
-
-// ---- rail: status — compact auto-width pills, not a full-width grid ------
-.ticket-detail__stepper {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4em;
-}
-.ticket-detail__step {
-  --step-accent: #{$signal};
-  flex: none;
-  border: 1px solid $line;
-  background: $card;
-  color: $ink-2;
-  font-size: 0.78em;
-  font-weight: 600;
-  padding: 0.45em 0.65em;
-  border-radius: 999px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.3em;
-  transition: border-color 0.12s, background 0.12s, color 0.12s;
-  &:hover:not(:disabled) {
-    border-color: var(--step-accent);
-    color: $ink;
-  }
-  &:disabled {
-    cursor: default;
-  }
-}
-.ticket-detail__step--current {
-  border-color: var(--step-accent);
-  background: color-mix(in srgb, var(--step-accent) 12%, transparent);
-  color: var(--step-accent);
-}
-
-// ---- rail: terminal actions — compact auto-width buttons, side by side ---
-.ticket-detail__terminal {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5em;
-}
-.ticket-detail__done-btn,
-.ticket-detail__discard-btn {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.4em;
-  padding: 0.5em 0.8em;
-  border-radius: 999px;
-  font-size: 0.8em;
-  font-weight: 600;
-  cursor: pointer;
-  border: 1px solid transparent;
-  transition: filter 0.12s, opacity 0.12s;
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-  &:not(:disabled):hover {
-    filter: brightness(0.96);
-  }
-}
-.ticket-detail__done-btn {
-  background: $ok;
-  color: #fff;
-}
-.ticket-detail__discard-btn {
-  background: $card;
-  border-color: $danger;
-  color: $danger;
-}
-.ticket-detail__gate-note {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.4em;
-  margin: 0;
-  font-size: 0.75em;
-  line-height: 1.4;
-  color: $ink-3;
-}
-
-// ---- main: comments ---------------------------------------------------------
-.ticket-detail__comments {
-  display: flex;
-  flex-direction: column;
-  gap: 0.9em;
-}
-.ticket-detail__comment {
-  display: flex;
-  gap: 0.6em;
-}
-.ticket-detail__comment-body {
-  flex: 1;
-  min-width: 0;
-  background: $paper;
-  border: 1px solid $line-2;
-  border-radius: 10px;
-  padding: 0.6em 0.75em;
-}
-.ticket-detail__comment-head {
-  display: flex;
-  align-items: baseline;
-  gap: 0.5em;
-  margin-bottom: 0.2em;
-}
-.ticket-detail__comment-author {
-  font-size: 0.85em;
-  font-weight: 700;
-  color: $ink;
-}
-.ticket-detail__comment-time {
-  font-size: 0.72em;
-  color: $ink-3;
-}
-// Comment text is rich-text HTML now (same editor as the description), so
-// this needs the same paragraph/list/image handling — not just plain
-// pre-wrapped text.
-.ticket-detail__comment-text {
-  font-size: 0.86em;
-  line-height: 1.5;
-  color: $ink-2;
-
-  p {
-    margin: 0 0 0.5em;
-    &:last-child {
-      margin-bottom: 0;
-    }
-  }
-  ul,
-  ol {
-    margin: 0 0 0.5em;
-    padding-left: 1.3em;
-  }
-  li {
-    margin-bottom: 0.2em;
-  }
-  strong {
-    font-weight: 700;
-    color: $ink;
-  }
-  img {
-    display: block;
-    max-width: 100%;
-    max-height: 280px;
-    height: auto;
-    border-radius: 8px;
-    border: 1px solid $line;
-    margin: 0.4em 0;
-    object-fit: contain;
-  }
-}
-.ticket-detail__comment-empty {
-  font-size: 0.85em;
-  color: $ink-3;
-  font-style: italic;
-}
-
-// Stacked, not a single row: the composer is a full rich-text editor now
-// (paste/drag/insert images, same as the description), so it needs its own
-// line — a "Post comment" button sits below it, right-aligned.
-.ticket-detail__comment-form {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5em;
-}
-.ticket-detail__comment-submit {
-  align-self: flex-end;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.4em;
-  padding: 0.5em 0.9em;
-  border-radius: 8px;
-  border: 1px solid $signal;
-  background: $signal;
-  color: #fff;
-  font-size: 0.82em;
-  font-weight: 650;
-  cursor: pointer;
-  transition: background 0.15s;
-  &:hover:not(:disabled) {
-    background: $signal-2;
-  }
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-}
-
-// ===========================================================================
-// Close-ticket confirmation — reuses .modal-overlay / .modal.modal--sm
-// above, just with its own inner content.
-// ===========================================================================
-.close-confirm-body {
-  padding: 1.5em 1.5em 1.25em;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-  gap: 0.3em;
-}
-.close-confirm__key {
-  font-family: $mono;
-  font-size: 0.75em;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  color: $ink-3;
-}
-.close-confirm__title {
-  margin: 0.3em 0 0;
-  font-size: 1.15em;
-  font-weight: 700;
-  color: $ink;
-}
-.close-confirm__msg {
-  margin: 0;
-  font-size: 0.9em;
-  color: $ink-2;
-  max-width: 26em;
-}
-.close-confirm__actions {
-  display: flex;
-  gap: 0.6em;
-  width: 100%;
-  margin-top: 1em;
-}
-.close-confirm__done,
-.close-confirm__discard {
-  flex: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.4em;
-  padding: 0.7em 0.8em;
-  border-radius: 10px;
-  font-size: 0.9em;
-  font-weight: 650;
-  cursor: pointer;
-  border: 1px solid transparent;
-  transition: filter 0.12s, transform 0.12s;
-  &:hover {
-    filter: brightness(0.96);
-    transform: translateY(-1px);
-  }
-}
-.close-confirm__done {
-  background: $ok;
-  color: #fff;
-}
-.close-confirm__discard {
-  background: $card;
-  border-color: $danger;
-  color: $danger;
-}
-.close-confirm__cancel {
-  margin-top: 0.6em;
-  border: 0;
-  background: transparent;
-  color: $ink-3;
-  font-size: 0.84em;
-  cursor: pointer;
-  padding: 0.3em 0.6em;
-  &:hover {
-    color: $ink;
-  }
-}
-
-@media (max-width: 820px) {
-  .ticket-board__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
-  .ticket-board__toolbar { padding: 12px 18px; }
-  .ticket-board__columns { padding: 0 18px 20px; grid-template-columns: 1fr; }
-  .modal-overlay { padding: 12px; }
-  .modal { width: 100%; max-height: 94vh; border-radius: 14px; }
-  .modal-body { flex-direction: column; overflow-y: auto; }
-  .modal-rail { width: auto; border-left: 0; border-top: 1px solid $line; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .modal-overlay,
-  .modal,
-  .ticket-board__spin,
-  .ticket-card__spin {
-    animation: none;
-  }
-}
-
-// ===========================================================================
-// Advanced filters — a toggle button in the toolbar that opens a floating
-// dropdown panel (assignee / reporter / created date range), all combining
-// via AND with each other and with the search box + priority pills. Pure
-// client-side filtering over tickets already loaded — no separate request.
-// ===========================================================================
-.adv-filters {
-  position: relative;
-}
-.adv-filters__toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4em;
-  padding: 0.5em 0.75em;
-  border-radius: 999px;
-  border: 1px solid $line;
-  background: $card;
-  color: $ink-2;
-  font-size: 0.78em;
-  font-weight: 650;
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s, background 0.15s;
-  &:hover {
-    border-color: $ink-3;
-    color: $ink;
-  }
-}
-.adv-filters__toggle--open {
-  border-color: $signal;
-  color: $signal;
-  background: $wash;
-}
-.adv-filters__badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 1.3em;
-  height: 1.3em;
-  padding: 0 0.35em;
-  border-radius: 999px;
-  background: $signal;
-  color: #fff;
-  font-size: 0.72em;
-  font-weight: 700;
-}
-.adv-filters__chevron {
-  transition: transform 0.15s;
-  .adv-filters__toggle--open & {
-    transform: rotate(180deg);
-  }
-}
-.adv-filters__panel {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  z-index: 30;
-  width: 300px;
-  max-width: 90vw;
-  background: $card;
-  border: 1px solid $line;
-  border-radius: 12px;
-  box-shadow: 0 14px 32px -12px rgba(20, 22, 27, 0.35);
-  padding: 0.9em;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75em;
-  animation: ticket-modal-in 0.14s ease both;
-}
-.adv-filters__field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35em;
-}
-.adv-filters__label {
-  font-size: 0.72em;
-  font-weight: 650;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: $ink-3;
-}
-.adv-filters__date {
-  width: 100%;
-  border: 1px solid $line;
-  border-radius: 8px;
-  background: $card;
-  color: $ink;
-  font-size: 0.85em;
-  font-family: inherit;
-  padding: 0.55em 0.6em;
-  outline: 0;
-  transition: border-color 0.15s, box-shadow 0.15s;
-  &:focus {
-    border-color: $signal;
-    box-shadow: 0 0 0 3px $wash;
-  }
-}
-.adv-filters__clear {
-  align-self: flex-start;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35em;
-  border: 0;
-  background: transparent;
-  color: $ink-3;
-  font-size: 0.78em;
-  font-weight: 600;
-  cursor: pointer;
-  padding: 0.2em 0;
-  margin-top: 0.1em;
-  &:hover:not(:disabled) {
-    color: $danger;
-  }
-  &:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-}
-
-// ===========================================================================
-// Role badges — small pills next to a name marking them as the Reporter or
-// Assignee, and an explicit "Unassigned" badge in place of a name when
-// there's no assignee, instead of just omitting the row/relying on hover.
-// Shared by both the card (.ticket-card__person) and the detail rail
-// (.ticket-detail__person-val).
-// ===========================================================================
-.ticket-role-badge {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  font-size: 0.62em;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  padding: 0.2em 0.5em;
-  border-radius: 999px;
-  white-space: nowrap;
-}
-.ticket-role-badge--reporter {
-  background: $wash;
-  color: $signal;
-}
-.ticket-role-badge--assignee {
-  background: $sky-ink-wash;
-  color: $sky-ink;
-}
-.ticket-role-badge--unassigned {
-  background: $ink-wash;
-  color: $ink-3;
-  border: 1px dashed $line;
-}
-
-// Placeholder avatar circle shown instead of initials when there's no
-// assignee — a plain dashed ring rather than a solid color, so it reads as
-// "empty" at a glance.
-.ticket-card__person-avatar--empty {
-  flex: none;
-  width: 1.5em;
-  height: 1.5em;
-  border-radius: 50%;
-  border: 1.5px dashed $line;
-  background: $paper;
 }
