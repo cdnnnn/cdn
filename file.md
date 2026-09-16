@@ -32,20 +32,36 @@ export interface TicketComment {
   created_at: string;
 }
 
-/** One status-change audit entry — who moved the ticket, from where, to
- *  where, and when. Server-appended: written whenever
- *  `PATCH /tickets/:id/status` (see MoveTicketRequest) succeeds, and
- *  returned as part of the ticket from then on — there's no separate
- *  "history" endpoint, it just rides along on the ticket object. */
-export interface TicketHistoryEntry {
+interface TicketHistoryEntryBase {
   id: string;
   actor: TicketUser;
+  created_at: string;
+}
+
+/** A status/column move — who moved the ticket, from where, to where. */
+export interface TicketStatusHistoryEntry extends TicketHistoryEntryBase {
+  type: 'status';
   from_status: TicketStatus;
   to_status: TicketStatus;
   /** Only set on entries where to_status === 'done'. */
   resolution?: TicketResolution | null;
-  created_at: string;
 }
+
+/** An assignee change — either side may be `null` (assigning from
+ *  Unassigned, or unassigning back to it). */
+export interface TicketAssigneeHistoryEntry extends TicketHistoryEntryBase {
+  type: 'assignee';
+  from_assignee: TicketUser | null;
+  to_assignee: TicketUser | null;
+}
+
+/** One audit-trail entry, of either kind above. Server-appended: a status
+ *  entry is written whenever `PATCH /tickets/:id/status` succeeds (see
+ *  MoveTicketRequest), an assignee entry whenever `PATCH /tickets/:id`
+ *  (see UpdateTicketRequest) changes `assignee_id`. Both just ride along on
+ *  the ticket object returned by those same endpoints — there's no
+ *  separate "history" endpoint. */
+export type TicketHistoryEntry = TicketStatusHistoryEntry | TicketAssigneeHistoryEntry;
 
 export interface Ticket {
   id: string;
@@ -66,8 +82,8 @@ export interface Ticket {
   assignee?: TicketUser | null;
   labels?: string[];
   comments?: TicketComment[];
-  /** Every status change this ticket has been through, oldest first.
-   *  Absent/empty for a ticket that's never left its initial column. */
+  /** Every status change and assignee change this ticket has been through,
+   *  oldest first. Absent/empty for a ticket that's never changed either. */
   history?: TicketHistoryEntry[];
   created_at: string;
   updated_at: string;
@@ -104,6 +120,240 @@ export interface MoveTicketRequest {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+//Ticketsslice.ts
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import { ticketsApi } from '../../api/endpoints/tickets';
+import type {
+  Ticket,
+  TicketStatus,
+  TicketResolution,
+  CreateTicketRequest,
+  UpdateTicketRequest,
+  AddCommentRequest,
+} from '../../types/tickets';
+
+type FetchStatus = 'idle' | 'loading' | 'succeeded' | 'failed';
+
+interface MoveArg {
+  id: string;
+  status: TicketStatus;
+  resolution?: TicketResolution | null;
+}
+
+interface TicketsState {
+  items: Ticket[];
+  status: FetchStatus;
+  error: string | null;
+  creating: boolean;
+  updatingId: string | null;
+  deletingId: string | null;
+  commentingId: string | null;
+  // Ids currently mid-move: optimistically applied in `pending`, confirmed in
+  // `fulfilled`, rolled back in `rejected`.
+  movingIds: string[];
+  // Snapshot of {status, resolution} captured at move-start, keyed by id, so a
+  // failed transition can be reverted to exactly where the card came from.
+  rollback: Record<string, { status: TicketStatus; resolution?: TicketResolution | null }>;
+}
+
+const initialState: TicketsState = {
+  items: [],
+  status: 'idle',
+  error: null,
+  creating: false,
+  updatingId: null,
+  deletingId: null,
+  commentingId: null,
+  movingIds: [],
+  rollback: {},
+};
+
+export const fetchTickets = createAsyncThunk('tickets/fetchAll', () => ticketsApi.list());
+
+export const createTicket = createAsyncThunk(
+  'tickets/create',
+  (payload: CreateTicketRequest) => ticketsApi.create(payload)
+);
+
+// Same "don't trust the mutation endpoint's response body, refetch instead"
+// reasoning as addTicketComment below — this is also where the backend is
+// expected to append an assignee-change history entry (docs/API-SPEC.md §3),
+// so trusting a response that might not include the updated `history` array
+// would silently leave that entry invisible until something else refetched.
+export const updateTicket = createAsyncThunk(
+  'tickets/update',
+  async (payload: UpdateTicketRequest, { dispatch }) => {
+    await ticketsApi.update(payload);
+    await dispatch(fetchTickets());
+  }
+);
+
+// The board moves the card the instant you drop it (see `pending` below) and
+// only reconciles with the server response afterward, so drag-and-drop feels
+// immediate. A rejection snaps it back. Like updateTicket/addTicketComment,
+// this refetches rather than trusting the move endpoint's response body —
+// that response is exactly where the backend appends a new status-history
+// entry (docs/API-SPEC.md §4), and trusting a response shape that might not
+// include it was the actual cause of "history doesn't show until I refresh".
+export const moveTicket = createAsyncThunk(
+  'tickets/move',
+  async (payload: MoveArg, { dispatch }) => {
+    await ticketsApi.move(payload);
+    await dispatch(fetchTickets());
+  }
+);
+
+export const deleteTicket = createAsyncThunk(
+  'tickets/delete',
+  async (id: string) => {
+    const res = await ticketsApi.remove(id);
+    return { id: res.id || id };
+  }
+);
+
+// The comment endpoint's response shape can vary across backends (full
+// updated ticket vs. just the created comment vs. some other envelope) —
+// rather than trust it and upsert `action.payload` directly (which silently
+// does nothing if that assumption is wrong, leaving the new comment
+// invisible until something else refetches), refetch the authoritative
+// list once the post succeeds. Same "mutate, then refetch" pattern already
+// used by createCustomModel elsewhere in this app.
+export const addTicketComment = createAsyncThunk(
+  'tickets/addComment',
+  async (payload: AddCommentRequest, { dispatch }) => {
+    await ticketsApi.addComment(payload);
+    await dispatch(fetchTickets());
+  }
+);
+
+const upsert = (list: Ticket[], t: Ticket) => {
+  const i = list.findIndex((x) => x.id === t.id);
+  if (i === -1) return [t, ...list];
+  const next = list.slice();
+  next[i] = t;
+  return next;
+};
+
+const ticketsSlice = createSlice({
+  name: 'tickets',
+  initialState,
+  reducers: {},
+  extraReducers: (builder) => {
+    builder
+      // ---- fetch ----------------------------------------------------------
+      .addCase(fetchTickets.pending, (state) => {
+        state.status = 'loading';
+      })
+      .addCase(fetchTickets.fulfilled, (state, action) => {
+        state.status = 'succeeded';
+        state.items = action.payload ?? [];
+      })
+      .addCase(fetchTickets.rejected, (state, action) => {
+        state.status = 'failed';
+        state.error = action.error.message || 'Failed to load tickets';
+      })
+
+      // ---- create ---------------------------------------------------------
+      .addCase(createTicket.pending, (state) => {
+        state.creating = true;
+      })
+      .addCase(createTicket.fulfilled, (state, action) => {
+        state.creating = false;
+        state.items = upsert(state.items, action.payload);
+      })
+      .addCase(createTicket.rejected, (state, action) => {
+        state.creating = false;
+        state.error = action.error.message || 'Failed to create ticket';
+      })
+
+      // ---- update (metadata) ---------------------------------------------
+      .addCase(updateTicket.pending, (state, action) => {
+        state.updatingId = action.meta.arg.id;
+      })
+      .addCase(updateTicket.fulfilled, (state) => {
+        state.updatingId = null;
+        // state.items already refreshed by the fetchTickets() the thunk
+        // dispatched internally — see the comment on updateTicket above.
+      })
+      .addCase(updateTicket.rejected, (state, action) => {
+        state.updatingId = null;
+        state.error = action.error.message || 'Failed to update ticket';
+      })
+
+      // ---- move (optimistic) ---------------------------------------------
+      .addCase(moveTicket.pending, (state, action) => {
+        const { id, status, resolution } = action.meta.arg;
+        const t = state.items.find((x) => x.id === id);
+        if (!t) return;
+        state.rollback[id] = { status: t.status, resolution: t.resolution ?? null };
+        t.status = status;
+        t.resolution = status === 'done' ? resolution ?? 'completed' : null;
+        if (!state.movingIds.includes(id)) state.movingIds.push(id);
+      })
+      .addCase(moveTicket.fulfilled, (state, action) => {
+        const { id } = action.meta.arg;
+        state.movingIds = state.movingIds.filter((x) => x !== id);
+        delete state.rollback[id];
+        // state.items already refreshed by the fetchTickets() the thunk
+        // dispatched internally, including the new history entry — see the
+        // comment on moveTicket above.
+      })
+      .addCase(moveTicket.rejected, (state, action) => {
+        const { id } = action.meta.arg;
+        state.movingIds = state.movingIds.filter((x) => x !== id);
+        const snap = state.rollback[id];
+        const t = state.items.find((x) => x.id === id);
+        if (t && snap) {
+          t.status = snap.status;
+          t.resolution = snap.resolution ?? null;
+        }
+        delete state.rollback[id];
+        state.error = action.error.message || 'Failed to move ticket';
+      })
+
+      // ---- delete ---------------------------------------------------------
+      .addCase(deleteTicket.pending, (state, action) => {
+        state.deletingId = action.meta.arg;
+      })
+      .addCase(deleteTicket.fulfilled, (state, action) => {
+        state.deletingId = null;
+        state.items = state.items.filter((m) => m.id !== action.payload.id);
+      })
+      .addCase(deleteTicket.rejected, (state, action) => {
+        state.deletingId = null;
+        state.error = action.error.message || 'Failed to delete ticket';
+      })
+
+      // ---- add comment ------------------------------------------------------
+      .addCase(addTicketComment.pending, (state, action) => {
+        state.commentingId = action.meta.arg.ticket_id;
+      })
+      .addCase(addTicketComment.fulfilled, (state) => {
+        state.commentingId = null;
+        // state.items is already up to date — the thunk dispatched
+        // fetchTickets() internally, and that action's own .fulfilled
+        // reducer (above) already replaced state.items.
+      })
+      .addCase(addTicketComment.rejected, (state, action) => {
+        state.commentingId = null;
+        state.error = action.error.message || 'Failed to post comment';
+      });
+  },
+});
+
+export default ticketsSlice.reducer;
 
 
 
@@ -183,6 +433,13 @@ const historyStatusAccent = (status: TicketStatus, resolution?: TicketResolution
   return COLUMNS.find((c) => c.status === status)?.accent ?? '#8A909B';
 };
 
+const assigneeChangeVerb = (h: { from_assignee: TicketUser | null; to_assignee: TicketUser | null }) => {
+  if (!h.from_assignee && h.to_assignee) return `assigned it to ${h.to_assignee.name}`;
+  if (h.from_assignee && !h.to_assignee) return `unassigned it (was ${h.from_assignee.name})`;
+  if (h.from_assignee && h.to_assignee) return `reassigned it from ${h.from_assignee.name} to ${h.to_assignee.name}`;
+  return 'changed the assignee';
+};
+
 // Centered modal, same shell as the rest of the app's dialogs (see
 // .modal-overlay / .modal in TicketBoard.module.scss). Rendered inline —
 // no portal — position:fixed + flex-centering is sufficient here.
@@ -208,6 +465,7 @@ export default function TicketDetailSidebar({
   const commentingId = useAppSelector((s) => s.tickets.commentingId);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [commentDraft, setCommentDraft] = useState('');
+  const [activeTab, setActiveTab] = useState<'comments' | 'history'>('comments');
 
   if (!ticket) return null; // e.g. deleted from another tab/session
 
@@ -216,6 +474,7 @@ export default function TicketDetailSidebar({
   const PriorityIcon = PRIORITY_ICON[ticket.priority];
   const posting = commentingId === ticket.id;
   const comments = ticket.comments ?? [];
+  const history = ticket.history ?? [];
 
   const submitComment = () => {
     if (isEmptyHtml(commentDraft)) return;
@@ -302,47 +561,77 @@ export default function TicketDetailSidebar({
               </div>
             )}
 
-            <div>
-              <div className={styles['ticket-detail__section-label']}>
-                <HistoryIcon size={11} />
-                History {(ticket.history ?? []).length > 0 && `(${(ticket.history ?? []).length})`}
-              </div>
-              <div className={styles['ticket-detail__history']} style={{ marginTop: '0.6em' }}>
-                {(ticket.history ?? []).length === 0 && (
-                  <p className={styles['ticket-detail__history-empty']}>
-                    No status changes yet — still in {historyStatusLabel(ticket.status)}.
-                  </p>
-                )}
-                {(ticket.history ?? []).map((h) => (
-                  <div key={h.id} className={styles['ticket-detail__history-item']}>
-                    <span
-                      className={styles['ticket-detail__history-dot']}
-                      style={{ background: historyStatusAccent(h.to_status, h.resolution) }}
-                    />
-                    <span className={styles['ticket-detail__history-text']}>
-                      <strong>{h.actor.name}</strong> moved{' '}
-                      <span className={styles['ticket-detail__history-from']}>
-                        {historyStatusLabel(h.from_status)}
-                      </span>
-                      {' → '}
-                      <span
-                        className={styles['ticket-detail__history-to']}
-                        style={{ color: historyStatusAccent(h.to_status, h.resolution) }}
-                      >
-                        {historyStatusLabel(h.to_status, h.resolution)}
-                      </span>
-                    </span>
-                    <span className={styles['ticket-detail__history-time']}>{formatTime(h.created_at)}</span>
-                  </div>
-                ))}
-              </div>
+            <div className={styles['ticket-detail__tabs']}>
+              <button
+                type="button"
+                className={[
+                  styles['ticket-detail__tab'],
+                  activeTab === 'comments' ? styles['ticket-detail__tab--active'] : '',
+                ].join(' ')}
+                onClick={() => setActiveTab('comments')}
+              >
+                Comments {comments.length > 0 && `(${comments.length})`}
+              </button>
+              <button
+                type="button"
+                className={[
+                  styles['ticket-detail__tab'],
+                  activeTab === 'history' ? styles['ticket-detail__tab--active'] : '',
+                ].join(' ')}
+                onClick={() => setActiveTab('history')}
+              >
+                <HistoryIcon size={12} />
+                History {history.length > 0 && `(${history.length})`}
+              </button>
             </div>
 
-            <div>
-              <div className={styles['ticket-detail__section-label']}>
-                Comments {comments.length > 0 && `(${comments.length})`}
+            {activeTab === 'history' && (
+              <div className={styles['ticket-detail__history']}>
+                {history.length === 0 && (
+                  <p className={styles['ticket-detail__history-empty']}>
+                    No changes yet — still in {historyStatusLabel(ticket.status)}.
+                  </p>
+                )}
+                {history.map((h) =>
+                  h.type === 'assignee' ? (
+                    <div key={h.id} className={styles['ticket-detail__history-item']}>
+                      <span
+                        className={styles['ticket-detail__history-dot']}
+                        style={{ background: h.to_assignee ? avatarAccent(h.to_assignee) : '#8A909B' }}
+                      />
+                      <span className={styles['ticket-detail__history-text']}>
+                        <strong>{h.actor.name}</strong> {assigneeChangeVerb(h)}
+                      </span>
+                      <span className={styles['ticket-detail__history-time']}>{formatTime(h.created_at)}</span>
+                    </div>
+                  ) : (
+                    <div key={h.id} className={styles['ticket-detail__history-item']}>
+                      <span
+                        className={styles['ticket-detail__history-dot']}
+                        style={{ background: historyStatusAccent(h.to_status, h.resolution) }}
+                      />
+                      <span className={styles['ticket-detail__history-text']}>
+                        <strong>{h.actor.name}</strong> moved{' '}
+                        <span className={styles['ticket-detail__history-from']}>
+                          {historyStatusLabel(h.from_status)}
+                        </span>
+                        {' → '}
+                        <span
+                          className={styles['ticket-detail__history-to']}
+                          style={{ color: historyStatusAccent(h.to_status, h.resolution) }}
+                        >
+                          {historyStatusLabel(h.to_status, h.resolution)}
+                        </span>
+                      </span>
+                      <span className={styles['ticket-detail__history-time']}>{formatTime(h.created_at)}</span>
+                    </div>
+                  )
+                )}
               </div>
-              <div className={styles['ticket-detail__comments']} style={{ marginTop: '0.7em' }}>
+            )}
+
+            {activeTab === 'comments' && (
+              <div className={styles['ticket-detail__comments']}>
                 {comments.length === 0 && (
                   <p className={styles['ticket-detail__comment-empty']}>
                     No comments yet — start the discussion.
@@ -397,7 +686,7 @@ export default function TicketDetailSidebar({
                   </button>
                 </div>
               </div>
-            </div>
+            )}
           </div>
 
           {/* ---- rail: requester/assignee, status, terminal actions ---- */}
@@ -540,6 +829,7 @@ export default function TicketDetailSidebar({
     </div>
   );
 }
+
 
 
 
@@ -1447,11 +1737,43 @@ $board-base-font: 0.8125rem;
   color: $ink-3;
 }
 
+// ---- main: Comments / History tabs -------------------------------------
+.ticket-detail__tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.2em;
+  border-bottom: 1px solid $line;
+  margin-top: 0.2em;
+}
+.ticket-detail__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  border: 0;
+  background: transparent;
+  color: $ink-3;
+  font-size: 0.84em;
+  font-weight: 650;
+  padding: 0.6em 0.2em;
+  margin-right: 1em;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.12s, border-color 0.12s;
+  &:hover {
+    color: $ink;
+  }
+}
+.ticket-detail__tab--active {
+  color: $signal;
+  border-bottom-color: $signal;
+}
+
 // ---- main: history (status-change audit trail) ------------------------------
 .ticket-detail__history {
   display: flex;
   flex-direction: column;
   gap: 0.5em;
+  margin-top: 0.7em;
 }
 .ticket-detail__history-item {
   display: flex;
@@ -1501,6 +1823,7 @@ $board-base-font: 0.8125rem;
   display: flex;
   flex-direction: column;
   gap: 0.9em;
+  margin-top: 0.7em;
 }
 .ticket-detail__comment {
   display: flex;
@@ -1879,14 +2202,6 @@ $board-base-font: 0.8125rem;
 
 
 
-
-
-
-
-
-
-
-
 # Requirements / Tickets — API Specification
 
 Every endpoint the frontend calls, with sample request and response bodies. The
@@ -1922,14 +2237,28 @@ interface TicketComment {
 // Status-change audit trail entry. Not returned by any dedicated endpoint —
 // see the note under §4: the existing move-status endpoint is what appends
 // these, and they just ride along as part of the ticket object from then on.
-interface TicketHistoryEntry {
+// Two kinds of audit entry, distinguished by `type`. A status entry is
+// appended by §4 (move status), an assignee entry by §3 (update, when
+// assignee_id changes). Both just ride along on the ticket object those
+// same endpoints already return — see the note under each section.
+interface TicketStatusHistoryEntry {
   id: string;
+  type: 'status';
   actor: TicketUser;
   from_status: TicketStatus;
   to_status: TicketStatus;
   resolution?: TicketResolution | null; // set only when to_status = "done"
   created_at: string; // ISO 8601
 }
+interface TicketAssigneeHistoryEntry {
+  id: string;
+  type: 'assignee';
+  actor: TicketUser;
+  from_assignee: TicketUser | null;
+  to_assignee: TicketUser | null;
+  created_at: string; // ISO 8601
+}
+type TicketHistoryEntry = TicketStatusHistoryEntry | TicketAssigneeHistoryEntry;
 
 interface Ticket {
   id: string;
@@ -2121,7 +2450,26 @@ rules and size considerations apply.
 }
 ```
 
-**Response 200** — the full updated ticket (same shape as §2's response).
+**Response 200** — the full updated ticket (same shape as §2's response). **If this request
+changes `assignee_id` to a genuinely different value** (including to/from `null`), append a
+`TicketAssigneeHistoryEntry` to `history` — same "rides along on the response, no dedicated
+endpoint" pattern as the status-change entries in §4:
+
+```json
+{
+  "id": "h_7a13",
+  "type": "assignee",
+  "actor": { "id": "ava.patel", "name": "Ava Patel" },
+  "from_assignee": { "id": "marcus.lee", "name": "Marcus Lee" },
+  "to_assignee": null,
+  "created_at": "2026-09-16T11:05:00Z"
+}
+```
+
+`from_assignee`/`to_assignee` may be `null` (assigning from Unassigned, or unassigning back
+to it). `actor` is the authenticated caller, not necessarily either the old or new assignee.
+Don't append an entry if `assignee_id` is present in the request but equals the ticket's
+current assignee (a no-op "change").
 
 **Errors**
 
@@ -2172,6 +2520,7 @@ object this endpoint already returns. Each entry should record:
 ```json
 {
   "id": "h_9f21",
+  "type": "status",
   "actor": { "id": "marcus.lee", "name": "Marcus Lee" },
   "from_status": "in_progress",
   "to_status": "in_review",
