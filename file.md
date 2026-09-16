@@ -1,3 +1,342 @@
+//Ticketmeta.ts
+import { Flame, ArrowUp, Minus, ArrowDown } from 'lucide-react';
+import type { TicketStatus, TicketPriority, Ticket, TicketUser } from '../../types/tickets';
+
+// ─────────────────────────────────────────────────────────────────────────
+// Adapter from the app's existing SsoLoginResult (state.auth.user, from
+// authSlice.ts) to this feature's minimal TicketUser shape ({ id, name }).
+//
+// SsoLoginResult has no `id` field — `username` is the stable per-user
+// identifier (used for the owner check, avatar color hashing, etc.) and
+// `profileName` is the display name shown throughout the UI.
+// ─────────────────────────────────────────────────────────────────────────
+export function toTicketUser(
+  sso: { username: string; profileName: string } | null | undefined
+): TicketUser | null {
+  if (!sso) return null;
+  return { id: sso.username, name: sso.profileName };
+}
+
+export interface ColumnMeta {
+  status: TicketStatus;
+  label: string;
+  /** Accent hex used for the column dot + card left-border. */
+  accent: string;
+}
+
+// Order here is the left-to-right order on the board.
+export const COLUMNS: ColumnMeta[] = [
+  { status: 'todo', label: 'To Do', accent: '#8A909B' },
+  { status: 'in_progress', label: 'In Progress', accent: '#2B2BF5' },
+  { status: 'in_review', label: 'In Review', accent: '#E08600' },
+  { status: 'done', label: 'Done / Discard', accent: '#0FA968' },
+];
+
+export const PRIORITY_META: Record<TicketPriority, { label: string; accent: string }> = {
+  low: { label: 'Low', accent: '#8A909B' },
+  medium: { label: 'Medium', accent: '#0369A1' },
+  high: { label: 'High', accent: '#E08600' },
+  urgent: { label: 'Urgent', accent: '#DC2626' },
+};
+
+// One small icon per level instead of relying on color alone to convey
+// urgency — also reads faster at a glance than text alone on a small card.
+export const PRIORITY_ICON: Record<TicketPriority, typeof Flame> = {
+  low: ArrowDown,
+  medium: Minus,
+  high: ArrowUp,
+  urgent: Flame,
+};
+
+// ─────────────────────────────────────────────────────────────────────────
+// Permission model.
+//
+// Requirement: only the requester (ticket owner) may move a ticket into the
+// terminal `done` column. Any user may move it among todo / in_progress /
+// in_review. `done` covers both "completed" and "discarded" resolutions —
+// both are owner-only since both close the ticket.
+//
+// This is a UX gate only. The /tickets/:id/status endpoint MUST re-check
+// ownership server-side; never rely on the disabled button alone.
+// ─────────────────────────────────────────────────────────────────────────
+
+export const isOwner = (ticket: Ticket, currentUserId: string) =>
+  ticket.owner?.id === currentUserId;
+
+/** Can `currentUserId` move `ticket` into `target`? (owner rule only — see
+ *  `canDropTicket` for the combined owner + sequence check used everywhere
+ *  a move is actually attempted.) */
+export const canTransition = (
+  ticket: Ticket,
+  target: TicketStatus,
+  currentUserId: string
+): boolean => {
+  if (target === 'done') return isOwner(ticket, currentUserId);
+  return true;
+};
+
+export const OWNER_ONLY_HINT = 'Only the requester can close this ticket.';
+export const OWNER_ONLY_DELETE_HINT = 'Only the requester can delete this ticket.';
+
+// ─────────────────────────────────────────────────────────────────────────
+// Sequence rule: a ticket may only advance one column at a time — a
+// forward move (e.g. To Do → In Review, or In Progress → Done) that skips
+// over an intermediate column is not allowed. Moving *backward* to any
+// earlier column, from anywhere, is always allowed — e.g. Done → To Do,
+// In Review → To Do, In Progress → To Do are all fine.
+// ─────────────────────────────────────────────────────────────────────────
+
+const COLUMN_ORDER: TicketStatus[] = ['todo', 'in_progress', 'in_review', 'done'];
+
+export const isSequentialMove = (from: TicketStatus, to: TicketStatus): boolean => {
+  const fromIndex = COLUMN_ORDER.indexOf(from);
+  const toIndex = COLUMN_ORDER.indexOf(to);
+  if (toIndex <= fromIndex) return true; // backward (or no-op) — always fine
+  return toIndex === fromIndex + 1; // forward — only one step at a time
+};
+
+export const SEQUENCE_HINT = "Move one step at a time — you can't skip a column.";
+
+export interface DropCheck {
+  ok: boolean;
+  reason?: string;
+}
+
+/** The single source of truth for "can this ticket move to this column right
+ *  now" — combines the sequence rule and the owner-only-close rule. Use this
+ *  (not `canTransition`/`isSequentialMove` individually) at every point a
+ *  move is attempted or a drop target's valid/locked state is computed. */
+export const canDropTicket = (
+  ticket: Ticket,
+  target: TicketStatus,
+  currentUserId: string
+): DropCheck => {
+  if (!isSequentialMove(ticket.status, target)) {
+    return { ok: false, reason: SEQUENCE_HINT };
+  }
+  if (!canTransition(ticket, target, currentUserId)) {
+    return { ok: false, reason: OWNER_ONLY_HINT };
+  }
+  return { ok: true };
+};
+
+/** Two-letter initials for an avatar chip. */
+export const initials = (user?: TicketUser | null) => {
+  if (!user?.name) return '?';
+  const parts = user.name.trim().split(/\s+/);
+  return (parts[0][0] + (parts[1]?.[0] ?? '')).toUpperCase();
+};
+
+/** Deterministic accent for an avatar, derived from the user id. */
+export const avatarAccent = (user?: TicketUser | null) => {
+  const palette = ['#2B2BF5', '#0FA968', '#E08600', '#DC2626', '#0369A1', '#DB2777'];
+  if (!user?.id) return palette[0];
+  let h = 0;
+  for (let i = 0; i < user.id.length; i++) h = (h * 31 + user.id.charCodeAt(i)) >>> 0;
+  return palette[h % palette.length];
+};
+
+/** The description field now stores rich-text HTML (from the description
+ *  editor). An "empty" editor still outputs something like `<p></p>`, so a
+ *  plain falsy/blank check isn't enough — strip tags and check what's left. */
+export const isEmptyHtml = (html?: string | null): boolean => {
+  if (!html) return true;
+  return html.replace(/<[^>]*>/g, '').trim().length === 0;
+
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Ticketcard.tsx
+import { useDraggable } from '@dnd-kit/core';
+import { Loader2 } from 'lucide-react';
+import type { Ticket, TicketUser } from '../../types/tickets';
+import { PRIORITY_META, PRIORITY_ICON, isOwner, initials, avatarAccent } from './ticketMeta';
+import styles from './TicketBoard.module.scss';
+
+interface TicketCardProps {
+  ticket: Ticket;
+  currentUser: TicketUser;
+  moving?: boolean;
+  onOpen: (ticket: Ticket) => void;
+  /** True only for the clone rendered inside <DragOverlay> — static, no
+   *  drag hook of its own. */
+  overlay?: boolean;
+  /** Overlay mode only: the exact width (px) of the card that's actually
+   *  being dragged, captured at drag-start. Without this the clone sizes
+   *  itself independently and can end up narrower/wider than the real
+   *  card, which is what makes a dragged card look offset from the
+   *  cursor instead of feeling like the card itself is being carried. */
+  overlayWidth?: number;
+}
+
+// Move actions live only in the detail view's status stepper and Done/Discard
+// buttons (plus drag-and-drop) — there's no per-card "⋯" quick-move menu.
+export default function TicketCard({
+  ticket,
+  currentUser,
+  moving = false,
+  onOpen,
+  overlay = false,
+  overlayWidth,
+}: TicketCardProps) {
+  const owner = isOwner(ticket, currentUser.id);
+  const priority = PRIORITY_META[ticket.priority];
+  const PriorityIcon = PRIORITY_ICON[ticket.priority];
+
+  // The real drag-and-drop wiring. Listeners go on the card's root element;
+  // dnd-kit's activation distance means an ordinary click (open the card)
+  // still fires normally — a drag only "activates" once the pointer has
+  // moved a few pixels. No live `transform` is applied here — the source
+  // card stays put (just dimmed via isDragging); the <DragOverlay> clone in
+  // TicketBoard is what actually follows the cursor.
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: ticket.id,
+    disabled: overlay || moving,
+  });
+
+  return (
+    <article
+      ref={overlay ? undefined : setNodeRef}
+      {...(overlay ? {} : attributes)}
+      {...(overlay ? {} : listeners)}
+      className={[
+        styles['ticket-card'],
+        moving ? styles['ticket-card--moving'] : '',
+        isDragging ? styles['ticket-card--dragging'] : '',
+        overlay ? styles['ticket-card--overlay'] : '',
+        ticket.resolution === 'discarded' ? styles['ticket-card--discarded'] : '',
+      ].join(' ')}
+      style={{
+        ['--priority-accent' as string]: priority.accent,
+        ...(overlay
+          ? { width: overlayWidth, flexShrink: 0 }
+          : { touchAction: 'none' }),
+      }}
+      onClick={() => !overlay && onOpen(ticket)}
+    >
+      <header className={styles['ticket-card__top']}>
+        <span className={styles['ticket-card__key']}>{ticket.key}</span>
+        <div className={styles['ticket-card__top-right']}>
+          <span
+            className={[
+              styles['ticket-card__priority'],
+              ticket.priority === 'urgent' ? styles['ticket-card__priority--urgent'] : '',
+            ].join(' ')}
+            style={{ ['--priority-accent' as string]: priority.accent }}
+          >
+            <PriorityIcon size={11} strokeWidth={2.75} className={styles['ticket-card__priority-icon']} />
+            {priority.label}
+          </span>
+          {moving && <Loader2 size={14} className={styles['ticket-card__spin']} />}
+        </div>
+      </header>
+
+      <h4 className={styles['ticket-card__title']}>{ticket.title}</h4>
+
+      {(ticket.labels ?? []).length > 0 && (
+        <div className={styles['ticket-card__labels']}>
+          {(ticket.labels ?? []).slice(0, 4).map((l) => (
+            <span key={l} className={styles['ticket-card__label']}>
+              {l}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {ticket.resolution && (
+        <footer className={styles['ticket-card__foot']}>
+          <span
+            className={[
+              styles['ticket-card__resolution'],
+              ticket.resolution === 'discarded'
+                ? styles['ticket-card__resolution--discarded']
+                : styles['ticket-card__resolution--done'],
+            ].join(' ')}
+          >
+            {ticket.resolution === 'discarded' ? 'Discarded' : 'Completed'}
+          </span>
+        </footer>
+      )}
+
+      <div className={styles['ticket-card__people']}>
+        <div
+          className={styles['ticket-card__person']}
+          title={ticket.assignee ? `Assignee: ${ticket.assignee.name}` : 'Unassigned'}
+        >
+          {ticket.assignee ? (
+            <span
+              className={styles['ticket-card__person-avatar']}
+              style={{ background: avatarAccent(ticket.assignee) }}
+            >
+              {initials(ticket.assignee)}
+            </span>
+          ) : (
+            <span className={styles['ticket-card__person-avatar--empty']} aria-hidden="true" />
+          )}
+          <span className={styles['ticket-card__person-name']}>
+            {ticket.assignee ? ticket.assignee.name : 'Unassigned'}
+          </span>
+          <span
+            className={[
+              styles['ticket-role-badge'],
+              ticket.assignee ? styles['ticket-role-badge--assignee'] : styles['ticket-role-badge--unassigned'],
+            ].join(' ')}
+          >
+            {ticket.assignee ? 'Assignee' : 'Unassigned'}
+          </span>
+        </div>
+        <div
+          className={styles['ticket-card__person']}
+          title={`Reporter: ${ticket.owner.name}${owner ? ' (you)' : ''}`}
+        >
+          <span
+            className={`${styles['ticket-card__person-avatar']} ${styles['ticket-card__person-avatar--owner']}`}
+            style={{ background: avatarAccent(ticket.owner) }}
+          >
+            {initials(ticket.owner)}
+          </span>
+          <span className={styles['ticket-card__person-name']}>
+            {ticket.owner.name}
+            {owner && <span className={styles['ticket-card__you']}>you</span>}
+          </span>
+          <span className={`${styles['ticket-role-badge']} ${styles['ticket-role-badge--reporter']}`}>
+            Reporter
+          </span>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 //Ticketdetailsidebar.tsx
 import { useState } from 'react';
 import DOMPurify from 'dompurify';
@@ -11,6 +350,7 @@ import TicketDescriptionEditor from './TicketDescriptionEditor';
 import {
   COLUMNS,
   PRIORITY_META,
+  PRIORITY_ICON,
   isOwner,
   isSequentialMove,
   canDropTicket,
@@ -80,6 +420,7 @@ export default function TicketDetailSidebar({
 
   const owner = isOwner(ticket, currentUser.id);
   const priority = PRIORITY_META[ticket.priority];
+  const PriorityIcon = PRIORITY_ICON[ticket.priority];
   const posting = commentingId === ticket.id;
   const comments = ticket.comments ?? [];
 
@@ -104,9 +445,13 @@ export default function TicketDetailSidebar({
           <div>
             <span className={styles['modal-key']}>{ticket.key}</span>
             <span
-              className={styles['ticket-card__priority']}
+              className={[
+                styles['ticket-card__priority'],
+                ticket.priority === 'urgent' ? styles['ticket-card__priority--urgent'] : '',
+              ].join(' ')}
               style={{ ['--priority-accent' as string]: priority.accent }}
             >
+              <PriorityIcon size={11} strokeWidth={2.75} className={styles['ticket-card__priority-icon']} />
               {priority.label}
             </span>
           </div>
@@ -810,14 +1155,32 @@ $board-base-font: 0.8125rem;
 }
 .ticket-card__priority {
   --priority-accent: #{$ink-3};
-  font-size: 0.8em;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
+  font-size: 0.78em;
   font-weight: 700;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  padding: 0.25em 0.5em;
-  border-radius: 5px;
+  letter-spacing: 0.02em;
+  padding: 0.22em 0.55em 0.22em 0.45em;
+  border-radius: 999px;
   color: var(--priority-accent);
   background: color-mix(in srgb, var(--priority-accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--priority-accent) 28%, transparent);
+}
+.ticket-card__priority-icon {
+  flex: none;
+}
+.ticket-card__priority--urgent {
+  animation: ticket-priority-pulse 1.8s ease-in-out infinite;
+}
+@keyframes ticket-priority-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--priority-accent) 35%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--priority-accent) 0%, transparent);
+  }
 }
 .ticket-card__spin {
   animation: spin 1.5s linear infinite;
