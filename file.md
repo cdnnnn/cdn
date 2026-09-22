@@ -1,6 +1,14 @@
+npm install @dnd-kit/core @tiptap/react @tiptap/pm @tiptap/starter-kit @tiptap/extension-image @tiptap/extension-placeholder dompurify
+
+
+
+
+
+
+
+
 import { useCallback, useRef, type PointerEvent as ReactPointerEvent } from 'react';
 import Image from '@tiptap/extension-image';
-import { mergeAttributes } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from '@tiptap/react';
 import styles from './TicketDescriptionEditor.module.scss';
 
@@ -10,17 +18,22 @@ import styles from './TicketDescriptionEditor.module.scss';
 // image at its natural size, then drag the corner handle to resize it.
 //
 // Both dimensions are stored as plain numeric HTML attributes on the <img>
-// itself — `width="450" height="300"`, not a CSS style — which is the
-// standard approach for a responsive image that still reserves its exact
-// box: combined with `max-width: 100%; height: auto;` in this file's CSS
-// (and the identical rule in TicketBoard.module.scss for the read-only
-// view), the browser renders it at exactly that saved width × height
-// wherever there's room, and scales both dimensions down together,
-// preserving the same aspect ratio, only if the container is narrower than
-// that. The saved HTML is identical between "what you resized while
-// creating" and "what the detail view renders later" — same tag, same
-// attributes, same CSS rule — so there's no separate reconciliation step
-// that could drift the two apart.
+// itself — `width="450" height="300"`, not a CSS style — the standard
+// approach for a responsive image that still reserves its exact box.
+// Combined with `max-width: 100%; height: auto;` in this file's CSS (and
+// the identical rule in TicketBoard.module.scss for the read-only view),
+// the browser renders it at exactly that saved width × height wherever
+// there's room, and only scales both dimensions down together — preserving
+// the same aspect ratio — if the container is narrower than that.
+//
+// IMPORTANT: `width`/`height` are contributed via each attribute's own
+// `renderHTML`, NOT by overriding the node's own `renderHTML` — the node-
+// level renderHTML is left completely alone (inherited from the base Image
+// extension), so `src`/`alt` rendering is untouched. An earlier version of
+// this file replaced the node-level renderHTML entirely, which broke image
+// rendering outright — this per-attribute approach is the standard,
+// documented way to add an attribute to an existing TipTap node without
+// risking exactly that regression.
 //
 // Height is never resized independently — it's always derived from the
 // image's own natural aspect ratio (naturalWidth/naturalHeight) at the
@@ -95,10 +108,10 @@ function ResizableImageView({ node, updateAttributes, selected }: NodeViewProps)
   );
 }
 
-// Shared by both attributes below — reads a saved size back from either the
-// modern plain `width`/`height` HTML attribute this extension now writes,
-// or (for backward compatibility with anything saved by an earlier version
-// of this extension) the older `style="width: …px"` form.
+// Reads a saved size back from either the plain `width`/`height` HTML
+// attribute this extension writes, or (for backward compatibility with
+// anything saved by an earlier version of this extension) the older
+// `style="width: …px"` form.
 const parseSizeAttr = (el: HTMLElement, attr: 'width' | 'height') => {
   const direct = el.getAttribute(attr);
   if (direct) {
@@ -120,32 +133,16 @@ export const ResizableImage = Image.extend({
       width: {
         default: null,
         parseHTML: (el: HTMLElement) => parseSizeAttr(el, 'width'),
-        // Handled explicitly in the node-level renderHTML() below instead
-        // of here — see that method's comment for why.
-        renderHTML: () => ({}),
+        renderHTML: (attrs: { width?: number | null }) =>
+          attrs.width ? { width: attrs.width } : {},
       },
       height: {
         default: null,
         parseHTML: (el: HTMLElement) => parseSizeAttr(el, 'height'),
-        renderHTML: () => ({}),
+        renderHTML: (attrs: { height?: number | null }) =>
+          attrs.height ? { height: attrs.height } : {},
       },
     };
-  },
-  // Node-level override: builds the actual <img width="…" height="…"
-  // src="..."> tag that `editor.getHTML()` serializes — this is exactly
-  // what ends up saved in the ticket's `description` field, and exactly
-  // what the read-only detail view renders back out later. Reading
-  // `node.attrs` directly here (rather than relying on each attribute's
-  // own `renderHTML` being merged in automatically) is a deliberately more
-  // direct, unambiguous path to guarantee both values actually make it
-  // into the saved HTML.
-  renderHTML({ node, HTMLAttributes }) {
-    const width = node.attrs.width as number | null;
-    const height = node.attrs.height as number | null;
-    const attrs = mergeAttributes(this.options.HTMLAttributes, HTMLAttributes);
-    if (width) attrs.width = width;
-    if (height) attrs.height = height;
-    return ['img', attrs];
   },
   addNodeView() {
     return ReactNodeViewRenderer(ResizableImageView);
