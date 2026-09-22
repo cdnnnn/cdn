@@ -1,1292 +1,641 @@
-import { Component, ErrorInfo, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+//Ticketmeta.ts
+import DOMPurify from 'dompurify';
+import { Flame, ArrowUp, Minus, ArrowDown } from 'lucide-react';
+import type { TicketStatus, TicketPriority, Ticket, TicketUser } from '../../types/tickets';
+
+// ─────────────────────────────────────────────────────────────────────────
+// Sanitizes rich-text HTML (description / comment text) before it's ever
+// injected via dangerouslySetInnerHTML. `ADD_ATTR: ['style']` is load-
+// bearing, not decorative: a resized image's width lives entirely in
+// `style="width: …px"` on the <img> tag (see tiptapResizableImage.tsx) — the
+// live editor never goes through this function at all (its resize preview
+// is a plain React `style` prop, unaffected by DOMPurify), so a resize that
+// looks correct while creating/editing but reverts to full size once you
+// view the saved ticket means the `style` attribute got stripped right
+// here. Forcing it into the allow-list explicitly, rather than trusting
+// DOMPurify's default config, is what actually fixes that — don't remove
+// this option even if it looks redundant against whatever DOMPurify's
+// current default happens to allow.
+export const sanitizeTicketHtml = (html: string | null | undefined): string =>
+  DOMPurify.sanitize(html ?? '', { ADD_ATTR: ['style'] });
+
+// ─────────────────────────────────────────────────────────────────────────
+// Adapter from the app's existing SsoLoginResult (state.auth.user, from
+// authSlice.ts) to this feature's minimal TicketUser shape ({ id, name }).
+//
+// SsoLoginResult has no `id` field — `username` is the stable per-user
+// identifier (used for the owner check, avatar color hashing, etc.) and
+// `profileName` is the display name shown throughout the UI.
+// ─────────────────────────────────────────────────────────────────────────
+export function toTicketUser(
+  sso: { username: string; profileName: string } | null | undefined
+): TicketUser | null {
+  if (!sso) return null;
+  return { id: sso.username, name: sso.profileName };
+}
+
+export interface ColumnMeta {
+  status: TicketStatus;
+  label: string;
+  /** Accent hex used for the column dot + card left-border. */
+  accent: string;
+}
+
+// Order here is the left-to-right order on the board.
+export const COLUMNS: ColumnMeta[] = [
+  { status: 'todo', label: 'To Do', accent: '#8A909B' },
+  { status: 'in_progress', label: 'In Progress', accent: '#2B2BF5' },
+  { status: 'in_review', label: 'In Review', accent: '#E08600' },
+  { status: 'done', label: 'Done / Discard', accent: '#0FA968' },
+];
+
+export const PRIORITY_META: Record<TicketPriority, { label: string; accent: string }> = {
+  low: { label: 'Low', accent: '#8A909B' },
+  medium: { label: 'Medium', accent: '#0369A1' },
+  high: { label: 'High', accent: '#E08600' },
+  urgent: { label: 'Urgent', accent: '#DC2626' },
+};
+
+// One small icon per level instead of relying on color alone to convey
+// urgency — also reads faster at a glance than text alone on a small card.
+export const PRIORITY_ICON: Record<TicketPriority, typeof Flame> = {
+  low: ArrowDown,
+  medium: Minus,
+  high: ArrowUp,
+  urgent: Flame,
+};
+
+// ─────────────────────────────────────────────────────────────────────────
+// Permission model.
+//
+// Requirement: only the requester (ticket owner) may move a ticket into the
+// terminal `done` column. Any user may move it among todo / in_progress /
+// in_review. `done` covers both "completed" and "discarded" resolutions —
+// both are owner-only since both close the ticket.
+//
+// This is a UX gate only. The /tickets/:id/status endpoint MUST re-check
+// ownership server-side; never rely on the disabled button alone.
+// ─────────────────────────────────────────────────────────────────────────
+
+export const isOwner = (ticket: Ticket, currentUserId: string) =>
+  ticket.owner?.id === currentUserId;
+
+/** Can `currentUserId` move `ticket` into `target`? (owner rule only — see
+ *  `canDropTicket` for the combined owner + sequence check used everywhere
+ *  a move is actually attempted.) */
+export const canTransition = (
+  ticket: Ticket,
+  target: TicketStatus,
+  currentUserId: string
+): boolean => {
+  if (target === 'done') return isOwner(ticket, currentUserId);
+  return true;
+};
+
+export const OWNER_ONLY_HINT = 'Only the requester can close this ticket.';
+export const OWNER_ONLY_DELETE_HINT = 'Only the requester can delete this ticket.';
+
+// ─────────────────────────────────────────────────────────────────────────
+// Sequence rule: a ticket may only advance one column at a time — a
+// forward move (e.g. To Do → In Review, or In Progress → Done) that skips
+// over an intermediate column is not allowed. Moving *backward* to any
+// earlier column, from anywhere, is always allowed — e.g. Done → To Do,
+// In Review → To Do, In Progress → To Do are all fine.
+// ─────────────────────────────────────────────────────────────────────────
+
+const COLUMN_ORDER: TicketStatus[] = ['todo', 'in_progress', 'in_review', 'done'];
+
+export const isSequentialMove = (from: TicketStatus, to: TicketStatus): boolean => {
+  const fromIndex = COLUMN_ORDER.indexOf(from);
+  const toIndex = COLUMN_ORDER.indexOf(to);
+  if (toIndex <= fromIndex) return true; // backward (or no-op) — always fine
+  return toIndex === fromIndex + 1; // forward — only one step at a time
+};
+
+export const SEQUENCE_HINT = "Move one step at a time — you can't skip a column.";
+
+export interface DropCheck {
+  ok: boolean;
+  reason?: string;
+}
+
+/** The single source of truth for "can this ticket move to this column right
+ *  now" — combines the sequence rule and the owner-only-close rule. Use this
+ *  (not `canTransition`/`isSequentialMove` individually) at every point a
+ *  move is attempted or a drop target's valid/locked state is computed. */
+export const canDropTicket = (
+  ticket: Ticket,
+  target: TicketStatus,
+  currentUserId: string
+): DropCheck => {
+  if (!isSequentialMove(ticket.status, target)) {
+    return { ok: false, reason: SEQUENCE_HINT };
+  }
+  if (!canTransition(ticket, target, currentUserId)) {
+    return { ok: false, reason: OWNER_ONLY_HINT };
+  }
+  return { ok: true };
+};
+
+/** Two-letter initials for an avatar chip. */
+export const initials = (user?: TicketUser | null) => {
+  if (!user?.name) return '?';
+  const parts = user.name.trim().split(/\s+/);
+  return (parts[0][0] + (parts[1]?.[0] ?? '')).toUpperCase();
+};
+
+/** Deterministic accent for an avatar, derived from the user id. */
+export const avatarAccent = (user?: TicketUser | null) => {
+  const palette = ['#2B2BF5', '#0FA968', '#E08600', '#DC2626', '#0369A1', '#DB2777'];
+  if (!user?.id) return palette[0];
+  let h = 0;
+  for (let i = 0; i < user.id.length; i++) h = (h * 31 + user.id.charCodeAt(i)) >>> 0;
+  return palette[h % palette.length];
+};
+
+/** The description field now stores rich-text HTML (from the description
+ *  editor). An "empty" editor still outputs something like `<p></p>`, so a
+ *  plain falsy/blank check isn't enough — strip tags and check what's left. */
+export const isEmptyHtml = (html?: string | null): boolean => {
+  if (!html) return true;
+  return html.replace(/<[^>]*>/g, '').trim().length === 0;
+
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Ticketdetialsidebar.tsx
+import { useState } from 'react';
+import { X, Pencil, Trash2, Loader2, Lock, Check, Ban, History as HistoryIcon } from 'lucide-react';
+import { useAppDispatch, useAppSelector } from '../../store/hooks';
+import { addTicketComment } from '../../store/slices/ticketsSlice';
+import type { Ticket, TicketStatus, TicketResolution, TicketUser } from '../../types/tickets';
+import ConfirmDialog from '../common/ConfirmDialog';
+import { useToast } from '../common/Toast';
+import TicketDescriptionEditor from './TicketDescriptionEditor';
 import {
-  AlertCircle, ArrowRight, Check, CheckCircle2, ChevronRight, Code2, Cpu, Database,
-  ListChecks, Loader2, MessageSquare, Plus, Repeat, ScrollText, Search, SlidersHorizontal,
-  Sparkles, Target, TextSearch, Wrench, X, XCircle, Zap,
-} from 'lucide-react';
-import styles from './CreateMetric.module.scss';
-import { useToast } from './useToast';
-import CustomSelect from './CustomSelect';
+  COLUMNS,
+  PRIORITY_META,
+  PRIORITY_ICON,
+  isOwner,
+  isSequentialMove,
+  canDropTicket,
+  isEmptyHtml,
+  sanitizeTicketHtml,
+  OWNER_ONLY_HINT,
+  OWNER_ONLY_DELETE_HINT,
+  SEQUENCE_HINT,
+  initials,
+  avatarAccent,
+} from './ticketMeta';
+import styles from './TicketBoard.module.scss';
 
-// A render-time crash anywhere below (a bad third-party component, a
-// malformed API response, etc.) would otherwise unmount the whole app and
-// leave a blank screen. This boundary catches it and shows a recoverable
-// message with a "Try again" reset instead.
-interface ErrorBoundaryState { hasError: boolean; message: string }
-class ErrorBoundary extends Component<{ children: ReactNode; fallbackLabel: string }, ErrorBoundaryState> {
-  state: ErrorBoundaryState = { hasError: false, message: '' };
-  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
-    return { hasError: true, message: error?.message || 'Something went wrong.' };
-  }
-  componentDidCatch(error: Error, info: ErrorInfo) {
-    // eslint-disable-next-line no-console
-    console.error(`[${this.props.fallbackLabel}] render error:`, error, info.componentStack);
-  }
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div className={styles.banner + ' ' + styles['banner--err']}>
-          <AlertCircle size={15} />
-          <span>
-            {this.props.fallbackLabel} failed to load ({this.state.message}).{' '}
-            <button type="button" className={styles['link-btn']} onClick={() => this.setState({ hasError: false, message: '' })}>Try again</button>
-          </span>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-import { useAppDispatch, useAppSelector } from '../../hooks/redux';
-import { fetchProviders } from '../../store/slices/providersSlice';
-import {
-  metricsApi, AgentSubcategory, BuiltinCheckDef, CodeTemplateListItem, EvalType, MetricType, PromptTemplate,
-  ModelSummary, DatasetSummary, PreviewQuestion, ValidateMetricData, RuleDef,
-} from '../../api/endpoints/metrics';
-
-interface CreateMetricProps {
-  onCancel: () => void;
-  onSaved: (id: string) => void;
+interface TicketDetailSidebarProps {
+  /** Looked up live from the store below — never a cached snapshot, so this
+   *  view can't go stale after a comment/move/edit the way passing the
+   *  whole `Ticket` object down as a static prop could. */
+  ticketId: string;
+  currentUser: TicketUser;
+  moving?: boolean;
+  deleting?: boolean;
+  onClose: () => void;
+  onMove: (id: string, status: TicketStatus, resolution?: TicketResolution | null) => void;
+  onEdit: (ticket: Ticket) => void;
+  onDelete: (id: string) => void;
 }
 
-// ---- static config -----------------------------------------------------
-const EVAL_TYPE_CARDS: { key: EvalType; label: string; desc: string; icon: JSX.Element }[] = [
-  { key: 'model', label: 'Model', desc: 'Score a model\u2019s output against an expected answer.', icon: <Cpu size={20} /> },
-  { key: 'agent', label: 'Agent', desc: 'Evaluate tool calls and task completion for agents.', icon: <Zap size={20} /> },
-  { key: 'rag', label: 'RAG', desc: 'Check answers grounded in retrieved context.', icon: <ScrollText size={20} /> },
-];
-
-const METRIC_TYPE_CARDS: { key: MetricType; label: string; desc: string; icon: JSX.Element }[] = [
-  { key: 'visual', label: 'Visual Builder', desc: 'Field comparisons joined with AND/OR logic. No code.', icon: <SlidersHorizontal size={18} /> },
-  { key: 'prompt', label: 'Prompt Builder', desc: 'An LLM judge scored with a prompt template.', icon: <Sparkles size={18} /> },
-  { key: 'code', label: 'Code Editor', desc: 'A custom Python scoring function.', icon: <Code2 size={18} /> },
-  { key: 'simple', label: 'Simple', desc: 'A built-in pass/fail check — no prompt or code needed.', icon: <Target size={18} /> },
-];
-
-const FIELDS_BY_EVAL_TYPE: Record<EvalType, string[]> = {
-  model: ['input', 'actual_output', 'expected_output'],
-  agent: ['input', 'actual_output', 'expected_output', 'tools_called', 'expected_tools'],
-  rag: ['input', 'actual_output', 'expected_output', 'tools_called', 'expected_tools'],
+const formatTime = (iso: string) => {
+  try {
+    return new Date(iso).toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  } catch {
+    return iso;
+  }
 };
 
-const OPERATORS = [
-  { value: 'contains', label: 'contains' },
-  { value: 'not_contains', label: 'not contains' },
-  { value: 'equals', label: 'equals' },
-  { value: 'starts_with', label: 'starts with' },
-  { value: 'ends_with', label: 'ends with' },
-  { value: 'greater_than', label: 'greater than' },
-  { value: 'less_than', label: 'less than' },
-  { value: 'regex_match', label: 'regex match' },
-];
-
-const OP_SYMBOL: Record<string, string> = {
-  contains: 'contains', not_contains: 'does not contain', equals: '==', starts_with: 'starts with',
-  ends_with: 'ends with', greater_than: '>', less_than: '<', regex_match: 'matches',
+// A history entry's `to_status` alone doesn't distinguish "closed as done"
+// from "closed as discarded" — both are `status: 'done'` — so this reads
+// `resolution` too when relevant.
+const historyStatusLabel = (status: TicketStatus, resolution?: TicketResolution | null) => {
+  if (status === 'done') return resolution === 'discarded' ? 'Discarded' : 'Done';
+  return COLUMNS.find((c) => c.status === status)?.label ?? status;
 };
 
-const METRIC_TYPE_TO_API: Record<MetricType, string> = {
-  visual: 'condition', prompt: 'prompt', code: 'code', simple: 'simple',
+const historyStatusAccent = (status: TicketStatus, resolution?: TicketResolution | null) => {
+  if (status === 'done' && resolution === 'discarded') return '#DC2626';
+  return COLUMNS.find((c) => c.status === status)?.accent ?? '#8A909B';
 };
 
-const EVAL_TYPE_TO_CATEGORY: Record<EvalType, string> = { model: 'llm', agent: 'agent', rag: 'rag' };
-
-// Agent-only: which part of the agent's behavior this metric evaluates —
-// scopes both the Prompt Builder templates and the Code Editor starter
-// code via a `subcategory` query param.
-const AGENT_SUBCATEGORY_CARDS: { key: AgentSubcategory; label: string; desc: string; icon: JSX.Element }[] = [
-  { key: 'tools', label: 'Tool Evaluation', desc: 'Score which tools the agent called and how.', icon: <Wrench size={18} /> },
-  { key: 'answer', label: 'Answer Evaluation', desc: 'Score the agent\u2019s final response.', icon: <MessageSquare size={18} /> },
-];
-
-// ---- Simple metric type — Built-in Check icons --------------------------
-// Built-in checks themselves now come from the API (GET /metrics/templates
-// -> builtin_checks), since their id/params can vary server-side. Icons
-// aren't part of that response, so map known ids to one and fall back to
-// a generic icon for anything unrecognized.
-const BUILTIN_CHECK_ICONS: Record<string, JSX.Element> = {
-  contains_keywords: <TextSearch size={18} />,
-  exact_match: <Target size={18} />,
-  agent_loop_detection: <Repeat size={18} />,
-  tool_correctness: <Wrench size={18} />,
+const assigneeChangeVerb = (h: { from_assignee: TicketUser | null; to_assignee: TicketUser | null }) => {
+  if (!h.from_assignee && h.to_assignee) return `assigned it to ${h.to_assignee.name}`;
+  if (h.from_assignee && !h.to_assignee) return `unassigned it (was ${h.from_assignee.name})`;
+  if (h.from_assignee && h.to_assignee) return `reassigned it from ${h.from_assignee.name} to ${h.to_assignee.name}`;
+  return 'changed the assignee';
 };
-const builtinCheckIcon = (id: string) => BUILTIN_CHECK_ICONS[id] || <ListChecks size={18} />;
 
-type CompareType = 'field' | 'literal';
-interface RuleRow { id: number; field: string; operator: string; compareType: CompareType; value: string; }
-let ruleSeq = 1;
-
-type SectionKey = 'details' | 'type' | 'config' | 'dataset';
-interface SectionDef { key: SectionKey; label: string; }
-
-export default function CreateMetric(props: CreateMetricProps) {
-  // Outer safety net — protects the whole page from any render crash
-  // (not just the code editor), independent of where CreateMetric is
-  // mounted from.
-  return (
-    <ErrorBoundary fallbackLabel="Metric builder">
-      <CreateMetricInner {...props} />
-    </ErrorBoundary>
-  );
-}
-
-function CreateMetricInner({ onCancel, onSaved }: CreateMetricProps) {
-  const { showToast, ToastEl } = useToast();
+// Centered modal, same shell as the rest of the app's dialogs (see
+// .modal-overlay / .modal in TicketBoard.module.scss). Rendered inline —
+// no portal — position:fixed + flex-centering is sufficient here.
+export default function TicketDetailSidebar({
+  ticketId,
+  currentUser,
+  moving = false,
+  deleting = false,
+  onClose,
+  onMove,
+  onEdit,
+  onDelete,
+}: TicketDetailSidebarProps) {
   const dispatch = useAppDispatch();
-  const providers = useAppSelector((s) => s.providers.items);
+  const toast = useToast();
+  // Selected live from the store on every render — this is the fix for
+  // "posting a comment doesn't show up until I refresh": previously this
+  // component received a `ticket` object as a prop that was only synced
+  // back up from the store via a separate effect in TicketBoard, which is
+  // an extra hop that can (and did) go stale. Reading directly from the
+  // store here removes that hop entirely.
+  const ticket = useAppSelector((s) => s.tickets.items.find((t) => t.id === ticketId));
+  const commentingId = useAppSelector((s) => s.tickets.commentingId);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [commentDraft, setCommentDraft] = useState('');
+  const [activeTab, setActiveTab] = useState<'comments' | 'history'>('comments');
 
-  // section refs for the rail's "jump to" links
-  const sectionRefs = {
-    details: useRef<HTMLDivElement>(null),
-    type: useRef<HTMLDivElement>(null),
-    config: useRef<HTMLDivElement>(null),
-    dataset: useRef<HTMLDivElement>(null),
-  };
-  const scrollToSection = (key: SectionKey) => {
-    sectionRefs[key].current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
+  if (!ticket) return null; // e.g. deleted from another tab/session
 
-  // details
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
+  const owner = isOwner(ticket, currentUser.id);
+  const priority = PRIORITY_META[ticket.priority];
+  const PriorityIcon = PRIORITY_ICON[ticket.priority];
+  const posting = commentingId === ticket.id;
+  const comments = ticket.comments ?? [];
+  const history = ticket.history ?? [];
 
-  // type
-  const [evalType, setEvalType] = useState<EvalType | null>(null);
-  const [metricType, setMetricType] = useState<MetricType | null>(null);
-  // Agent-only sub-scope (Tool Evaluation / Answer Evaluation) — required
-  // before Prompt Builder templates or Code Editor starter code can load
-  // when evalType === 'agent'.
-  const [agentSubcategory, setAgentSubcategory] = useState<AgentSubcategory | null>(null);
-
-  // config: visual
-  const [rules, setRules] = useState<RuleRow[]>([{ id: ruleSeq, field: 'actual_output', operator: 'contains', compareType: 'field', value: 'input' }]);
-  const [gates, setGates] = useState<('AND' | 'OR')[]>([]);
-
-  // templates data — GET /metrics/templates. Serves both the Prompt
-  // Builder (templates + placeholders) and the Simple/Built-in Check
-  // config (builtin_checks), since both live behind the same endpoint
-  // and both depend on evalType (and, for agent, agentSubcategory).
-  const [templates, setTemplates] = useState<PromptTemplate[]>([]);
-  const [builtinChecks, setBuiltinChecks] = useState<BuiltinCheckDef[]>([]);
-  const [templatesLoading, setTemplatesLoading] = useState(false);
-  const [templatesError, setTemplatesError] = useState('');
-
-  // config: prompt
-  const [selectedTemplateName, setSelectedTemplateName] = useState('');
-  const [promptText, setPromptText] = useState('');
-  const [models, setModels] = useState<ModelSummary[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
-  const [modelsError, setModelsError] = useState('');
-  const [modelHealth, setModelHealth] = useState<Record<string, 'checking' | 'healthy' | 'unhealthy'>>({});
-  const [selectedModelId, setSelectedModelId] = useState('');
-
-  // config: code
-  // config: code — dropdown of available starter templates, then the
-  // actual code for whichever one is selected
-  const [code, setCode] = useState('');
-  const [codeTemplates, setCodeTemplates] = useState<CodeTemplateListItem[]>([]);
-  const [codeTemplatesLoading, setCodeTemplatesLoading] = useState(false);
-  const [codeTemplatesError, setCodeTemplatesError] = useState('');
-  const [selectedCodeTemplateName, setSelectedCodeTemplateName] = useState('');
-  const [codeLoading, setCodeLoading] = useState(false);
-  const [codeError, setCodeError] = useState('');
-
-  // config: simple — selected built-in check id + its params, keyed
-  // dynamically off whatever `params` the API returned for that check
-  // (no more hardcoded per-check fields).
-  const [builtinCheck, setBuiltinCheck] = useState<string | null>(null);
-  const [builtinParams, setBuiltinParams] = useState<Record<string, unknown>>({});
-  // Simple metric type's Section 3 also asks for an "Output" — the
-  // actual_output text this built-in check is validated against.
-  const [simpleOutput, setSimpleOutput] = useState('');
-
-  // threshold (shared across all config types)
-  const [threshold, setThreshold] = useState(0.7);
-
-  // dataset
-  const [datasets, setDatasets] = useState<DatasetSummary[]>([]);
-  const [datasetsLoading, setDatasetsLoading] = useState(false);
-  const [datasetsError, setDatasetsError] = useState('');
-  const [selectedDatasetId, setSelectedDatasetId] = useState('');
-  const [previewQuestions, setPreviewQuestions] = useState<PreviewQuestion[]>([]);
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewError, setPreviewError] = useState('');
-  const [selectedQuestionIds, setSelectedQuestionIds] = useState<Set<string>>(new Set());
-
-  // validate / save
-  const [validating, setValidating] = useState(false);
-  const [validateError, setValidateError] = useState('');
-  const [validateResult, setValidateResult] = useState<ValidateMetricData | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState('');
-  const [savedId, setSavedId] = useState('');
-
-  const fields = evalType ? FIELDS_BY_EVAL_TYPE[evalType] : [];
-
-  // ---- reset chains ------------------------------------------------------
-  const handleEvalType = (t: EvalType) => {
-    if (t === evalType) return;
-    setEvalType(t);
-    setAgentSubcategory(null);
-    setDatasets([]); setSelectedDatasetId(''); setPreviewQuestions([]); setSelectedQuestionIds(new Set());
-    setCode(''); setPromptText(''); setSelectedTemplateName(''); setValidateResult(null); setSavedId('');
-    setTemplates([]); setBuiltinChecks([]);
-    // Cleared here (not just inside the list-fetch effect) so the
-    // "load code" effect — which also depends on evalType — doesn't fire
-    // with this render's now-stale template name for the old eval type.
-    setCodeTemplates([]); setSelectedCodeTemplateName('');
-    // Built-in check availability depends on eval type (e.g. Agent Loop
-    // Detection / Tool Correctness are agent-only) — clear the selection
-    // so a now-unavailable check can't stay silently selected.
-    setBuiltinCheck(null); setBuiltinParams({}); setSimpleOutput('');
-  };
-  const handleAgentSubcategory = (s: AgentSubcategory) => {
-    if (s === agentSubcategory) return;
-    setAgentSubcategory(s);
-    setCode(''); setPromptText(''); setSelectedTemplateName(''); setValidateResult(null); setSavedId('');
-    setTemplates([]); setBuiltinChecks([]);
-    setCodeTemplates([]); setSelectedCodeTemplateName('');
-    setBuiltinCheck(null); setBuiltinParams({}); setSimpleOutput('');
-  };
-  const handleMetricType = (t: MetricType) => {
-    if (t === metricType) return;
-    setMetricType(t); setValidateResult(null); setSavedId('');
-    if (t !== 'simple') { setBuiltinCheck(null); setBuiltinParams({}); setSimpleOutput(''); }
+  const submitComment = () => {
+    if (isEmptyHtml(commentDraft)) return;
+    dispatch(addTicketComment({ ticket_id: ticket.id, text: commentDraft }))
+      .unwrap()
+      .then(() => setCommentDraft(''))
+      .catch((e) => toast.error(typeof e === 'string' ? e : 'Could not post comment'));
   };
 
-  const handleBuiltinCheck = (check: BuiltinCheckDef) => {
-    if (check.id === builtinCheck) return;
-    setBuiltinCheck(check.id); setValidateResult(null); setSavedId('');
-    // Seed params from each field's default_value so the form (and a
-    // preview run without touching anything) starts from a sane state.
-    const init: Record<string, unknown> = {};
-    check.params.forEach((p) => {
-      if (p.type === 'list' || p.type === 'string_list') {
-        init[p.key] = Array.isArray(p.default_value) ? (p.default_value as string[]).join(', ') : (p.default_value ?? '');
-      } else if (p.type === 'bool') {
-        init[p.key] = Boolean(p.default_value);
-      } else if (p.type === 'number') {
-        init[p.key] = typeof p.default_value === 'number' ? p.default_value : 0;
-      } else {
-        init[p.key] = p.default_value ?? '';
-      }
-    });
-    setBuiltinParams(init);
-  };
-
-  const availableBuiltinChecks = useMemo(
-    () => (evalType ? builtinChecks.filter((c) => c.applicable_eval_types.includes(evalType)) : []),
-    [evalType, builtinChecks],
-  );
-  const selectedBuiltinCheckDef = useMemo(
-    () => availableBuiltinChecks.find((c) => c.id === builtinCheck) || null,
-    [availableBuiltinChecks, builtinCheck],
-  );
-
-  // ---- visual rules ------------------------------------------------------
-  const addRule = () => {
-    ruleSeq += 1;
-    setRules((r) => [...r, { id: ruleSeq, field: fields[0] || 'input', operator: 'contains', compareType: 'literal', value: '' }]);
-    setGates((g) => [...g, 'AND']);
-  };
-  const removeRule = (id: number) => {
-    setRules((r) => {
-      if (r.length <= 1) return r;
-      const idx = r.findIndex((row) => row.id === id);
-      setGates((g) => g.filter((_, i) => i !== Math.max(0, idx - 1)));
-      return r.filter((row) => row.id !== id);
-    });
-  };
-  const updateRule = (id: number, patch: Partial<RuleRow>) => setRules((r) => r.map((row) => (row.id === id ? { ...row, ...patch } : row)));
-  const toggleGate = (idx: number) => setGates((g) => g.map((v, i) => (i === idx ? (v === 'AND' ? 'OR' : 'AND') : v)));
-
-  // ---- templates (Prompt Builder templates + Simple built-in checks) ----
-  // Both Prompt Builder and Simple need this same endpoint, scoped by
-  // evalType and — for agent — by agentSubcategory. Waits for the
-  // subcategory pick before fetching when evalType is 'agent'.
-  useEffect(() => {
-    if (!evalType) { setTemplates([]); setBuiltinChecks([]); return; }
-    if (evalType === 'agent' && !agentSubcategory) { setTemplates([]); setBuiltinChecks([]); return; }
-    setTemplatesLoading(true); setTemplatesError('');
-    const scope = evalType === 'agent' && agentSubcategory ? { evalType, subcategory: agentSubcategory } : undefined;
-    metricsApi.getPromptTemplates(scope)
-      .then((res) => { setTemplates(res.templates); setBuiltinChecks(res.builtin_checks); })
-      .catch((e) => setTemplatesError(e.message || 'Failed to load templates'))
-      .finally(() => setTemplatesLoading(false));
-  }, [evalType, agentSubcategory]);
-
-  const matchingTemplates = useMemo(
-    () => templates.filter((t) => t.category === (evalType ? EVAL_TYPE_TO_CATEGORY[evalType] : '')),
-    [templates, evalType],
-  );
-  // Custom Prompt is available for every evaluation type — Model included,
-  // same as Agent and RAG.
-  const allowsCustomPrompt = evalType === 'agent' || evalType === 'rag' || evalType === 'model';
-
-  useEffect(() => {
-    if (metricType !== 'prompt' || models.length) return;
-    setModelsLoading(true); setModelsError('');
-    metricsApi.listModels()
-      .then((list) => {
-        setModels(list);
-        const init: Record<string, 'checking'> = {};
-        list.forEach((m) => { init[m.id] = 'checking'; });
-        setModelHealth(init);
-        list.forEach((m) => metricsApi.checkModelHealth(m.id).then((h) =>
-          setModelHealth((prev) => ({ ...prev, [m.id]: h.success ? 'healthy' : 'unhealthy' }))));
-      })
-      .catch((e) => setModelsError(e.message || 'Failed to load models'))
-      .finally(() => setModelsLoading(false));
-  }, [metricType, models.length]);
-
-  // Provider names for the Judge Model columns — fetched once, same
-  // pattern Model Catalog uses to resolve provider_id -> display name.
-  useEffect(() => {
-    if (metricType !== 'prompt' || providers.length) return;
-    dispatch(fetchProviders());
-  }, [metricType, providers.length, dispatch]);
-
-  const providerName = (id: string) => providers.find((p) => p.id === id)?.name || id || 'Unknown provider';
-
-  // Judge Model list grouped by provider, one column per provider, sorted
-  // alphabetically by display name.
-  const modelsByProvider = useMemo(() => {
-    const map = new Map<string, ModelSummary[]>();
-    models.forEach((m) => {
-      const key = m.provider_id || 'unknown';
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(m);
-    });
-    return [...map.entries()].sort((a, b) => providerName(a[0]).localeCompare(providerName(b[0])));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [models, providers]);
-
-  const [modelSearch, setModelSearch] = useState<Record<string, string>>({});
-
-  // ---- code template -----------------------------------------------------
-  // 1) list the available starter templates for a dropdown
-  useEffect(() => {
-    if (metricType !== 'code' || !evalType) return;
-    if (evalType === 'agent' && !agentSubcategory) return;
-    setCodeTemplatesLoading(true); setCodeTemplatesError('');
-    setCodeTemplates([]); setSelectedCodeTemplateName(''); setCode('');
-    metricsApi.listCodeTemplates(evalType, evalType === 'agent' ? agentSubcategory ?? undefined : undefined)
-      .then(setCodeTemplates)
-      .catch((e) => setCodeTemplatesError(e.message || 'Failed to load code templates'))
-      .finally(() => setCodeTemplatesLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [metricType, evalType, agentSubcategory]);
-
-  // 2) load the actual code once a template is picked from the dropdown
-  useEffect(() => {
-    if (metricType !== 'code' || !evalType || !selectedCodeTemplateName) return;
-    setCodeLoading(true); setCodeError('');
-    metricsApi.getCodeTemplateExample(evalType, selectedCodeTemplateName, evalType === 'agent' ? agentSubcategory ?? undefined : undefined)
-      .then((res) => setCode(res.code))
-      .catch((e) => setCodeError(e.message || 'Failed to load starter code'))
-      .finally(() => setCodeLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [metricType, evalType, agentSubcategory, selectedCodeTemplateName]);
-
-  // ---- datasets ----------------------------------------------------------
-  useEffect(() => {
-    if (!evalType) return;
-    setDatasetsLoading(true); setDatasetsError(''); setSelectedDatasetId(''); setPreviewQuestions([]);
-    metricsApi.listDatasets(evalType)
-      .then((list) => {
-        // These agent datasets are tool-calling benchmarks that don't fit
-        // the metric-building flow here — hide them for eval type Agent.
-        if (evalType === 'agent') {
-          const hidden = new Set(['ToolBench', 'BFCLv3', 'GAIA']);
-          list = list.filter((d) => !hidden.has(d.name));
-        }
-        setDatasets(list);
-      })
-      .catch((e) => setDatasetsError(e.message || 'Failed to load datasets'))
-      .finally(() => setDatasetsLoading(false));
-  }, [evalType]);
-
-  const selectDataset = (id: string) => {
-    setSelectedDatasetId(id); setValidateResult(null); setSavedId('');
-    setPreviewLoading(true); setPreviewError('');
-    metricsApi.previewDataset(id)
-      .then((res) => {
-        const qs = res.questions.slice(0, 5);
-        setPreviewQuestions(qs);
-        setSelectedQuestionIds(new Set(qs.map((q) => q.id)));
-      })
-      .catch((e) => setPreviewError(e.message || 'Failed to load preview'))
-      .finally(() => setPreviewLoading(false));
-  };
-  const toggleQuestion = (id: string) => setSelectedQuestionIds((prev) => {
-    const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next;
-  });
-  const selectAllQuestions = () => setSelectedQuestionIds(new Set(previewQuestions.map((q) => q.id)));
-  const clearAllQuestions = () => setSelectedQuestionIds(new Set());
-
-  // ---- rule summary ------------------------------------------------------
-  const ruleSummary = useMemo(() => {
-    if (!rules.length) return null;
-    return rules.map((r, i) => {
-      const compare = r.compareType === 'field' ? (r.value || '<field>') : `"${r.value || '…'}"`;
-      return (
-        <span key={r.id}>
-          {i > 0 && <span className={styles['summary__gate']}>{gates[i - 1] || 'AND'}</span>}
-          <span className={styles['summary__token']}>{r.field}</span>
-          {' '}{OP_SYMBOL[r.operator] || r.operator}{' '}
-          <span className={styles['summary__token']}>{compare}</span>
-        </span>
-      );
-    });
-  }, [rules, gates]);
-
-  // ---- gating (used for status dots + validate button, not for hiding UI) ---
-  const detailsComplete = !!name.trim();
-  const typeComplete = !!evalType && !!metricType && (evalType !== 'agent' || !!agentSubcategory);
-  const configComplete = useMemo(() => {
-    if (!metricType) return false;
-    if (metricType === 'visual') return rules.every((r) => r.field && r.operator && (r.compareType === 'field' ? r.value : r.value.trim()));
-    if (metricType === 'prompt') return !!promptText.trim() && !!selectedModelId;
-    if (metricType === 'code') return !!code.trim();
-    if (metricType === 'simple') {
-      if (!selectedBuiltinCheckDef) return false;
-      if (!simpleOutput.trim()) return false;
-      return selectedBuiltinCheckDef.params
-        .filter((p) => p.required)
-        .every((p) => {
-          const v = builtinParams[p.key];
-          if (p.type === 'bool') return v !== undefined;
-          if (p.type === 'number') return typeof v === 'number' && !Number.isNaN(v) && v > 0;
-          if (p.type === 'list' || p.type === 'string_list') return typeof v === 'string' && v.trim().length > 0;
-          return typeof v === 'string' && v.trim().length > 0;
-        });
-    }
-    return true;
-  }, [metricType, rules, promptText, selectedModelId, code, selectedBuiltinCheckDef, builtinParams, simpleOutput]);
-  const datasetComplete = !!selectedDatasetId && selectedQuestionIds.size > 0;
-  const canValidate = detailsComplete && typeComplete && configComplete && datasetComplete && threshold >= 0 && threshold <= 1;
-  const validateSucceeded = !!validateResult && validateResult.passed > 0;
-
-  const SECTIONS: SectionDef[] = [
-    { key: 'details', label: 'Metric Details' },
-    { key: 'type', label: 'Type & Target' },
-    { key: 'config', label: metricType === 'prompt' ? 'Judge Prompt' : metricType === 'code' ? 'Scoring Code' : metricType === 'simple' ? 'Configuration' : 'Rules' },
-    { key: 'dataset', label: 'Dataset · Validate & Save' },
-  ];
-
-  const sectionDone: Record<SectionKey, boolean> = {
-    details: detailsComplete,
-    type: typeComplete,
-    config: configComplete,
-    dataset: datasetComplete && !!validateResult,
-  };
-
-  const sectionValue: Record<SectionKey, string> = {
-    details: name || 'Not set',
-    type: evalType && metricType
-      ? `${evalType.toUpperCase()}${evalType === 'agent' && agentSubcategory ? ` · ${agentSubcategory === 'tools' ? 'Tool Eval' : 'Answer Eval'}` : ''} · ${METRIC_TYPE_CARDS.find((c) => c.key === metricType)!.label}`
-      : 'Not set',
-    config: metricType ? (configComplete ? 'Configured' : 'Incomplete') : '—',
-    dataset: validateResult ? `${validateResult.passed}/${validateResult.total} passed` : (selectedDatasetId ? `${selectedQuestionIds.size} selected` : 'Not set'),
-  };
-
-  // What's still missing for each incomplete section, surfaced in the rail
-  // so the user knows exactly what to do next instead of just seeing
-  // "Incomplete" / "Not set".
-  const sectionMissing: Record<SectionKey, string> = {
-    details: !name.trim() ? 'Add a metric name' : '',
-
-    type: (() => {
-      if (!evalType && !metricType) return 'Choose an evaluation type and a metric type';
-      if (!evalType) return 'Choose an evaluation type';
-      if (evalType === 'agent' && !agentSubcategory) return 'Choose Tool Evaluation or Answer Evaluation';
-      if (!metricType) return 'Choose a metric type';
-      return '';
-    })(),
-
-    config: (() => {
-      if (!metricType) return 'Pick a metric type in the section above first';
-      if (configComplete) return '';
-      if (metricType === 'visual') return 'Fill in every rule\u2019s field, operator, and value';
-      if (metricType === 'prompt') {
-        if (!promptText.trim() && !selectedModelId) return 'Write a judge prompt and choose a judge model';
-        if (!promptText.trim()) return 'Write a judge prompt';
-        return 'Choose a judge model';
-      }
-      if (metricType === 'code') return selectedCodeTemplateName ? 'Add your scoring code' : 'Choose a starter template';
-      if (metricType === 'simple') {
-        if (!selectedBuiltinCheckDef) return 'Select a built-in check';
-        if (!simpleOutput.trim()) return 'Add the Output text to validate against';
-        const missingParam = selectedBuiltinCheckDef.params.find((p) => {
-          const v = builtinParams[p.key];
-          if (!p.required) return false;
-          if (p.type === 'bool') return v === undefined;
-          if (p.type === 'number') return !(typeof v === 'number' && v > 0);
-          return !(typeof v === 'string' && v.trim().length > 0);
-        });
-        if (missingParam) return `Set ${missingParam.label}`;
-      }
-      return '';
-    })(),
-
-    dataset: (() => {
-      if (!evalType) return 'Choose an evaluation type to load datasets';
-      if (!selectedDatasetId) return 'Select a dataset';
-      if (selectedQuestionIds.size === 0) return 'Select at least one test question';
-      if (!validateResult) return 'Run validation to complete this step';
-      return '';
-    })(),
-  };
-
-  const completedCount = SECTIONS.filter((s) => sectionDone[s.key]).length;
-
-  // ---- validate / save ---------------------------------------------------
-  const buildDefinition = () => {
-    if (metricType === 'visual') return { rules: rules.map<RuleDef>((r) => ({ field: r.field, operator: r.operator, value: r.value, compare_to_field: r.compareType === 'field' })) };
-    if (metricType === 'prompt') return { prompt_template: promptText };
-    if (metricType === 'code') return { code, skip_validation: true };
-    if (metricType === 'simple') {
-      if (!selectedBuiltinCheckDef) return {};
-      // Convert each param to its API-facing value: list/string_list
-      // params are edited as a comma-separated string but sent as an
-      // array; number params sent as numbers; everything else as-is.
-      const params: Record<string, unknown> = {};
-      selectedBuiltinCheckDef.params.forEach((p) => {
-        const raw = builtinParams[p.key];
-        if (p.type === 'list' || p.type === 'string_list') {
-          params[p.key] = typeof raw === 'string' ? raw.split(',').map((v) => v.trim()).filter(Boolean) : [];
-        } else if (p.type === 'number') {
-          params[p.key] = Number(raw);
-        } else if (p.type === 'bool') {
-          params[p.key] = Boolean(raw);
-        } else {
-          params[p.key] = raw;
-        }
-      });
-      return { subtype: selectedBuiltinCheckDef.id, params };
-    }
-    return {};
-  };
-
-  // What goes into `actual_output` (top-level and per test case) depends
-  // on the metric type — it's whatever that type's Section 3 configures:
-  // Visual Builder's rules, the judge prompt, the scoring code, or the
-  // Simple type's own Output field.
-  const buildActualOutput = () => {
-    if (metricType === 'visual') {
-      return rules
-        .map((r, i) => {
-          const gate = i > 0 ? `${gates[i - 1]} ` : '';
-          const val = r.compareType === 'field' ? r.value : JSON.stringify(r.value);
-          return `${gate}${r.field} ${r.operator} ${val}`;
-        })
-        .join(' ');
-    }
-    if (metricType === 'prompt') return promptText;
-    if (metricType === 'code') return code;
-    if (metricType === 'simple') return simpleOutput;
-    return '';
-  };
-
-  const runValidate = () => {
-    if (!canValidate || !evalType || !metricType) { showToast('Complete every section first', 'error'); return; }
-    setValidating(true); setValidateError(''); setValidateResult(null);
-    const selectedQs = previewQuestions.filter((q) => selectedQuestionIds.has(q.id));
-    const actualOutput = buildActualOutput();
-    metricsApi.validate({
-      actual_output: actualOutput, context: [], definition: buildDefinition(), description,
-      eval_types: [evalType], expected_output: '', expected_tools: [],
-      gates: metricType === 'visual' ? gates : [], input: '',
-      judge_config: metricType === 'prompt' ? { model_id: selectedModelId } : null,
-      metric_type: METRIC_TYPE_TO_API[metricType], name, retrieval_context: [],
-      test_cases: selectedQs.map((q) => ({
-        input: q.input?.prompt || '', actual_output: q.expected?.answer || '', expected_output: q.expected?.answer || '',
-        context: [], retrieval_context: [], tools_called: [],
-        expected_tools: (q.expected?.expected_tools || q.expected?.tool_calls || []).map((t) => t.name),
-        available_tools: q.input?.available_tools || [],
-      })),
-      threshold: threshold.toFixed(2), tools_called: [],
-    })
-      .then(setValidateResult)
-      .catch((e) => setValidateError(e.message || 'Validation failed'))
-      .finally(() => setValidating(false));
-  };
-
-  const handleSave = () => {
-    if (!validateResult || !evalType || !metricType) { showToast('Run validation before saving', 'error'); return; }
-    setSaving(true); setSaveError('');
-    metricsApi.create({
-      definition: buildDefinition(), description, eval_types: [evalType],
-      metric_type: METRIC_TYPE_TO_API[metricType], name, threshold: threshold.toFixed(2),
-      judge_config: metricType === 'prompt' ? { model_id: selectedModelId } : null,
-    })
-      .then((res) => setSavedId(res.id || 'saved'))
-      .catch((e) => setSaveError(e.message || 'Failed to save metric'))
-      .finally(() => setSaving(false));
-  };
-
-  const resetForm = () => {
-    setName(''); setDescription(''); setEvalType(null); setMetricType(null); setAgentSubcategory(null);
-    setRules([{ id: ++ruleSeq, field: 'actual_output', operator: 'contains', compareType: 'field', value: 'input' }]); setGates([]);
-    setTemplates([]); setBuiltinChecks([]); setSelectedTemplateName(''); setPromptText('');
-    setModels([]); setModelHealth({}); setSelectedModelId(''); setThreshold(0.7);
-    setCodeTemplates([]); setSelectedCodeTemplateName(''); setCode('');
-    setBuiltinCheck(null); setBuiltinParams({}); setSimpleOutput('');
-    setDatasets([]); setSelectedDatasetId(''); setPreviewQuestions([]); setSelectedQuestionIds(new Set());
-    setValidateResult(null); setValidateError(''); setSavedId('');
-    sectionRefs.details.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
-
-  // =========================================================================
   return (
-    <div className={styles.cm}>
-
-      <div className={styles.builder}>
-
-        {/* ============ LEFT RAIL — jump-to links, all sections visible ============ */}
-        <aside className={styles.rail}>
-          <div className={styles['rail__head']}>
-            <div className={styles['rail__eyebrow']}>Overview</div>
-            <div className={styles['rail__sub']}>Everything is on this page — jump to any section.</div>
+    <div className={styles['modal-overlay']} onClick={onClose}>
+      <div
+        className={styles['modal']}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Ticket detail"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className={styles['modal-hdr']}>
+          <div>
+            <span className={styles['modal-key']}>{ticket.key}</span>
+            <span
+              className={[
+                styles['ticket-card__priority'],
+                ticket.priority === 'urgent' ? styles['ticket-card__priority--urgent'] : '',
+              ].join(' ')}
+              style={{ ['--priority-accent' as string]: priority.accent }}
+            >
+              <PriorityIcon size={11} strokeWidth={2.75} className={styles['ticket-card__priority-icon']} />
+              {priority.label}
+            </span>
           </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4em' }}>
+            <button
+              type="button"
+              className={styles['modal-close']}
+              onClick={() => onEdit(ticket)}
+              aria-label="Edit ticket"
+              title="Edit"
+            >
+              <Pencil size={14} />
+            </button>
+            <button
+              type="button"
+              className={styles['modal-close']}
+              onClick={() => setConfirmDelete(true)}
+              disabled={deleting || !owner}
+              aria-label="Delete ticket"
+              title={owner ? 'Delete' : OWNER_ONLY_DELETE_HINT}
+            >
+              {deleting ? <Loader2 size={14} className={styles['ticket-board__spin']} /> : <Trash2 size={14} />}
+            </button>
+            <button className={styles['modal-close']} onClick={onClose} aria-label="Close">
+              <X size={16} />
+            </button>
+          </div>
+        </header>
 
-          <nav className={styles['rail__steps']}>
-            {SECTIONS.map((s, i) => {
-              const done = sectionDone[s.key];
-              return (
-                <button
-                  key={s.key}
-                  onClick={() => scrollToSection(s.key)}
-                  className={`${styles['rail-step']} ${done ? styles['rail-step--done'] : ''}`}
-                >
-                  <span className={styles['rail-step__marker']}>
-                    {done ? <Check size={15} /> : i + 1}
+        <div className={styles['modal-body']}>
+          {/* ---- main: title, description (with inline images), comments ---- */}
+          <div className={styles['modal-main']}>
+            <h3 className={styles['ticket-detail__title']}>{ticket.title}</h3>
+
+            {!isEmptyHtml(ticket.description) ? (
+              <div
+                className={styles['ticket-detail__desc']}
+                // Description is rich-text HTML from the description editor
+                // (images the requester pasted/dropped/inserted are already
+                // embedded inline as <img> tags) — sanitize before ever
+                // injecting it, since this is otherwise-untrusted content.
+                dangerouslySetInnerHTML={{ __html: sanitizeTicketHtml(ticket.description) }}
+              />
+            ) : (
+              <p className={styles['ticket-detail__desc--empty']}>No description.</p>
+            )}
+
+            {(ticket.labels ?? []).length > 0 && (
+              <div className={styles['ticket-card__labels']}>
+                {(ticket.labels ?? []).map((l) => (
+                  <span key={l} className={styles['ticket-card__label']}>
+                    {l}
                   </span>
-                  <span className={styles['rail-step__body']}>
-                    <span className={styles['rail-step__label']}>{s.label}</span>
-                    <span className={styles['rail-step__value']}>{sectionValue[s.key]}</span>
-                    {!done && sectionMissing[s.key] && (
-                      <span className={styles['rail-step__missing']}>
-                        <AlertCircle size={11} />
-                        {sectionMissing[s.key]}
+                ))}
+              </div>
+            )}
+
+            <div className={styles['ticket-detail__tabs']}>
+              <button
+                type="button"
+                className={[
+                  styles['ticket-detail__tab'],
+                  activeTab === 'comments' ? styles['ticket-detail__tab--active'] : '',
+                ].join(' ')}
+                onClick={() => setActiveTab('comments')}
+              >
+                Comments {comments.length > 0 && `(${comments.length})`}
+              </button>
+              <button
+                type="button"
+                className={[
+                  styles['ticket-detail__tab'],
+                  activeTab === 'history' ? styles['ticket-detail__tab--active'] : '',
+                ].join(' ')}
+                onClick={() => setActiveTab('history')}
+              >
+                <HistoryIcon size={12} />
+                History {history.length > 0 && `(${history.length})`}
+              </button>
+            </div>
+
+            {activeTab === 'history' && (
+              <div className={styles['ticket-detail__history']}>
+                {history.length === 0 && (
+                  <p className={styles['ticket-detail__history-empty']}>
+                    No changes yet — still in {historyStatusLabel(ticket.status)}.
+                  </p>
+                )}
+                {history.map((h) =>
+                  h.type === 'assignee' ? (
+                    <div key={h.id} className={styles['ticket-detail__history-item']}>
+                      <span
+                        className={styles['ticket-detail__history-dot']}
+                        style={{ background: h.to_assignee ? avatarAccent(h.to_assignee) : '#8A909B' }}
+                      />
+                      <span className={styles['ticket-detail__history-text']}>
+                        <strong>{h.actor.name}</strong> {assigneeChangeVerb(h)}
                       </span>
-                    )}
-                  </span>
-                  <ChevronRight size={14} className={styles['rail-step__arrow']} />
-                </button>
-              );
-            })}
-          </nav>
-        </aside>
-
-        {/* ============ RIGHT WORKSPACE — all sections rendered together ============ */}
-        <section className={styles.work}>
-          <div className={styles['work__scroll']}>
-            <div className={styles['work__inner']}>
-
-              {/* ---- SECTION: DETAILS ---- */}
-              <div className={styles.section} ref={sectionRefs.details}>
-                <div className={styles['work__eyebrow']}>Section 1</div>
-                <h1 className={styles['work__title']}>Name your metric</h1>
-                <p className={styles['work__desc']}>Give it a clear name and, optionally, a short description of what it measures.</p>
-
-                <div className={styles['field-row']}>
-                  <div className={styles.field}>
-                    <label className={styles['field__label']}>Metric Name</label>
-                    <input className={styles.input} placeholder="e.g., Answer Faithfulness" value={name} onChange={(e) => setName(e.target.value)} />
-                  </div>
-                  <div className={styles.field}>
-                    <label className={styles['field__label']}>Description</label>
-                    <input className={styles.input} placeholder="What does this metric measure? (optional)" value={description} onChange={(e) => setDescription(e.target.value)} />
-                  </div>
-                </div>
+                      <span className={styles['ticket-detail__history-time']}>{formatTime(h.created_at)}</span>
+                    </div>
+                  ) : (
+                    <div key={h.id} className={styles['ticket-detail__history-item']}>
+                      <span
+                        className={styles['ticket-detail__history-dot']}
+                        style={{ background: historyStatusAccent(h.to_status, h.resolution) }}
+                      />
+                      <span className={styles['ticket-detail__history-text']}>
+                        <strong>{h.actor.name}</strong> moved{' '}
+                        <span className={styles['ticket-detail__history-from']}>
+                          {historyStatusLabel(h.from_status)}
+                        </span>
+                        {' → '}
+                        <span
+                          className={styles['ticket-detail__history-to']}
+                          style={{ color: historyStatusAccent(h.to_status, h.resolution) }}
+                        >
+                          {historyStatusLabel(h.to_status, h.resolution)}
+                        </span>
+                      </span>
+                      <span className={styles['ticket-detail__history-time']}>{formatTime(h.created_at)}</span>
+                    </div>
+                  )
+                )}
               </div>
+            )}
 
-              {/* ---- SECTION: TYPE & TARGET ---- */}
-              <div className={styles.section} ref={sectionRefs.type}>
-                <div className={styles['work__eyebrow']}>Section 2</div>
-                <h1 className={styles['work__title']}>Evaluation type &amp; approach</h1>
-                <p className={styles['work__desc']}>Choose what you’re evaluating, then how the metric should score it.</p>
-
-                <div className={styles.field}>
-                  <label className={styles['field__label']}>Evaluation Type</label>
-                  <div className={`${styles['opt-grid']} ${styles['opt-grid--3']}`}>
-                    {EVAL_TYPE_CARDS.map((c) => (
-                      <button key={c.key} className={`${styles.opt} ${evalType === c.key ? styles['opt--selected'] : ''}`} onClick={() => handleEvalType(c.key)}>
-                        {evalType === c.key && <span className={styles['opt__check']}><Check size={12} /></span>}
-                        <span className={styles['opt__icon']}>{c.icon}</span>
-                        <div className={styles['opt__title']}>{c.label}</div>
-                        <div className={styles['opt__desc']}>{c.desc}</div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {evalType === 'agent' && (
-                  <div className={styles.field}>
-                    <label className={styles['field__label']}>Agent Focus</label>
-                    <div className={`${styles['opt-grid']} ${styles['opt-grid--3']}`}>
-                      {AGENT_SUBCATEGORY_CARDS.map((c) => (
-                        <button key={c.key} className={`${styles.opt} ${agentSubcategory === c.key ? styles['opt--selected'] : ''}`} onClick={() => handleAgentSubcategory(c.key)}>
-                          {agentSubcategory === c.key && <span className={styles['opt__check']}><Check size={12} /></span>}
-                          <span className={styles['opt__icon']}>{c.icon}</span>
-                          <div className={styles['opt__title']}>{c.label}</div>
-                          <div className={styles['opt__desc']}>{c.desc}</div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+            {activeTab === 'comments' && (
+              <div className={styles['ticket-detail__comments']}>
+                {comments.length === 0 && (
+                  <p className={styles['ticket-detail__comment-empty']}>
+                    No comments yet — start the discussion.
+                  </p>
                 )}
-
-                <div className={styles.field}>
-                  <label className={styles['field__label']}>Metric Type</label>
-                  <div className={`${styles['opt-grid']} ${styles['opt-grid--4']}`}>
-                    {METRIC_TYPE_CARDS.map((c) => (
-                      <button key={c.key} className={`${styles.opt} ${metricType === c.key ? styles['opt--selected'] : ''}`} onClick={() => handleMetricType(c.key)}>
-                        {metricType === c.key && <span className={styles['opt__check']}><Check size={12} /></span>}
-                        <span className={styles['opt__icon']}>{c.icon}</span>
-                        <div className={styles['opt__title']}>{c.label}</div>
-                        <div className={styles['opt__desc']}>{c.desc}</div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* ---- SECTION: CONFIG ---- */}
-              <div className={styles.section} ref={sectionRefs.config}>
-                <div className={styles['work__eyebrow']}>Section 3</div>
-                <h1 className={styles['work__title']}>{SECTIONS[2].label}</h1>
-
-                {!metricType && (
-                  <div className={styles.empty}>Pick a metric type above to configure it here.</div>
-                )}
-
-                {/* visual */}
-                {metricType === 'visual' && (
-                  <>
-                    <p className={styles['work__desc']}>Build one or more field comparisons. Combine them with AND / OR.</p>
-                    <div className={styles.rules}>
-                      {rules.map((rule, i) => (
-                        <div key={rule.id}>
-                          {i > 0 && (
-                            <div className={styles.gate}>
-                              <div className={styles['gate__toggle']}>
-                                {(['AND', 'OR'] as const).map((g) => (
-                                  <button key={g} className={`${styles['gate__opt']} ${gates[i - 1] === g ? styles.on : ''}`} onClick={() => toggleGate(i - 1)}>{g}</button>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                          <div className={styles.rule}>
-                            <div className={styles['rule__head']}>
-                              <span className={styles['rule__index']}>Rule {i + 1}</span>
-                              <button className={styles['btn-icon']} title="Remove" onClick={() => removeRule(rule.id)}><X size={15} /></button>
-                            </div>
-                            <div className={styles['rule__grid']}>
-                              <div className={styles['rule__field']}>
-                                <span className={styles['rule__field-label']}>Field</span>
-                                <CustomSelect value={rule.field} onChange={(v) => updateRule(rule.id, { field: v })} options={fields.map((f) => ({ value: f, label: f }))} />
-                              </div>
-                              <div className={styles['rule__field']}>
-                                <span className={styles['rule__field-label']}>Operator</span>
-                                <CustomSelect value={rule.operator} onChange={(v) => updateRule(rule.id, { operator: v })} options={OPERATORS} />
-                              </div>
-                              <div className={styles['rule__field']}>
-                                <span className={styles['rule__field-label']}>Compare To</span>
-                                <CustomSelect value={rule.compareType} onChange={(v) => updateRule(rule.id, { compareType: v as CompareType, value: '' })} options={[{ value: 'field', label: 'Field' }, { value: 'literal', label: 'Literal Value' }]} />
-                              </div>
-                              <div className={styles['rule__field']}>
-                                <span className={styles['rule__field-label']}>Value</span>
-                                {rule.compareType === 'literal'
-                                  ? <input className={styles.input} placeholder="value" value={rule.value} onChange={(e) => updateRule(rule.id, { value: e.target.value })} />
-                                  : <CustomSelect value={rule.value} onChange={(v) => updateRule(rule.id, { value: v })} placeholder="field…" options={fields.map((f) => ({ value: f, label: f }))} />}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    <button className={`${styles.btn} ${styles['btn--sm']} ${styles['add-rule']}`} onClick={addRule}><Plus size={14} /> Add Rule</button>
-
-                    <div className={styles.summary}>
-                      <div className={styles['summary__label']}>Summary</div>
-                      <div className={styles['summary__code']}>{ruleSummary || 'No rules defined'}</div>
-                    </div>
-                  </>
-                )}
-
-                {/* prompt */}
-                {metricType === 'prompt' && (
-                  <>
-                    <p className={styles['work__desc']}>Pick a judge prompt template (or write your own), then choose a judge model.</p>
-
-                    {templatesError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {templatesError}</div>}
-                    {evalType === 'agent' && !agentSubcategory ? (
-                      <div className={styles.empty}>Choose Tool Evaluation or Answer Evaluation above first.</div>
-                    ) : templatesLoading ? (
-                      <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading templates…</div>
-                    ) : (
-                      <div className={styles['tpl-list']}>
-                        {matchingTemplates.length === 0 && !allowsCustomPrompt && <div className={styles.empty}>No templates for this evaluation type.</div>}
-                        {matchingTemplates.map((t) => (
-                          <label key={t.name} className={`${styles.tpl} ${selectedTemplateName === t.name ? styles['tpl--selected'] : ''}`}>
-                            <input type="radio" name="tpl" hidden checked={selectedTemplateName === t.name} onChange={() => { setSelectedTemplateName(t.name); setPromptText(t.template); }} />
-                            <span className={styles['tpl__radio']} />
-                            <span className={styles['tpl__body']}>
-                              <span className={styles['tpl__label']}>{t.label}</span>
-                              <span className={styles['tpl__desc']}>{t.description}</span>
-                              {t.uses_placeholders?.length > 0 && (
-                                <span className={styles['tpl__tags']}>
-                                  {t.uses_placeholders.map((p) => <span key={p} className={styles.token}>{`{${p}}`}</span>)}
-                                </span>
-                              )}
-                            </span>
-                          </label>
-                        ))}
-                        {allowsCustomPrompt && (
-                          <label className={`${styles.tpl} ${selectedTemplateName === '__custom__' ? styles['tpl--selected'] : ''}`}>
-                            <input type="radio" name="tpl" hidden checked={selectedTemplateName === '__custom__'} onChange={() => { setSelectedTemplateName('__custom__'); setPromptText(''); }} />
-                            <span className={styles['tpl__radio']} />
-                            <span className={styles['tpl__body']}>
-                              <span className={styles['tpl__label']}>Custom Prompt</span>
-                              <span className={styles['tpl__desc']}>Write your own judge prompt from scratch.</span>
-                            </span>
-                          </label>
-                        )}
+                {comments.map((c) => (
+                  <div key={c.id} className={styles['ticket-detail__comment']}>
+                    <span
+                      className={styles['ticket-card__avatar']}
+                      style={{ background: avatarAccent(c.author) }}
+                    >
+                      {initials(c.author)}
+                    </span>
+                    <div className={styles['ticket-detail__comment-body']}>
+                      <div className={styles['ticket-detail__comment-head']}>
+                        <span className={styles['ticket-detail__comment-author']}>
+                          {c.author.name}
+                        </span>
+                        <span className={styles['ticket-detail__comment-time']}>
+                          {formatTime(c.created_at)}
+                        </span>
                       </div>
-                    )}
-
-                    {selectedTemplateName && (
-                      <div className={styles.field}>
-                        <label className={styles['field__label']}>Prompt</label>
-                        <textarea className={styles.textarea} style={{ minHeight: '150px' }} value={promptText} onChange={(e) => setPromptText(e.target.value)} placeholder="Enter your judge prompt…" />
-                      </div>
-                    )}
-
-                    <div className={styles.field}>
-                      <label className={styles['field__label']}>Judge Model</label>
-                      {modelsError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {modelsError}</div>}
-                      {modelsLoading ? (
-                        <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading models…</div>
-                      ) : models.length === 0 ? (
-                        <div className={styles.empty}>No models available.</div>
-                      ) : (
-                        <div className={styles['provider-cols']}>
-                          {modelsByProvider.map(([providerId, list]) => {
-                            const search = (modelSearch[providerId] || '').toLowerCase();
-                            const filtered = search ? list.filter((m) => m.name.toLowerCase().includes(search)) : list;
-                            return (
-                              <div key={providerId} className={styles['provider-col']}>
-                                <div className={styles['provider-col__head']}>
-                                  {providerName(providerId)}
-                                  <span className={styles['provider-col__count']}>{list.length}</span>
-                                </div>
-                                <div className={styles['provider-col__search']}>
-                                  <Search size={13} />
-                                  <input
-                                    placeholder="Search model…"
-                                    value={modelSearch[providerId] || ''}
-                                    onChange={(e) => setModelSearch((prev) => ({ ...prev, [providerId]: e.target.value }))}
-                                  />
-                                </div>
-                                <div className={styles['provider-col__list']}>
-                                  {filtered.length === 0 ? (
-                                    <div className={styles.empty}>No matching models.</div>
-                                  ) : filtered.map((m) => {
-                                    const health = modelHealth[m.id] || 'checking';
-                                    const disabled = health === 'unhealthy';
-                                    return (
-                                      <label key={m.id} className={`${styles.model} ${selectedModelId === m.id ? styles['model--selected'] : ''} ${disabled ? styles['model--disabled'] : ''}`}>
-                                        <input type="radio" name="judge" hidden checked={selectedModelId === m.id} disabled={disabled} onChange={() => setSelectedModelId(m.id)} />
-                                        <span className={styles['model__radio']} />
-                                        <span className={styles['model__body']}>
-                                          <span className={styles['model__name']} title={m.name}>{m.name}</span>
-                                          {health === 'checking' && <span className={styles['model__checking']}>Checking…</span>}
-                                        </span>
-                                        <span className={`${styles['model__health']} ${styles[`health--${health}`]}`} title={health === 'checking' ? 'Checking' : health === 'healthy' ? 'Healthy' : 'Offline'}>
-                                          <span className={styles['health-dot']} />
-                                        </span>
-                                      </label>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  </>
-                )}
-
-                {/* code */}
-                {metricType === 'code' && (
-                  <>
-                    <p className={styles['work__desc']}>Pick a starter template, then edit the code to suit your metric.</p>
-                    {codeTemplatesError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {codeTemplatesError}</div>}
-                    {codeError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {codeError}</div>}
-
-                    {evalType === 'agent' && !agentSubcategory ? (
-                      <div className={styles.empty}>Choose Tool Evaluation or Answer Evaluation above first.</div>
-                    ) : (
-                      <>
-                        <div className={`${styles.field} ${styles['field--fit']}`}>
-                          <label className={styles['field__label']}>Starter Template</label>
-                          {codeTemplatesLoading ? (
-                            <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading templates…</div>
-                          ) : codeTemplates.length === 0 ? (
-                            <div className={styles.empty}>No starter templates for this evaluation type.</div>
-                          ) : (
-                            <CustomSelect
-                              value={selectedCodeTemplateName}
-                              onChange={setSelectedCodeTemplateName}
-                              placeholder="Choose a template…"
-                              options={codeTemplates.map((t) => ({ value: t.name, label: t.label, sublabel: t.description }))}
-                            />
-                          )}
-                        </div>
-
-                        {selectedCodeTemplateName && (
-                          <div className={styles.code}>
-                            <div className={styles['code__bar']}>
-                              <span className={styles['code__lang']}>Python</span>
-                              {codeLoading && <Loader2 size={13} className={styles.spin} />}
-                            </div>
-                            <textarea className={styles['code__area']} spellCheck={false} value={code} onChange={(e) => setCode(e.target.value)} placeholder="# scoring function" />
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </>
-                )}
-
-                {/* simple — Built-in Check (checks + params come from the API) */}
-                {metricType === 'simple' && (
-                  <>
-                    <p className={styles['work__desc']}>Pick a built-in check. Available checks depend on the evaluation type selected above.</p>
-
-                    {templatesError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {templatesError}</div>}
-
-                    {!evalType ? (
-                      <div className={styles.empty}>Choose an evaluation type above to see available checks.</div>
-                    ) : evalType === 'agent' && !agentSubcategory ? (
-                      <div className={styles.empty}>Choose Tool Evaluation or Answer Evaluation above first.</div>
-                    ) : templatesLoading ? (
-                      <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading checks…</div>
-                    ) : availableBuiltinChecks.length === 0 ? (
-                      <div className={styles.empty}>No built-in checks for this evaluation type.</div>
-                    ) : (
-                      <div className={`${styles['opt-grid']} ${availableBuiltinChecks.length >= 4 ? styles['opt-grid--4'] : ''}`}>
-                        {availableBuiltinChecks.map((c) => (
-                          <button
-                            key={c.id}
-                            className={`${styles.opt} ${builtinCheck === c.id ? styles['opt--selected'] : ''}`}
-                            onClick={() => handleBuiltinCheck(c)}
-                          >
-                            {builtinCheck === c.id && <span className={styles['opt__check']}><Check size={12} /></span>}
-                            <span className={styles['opt__icon']}>{builtinCheckIcon(c.id)}</span>
-                            <div className={styles['opt__title']}>{c.name}</div>
-                            <div className={styles['opt__desc']}>{c.description}</div>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-
-                    {selectedBuiltinCheckDef?.params.map((p) => (
-                      <div key={p.key} className={`${styles.field} ${styles['field--fit']}`} style={{ marginTop: '18px' }}>
-                        {p.type === 'bool' ? (
-                          <div className={styles['switch-row']}>
-                            <div>
-                              <div className={styles['switch-row__label']}>{p.label}</div>
-                            </div>
-                            <button
-                              type="button"
-                              role="switch"
-                              aria-checked={Boolean(builtinParams[p.key])}
-                              className={`${styles.switch} ${builtinParams[p.key] ? styles['switch--on'] : ''}`}
-                              onClick={() => setBuiltinParams((prev) => ({ ...prev, [p.key]: !prev[p.key] }))}
-                            >
-                              <span className={styles['switch__thumb']} />
-                            </button>
-                          </div>
-                        ) : p.type === 'number' ? (
-                          <>
-                            <label className={styles['field__label']}>{p.label}</label>
-                            <input
-                              type="number"
-                              min={1}
-                              step={1}
-                              className={styles.input}
-                              value={typeof builtinParams[p.key] === 'number' ? (builtinParams[p.key] as number) : ''}
-                              onChange={(e) => {
-                                const raw = e.target.value;
-                                if (raw === '') { setBuiltinParams((prev) => ({ ...prev, [p.key]: '' })); return; }
-                                const n = Math.floor(Number(raw));
-                                setBuiltinParams((prev) => ({ ...prev, [p.key]: Number.isFinite(n) && n > 0 ? n : 1 }));
-                              }}
-                            />
-                          </>
-                        ) : p.type === 'list' || p.type === 'string_list' ? (
-                          <>
-                            <label className={styles['field__label']}>{p.label} (comma-separated)</label>
-                            <input
-                              className={styles.input}
-                              placeholder="Enter one or more values, separated by commas"
-                              value={typeof builtinParams[p.key] === 'string' ? (builtinParams[p.key] as string) : ''}
-                              onChange={(e) => setBuiltinParams((prev) => ({ ...prev, [p.key]: e.target.value }))}
-                            />
-                          </>
-                        ) : (
-                          <>
-                            <label className={styles['field__label']}>{p.label}</label>
-                            <input
-                              className={styles.input}
-                              value={typeof builtinParams[p.key] === 'string' ? (builtinParams[p.key] as string) : ''}
-                              onChange={(e) => setBuiltinParams((prev) => ({ ...prev, [p.key]: e.target.value }))}
-                            />
-                          </>
-                        )}
-                      </div>
-                    ))}
-
-                    <div className={styles.field} style={{ marginTop: '18px' }}>
-                      <label className={styles['field__label']}>Output</label>
-                      <textarea
-                        className={styles.textarea}
-                        placeholder="The actual_output text this check is validated against"
-                        value={simpleOutput}
-                        onChange={(e) => setSimpleOutput(e.target.value)}
+                      {/* Comment text is rich-text HTML too (same editor as
+                          the description) — sanitize before rendering. */}
+                      <div
+                        className={styles['ticket-detail__comment-text']}
+                        dangerouslySetInnerHTML={{ __html: sanitizeTicketHtml(c.text) }}
                       />
                     </div>
-                  </>
-                )}
-
-                {/* threshold — shared across all config types */}
-                {metricType && (
-                  <div className={styles.field} style={{ marginTop: '26px' }}>
-                    <label className={styles['field__label']}>Pass Threshold</label>
-                    <div className={`${styles.thr} ${styles['field--fit']}`}>
-                      <div className={styles['thr__row']}>
-                        <span className={styles['thr__cap']}>Minimum score required to pass</span>
-                        <span className={styles['thr__value']}>{threshold.toFixed(2)}</span>
-                      </div>
-                      <input type="range" className={styles['thr__slider']} min={0} max={1} step={0.01} value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} />
-                      <div className={styles['thr__scale']}><span>0.00</span><span>0.50</span><span>1.00</span></div>
-                    </div>
                   </div>
-                )}
-              </div>
+                ))}
 
-              {/* ---- SECTION: DATASET ---- */}
-              <div className={`${styles.section} ${styles['section--last']}`} ref={sectionRefs.dataset}>
-                <div className={styles['work__eyebrow']}>Section 4</div>
-                <h1 className={styles['work__title']}>Choose test data &amp; validate</h1>
-                <p className={styles['work__desc']}>Pick a dataset and questions, run validation, then save your metric.</p>
-
-                {!evalType ? (
-                  <div className={styles.empty}>Choose an evaluation type above to load datasets.</div>
-                ) : (
-                  <div className={styles['data-row']}>
-                    <div className={styles['data-col']}>
-                      <div className={styles['data-col__head']}>
-                        <span className={styles['data-col__head-title']}><Database size={12} /> Datasets</span>
-                        {datasets.length > 0 && <span className={styles['data-col__count']}>{datasets.length}</span>}
-                      </div>
-                      <div className={styles['data-col__body']}>
-                        {datasetsError ? <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {datasetsError}</div>
-                          : datasetsLoading ? <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading…</div>
-                          : datasets.length === 0 ? <div className={styles.empty}>No datasets for this type.</div>
-                          : (
-                            <div className={styles['ds-list']}>
-                              {datasets.map((d) => {
-                                const selected = selectedDatasetId === d.id;
-                                return (
-                                  <div
-                                    key={d.id}
-                                    className={`${styles.ds} ${selected ? styles['ds--selected'] : ''}`}
-                                    onClick={() => selectDataset(d.id)}
-                                    title={d.name}
-                                  >
-                                    <span className={styles['ds__check']}><Check size={11} /></span>
-                                    <span className={styles['ds__icon']}><Database size={14} /></span>
-                                    <span className={styles['ds__name']}>{d.name}</span>
-                                    <span className={styles['ds__count']}>{d.question_count} {d.question_count === 1 ? 'question' : 'questions'}</span>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                      </div>
-                    </div>
-
-                    <div className={styles['data-col']}>
-                      <div className={styles['data-col__head']}>
-                        <span className={styles['data-col__head-title']}>
-                          <ListChecks size={12} /> Questions
-                        </span>
-                        {previewQuestions.length > 0 && (
-                          <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                            <span className={styles['data-col__count']}>{selectedQuestionIds.size}/{previewQuestions.length}</span>
-                            <span style={{ display: 'flex', gap: '8px' }}>
-                              <button className={styles['link-btn']} onClick={selectAllQuestions}>All</button>
-                              <button className={styles['link-btn']} onClick={clearAllQuestions}>Clear</button>
-                            </span>
-                          </span>
-                        )}
-                      </div>
-                      <div className={styles['data-col__body']}>
-                        {previewError ? <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {previewError}</div>
-                          : previewLoading ? <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading…</div>
-                          : previewQuestions.length === 0 ? <div className={styles.empty}>Select a dataset to preview.</div>
-                          : (
-                            <div className={styles['q-list']}>
-                              {previewQuestions.map((q) => {
-                                const on = selectedQuestionIds.has(q.id);
-                                const tools = q.input?.available_tools || [];
-                                const expectedCalls = (q.expected?.expected_tools?.length ? q.expected.expected_tools : q.expected?.tool_calls) || [];
-                                return (
-                                  <div key={q.id} className={`${styles.q} ${on ? styles['q--on'] : ''}`} onClick={() => toggleQuestion(q.id)}>
-                                    <span className={styles['q__check']}>{on && <Check size={12} />}</span>
-                                    <span className={styles['q__body']}>
-                                      {q.category && <span className={styles['q__category']}>{q.category}</span>}
-                                      <span className={styles['q__q']}>{q.input?.prompt}</span>
-                                      <span className={styles['q__a']}><span className={styles['q__a-label']}>Expected:</span>{q.expected?.answer}</span>
-
-                                      {tools.length > 0 && (
-                                        <span className={styles['q__tools']}>
-                                          <span className={styles['q__tools-label']}>Available tools</span>
-                                          <span className={styles['q__tool-tags']}>
-                                            {tools.map((t) => (
-                                              <span key={t.name} className={styles['q__tool-tag']} title={t.description}>
-                                                <span className={styles['q__tool-method']}>{t.method}</span>
-                                                {t.name}
-                                              </span>
-                                            ))}
-                                          </span>
-                                        </span>
-                                      )}
-
-                                      {expectedCalls.length > 0 && (
-                                        <span className={styles['q__calls']}>
-                                          <span className={styles['q__tools-label']}>Expected tool calls</span>
-                                          {expectedCalls.map((c, i) => (
-                                            <span key={`${c.name}-${i}`} className={styles['q__call']}>
-                                              <span className={styles['q__call-name']}>{c.name}</span>
-                                              {Object.entries(c.arguments || {}).length > 0 && (
-                                                <span className={styles['q__call-args']}>
-                                                  {Object.entries(c.arguments).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ')}
-                                                </span>
-                                              )}
-                                            </span>
-                                          ))}
-                                        </span>
-                                      )}
-                                    </span>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* ---- validate & save ---- */}
-                <div className={styles['validate-section']}>
-                  <div className={styles['validate-section__label']}>Validate &amp; Save</div>
-                  <p className={styles['validate-section__desc']}>Run a dry-run against your selected questions. Saving unlocks once it passes.</p>
-
-                  {validateError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {validateError}</div>}
-
-                  {!validateResult && !validating && (
-                    <div className={`${styles.banner} ${styles['banner--info']}`}><Sparkles size={15} /> Ready to validate {selectedQuestionIds.size} test case{selectedQuestionIds.size === 1 ? '' : 's'}.</div>
-                  )}
-
-                  {validateResult && (
-                    <div style={{ marginBottom: '18px' }}>
-                      {validateSucceeded
-                        ? <div className={`${styles.banner} ${styles['banner--ok']}`}><CheckCircle2 size={15} /> Metric is valid — ready to save.</div>
-                        : <div className={`${styles.banner} ${styles['banner--err']}`}><XCircle size={15} /> No test cases passed. You can still save, or adjust your metric and re-run.</div>}
-
-                      <div className={styles.results}>
-                        {validateResult.results.map((r, i) => (
-                          <div key={i} className={styles['results__row']}>
-                            <span className={`${styles['results__score']} ${r.success ? styles['results__score--pass'] : styles['results__score--fail']}`}>{r.score.toFixed(2)}</span>
-                            <span className={styles['results__body']}>
-                              <span className={styles['results__io']}><span className={styles['results__io-label']}>Input:</span>{r.test_case.input}</span>
-                              {r.test_case.actual_output && (
-                                <span className={styles['results__io']}><span className={styles['results__io-label']}>Actual:</span>{r.test_case.actual_output}</span>
-                              )}
-                              {r.test_case.expected_output && (
-                                <span className={styles['results__io']}><span className={styles['results__io-label']}>Expected:</span>{r.test_case.expected_output}</span>
-                              )}
-                              {r.reason && <span className={styles['results__reason']}>{r.reason}</span>}
-                            </span>
-                            <span className={`${styles['results__pill']} ${r.success ? styles['results__pill--pass'] : styles['results__pill--fail']}`}>{r.success ? 'Pass' : 'Fail'}</span>
-                          </div>
-                        ))}
-                        <div className={styles['results__summary']}>
-                          <span>Passed: <strong>{validateResult.passed}/{validateResult.total}</strong></span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
+                <div className={styles['ticket-detail__comment-form']}>
+                  <TicketDescriptionEditor
+                    value={commentDraft}
+                    onChange={setCommentDraft}
+                    placeholder="Add a comment… paste or drag an image in."
+                    disabled={posting}
+                    compact
+                  />
+                  <button
+                    type="button"
+                    className={styles['ticket-detail__comment-submit']}
+                    onClick={submitComment}
+                    disabled={posting || isEmptyHtml(commentDraft)}
+                  >
+                    {posting ? (
+                      <Loader2 size={14} className={styles['ticket-board__spin']} />
+                    ) : (
+                      'Post comment'
+                    )}
+                  </button>
                 </div>
               </div>
-
-            </div>
+            )}
           </div>
 
-          {/* ---- sticky footer ---- */}
-          <div className={styles['work__foot']}>
-            <span className={styles['work__foot-info']}>
-              {completedCount}/{SECTIONS.length} sections ready
-            </span>
+          {/* ---- rail: requester/assignee, status, terminal actions ---- */}
+          <div className={styles['modal-rail']}>
+            <div className={styles['ticket-detail__people']}>
+              <div className={styles['ticket-detail__person']}>
+                <span className={styles['ticket-detail__person-label']}>Requester</span>
+                <div className={styles['ticket-detail__person-val']}>
+                  <span
+                    className={styles['ticket-card__avatar']}
+                    style={{ background: avatarAccent(ticket.owner) }}
+                  >
+                    {initials(ticket.owner)}
+                  </span>
+                  <span className={styles['ticket-detail__person-name-text']}>{ticket.owner.name}</span>
+                  {owner && <span className={styles['ticket-detail__you']}>you</span>}
+                  <span className={`${styles['ticket-role-badge']} ${styles['ticket-role-badge--reporter']}`}>
+                    Reporter
+                  </span>
+                </div>
+              </div>
+              <div className={styles['ticket-detail__person']}>
+                <span className={styles['ticket-detail__person-label']}>Assignee</span>
+                {ticket.assignee ? (
+                  <div className={styles['ticket-detail__person-val']}>
+                    <span
+                      className={styles['ticket-card__avatar']}
+                      style={{ background: avatarAccent(ticket.assignee) }}
+                    >
+                      {initials(ticket.assignee)}
+                    </span>
+                    <span className={styles['ticket-detail__person-name-text']}>{ticket.assignee.name}</span>
+                    <span className={`${styles['ticket-role-badge']} ${styles['ticket-role-badge--assignee']}`}>
+                      Assignee
+                    </span>
+                  </div>
+                ) : (
+                  <div className={styles['ticket-detail__person-val']}>
+                    <span className={styles['ticket-card__person-avatar--empty']} aria-hidden="true" />
+                    <span className={styles['ticket-detail__person-name-text']}>Unassigned</span>
+                    <span
+                      className={`${styles['ticket-role-badge']} ${styles['ticket-role-badge--unassigned']}`}
+                    >
+                      Unassigned
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
 
-            <div className={styles['work__foot-actions']}>
-              {!validateResult ? (
-                <>
-                  <button className={`${styles.btn} ${styles['btn--primary']}`} onClick={runValidate} disabled={validating || !canValidate}>
-                    {validating ? <Loader2 size={15} className={styles.spin} /> : <Sparkles size={15} />}
-                    {validating ? 'Validating…' : 'Run Validation'}
-                    {!validating && <ArrowRight size={15} />}
-                  </button>
-                  <button className={`${styles.btn} ${styles['btn--ghost']}`} onClick={onCancel}>Cancel</button>
-                </>
-              ) : (
-                <>
-                  <button className={`${styles.btn} ${styles['btn--ok']}`} onClick={handleSave} disabled={saving}>
-                    {saving ? <Loader2 size={15} className={styles.spin} /> : <Check size={15} />}
-                    Save Metric
-                  </button>
-                  <button className={`${styles.btn} ${styles['btn--ghost']}`} onClick={onCancel}>Cancel</button>
-                </>
+            <div>
+              <div className={styles['ticket-detail__section-label']}>
+                Status
+                {moving && <Loader2 size={13} className={styles['ticket-board__spin']} />}
+              </div>
+              <div className={styles['ticket-detail__stepper']} style={{ marginTop: '0.5em' }}>
+                {COLUMNS.filter((c) => c.status !== 'done').map((c) => {
+                  const isCurrent = ticket.status === c.status;
+                  const skipsAhead = !isCurrent && !isSequentialMove(ticket.status, c.status);
+                  return (
+                    <button
+                      key={c.status}
+                      type="button"
+                      className={[
+                        styles['ticket-detail__step'],
+                        isCurrent ? styles['ticket-detail__step--current'] : '',
+                      ].join(' ')}
+                      style={{ ['--step-accent' as string]: c.accent }}
+                      disabled={isCurrent || moving || skipsAhead}
+                      title={skipsAhead ? SEQUENCE_HINT : undefined}
+                      onClick={() => onMove(ticket.id, c.status)}
+                    >
+                      {isCurrent && <Check size={13} />}
+                      {c.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <div className={styles['ticket-detail__section-label']}>Close ticket</div>
+              <div className={styles['ticket-detail__terminal']} style={{ marginTop: '0.5em' }}>
+                {(() => {
+                  const closeCheck = canDropTicket(ticket, 'done', currentUser.id);
+                  const alreadyDone = ticket.status === 'done' && ticket.resolution === 'completed';
+                  const alreadyDiscarded = ticket.status === 'done' && ticket.resolution === 'discarded';
+                  return (
+                    <>
+                      <button
+                        type="button"
+                        className={styles['ticket-detail__done-btn']}
+                        disabled={!closeCheck.ok || moving || alreadyDone}
+                        title={closeCheck.ok ? undefined : closeCheck.reason}
+                        onClick={() => onMove(ticket.id, 'done', 'completed')}
+                      >
+                        {owner ? <Check size={14} /> : <Lock size={14} />}
+                        Mark Done
+                      </button>
+                      <button
+                        type="button"
+                        className={styles['ticket-detail__discard-btn']}
+                        disabled={!closeCheck.ok || moving || alreadyDiscarded}
+                        title={closeCheck.ok ? undefined : closeCheck.reason}
+                        onClick={() => onMove(ticket.id, 'done', 'discarded')}
+                      >
+                        {owner ? <Ban size={14} /> : <Lock size={14} />}
+                        Discard
+                      </button>
+                    </>
+                  );
+                })()}
+              </div>
+              {!owner && (
+                <p className={styles['ticket-detail__gate-note']} style={{ marginTop: '0.5em' }}>
+                  <Lock size={12} /> {OWNER_ONLY_HINT}
+                </p>
+              )}
+              {owner && ticket.status !== 'in_review' && ticket.status !== 'done' && (
+                <p className={styles['ticket-detail__gate-note']} style={{ marginTop: '0.5em' }}>
+                  {SEQUENCE_HINT}
+                </p>
               )}
             </div>
           </div>
-        </section>
-      </div>
-
-      {saveError && <div className={styles.toast}><AlertCircle size={15} /> {saveError}</div>}
-
-      {savedId && (
-        <div className={styles.overlay}>
-          <div className={styles.modal}>
-            <div className={styles['modal__icon']}><CheckCircle2 size={26} /></div>
-            <div className={styles['modal__title']}>Metric created!</div>
-            <div className={styles['modal__text']}>Your metric is now available for evaluations.</div>
-            <div className={styles['modal__id']}>ID: {savedId}</div>
-            <div className={styles['modal__actions']}>
-              <button className={styles.btn} onClick={resetForm}>Create Another</button>
-              <button className={`${styles.btn} ${styles['btn--primary']}`} onClick={() => onSaved(savedId)}>Go to Dashboard</button>
-            </div>
-          </div>
         </div>
-      )}
 
-      {ToastEl}
+        {confirmDelete && (
+          <ConfirmDialog
+            title="Delete this ticket?"
+            message={`"${ticket.title}" will be permanently removed. This can't be undone.`}
+            confirmLabel="Delete"
+            tone="danger"
+            loading={deleting}
+            onCancel={() => setConfirmDelete(false)}
+            onConfirm={() => onDelete(ticket.id)}
+          />
+        )}
+      </div>
     </div>
   );
 }
