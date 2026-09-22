@@ -1,1183 +1,1204 @@
-//History.tsx
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
-  Search, Sparkles, Bot, Layers, Loader2, Download, ListTree, CheckCircle2, XCircle,
-  Award, ListChecks, Clock, History as HistoryIcon, SlidersHorizontal, CalendarDays, X, PlaySquare,
-  StopCircle, AlertTriangle, Trash2, ChevronLeft, ChevronRight,
+  AlertCircle, ArrowRight, Check, CheckCircle2, ChevronRight, Code2, Cpu, Database,
+  ListChecks, Loader2, MessageSquare, Plus, Repeat, ScrollText, Search, SlidersHorizontal,
+  Sparkles, Target, TextSearch, Wrench, X, XCircle, Zap,
 } from 'lucide-react';
+import styles from './CreateMetric.module.scss';
+import { useToast } from './useToast';
+import CustomSelect from './CustomSelect';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
+import { fetchProviders } from '../../store/slices/providersSlice';
 import {
-  fetchEvaluations, fetchEvaluationResults, cancelEvaluation, deleteEvaluation, fetchEvaluationProgress,
-} from '../../store/slices/evaluationsSlice';
-import { downloadReport } from '../../store/slices/reportsSlice';
-import type { ReportDownloadFormat } from '../../api/endpoints/reports';
-import type { EvaluationListItem, EvaluationStatusValue, ModelResult, TestDetail } from '../../types';
-import { SkeletonListRows } from '../common/Skeleton';
-import styles from './History.module.scss';
+  metricsApi, AgentSubcategory, BuiltinCheckDef, CodeTemplateListItem, EvalType, MetricType, PromptTemplate,
+  ModelSummary, DatasetSummary, PreviewQuestion, ValidateMetricData, RuleDef,
+} from '../../api/endpoints/metrics';
 
-const TYPE_ICON: Record<string, typeof Sparkles> = { model: Sparkles, agent: Bot, rag: Layers };
-const TYPE_LABEL: Record<string, string> = { model: 'AI Model', agent: 'Agent', rag: 'RAG' };
+interface CreateMetricProps {
+  onCancel: () => void;
+  onSaved: (id: string) => void;
+}
 
-// Shown in place of the per-model results table whenever there's nothing to
-// show there yet — either because the evaluation hasn't finished (results
-// fetched for every status now, not just 'completed'), or because a fetch
-// for a not-yet-completed run came back empty/errored.
-const RESULTS_PLACEHOLDER: Partial<Record<EvaluationStatusValue, string>> = {
-  running: 'This evaluation is still running — results will appear once it completes.',
-  pending: "This evaluation hasn't started yet.",
-  failed: 'This evaluation failed to complete.',
-  canceled: 'This evaluation was canceled.',
-  completed: 'No results available.',
+// ---- static config -----------------------------------------------------
+const EVAL_TYPE_CARDS: { key: EvalType; label: string; desc: string; icon: JSX.Element }[] = [
+  { key: 'model', label: 'Model', desc: 'Score a model\u2019s output against an expected answer.', icon: <Cpu size={20} /> },
+  { key: 'agent', label: 'Agent', desc: 'Evaluate tool calls and task completion for agents.', icon: <Zap size={20} /> },
+  { key: 'rag', label: 'RAG', desc: 'Check answers grounded in retrieved context.', icon: <ScrollText size={20} /> },
+];
+
+const METRIC_TYPE_CARDS: { key: MetricType; label: string; desc: string; icon: JSX.Element }[] = [
+  { key: 'visual', label: 'Visual Builder', desc: 'Field comparisons joined with AND/OR logic. No code.', icon: <SlidersHorizontal size={18} /> },
+  { key: 'prompt', label: 'Prompt Builder', desc: 'An LLM judge scored with a prompt template.', icon: <Sparkles size={18} /> },
+  { key: 'code', label: 'Code Editor', desc: 'A custom Python scoring function.', icon: <Code2 size={18} /> },
+  { key: 'simple', label: 'Simple', desc: 'A built-in pass/fail check — no prompt or code needed.', icon: <Target size={18} /> },
+];
+
+const FIELDS_BY_EVAL_TYPE: Record<EvalType, string[]> = {
+  model: ['input', 'actual_output', 'expected_output'],
+  agent: ['input', 'actual_output', 'expected_output', 'tools_called', 'expected_tools'],
+  rag: ['input', 'actual_output', 'expected_output', 'tools_called', 'expected_tools'],
 };
 
-// Mirrors Reports.tsx — same base four formats, same download endpoint.
-// HTML is agent-only (appended at render time — see the detail header
-// download buttons below) since it's not a meaningful export for
-// model/RAG evaluations.
-const DOWNLOAD_OPTIONS: { format: ReportDownloadFormat; label: string }[] = [
-  { format: 'json', label: 'JSON' },
-  { format: 'csv', label: 'CSV' },
-  { format: 'csv_detailed', label: 'CSV (Detailed)' },
-  { format: 'pdf', label: 'PDF' },
+const OPERATORS = [
+  { value: 'contains', label: 'contains' },
+  { value: 'not_contains', label: 'not contains' },
+  { value: 'equals', label: 'equals' },
+  { value: 'starts_with', label: 'starts with' },
+  { value: 'ends_with', label: 'ends with' },
+  { value: 'greater_than', label: 'greater than' },
+  { value: 'less_than', label: 'less than' },
+  { value: 'regex_match', label: 'regex match' },
 ];
-const HTML_DOWNLOAD_OPTION: { format: ReportDownloadFormat; label: string } = { format: 'html', label: 'HTML' };
 
-const PAGE_SIZE_OPTIONS = [20, 30, 40, 50];
+const OP_SYMBOL: Record<string, string> = {
+  contains: 'contains', not_contains: 'does not contain', equals: '==', starts_with: 'starts with',
+  ends_with: 'ends with', greater_than: '>', less_than: '<', regex_match: 'matches',
+};
 
-// Maps a raw status to the module status-pill variant suffix.
-function statusVariant(status: EvaluationStatusValue): string {
-  switch (status) {
-    case 'completed': return 'completed';
-    case 'running': return 'running';
-    case 'pending': return 'pending';
-    case 'failed': return 'failed';
-    case 'canceled': return 'canceled';
-    default: return 'pending';
-  }
-}
+const METRIC_TYPE_TO_API: Record<MetricType, string> = {
+  visual: 'condition', prompt: 'prompt', code: 'code', simple: 'simple',
+};
 
-function withinDateRange(iso: string | null | undefined, range: string): boolean {
-  if (range === 'all') return true;
-  if (!iso) return false;
-  const time = new Date(iso).getTime();
-  if (Number.isNaN(time)) return false;
-  const days = range === '7' ? 7 : 30;
-  const cutoff = Date.now() - days * 86400000;
-  return time >= cutoff;
-}
+const EVAL_TYPE_TO_CATEGORY: Record<EvalType, string> = { model: 'llm', agent: 'agent', rag: 'rag' };
 
-// Formats an ISO date string for display, falling back to an em dash when
-// the value is missing or unparseable instead of showing "Invalid Date".
-function formatDate(iso: string | null | undefined, withTime = false): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
-  return withTime ? d.toLocaleString() : d.toLocaleDateString();
-}
+// Agent-only: which part of the agent's behavior this metric evaluates —
+// scopes both the Prompt Builder templates and the Code Editor starter
+// code via a `subcategory` query param.
+const AGENT_SUBCATEGORY_CARDS: { key: AgentSubcategory; label: string; desc: string; icon: JSX.Element }[] = [
+  { key: 'tools', label: 'Tool Evaluation', desc: 'Score which tools the agent called and how.', icon: <Wrench size={18} /> },
+  { key: 'answer', label: 'Answer Evaluation', desc: 'Score the agent\u2019s final response.', icon: <MessageSquare size={18} /> },
+];
 
-export default function History() {
+// ---- Simple metric type — Built-in Check icons --------------------------
+// Built-in checks themselves now come from the API (GET /metrics/templates
+// -> builtin_checks), since their id/params can vary server-side. Icons
+// aren't part of that response, so map known ids to one and fall back to
+// a generic icon for anything unrecognized.
+const BUILTIN_CHECK_ICONS: Record<string, JSX.Element> = {
+  contains_keywords: <TextSearch size={18} />,
+  exact_match: <Target size={18} />,
+  agent_loop_detection: <Repeat size={18} />,
+  tool_correctness: <Wrench size={18} />,
+};
+const builtinCheckIcon = (id: string) => BUILTIN_CHECK_ICONS[id] || <ListChecks size={18} />;
+
+type CompareType = 'field' | 'literal';
+interface RuleRow { id: number; field: string; operator: string; compareType: CompareType; value: string; }
+let ruleSeq = 1;
+
+type SectionKey = 'details' | 'type' | 'config' | 'dataset';
+interface SectionDef { key: SectionKey; label: string; }
+
+export default function CreateMetric({ onCancel, onSaved }: CreateMetricProps) {
+  const { showToast, ToastEl } = useToast();
   const dispatch = useAppDispatch();
-  const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const selectedId = searchParams.get('id');
+  const providers = useAppSelector((s) => s.providers.items);
 
-  const { list: rawList, total, listStatus, listError, resultsByEvalId, resultsStatusByEvalId, resultsErrorByEvalId } = useAppSelector((s) => s.evaluations);
-  const list = rawList || [];
-  const models = useAppSelector((s) => s.models.items) || [];
-  const providers = useAppSelector((s) => s.providers.items) || [];
-  const downloadingId = useAppSelector((s) => s.reports.downloadingId);
-  const cancelingId = useAppSelector((s) => s.evaluations.cancelingId);
-  const deletingId = useAppSelector((s) => s.evaluations.deletingId);
-  const progressByEvalId = useAppSelector((s) => s.evaluations.progressByEvalId);
-
-  const [search, setSearch] = useState('');
-  const [typeFilter, setTypeFilter] = useState('All');
-  const [dateFilter, setDateFilter] = useState('all');
-  const [statusFilter, setStatusFilter] = useState('All');
-  const [activeFilter, setActiveFilter] = useState<'search' | 'type' | 'date' | 'status' | null>(null);
-  const [detailsModel, setDetailsModel] = useState<ModelResult | null>(null);
-  // Which metric the drawer's test list is scoped to — null means "no
-  // metric breakdown for this model, show every test case" (the fallback
-  // row). Set alongside detailsModel by openDrawer below.
-  const [detailsMetric, setDetailsMetric] = useState<string | null>(null);
-  // Row + action awaiting "are you sure?" confirmation before calling the
-  // cancel/delete API — one dialog handles both.
-  const [confirmTarget, setConfirmTarget] = useState<{ evaluation: EvaluationListItem; action: 'cancel' | 'delete' } | null>(null);
-  const searchInputRef = useRef<HTMLInputElement>(null);
-
-  // typeFilter/statusFilter are now server-side (query params on GET
-  // /evaluations), so changing either means a genuinely different result
-  // set — jump back to page 1 rather than potentially landing on an
-  // out-of-range page for the new filter.
-  const changeTypeFilter = (value: string) => {
-    setTypeFilter(value);
-    setPage(1);
+  // section refs for the rail's "jump to" links
+  const sectionRefs = {
+    details: useRef<HTMLDivElement>(null),
+    type: useRef<HTMLDivElement>(null),
+    config: useRef<HTMLDivElement>(null),
+    dataset: useRef<HTMLDivElement>(null),
   };
-  const changeStatusFilter = (value: string) => {
-    setStatusFilter(value);
-    setPage(1);
+  const scrollToSection = (key: SectionKey) => {
+    sectionRefs[key].current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
-  const toggleFilter = (key: 'search' | 'type' | 'date' | 'status') => {
-    setActiveFilter((prev) => (prev === key ? null : key));
+  // details
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+
+  // type
+  const [evalType, setEvalType] = useState<EvalType | null>(null);
+  const [metricType, setMetricType] = useState<MetricType | null>(null);
+  // Agent-only sub-scope (Tool Evaluation / Answer Evaluation) — required
+  // before Prompt Builder templates or Code Editor starter code can load
+  // when evalType === 'agent'.
+  const [agentSubcategory, setAgentSubcategory] = useState<AgentSubcategory | null>(null);
+
+  // config: visual
+  const [rules, setRules] = useState<RuleRow[]>([{ id: ruleSeq, field: 'actual_output', operator: 'contains', compareType: 'field', value: 'input' }]);
+  const [gates, setGates] = useState<('AND' | 'OR')[]>([]);
+
+  // templates data — GET /metrics/templates. Serves both the Prompt
+  // Builder (templates + placeholders) and the Simple/Built-in Check
+  // config (builtin_checks), since both live behind the same endpoint
+  // and both depend on evalType (and, for agent, agentSubcategory).
+  const [templates, setTemplates] = useState<PromptTemplate[]>([]);
+  const [builtinChecks, setBuiltinChecks] = useState<BuiltinCheckDef[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [templatesError, setTemplatesError] = useState('');
+
+  // config: prompt
+  const [selectedTemplateName, setSelectedTemplateName] = useState('');
+  const [promptText, setPromptText] = useState('');
+  const [models, setModels] = useState<ModelSummary[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState('');
+  const [modelHealth, setModelHealth] = useState<Record<string, 'checking' | 'healthy' | 'unhealthy'>>({});
+  const [selectedModelId, setSelectedModelId] = useState('');
+
+  // config: code
+  // config: code — dropdown of available starter templates, then the
+  // actual code for whichever one is selected
+  const [code, setCode] = useState('');
+  const [codeTemplates, setCodeTemplates] = useState<CodeTemplateListItem[]>([]);
+  const [codeTemplatesLoading, setCodeTemplatesLoading] = useState(false);
+  const [codeTemplatesError, setCodeTemplatesError] = useState('');
+  const [selectedCodeTemplateName, setSelectedCodeTemplateName] = useState('');
+  const [codeLoading, setCodeLoading] = useState(false);
+  const [codeError, setCodeError] = useState('');
+
+  // config: simple — selected built-in check id + its params, keyed
+  // dynamically off whatever `params` the API returned for that check
+  // (no more hardcoded per-check fields).
+  const [builtinCheck, setBuiltinCheck] = useState<string | null>(null);
+  const [builtinParams, setBuiltinParams] = useState<Record<string, unknown>>({});
+
+  // threshold (shared across all config types)
+  const [threshold, setThreshold] = useState(0.7);
+
+  // dataset
+  const [datasets, setDatasets] = useState<DatasetSummary[]>([]);
+  const [datasetsLoading, setDatasetsLoading] = useState(false);
+  const [datasetsError, setDatasetsError] = useState('');
+  const [selectedDatasetId, setSelectedDatasetId] = useState('');
+  const [previewQuestions, setPreviewQuestions] = useState<PreviewQuestion[]>([]);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState('');
+  const [selectedQuestionIds, setSelectedQuestionIds] = useState<Set<string>>(new Set());
+
+  // validate / save
+  const [validating, setValidating] = useState(false);
+  const [validateError, setValidateError] = useState('');
+  const [validateResult, setValidateResult] = useState<ValidateMetricData | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [savedId, setSavedId] = useState('');
+
+  const fields = evalType ? FIELDS_BY_EVAL_TYPE[evalType] : [];
+
+  // ---- reset chains ------------------------------------------------------
+  const handleEvalType = (t: EvalType) => {
+    if (t === evalType) return;
+    setEvalType(t);
+    setAgentSubcategory(null);
+    setDatasets([]); setSelectedDatasetId(''); setPreviewQuestions([]); setSelectedQuestionIds(new Set());
+    setCode(''); setPromptText(''); setSelectedTemplateName(''); setValidateResult(null); setSavedId('');
+    setTemplates([]); setBuiltinChecks([]);
+    // Built-in check availability depends on eval type (e.g. Agent Loop
+    // Detection / Tool Correctness are agent-only) — clear the selection
+    // so a now-unavailable check can't stay silently selected.
+    setBuiltinCheck(null); setBuiltinParams({});
+  };
+  const handleAgentSubcategory = (s: AgentSubcategory) => {
+    if (s === agentSubcategory) return;
+    setAgentSubcategory(s);
+    setCode(''); setPromptText(''); setSelectedTemplateName(''); setValidateResult(null); setSavedId('');
+    setTemplates([]); setBuiltinChecks([]);
+    setBuiltinCheck(null); setBuiltinParams({});
+  };
+  const handleMetricType = (t: MetricType) => {
+    if (t === metricType) return;
+    setMetricType(t); setValidateResult(null); setSavedId('');
+    if (t !== 'simple') { setBuiltinCheck(null); setBuiltinParams({}); }
   };
 
-  useEffect(() => {
-    if (activeFilter === 'search') searchInputRef.current?.focus();
-  }, [activeFilter]);
-
-  const DATE_LABEL: Record<string, string> = { all: 'All time', '30': 'Last 30 days', '7': 'Last 7 days' };
-  const STATUS_LABEL: Record<string, string> = {
-    All: 'All',
-    completed: 'Completed',
-    running: 'Running',
-    pending: 'Pending',
-    failed: 'Failed',
-  };
-
-  // Local page/page-size state drives the server request — Redux's `page`/
-  // `pageSize` (set above) just echo back whatever the most recent fetch
-  // actually requested, once it resolves.
-  const [pageState, setPage] = useState(1);
-  const [pageSizeState, setPageSizeState] = useState(20);
-  const changePageSize = (value: number) => {
-    setPageSizeState(value);
-    setPage(1);
-  };
-
-  // Initial load + refetch on page/page-size/filter change, plus a silent
-  // 10s background poll of whatever's currently being viewed (spec §2.4) —
-  // the poll never disrupts the loading/error UI over data already on
-  // screen (see fetchEvaluations.pending in the slice).
-  //
-  // After each fetch resolves, kick off a progress poll (GET
-  // /evaluations/{id}/status) for every row that came back 'running' —
-  // that's the only status this endpoint is meaningful for, so it's never
-  // called for anything else.
-  useEffect(() => {
-    const loadList = async (silent: boolean) => {
-      const result = await dispatch(
-        fetchEvaluations({ page: pageState, pageSize: pageSizeState, status: statusFilter, evalType: typeFilter, silent })
-      );
-      if (fetchEvaluations.fulfilled.match(result)) {
-        result.payload.evaluations
-          .filter((e) => e.status === 'running')
-          .forEach((e) => dispatch(fetchEvaluationProgress(e.id)));
+  const handleBuiltinCheck = (check: BuiltinCheckDef) => {
+    if (check.id === builtinCheck) return;
+    setBuiltinCheck(check.id); setValidateResult(null); setSavedId('');
+    // Seed params from each field's default_value so the form (and a
+    // preview run without touching anything) starts from a sane state.
+    const init: Record<string, unknown> = {};
+    check.params.forEach((p) => {
+      if (p.type === 'list' || p.type === 'string_list') {
+        init[p.key] = Array.isArray(p.default_value) ? (p.default_value as string[]).join(', ') : (p.default_value ?? '');
+      } else if (p.type === 'bool') {
+        init[p.key] = Boolean(p.default_value);
+      } else if (p.type === 'number') {
+        init[p.key] = typeof p.default_value === 'number' ? p.default_value : 0;
+      } else {
+        init[p.key] = p.default_value ?? '';
       }
-    };
-    loadList(false);
-    const interval = setInterval(() => loadList(true), 10000);
-    return () => clearInterval(interval);
-  }, [dispatch, pageState, pageSizeState, statusFilter, typeFilter]);
-
-  const totalPages = Math.max(1, Math.ceil(total / pageSizeState));
-  const rangeStart = total === 0 ? 0 : (pageState - 1) * pageSizeState + 1;
-  const rangeEnd = Math.min(pageState * pageSizeState, total);
-
-  // search/date remain client-side, applied only to the current page's rows
-  // — the API doesn't take a search or date-range param yet. type/status
-  // are now handled server-side (see the fetch effect above) rather than
-  // filtered here.
-  const filtered = useMemo(() => {
-    return list.filter((e) => {
-      if (search && !(e.name || '').toLowerCase().includes(search.toLowerCase())) return false;
-      if (!withinDateRange(e.created_at, dateFilter)) return false;
-      return true;
     });
-  }, [list, search, dateFilter]);
+    setBuiltinParams(init);
+  };
 
-  const selected = list.find((e) => e.id === selectedId) || filtered[0] || null;
+  const availableBuiltinChecks = useMemo(
+    () => (evalType ? builtinChecks.filter((c) => c.applicable_eval_types.includes(evalType)) : []),
+    [evalType, builtinChecks],
+  );
+  const selectedBuiltinCheckDef = useMemo(
+    () => availableBuiltinChecks.find((c) => c.id === builtinCheck) || null,
+    [availableBuiltinChecks, builtinCheck],
+  );
 
-  // Handles the initial/default selection (mount, or URL navigation to an
-  // id we haven't fetched yet). Explicit row clicks trigger their own fetch
-  // in selectRow below regardless of cache, so this only needs to cover the
-  // "selection changed without a click" case — hence the cache guard stays
-  // here, but not in selectRow.
-  //
-  // Fetched for every status now, not just 'completed' — a pending/failed/
-  // canceled evaluation still has a run configuration (dataset, benchmark,
-  // metrics tested, metrics_config) worth showing even with no per-model
-  // results yet. The render below falls back gracefully when `results` is
-  // empty/absent for a given status.
+  // ---- visual rules ------------------------------------------------------
+  const addRule = () => {
+    ruleSeq += 1;
+    setRules((r) => [...r, { id: ruleSeq, field: fields[0] || 'input', operator: 'contains', compareType: 'literal', value: '' }]);
+    setGates((g) => [...g, 'AND']);
+  };
+  const removeRule = (id: number) => {
+    setRules((r) => {
+      if (r.length <= 1) return r;
+      const idx = r.findIndex((row) => row.id === id);
+      setGates((g) => g.filter((_, i) => i !== Math.max(0, idx - 1)));
+      return r.filter((row) => row.id !== id);
+    });
+  };
+  const updateRule = (id: number, patch: Partial<RuleRow>) => setRules((r) => r.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+  const toggleGate = (idx: number) => setGates((g) => g.map((v, i) => (i === idx ? (v === 'AND' ? 'OR' : 'AND') : v)));
+
+  // ---- templates (Prompt Builder templates + Simple built-in checks) ----
+  // Both Prompt Builder and Simple need this same endpoint, scoped by
+  // evalType and — for agent — by agentSubcategory. Waits for the
+  // subcategory pick before fetching when evalType is 'agent'.
   useEffect(() => {
-    if (selected && !resultsByEvalId[selected.id]) {
-      dispatch(fetchEvaluationResults(selected.id));
-    }
+    if (!evalType) { setTemplates([]); setBuiltinChecks([]); return; }
+    if (evalType === 'agent' && !agentSubcategory) { setTemplates([]); setBuiltinChecks([]); return; }
+    setTemplatesLoading(true); setTemplatesError('');
+    const scope = evalType === 'agent' && agentSubcategory ? { evalType, subcategory: agentSubcategory } : undefined;
+    metricsApi.getPromptTemplates(scope)
+      .then((res) => { setTemplates(res.templates); setBuiltinChecks(res.builtin_checks); })
+      .catch((e) => setTemplatesError(e.message || 'Failed to load templates'))
+      .finally(() => setTemplatesLoading(false));
+  }, [evalType, agentSubcategory]);
+
+  const matchingTemplates = useMemo(
+    () => templates.filter((t) => t.category === (evalType ? EVAL_TYPE_TO_CATEGORY[evalType] : '')),
+    [templates, evalType],
+  );
+  // Custom Prompt is available for every evaluation type — Model included,
+  // same as Agent and RAG.
+  const allowsCustomPrompt = evalType === 'agent' || evalType === 'rag' || evalType === 'model';
+
+  useEffect(() => {
+    if (metricType !== 'prompt' || models.length) return;
+    setModelsLoading(true); setModelsError('');
+    metricsApi.listModels()
+      .then((list) => {
+        setModels(list);
+        const init: Record<string, 'checking'> = {};
+        list.forEach((m) => { init[m.id] = 'checking'; });
+        setModelHealth(init);
+        list.forEach((m) => metricsApi.checkModelHealth(m.id).then((h) =>
+          setModelHealth((prev) => ({ ...prev, [m.id]: h.success ? 'healthy' : 'unhealthy' }))));
+      })
+      .catch((e) => setModelsError(e.message || 'Failed to load models'))
+      .finally(() => setModelsLoading(false));
+  }, [metricType, models.length]);
+
+  // Provider names for the Judge Model columns — fetched once, same
+  // pattern Model Catalog uses to resolve provider_id -> display name.
+  useEffect(() => {
+    if (metricType !== 'prompt' || providers.length) return;
+    dispatch(fetchProviders());
+  }, [metricType, providers.length, dispatch]);
+
+  const providerName = (id: string) => providers.find((p) => p.id === id)?.name || id || 'Unknown provider';
+
+  // Judge Model list grouped by provider, one column per provider, sorted
+  // alphabetically by display name.
+  const modelsByProvider = useMemo(() => {
+    const map = new Map<string, ModelSummary[]>();
+    models.forEach((m) => {
+      const key = m.provider_id || 'unknown';
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(m);
+    });
+    return [...map.entries()].sort((a, b) => providerName(a[0]).localeCompare(providerName(b[0])));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id]);
+  }, [models, providers]);
 
-  // Re-fetches on every click, including re-clicking the already-selected
-  // row — results can change server-side (e.g. a report finishing after the
-  // eval completed), so cached data shouldn't block a manual refresh.
-  const selectRow = (id: string) => {
-    const clicked = list.find((e) => e.id === id);
-    // Running evaluations aren't selectable — there's nothing to show yet
-    // (no results, no report), and the "Stop evaluation" button is the only
-    // interactive element on that card. Same for a card mid-delete.
-    if (clicked && (clicked.status === 'running' || deletingId === clicked.id)) return;
-    setSearchParams({ id });
-    setDetailsModel(null);
-    if (clicked) {
-      dispatch(fetchEvaluationResults(id));
-    }
-  };
+  const [modelSearch, setModelSearch] = useState<Record<string, string>>({});
 
-  // Drives the delete animation: the row pulses (red border + sheen) while
-  // the API call is in flight, then — once it actually succeeds — collapses
-  // and fades out over ~320ms instead of disappearing the instant Redux
-  // removes it from `list`. We keep a stashed copy of the row (plus its
-  // original position) so it can keep rendering through both phases even
-  // after the real data is already gone from the store.
-  const [deleteAnim, setDeleteAnim] = useState<{ item: EvaluationListItem; index: number; exiting: boolean } | null>(null);
-  const DELETE_EXIT_MS = 320;
-
-  // Confirm-and-act flow shared by the "Stop" (running cards) and "Delete"
-  // (non-running cards) buttons.
-  const requestConfirm = (e: React.MouseEvent, evaluation: EvaluationListItem, action: 'cancel' | 'delete') => {
-    e.stopPropagation(); // don't let this bubble into selectRow
-    setConfirmTarget({ evaluation, action });
-  };
-  const runConfirmedAction = async () => {
-    if (!confirmTarget) return;
-    const { evaluation, action } = confirmTarget;
-    setConfirmTarget(null);
-
-    if (action === 'cancel') {
-      dispatch(cancelEvaluation(evaluation.id));
-      return;
-    }
-
-    const index = filtered.findIndex((e) => e.id === evaluation.id);
-    setDeleteAnim({ item: evaluation, index: index === -1 ? filtered.length : index, exiting: false });
-
-    const result = await dispatch(deleteEvaluation(evaluation.id));
-    if (deleteEvaluation.fulfilled.match(result)) {
-      // If the row being deleted is currently selected/showing in the
-      // detail panel, clear the selection so it doesn't linger on screen.
-      if (selectedId === evaluation.id) setSearchParams({});
-      // Flip to the collapse/fade-out phase, then drop the stashed row
-      // once the CSS transition has had time to finish.
-      setDeleteAnim((prev) => (prev && prev.item.id === evaluation.id ? { ...prev, exiting: true } : prev));
-      window.setTimeout(() => {
-        setDeleteAnim((prev) => (prev && prev.item.id === evaluation.id ? null : prev));
-      }, DELETE_EXIT_MS);
-    } else {
-      // Delete failed — the row is still in the store, so just drop the
-      // stashed copy and let it re-render normally.
-      setDeleteAnim(null);
-    }
-  };
-
-  // Merges the stashed row back into the rendered list for as long as
-  // deleteAnim is active — covers both the brief window where the API call
-  // has already succeeded and Redux has removed it from `list`/`filtered`,
-  // and the exit-animation phase that follows.
-  const displayList = useMemo(() => {
-    if (!deleteAnim || filtered.some((e) => e.id === deleteAnim.item.id)) return filtered;
-    const merged = [...filtered];
-    merged.splice(Math.min(deleteAnim.index, merged.length), 0, deleteAnim.item);
-    return merged;
-  }, [filtered, deleteAnim]);
-
-  // Opens the test-details drawer for a model, scoped to one metric row's
-  // worth of test cases when opened from a metric-specific row in the
-  // results table (metric === null for the no-breakdown fallback row,
-  // which shows every test case for that model).
-  const openDrawer = (model: ModelResult, metric: string | null) => {
-    setDetailsModel(model);
-    setDetailsMetric(metric);
-    setTestFilter('all');
-  };
-
-  // ---- drawer width, drag-to-resize from the left edge -------------------
-  const DRAWER_MIN_WIDTH = 380;
-  // Matches the CSS max-width below (calc(100vw - 256px)) — 256px is the
-  // app's global sidebar width, so the drawer can never be dragged wide
-  // enough to sit underneath/behind it.
-  const getDrawerMaxWidth = () => window.innerWidth - 256;
-  const [drawerWidth, setDrawerWidth] = useState(480);
-  const [isResizingDrawer, setIsResizingDrawer] = useState(false);
-  const resizeStartRef = useRef<{ x: number; width: number } | null>(null);
-
-  const startDrawerResize = (e: React.MouseEvent) => {
-    e.preventDefault();
-    resizeStartRef.current = { x: e.clientX, width: drawerWidth };
-    setIsResizingDrawer(true);
-  };
-
+  // ---- code template -----------------------------------------------------
+  // 1) list the available starter templates for a dropdown
   useEffect(() => {
-    if (!isResizingDrawer) return;
-    const onMove = (e: MouseEvent) => {
-      if (!resizeStartRef.current) return;
-      // Drawer is anchored to the right edge and the handle sits on its
-      // left edge, so dragging left (clientX decreasing) should widen it.
-      const delta = resizeStartRef.current.x - e.clientX;
-      const next = Math.min(getDrawerMaxWidth(), Math.max(DRAWER_MIN_WIDTH, resizeStartRef.current.width + delta));
-      setDrawerWidth(next);
-    };
-    const onUp = () => setIsResizingDrawer(false);
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    // Keep the resize cursor and prevent text selection for the whole page
-    // while dragging, not just while the pointer is exactly over the handle.
-    document.body.style.cursor = 'ew-resize';
-    document.body.style.userSelect = 'none';
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-  }, [isResizingDrawer]);
+    if (metricType !== 'code' || !evalType) return;
+    if (evalType === 'agent' && !agentSubcategory) return;
+    setCodeTemplatesLoading(true); setCodeTemplatesError('');
+    setCodeTemplates([]); setSelectedCodeTemplateName(''); setCode('');
+    metricsApi.listCodeTemplates(evalType, evalType === 'agent' ? agentSubcategory ?? undefined : undefined)
+      .then(setCodeTemplates)
+      .catch((e) => setCodeTemplatesError(e.message || 'Failed to load code templates'))
+      .finally(() => setCodeTemplatesLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [metricType, evalType, agentSubcategory]);
 
-  // ---- test-details pass/fail filter --------------------------------------
-  const [testFilter, setTestFilter] = useState<'all' | 'passed' | 'failed'>('all');
-
-  // Close the details drawer with Escape.
+  // 2) load the actual code once a template is picked from the dropdown
   useEffect(() => {
-    if (!detailsModel) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setDetailsModel(null);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [detailsModel]);
+    if (metricType !== 'code' || !evalType || !selectedCodeTemplateName) return;
+    setCodeLoading(true); setCodeError('');
+    metricsApi.getCodeTemplateExample(evalType, selectedCodeTemplateName, evalType === 'agent' ? agentSubcategory ?? undefined : undefined)
+      .then((res) => setCode(res.code))
+      .catch((e) => setCodeError(e.message || 'Failed to load starter code'))
+      .finally(() => setCodeLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [metricType, evalType, agentSubcategory, selectedCodeTemplateName]);
 
-  // Close the stop/delete confirm dialog with Escape.
+  // ---- datasets ----------------------------------------------------------
   useEffect(() => {
-    if (!confirmTarget) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setConfirmTarget(null);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [confirmTarget]);
+    if (!evalType) return;
+    setDatasetsLoading(true); setDatasetsError(''); setSelectedDatasetId(''); setPreviewQuestions([]);
+    metricsApi.listDatasets(evalType)
+      .then((list) => {
+        // These agent datasets are tool-calling benchmarks that don't fit
+        // the metric-building flow here — hide them for eval type Agent.
+        if (evalType === 'agent') {
+          const hidden = new Set(['ToolBench', 'BFCLv3', 'GAIA']);
+          list = list.filter((d) => !hidden.has(d.name));
+        }
+        setDatasets(list);
+      })
+      .catch((e) => setDatasetsError(e.message || 'Failed to load datasets'))
+      .finally(() => setDatasetsLoading(false));
+  }, [evalType]);
 
-  const modelName = (id: string) => models.find((m) => m.id === id)?.name || id;
-  const providerName = (id: string) => {
-    const model = models.find((m) => m.id === id);
-    return providers.find((p) => p.id === model?.provider_id)?.name || model?.provider_id || '—';
+  const selectDataset = (id: string) => {
+    setSelectedDatasetId(id); setValidateResult(null); setSavedId('');
+    setPreviewLoading(true); setPreviewError('');
+    metricsApi.previewDataset(id)
+      .then((res) => {
+        const qs = res.questions.slice(0, 5);
+        setPreviewQuestions(qs);
+        setSelectedQuestionIds(new Set(qs.map((q) => q.id)));
+      })
+      .catch((e) => setPreviewError(e.message || 'Failed to load preview'))
+      .finally(() => setPreviewLoading(false));
+  };
+  const toggleQuestion = (id: string) => setSelectedQuestionIds((prev) => {
+    const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next;
+  });
+  const selectAllQuestions = () => setSelectedQuestionIds(new Set(previewQuestions.map((q) => q.id)));
+  const clearAllQuestions = () => setSelectedQuestionIds(new Set());
+
+  // ---- rule summary ------------------------------------------------------
+  const ruleSummary = useMemo(() => {
+    if (!rules.length) return null;
+    return rules.map((r, i) => {
+      const compare = r.compareType === 'field' ? (r.value || '<field>') : `"${r.value || '…'}"`;
+      return (
+        <span key={r.id}>
+          {i > 0 && <span className={styles['summary__gate']}>{gates[i - 1] || 'AND'}</span>}
+          <span className={styles['summary__token']}>{r.field}</span>
+          {' '}{OP_SYMBOL[r.operator] || r.operator}{' '}
+          <span className={styles['summary__token']}>{compare}</span>
+        </span>
+      );
+    });
+  }, [rules, gates]);
+
+  // ---- gating (used for status dots + validate button, not for hiding UI) ---
+  const detailsComplete = !!name.trim();
+  const typeComplete = !!evalType && !!metricType && (evalType !== 'agent' || !!agentSubcategory);
+  const configComplete = useMemo(() => {
+    if (!metricType) return false;
+    if (metricType === 'visual') return rules.every((r) => r.field && r.operator && (r.compareType === 'field' ? r.value : r.value.trim()));
+    if (metricType === 'prompt') return !!promptText.trim() && !!selectedModelId;
+    if (metricType === 'code') return !!code.trim();
+    if (metricType === 'simple') {
+      if (!selectedBuiltinCheckDef) return false;
+      return selectedBuiltinCheckDef.params
+        .filter((p) => p.required)
+        .every((p) => {
+          const v = builtinParams[p.key];
+          if (p.type === 'bool') return v !== undefined;
+          if (p.type === 'number') return typeof v === 'number' && !Number.isNaN(v) && v > 0;
+          if (p.type === 'list' || p.type === 'string_list') return typeof v === 'string' && v.trim().length > 0;
+          return typeof v === 'string' && v.trim().length > 0;
+        });
+    }
+    return true;
+  }, [metricType, rules, promptText, selectedModelId, code, selectedBuiltinCheckDef, builtinParams]);
+  const datasetComplete = !!selectedDatasetId && selectedQuestionIds.size > 0;
+  const canValidate = detailsComplete && typeComplete && configComplete && datasetComplete && threshold >= 0 && threshold <= 1;
+  const validateSucceeded = !!validateResult && validateResult.passed > 0;
+
+  const SECTIONS: SectionDef[] = [
+    { key: 'details', label: 'Metric Details' },
+    { key: 'type', label: 'Type & Target' },
+    { key: 'config', label: metricType === 'prompt' ? 'Judge Prompt' : metricType === 'code' ? 'Scoring Code' : metricType === 'simple' ? 'Configuration' : 'Rules' },
+    { key: 'dataset', label: 'Dataset · Validate & Save' },
+  ];
+
+  const sectionDone: Record<SectionKey, boolean> = {
+    details: detailsComplete,
+    type: typeComplete,
+    config: configComplete,
+    dataset: datasetComplete && !!validateResult,
   };
 
-  const results = selected ? resultsByEvalId[selected.id] : undefined;
-  const resultsStatus = selected ? resultsStatusByEvalId[selected.id] : undefined;
-  const resultsError = selected ? resultsErrorByEvalId[selected.id] : undefined;
+  const sectionValue: Record<SectionKey, string> = {
+    details: name || 'Not set',
+    type: evalType && metricType
+      ? `${evalType.toUpperCase()}${evalType === 'agent' && agentSubcategory ? ` · ${agentSubcategory === 'tools' ? 'Tool Eval' : 'Answer Eval'}` : ''} · ${METRIC_TYPE_CARDS.find((c) => c.key === metricType)!.label}`
+      : 'Not set',
+    config: metricType ? (configComplete ? 'Configured' : 'Incomplete') : '—',
+    dataset: validateResult ? `${validateResult.passed}/${validateResult.total} passed` : (selectedDatasetId ? `${selectedQuestionIds.size} selected` : 'Not set'),
+  };
 
-  // Whether the Run Configuration panel has anything worth showing —
-  // top-level max_retries/timeout are deliberately excluded from display,
-  // so their presence alone shouldn't be enough to render an otherwise-
-  // empty panel (just a title with nothing under it).
-  const mc = results?.metrics_config;
-  const hasConfigToShow = !!(
-    mc &&
-    (mc.retest_on_wrong != null ||
-      mc.retest_verify_metric ||
-      (mc.model_retry_config && Object.keys(mc.model_retry_config).length > 0))
-  );
+  // What's still missing for each incomplete section, surfaced in the rail
+  // so the user knows exactly what to do next instead of just seeing
+  // "Incomplete" / "Not set".
+  const sectionMissing: Record<SectionKey, string> = {
+    details: !name.trim() ? 'Add a metric name' : '',
 
-  const StatusBadge = ({ status }: { status: EvaluationStatusValue }) => (
-    <span className={`${styles.status} ${styles[`status--${statusVariant(status)}`]}`}>
-      {status === 'running' && <span className={styles['live-dot']} />}
-      {status}
-    </span>
-  );
+    type: (() => {
+      if (!evalType && !metricType) return 'Choose an evaluation type and a metric type';
+      if (!evalType) return 'Choose an evaluation type';
+      if (evalType === 'agent' && !agentSubcategory) return 'Choose Tool Evaluation or Answer Evaluation';
+      if (!metricType) return 'Choose a metric type';
+      return '';
+    })(),
 
+    config: (() => {
+      if (!metricType) return 'Pick a metric type in the section above first';
+      if (configComplete) return '';
+      if (metricType === 'visual') return 'Fill in every rule\u2019s field, operator, and value';
+      if (metricType === 'prompt') {
+        if (!promptText.trim() && !selectedModelId) return 'Write a judge prompt and choose a judge model';
+        if (!promptText.trim()) return 'Write a judge prompt';
+        return 'Choose a judge model';
+      }
+      if (metricType === 'code') return selectedCodeTemplateName ? 'Add your scoring code' : 'Choose a starter template';
+      if (metricType === 'simple') {
+        if (!selectedBuiltinCheckDef) return 'Select a built-in check';
+        const missingParam = selectedBuiltinCheckDef.params.find((p) => {
+          const v = builtinParams[p.key];
+          if (!p.required) return false;
+          if (p.type === 'bool') return v === undefined;
+          if (p.type === 'number') return !(typeof v === 'number' && v > 0);
+          return !(typeof v === 'string' && v.trim().length > 0);
+        });
+        if (missingParam) return `Set ${missingParam.label}`;
+      }
+      return '';
+    })(),
+
+    dataset: (() => {
+      if (!evalType) return 'Choose an evaluation type to load datasets';
+      if (!selectedDatasetId) return 'Select a dataset';
+      if (selectedQuestionIds.size === 0) return 'Select at least one test question';
+      if (!validateResult) return 'Run validation to complete this step';
+      return '';
+    })(),
+  };
+
+  const completedCount = SECTIONS.filter((s) => sectionDone[s.key]).length;
+
+  // ---- validate / save ---------------------------------------------------
+  const buildDefinition = () => {
+    if (metricType === 'visual') return { rules: rules.map<RuleDef>((r) => ({ field: r.field, operator: r.operator, value: r.value, compare_to_field: r.compareType === 'field' })) };
+    if (metricType === 'prompt') return { prompt_template: promptText };
+    if (metricType === 'code') return { code, skip_validation: true };
+    if (metricType === 'simple') {
+      if (!selectedBuiltinCheckDef) return {};
+      // Convert each param to its API-facing value: list/string_list
+      // params are edited as a comma-separated string but sent as an
+      // array; number params sent as numbers; everything else as-is.
+      const params: Record<string, unknown> = {};
+      selectedBuiltinCheckDef.params.forEach((p) => {
+        const raw = builtinParams[p.key];
+        if (p.type === 'list' || p.type === 'string_list') {
+          params[p.key] = typeof raw === 'string' ? raw.split(',').map((v) => v.trim()).filter(Boolean) : [];
+        } else if (p.type === 'number') {
+          params[p.key] = Number(raw);
+        } else if (p.type === 'bool') {
+          params[p.key] = Boolean(raw);
+        } else {
+          params[p.key] = raw;
+        }
+      });
+      return { subtype: selectedBuiltinCheckDef.id, params };
+    }
+    return {};
+  };
+
+  const runValidate = () => {
+    if (!canValidate || !evalType || !metricType) { showToast('Complete every section first', 'error'); return; }
+    setValidating(true); setValidateError(''); setValidateResult(null);
+    const selectedQs = previewQuestions.filter((q) => selectedQuestionIds.has(q.id));
+    metricsApi.validate({
+      actual_output: '', context: [], definition: buildDefinition(), description,
+      eval_types: [evalType], expected_output: '', expected_tools: [],
+      gates: metricType === 'visual' ? gates : [], input: '',
+      judge_config: metricType === 'prompt' ? { model_id: selectedModelId } : null,
+      metric_type: METRIC_TYPE_TO_API[metricType], name, retrieval_context: [],
+      test_cases: selectedQs.map((q) => ({
+        input: q.input?.prompt || '', actual_output: '', expected_output: q.expected?.answer || '',
+        context: [], retrieval_context: [], tools_called: [],
+        expected_tools: (q.expected?.expected_tools || q.expected?.tool_calls || []).map((t) => t.name),
+        available_tools: q.input?.available_tools || [],
+      })),
+      threshold: threshold.toFixed(2), tools_called: [],
+    })
+      .then(setValidateResult)
+      .catch((e) => setValidateError(e.message || 'Validation failed'))
+      .finally(() => setValidating(false));
+  };
+
+  const handleSave = () => {
+    if (!validateResult || !evalType || !metricType) { showToast('Run validation before saving', 'error'); return; }
+    setSaving(true); setSaveError('');
+    metricsApi.create({
+      definition: buildDefinition(), description, eval_types: [evalType],
+      metric_type: METRIC_TYPE_TO_API[metricType], name, threshold: threshold.toFixed(2),
+      judge_config: metricType === 'prompt' ? { model_id: selectedModelId } : null,
+    })
+      .then((res) => setSavedId(res.id || 'saved'))
+      .catch((e) => setSaveError(e.message || 'Failed to save metric'))
+      .finally(() => setSaving(false));
+  };
+
+  const resetForm = () => {
+    setName(''); setDescription(''); setEvalType(null); setMetricType(null); setAgentSubcategory(null);
+    setRules([{ id: ++ruleSeq, field: 'actual_output', operator: 'contains', compareType: 'field', value: 'input' }]); setGates([]);
+    setTemplates([]); setBuiltinChecks([]); setSelectedTemplateName(''); setPromptText('');
+    setModels([]); setModelHealth({}); setSelectedModelId(''); setThreshold(0.7);
+    setCodeTemplates([]); setSelectedCodeTemplateName(''); setCode('');
+    setBuiltinCheck(null); setBuiltinParams({});
+    setDatasets([]); setSelectedDatasetId(''); setPreviewQuestions([]); setSelectedQuestionIds(new Set());
+    setValidateResult(null); setValidateError(''); setSavedId('');
+    sectionRefs.details.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  // =========================================================================
   return (
-    <div className={`page-enter pg-shell ${styles.history}`}>
-      <div className={styles['history__header']}>
-        <div>
-          <p className={styles['history__header-eyebrow']}>Activity</p>
-          <h1>History</h1>
-          <p className={styles['history__header-sub']}>All past and in-progress evaluations</p>
-        </div>
-        <div className={styles['history__header-meta']}>
-          <HistoryIcon size={13} />
-          {list.length} evaluation{list.length === 1 ? '' : 's'} tracked
-        </div>
-      </div>
+    <div className={styles.cm}>
 
-      {/* List + detail panels scroll independently, so pg-body itself doesn't
-          scroll here — .shell fills it instead. */}
-      <div className={`pg-body ${styles['pg-body-fixed']}`}>
-        <div className={styles.shell}>
-          {/* ---------- Sidebar list ---------- */}
-          <div className={styles.sidebar}>
-            <div className={styles.filters}>
-              <div className={styles['filter-toolbar']}>
-                <span className={styles['filter-toolbar__label']}>Filters</span>
-                <div className={styles['filter-toolbar__divider']} />
-                <button
-                  type="button"
-                  className={`${styles['filter-toolbar__btn']} ${activeFilter === 'search' ? styles.on : ''}`}
-                  onClick={() => toggleFilter('search')}
-                  title="Search"
-                >
-                  <Search size={15} />
-                  {search && <span className={styles['filter-toolbar__dot']} />}
-                </button>
-                <button
-                  type="button"
-                  className={`${styles['filter-toolbar__btn']} ${activeFilter === 'type' ? styles.on : ''}`}
-                  onClick={() => toggleFilter('type')}
-                  title="Filter by type"
-                >
-                  <SlidersHorizontal size={15} />
-                  {typeFilter !== 'All' && <span className={styles['filter-toolbar__dot']} />}
-                </button>
-                <button
-                  type="button"
-                  className={`${styles['filter-toolbar__btn']} ${activeFilter === 'date' ? styles.on : ''}`}
-                  onClick={() => toggleFilter('date')}
-                  title="Filter by date"
-                >
-                  <CalendarDays size={15} />
-                  {dateFilter !== 'all' && <span className={styles['filter-toolbar__dot']} />}
-                </button>
-                <button
-                  type="button"
-                  className={`${styles['filter-toolbar__btn']} ${activeFilter === 'status' ? styles.on : ''}`}
-                  onClick={() => toggleFilter('status')}
-                  title="Filter by status"
-                >
-                  <ListChecks size={15} />
-                  {statusFilter !== 'All' && <span className={styles['filter-toolbar__dot']} />}
-                </button>
+      <div className={styles.builder}>
 
-                <div className={styles['filter-toolbar__summary']}>
-                  {search && (
-                    <span className={styles['filter-chip']}>
-                      <span>“{search}”</span>
-                      <X size={11} onClick={() => setSearch('')} />
-                    </span>
-                  )}
-                  {typeFilter !== 'All' && (
-                    <span className={styles['filter-chip']}>
-                      <span>{TYPE_LABEL[typeFilter]}</span>
-                      <X size={11} onClick={() => changeTypeFilter('All')} />
-                    </span>
-                  )}
-                  {dateFilter !== 'all' && (
-                    <span className={styles['filter-chip']}>
-                      <span>{DATE_LABEL[dateFilter]}</span>
-                      <X size={11} onClick={() => setDateFilter('all')} />
-                    </span>
-                  )}
-                  {statusFilter !== 'All' && (
-                    <span className={styles['filter-chip']}>
-                      <span>{STATUS_LABEL[statusFilter]}</span>
-                      <X size={11} onClick={() => changeStatusFilter('All')} />
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              <div className={`${styles['filter-panel']} ${activeFilter ? styles['filter-panel--open'] : ''}`}>
-                {activeFilter === 'search' && (
-                  <div>
-                    <div className={styles['panel-search']}>
-                      <Search size={16} />
-                      <input
-                        ref={searchInputRef}
-                        placeholder="Search evaluations…"
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                      />
-                    </div>
-                  </div>
-                )}
-                {activeFilter === 'type' && (
-                  <div>
-                    <div className={styles['panel-pills']}>
-                      {['All', 'model', 'agent', 'rag'].map((t) => (
-                        <button
-                          key={t}
-                          className={`${styles['panel-pill']} ${typeFilter === t ? styles.on : ''}`}
-                          onClick={() => {
-                            changeTypeFilter(t);
-                            setActiveFilter(null);
-                          }}
-                        >
-                          {t === 'All' ? 'All' : TYPE_LABEL[t]}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {activeFilter === 'date' && (
-                  <div>
-                    <div className={styles['panel-pills']}>
-                      {Object.entries(DATE_LABEL).map(([value, label]) => (
-                        <button
-                          key={value}
-                          className={`${styles['panel-pill']} ${dateFilter === value ? styles.on : ''}`}
-                          onClick={() => {
-                            setDateFilter(value);
-                            setActiveFilter(null);
-                          }}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {activeFilter === 'status' && (
-                  <div>
-                    <div className={styles['panel-pills']}>
-                      {Object.entries(STATUS_LABEL).map(([value, label]) => (
-                        <button
-                          key={value}
-                          className={`${styles['panel-pill']} ${statusFilter === value ? styles.on : ''}`}
-                          onClick={() => {
-                            changeStatusFilter(value);
-                            setActiveFilter(null);
-                          }}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {listStatus === 'failed' && list.length === 0 && (
-                <div className={styles.empty}>{listError || 'Failed to load evaluations.'}</div>
-              )}
-              {listStatus !== 'loading' && total > 0 && (list.length === 0 || filtered.length === 0) && (
-                <div className={styles.empty}>No evaluations match your filters.</div>
-              )}
-            </div>
-
-            <div className={styles.rows}>
-              {listStatus === 'loading' && list.length === 0 && <SkeletonListRows count={5} />}
-
-              {/* True empty state — the account has no evaluations at all yet
-                  (total === 0), as opposed to "no evaluations match your
-                  current page/filters" (handled above via styles.empty),
-                  which can now happen even with list.length === 0 if a
-                  server-side status/type filter or a later page just has no
-                  rows while other pages/filters still do. */}
-              {listStatus === 'succeeded' && total === 0 && (
-                <div className={styles['sidebar-empty']}>
-                  <div className={styles['sidebar-empty__icon']}>
-                    <HistoryIcon size={22} />
-                  </div>
-                  <h3 className={styles['sidebar-empty__title']}>No evaluations yet</h3>
-                  <p className={styles['sidebar-empty__sub']}>
-                    Once you launch an evaluation, it'll show up here so you can track progress and review results.
-                  </p>
-                  <button type="button" className={styles['sidebar-empty__cta']} onClick={() => navigate('/evaluations/new')}>
-                    <PlaySquare size={14} />
-                    Start your first evaluation
-                  </button>
-                </div>
-              )}
-
-              {displayList.map((e) => {
-                const Icon = TYPE_ICON[e.eval_type] || Sparkles;
-                const isSelected = selected?.id === e.id;
-                const isRunning = e.status === 'running';
-                const isDeletingRow = deleteAnim?.item.id === e.id;
-                const isExitingRow = isDeletingRow && deleteAnim.exiting;
-                return (
-                  <div
-                    key={e.id}
-                    className={`${styles.row} ${isSelected ? styles.selected : ''} ${isRunning ? `${styles['row--running']} ${styles['row--unselectable']}` : ''} ${isDeletingRow && !isExitingRow ? `${styles['row--deleting']} ${styles['row--unselectable']}` : ''} ${isExitingRow ? styles['row--exiting'] : ''}`}
-                    onClick={() => selectRow(e.id)}
-                  >
-                    <div className={styles.row__top}>
-                      <div className={styles.row__icon}>
-                        <Icon size={16} />
-                      </div>
-                      <div className={styles.row__name}>{e.name}</div>
-                    </div>
-                    <div className={styles.row__badges}>
-                      <span className={styles['type-tag']}>{TYPE_LABEL[e.eval_type] || e.eval_type}</span>
-                      <StatusBadge status={e.status} />
-                      {isRunning ? (
-                        <button
-                          type="button"
-                          className={styles['row__stop-btn']}
-                          onClick={(evt) => requestConfirm(evt, e, 'cancel')}
-                          disabled={cancelingId === e.id}
-                          title="Stop this evaluation"
-                        >
-                          {cancelingId === e.id ? <Loader2 size={11} className={styles.spin} /> : <StopCircle size={11} />}
-                          {cancelingId === e.id ? 'Stopping…' : 'Stop'}
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          className={styles['row__delete-btn']}
-                          onClick={(evt) => requestConfirm(evt, e, 'delete')}
-                          disabled={deletingId === e.id}
-                          title="Delete this evaluation"
-                        >
-                          {deletingId === e.id ? <Loader2 size={12} className={styles.spin} /> : <Trash2 size={12} />}
-                        </button>
-                      )}
-                    </div>
-                    <div className={styles.row__meta}>{formatDate(e.created_at)}</div>
-                    {isRunning &&
-                      (() => {
-                        const p = progressByEvalId[e.id];
-                        const current = p?.celeryState?.current ?? 0;
-                        const total = p?.celeryState?.total ?? 0;
-                        const pct = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
-                        return (
-                          <div className={styles['row__progress']}>
-                            <div className={styles['row__progress-top']}>
-                              <span className={styles['row__progress-caption']}>Progress</span>
-                              <span className={styles['row__progress-pct']}>{pct}%</span>
-                            </div>
-                            <div className={styles['row__progress-track']}>
-                              <div className={styles['row__progress-fill']} style={{ width: `${pct}%` }} />
-                            </div>
-                            {total > 0 && (
-                              <div className={styles['row__progress-count']}>
-                                {current} / {total} completed
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })()}
-                    <div className={styles.row__stats}>
-                      <span>{e.top_model ? `🏆 ${e.top_model}` : '—'}</span>
-                      <span>{e.top_score != null ? `${e.top_score}%` : '—'}</span>
-                      <span>{(e.model_ids || []).length} models</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Pagination bar — only worth showing once there's more than
-                one page, or the page-size control is worth exposing even at
-                exactly one page so it's discoverable before it's needed. */}
-            {total > 0 && (
-              <div className={styles.pagination}>
-                <div className={styles['pagination__info']}>
-                  {rangeStart}–{rangeEnd} of {total}
-                </div>
-                <div className={styles['pagination__controls']}>
-                  <select
-                    className={styles['pagination__size-select']}
-                    value={pageSizeState}
-                    onChange={(e) => changePageSize(Number(e.target.value))}
-                    title="Rows per page"
-                  >
-                    {PAGE_SIZE_OPTIONS.map((n) => (
-                      <option key={n} value={n}>
-                        {n} / page
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    className={styles['pagination__nav-btn']}
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
-                    disabled={pageState <= 1 || listStatus === 'loading'}
-                    title="Previous page"
-                  >
-                    <ChevronLeft size={14} />
-                  </button>
-                  <span className={styles['pagination__page-label']}>
-                    {pageState} / {totalPages}
-                  </span>
-                  <button
-                    type="button"
-                    className={styles['pagination__nav-btn']}
-                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                    disabled={pageState >= totalPages || listStatus === 'loading'}
-                    title="Next page"
-                  >
-                    <ChevronRight size={14} />
-                  </button>
-                </div>
-              </div>
-            )}
+        {/* ============ LEFT RAIL — jump-to links, all sections visible ============ */}
+        <aside className={styles.rail}>
+          <div className={styles['rail__head']}>
+            <div className={styles['rail__eyebrow']}>Overview</div>
+            <div className={styles['rail__sub']}>Everything is on this page — jump to any section.</div>
           </div>
 
-          {/* ---------- Detail panel ---------- */}
-          <div className={styles.detail}>
-            {!selected ? (
-              <div className={styles['detail-empty']}>Select an evaluation to see its details.</div>
-            ) : (
-              <>
-                <div className={styles['detail-hdr']}>
-                  <div>
-                    <div className={styles['detail-hdr__badges']}>
-                      <span className={styles['type-tag']}>{TYPE_LABEL[selected.eval_type] || selected.eval_type}</span>
-                      <StatusBadge status={selected.status} />
-                    </div>
-                    <h2 className={styles['detail-hdr__name']}>{selected.name || 'Untitled evaluation'}</h2>
-                    <div className={styles['detail-hdr__date']}>Created {formatDate(selected.created_at, true)}</div>
+          <nav className={styles['rail__steps']}>
+            {SECTIONS.map((s, i) => {
+              const done = sectionDone[s.key];
+              return (
+                <button
+                  key={s.key}
+                  onClick={() => scrollToSection(s.key)}
+                  className={`${styles['rail-step']} ${done ? styles['rail-step--done'] : ''}`}
+                >
+                  <span className={styles['rail-step__marker']}>
+                    {done ? <Check size={15} /> : i + 1}
+                  </span>
+                  <span className={styles['rail-step__body']}>
+                    <span className={styles['rail-step__label']}>{s.label}</span>
+                    <span className={styles['rail-step__value']}>{sectionValue[s.key]}</span>
+                    {!done && sectionMissing[s.key] && (
+                      <span className={styles['rail-step__missing']}>
+                        <AlertCircle size={11} />
+                        {sectionMissing[s.key]}
+                      </span>
+                    )}
+                  </span>
+                  <ChevronRight size={14} className={styles['rail-step__arrow']} />
+                </button>
+              );
+            })}
+          </nav>
+        </aside>
+
+        {/* ============ RIGHT WORKSPACE — all sections rendered together ============ */}
+        <section className={styles.work}>
+          <div className={styles['work__scroll']}>
+            <div className={styles['work__inner']}>
+
+              {/* ---- SECTION: DETAILS ---- */}
+              <div className={styles.section} ref={sectionRefs.details}>
+                <div className={styles['work__eyebrow']}>Section 1</div>
+                <h1 className={styles['work__title']}>Name your metric</h1>
+                <p className={styles['work__desc']}>Give it a clear name and, optionally, a short description of what it measures.</p>
+
+                <div className={styles['field-row']}>
+                  <div className={styles.field}>
+                    <label className={styles['field__label']}>Metric Name</label>
+                    <input className={styles.input} placeholder="e.g., Answer Faithfulness" value={name} onChange={(e) => setName(e.target.value)} />
                   </div>
-                  {/* Only offered once the backend has generated a report row
-                      for this evaluation (selected.report.report_id present) —
-                      same options/behavior as the Reports page. HTML is only
-                      offered for agent-type evaluations. */}
-                  {selected.report?.report_id && (
-                    <div className={styles['detail-hdr__actions']}>
-                      {[...DOWNLOAD_OPTIONS, ...(selected.eval_type === 'agent' ? [HTML_DOWNLOAD_OPTION] : [])].map((opt) => (
-                        <button
-                          key={opt.format}
-                          className={styles['dl-btn']}
-                          disabled={downloadingId === selected.report!.report_id}
-                          onClick={() =>
-                            dispatch(
-                              downloadReport({
-                                reportId: selected.report!.report_id,
-                                format: opt.format,
-                                filenameHint: selected.report!.title || selected.name,
-                              })
-                            )
-                          }
-                        >
-                          {downloadingId === selected.report.report_id ? (
-                            <Loader2 size={12} className={styles.spin} />
-                          ) : (
-                            <Download size={12} />
-                          )}
-                          {opt.label}
+                  <div className={styles.field}>
+                    <label className={styles['field__label']}>Description</label>
+                    <input className={styles.input} placeholder="What does this metric measure? (optional)" value={description} onChange={(e) => setDescription(e.target.value)} />
+                  </div>
+                </div>
+              </div>
+
+              {/* ---- SECTION: TYPE & TARGET ---- */}
+              <div className={styles.section} ref={sectionRefs.type}>
+                <div className={styles['work__eyebrow']}>Section 2</div>
+                <h1 className={styles['work__title']}>Evaluation type &amp; approach</h1>
+                <p className={styles['work__desc']}>Choose what you’re evaluating, then how the metric should score it.</p>
+
+                <div className={styles.field}>
+                  <label className={styles['field__label']}>Evaluation Type</label>
+                  <div className={`${styles['opt-grid']} ${styles['opt-grid--3']}`}>
+                    {EVAL_TYPE_CARDS.map((c) => (
+                      <button key={c.key} className={`${styles.opt} ${evalType === c.key ? styles['opt--selected'] : ''}`} onClick={() => handleEvalType(c.key)}>
+                        {evalType === c.key && <span className={styles['opt__check']}><Check size={12} /></span>}
+                        <span className={styles['opt__icon']}>{c.icon}</span>
+                        <div className={styles['opt__title']}>{c.label}</div>
+                        <div className={styles['opt__desc']}>{c.desc}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {evalType === 'agent' && (
+                  <div className={styles.field}>
+                    <label className={styles['field__label']}>Agent Focus</label>
+                    <div className={`${styles['opt-grid']} ${styles['opt-grid--3']}`}>
+                      {AGENT_SUBCATEGORY_CARDS.map((c) => (
+                        <button key={c.key} className={`${styles.opt} ${agentSubcategory === c.key ? styles['opt--selected'] : ''}`} onClick={() => handleAgentSubcategory(c.key)}>
+                          {agentSubcategory === c.key && <span className={styles['opt__check']}><Check size={12} /></span>}
+                          <span className={styles['opt__icon']}>{c.icon}</span>
+                          <div className={styles['opt__title']}>{c.label}</div>
+                          <div className={styles['opt__desc']}>{c.desc}</div>
                         </button>
                       ))}
                     </div>
-                  )}
-                </div>
-
-                <div className={styles['summary-cards']}>
-                  <div className={styles['summary-card']}>
-                    <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--win']}`}>
-                      <Award size={16} />
-                    </span>
-                    <div>
-                      <div className={styles['summary-card__label']}>Winner</div>
-                      <div className={styles['summary-card__val']}>
-                        {selected.top_model || '—'}
-                        {selected.top_score != null ? ` · ${selected.top_score}%` : ''}
-                      </div>
-                    </div>
-                  </div>
-                  <div className={styles['summary-card']}>
-                    <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--info']}`}>
-                      <ListChecks size={16} />
-                    </span>
-                    <div>
-                      <div className={styles['summary-card__label']}>Questions / Models</div>
-                      <div className={styles['summary-card__val']}>
-                        {(selected.total_questions ?? 0).toLocaleString()} &middot; {(selected.model_ids || []).length} models
-                      </div>
-                    </div>
-                  </div>
-                  <div className={styles['summary-card']}>
-                    <span className={`${styles['summary-card__icon']} ${styles['summary-card__icon--status']}`}>
-                      <Clock size={16} />
-                    </span>
-                    <div>
-                      <div className={styles['summary-card__label']}>Status</div>
-                      <div className={styles['summary-card__val']}>
-                        {selected.status || '—'}
-                        {selected.completed_at ? ` · ${formatDate(selected.completed_at)}` : ''}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Results — fetched for every status now (not just
-                    'completed'), so pending/running/failed/canceled runs
-                    still surface benchmark/dataset/metrics-tested/started
-                    via the meta-strip even with no per-model rows yet. */}
-                {resultsStatus === 'loading' && !results && (
-                  <div className={styles.empty}>
-                    <Loader2 size={16} className={styles.spin} /> Loading evaluation details…
                   </div>
                 )}
-                {resultsStatus === 'failed' && !results && (
-                  <div className={styles['status-message']}>
-                    {selected.status === 'completed'
-                      ? resultsError || 'Failed to load results.'
-                      : RESULTS_PLACEHOLDER[selected.status] || 'No results available yet.'}
+
+                <div className={styles.field}>
+                  <label className={styles['field__label']}>Metric Type</label>
+                  <div className={`${styles['opt-grid']} ${styles['opt-grid--4']}`}>
+                    {METRIC_TYPE_CARDS.map((c) => (
+                      <button key={c.key} className={`${styles.opt} ${metricType === c.key ? styles['opt--selected'] : ''}`} onClick={() => handleMetricType(c.key)}>
+                        {metricType === c.key && <span className={styles['opt__check']}><Check size={12} /></span>}
+                        <span className={styles['opt__icon']}>{c.icon}</span>
+                        <div className={styles['opt__title']}>{c.label}</div>
+                        <div className={styles['opt__desc']}>{c.desc}</div>
+                      </button>
+                    ))}
                   </div>
+                </div>
+              </div>
+
+              {/* ---- SECTION: CONFIG ---- */}
+              <div className={styles.section} ref={sectionRefs.config}>
+                <div className={styles['work__eyebrow']}>Section 3</div>
+                <h1 className={styles['work__title']}>{SECTIONS[2].label}</h1>
+
+                {!metricType && (
+                  <div className={styles.empty}>Pick a metric type above to configure it here.</div>
                 )}
-                {results && (
+
+                {/* visual */}
+                {metricType === 'visual' && (
                   <>
-                    {/* Run configuration (metrics_config) — comes from the
-                        results fetch (GET /evaluations/{id}/results), not
-                        the list item. Genuinely dynamic on the wire (can be
-                        {}, a subset, or the full shape), so every piece
-                        below renders only if that specific field is
-                        actually present rather than assuming a fixed shape. */}
-                    {hasConfigToShow && (
-                      <div className={styles['config-panel']}>
-                        <div className={styles['config-panel__title']}>Run configuration</div>
-                        <div className={styles['config-panel__grid']}>
-                          {/* Top-level max_retries/timeout deliberately not shown —
-                              only the per-model overrides below are relevant here. */}
-                          {results.metrics_config.retest_on_wrong != null && (
-                            <div className={styles['config-panel__item']}>
-                              <span className={styles['config-panel__label']}>Retest on wrong</span>
-                              <span className={styles['config-panel__val']}>{results.metrics_config.retest_on_wrong ? 'Yes' : 'No'}</span>
-                            </div>
-                          )}
-                          {results.metrics_config.retest_on_wrong && results.metrics_config.retest_max_rounds != null && (
-                            <div className={styles['config-panel__item']}>
-                              <span className={styles['config-panel__label']}>Retest max rounds</span>
-                              <span className={styles['config-panel__val']}>{results.metrics_config.retest_max_rounds}</span>
-                            </div>
-                          )}
-                          {results.metrics_config.retest_verify_metric && (
-                            <div className={styles['config-panel__item']}>
-                              <span className={styles['config-panel__label']}>Retest verify metric</span>
-                              <span className={styles['config-panel__val']}>{results.metrics_config.retest_verify_metric}</span>
-                            </div>
-                          )}
-                        </div>
-
-                        {results.metrics_config.model_retry_config &&
-                          Object.keys(results.metrics_config.model_retry_config).length > 0 && (
-                            <div className={styles['config-panel__models']}>
-                              <span className={styles['config-panel__label']}>Per-model retry overrides</span>
-                              <div className={styles['config-panel__model-list']}>
-                                {Object.entries(results.metrics_config.model_retry_config).map(([modelId, cfg]) => (
-                                  <div key={modelId} className={styles['config-panel__model-row']}>
-                                    <span className={styles['config-panel__model-name']}>{modelName(modelId)}</span>
-                                    <span className={styles['config-panel__model-vals']}>
-                                      {cfg?.max_retries != null && <span>Retries: {cfg.max_retries}</span>}
-                                      {cfg?.timeout != null && <span>Timeout: {cfg.timeout}s</span>}
-                                    </span>
-                                  </div>
+                    <p className={styles['work__desc']}>Build one or more field comparisons. Combine them with AND / OR.</p>
+                    <div className={styles.rules}>
+                      {rules.map((rule, i) => (
+                        <div key={rule.id}>
+                          {i > 0 && (
+                            <div className={styles.gate}>
+                              <div className={styles['gate__toggle']}>
+                                {(['AND', 'OR'] as const).map((g) => (
+                                  <button key={g} className={`${styles['gate__opt']} ${gates[i - 1] === g ? styles.on : ''}`} onClick={() => toggleGate(i - 1)}>{g}</button>
                                 ))}
                               </div>
                             </div>
                           )}
-                      </div>
-                    )}
-
-                    {/* Extra fields from GET /evaluations/{id}/results — benchmark,
-                        dataset, metrics tested, and when the run actually started. */}
-                    <div className={styles['meta-strip']}>
-                      {results.benchmark && (
-                        <div className={styles['meta-strip__item']}>
-                          <span className={styles['meta-strip__label']}>Benchmark</span>
-                          <span className={styles['meta-strip__val']}>{results.benchmark}</span>
-                        </div>
-                      )}
-                      {results.dataset_id && (
-                        <div className={styles['meta-strip__item']}>
-                          <span className={styles['meta-strip__label']}>Dataset</span>
-                          <span className={styles['meta-strip__val']}>{results.dataset_id}</span>
-                        </div>
-                      )}
-                      {results.started_at && (
-                        <div className={styles['meta-strip__item']}>
-                          <span className={styles['meta-strip__label']}>Started</span>
-                          <span className={styles['meta-strip__val']}>{formatDate(results.started_at, true)}</span>
-                        </div>
-                      )}
-                      {(results.selected_metrics || []).length > 0 && (
-                        <div className={styles['meta-strip__item']}>
-                          <span className={styles['meta-strip__label']}>Metrics tested</span>
-                          <span className={styles['meta-strip__chips']}>
-                            {(results.selected_metrics || []).map((m) => (
-                              <span key={m} className={styles['type-tag']}>{m}</span>
-                            ))}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-
-                    {(results.results || []).length > 0 ? (
-                      <div className={styles.results}>
-                        <table className={styles['results-table']}>
-                          <thead>
-                            <tr>
-                              <th>Rank</th>
-                              <th>Model</th>
-                              <th>Provider</th>
-                              <th>Metric</th>
-                              <th>Score</th>
-                              <th>Passed</th>
-                              <th>Failed</th>
-                              <th />
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {(results.results || []).map((r) => {
-                              const breakdown = Object.entries(r.metric_breakdown || {});
-                              const rowSpan = breakdown.length || 1;
-                              const winnerClass = r.rank === 1 ? styles.winner : '';
-
-                              // One row per metric when the model has a
-                              // breakdown — Rank/Model/Provider are merged
-                              // across those rows via rowSpan rather than
-                              // repeated on each line.
-                              if (breakdown.length > 0) {
-                                return breakdown.map(([metricLabel, m], idx) => (
-                                  <tr key={`${r.model_id}-${metricLabel}`} className={winnerClass}>
-                                    {idx === 0 && (
-                                      <>
-                                        <td className={styles['cell-rank']} rowSpan={rowSpan}>
-                                          {r.rank === 1 ? '🏆 ' : ''}
-                                          {r.rank ?? '—'}
-                                        </td>
-                                        <td className={styles['cell-model']} rowSpan={rowSpan}>{modelName(r.model_id)}</td>
-                                        <td className={styles['cell-provider']} rowSpan={rowSpan}>{r.provider || providerName(r.model_id)}</td>
-                                      </>
-                                    )}
-                                    <td className={styles['cell-metric']}>{metricLabel}</td>
-                                    <td className={styles['cell-num']}>{Math.round(Math.max(0, Math.min(1, m.score ?? 0)) * 100)}%</td>
-                                    <td className={styles['cell-pass']}>{m.passed ?? 0}</td>
-                                    <td className={styles['cell-fail']}>{m.failed ?? 0}</td>
-                                    <td className={styles['cell-details']}>
-                                      {(r.details?.some((d) => d.metric_passed && metricLabel in d.metric_passed) ?? false) && (
-                                        <button
-                                          type="button"
-                                          className={styles['details-btn']}
-                                          title={`View test-by-test details for ${metricLabel}`}
-                                          onClick={() => openDrawer(r, metricLabel)}
-                                        >
-                                          <ListTree size={14} />
-                                        </button>
-                                      )}
-                                    </td>
-                                  </tr>
-                                ));
-                              }
-
-                              // No metric breakdown for this model — a
-                              // single plain row, details icon (if any)
-                              // shows every test case unscoped.
-                              return (
-                                <tr key={r.model_id} className={winnerClass}>
-                                  <td className={styles['cell-rank']}>
-                                    {r.rank === 1 ? '🏆 ' : ''}
-                                    {r.rank ?? '—'}
-                                  </td>
-                                  <td className={styles['cell-model']}>{modelName(r.model_id)}</td>
-                                  <td className={styles['cell-provider']}>{r.provider || providerName(r.model_id)}</td>
-                                  <td className={styles['cell-metric']}>—</td>
-                                  <td className={styles['cell-num']}>{r.score ?? 0}%</td>
-                                  <td className={styles['cell-pass']}>{r.passed_tests ?? 0}</td>
-                                  <td className={styles['cell-fail']}>{r.failed_tests ?? 0}</td>
-                                  <td className={styles['cell-details']}>
-                                    {(r.details?.length ?? 0) > 0 && (
-                                      <button
-                                        type="button"
-                                        className={styles['details-btn']}
-                                        title="View test-by-test details"
-                                        onClick={() => openDrawer(r, null)}
-                                      >
-                                        <ListTree size={14} />
-                                      </button>
-                                    )}
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    ) : (
-                      <div className={styles['status-message']}>
-                        {RESULTS_PLACEHOLDER[selected.status] || 'No results available.'}
-                      </div>
-                    )}
-                  </>
-                )}
-              </>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* ---------- Test-detail / metric-score slide-over ---------- */}
-      <div className={`${styles['drawer-overlay']} ${detailsModel ? styles['drawer-overlay--open'] : ''}`} onClick={() => setDetailsModel(null)} />
-      <div
-        className={`${styles.drawer} ${detailsModel ? styles['drawer--open'] : ''} ${isResizingDrawer ? styles['drawer--resizing'] : ''}`}
-        style={{ width: drawerWidth }}
-        role="dialog"
-        aria-hidden={!detailsModel}
-      >
-        {/* Drag left/right from here to resize. Only meaningful once the
-            drawer is actually open, but kept mounted (not conditionally
-            rendered) so a drag in progress doesn't get cut off mid-gesture
-            if detailsModel changes. */}
-        <div
-          className={styles['drawer__resize-handle']}
-          onMouseDown={startDrawerResize}
-          role="separator"
-          aria-orientation="vertical"
-          title="Drag to resize"
-        />
-        {detailsModel && (
-          <>
-            {(() => {
-              // Scoped to one metric's test cases when opened from a metric
-              // row (detailsMetric set) — a test case belongs to that scope
-              // when it has an entry for this metric in metric_passed, since
-              // one test case can be scored against several metrics at once.
-              // Otherwise every test case for the model (no-breakdown
-              // fallback row).
-              const scopedDetails = (detailsModel.details || []).filter(
-                (d) => !detailsMetric || (d.metric_passed && detailsMetric in d.metric_passed)
-              );
-              // Pass/fail state for a given test case, resolved for the
-              // current scope — the metric-specific verdict when scoped to
-              // one metric (a test case can pass overall but fail a
-              // particular metric, or vice versa), otherwise its overall
-              // passed flag.
-              const isPassed = (d: TestDetail) =>
-                detailsMetric ? d.metric_passed?.[detailsMetric] ?? d.passed : d.passed;
-
-              const metricEntry = detailsMetric ? detailsModel.metric_breakdown?.[detailsMetric] : undefined;
-              const headerScorePct = metricEntry
-                ? Math.round(Math.max(0, Math.min(1, metricEntry.score ?? 0)) * 100)
-                : detailsModel.score ?? 0;
-              const total = scopedDetails.length;
-              const passedCount = scopedDetails.filter(isPassed).length;
-              const failedCount = total - passedCount;
-              const visible = scopedDetails.filter((d) =>
-                testFilter === 'all' ? true : testFilter === 'passed' ? isPassed(d) : !isPassed(d)
-              );
-              const filters: { key: 'all' | 'passed' | 'failed'; label: string; count: number }[] = [
-                { key: 'all', label: 'All', count: total },
-                { key: 'passed', label: 'Passed', count: passedCount },
-                { key: 'failed', label: 'Failed', count: failedCount },
-              ];
-
-              return (
-                <>
-                  <div className={styles['drawer__header']}>
-                    <div>
-                      <div className={styles['drawer__eyebrow']}>
-                        Test-by-test details{detailsMetric ? ` · ${detailsMetric}` : ''}
-                      </div>
-                      <h3 className={styles['drawer__title']}>{modelName(detailsModel.model_id)}</h3>
-                      <div className={styles['drawer__sub']}>
-                        {(detailsModel.provider || providerName(detailsModel.model_id))} · {headerScorePct}% score
-                      </div>
-                    </div>
-                    <button type="button" className={styles['drawer__close']} onClick={() => setDetailsModel(null)} title="Close">
-                      <X size={16} />
-                    </button>
-                  </div>
-
-                  <div className={styles['drawer__filterbar']}>
-                    {filters.map((f) => (
-                      <button
-                        key={f.key}
-                        type="button"
-                        className={`${styles['test-filter']} ${styles[`test-filter--${f.key}`]} ${testFilter === f.key ? styles.on : ''}`}
-                        onClick={() => setTestFilter(f.key)}
-                      >
-                        {f.key === 'passed' && <CheckCircle2 size={12} />}
-                        {f.key === 'failed' && <XCircle size={12} />}
-                        {f.label}
-                        <span className={styles['test-filter__count']}>{f.count}</span>
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className={styles['drawer__body']}>
-                    {visible.length === 0 ? (
-                      <div className={styles['drawer__empty']}>
-                        {testFilter === 'passed' && 'No passed tests to show.'}
-                        {testFilter === 'failed' && 'No failed tests to show.'}
-                        {testFilter === 'all' && 'No test details available.'}
-                      </div>
-                    ) : (
-                      visible.map((d, i) => {
-                        const passedHere = isPassed(d);
-                        const metricScorePct =
-                          detailsMetric && d.metric_scores?.[detailsMetric] != null
-                            ? Math.round(Math.max(0, Math.min(1, d.metric_scores[detailsMetric])) * 100)
-                            : null;
-                        return (
-                          <div key={i} className={`${styles['detail-card']} ${passedHere ? styles['detail-card--pass'] : styles['detail-card--fail']}`}>
-                            <div className={styles['detail-card__hdr']}>
-                              <span className={styles['detail-card__task']}>{d.task || `Test ${i + 1}`}</span>
-                              <span className={`${styles['detail-card__badge']} ${passedHere ? styles['detail-card__badge--pass'] : styles['detail-card__badge--fail']}`}>
-                                {passedHere ? <CheckCircle2 size={12} /> : <XCircle size={12} />}
-                                {passedHere ? 'Passed' : 'Failed'}
-                                {metricScorePct != null && ` · ${metricScorePct}%`}
-                              </span>
+                          <div className={styles.rule}>
+                            <div className={styles['rule__head']}>
+                              <span className={styles['rule__index']}>Rule {i + 1}</span>
+                              <button className={styles['btn-icon']} title="Remove" onClick={() => removeRule(rule.id)}><X size={15} /></button>
                             </div>
-                            <div className={styles['detail-card__field']}>
-                              <span className={styles['detail-card__label']}>Input</span>
-                              <div className={styles['detail-card__text']}>{d.input || '—'}</div>
-                            </div>
-                            <div className={styles['detail-card__row']}>
-                              <div className={styles['detail-card__field']}>
-                                <span className={styles['detail-card__label']}>Expected</span>
-                                <div className={styles['detail-card__text']}>{d.expected_output || '—'}</div>
+                            <div className={styles['rule__grid']}>
+                              <div className={styles['rule__field']}>
+                                <span className={styles['rule__field-label']}>Field</span>
+                                <CustomSelect value={rule.field} onChange={(v) => updateRule(rule.id, { field: v })} options={fields.map((f) => ({ value: f, label: f }))} />
                               </div>
-                              <div className={styles['detail-card__field']}>
-                                <span className={styles['detail-card__label']}>Actual</span>
-                                <div className={`${styles['detail-card__text']} ${!passedHere ? styles['detail-card__text--fail'] : ''}`}>
-                                  {d.actual_output || '—'}
-                                </div>
+                              <div className={styles['rule__field']}>
+                                <span className={styles['rule__field-label']}>Operator</span>
+                                <CustomSelect value={rule.operator} onChange={(v) => updateRule(rule.id, { operator: v })} options={OPERATORS} />
+                              </div>
+                              <div className={styles['rule__field']}>
+                                <span className={styles['rule__field-label']}>Compare To</span>
+                                <CustomSelect value={rule.compareType} onChange={(v) => updateRule(rule.id, { compareType: v as CompareType, value: '' })} options={[{ value: 'field', label: 'Field' }, { value: 'literal', label: 'Literal Value' }]} />
+                              </div>
+                              <div className={styles['rule__field']}>
+                                <span className={styles['rule__field-label']}>Value</span>
+                                {rule.compareType === 'literal'
+                                  ? <input className={styles.input} placeholder="value" value={rule.value} onChange={(e) => updateRule(rule.id, { value: e.target.value })} />
+                                  : <CustomSelect value={rule.value} onChange={(v) => updateRule(rule.id, { value: v })} placeholder="field…" options={fields.map((f) => ({ value: f, label: f }))} />}
                               </div>
                             </div>
                           </div>
-                        );
-                      })
+                        </div>
+                      ))}
+                    </div>
+                    <button className={`${styles.btn} ${styles['btn--sm']} ${styles['add-rule']}`} onClick={addRule}><Plus size={14} /> Add Rule</button>
+
+                    <div className={styles.summary}>
+                      <div className={styles['summary__label']}>Summary</div>
+                      <div className={styles['summary__code']}>{ruleSummary || 'No rules defined'}</div>
+                    </div>
+                  </>
+                )}
+
+                {/* prompt */}
+                {metricType === 'prompt' && (
+                  <>
+                    <p className={styles['work__desc']}>Pick a judge prompt template (or write your own), then choose a judge model.</p>
+
+                    {templatesError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {templatesError}</div>}
+                    {evalType === 'agent' && !agentSubcategory ? (
+                      <div className={styles.empty}>Choose Tool Evaluation or Answer Evaluation above first.</div>
+                    ) : templatesLoading ? (
+                      <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading templates…</div>
+                    ) : (
+                      <div className={styles['tpl-list']}>
+                        {matchingTemplates.length === 0 && !allowsCustomPrompt && <div className={styles.empty}>No templates for this evaluation type.</div>}
+                        {matchingTemplates.map((t) => (
+                          <label key={t.name} className={`${styles.tpl} ${selectedTemplateName === t.name ? styles['tpl--selected'] : ''}`}>
+                            <input type="radio" name="tpl" hidden checked={selectedTemplateName === t.name} onChange={() => { setSelectedTemplateName(t.name); setPromptText(t.template); }} />
+                            <span className={styles['tpl__radio']} />
+                            <span className={styles['tpl__body']}>
+                              <span className={styles['tpl__label']}>{t.label}</span>
+                              <span className={styles['tpl__desc']}>{t.description}</span>
+                              {t.uses_placeholders?.length > 0 && (
+                                <span className={styles['tpl__tags']}>
+                                  {t.uses_placeholders.map((p) => <span key={p} className={styles.token}>{`{${p}}`}</span>)}
+                                </span>
+                              )}
+                            </span>
+                          </label>
+                        ))}
+                        {allowsCustomPrompt && (
+                          <label className={`${styles.tpl} ${selectedTemplateName === '__custom__' ? styles['tpl--selected'] : ''}`}>
+                            <input type="radio" name="tpl" hidden checked={selectedTemplateName === '__custom__'} onChange={() => { setSelectedTemplateName('__custom__'); setPromptText(''); }} />
+                            <span className={styles['tpl__radio']} />
+                            <span className={styles['tpl__body']}>
+                              <span className={styles['tpl__label']}>Custom Prompt</span>
+                              <span className={styles['tpl__desc']}>Write your own judge prompt from scratch.</span>
+                            </span>
+                          </label>
+                        )}
+                      </div>
                     )}
+
+                    {selectedTemplateName && (
+                      <div className={styles.field}>
+                        <label className={styles['field__label']}>Prompt</label>
+                        <textarea className={styles.textarea} style={{ minHeight: '150px' }} value={promptText} onChange={(e) => setPromptText(e.target.value)} placeholder="Enter your judge prompt…" />
+                      </div>
+                    )}
+
+                    <div className={styles.field}>
+                      <label className={styles['field__label']}>Judge Model</label>
+                      {modelsError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {modelsError}</div>}
+                      {modelsLoading ? (
+                        <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading models…</div>
+                      ) : models.length === 0 ? (
+                        <div className={styles.empty}>No models available.</div>
+                      ) : (
+                        <div className={styles['provider-cols']}>
+                          {modelsByProvider.map(([providerId, list]) => {
+                            const search = (modelSearch[providerId] || '').toLowerCase();
+                            const filtered = search ? list.filter((m) => m.name.toLowerCase().includes(search)) : list;
+                            return (
+                              <div key={providerId} className={styles['provider-col']}>
+                                <div className={styles['provider-col__head']}>
+                                  {providerName(providerId)}
+                                  <span className={styles['provider-col__count']}>{list.length}</span>
+                                </div>
+                                <div className={styles['provider-col__search']}>
+                                  <Search size={13} />
+                                  <input
+                                    placeholder="Search model…"
+                                    value={modelSearch[providerId] || ''}
+                                    onChange={(e) => setModelSearch((prev) => ({ ...prev, [providerId]: e.target.value }))}
+                                  />
+                                </div>
+                                <div className={styles['provider-col__list']}>
+                                  {filtered.length === 0 ? (
+                                    <div className={styles.empty}>No matching models.</div>
+                                  ) : filtered.map((m) => {
+                                    const health = modelHealth[m.id] || 'checking';
+                                    const disabled = health === 'unhealthy';
+                                    return (
+                                      <label key={m.id} className={`${styles.model} ${selectedModelId === m.id ? styles['model--selected'] : ''} ${disabled ? styles['model--disabled'] : ''}`}>
+                                        <input type="radio" name="judge" hidden checked={selectedModelId === m.id} disabled={disabled} onChange={() => setSelectedModelId(m.id)} />
+                                        <span className={styles['model__radio']} />
+                                        <span className={styles['model__body']}>
+                                          <span className={styles['model__name']} title={m.name}>{m.name}</span>
+                                          {health === 'checking' && <span className={styles['model__checking']}>Checking…</span>}
+                                        </span>
+                                        <span className={`${styles['model__health']} ${styles[`health--${health}`]}`} title={health === 'checking' ? 'Checking' : health === 'healthy' ? 'Healthy' : 'Offline'}>
+                                          <span className={styles['health-dot']} />
+                                        </span>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+
+                {/* code */}
+                {metricType === 'code' && (
+                  <>
+                    <p className={styles['work__desc']}>Pick a starter template, then edit the code to suit your metric.</p>
+                    {codeTemplatesError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {codeTemplatesError}</div>}
+                    {codeError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {codeError}</div>}
+
+                    {evalType === 'agent' && !agentSubcategory ? (
+                      <div className={styles.empty}>Choose Tool Evaluation or Answer Evaluation above first.</div>
+                    ) : (
+                      <>
+                        <div className={`${styles.field} ${styles['field--fit']}`}>
+                          <label className={styles['field__label']}>Starter Template</label>
+                          {codeTemplatesLoading ? (
+                            <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading templates…</div>
+                          ) : codeTemplates.length === 0 ? (
+                            <div className={styles.empty}>No starter templates for this evaluation type.</div>
+                          ) : (
+                            <CustomSelect
+                              value={selectedCodeTemplateName}
+                              onChange={setSelectedCodeTemplateName}
+                              placeholder="Choose a template…"
+                              options={codeTemplates.map((t) => ({ value: t.name, label: t.label, sublabel: t.description }))}
+                            />
+                          )}
+                        </div>
+
+                        {selectedCodeTemplateName && (
+                          <div className={styles.code}>
+                            <div className={styles['code__bar']}>
+                              <span className={styles['code__lang']}>Python</span>
+                              {codeLoading && <Loader2 size={13} className={styles.spin} />}
+                            </div>
+                            <textarea className={styles['code__area']} spellCheck={false} value={code} onChange={(e) => setCode(e.target.value)} placeholder="# scoring function" />
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </>
+                )}
+
+                {/* simple — Built-in Check (checks + params come from the API) */}
+                {metricType === 'simple' && (
+                  <>
+                    <p className={styles['work__desc']}>Pick a built-in check. Available checks depend on the evaluation type selected above.</p>
+
+                    {templatesError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {templatesError}</div>}
+
+                    {!evalType ? (
+                      <div className={styles.empty}>Choose an evaluation type above to see available checks.</div>
+                    ) : evalType === 'agent' && !agentSubcategory ? (
+                      <div className={styles.empty}>Choose Tool Evaluation or Answer Evaluation above first.</div>
+                    ) : templatesLoading ? (
+                      <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading checks…</div>
+                    ) : availableBuiltinChecks.length === 0 ? (
+                      <div className={styles.empty}>No built-in checks for this evaluation type.</div>
+                    ) : (
+                      <div className={`${styles['opt-grid']} ${availableBuiltinChecks.length >= 4 ? styles['opt-grid--4'] : ''}`}>
+                        {availableBuiltinChecks.map((c) => (
+                          <button
+                            key={c.id}
+                            className={`${styles.opt} ${builtinCheck === c.id ? styles['opt--selected'] : ''}`}
+                            onClick={() => handleBuiltinCheck(c)}
+                          >
+                            {builtinCheck === c.id && <span className={styles['opt__check']}><Check size={12} /></span>}
+                            <span className={styles['opt__icon']}>{builtinCheckIcon(c.id)}</span>
+                            <div className={styles['opt__title']}>{c.name}</div>
+                            <div className={styles['opt__desc']}>{c.description}</div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {selectedBuiltinCheckDef?.params.map((p) => (
+                      <div key={p.key} className={`${styles.field} ${styles['field--fit']}`} style={{ marginTop: '18px' }}>
+                        {p.type === 'bool' ? (
+                          <div className={styles['switch-row']}>
+                            <div>
+                              <div className={styles['switch-row__label']}>{p.label}</div>
+                            </div>
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={Boolean(builtinParams[p.key])}
+                              className={`${styles.switch} ${builtinParams[p.key] ? styles['switch--on'] : ''}`}
+                              onClick={() => setBuiltinParams((prev) => ({ ...prev, [p.key]: !prev[p.key] }))}
+                            >
+                              <span className={styles['switch__thumb']} />
+                            </button>
+                          </div>
+                        ) : p.type === 'number' ? (
+                          <>
+                            <label className={styles['field__label']}>{p.label}</label>
+                            <input
+                              type="number"
+                              min={1}
+                              step={1}
+                              className={styles.input}
+                              value={typeof builtinParams[p.key] === 'number' ? (builtinParams[p.key] as number) : ''}
+                              onChange={(e) => {
+                                const raw = e.target.value;
+                                if (raw === '') { setBuiltinParams((prev) => ({ ...prev, [p.key]: '' })); return; }
+                                const n = Math.floor(Number(raw));
+                                setBuiltinParams((prev) => ({ ...prev, [p.key]: Number.isFinite(n) && n > 0 ? n : 1 }));
+                              }}
+                            />
+                          </>
+                        ) : p.type === 'list' || p.type === 'string_list' ? (
+                          <>
+                            <label className={styles['field__label']}>{p.label} (comma-separated)</label>
+                            <input
+                              className={styles.input}
+                              placeholder="Enter one or more values, separated by commas"
+                              value={typeof builtinParams[p.key] === 'string' ? (builtinParams[p.key] as string) : ''}
+                              onChange={(e) => setBuiltinParams((prev) => ({ ...prev, [p.key]: e.target.value }))}
+                            />
+                          </>
+                        ) : (
+                          <>
+                            <label className={styles['field__label']}>{p.label}</label>
+                            <input
+                              className={styles.input}
+                              value={typeof builtinParams[p.key] === 'string' ? (builtinParams[p.key] as string) : ''}
+                              onChange={(e) => setBuiltinParams((prev) => ({ ...prev, [p.key]: e.target.value }))}
+                            />
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </>
+                )}
+
+                {/* threshold — shared across all config types */}
+                {metricType && (
+                  <div className={styles.field} style={{ marginTop: '26px' }}>
+                    <label className={styles['field__label']}>Pass Threshold</label>
+                    <div className={`${styles.thr} ${styles['field--fit']}`}>
+                      <div className={styles['thr__row']}>
+                        <span className={styles['thr__cap']}>Minimum score required to pass</span>
+                        <span className={styles['thr__value']}>{threshold.toFixed(2)}</span>
+                      </div>
+                      <input type="range" className={styles['thr__slider']} min={0} max={1} step={0.01} value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} />
+                      <div className={styles['thr__scale']}><span>0.00</span><span>0.50</span><span>1.00</span></div>
+                    </div>
                   </div>
+                )}
+              </div>
+
+              {/* ---- SECTION: DATASET ---- */}
+              <div className={`${styles.section} ${styles['section--last']}`} ref={sectionRefs.dataset}>
+                <div className={styles['work__eyebrow']}>Section 4</div>
+                <h1 className={styles['work__title']}>Choose test data &amp; validate</h1>
+                <p className={styles['work__desc']}>Pick a dataset and questions, run validation, then save your metric.</p>
+
+                {!evalType ? (
+                  <div className={styles.empty}>Choose an evaluation type above to load datasets.</div>
+                ) : (
+                  <div className={styles['data-row']}>
+                    <div className={styles['data-col']}>
+                      <div className={styles['data-col__head']}>
+                        <span className={styles['data-col__head-title']}><Database size={12} /> Datasets</span>
+                        {datasets.length > 0 && <span className={styles['data-col__count']}>{datasets.length}</span>}
+                      </div>
+                      <div className={styles['data-col__body']}>
+                        {datasetsError ? <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {datasetsError}</div>
+                          : datasetsLoading ? <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading…</div>
+                          : datasets.length === 0 ? <div className={styles.empty}>No datasets for this type.</div>
+                          : (
+                            <div className={styles['ds-list']}>
+                              {datasets.map((d) => {
+                                const selected = selectedDatasetId === d.id;
+                                return (
+                                  <div
+                                    key={d.id}
+                                    className={`${styles.ds} ${selected ? styles['ds--selected'] : ''}`}
+                                    onClick={() => selectDataset(d.id)}
+                                    title={d.name}
+                                  >
+                                    <span className={styles['ds__check']}><Check size={11} /></span>
+                                    <span className={styles['ds__icon']}><Database size={14} /></span>
+                                    <span className={styles['ds__name']}>{d.name}</span>
+                                    <span className={styles['ds__count']}>{d.question_count} {d.question_count === 1 ? 'question' : 'questions'}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                      </div>
+                    </div>
+
+                    <div className={styles['data-col']}>
+                      <div className={styles['data-col__head']}>
+                        <span className={styles['data-col__head-title']}>
+                          <ListChecks size={12} /> Questions
+                        </span>
+                        {previewQuestions.length > 0 && (
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <span className={styles['data-col__count']}>{selectedQuestionIds.size}/{previewQuestions.length}</span>
+                            <span style={{ display: 'flex', gap: '8px' }}>
+                              <button className={styles['link-btn']} onClick={selectAllQuestions}>All</button>
+                              <button className={styles['link-btn']} onClick={clearAllQuestions}>Clear</button>
+                            </span>
+                          </span>
+                        )}
+                      </div>
+                      <div className={styles['data-col__body']}>
+                        {previewError ? <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {previewError}</div>
+                          : previewLoading ? <div className={styles.loading}><Loader2 size={15} className={styles.spin} /> Loading…</div>
+                          : previewQuestions.length === 0 ? <div className={styles.empty}>Select a dataset to preview.</div>
+                          : (
+                            <div className={styles['q-list']}>
+                              {previewQuestions.map((q) => {
+                                const on = selectedQuestionIds.has(q.id);
+                                const tools = q.input?.available_tools || [];
+                                const expectedCalls = (q.expected?.expected_tools?.length ? q.expected.expected_tools : q.expected?.tool_calls) || [];
+                                return (
+                                  <div key={q.id} className={`${styles.q} ${on ? styles['q--on'] : ''}`} onClick={() => toggleQuestion(q.id)}>
+                                    <span className={styles['q__check']}>{on && <Check size={12} />}</span>
+                                    <span className={styles['q__body']}>
+                                      {q.category && <span className={styles['q__category']}>{q.category}</span>}
+                                      <span className={styles['q__q']}>{q.input?.prompt}</span>
+                                      <span className={styles['q__a']}><span className={styles['q__a-label']}>Expected:</span>{q.expected?.answer}</span>
+
+                                      {tools.length > 0 && (
+                                        <span className={styles['q__tools']}>
+                                          <span className={styles['q__tools-label']}>Available tools</span>
+                                          <span className={styles['q__tool-tags']}>
+                                            {tools.map((t) => (
+                                              <span key={t.name} className={styles['q__tool-tag']} title={t.description}>
+                                                <span className={styles['q__tool-method']}>{t.method}</span>
+                                                {t.name}
+                                              </span>
+                                            ))}
+                                          </span>
+                                        </span>
+                                      )}
+
+                                      {expectedCalls.length > 0 && (
+                                        <span className={styles['q__calls']}>
+                                          <span className={styles['q__tools-label']}>Expected tool calls</span>
+                                          {expectedCalls.map((c, i) => (
+                                            <span key={`${c.name}-${i}`} className={styles['q__call']}>
+                                              <span className={styles['q__call-name']}>{c.name}</span>
+                                              {Object.entries(c.arguments || {}).length > 0 && (
+                                                <span className={styles['q__call-args']}>
+                                                  {Object.entries(c.arguments).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ')}
+                                                </span>
+                                              )}
+                                            </span>
+                                          ))}
+                                        </span>
+                                      )}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ---- validate & save ---- */}
+                <div className={styles['validate-section']}>
+                  <div className={styles['validate-section__label']}>Validate &amp; Save</div>
+                  <p className={styles['validate-section__desc']}>Run a dry-run against your selected questions. Saving unlocks once it passes.</p>
+
+                  {validateError && <div className={`${styles.banner} ${styles['banner--err']}`}><AlertCircle size={15} /> {validateError}</div>}
+
+                  {!validateResult && !validating && (
+                    <div className={`${styles.banner} ${styles['banner--info']}`}><Sparkles size={15} /> Ready to validate {selectedQuestionIds.size} test case{selectedQuestionIds.size === 1 ? '' : 's'}.</div>
+                  )}
+
+                  {validateResult && (
+                    <div style={{ marginBottom: '18px' }}>
+                      {validateSucceeded
+                        ? <div className={`${styles.banner} ${styles['banner--ok']}`}><CheckCircle2 size={15} /> Metric is valid — ready to save.</div>
+                        : <div className={`${styles.banner} ${styles['banner--err']}`}><XCircle size={15} /> No test cases passed. You can still save, or adjust your metric and re-run.</div>}
+
+                      <div className={styles.results}>
+                        {validateResult.results.map((r, i) => (
+                          <div key={i} className={styles['results__row']}>
+                            <span className={`${styles['results__score']} ${r.success ? styles['results__score--pass'] : styles['results__score--fail']}`}>{r.score.toFixed(2)}</span>
+                            <span className={styles['results__body']}>
+                              <span className={styles['results__io']}>{r.test_case.input}</span>
+                              {r.reason && <span className={styles['results__reason']}>{r.reason}</span>}
+                            </span>
+                            <span className={`${styles['results__pill']} ${r.success ? styles['results__pill--pass'] : styles['results__pill--fail']}`}>{r.success ? 'Pass' : 'Fail'}</span>
+                          </div>
+                        ))}
+                        <div className={styles['results__summary']}>
+                          <span>Passed: <strong>{validateResult.passed}/{validateResult.total}</strong></span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          {/* ---- sticky footer ---- */}
+          <div className={styles['work__foot']}>
+            <span className={styles['work__foot-info']}>
+              {completedCount}/{SECTIONS.length} sections ready
+            </span>
+
+            <div className={styles['work__foot-actions']}>
+              {!validateResult ? (
+                <>
+                  <button className={`${styles.btn} ${styles['btn--primary']}`} onClick={runValidate} disabled={validating || !canValidate}>
+                    {validating ? <Loader2 size={15} className={styles.spin} /> : <Sparkles size={15} />}
+                    {validating ? 'Validating…' : 'Run Validation'}
+                    {!validating && <ArrowRight size={15} />}
+                  </button>
+                  <button className={`${styles.btn} ${styles['btn--ghost']}`} onClick={onCancel}>Cancel</button>
                 </>
-              );
-            })()}
-          </>
-        )}
+              ) : (
+                <>
+                  <button className={`${styles.btn} ${styles['btn--ok']}`} onClick={handleSave} disabled={saving}>
+                    {saving ? <Loader2 size={15} className={styles.spin} /> : <Check size={15} />}
+                    Save Metric
+                  </button>
+                  <button className={`${styles.btn} ${styles['btn--ghost']}`} onClick={onCancel}>Cancel</button>
+                </>
+              )}
+            </div>
+          </div>
+        </section>
       </div>
 
-      {/* ---------- Stop / delete confirm dialog ---------- */}
-      {confirmTarget && (
-        <div className={styles['confirm-overlay']} onClick={() => setConfirmTarget(null)}>
-          <div className={styles['confirm-dialog']} role="alertdialog" aria-modal="true" onClick={(evt) => evt.stopPropagation()}>
-            <div className={styles['confirm-dialog__icon']}>
-              <AlertTriangle size={20} />
+      {saveError && <div className={styles.toast}><AlertCircle size={15} /> {saveError}</div>}
+
+      {savedId && (
+        <div className={styles.overlay}>
+          <div className={styles.modal}>
+            <div className={styles['modal__icon']}><CheckCircle2 size={26} /></div>
+            <div className={styles['modal__title']}>Metric created!</div>
+            <div className={styles['modal__text']}>Your metric is now available for evaluations.</div>
+            <div className={styles['modal__id']}>ID: {savedId}</div>
+            <div className={styles['modal__actions']}>
+              <button className={styles.btn} onClick={resetForm}>Create Another</button>
+              <button className={`${styles.btn} ${styles['btn--primary']}`} onClick={() => onSaved(savedId)}>Go to Dashboard</button>
             </div>
-            {confirmTarget.action === 'cancel' ? (
-              <>
-                <h3 className={styles['confirm-dialog__title']}>Stop this evaluation?</h3>
-                <p className={styles['confirm-dialog__body']}>
-                  <strong>{confirmTarget.evaluation.name || 'This evaluation'}</strong> is still running. Stopping it
-                  now will end the run early — progress made so far won't be recoverable.
-                </p>
-                <div className={styles['confirm-dialog__actions']}>
-                  <button type="button" className={styles['confirm-dialog__btn--ghost']} onClick={() => setConfirmTarget(null)}>
-                    Keep running
-                  </button>
-                  <button type="button" className={styles['confirm-dialog__btn--danger']} onClick={runConfirmedAction}>
-                    <StopCircle size={14} />
-                    Stop evaluation
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <h3 className={styles['confirm-dialog__title']}>Delete this evaluation?</h3>
-                <p className={styles['confirm-dialog__body']}>
-                  <strong>{confirmTarget.evaluation.name || 'This evaluation'}</strong> and its results will be
-                  permanently deleted. This can't be undone.
-                </p>
-                <div className={styles['confirm-dialog__actions']}>
-                  <button type="button" className={styles['confirm-dialog__btn--ghost']} onClick={() => setConfirmTarget(null)}>
-                    Cancel
-                  </button>
-                  <button type="button" className={styles['confirm-dialog__btn--danger']} onClick={runConfirmedAction}>
-                    <Trash2 size={14} />
-                    Delete evaluation
-                  </button>
-                </div>
-              </>
-            )}
           </div>
         </div>
       )}
+
+      {ToastEl}
     </div>
   );
 }
@@ -1197,427 +1218,373 @@ export default function History() {
 
 
 
-//Evaluationsslice.ts
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import type { PayloadAction } from '@reduxjs/toolkit';
-import { evaluationsApi } from '../../api/endpoints/evaluations';
-import type { AgentBenchmarkRunMultiRequest, AgentBenchmarkRunRequest } from '../../api/endpoints/evaluations';
-import type {
-  CreateEvaluationRequest,
-  EvaluationDraft,
-  EvaluationListItem,
-  EvaluationResultsResponse,
-} from '../../types';
 
-type AsyncStatus = 'idle' | 'loading' | 'succeeded' | 'failed';
 
-interface EvaluationsState {
-  draft: EvaluationDraft;
 
-  // History list (GET /evaluations) — silently re-fetched every 10s from
-  // History.tsx. `listStatus` only gates the *initial* loading/error UI;
-  // components should check `list.length === 0` alongside it so a failed
-  // background poll never shows a spinner/error over existing data (spec §2.4).
-  //
-  // Server-paginated as of the offset/limit + status/eval_type filter API:
-  // `list` holds only the *current page's* rows, `total` is the full
-  // filtered count across all pages (drives History's pagination bar), and
-  // `page`/`pageSize` echo back whatever the most recent fetchEvaluations
-  // call requested.
-  list: EvaluationListItem[];
+
+import api from '../axiosInstance';
+
+// ---- Evaluation type & metric type (client-side only, no API) -----------
+export type EvalType = 'model' | 'agent' | 'rag';
+export type MetricType = 'visual' | 'prompt' | 'code' | 'simple';
+
+// ---- Prompt Builder — GET /metrics/templates -----------------------------
+export interface PromptTemplate {
+  category: string; // "llm" | "agent" | "rag"
+  description: string;
+  label: string;
+  name: string;
+  template: string;
+  uses_placeholders: string[];
+}
+
+// A reusable {placeholder} the judge prompt can reference — returned
+// alongside templates so the Prompt Builder can show what each token means.
+export interface PromptPlaceholder {
+  name: string;
+  label: string;
+  description: string;
+  syntax: string; // e.g. "{input}"
+  category: string;
+}
+
+// One configurable parameter of a Built-in Check (Simple metric type),
+// rendered as a form field whose input type is driven by `type`.
+export interface BuiltinCheckParam {
+  key: string;
+  label: string;
+  type: 'bool' | 'number' | 'string' | 'list' | 'string_list';
+  default_value: unknown;
+  required: boolean;
+}
+
+export interface BuiltinCheckDef {
+  id: string; // e.g. "contains_keywords" — used as definition.subtype
+  name: string;
+  description: string;
+  applicable_eval_types: EvalType[];
+  params: BuiltinCheckParam[];
+}
+
+export interface TemplatesResponse {
+  templates: PromptTemplate[];
+  placeholders: PromptPlaceholder[];
+  builtin_checks: BuiltinCheckDef[];
+}
+
+// Agent-only sub-scoping for both /metrics/templates and
+// /metrics/code-templates/agent — Tool Evaluation vs Answer Evaluation.
+export type AgentSubcategory = 'tools' | 'answer';
+
+// ---- Code Editor — GET /metrics/code-templates/{eval_type}/list -----------
+export interface CodeTemplateListItem {
+  name: string;
+  label: string;
+  description: string;
+}
+export interface CodeTemplateListData {
+  eval_type: string;
+  templates: CodeTemplateListItem[];
+}
+
+// ---- Code Editor — GET /metrics/code-templates/{eval_type}/example --------
+export interface CodeTemplateData {
+  eval_type: string;
+  template_name: string;
+  code: string;
+}
+
+// ---- Judge model (Prompt Builder) — GET /models ---------------------------
+export interface ModelSummary {
+  id: string;
+  name: string;
+  provider_id: string;
+  category: string;
+  capabilities: string[];
+  context_window: number;
+  input_price: number | null;
+  output_price: number | null;
+  accuracy_score: number | null;
+  agent_score: number | null;
+  is_active: boolean;
+  base_url: string;
+}
+
+export interface ModelHealthData {
+  success: boolean;
+  message: string;
+  model_id: string;
+  response: string;
+}
+
+// ---- Datasets ---------------------------------------------------------
+export interface DatasetSummary {
+  id: string;
+  name: string;
+  question_count: number;
+}
+
+export interface PreviewQuestion {
+  id: string;
+  input: {
+    prompt: string;
+    // Only present for agent-style datasets — the tools the agent could
+    // call while answering this question.
+    available_tools?: AvailableTool[];
+  };
+  expected: {
+    answer: string;
+    // Agent datasets may include either or both of these — kept
+    // separate since the API can send either name.
+    tool_calls?: ToolCallSpec[];
+    expected_tools?: ToolCallSpec[];
+  };
+  category?: string;
+}
+
+// A tool the agent could call, as declared on a question's input.
+export interface AvailableTool {
+  name: string;
+  description: string;
+  method: string;
+  parameters: {
+    type: string;
+    properties: Record<string, { type: string; description?: string }>;
+  };
+}
+
+// A concrete (expected or actual) tool invocation — name + its arguments.
+export interface ToolCallSpec {
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface DatasetPreviewData {
+  dataset_id: string;
+  questions: PreviewQuestion[];
+  total?: number;
+}
+
+// ---- Validate (dry run) — POST /metrics/custom/preview --------------------
+export interface RuleDef {
+  field: string;
+  operator: string;
+  value: string;
+  compare_to_field: boolean;
+}
+
+export interface MetricDefinition {
+  rules?: RuleDef[];
+  // NB: the spec's own example literally spells this "prompt_tenplate" —
+  // treating that as a typo and using the correct spelling here.
+  prompt_template?: string;
+  code?: string;
+  skip_validation?: boolean;
+  // Simple metric type — Built-in Check (contains_keyword / exact_match /
+  // agent_loop_detection / tool_correctness).
+  subtype?: string;
+  params?: Record<string, unknown>;
+}
+
+export interface TestCasePayload {
+  input: string;
+  actual_output: string;
+  expected_output: string;
+  context: string[];
+  retrieval_context: string[];
+  tools_called: string[];
+  expected_tools: string[];
+  // The tools the agent had available while answering this question —
+  // sourced from the dataset question's input.available_tools.
+  available_tools: AvailableTool[];
+}
+
+export interface JudgeConfig {
+  model_id: string;
+}
+
+export interface ValidateMetricRequest {
+  actual_output: string;
+  context: string[];
+  definition: MetricDefinition;
+  description: string;
+  eval_types: EvalType[];
+  expected_output: string;
+  expected_tools: string[];
+  gates: string[];
+  input: string;
+  judge_config: JudgeConfig | null;
+  metric_type: string; // "condition" | "prompt" | "code" | "simple"
+  name: string;
+  retrieval_context: string[];
+  test_cases: TestCasePayload[];
+  threshold: string; // sent as a string, e.g. "0.70"
+  tools_called: string[];
+}
+
+export interface ValidateResultItem {
+  score: number;
+  reason: string;
+  success: boolean;
+  test_case: TestCasePayload;
+}
+
+export interface ValidateMetricData {
+  results: ValidateResultItem[];
   total: number;
-  page: number;
-  pageSize: number;
-  listStatus: AsyncStatus;
-  listError: string | null;
-
-  // Per-evaluation results (GET /evaluations/{id}/results), fetched lazily
-  // and only once status === 'completed' (spec §2.3).
-  resultsByEvalId: Record<string, EvaluationResultsResponse>;
-  resultsStatusByEvalId: Record<string, AsyncStatus>;
-  resultsErrorByEvalId: Record<string, string | null>;
-
-  launching: boolean;
-  launchError: string | null;
-
-  // Cancel-in-flight tracking for the "Stop evaluation" action on a running
-  // card in History.tsx (confirm dialog -> POST /evaluations/{id}/cancel).
-  cancelingId: string | null;
-  cancelError: string | null;
-
-  // Delete-in-flight tracking for the "Delete" action on a non-running card
-  // in History.tsx (confirm dialog -> DELETE /evaluations/{id}).
-  deletingId: string | null;
-  deleteError: string | null;
-
-  // Live progress for 'running' evaluations, polled via GET
-  // /evaluations/{id}/status right after each list fetch (initial load and
-  // the 10s background poll) — keyed by evaluation id. Only ever populated
-  // for rows whose status is 'running'. The displayed percentage is
-  // computed as (celeryState.current/celeryState.total)*100 — celery_state
-  // is the authoritative progress signal here, not the top-level
-  // progress/total fields.
-  progressByEvalId: Record<
-    string,
-    { progress: number; total: number; status: string; celeryState: { current: number; total: number } }
-  >;
+  passed: number;
 }
 
-const initialDraft: EvaluationDraft = {
-  name: '',
-  type: null,
-  providers: [],
-  models: [],
-  retryConfigMode: 'individual',
-  retryConfigAll: { max_retries: 1, timeout: 60 },
-  modelRetryConfig: {},
-  dataset: null,
-  subgroup: [],
-  runSamplesMode: 'custom',
-  runSamples: 10,
-  metrics: [],
-  judgeModelId: null,
-  agentFramework: null,
-  topK: 5,
-  instruction: '',
-  retestOnWrong: false,
-  retestMaxRounds: 3,
-  retestVerifyMetric: null,
+// ---- Save — POST /metrics/custom -------------------------------------
+export interface SaveMetricRequest {
+  definition: MetricDefinition;
+  description: string;
+  eval_types: EvalType[];
+  metric_type: string;
+  name: string;
+  threshold: string;
+  // Not shown in the spec's request sample, but included defensively since
+  // Prompt Builder metrics can't be scored without a judge model — drop
+  // this if the backend rejects the extra field.
+  judge_config?: JudgeConfig | null;
+}
+
+export interface SaveMetricData {
+  id?: string;
+  name?: string;
+}
+
+// ---- Delete — DELETE /metrics/custom/{metric_id} --------------------------
+export interface DeleteMetricData {
+  status: string;
+  metric_id: string;
+}
+
+// ---- Dashboard: saved custom metrics ---------------------------------
+export interface CustomMetricRuleDef {
+  field: string;
+  operator: string;
+  value: string;
+  compared_to_field: boolean;
+}
+
+export interface CustomMetricDefinition {
+  subtype?: string;
+  params?: Record<string, unknown>;
+  rules?: CustomMetricRuleDef[];
+}
+
+export interface CustomMetric {
+  id: string;
+  name: string;
+  description: string;
+  metric_type: string;
+  eval_types: string[];
+  definition: CustomMetricDefinition;
+  requires_judge: boolean;
+  threshold: number;
+  is_active: boolean;
+  created_by_id: number;
+  created_at: string;
+  updated_at: string;
+}
+
+// None of these endpoints wrap their body in a { status, data } envelope —
+// every response below is the payload itself, so each call just unwraps
+// axios's own `r.data` and normalizes array fields to [] where the backend
+// might omit them.
+export const metricsApi = {
+  // Dashboard — GET /metrics/custom -> { metrics: [...] }
+  list: () =>
+    api.get<{ metrics: CustomMetric[] }>('/metrics/custom').then((r) => r.data.metrics || []),
+
+  // Prompt Builder + Simple/Built-in Check — GET /metrics/templates ->
+  // { templates, placeholders, builtin_checks }. Agent eval type further
+  // scopes the response by subcategory (Tool Evaluation vs Answer
+  // Evaluation) via query params instead of the plain unscoped call.
+  getPromptTemplates: (scope?: { evalType: EvalType; subcategory: AgentSubcategory }) =>
+    api
+      .get<TemplatesResponse>('/metrics/templates', {
+        params: scope ? { eval_type: scope.evalType, subcategory: scope.subcategory } : undefined,
+      })
+      .then((r) => ({
+        templates: r.data.templates || [],
+        placeholders: r.data.placeholders || [],
+        builtin_checks: r.data.builtin_checks || [],
+      })),
+
+  // Code Editor — GET /metrics/code-templates/{eval_type}/list. Lists the
+  // available starter-code templates for a dropdown; same agent
+  // subcategory scoping as getPromptTemplates above.
+  listCodeTemplates: (evalType: EvalType, subcategory?: AgentSubcategory) =>
+    api
+      .get<CodeTemplateListData>(`/metrics/code-templates/${evalType}/list`, {
+        params: evalType === 'agent' && subcategory ? { subcategory } : undefined,
+      })
+      .then((r) => r.data.templates || []),
+
+  // Code Editor — GET /metrics/code-templates/{eval_type}/example — the
+  // actual code for a template chosen from the list above.
+  getCodeTemplateExample: (evalType: EvalType, templateName: string, subcategory?: AgentSubcategory) =>
+    api
+      .get<CodeTemplateData>(`/metrics/code-templates/${evalType}/example`, {
+        params: { template_name: templateName, ...(evalType === 'agent' && subcategory ? { subcategory } : {}) },
+      })
+      .then((r) => r.data),
+
+  // Prompt Builder — GET /models
+  listModels: () =>
+    api.get<{ models: ModelSummary[] }>('/models').then((r) => r.data.models || []),
+
+  // Prompt Builder — per-model health ping. Failures (network error, or a
+  // body missing `success`) resolve to an "unreachable" fallback instead
+  // of throwing, since an offline model is a normal UI state, not an
+  // exceptional one.
+  checkModelHealth: (modelId: string) =>
+    api
+      .get<ModelHealthData>(`/models/health/${modelId}`)
+      .then((r) => ('success' in r.data ? r.data : { success: false, message: 'Unreachable', model_id: modelId, response: '' }))
+      .catch(() => ({ success: false, message: 'Unreachable', model_id: modelId, response: '' })),
+
+  // Dataset selection — GET /datasets?eval_type={evalType}
+  listDatasets: (evalType: EvalType) =>
+    api
+      .get<{ total_count: number; datasets: DatasetSummary[] }>('/datasets', { params: { eval_type: evalType } })
+      .then((r) => r.data.datasets || []),
+
+  // GET /datasets/{dataset_id}/preview. Defensively reads either
+  // `questions` or the singular `question` key — the API has been
+  // observed sending both spellings — and normalizes every question's
+  // nested arrays so components never have to null-check them.
+  previewDataset: (datasetId: string) =>
+    api.get<DatasetPreviewData & { question?: PreviewQuestion[] }>(`/datasets/${datasetId}/preview`).then((r) => {
+      const raw = r.data;
+      const questions = raw.questions || raw.question || [];
+      return {
+        dataset_id: raw.dataset_id,
+        total: raw.total ?? questions.length,
+        questions: questions.map((q) => ({
+          ...q,
+          input: { ...q.input, available_tools: q.input?.available_tools || [] },
+          expected: { ...q.expected, tool_calls: q.expected?.tool_calls || [], expected_tools: q.expected?.expected_tools || [] },
+        })),
+      };
+    }),
+
+  // Footer "Validate Metric" — POST /metrics/custom/preview. Doesn't
+  // persist anything; a successful response with results unlocks Save.
+  validate: (payload: ValidateMetricRequest) =>
+    api.post<ValidateMetricData>('/metrics/custom/preview', payload).then((r) => ({
+      ...r.data,
+      results: r.data.results || [],
+    })),
+
+  // "Save Metric" — POST /metrics/custom. Response body beyond "200 OK"
+  // isn't specified, so `id`/`name` are optional here.
+  create: (payload: SaveMetricRequest) =>
+    api.post<SaveMetricData | void>('/metrics/custom', payload).then((r) => r.data || {}),
+
+  // Dashboard "Delete" — DELETE /metrics/custom/{metric_id} -> { status, metric_id }
+  remove: (metricId: string) =>
+    api.delete<DeleteMetricData>(`/metrics/custom/${metricId}`).then((r) => r.data),
 };
-
-const initialState: EvaluationsState = {
-  draft: initialDraft,
-  list: [],
-  total: 0,
-  page: 1,
-  pageSize: 20,
-  listStatus: 'idle',
-  listError: null,
-  resultsByEvalId: {},
-  resultsStatusByEvalId: {},
-  resultsErrorByEvalId: {},
-  launching: false,
-  launchError: null,
-  cancelingId: null,
-  cancelError: null,
-  deletingId: null,
-  deleteError: null,
-  progressByEvalId: {},
-};
-
-// Args for fetchEvaluations — `status`/`evalType` of 'All' (or omitted) mean
-// "no filter", which the thunk translates into leaving those query params
-// off the request entirely (see evaluationsApi.list). `silent: true` is used
-// for the 10s background poll so it doesn't flip listStatus back to
-// 'loading' over data that's already on screen (spec §2.4) — explicit page/
-// page-size/filter changes should still show the loading state, since the
-// content is genuinely about to change.
-export interface FetchEvaluationsArgs {
-  page: number;
-  pageSize: number;
-  status?: string;
-  evalType?: string;
-  silent?: boolean;
-}
-
-export const fetchEvaluations = createAsyncThunk('evaluations/fetchList', async (args: FetchEvaluationsArgs) => {
-  const offset = (args.page - 1) * args.pageSize;
-  const result = await evaluationsApi.list({
-    offset,
-    limit: args.pageSize,
-    status: args.status && args.status !== 'All' ? args.status : undefined,
-    eval_type: args.evalType && args.evalType !== 'All' ? args.evalType : undefined,
-  });
-  return { ...result, page: args.page, pageSize: args.pageSize };
-});
-
-
-export const fetchEvaluationResults = createAsyncThunk(
-  'evaluations/fetchResults',
-  async (evaluationId: string, { rejectWithValue }) => {
-    try {
-      const data = await evaluationsApi.results(evaluationId);
-      return { evaluationId, data };
-    } catch (err) {
-      const detail =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-        (err as Error)?.message ||
-        'Failed to load results';
-      return rejectWithValue({ evaluationId, message: detail });
-    }
-  }
-);
-
-// Shared across all three launch thunks below, cancelEvaluation,
-// deleteEvaluation, and fetchEvaluationResults above — the backend's error
-// body on 4xx responses is { detail: string }, so that's what should end up
-// in state, not axios's generic "Request failed with status code 400".
-function extractErrorDetail(err: unknown, fallback: string): string {
-  return (
-    (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-    (err as Error)?.message ||
-    fallback
-  );
-}
-
-// POST /evaluations then /evaluations/{id}/start — draft.type 'model' | 'rag'.
-export const launchEvaluation = createAsyncThunk(
-  'evaluations/launch',
-  async (payload: CreateEvaluationRequest, { rejectWithValue }) => {
-    try {
-      return await evaluationsApi.createAndStart(payload);
-    } catch (err) {
-      return rejectWithValue(extractErrorDetail(err, 'Failed to launch evaluation'));
-    }
-  }
-);
-
-// POST /agent-benchmark/run — draft.type 'agent', no agentFramework selected.
-export const runAgentBenchmark = createAsyncThunk(
-  'evaluations/runAgentBenchmark',
-  async (payload: AgentBenchmarkRunRequest, { rejectWithValue }) => {
-    try {
-      return await evaluationsApi.runAgentBenchmark(payload);
-    } catch (err) {
-      return rejectWithValue(extractErrorDetail(err, 'Failed to launch agent benchmark'));
-    }
-  }
-);
-
-// POST /agent-benchmark/run-multi — draft.type 'agent', agentFramework selected.
-export const runAgentBenchmarkMulti = createAsyncThunk(
-  'evaluations/runAgentBenchmarkMulti',
-  async (payload: AgentBenchmarkRunMultiRequest, { rejectWithValue }) => {
-    try {
-      return await evaluationsApi.runAgentBenchmarkMulti(payload);
-    } catch (err) {
-      return rejectWithValue(extractErrorDetail(err, 'Failed to launch agent benchmark'));
-    }
-  }
-);
-
-// POST /evaluations/{id}/cancel — "Stop evaluation" button on a running
-// card in History.tsx, behind a confirm dialog. `evaluationId` is threaded
-// through action.meta.arg (createAsyncThunk's default), so the reducers
-// below can key cancelingId/list updates off it without it being part of
-// the rejected payload.
-export const cancelEvaluation = createAsyncThunk(
-  'evaluations/cancel',
-  async (evaluationId: string, { rejectWithValue }) => {
-    try {
-      return await evaluationsApi.cancel(evaluationId);
-    } catch (err) {
-      return rejectWithValue(extractErrorDetail(err, 'Failed to stop evaluation'));
-    }
-  }
-);
-
-// DELETE /evaluations/{id} — "Delete" action on a non-running card in
-// History.tsx, behind a confirm dialog. Same evaluationId-via-meta.arg
-// pattern as cancelEvaluation above.
-export const deleteEvaluation = createAsyncThunk(
-  'evaluations/delete',
-  async (evaluationId: string, { rejectWithValue }) => {
-    try {
-      return await evaluationsApi.remove(evaluationId);
-    } catch (err) {
-      return rejectWithValue(extractErrorDetail(err, 'Failed to delete evaluation'));
-    }
-  }
-);
-
-// GET /evaluations/{id}/status — polled for 'running' rows only, right
-// after each fetchEvaluations resolves (see the effect in History.tsx).
-// Deliberately silent on failure (no rejectWithValue/error state): a
-// missed poll for one row just means its progress bar doesn't update this
-// cycle, which isn't worth surfacing as an error — the next 10s poll will
-// try again.
-export const fetchEvaluationProgress = createAsyncThunk(
-  'evaluations/fetchProgress',
-  async (evaluationId: string) => {
-    const data = await evaluationsApi.getProgress(evaluationId);
-    return {
-      evaluationId,
-      progress: data.progress,
-      total: data.total,
-      status: data.status,
-      celeryState: data.celery_state,
-    };
-  }
-);
-
-const evaluationsSlice = createSlice({
-  name: 'evaluations',
-  initialState,
-  reducers: {
-    setDraft(state, action: PayloadAction<Partial<EvaluationDraft>>) {
-      state.draft = { ...state.draft, ...action.payload };
-    },
-    // Step 2: changing type invalidates everything chosen after it — the
-    // available providers/models/datasets/metrics all depend on type, so
-    // stale selections from a previous type must not silently carry over.
-    // Providers and models in particular are toggle-based multi-select
-    // (see NewEvaluation.tsx `toggle`), so without this reset, switching
-    // from e.g. Model -> Agent -> Model again and picking a *different*
-    // model each time would leave BOTH models checked (the old selection
-    // was never cleared, only added to) — that's the bug this fixes.
-    setDraftType(state, action: PayloadAction<EvaluationDraft['type']>) {
-      state.draft.type = action.payload;
-      state.draft.providers = [];
-      state.draft.models = [];
-      state.draft.retryConfigMode = 'individual';
-      state.draft.retryConfigAll = { max_retries: 1, timeout: 60 };
-      state.draft.modelRetryConfig = {};
-      state.draft.dataset = null;
-      state.draft.subgroup = [];
-      state.draft.metrics = [];
-      state.draft.judgeModelId = null;
-      state.draft.runSamplesMode = 'custom';
-      state.draft.runSamples = 10;
-      state.draft.topK = 5;
-      state.draft.instruction = '';
-      state.draft.retestOnWrong = false;
-      state.draft.retestMaxRounds = 3;
-      state.draft.retestVerifyMetric = null;
-      if (action.payload !== 'agent') {
-        state.draft.agentFramework = null;
-      }
-    },
-    resetDraft(state) {
-      state.draft = initialDraft;
-    },
-    // Local-only removal, kept as a manual escape hatch for edge cases (e.g.
-    // clearing a stale row the backend won't return anymore). The primary
-    // delete path is now the deleteEvaluation thunk below, which calls
-    // DELETE /evaluations/{id} and removes the row on success — this
-    // reducer does not call the API and does not persist.
-    removeEvaluationLocal(state, action: PayloadAction<string>) {
-      state.list = state.list.filter((e) => e.id !== action.payload);
-    },
-  },
-  extraReducers: (builder) => {
-    builder
-      .addCase(fetchEvaluations.pending, (state, action) => {
-        // Silent (background poll) calls never show the loading state over
-        // data that's already on screen. Explicit calls (page/page-size/
-        // filter changes, or the very first load) do — the content is
-        // genuinely about to change, not just being silently refreshed.
-        if (!action.meta.arg.silent || state.list.length === 0) {
-          state.listStatus = 'loading';
-        }
-      })
-      .addCase(fetchEvaluations.fulfilled, (state, action) => {
-        state.listStatus = 'succeeded';
-        state.listError = null;
-        state.list = action.payload.evaluations;
-        state.total = action.payload.total;
-        state.page = action.payload.page;
-        state.pageSize = action.payload.pageSize;
-      })
-      .addCase(fetchEvaluations.rejected, (state, action) => {
-        // Background polls fail silently (spec §2.4) — only surface the
-        // error state when we have nothing on screen yet.
-        if (state.list.length === 0) {
-          state.listStatus = 'failed';
-          state.listError = action.error.message || 'Failed to load evaluations';
-        }
-      })
-      .addCase(fetchEvaluationResults.pending, (state, action) => {
-        state.resultsStatusByEvalId[action.meta.arg] = 'loading';
-        state.resultsErrorByEvalId[action.meta.arg] = null;
-      })
-      .addCase(fetchEvaluationResults.fulfilled, (state, action) => {
-        const { evaluationId, data } = action.payload;
-        state.resultsStatusByEvalId[evaluationId] = 'succeeded';
-        state.resultsByEvalId[evaluationId] = data;
-      })
-      .addCase(fetchEvaluationResults.rejected, (state, action) => {
-        const payload = action.payload as { evaluationId: string; message: string } | undefined;
-        const id = payload?.evaluationId ?? action.meta.arg;
-        state.resultsStatusByEvalId[id] = 'failed';
-        state.resultsErrorByEvalId[id] = payload?.message || 'Failed to load results';
-      })
-
-      // ---- launch: three thunks (Model/RAG, Agent-benchmark, Agent-multi) ---
-      // all share the same launching/launchError flags and all clear the
-      // draft on success, exactly like the original launchEvaluation did.
-      .addCase(launchEvaluation.pending, (state) => {
-        state.launching = true;
-        state.launchError = null;
-      })
-      .addCase(launchEvaluation.fulfilled, (state) => {
-        state.launching = false;
-        state.draft = initialDraft;
-      })
-      .addCase(launchEvaluation.rejected, (state, action) => {
-        state.launching = false;
-        state.launchError = (action.payload as string) || action.error.message || 'Failed to launch evaluation';
-      })
-
-      .addCase(runAgentBenchmark.pending, (state) => {
-        state.launching = true;
-        state.launchError = null;
-      })
-      .addCase(runAgentBenchmark.fulfilled, (state) => {
-        state.launching = false;
-        state.draft = initialDraft;
-      })
-      .addCase(runAgentBenchmark.rejected, (state, action) => {
-        state.launching = false;
-        state.launchError = (action.payload as string) || action.error.message || 'Failed to launch agent benchmark';
-      })
-
-      .addCase(runAgentBenchmarkMulti.pending, (state) => {
-        state.launching = true;
-        state.launchError = null;
-      })
-      .addCase(runAgentBenchmarkMulti.fulfilled, (state) => {
-        state.launching = false;
-        state.draft = initialDraft;
-      })
-      .addCase(runAgentBenchmarkMulti.rejected, (state, action) => {
-        state.launching = false;
-        state.launchError = (action.payload as string) || action.error.message || 'Failed to launch agent benchmark';
-      })
-
-      // ---- cancel (stop a running evaluation) --------------------------------
-      .addCase(cancelEvaluation.pending, (state, action) => {
-        state.cancelingId = action.meta.arg;
-        state.cancelError = null;
-      })
-      .addCase(cancelEvaluation.fulfilled, (state, action) => {
-        state.cancelingId = null;
-        // Optimistically flip the row to 'canceled' right away rather than
-        // waiting for the next 10s background poll to pick it up.
-        const item = state.list.find((e) => e.id === action.payload.evaluation_id);
-        if (item) item.status = 'canceled';
-      })
-      .addCase(cancelEvaluation.rejected, (state, action) => {
-        state.cancelingId = null;
-        state.cancelError = (action.payload as string) || action.error.message || 'Failed to stop evaluation';
-      })
-
-      // ---- delete ------------------------------------------------------------
-      .addCase(deleteEvaluation.pending, (state, action) => {
-        state.deletingId = action.meta.arg;
-        state.deleteError = null;
-      })
-      .addCase(deleteEvaluation.fulfilled, (state, action) => {
-        state.deletingId = null;
-        state.list = state.list.filter((e) => e.id !== action.payload.evaluation_id);
-      })
-      .addCase(deleteEvaluation.rejected, (state, action) => {
-        state.deletingId = null;
-        state.deleteError = (action.payload as string) || action.error.message || 'Failed to delete evaluation';
-      })
-
-      // ---- progress polling (running evaluations only) -----------------------
-      .addCase(fetchEvaluationProgress.fulfilled, (state, action) => {
-        const { evaluationId, progress, total, status, celeryState } = action.payload;
-        state.progressByEvalId[evaluationId] = { progress, total, status, celeryState };
-      });
-  },
-});
-
-export const { setDraft, setDraftType, resetDraft, removeEvaluationLocal } = evaluationsSlice.actions;
-export default evaluationsSlice.reducer;
