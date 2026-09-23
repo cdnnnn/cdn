@@ -1,59 +1,23 @@
-1. Cross-Team Exposure
+Question / Suggestion:
 
-Question:
-
-Could we have more opportunities to learn about what other teams and business areas are working on?
+Could we consider having an Innovation Day once every quarter, where interested employees can present and demonstrate new ideas or solutions that address real-life or day-to-day problems?
 
 Why it is useful:
 
-This would help employees understand the bigger picture, learn from other teams, and see how different areas of the organization work together.
+This could encourage employees to think beyond their regular project responsibilities, develop a more innovative mindset, and explore practical ideas that could potentially benefit the organization or everyday life. It could also provide a platform for employees from different teams to share ideas, learn from each other, and collaborate on promising innovations.
 
-2. Innovation & Idea Sharing
 
-Question:
 
-Could we have occasional opportunities to share and explore new ideas beyond our regular work?
 
-Why it is useful:
 
-This would encourage creativity, collaboration, and new ideas that could potentially benefit the organization.
 
-3. Future Skills & Employee Development
+
+Future Strategy & Growth
 
 Question:
 
-What skills do you think will be important for employees in the next few years, and how can we prepare for them?
+Looking ahead at the next few years, what is the organization's direction for growth and innovation, and what does the organization expect from employees to help align with and contribute to that direction?
 
 Why it is useful:
 
-This would help employees understand future expectations and focus their learning and development in the right areas.
-
-4. Future Strategy & Growth
-
-Question:
-
-What are the organization's plans for future growth and innovation, and how can employees be part of them?
-
-Why it is useful:
-
-This would help employees better understand the organization's direction and identify ways they can contribute to its future goals.
-
-5. Cross-Functional Collaboration
-
-Question:
-
-Could we have more opportunities to work or interact with people from different functions?
-
-Why it is useful:
-
-This would help employees gain different perspectives, understand other areas of the business, and build stronger collaboration across the organization.
-
-6. Emerging Technologies
-
-Question:
-
-What new technologies or trends do you think will be important for the organization in the future?
-
-Why it is useful:
-
-This would help employees stay aware of the organization's future direction and prepare themselves for changes in technology and the industry.
+This would help employees better understand the organization's future priorities and identify how they can develop their skills, take initiative, and contribute more value toward the organization's long-term goals.
