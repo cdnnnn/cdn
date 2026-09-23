@@ -183,16 +183,21 @@ export default function Providers() {
                   <div className={styles['providers__desc']}>{p.description}</div>
 
                   {p.id === 'openrouter' && (
-                    <div className={styles['providers__credits']}>
+                    <div
+                      className={styles['providers__credits']}
+                      title={
+                        openrouterCreditsStatus === 'succeeded' && openrouterCredits
+                          ? `${openrouterCredits.total_usage.toLocaleString()} of ${openrouterCredits.total_credits.toLocaleString()} ${openrouterCredits.currency} used`
+                          : undefined
+                      }
+                    >
+                      <Wallet
+                        size={12}
+                        className={openrouterCreditsStatus === 'loading' ? styles['providers__credits-icon--pulse'] : styles['providers__credits-icon']}
+                      />
+
                       {openrouterCreditsStatus === 'loading' && (
-                        <div className={styles['providers__credits-loading']}>
-                          <Wallet size={13} className={styles['providers__credits-loading-icon']} />
-                          <span>Fetching balance…</span>
-                          <div className={styles['providers__credits-skeleton']}>
-                            <div className={styles['providers__credits-skeleton-bar']} />
-                            <div className={styles['providers__credits-skeleton-bar']} style={{ width: '58%' }} />
-                          </div>
-                        </div>
+                        <div className={styles['providers__credits-skeleton-bar']} />
                       )}
 
                       {openrouterCreditsStatus === 'succeeded' && openrouterCredits && (() => {
@@ -202,30 +207,24 @@ export default function Providers() {
                         const level = pct >= 90 ? 'danger' : pct >= 70 ? 'warn' : 'ok';
                         return (
                           <>
-                            <div className={styles['providers__credits-hdr']}>
-                              <span className={styles['providers__credits-label']}>
-                                <Wallet size={12} /> Credits Remaining
-                              </span>
-                              <span className={styles['providers__credits-remaining']}>
-                                {openrouterCredits.remaining.toLocaleString()} {openrouterCredits.currency}
-                              </span>
-                            </div>
+                            <span className={styles['providers__credits-remaining']}>
+                              {openrouterCredits.remaining.toLocaleString()} {openrouterCredits.currency}
+                            </span>
                             <div className={styles['providers__credits-bar-track']}>
                               <div
                                 className={`${styles['providers__credits-bar-fill']} ${styles[`providers__credits-bar-fill--${level}`]}`}
                                 style={{ width: `${pct}%` }}
                               />
                             </div>
-                            <div className={styles['providers__credits-meta']}>
-                              <span>{openrouterCredits.total_usage.toLocaleString()} used</span>
-                              <span>{openrouterCredits.total_credits.toLocaleString()} total</span>
-                            </div>
+                            <span className={styles['providers__credits-fraction']}>
+                              {openrouterCredits.total_usage.toLocaleString()}/{openrouterCredits.total_credits.toLocaleString()}
+                            </span>
                           </>
                         );
                       })()}
 
                       {openrouterCreditsStatus === 'failed' && (
-                        <div className={styles['providers__credits-error']}>Couldn't load credit balance.</div>
+                        <span className={styles['providers__credits-error']}>Couldn't load balance</span>
                       )}
                     </div>
                   )}
@@ -431,6 +430,17 @@ export default function Providers() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -832,71 +842,53 @@ $providers-base-font: 0.8125rem;
   }
 
   // ---- OpenRouter credits widget --------------------------------------------
+  // Deliberately a single row (icon + value + thin bar + fraction) rather than
+  // a multi-line card, so it adds minimal height to the OpenRouter card.
   &__credits {
-    margin-top: 12px;
-    padding: 11px 12px;
-    border-radius: 11px;
-    background: $paper;
-    border: 1px solid $line;
-  }
-
-  &__credits-loading {
+    margin-top: 10px;
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-size: 0.9231em; // 0.75rem / 0.8125rem
-    font-weight: 600;
-    color: $ink-3;
-    flex-wrap: wrap;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: $paper;
+    border: 1px solid $line;
+    min-height: 26px;
   }
 
-  &__credits-loading-icon {
+  &__credits-icon,
+  &__credits-icon--pulse {
+    flex-shrink: 0;
+    color: $ink-3;
+  }
+
+  &__credits-icon--pulse {
     animation: providers-credits-pulse 1.3s ease-in-out infinite;
   }
 
-  &__credits-skeleton {
-    flex-basis: 100%;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    margin-top: 4px;
-  }
-
   &__credits-skeleton-bar {
-    height: 8px;
-    width: 100%;
-    border-radius: 5px;
+    flex: 1;
+    height: 4px;
+    min-width: 40px;
+    border-radius: 999px;
     background: linear-gradient(90deg, $card 25%, $line 37%, $card 63%);
-    background-size: 400px 100%;
+    background-size: 200px 100%;
     animation: providers-credits-shimmer 1.4s ease-in-out infinite;
   }
 
-  &__credits-hdr {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-
-  &__credits-label {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    @extend %micro;
-    font-size: 0.7692em; // 0.625rem / 0.8125rem
-    color: $ink-3;
-  }
-
   &__credits-remaining {
+    flex-shrink: 0;
     font-family: $mono;
     font-weight: 750;
-    font-size: 1.0769em; // 0.875rem / 0.8125rem
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
     color: $ink;
+    white-space: nowrap;
   }
 
   &__credits-bar-track {
-    margin-top: 8px;
-    height: 6px;
+    flex: 1;
+    min-width: 30px;
+    height: 4px;
     border-radius: 999px;
     background: $card;
     border: 1px solid $line;
@@ -914,16 +906,16 @@ $providers-base-font: 0.8125rem;
     &--danger { background: $danger; }
   }
 
-  &__credits-meta {
-    margin-top: 6px;
-    display: flex;
-    justify-content: space-between;
+  &__credits-fraction {
+    flex-shrink: 0;
+    font-family: $mono;
     font-size: 0.8462em; // 0.6875rem / 0.8125rem
     color: $ink-3;
+    white-space: nowrap;
   }
 
   &__credits-error {
-    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    font-size: 0.8462em; // 0.6875rem / 0.8125rem
     color: $danger;
   }
 
