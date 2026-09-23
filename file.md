@@ -183,46 +183,22 @@ export default function Providers() {
                   <div className={styles['providers__desc']}>{p.description}</div>
 
                   {p.id === 'openrouter' && (
-                    <div className={styles['providers__credits']}>
-                      <div className={styles['providers__credits-row']}>
-                        <Wallet
-                          size={12}
-                          className={openrouterCreditsStatus === 'loading' ? styles['providers__credits-icon--pulse'] : styles['providers__credits-icon']}
-                        />
+                    <div
+                      className={styles['providers__credits']}
+                      title={
+                        openrouterCreditsStatus === 'succeeded' && openrouterCredits
+                          ? `${openrouterCredits.total_usage.toLocaleString()} of ${openrouterCredits.total_credits.toLocaleString()} ${openrouterCredits.currency} used`
+                          : undefined
+                      }
+                    >
+                      <Wallet
+                        size={12}
+                        className={openrouterCreditsStatus === 'loading' ? styles['providers__credits-icon--pulse'] : styles['providers__credits-icon']}
+                      />
 
-                        {openrouterCreditsStatus === 'loading' && (
-                          <div className={styles['providers__credits-skeleton-bar']} />
-                        )}
-
-                        {openrouterCreditsStatus === 'succeeded' && openrouterCredits && (
-                          <>
-                            <div className={styles['providers__credits-stat']}>
-                              <span className={styles['providers__credits-stat-label']}>Total</span>
-                              <span className={styles['providers__credits-stat-value']}>
-                                {openrouterCredits.total_credits.toLocaleString()} {openrouterCredits.currency}
-                              </span>
-                            </div>
-                            <span className={styles['providers__credits-divider']} />
-                            <div className={styles['providers__credits-stat']}>
-                              <span className={styles['providers__credits-stat-label']}>Used</span>
-                              <span className={styles['providers__credits-stat-value']}>
-                                {openrouterCredits.total_usage.toLocaleString()}
-                              </span>
-                            </div>
-                            <span className={styles['providers__credits-divider']} />
-                            <div className={styles['providers__credits-stat']}>
-                              <span className={styles['providers__credits-stat-label']}>Remaining</span>
-                              <span className={`${styles['providers__credits-stat-value']} ${styles['providers__credits-stat-value--highlight']}`}>
-                                {openrouterCredits.remaining.toLocaleString()}
-                              </span>
-                            </div>
-                          </>
-                        )}
-
-                        {openrouterCreditsStatus === 'failed' && (
-                          <span className={styles['providers__credits-error']}>Couldn't load balance</span>
-                        )}
-                      </div>
+                      {openrouterCreditsStatus === 'loading' && (
+                        <div className={styles['providers__credits-skeleton-bar']} />
+                      )}
 
                       {openrouterCreditsStatus === 'succeeded' && openrouterCredits && (() => {
                         const pct = openrouterCredits.total_credits > 0
@@ -230,14 +206,26 @@ export default function Providers() {
                           : 0;
                         const level = pct >= 90 ? 'danger' : pct >= 70 ? 'warn' : 'ok';
                         return (
-                          <div className={styles['providers__credits-bar-track']}>
-                            <div
-                              className={`${styles['providers__credits-bar-fill']} ${styles[`providers__credits-bar-fill--${level}`]}`}
-                              style={{ width: `${pct}%` }}
-                            />
-                          </div>
+                          <>
+                            <span className={styles['providers__credits-remaining']}>
+                              {openrouterCredits.remaining.toLocaleString()} {openrouterCredits.currency}
+                            </span>
+                            <div className={styles['providers__credits-bar-track']}>
+                              <div
+                                className={`${styles['providers__credits-bar-fill']} ${styles[`providers__credits-bar-fill--${level}`]}`}
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                            <span className={styles['providers__credits-fraction']}>
+                              {openrouterCredits.total_usage.toLocaleString()}/{openrouterCredits.total_credits.toLocaleString()}
+                            </span>
+                          </>
                         );
                       })()}
+
+                      {openrouterCreditsStatus === 'failed' && (
+                        <span className={styles['providers__credits-error']}>Couldn't load balance</span>
+                      )}
                     </div>
                   )}
 
@@ -442,6 +430,8 @@ export default function Providers() {
     </div>
   );
 }
+
+
 
 
 
@@ -842,27 +832,23 @@ $providers-base-font: 0.8125rem;
   }
 
   // ---- OpenRouter credits widget --------------------------------------------
-  // Two tight rows: labeled stats (Total / Used / Remaining) on top, a thin
-  // usage bar underneath — still far shorter than a full stacked card.
+  // Deliberately a single row (icon + value + thin bar + fraction) rather than
+  // a multi-line card, so it adds minimal height to the OpenRouter card.
   &__credits {
     margin-top: 10px;
-    padding: 8px 10px;
-    border-radius: 11px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 999px;
     background: $paper;
     border: 1px solid $line;
-  }
-
-  &__credits-row {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    flex-wrap: wrap;
+    min-height: 26px;
   }
 
   &__credits-icon,
   &__credits-icon--pulse {
     flex-shrink: 0;
-    align-self: center;
     color: $ink-3;
   }
 
@@ -873,7 +859,6 @@ $providers-base-font: 0.8125rem;
   &__credits-skeleton-bar {
     flex: 1;
     height: 4px;
-    align-self: center;
     min-width: 40px;
     border-radius: 999px;
     background: linear-gradient(90deg, $card 25%, $line 37%, $card 63%);
@@ -881,37 +866,18 @@ $providers-base-font: 0.8125rem;
     animation: providers-credits-shimmer 1.4s ease-in-out infinite;
   }
 
-  &__credits-stat {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 4px;
+  &__credits-remaining {
+    flex-shrink: 0;
+    font-family: $mono;
+    font-weight: 750;
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    color: $ink;
     white-space: nowrap;
   }
 
-  &__credits-stat-label {
-    @extend %micro;
-    font-size: 0.7692em; // 0.625rem / 0.8125rem
-    color: $ink-3;
-  }
-
-  &__credits-stat-value {
-    font-family: $mono;
-    font-weight: 700;
-    font-size: 0.9231em; // 0.75rem / 0.8125rem
-    color: $ink;
-
-    &--highlight { color: $signal; }
-  }
-
-  &__credits-divider {
-    align-self: center;
-    width: 1px;
-    height: 10px;
-    background: $line;
-  }
-
   &__credits-bar-track {
-    margin-top: 7px;
+    flex: 1;
+    min-width: 30px;
     height: 4px;
     border-radius: 999px;
     background: $card;
@@ -928,6 +894,14 @@ $providers-base-font: 0.8125rem;
     &--ok { background: $ok; }
     &--warn { background: $amber-dark; }
     &--danger { background: $danger; }
+  }
+
+  &__credits-fraction {
+    flex-shrink: 0;
+    font-family: $mono;
+    font-size: 0.8462em; // 0.6875rem / 0.8125rem
+    color: $ink-3;
+    white-space: nowrap;
   }
 
   &__credits-error {
