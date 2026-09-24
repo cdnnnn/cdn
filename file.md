@@ -1,4 +1,3 @@
-//Newevaluation.tsx
 import { Component, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -1104,13 +1103,16 @@ export default function NewEvaluation() {
   const isModelSelectable = (modelId: string) => healthById?.[modelId] === 'success';
 
   // Judge model options — every model that's actually usable (health check
-  // passed), regardless of whether its provider was selected in Step 2 or
-  // the model itself was picked in Step 3 for evaluation. Judge model
-  // selection is independent of both — previously this was scoped to
-  // availableModels (draft.providers-filtered), which meant a perfectly
-  // usable model could be missing from the Judge Model list just because
-  // its provider wasn't chosen for the eval models themselves.
-  const judgeCandidateModels = useMemo(() => models.filter((m) => isModelSelectable(m?.id)), [models, healthById]);
+  // passed) AND belongs to a currently-selected provider, regardless of
+  // whether the model itself was picked in Step 3 for evaluation (judge
+  // selection is independent of that). Scoped to availableModels
+  // (draft.providers-filtered) rather than the full model list — a model
+  // whose provider gets unselected back in Step 2 needs to disappear from
+  // here too, not linger as a stale option.
+  const judgeCandidateModels = useMemo(
+    () => availableModels.filter((m) => isModelSelectable(m?.id)),
+    [availableModels, healthById]
+  );
 
   const filteredJudgeModels = useMemo(
     () => judgeCandidateModels.filter((m) => (m?.name ?? '').toLowerCase().includes(judgeSearch.trim().toLowerCase())),
@@ -3037,6 +3039,9 @@ export default function NewEvaluation() {
                           ) : (
                             filteredJudgeModels.map((m) => {
                                 const on = draft.judgeModelId === m.id;
+                                const inputPrice = (m as any).input_price as number | null | undefined;
+                                const outputPrice = (m as any).output_price as number | null | undefined;
+                                const hasPrice = inputPrice !== undefined || outputPrice !== undefined;
                                 return (
                                   <button
                                     key={m.id}
@@ -3045,7 +3050,7 @@ export default function NewEvaluation() {
                                     onClick={() => dispatch(setDraft({ judgeModelId: on ? null : m.id }))}
                                   >
                                     <span className={`${styles.ev__radio} ${on ? styles['ev__radio--on'] : ''}`} />
-                                    <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+                                    <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0, flex: 1 }}>
                                       <span className={styles['ev__judge-name']} title={m.name || 'Unnamed model'}>
                                         {m.name || 'Unnamed model'}
                                       </span>
@@ -3053,6 +3058,11 @@ export default function NewEvaluation() {
                                         {providers.find((p) => p?.id === m.provider_id)?.name ?? m.provider_id}
                                       </span>
                                     </span>
+                                    {hasPrice && (
+                                      <span className={styles['ev__judge-price']} title="Price per 1M tokens, input/output">
+                                        {formatPrice(inputPrice)}/{formatPrice(outputPrice)}
+                                      </span>
+                                    )}
                                   </button>
                                 );
                               })
@@ -3572,7 +3582,11 @@ export default function NewEvaluation() {
 
 
 
-//Newevaluation.module.scss
+
+
+
+
+
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
@@ -5905,6 +5919,21 @@ $ev-base-font: 0.8125rem;
     }
   }
 
+  // Input/output price per 1M tokens — same data + formatting (formatPrice)
+  // as the Models step's card stats, just laid out as a single line on the
+  // right of the row instead of a labeled stat block.
+  &__judge-price {
+    flex-shrink: 0;
+    font-family: $mono;
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    font-weight: 700;
+    color: $ink-2;
+
+    @media (min-width: 1800px) {
+      font-size: 1.0385em; // 0.84375rem / 0.8125rem
+    }
+  }
+
   // ========================================================================
   // Review step
   // ========================================================================
@@ -6586,466 +6615,4 @@ $ev-base-font: 0.8125rem;
 
 @media (prefers-reduced-motion: reduce) {
   .ev *, .ev-toast { animation: none !important; transition: none !important; }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//index.ts
-// ---------- Auth ----------
-export interface SsoLoginRequest {
-  token: string;
-  data: string;
-}
-export interface SsoLoginResult {
-  token: string;
-  username: string;
-  email: string;
-  language: string;
-  profile_name: string;
-}
-export interface SsoLoginResponse {
-  status: string;
-  message: string;
-  result: SsoLoginResult;
-}
-
-// ---------- Providers ----------
-export interface Provider {
-  id: string;
-  name: string;
-  description: string;
-  logo_url: string | null;
-  base_url: string | null;
-  url_template: string | null;
-  model_count: number;
-  status: 'connected' | 'not_connected' | string;
-}
-export interface ConnectProviderRequest {
-  api_key: string;
-}
-export interface ConnectProviderResponse {
-  status: 'connected';
-  provider_id: string;
-  models_synced: number;
-}
-export interface DisconnectProviderResponse {
-  status: 'disconnected';
-  provider_id: string;
-}
-
-// ---------- Models ----------
-export interface Model {
-  id: string;
-  name: string;
-  provider_id: string;
-  category: string;
-  capabilities: string[];
-  context_window: number;
-  input_price: number | null;
-  output_price: number | null;
-  accuracy_score: number | null;
-  agent_score: number | null;
-  is_active: boolean;
-  base_url: string | null;
-}
-export interface CustomModelRequest {
-  base_url: string;
-  category: string;
-  api_key: string;
-  model_id: string;
-  name: string;
-  context_window: number;
-  description: string;
-}
-
-// ---------- Benchmarks ----------
-export interface BenchmarkTask {
-  name: string;
-  value: string;
-}
-export interface Benchmark {
-  name: string;
-  description: string;
-  // ⚠️ Not always present on the real API response — normalized to [] at the
-  // fetch boundary (benchmarksApi.list), so consumers can trust these are
-  // always arrays. See spec §5 "Known data-contract gap".
-  tasks: BenchmarkTask[];
-  task_count: number;
-  required_capabilities: string[];
-  huggingface_dataset: string;
-  type: string;
-}
-export interface BenchmarksResponse {
-  benchmarks: Benchmark[];
-  total: number;
-}
-
-// ---------- Datasets (Test Suite step) ----------
-// `dataset_type` distinguishes the built-in DeepEval suites from datasets a
-// user uploaded themselves. Both are shown in the Test Suite grid; only
-// 'custom' gets the "Custom" tag, and both are filterable via the
-// All / Custom / Deepeval chip group in the step header (spec: Test Suite
-// Change-1).
-export type DatasetType = 'custom' | 'deepeval' | string;
-
-export interface Dataset {
-  id: string;
-  name: string;
-  description?: string;
-  category: string;
-  eval_type: string;
-  dataset_type: DatasetType;
-  question_count: number;
-  dataset_categories: string[];
-  // When true, this dataset's questions include images (MinIO object keys
-  // under input.images[] — see DatasetPreviewQuestion below). Selecting
-  // such a dataset triggers a POST /models/check-multimodal pre-flight
-  // check (every selected model + the judge model) before the evaluation
-  // is created — see NewEvaluation.tsx `launch`. Optional/absent on
-  // datasets that predate this field, treated the same as false.
-  has_images?: boolean;
-}
-export interface DatasetsResponse {
-  datasets: Dataset[];
-}
-
-// GET /datasets/{id}/preview?limit={limit}&offset={offset} — paginated,
-// 20 per page by default. Powers the right-to-left preview slider on each
-// dataset card.
-//
-// Two response shapes are both observed in practice for `input`/`expected`
-// (and whether `choices`/`metadata`/`subgroup` are present at all depends
-// on the dataset), so every field below is optional except `id` — the UI
-// renders whichever subset actually shows up rather than assuming one
-// fixed shape:
-//   Shape A (e.g. multiple-choice): input.prompt, expected.answer, choices
-//   Shape B (e.g. RAG/retrieval):   input.question/source/type,
-//                                   expected.answer/doc_id/section_id,
-//                                   metadata, subgroup
-//   Shape C (e.g. vision/multimodal): input.prompt, input.images (MinIO
-//                                   object keys — see evaluationsApi.
-//                                   getImageBlobUrl and NewEvaluation.tsx's
-//                                   image lightbox), input.language
-export interface DatasetPreviewQuestion {
-  id: string;
-  input?: {
-    prompt?: string;
-    question?: string;
-    source?: string;
-    type?: string;
-    // MinIO object keys (e.g. "datasets/ds-001/images/image1.jpg"), not
-    // usable directly as <img src> — resolve each one to a blob URL via
-    // evaluationsApi.getImageBlobUrl (POST /datasets/image) first.
-    images?: string[];
-    language?: string;
-    [key: string]: unknown;
-  };
-  expected?: {
-    answer?: string;
-    doc_id?: string;
-    section_id?: number;
-    [key: string]: unknown;
-  };
-  metadata?: Record<string, unknown>;
-  category?: string;
-  subgroup?: string;
-  choices?: string[];
-  // Seen alongside the Shape C vision payload — a free-text tag, not to be
-  // confused with input.type.
-  question_type?: string;
-}
-export interface DatasetPreviewResponse {
-  dataset_id: string;
-  questions: DatasetPreviewQuestion[];
-}
-
-// ---------- Metrics ----------
-// GET /metrics?eval_type={type}
-export interface CustomMetric {
-  id: string;
-  name: string;
-  metrics_type: string;
-  // When true, this specific custom metric needs a judge model to grade
-  // it — surfaced as a small indicator on its chip. Doesn't gate whether
-  // the Judge Model picker itself shows (that's now always shown/mandatory
-  // regardless of metric selection — see NewEvaluation.tsx).
-  required_judge: boolean;
-  eval_types: string[];
-  description: string;
-}
-export interface MetricsResponse {
-  eval_type: string;
-  all_metrics: string[];
-  custom: CustomMetric[];
-}
-
-// ---------- Evaluations: create/start ----------
-// Per-model retry/timeout config, set in the Models step. max_retries: 1–8.
-// timeout: 60–600 (seconds). Also reused verbatim inside judge_config below.
-export interface ModelRetryConfig {
-  max_retries: number;
-  timeout: number;
-}
-export interface JudgeConfig extends ModelRetryConfig {
-  model_id: string;
-  base_url: string;
-  // NOTE: populated with the judge model's own id, not a real credential —
-  // the Judge API Key field was removed from the UI entirely (spec §1.4).
-  api_key: string;
-}
-export interface CreateEvaluationRequest {
-  name: string;
-  description?: string;
-  eval_type: 'model' | 'agent' | 'rag' | string;
-  dataset_id: string;
-  benchmark?: string;
-  // For eval_type 'rag': holds only the selected LLM model id(s) — the
-  // Embedding and Reranker selections (each exactly one, enforced in the
-  // Models step) go in the two fields below instead, not in this array.
-  // For 'model'/'agent': every selected model, as before.
-  model_ids: string[];
-  // RAG-only — the Models step's single-select Embedding/Reranker
-  // columns. Always present together when eval_type is 'rag'; omitted
-  // entirely for 'model'/'agent'.
-  embedding_model_id?: string;
-  reranker_model_id?: string;
-  // The Models step lets the user apply retry/timeout either the same way
-  // to every selected model, or individually per model — exactly one of
-  // these two shapes is sent, never both:
-  //   "Apply to all" -> top-level max_retries/timeout, no model_retry_config
-  //   "Individually"  -> model_retry_config (one entry per id in model_ids),
-  //                       no top-level max_retries/timeout
-  max_retries?: number;
-  timeout?: number;
-  model_retry_config?: Record<string, ModelRetryConfig>;
-  metrics_config?: Record<string, unknown>;
-  selected_metrics: string[];
-  // The subset of selected_metrics that are custom metrics (their `id`s,
-  // as opposed to the plain name strings used for built-in metrics) —
-  // selected_metrics itself still contains both mixed together (see
-  // NewEvaluation.tsx draft.metrics), this is purely additive so the
-  // backend can tell which entries are custom. Omitted when no custom
-  // metric is selected.
-  selected_metric_ids?: string[];
-  dataset_limit?: number;
-  // null when the wizard's Run Samples is set to "Full" — the backend
-  // treats a null run_samples as "use the whole dataset" for this endpoint
-  // (POST /evaluations), distinct from the agent-benchmark endpoints below
-  // which use 0 for the same "full" concept.
-  run_samples: number | null;
-  selected_category?: string[];
-  judge_config?: JudgeConfig;
-  // RAG-only — how many retrieved documents/chunks to consider per query.
-  // Test Suite step shows this input only when draft.type === 'rag'
-  // (default 5, 1–50); omitted entirely for Model/Agent.
-  top_k?: number;
-  // Free-text evaluation instruction — optional. Either typed by the user
-  // directly or pre-filled via POST /evaluations/generate-instruction and
-  // then edited. See GenerateInstructionRequest/Response below.
-  instruction?: string;
-  // Model and RAG — Metrics step's "Retest on Wrong" control. Always sent
-  // for eval_type 'model'/'rag'; retest_max_rounds/retest_verify_metric
-  // are only included when retest_on_wrong is true.
-  retest_on_wrong?: boolean;
-  retest_max_rounds?: number;
-  retest_verify_metric?: string;
-}
-export interface CreateEvaluationResponse {
-  id?: string;
-  evaluation_id?: string;
-  [key: string]: unknown;
-}
-
-// POST /evaluations/generate-instruction — Metrics step's "Generate
-// Instruction" button. `questions` is built from a 5-question dataset
-// preview (see NewEvaluation.tsx `generateInstruction`), reusing the same
-// `input`/`expected` shapes as DatasetPreviewQuestion.
-export interface GenerateInstructionQuestion {
-  input?: DatasetPreviewQuestion['input'];
-  expected?: DatasetPreviewQuestion['expected'];
-}
-export interface GenerateInstructionRequest {
-  model_id: string;
-  eval_type: string;
-  questions: GenerateInstructionQuestion[];
-}
-export interface GenerateInstructionResponse {
-  instruction: string;
-}
-
-// ---------- Evaluations: agent-benchmark launch ----------
-// draft.type === 'agent'. Which request shape is sent depends on whether
-// an agent framework was chosen in Step 2 (see NewEvaluation.tsx `launch`):
-//   no framework  -> POST /agent-benchmark/run       (AgentBenchmarkRunRequest)
-//   framework set -> POST /agent-benchmark/run-multi (AgentBenchmarkRunMultiRequest)
-export interface AgentBenchmarkRunRequest {
-  dataset_id: string;
-  model_ids: string[];
-  evaluation_name: string;
-  run_samples: number;
-  // Same retry/timeout shape as CreateEvaluationRequest — exactly one of
-  // the two is sent, matching the Models step's "Apply to all" /
-  // "Individually" toggle. See NewEvaluation.tsx `launch`.
-  max_retries?: number;
-  timeout?: number;
-  model_retry_config?: Record<string, ModelRetryConfig>;
-}
-export interface AgentBenchmarkRunMultiRequest {
-  dataset_id: string;
-  model_ids: string[];
-  evaluation_name: string;
-  selected_metrics: string[];
-  // Same as CreateEvaluationRequest.selected_metric_ids — the subset of
-  // selected_metrics that are custom metric ids. Omitted when none selected.
-  selected_metric_ids?: string[];
-  selected_categories: string[];
-  run_samples: number;
-  // Same retry/timeout shape as CreateEvaluationRequest — exactly one of
-  // the two is sent, matching the Models step's "Apply to all" /
-  // "Individually" toggle. See NewEvaluation.tsx `launch`.
-  max_retries?: number;
-  timeout?: number;
-  model_retry_config?: Record<string, ModelRetryConfig>;
-  // Same as CreateEvaluationRequest's Retest on Wrong control — always
-  // sent for this endpoint (an agent framework is selected, so metrics
-  // config applies); retest_max_rounds/retest_verify_metric only included
-  // when retest_on_wrong is true. See NewEvaluation.tsx `launch`.
-  retest_on_wrong?: boolean;
-  retest_max_rounds?: number;
-  retest_verify_metric?: string;
-}
-
-// ---------- Evaluations: list (History) ----------
-export type EvaluationStatusValue = 'pending' | 'running' | 'completed' | 'failed' | 'canceled';
-
-// Nested summary of the report generated for this evaluation, if any.
-// Only present once the backend has created a report row for the eval —
-// absent/undefined while the eval is still pending/running with no report yet.
-export interface EvaluationReportSummary {
-  report_id: string;
-  title: string;
-  status: string;
-  created_at: string;
-}
-
-export interface EvaluationListItem {
-  id: string;
-  name: string;
-  description: string;
-  eval_type: string;
-  dataset_id: string;
-  datasets_config: { dataset_id: string }[];
-  benchmark: string;
-  model_ids: string[];
-  selected_metrics: string[];
-  run_samples: number;
-  selected_category: string[];
-  status: EvaluationStatusValue;
-  progress: number;
-  total_questions: number;
-  top_model: string | null;
-  top_score: number | null;
-  created_at: string;
-  started_at: string | null;
-  completed_at: string | null;
-  // Present once a report has been generated for this evaluation (spec: new
-  // "download from History" requirement). When `report.report_id` is set,
-  // History should offer the same download options as the Reports page.
-  report?: EvaluationReportSummary | null;
-}
-export interface EvaluationsListResponse {
-  evaluations: EvaluationListItem[];
-}
-
-// ---------- Evaluations: results ----------
-export interface TestDetail {
-  task: string;
-  input: string;
-  expected_output: string;
-  actual_output: string;
-  passed: boolean;
-}
-export interface ModelResult {
-  model_id: string;
-  provider: string | null;
-  rank: number;
-  score: number;
-  accuracy: number;
-  passed_tests: number;
-  failed_tests: number;
-  // Normalized from the API's `total_test` (singular) at the fetch boundary
-  // (evaluationsApi.results) — see benchmarksApi.list for the same pattern.
-  total_tests: number;
-  metric_scores: Record<string, number>;
-  details: TestDetail[];
-}
-export interface EvaluationResultsResponse {
-  evaluation_id: string;
-  name: string;
-  eval_type: string;
-  dataset_id: string;
-  benchmark: string;
-  model_ids: string[];
-  selected_metrics: string[];
-  status: EvaluationStatusValue;
-  total_questions: number;
-  top_model: string;
-  top_score: number;
-  started_at: string | null;
-  results: ModelResult[];
-}
-
-// UI-only draft built up across the wizard's 7 steps (spec §6).
-export interface EvaluationDraft {
-  name: string;
-  type: 'model' | 'agent' | 'rag' | null;
-  providers: string[];
-  models: string[];
-  // How the Models step's max_retries/timeout are applied: 'all' sends one
-  // shared value for every selected model (top-level max_retries/timeout
-  // on the request); 'individual' sends model_retry_config, one entry per
-  // model. retryConfigAll is only meaningful in 'all' mode; modelRetryConfig
-  // entries are still kept in sync with `models` regardless of mode, so
-  // switching modes never loses previously-entered per-model values.
-  retryConfigMode: 'all' | 'individual'; // default 'individual'
-  retryConfigAll: ModelRetryConfig; // default { max_retries: 1, timeout: 60 }
-  modelRetryConfig: Record<string, ModelRetryConfig>;
-  dataset: string | null;
-  subgroup: string[];
-  // 'custom': runSamples is a user-entered count, sent as-is.
-  // 'full': the whole dataset is used — runSamples is sent as 0 regardless
-  // of the last custom value entered (see NewEvaluation.tsx `launch`).
-  runSamplesMode: 'custom' | 'full'; // default 'custom'
-  runSamples: number; // default 10 — only meaningful when runSamplesMode === 'custom'
-  metrics: string[];
-  judgeModelId: string | null;
-  // judgeApiKey intentionally omitted — no longer collected (spec §1.4)
-  agentFramework: string | null;
-  // RAG-only — see CreateEvaluationRequest.top_k. Only meaningful (and
-  // only shown in the UI) when type === 'rag'.
-  topK: number; // default 5, 1–50
-  // Optional free-text evaluation instruction (Metrics step). Either
-  // typed directly or pre-filled via the "Generate Instruction" button
-  // and then edited — always editable either way.
-  instruction: string; // default ''
-  // Model-only (Metrics step) — retest a wrong answer against the judge up
-  // to retestMaxRounds times, using retestVerifyMetric (a single built-in
-  // metric name) to decide pass/fail on each retest. retestMaxRounds/
-  // retestVerifyMetric are only meaningful — and only shown in the UI —
-  // when retestOnWrong is true.
-  retestOnWrong: boolean; // default false
-  retestMaxRounds: number; // default 3, 1–15
-  retestVerifyMetric: string | null; // default null
 }
