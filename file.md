@@ -7,7 +7,7 @@ import { SkeletonTableRows } from '../common/Skeleton';
 import type { Model } from '../../types';
 import styles from './ModelCatalog.module.scss';
 
-type SortKey = 'name' | 'provider' | 'category' | 'context_window' | 'price' | 'status';
+type SortKey = 'name' | 'provider' | 'context_window' | 'price' | 'accuracy' | 'status';
 type SortDir = 'asc' | 'desc';
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
@@ -99,8 +99,8 @@ export default function ModelCatalog() {
           return ((a.context_window ?? 0) - (b.context_window ?? 0)) * dir;
         case 'price':
           return ((a.input_price ?? -1) - (b.input_price ?? -1)) * dir;
-        case 'category':
-          return (a.category ?? '').localeCompare(b.category ?? '') * dir;
+        case 'accuracy':
+          return ((a.accuracy_score ?? -1) - (b.accuracy_score ?? -1)) * dir;
         case 'status':
           return (Number(a.is_active) - Number(b.is_active)) * dir;
         default:
@@ -167,10 +167,10 @@ export default function ModelCatalog() {
               <tr>
                 <SortableTh label="Model" sortKey="name" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Provider" sortKey="provider" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                <SortableTh label="Category" sortKey="category" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
                 <th>Capabilities</th>
                 <SortableTh label="Context" sortKey="context_window" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Price (in/out)" sortKey="price" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Accuracy" sortKey="accuracy" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Status" sortKey="status" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
               </tr>
             </thead>
@@ -180,11 +180,15 @@ export default function ModelCatalog() {
                 <tr key={m.id}>
                   <td style={{ fontWeight: 700 }}>{m.name ?? '—'}</td>
                   <td style={{ color: 'var(--text-secondary)' }}>{providerName(m.provider_id)}</td>
-                  <td>{m.category ? <span className="tag tag-ind">{m.category}</span> : '—'}</td>
                   <td>{(m.capabilities ?? []).map((c) => <span key={c} className="tag tag-ind">{c}</span>)}</td>
                   <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontSize: 13 }}>{(m.context_window ?? 0).toLocaleString()}</td>
                   <td style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontSize: 13, color: 'var(--text-secondary)' }}>
                     {m.input_price != null ? `$${m.input_price.toFixed(2)}` : '—'} / {m.output_price != null ? `$${m.output_price.toFixed(2)}` : '—'}
+                  </td>
+                  <td>
+                    <span style={{ fontFamily: "'Segoe UI', Roboto, Arial, sans-serif", fontWeight: 700, color: (m.accuracy_score ?? 0) >= 90 ? '#10B981' : 'var(--text-primary)' }}>
+                      {m.accuracy_score != null ? `${m.accuracy_score}%` : '—'}
+                    </span>
                   </td>
                   <td><span className={`badge ${m.is_active ? 'badge-green' : 'badge-gray'}`}>{m.is_active ? 'Active' : 'Inactive'}</span></td>
                 </tr>
