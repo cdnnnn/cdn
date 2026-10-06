@@ -7,11 +7,10 @@ import { SkeletonTableRows } from '../common/Skeleton';
 import type { Model } from '../../types';
 import styles from './ModelCatalog.module.scss';
 
-type SortKey = 'name' | 'provider' | 'context_window' | 'price' | 'accuracy' | 'status';
+type SortKey = 'name' | 'provider' | 'category' | 'context_window' | 'price' | 'status';
 type SortDir = 'asc' | 'desc';
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
-const ACCURACY_HIGH_THRESHOLD = 90;
 
 // Builds a compact page-number list with ellipses, e.g. [1, '…', 4, 5, 6, '…', 12]
 function buildPageList(current: number, total: number): (number | '…')[] {
@@ -92,12 +91,12 @@ export default function ModelCatalog() {
           return a.name.localeCompare(b.name) * dir;
         case 'provider':
           return providerName(a.provider_id).localeCompare(providerName(b.provider_id)) * dir;
+        case 'category':
+          return (a.category ?? '').localeCompare(b.category ?? '') * dir;
         case 'context_window':
           return (a.context_window - b.context_window) * dir;
         case 'price':
           return ((a.input_price ?? -1) - (b.input_price ?? -1)) * dir;
-        case 'accuracy':
-          return ((a.accuracy_score ?? -1) - (b.accuracy_score ?? -1)) * dir;
         case 'status':
           return (Number(a.is_active) - Number(b.is_active)) * dir;
         default:
@@ -171,10 +170,10 @@ export default function ModelCatalog() {
               <tr>
                 <SortableTh label="Model" sortKey="name" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Provider" sortKey="provider" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Category" sortKey="category" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
                 <th>Capabilities</th>
                 <SortableTh label="Context" sortKey="context_window" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Price (in/out)" sortKey="price" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                <SortableTh label="Accuracy" sortKey="accuracy" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Status" sortKey="status" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
               </tr>
             </thead>
@@ -185,6 +184,13 @@ export default function ModelCatalog() {
                   <tr key={m.id}>
                     <td className={styles['model-catalog__name-cell']}>{m.name}</td>
                     <td className={styles['model-catalog__provider-cell']}>{providerName(m.provider_id)}</td>
+                    <td>
+                      {m.category ? (
+                        <span className={styles['model-catalog__tag']}>{m.category}</span>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
                     <td>
                       <div className={styles['model-catalog__caps-cell']}>
                         {m.capabilities.map((c) => (
@@ -197,15 +203,6 @@ export default function ModelCatalog() {
                     <td className={styles['model-catalog__mono-cell']}>{m.context_window.toLocaleString()}</td>
                     <td className={`${styles['model-catalog__mono-cell']} ${styles['model-catalog__mono-cell--muted']}`}>
                       {m.input_price != null ? `$${m.input_price.toFixed(2)}` : '—'} / {m.output_price != null ? `$${m.output_price.toFixed(2)}` : '—'}
-                    </td>
-                    <td>
-                      <span
-                        className={`${styles['model-catalog__accuracy']} ${
-                          (m.accuracy_score || 0) >= ACCURACY_HIGH_THRESHOLD ? styles['model-catalog__accuracy--high'] : ''
-                        }`}
-                      >
-                        {m.accuracy_score != null ? `${m.accuracy_score}%` : '—'}
-                      </span>
                     </td>
                     <td>
                       <span className={`${styles['model-catalog__status']} ${styles[`model-catalog__status--${m.is_active ? 'active' : 'inactive'}`]}`}>
