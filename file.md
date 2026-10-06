@@ -1,463 +1,3 @@
-//Custommetricsdashboard.tsx
-import { useEffect, useMemo, useState, useCallback } from 'react';
-import {
-  Search, Gauge, LayoutDashboard, PenSquare, ListFilter, AlertCircle, Loader2, Trash2, X,
-  ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
-} from 'lucide-react';
-import { SkeletonTableRows } from '../common/Skeleton';
-import styles from './CustomMetrics.module.scss';
-import { metricsApi, CustomMetric } from '../../api/endpoints/metrics';
-import CreateMetric from './CreateMetric';
-
-type View = 'dashboard' | 'create';
-type SortKey = 'name' | 'type' | 'threshold' | 'judge' | 'status' | 'created';
-type SortDir = 'asc' | 'desc';
-
-const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
-
-function formatDate(iso: string) {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-}
-
-// Maps an eval type to its badge color variant; anything outside the
-// known set (model/agent/rag) falls back to a neutral badge.
-function evalTypeVariant(t: string): string {
-  const known = ['model', 'agent', 'rag'];
-  return known.includes((t ?? '').toLowerCase()) ? (t ?? '').toLowerCase() : 'default';
-}
-
-// Builds a compact page-number list with ellipses, e.g. [1, '…', 4, 5, 6, '…', 12]
-function buildPageList(current: number, total: number): (number | '…')[] {
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
-  const pages = new Set<number>([1, total, current, current - 1, current + 1]);
-  const sorted = [...pages].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
-  const result: (number | '…')[] = [];
-  let prev = 0;
-  for (const p of sorted) {
-    if (prev && p - prev > 1) result.push('…');
-    result.push(p);
-    prev = p;
-  }
-  return result;
-}
-
-interface SortableThProps {
-  label: string;
-  sortKey: SortKey;
-  activeKey: SortKey;
-  dir: SortDir;
-  onSort: (key: SortKey) => void;
-}
-
-function SortableTh({ label, sortKey, activeKey, dir, onSort }: SortableThProps) {
-  const active = activeKey === sortKey;
-  return (
-    <th className={styles['custom-metrics__sortable-th']}>
-      <button
-        type="button"
-        className={`${styles['custom-metrics__sort-btn']} ${active ? styles['custom-metrics__sort-btn--active'] : ''}`}
-        onClick={() => onSort(sortKey)}
-      >
-        {label}
-        {active ? (
-          dir === 'asc' ? <ChevronUp size={13} /> : <ChevronDown size={13} />
-        ) : (
-          <ChevronsUpDown size={13} className={styles['custom-metrics__sort-icon-idle']} />
-        )}
-      </button>
-    </th>
-  );
-}
-
-export default function CustomMetricsDashboard() {
-  const [view, setView] = useState<View>('dashboard');
-
-  const [metrics, setMetrics] = useState<CustomMetric[]>([]);
-  const [status, setStatus] = useState<'idle' | 'loading' | 'succeeded' | 'failed'>('loading');
-  const [error, setError] = useState('');
-
-  const [search, setSearch] = useState('');
-  const [evalFilter, setEvalFilter] = useState('All');
-  const [sortKey, setSortKey] = useState<SortKey>('name');
-  const [sortDir, setSortDir] = useState<SortDir>('asc');
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
-
-  // delete state
-  const [pendingDeleteId, setPendingDeleteId] = useState('');
-  const [deletingId, setDeletingId] = useState('');
-  const [deleteError, setDeleteError] = useState('');
-
-  const fetchMetrics = useCallback(() => {
-    setStatus('loading');
-    setError('');
-    metricsApi.list()
-      .then((list) => { setMetrics(list); setStatus('succeeded'); })
-      .catch((err) => { setError(err.message || 'Failed to load metrics'); setStatus('failed'); })
-      .finally(() => {});
-  }, []);
-
-  useEffect(() => { fetchMetrics(); }, [fetchMetrics]);
-
-  const evalTypeOptions = useMemo(() => ['All', ...new Set(metrics.flatMap((m) => m.eval_types ?? []))], [metrics]);
-
-  const filtered = useMemo(() => {
-    return metrics.filter((m) => {
-      if (evalFilter !== 'All' && !(m.eval_types ?? []).includes(evalFilter)) return false;
-      const q = search.toLowerCase();
-      return !q || (m.name ?? '').toLowerCase().includes(q) || (m.description ?? '').toLowerCase().includes(q);
-    });
-  }, [metrics, search, evalFilter]);
-
-  const sorted = useMemo(() => {
-    const dir = sortDir === 'asc' ? 1 : -1;
-    const compare = (a: CustomMetric, b: CustomMetric): number => {
-      switch (sortKey) {
-        case 'name':
-          return (a.name ?? '').localeCompare(b.name ?? '') * dir;
-        case 'type':
-          return (a.metric_type ?? '').localeCompare(b.metric_type ?? '') * dir;
-        case 'threshold':
-          return ((a.threshold ?? 0) - (b.threshold ?? 0)) * dir;
-        case 'judge':
-          return (Number(a.requires_judge) - Number(b.requires_judge)) * dir;
-        case 'status':
-          return (Number(a.is_active) - Number(b.is_active)) * dir;
-        case 'created':
-          return (new Date(a.created_at).getTime() - new Date(b.created_at).getTime()) * dir;
-        default:
-          return 0;
-      }
-    };
-    return [...filtered].sort(compare);
-  }, [filtered, sortKey, sortDir]);
-
-  const total = sorted.length;
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const safePage = Math.min(page, totalPages);
-  const startIdx = (safePage - 1) * pageSize;
-  const pageItems = sorted.slice(startIdx, startIdx + pageSize);
-  const pageList = useMemo(() => buildPageList(safePage, totalPages), [safePage, totalPages]);
-
-  useEffect(() => {
-    setPage(1);
-  }, [search, evalFilter, pageSize]);
-
-  const toggleSort = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortKey(key);
-      setSortDir('asc');
-    }
-  };
-
-  const requestDelete = (id: string) => {
-    setDeleteError('');
-    setPendingDeleteId(id);
-  };
-  const cancelDelete = () => setPendingDeleteId('');
-  const confirmDelete = (id: string) => {
-    setDeletingId(id);
-    setDeleteError('');
-    metricsApi.remove(id)
-      .then(() => {
-        setMetrics((prev) => prev.filter((m) => m.id !== id));
-        setPendingDeleteId('');
-      })
-      .catch((err) => setDeleteError(err.message || 'Failed to delete metric'))
-      .finally(() => setDeletingId(''));
-  };
-
-  // After a successful save, hop back to the dashboard and refresh the list.
-  const handleSaved = () => {
-    setView('dashboard');
-    fetchMetrics();
-  };
-
-  return (
-    <div className="page-enter pg-shell">
-      <div className={styles['custom-metrics__header']}>
-        <div>
-          <p className={styles['custom-metrics__header-eyebrow']}>Custom Metrics</p>
-          <h1>{view === 'dashboard' ? 'Dashboard' : 'Create Metric'}</h1>
-          <p className={styles['custom-metrics__header-sub']}>
-            {view === 'dashboard' ? 'Saved metrics for evaluation' : 'Fill in every section below, then validate and save.'}
-          </p>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div className={styles.tabbar}>
-            <button
-              type="button"
-              className={`${styles.tab} ${view === 'dashboard' ? styles['tab--active'] : ''}`}
-              onClick={() => setView('dashboard')}
-            >
-              <LayoutDashboard size={14} /> Dashboard
-            </button>
-            <button
-              type="button"
-              className={`${styles.tab} ${view === 'create' ? styles['tab--active'] : ''}`}
-              onClick={() => setView('create')}
-            >
-              <PenSquare size={14} /> Create Metric
-            </button>
-          </div>
-
-          {view === 'dashboard' && (
-            <div className={styles['custom-metrics__header-meta']}>
-              <Gauge size={13} />
-              {metrics.length} metric{metrics.length === 1 ? '' : 's'} listed
-            </div>
-          )}
-        </div>
-      </div>
-
-      {view === 'create' ? (
-        <CreateMetric onCancel={() => setView('dashboard')} onSaved={handleSaved} />
-      ) : (
-        <>
-          <div className={styles['custom-metrics__toolbar']}>
-            <div className={styles['custom-metrics__search']}>
-              <Search size={16} />
-              <input placeholder="Search metrics…" value={search} onChange={(e) => setSearch(e.target.value)} />
-            </div>
-
-            <div className={styles['custom-metrics__filter-group']}>
-              <span className={styles['custom-metrics__toolbar-label']}>
-                <ListFilter size={11} /> Eval Type
-              </span>
-              {evalTypeOptions.map((t) => (
-                <button
-                  key={t}
-                  className={`${styles['custom-metrics__filter-pill']} ${evalFilter === t ? styles['custom-metrics__filter-pill--on'] : ''}`}
-                  onClick={() => setEvalFilter(t)}
-                >
-                  {t === 'All' ? 'All' : t.toUpperCase()}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="pg-body">
-            {error && <div className={styles['error-banner']}><AlertCircle size={14} /> {error}</div>}
-            {deleteError && <div className={styles['error-banner']}><AlertCircle size={14} /> {deleteError}</div>}
-
-            <div className={styles['custom-metrics__table-wrap']}>
-              <table className={styles['custom-metrics__table']}>
-                <thead>
-                  <tr>
-                    <SortableTh label="Name" sortKey="name" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                    <th>Eval Types</th>
-                    <SortableTh label="Type" sortKey="type" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                    <SortableTh label="Threshold" sortKey="threshold" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                    <SortableTh label="Judge" sortKey="judge" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                    <SortableTh label="Status" sortKey="status" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                    <SortableTh label="Created" sortKey="created" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
-                    <th style={{ width: '1%' }} />
-                  </tr>
-                </thead>
-                <tbody>
-                  {status === 'loading' && <SkeletonTableRows columns={8} rows={6} />}
-                  {status !== 'loading' && pageItems.map((m) => {
-                    return (
-                      <tr key={m.id} title={m.description}>
-                        <td className={styles['custom-metrics__name-cell']}>{m.name ?? '—'}</td>
-                        <td>
-                          <div className={styles['type-badge-group']}>
-                            {(m.eval_types ?? []).map((t) => (
-                              <span key={t} className={`${styles['type-badge']} ${styles[`type-badge--${evalTypeVariant(t)}`]}`}>
-                                {(t ?? '').toUpperCase()}
-                              </span>
-                            ))}
-                          </div>
-                        </td>
-                        <td><span className={`${styles['type-badge']} ${styles['type-badge--metric']}`}>{m.metric_type}</span></td>
-                        <td className={`${styles['custom-metrics__mono-cell']} ${styles['custom-metrics__mono-cell--muted']}`}>{m.threshold}</td>
-                        <td className={styles['custom-metrics__muted-cell']}>{m.requires_judge ? 'Yes' : 'No'}</td>
-                        <td>
-                          <span className={`${styles['custom-metrics__status']} ${styles[`custom-metrics__status--${m.is_active ? 'active' : 'inactive'}`]}`}>
-                            {m.is_active ? 'Active' : 'Inactive'}
-                          </span>
-                        </td>
-                        <td className={`${styles['custom-metrics__mono-cell']} ${styles['custom-metrics__mono-cell--muted']}`}>{formatDate(m.created_at)}</td>
-                        <td>
-                          <button
-                            type="button"
-                            className={styles['custom-metrics__action-btn']}
-                            title="Delete metric"
-                            aria-label={`Delete ${m.name}`}
-                            onClick={() => requestDelete(m.id)}
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {status !== 'loading' && pageItems.length === 0 && (
-                    <tr>
-                      <td colSpan={8} className={styles['custom-metrics__empty']}>No metrics match your filters.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-
-              {status !== 'loading' && total > 0 && (
-                <div className={styles['custom-metrics__pagination']}>
-                  <div className={styles['custom-metrics__pagination-info']}>
-                    <span>
-                      Showing <strong>{startIdx + 1}–{Math.min(startIdx + pageSize, total)}</strong> of <strong>{total}</strong> metric{total === 1 ? '' : 's'}
-                    </span>
-                    <div className={styles['custom-metrics__page-size']}>
-                      <label htmlFor="custom-metrics-page-size">Rows per page</label>
-                      <select
-                        id="custom-metrics-page-size"
-                        value={pageSize}
-                        onChange={(e) => setPageSize(Number(e.target.value))}
-                      >
-                        {PAGE_SIZE_OPTIONS.map((n) => (
-                          <option key={n} value={n}>{n}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className={styles['custom-metrics__pager']}>
-                    <button
-                      className={styles['custom-metrics__page-btn']}
-                      disabled={safePage === 1}
-                      onClick={() => setPage(1)}
-                      aria-label="First page"
-                    >
-                      <ChevronsLeft size={14} />
-                    </button>
-                    <button
-                      className={styles['custom-metrics__page-btn']}
-                      disabled={safePage === 1}
-                      onClick={() => setPage((p) => Math.max(1, p - 1))}
-                      aria-label="Previous page"
-                    >
-                      <ChevronLeft size={14} />
-                    </button>
-
-                    {pageList.map((p, i) =>
-                      p === '…' ? (
-                        <span key={`dots-${i}`} className={styles['custom-metrics__page-dots']}>…</span>
-                      ) : (
-                        <button
-                          key={p}
-                          className={`${styles['custom-metrics__page-btn']} ${styles['custom-metrics__page-btn--num']} ${p === safePage ? styles['custom-metrics__page-btn--active'] : ''}`}
-                          onClick={() => setPage(p)}
-                          aria-current={p === safePage ? 'page' : undefined}
-                        >
-                          {p}
-                        </button>
-                      )
-                    )}
-
-                    <button
-                      className={styles['custom-metrics__page-btn']}
-                      disabled={safePage === totalPages}
-                      onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                      aria-label="Next page"
-                    >
-                      <ChevronRight size={14} />
-                    </button>
-                    <button
-                      className={styles['custom-metrics__page-btn']}
-                      disabled={safePage === totalPages}
-                      onClick={() => setPage(totalPages)}
-                      aria-label="Last page"
-                    >
-                      <ChevronsRight size={14} />
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </>
-      )}
-
-      {pendingDeleteId && (() => {
-        const target = metrics.find((m) => m.id === pendingDeleteId);
-        const isDeleting = deletingId === pendingDeleteId;
-        return (
-          // Backdrop is intentionally non-interactive — no onClick here —
-          // so clicking outside the modal does not dismiss it. Only the
-          // close icon and Cancel button call cancelDelete().
-          <div className={styles['confirm-overlay']}>
-            <div className={styles['confirm-modal']} role="dialog" aria-modal="true" aria-label="Confirm delete metric">
-              <div className={styles['confirm-modal__top']}>
-                <div className={styles['confirm-modal__icon']}>
-                  <AlertCircle size={20} />
-                </div>
-                <button
-                  type="button"
-                  className={styles['confirm-modal__close']}
-                  aria-label="Close"
-                  disabled={isDeleting}
-                  onClick={cancelDelete}
-                >
-                  <X size={16} />
-                </button>
-              </div>
-
-              <div className={styles['confirm-modal__title']}>Delete this metric?</div>
-              <div className={styles['confirm-modal__text']}>
-                {target ? <>This will permanently delete <strong>{target.name}</strong>. This action can&apos;t be undone.</> : "This action can't be undone."}
-              </div>
-
-              <div className={styles['confirm-modal__actions']}>
-                <button
-                  type="button"
-                  className={`${styles['confirm-modal__btn']} ${styles['confirm-modal__btn--cancel']}`}
-                  disabled={isDeleting}
-                  onClick={cancelDelete}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className={`${styles['confirm-modal__btn']} ${styles['confirm-modal__btn--danger']}`}
-                  disabled={isDeleting}
-                  onClick={() => confirmDelete(pendingDeleteId)}
-                >
-                  {isDeleting ? <Loader2 size={14} className={styles.spin} /> : <Trash2 size={14} />}
-                  Delete
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-    </div>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Custommetrics.module.scss
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
@@ -981,62 +521,23 @@ $custom-metrics-base-font: 0.8125rem;
 // (no new hex values); each eval type gets a distinct existing wash.
 // ---------------------------------------------------------------------------
 .type-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-family: $mono;
-  font-size: 0.7692em; // 0.625rem / 0.8125rem
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  padding: 3px 9px;
-  border-radius: 6px;
-  border: 1px solid transparent;
+  display: inline-block;
+  font-size: 0.9231em; // 0.75rem / 0.8125rem
+  font-weight: 600;
+  line-height: 1.5;
+  text-transform: capitalize;
+  padding: 2px 10px;
+  border-radius: 999px;
   white-space: nowrap;
 
-  &::before {
-    content: '';
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
+  // eval-type variants — a soft tint of each accent, nothing else
+  &--model { color: $signal; background: $wash; }
+  &--agent { color: $sky-ink; background: $sky-ink-wash; }
+  &--rag { color: $rose-ink; background: $rose-ink-wash; text-transform: uppercase; }
+  &--default { color: $ink-2; background: $ink-wash; }
 
-  // eval-type variants
-  &--model {
-    color: $signal;
-    background: $wash;
-    border-color: rgba($signal, 0.16);
-    &::before { background: $signal; }
-  }
-  &--agent {
-    color: $sky-ink;
-    background: $sky-ink-wash;
-    border-color: rgba($sky-ink, 0.18);
-    &::before { background: $sky-ink; }
-  }
-  &--rag {
-    color: $rose-ink;
-    background: $rose-ink-wash;
-    border-color: rgba($rose-ink, 0.18);
-    &::before { background: $rose-ink; }
-  }
-  // fallback for any eval type outside the known set
-  &--default {
-    color: $ink-2;
-    background: $ink-wash;
-    border-color: $line;
-    &::before { background: $ink-3; }
-  }
-
-  // metric-type column reuses the same shape but stays neutral/monochrome
-  // so it reads as a distinct dimension from the colored eval-type badges
-  &--metric {
-    color: $ink-2;
-    background: $paper;
-    border-color: $line;
-    &::before { display: none; }
-  }
+  // metric-type column stays neutral so it reads as a different dimension
+  &--metric { color: $ink-2; background: $ink-wash; }
 }
 
 .type-badge-group {
@@ -1199,4 +700,467 @@ $custom-metrics-base-font: 0.8125rem;
 @media (max-width: 768px) {
   .custom-metrics__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
   .custom-metrics__toolbar { padding: 12px 18px; }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import { useEffect, useMemo, useState, useCallback } from 'react';
+import {
+  Search, Gauge, LayoutDashboard, PenSquare, ListFilter, AlertCircle, Loader2, Trash2, X,
+  ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
+} from 'lucide-react';
+import { SkeletonTableRows } from '../common/Skeleton';
+import styles from './CustomMetrics.module.scss';
+import { metricsApi, CustomMetric } from '../../api/endpoints/metrics';
+import CreateMetric from './CreateMetric';
+
+type View = 'dashboard' | 'create';
+type SortKey = 'name' | 'type' | 'threshold' | 'judge' | 'status' | 'created';
+type SortDir = 'asc' | 'desc';
+
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+
+function formatDate(iso: string) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+// Maps an eval type to its badge color variant; anything outside the
+// known set (model/agent/rag) falls back to a neutral badge.
+function evalTypeVariant(t: string): string {
+  const known = ['model', 'agent', 'rag'];
+  return known.includes((t ?? '').toLowerCase()) ? (t ?? '').toLowerCase() : 'default';
+}
+
+// Builds a compact page-number list with ellipses, e.g. [1, '…', 4, 5, 6, '…', 12]
+function buildPageList(current: number, total: number): (number | '…')[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages = new Set<number>([1, total, current, current - 1, current + 1]);
+  const sorted = [...pages].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
+  const result: (number | '…')[] = [];
+  let prev = 0;
+  for (const p of sorted) {
+    if (prev && p - prev > 1) result.push('…');
+    result.push(p);
+    prev = p;
+  }
+  return result;
+}
+
+interface SortableThProps {
+  label: string;
+  sortKey: SortKey;
+  activeKey: SortKey;
+  dir: SortDir;
+  onSort: (key: SortKey) => void;
+}
+
+function SortableTh({ label, sortKey, activeKey, dir, onSort }: SortableThProps) {
+  const active = activeKey === sortKey;
+  return (
+    <th className={styles['custom-metrics__sortable-th']}>
+      <button
+        type="button"
+        className={`${styles['custom-metrics__sort-btn']} ${active ? styles['custom-metrics__sort-btn--active'] : ''}`}
+        onClick={() => onSort(sortKey)}
+      >
+        {label}
+        {active ? (
+          dir === 'asc' ? <ChevronUp size={13} /> : <ChevronDown size={13} />
+        ) : (
+          <ChevronsUpDown size={13} className={styles['custom-metrics__sort-icon-idle']} />
+        )}
+      </button>
+    </th>
+  );
+}
+
+export default function CustomMetricsDashboard() {
+  const [view, setView] = useState<View>('dashboard');
+
+  const [metrics, setMetrics] = useState<CustomMetric[]>([]);
+  const [status, setStatus] = useState<'idle' | 'loading' | 'succeeded' | 'failed'>('loading');
+  const [error, setError] = useState('');
+
+  const [search, setSearch] = useState('');
+  const [evalFilter, setEvalFilter] = useState('All');
+  const [sortKey, setSortKey] = useState<SortKey>('name');
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
+  // delete state
+  const [pendingDeleteId, setPendingDeleteId] = useState('');
+  const [deletingId, setDeletingId] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+
+  const fetchMetrics = useCallback(() => {
+    setStatus('loading');
+    setError('');
+    metricsApi.list()
+      .then((list) => { setMetrics(list); setStatus('succeeded'); })
+      .catch((err) => { setError(err.message || 'Failed to load metrics'); setStatus('failed'); })
+      .finally(() => {});
+  }, []);
+
+  useEffect(() => { fetchMetrics(); }, [fetchMetrics]);
+
+  const evalTypeOptions = useMemo(() => ['All', ...new Set(metrics.flatMap((m) => m.eval_types ?? []))], [metrics]);
+
+  const filtered = useMemo(() => {
+    return metrics.filter((m) => {
+      if (evalFilter !== 'All' && !(m.eval_types ?? []).includes(evalFilter)) return false;
+      const q = search.toLowerCase();
+      return !q || (m.name ?? '').toLowerCase().includes(q) || (m.description ?? '').toLowerCase().includes(q);
+    });
+  }, [metrics, search, evalFilter]);
+
+  const sorted = useMemo(() => {
+    const dir = sortDir === 'asc' ? 1 : -1;
+    const compare = (a: CustomMetric, b: CustomMetric): number => {
+      switch (sortKey) {
+        case 'name':
+          return (a.name ?? '').localeCompare(b.name ?? '') * dir;
+        case 'type':
+          return (a.metric_type ?? '').localeCompare(b.metric_type ?? '') * dir;
+        case 'threshold':
+          return ((a.threshold ?? 0) - (b.threshold ?? 0)) * dir;
+        case 'judge':
+          return (Number(a.requires_judge) - Number(b.requires_judge)) * dir;
+        case 'status':
+          return (Number(a.is_active) - Number(b.is_active)) * dir;
+        case 'created':
+          return (new Date(a.created_at).getTime() - new Date(b.created_at).getTime()) * dir;
+        default:
+          return 0;
+      }
+    };
+    return [...filtered].sort(compare);
+  }, [filtered, sortKey, sortDir]);
+
+  const total = sorted.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const startIdx = (safePage - 1) * pageSize;
+  const pageItems = sorted.slice(startIdx, startIdx + pageSize);
+  const pageList = useMemo(() => buildPageList(safePage, totalPages), [safePage, totalPages]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [search, evalFilter, pageSize]);
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir('asc');
+    }
+  };
+
+  const requestDelete = (id: string) => {
+    setDeleteError('');
+    setPendingDeleteId(id);
+  };
+  const cancelDelete = () => setPendingDeleteId('');
+  const confirmDelete = (id: string) => {
+    setDeletingId(id);
+    setDeleteError('');
+    metricsApi.remove(id)
+      .then(() => {
+        setMetrics((prev) => prev.filter((m) => m.id !== id));
+        setPendingDeleteId('');
+      })
+      .catch((err) => setDeleteError(err.message || 'Failed to delete metric'))
+      .finally(() => setDeletingId(''));
+  };
+
+  // After a successful save, hop back to the dashboard and refresh the list.
+  const handleSaved = () => {
+    setView('dashboard');
+    fetchMetrics();
+  };
+
+  return (
+    <div className="page-enter pg-shell">
+      <div className={styles['custom-metrics__header']}>
+        <div>
+          <p className={styles['custom-metrics__header-eyebrow']}>Custom Metrics</p>
+          <h1>{view === 'dashboard' ? 'Dashboard' : 'Create Metric'}</h1>
+          <p className={styles['custom-metrics__header-sub']}>
+            {view === 'dashboard' ? 'Saved metrics for evaluation' : 'Fill in every section below, then validate and save.'}
+          </p>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div className={styles.tabbar}>
+            <button
+              type="button"
+              className={`${styles.tab} ${view === 'dashboard' ? styles['tab--active'] : ''}`}
+              onClick={() => setView('dashboard')}
+            >
+              <LayoutDashboard size={14} /> Dashboard
+            </button>
+            <button
+              type="button"
+              className={`${styles.tab} ${view === 'create' ? styles['tab--active'] : ''}`}
+              onClick={() => setView('create')}
+            >
+              <PenSquare size={14} /> Create Metric
+            </button>
+          </div>
+
+          {view === 'dashboard' && (
+            <div className={styles['custom-metrics__header-meta']}>
+              <Gauge size={13} />
+              {metrics.length} metric{metrics.length === 1 ? '' : 's'} listed
+            </div>
+          )}
+        </div>
+      </div>
+
+      {view === 'create' ? (
+        <CreateMetric onCancel={() => setView('dashboard')} onSaved={handleSaved} />
+      ) : (
+        <>
+          <div className={styles['custom-metrics__toolbar']}>
+            <div className={styles['custom-metrics__search']}>
+              <Search size={16} />
+              <input placeholder="Search metrics…" value={search} onChange={(e) => setSearch(e.target.value)} />
+            </div>
+
+            <div className={styles['custom-metrics__filter-group']}>
+              <span className={styles['custom-metrics__toolbar-label']}>
+                <ListFilter size={11} /> Eval Type
+              </span>
+              {evalTypeOptions.map((t) => (
+                <button
+                  key={t}
+                  className={`${styles['custom-metrics__filter-pill']} ${evalFilter === t ? styles['custom-metrics__filter-pill--on'] : ''}`}
+                  onClick={() => setEvalFilter(t)}
+                >
+                  {t === 'All' ? 'All' : t.toUpperCase()}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="pg-body">
+            {error && <div className={styles['error-banner']}><AlertCircle size={14} /> {error}</div>}
+            {deleteError && <div className={styles['error-banner']}><AlertCircle size={14} /> {deleteError}</div>}
+
+            <div className={styles['custom-metrics__table-wrap']}>
+              <table className={styles['custom-metrics__table']}>
+                <thead>
+                  <tr>
+                    <SortableTh label="Name" sortKey="name" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                    <th>Eval Types</th>
+                    <SortableTh label="Type" sortKey="type" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                    <SortableTh label="Threshold" sortKey="threshold" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                    <SortableTh label="Judge" sortKey="judge" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                    <SortableTh label="Status" sortKey="status" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                    <SortableTh label="Created" sortKey="created" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                    <th style={{ width: '1%' }} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {status === 'loading' && <SkeletonTableRows columns={8} rows={6} />}
+                  {status !== 'loading' && pageItems.map((m) => {
+                    return (
+                      <tr key={m.id} title={m.description}>
+                        <td className={styles['custom-metrics__name-cell']}>{m.name ?? '—'}</td>
+                        <td>
+                          <div className={styles['type-badge-group']}>
+                            {(m.eval_types ?? []).map((t) => (
+                              <span key={t} className={`${styles['type-badge']} ${styles[`type-badge--${evalTypeVariant(t)}`]}`}>
+                                {t}
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+                        <td><span className={`${styles['type-badge']} ${styles['type-badge--metric']}`}>{m.metric_type}</span></td>
+                        <td className={`${styles['custom-metrics__mono-cell']} ${styles['custom-metrics__mono-cell--muted']}`}>{m.threshold}</td>
+                        <td className={styles['custom-metrics__muted-cell']}>{m.requires_judge ? 'Yes' : 'No'}</td>
+                        <td>
+                          <span className={`${styles['custom-metrics__status']} ${styles[`custom-metrics__status--${m.is_active ? 'active' : 'inactive'}`]}`}>
+                            {m.is_active ? 'Active' : 'Inactive'}
+                          </span>
+                        </td>
+                        <td className={`${styles['custom-metrics__mono-cell']} ${styles['custom-metrics__mono-cell--muted']}`}>{formatDate(m.created_at)}</td>
+                        <td>
+                          <button
+                            type="button"
+                            className={styles['custom-metrics__action-btn']}
+                            title="Delete metric"
+                            aria-label={`Delete ${m.name}`}
+                            onClick={() => requestDelete(m.id)}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {status !== 'loading' && pageItems.length === 0 && (
+                    <tr>
+                      <td colSpan={8} className={styles['custom-metrics__empty']}>No metrics match your filters.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+
+              {status !== 'loading' && total > 0 && (
+                <div className={styles['custom-metrics__pagination']}>
+                  <div className={styles['custom-metrics__pagination-info']}>
+                    <span>
+                      Showing <strong>{startIdx + 1}–{Math.min(startIdx + pageSize, total)}</strong> of <strong>{total}</strong> metric{total === 1 ? '' : 's'}
+                    </span>
+                    <div className={styles['custom-metrics__page-size']}>
+                      <label htmlFor="custom-metrics-page-size">Rows per page</label>
+                      <select
+                        id="custom-metrics-page-size"
+                        value={pageSize}
+                        onChange={(e) => setPageSize(Number(e.target.value))}
+                      >
+                        {PAGE_SIZE_OPTIONS.map((n) => (
+                          <option key={n} value={n}>{n}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className={styles['custom-metrics__pager']}>
+                    <button
+                      className={styles['custom-metrics__page-btn']}
+                      disabled={safePage === 1}
+                      onClick={() => setPage(1)}
+                      aria-label="First page"
+                    >
+                      <ChevronsLeft size={14} />
+                    </button>
+                    <button
+                      className={styles['custom-metrics__page-btn']}
+                      disabled={safePage === 1}
+                      onClick={() => setPage((p) => Math.max(1, p - 1))}
+                      aria-label="Previous page"
+                    >
+                      <ChevronLeft size={14} />
+                    </button>
+
+                    {pageList.map((p, i) =>
+                      p === '…' ? (
+                        <span key={`dots-${i}`} className={styles['custom-metrics__page-dots']}>…</span>
+                      ) : (
+                        <button
+                          key={p}
+                          className={`${styles['custom-metrics__page-btn']} ${styles['custom-metrics__page-btn--num']} ${p === safePage ? styles['custom-metrics__page-btn--active'] : ''}`}
+                          onClick={() => setPage(p)}
+                          aria-current={p === safePage ? 'page' : undefined}
+                        >
+                          {p}
+                        </button>
+                      )
+                    )}
+
+                    <button
+                      className={styles['custom-metrics__page-btn']}
+                      disabled={safePage === totalPages}
+                      onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                      aria-label="Next page"
+                    >
+                      <ChevronRight size={14} />
+                    </button>
+                    <button
+                      className={styles['custom-metrics__page-btn']}
+                      disabled={safePage === totalPages}
+                      onClick={() => setPage(totalPages)}
+                      aria-label="Last page"
+                    >
+                      <ChevronsRight size={14} />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {pendingDeleteId && (() => {
+        const target = metrics.find((m) => m.id === pendingDeleteId);
+        const isDeleting = deletingId === pendingDeleteId;
+        return (
+          // Backdrop is intentionally non-interactive — no onClick here —
+          // so clicking outside the modal does not dismiss it. Only the
+          // close icon and Cancel button call cancelDelete().
+          <div className={styles['confirm-overlay']}>
+            <div className={styles['confirm-modal']} role="dialog" aria-modal="true" aria-label="Confirm delete metric">
+              <div className={styles['confirm-modal__top']}>
+                <div className={styles['confirm-modal__icon']}>
+                  <AlertCircle size={20} />
+                </div>
+                <button
+                  type="button"
+                  className={styles['confirm-modal__close']}
+                  aria-label="Close"
+                  disabled={isDeleting}
+                  onClick={cancelDelete}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              <div className={styles['confirm-modal__title']}>Delete this metric?</div>
+              <div className={styles['confirm-modal__text']}>
+                {target ? <>This will permanently delete <strong>{target.name}</strong>. This action can&apos;t be undone.</> : "This action can't be undone."}
+              </div>
+
+              <div className={styles['confirm-modal__actions']}>
+                <button
+                  type="button"
+                  className={`${styles['confirm-modal__btn']} ${styles['confirm-modal__btn--cancel']}`}
+                  disabled={isDeleting}
+                  onClick={cancelDelete}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className={`${styles['confirm-modal__btn']} ${styles['confirm-modal__btn--danger']}`}
+                  disabled={isDeleting}
+                  onClick={() => confirmDelete(pendingDeleteId)}
+                >
+                  {isDeleting ? <Loader2 size={14} className={styles.spin} /> : <Trash2 size={14} />}
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
 }
