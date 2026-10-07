@@ -1,346 +1,321 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { X, Loader2, Inbox, Trash2, Pencil, Search } from 'lucide-react';
-import type { Provider, Model } from '../../types';
-import ConfirmDialog from './ConfirmDialog';
-import AddCustomModelDrawer, { type CustomModelSubmitPayload, type EditableModel } from './AddCustomModelDrawer';
-import styles from './Providers.module.scss';
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
+import { Search, Boxes, ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ListFilter } from 'lucide-react';
+import { useAppDispatch, useAppSelector } from '../../hooks/redux';
+import { fetchModels } from '../../store/slices/modelsSlice';
+import { fetchProviders } from '../../store/slices/providersSlice';
+import { SkeletonTableRows } from '../common/Skeleton';
+import type { Model } from '../../types';
+import styles from './ModelCatalog.module.scss';
 
-// Providers can have hundreds of models (e.g. 500+). Rendering every card at
-// once blocks the main thread, so cards are rendered in batches and more are
-// appended as the user scrolls near the bottom.
-const BATCH_SIZE = 20;
-const SEARCH_THRESHOLD = 10;
-const EMPTY_MODELS: Model[] = [];
+type SortKey = 'name' | 'provider' | 'category' | 'context_window' | 'price' | 'status';
+type SortDir = 'asc' | 'desc';
 
-interface ProviderModelsSidebarProps {
-  provider: Provider;
-  models: Model[];
-  status: 'idle' | 'loading' | 'succeeded' | 'failed';
-  onClose: () => void;
-  /** Edit + delete affordances only make sense for the Custom provider. */
-  canManage?: boolean;
-  deletingId?: string | null;
-  updatingId?: string | null;
-  /** True while a "register as new model" submission (from a mismatched edit) is in flight. */
-  creatingNew?: boolean;
-  onDelete?: (modelId: string) => void;
-  /** Returning a Promise lets the sidebar close the edit drawer once the dispatch resolves. */
-  onEditSubmit?: (payload: CustomModelSubmitPayload) => Promise<unknown> | void;
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+
+// Builds a compact page-number list with ellipses, e.g. [1, '…', 4, 5, 6, '…', 12]
+function buildPageList(current: number, total: number): (number | '…')[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages = new Set<number>([1, total, current, current - 1, current + 1]);
+  const sorted = [...pages].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
+  const result: (number | '…')[] = [];
+  let prev = 0;
+  for (const p of sorted) {
+    if (prev && p - prev > 1) result.push('…');
+    result.push(p);
+    prev = p;
+  }
+  return result;
+}
+
+interface SortableThProps {
+  label: string;
+  sortKey: SortKey;
+  activeKey: SortKey;
+  dir: SortDir;
+  onSort: (key: SortKey) => void;
+}
+
+function SortableTh({ label, sortKey, activeKey, dir, onSort }: SortableThProps) {
+  const active = activeKey === sortKey;
+  return (
+    <th className={styles['model-catalog__sortable-th']}>
+      <button
+        type="button"
+        className={`${styles['model-catalog__sort-btn']} ${active ? styles['model-catalog__sort-btn--active'] : ''}`}
+        onClick={() => onSort(sortKey)}
+      >
+        {label}
+        {active ? (
+          dir === 'asc' ? <ChevronUp size={13} /> : <ChevronDown size={13} />
+        ) : (
+          <ChevronsUpDown size={13} className={styles['model-catalog__sort-icon-idle']} />
+        )}
+      </button>
+    </th>
+  );
 }
 
 interface ModelRowProps {
-  model: EditableModel;
-  canManage: boolean;
-  isDeleting: boolean;
-  onEdit: (m: EditableModel) => void;
-  onRemove: (m: EditableModel) => void;
+  model: Model;
+  providerLabel: string;
 }
 
-// Memoized so that unrelated state changes (search typing, delete spinner on
-// another row, loading more batches) don't re-render every card already shown.
-const ModelRow = memo(function ModelRow({ model: m, canManage, isDeleting, onEdit, onRemove }: ModelRowProps) {
+// Memoized so typing in search / changing page doesn't re-render rows whose
+// data hasn't changed.
+const ModelRow = memo(function ModelRow({ model: m, providerLabel }: ModelRowProps) {
   return (
-    <div className={`${styles['providers__model-row']} ${isDeleting ? styles['providers__model-row--deleting'] : ''}`}>
-      <div className={styles['providers__model-row-head']}>
-        <span className={styles['providers__model-row-name']} title={m.name ?? 'Unnamed model'}>{m.name ?? 'Unnamed model'}</span>
-        <div className={styles['providers__model-row-head-actions']}>
-          <span className={`badge ${m.is_active ? 'badge-green' : 'badge-gray'}`}>
-            {m.is_active ? 'Active' : 'Inactive'}
-          </span>
-          {canManage && (
-            <>
-              <button
-                type="button"
-                className={styles['providers__model-row-edit']}
-                onClick={() => onEdit(m)}
-                title="Edit model"
-                aria-label={`Edit ${m.name ?? m.id}`}
-              >
-                <Pencil size={13} />
-              </button>
-              <button
-                type="button"
-                className={styles['providers__model-row-delete']}
-                onClick={() => onRemove(m)}
-                disabled={isDeleting}
-                title="Remove model"
-                aria-label={`Remove ${m.name ?? m.id}`}
-              >
-                {isDeleting ? (
-                  <Loader2 size={13} style={{ animation: 'spin 1.5s linear infinite' }} />
-                ) : (
-                  <Trash2 size={13} />
-                )}
-              </button>
-            </>
-          )}
+    <tr>
+      <td className={styles['model-catalog__name-cell']}>{m.name}</td>
+      <td className={styles['model-catalog__provider-cell']}>{providerLabel}</td>
+      <td>
+        {m.category ? (
+          <span className={styles['model-catalog__tag']}>{m.category}</span>
+        ) : (
+          '—'
+        )}
+      </td>
+      <td>
+        <div className={styles['model-catalog__caps-cell']}>
+          {m.capabilities.map((c) => (
+            <span key={c} className={styles['model-catalog__tag']}>
+              {c}
+            </span>
+          ))}
+        </div>
+      </td>
+      <td className={styles['model-catalog__mono-cell']}>{m.context_window.toLocaleString()}</td>
+      <td className={`${styles['model-catalog__mono-cell']} ${styles['model-catalog__mono-cell--muted']}`}>
+        {m.input_price != null ? `$${m.input_price.toFixed(2)}` : '—'} / {m.output_price != null ? `$${m.output_price.toFixed(2)}` : '—'}
+      </td>
+      <td>
+        <span className={`${styles['model-catalog__status']} ${styles[`model-catalog__status--${m.is_active ? 'active' : 'inactive'}`]}`}>
+          {m.is_active ? 'Active' : 'Inactive'}
+        </span>
+      </td>
+    </tr>
+  );
+});
+
+export default function ModelCatalog() {
+  const dispatch = useAppDispatch();
+  const { items, status } = useAppSelector((s) => s.models);
+  const providers = useAppSelector((s) => s.providers.items);
+  const [search, setSearch] = useState('');
+  const [capFilter, setCapFilter] = useState('All');
+  const [sortKey, setSortKey] = useState<SortKey>('name');
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
+  useEffect(() => {
+    dispatch(fetchModels());
+    dispatch(fetchProviders());
+  }, [dispatch]);
+
+  const caps = useMemo(() => ['All', ...new Set(items.flatMap((m) => m.capabilities))], [items]);
+  // O(1) lookup — the previous Array.find ran per model inside every filter
+  // and sort comparison, which gets slow with hundreds of models.
+  const providerNames = useMemo(() => new Map(providers.map((p) => [p.id, p.name])), [providers]);
+  const providerName = useCallback((id: string) => providerNames.get(id) || id, [providerNames]);
+
+  // Keep typing responsive: the (re)filtering of a large list happens at a
+  // lower priority than the input update itself.
+  const deferredSearch = useDeferredValue(search);
+
+  const filtered = useMemo(() => {
+    const q = deferredSearch.toLowerCase();
+    return items.filter((m) => {
+      if (capFilter !== 'All' && !m.capabilities.includes(capFilter)) return false;
+      return !q || m.name.toLowerCase().includes(q) || providerName(m.provider_id).toLowerCase().includes(q);
+    });
+  }, [items, providerName, deferredSearch, capFilter]);
+
+  const sorted = useMemo(() => {
+    const dir = sortDir === 'asc' ? 1 : -1;
+    const compare = (a: Model, b: Model): number => {
+      switch (sortKey) {
+        case 'name':
+          return a.name.localeCompare(b.name) * dir;
+        case 'provider':
+          return providerName(a.provider_id).localeCompare(providerName(b.provider_id)) * dir;
+        case 'category':
+          return (a.category ?? '').localeCompare(b.category ?? '') * dir;
+        case 'context_window':
+          return (a.context_window - b.context_window) * dir;
+        case 'price':
+          return ((a.input_price ?? -1) - (b.input_price ?? -1)) * dir;
+        case 'status':
+          return (Number(a.is_active) - Number(b.is_active)) * dir;
+        default:
+          return 0;
+      }
+    };
+    return [...filtered].sort(compare);
+  }, [filtered, sortKey, sortDir, providerName]);
+
+  const total = sorted.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const startIdx = (safePage - 1) * pageSize;
+  const pageItems = sorted.slice(startIdx, startIdx + pageSize);
+  const pageList = useMemo(() => buildPageList(safePage, totalPages), [safePage, totalPages]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [deferredSearch, capFilter, pageSize]);
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir('asc');
+    }
+  };
+
+  return (
+    <div className="page-enter pg-shell">
+      <div className={styles['model-catalog__header']}>
+        <div>
+          <p className={styles['model-catalog__header-eyebrow']}>Catalog</p>
+          <h1>Model Catalog</h1>
+          <p className={styles['model-catalog__header-sub']}>All models across connected providers</p>
+        </div>
+        <div className={styles['model-catalog__header-meta']}>
+          <Boxes size={13} />
+          {items.length} model{items.length === 1 ? '' : 's'} listed
         </div>
       </div>
 
-      {m.description && (
-        <p className={styles['providers__model-row-desc']}>{m.description}</p>
-      )}
+      <div className={styles['model-catalog__toolbar']}>
+        <div className={styles['model-catalog__search']}>
+          <Search size={16} />
+          <input placeholder="Search models or providers…" value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
 
-      {(m.category || (m.capabilities ?? []).length > 0) && (
-        <div className={styles['providers__model-row-tags']}>
-          {m.category && (
-            <div className={styles['providers__tag-group']}>
-              <span className={styles['providers__tag-group-label']}>Category</span>
-              <span className={styles['providers__category-badge']}>{m.category}</span>
-            </div>
-          )}
-          {(m.capabilities ?? []).length > 0 && (
-            <div className={styles['providers__tag-group']}>
-              <span className={styles['providers__tag-group-label']}>Capabilities</span>
-              <div className={styles['providers__tag-group-pills']}>
-                {(m.capabilities ?? []).map((c) => (
-                  <span key={c} className={styles['providers__capability-badge']}>{c}</span>
+        <div className={styles['model-catalog__filter-group']}>
+          <span className={styles['model-catalog__toolbar-label']}>
+            <ListFilter size={11} /> Capability
+          </span>
+          {caps.map((c) => (
+            <button
+              key={c}
+              className={`${styles['model-catalog__filter-pill']} ${capFilter === c ? styles['model-catalog__filter-pill--on'] : ''}`}
+              onClick={() => setCapFilter(c)}
+            >
+              {c}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="pg-body">
+        <div className={styles['model-catalog__table-wrap']}>
+          <table className={styles['model-catalog__table']}>
+            <thead>
+              <tr>
+                <SortableTh label="Model" sortKey="name" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Provider" sortKey="provider" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Category" sortKey="category" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                <th>Capabilities</th>
+                <SortableTh label="Context" sortKey="context_window" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Price (in/out)" sortKey="price" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Status" sortKey="status" activeKey={sortKey} dir={sortDir} onSort={toggleSort} />
+              </tr>
+            </thead>
+            <tbody>
+              {status === 'loading' && <SkeletonTableRows columns={7} rows={6} />}
+              {status !== 'loading' &&
+                pageItems.map((m) => (
+                  <ModelRow key={m.id} model={m} providerLabel={providerName(m.provider_id)} />
                 ))}
+              {status !== 'loading' && pageItems.length === 0 && (
+                <tr>
+                  <td colSpan={7} className={styles['model-catalog__empty']}>
+                    No models match your filters.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+
+          {status !== 'loading' && total > 0 && (
+            <div className={styles['model-catalog__pagination']}>
+              <div className={styles['model-catalog__pagination-info']}>
+                <span>
+                  Showing <strong>{startIdx + 1}–{Math.min(startIdx + pageSize, total)}</strong> of <strong>{total}</strong> model
+                  {total === 1 ? '' : 's'}
+                </span>
+                <div className={styles['model-catalog__page-size']}>
+                  <label htmlFor="model-catalog-page-size">Rows per page</label>
+                  <select id="model-catalog-page-size" value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
+                    {PAGE_SIZE_OPTIONS.map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className={styles['model-catalog__pager']}>
+                <button
+                  className={styles['model-catalog__page-btn']}
+                  disabled={safePage === 1}
+                  onClick={() => setPage(1)}
+                  aria-label="First page"
+                >
+                  <ChevronsLeft size={14} />
+                </button>
+                <button
+                  className={styles['model-catalog__page-btn']}
+                  disabled={safePage === 1}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  aria-label="Previous page"
+                >
+                  <ChevronLeft size={14} />
+                </button>
+
+                {pageList.map((p, i) =>
+                  p === '…' ? (
+                    <span key={`dots-${i}`} className={styles['model-catalog__page-dots']}>
+                      …
+                    </span>
+                  ) : (
+                    <button
+                      key={p}
+                      className={`${styles['model-catalog__page-btn']} ${styles['model-catalog__page-btn--num']} ${
+                        p === safePage ? styles['model-catalog__page-btn--active'] : ''
+                      }`}
+                      onClick={() => setPage(p)}
+                      aria-current={p === safePage ? 'page' : undefined}
+                    >
+                      {p}
+                    </button>
+                  )
+                )}
+
+                <button
+                  className={styles['model-catalog__page-btn']}
+                  disabled={safePage === totalPages}
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  aria-label="Next page"
+                >
+                  <ChevronRight size={14} />
+                </button>
+                <button
+                  className={styles['model-catalog__page-btn']}
+                  disabled={safePage === totalPages}
+                  onClick={() => setPage(totalPages)}
+                  aria-label="Last page"
+                >
+                  <ChevronsRight size={14} />
+                </button>
               </div>
             </div>
           )}
         </div>
-      )}
-
-      <div className={styles['providers__model-row-meta']}>
-        <div>
-          <span className={styles['providers__model-row-meta-label']}>Context</span>
-          <span>{(m.context_window ?? 0).toLocaleString()}</span>
-        </div>
-        <div>
-          <span className={styles['providers__model-row-meta-label']}>Price (in/out)</span>
-          <span>
-            {m.input_price != null ? `$${m.input_price.toFixed(2)}` : '—'} / {m.output_price != null ? `$${m.output_price.toFixed(2)}` : '—'}
-          </span>
-        </div>
-        <div>
-          <span className={styles['providers__model-row-meta-label']}>Accuracy</span>
-          <span>{m.accuracy_score != null ? `${m.accuracy_score}%` : '—'}</span>
-        </div>
-        <div>
-          <span className={styles['providers__model-row-meta-label']}>Agent Score</span>
-          <span>{m.agent_score != null ? `${m.agent_score}%` : '—'}</span>
-        </div>
       </div>
-
-      {m.base_url && (
-        <div className={styles['providers__model-row-url']} title={m.base_url}>
-          {m.base_url}
-        </div>
-      )}
     </div>
-  );
-});
-
-export default function ProviderModelsSidebar({
-  provider,
-  models = EMPTY_MODELS,
-  status,
-  onClose,
-  canManage = false,
-  deletingId = null,
-  updatingId = null,
-  creatingNew = false,
-  onDelete,
-  onEditSubmit,
-}: ProviderModelsSidebarProps) {
-  const [pendingDelete, setPendingDelete] = useState<EditableModel | null>(null);
-  const [editingModel, setEditingModel] = useState<EditableModel | null>(null);
-  const [query, setQuery] = useState('');
-  const [visibleCount, setVisibleCount] = useState(BATCH_SIZE);
-
-  const bodyRef = useRef<HTMLDivElement>(null);
-  const sentinelRef = useRef<HTMLDivElement>(null);
-
-  const confirmDelete = () => {
-    if (pendingDelete && onDelete) onDelete(pendingDelete.id);
-  };
-
-  // Close the delete confirmation once the in-flight delete for the pending
-  // model finishes.
-  const prevDeletingId = useRef<string | null>(null);
-  useEffect(() => {
-    if (pendingDelete && prevDeletingId.current === pendingDelete.id && deletingId !== pendingDelete.id) {
-      setPendingDelete(null);
-    }
-    prevDeletingId.current = deletingId;
-  }, [deletingId, pendingDelete]);
-
-  const handleEditSubmit = (payload: CustomModelSubmitPayload) => {
-    const result = onEditSubmit?.(payload);
-    if (result && typeof (result as Promise<unknown>).then === 'function') {
-      // On success close the drawer; on failure (already toasted by the
-      // caller) keep it open so the user can adjust and retry.
-      (result as Promise<unknown>).then(() => setEditingModel(null)).catch(() => {});
-    } else {
-      setEditingModel(null);
-    }
-  };
-
-  const editSubmitting = editingModel
-    ? (updatingId === editingModel.id || creatingNew)
-    : false;
-
-  // ---- search + incremental rendering ----------------------------------------
-  const filteredModels = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return models;
-    return models.filter((m) => {
-      const e = m as EditableModel;
-      return (
-        (e.name ?? '').toLowerCase().includes(q) ||
-        e.id.toLowerCase().includes(q) ||
-        (e.category ?? '').toLowerCase().includes(q) ||
-        (e.capabilities ?? []).some((c) => c.toLowerCase().includes(q))
-      );
-    });
-  }, [models, query]);
-
-  // Start from the first batch again whenever the search or provider changes.
-  useEffect(() => {
-    setVisibleCount(BATCH_SIZE);
-    bodyRef.current?.scrollTo({ top: 0 });
-  }, [query, provider?.id]);
-
-  const visibleModels = useMemo(
-    () => filteredModels.slice(0, visibleCount),
-    [filteredModels, visibleCount]
-  );
-  const hasMore = visibleCount < filteredModels.length;
-
-  // Append the next batch when the sentinel at the bottom scrolls into view.
-  // Re-observing after each batch also handles the case where the sentinel is
-  // still visible (tall viewport) once new rows have rendered.
-  //
-  // `status` must be a dependency: the sentinel only renders once status is
-  // 'succeeded'. On re-open, the models are already cached in the store, so
-  // `hasMore` is true while status is still 'loading' (no sentinel yet) —
-  // without `status` here the effect would bail out and never attach later.
-  useEffect(() => {
-    if (status !== 'succeeded' || !hasMore) return;
-    const node = sentinelRef.current;
-    const root = bodyRef.current;
-    if (!node || !root) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) setVisibleCount((c) => c + BATCH_SIZE);
-      },
-      { root, rootMargin: '300px' }
-    );
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [status, hasMore, visibleCount]);
-
-  // Stable callbacks so memoized rows don't re-render needlessly.
-  const handleEdit = useCallback((m: EditableModel) => setEditingModel(m), []);
-  const handleRemove = useCallback((m: EditableModel) => setPendingDelete(m), []);
-
-  const showSearch = status === 'succeeded' && models.length > SEARCH_THRESHOLD;
-  const isFiltering = query.trim() !== '';
-
-  return (
-    <>
-      <div className={styles['providers__sidebar-overlay']} onClick={onClose} />
-      <aside className={styles['providers__sidebar']}>
-        <div className={styles['providers__sidebar-header']}>
-          <div>
-            <div className={styles['providers__sidebar-title']}>{provider?.name ?? 'Provider'}</div>
-            <div className={styles['providers__sidebar-subtitle']}>
-              {isFiltering
-                ? `${filteredModels.length} of ${models.length} models`
-                : `${models.length} model${models.length === 1 ? '' : 's'} available`}
-            </div>
-          </div>
-          <button className="btn btn-sm btn-ghost" onClick={onClose} aria-label="Close">
-            <X size={16} />
-          </button>
-        </div>
-
-        {showSearch && (
-          <div className={styles['providers__sidebar-toolbar']}>
-            <div className={styles['providers__sidebar-search']}>
-              <Search size={14} />
-              <input
-                placeholder="Search models…"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-            </div>
-          </div>
-        )}
-
-        <div className={styles['providers__sidebar-body']} ref={bodyRef}>
-          {status === 'loading' && (
-            <div className={styles['providers__sidebar-empty']}>
-              <Loader2 size={18} style={{ animation: 'spin 1.5s linear infinite' }} />
-              <span>Loading models…</span>
-            </div>
-          )}
-
-          {status === 'failed' && (
-            <div className={styles['providers__sidebar-empty']}>
-              <span>Couldn't load models for this provider.</span>
-            </div>
-          )}
-
-          {status === 'succeeded' && models.length === 0 && (
-            <div className={styles['providers__sidebar-empty']}>
-              <Inbox size={18} />
-              <span>No models found for this provider yet.</span>
-            </div>
-          )}
-
-          {status === 'succeeded' && models.length > 0 && filteredModels.length === 0 && (
-            <div className={styles['providers__sidebar-empty']}>
-              <Search size={18} />
-              <span>No models match "{query.trim()}".</span>
-            </div>
-          )}
-
-          {status === 'succeeded' && visibleModels.map((raw) => {
-            const m = raw as EditableModel;
-            return (
-              <ModelRow
-                key={m.id}
-                model={m}
-                canManage={canManage}
-                isDeleting={deletingId === m.id}
-                onEdit={handleEdit}
-                onRemove={handleRemove}
-              />
-            );
-          })}
-
-          {status === 'succeeded' && hasMore && (
-            <div ref={sentinelRef} className={styles['providers__sidebar-more']}>
-              <Loader2 size={14} style={{ animation: 'spin 1.5s linear infinite' }} />
-              <span>Showing {visibleModels.length} of {filteredModels.length} — loading more…</span>
-            </div>
-          )}
-        </div>
-      </aside>
-
-      {pendingDelete && (
-        <ConfirmDialog
-          title="Remove this model?"
-          message={`"${pendingDelete.name ?? pendingDelete.id}" will be permanently removed from ${provider?.name ?? 'this provider'}. This can't be undone.`}
-          confirmLabel="Remove Model"
-          tone="danger"
-          loading={deletingId === pendingDelete.id}
-          onCancel={() => setPendingDelete(null)}
-          onConfirm={confirmDelete}
-        />
-      )}
-
-      {editingModel && (
-        <AddCustomModelDrawer
-          mode="edit"
-          initialModel={editingModel}
-          submitting={editSubmitting}
-          onClose={() => setEditingModel(null)}
-          onSubmit={handleEditSubmit}
-        />
-      )}
-    </>
   );
 }
