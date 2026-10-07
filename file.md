@@ -194,7 +194,6 @@ export default function Providers() {
                       { label: 'Total Credits', value: credits?.total_credits.toLocaleString() },
                       { label: 'Total Usage', value: credits?.total_usage.toLocaleString() },
                       { label: 'Remaining', value: credits?.remaining.toLocaleString(), highlight: true },
-                      { label: 'Currency', value: credits?.currency },
                     ];
                     return (
                       <div className={styles['providers__credits']}>
@@ -211,6 +210,7 @@ export default function Providers() {
                                       className={`${styles['providers__credits-value']} ${st.highlight ? styles['providers__credits-value--highlight'] : ''}`}
                                     >
                                       {st.value}
+                                      <span className={styles['providers__credits-currency']}>{credits?.currency}</span>
                                     </span>
                                   )}
                                 </span>
@@ -435,6 +435,11 @@ export default function Providers() {
     </div>
   );
 }
+
+
+
+
+
 
 
 
@@ -837,9 +842,8 @@ $providers-base-font: 0.8125rem;
   }
 
   // ---- OpenRouter credits widget --------------------------------------------
-  // Intentionally minimal: no box, just one line of "label value" pairs plus a
-  // 2px usage rule underneath (~20px total). Wraps onto a second line only if
-  // the card is too narrow.
+  // Intentionally minimal: no box, just a row of stacked label-over-value items
+  // (currency shown beside each value) plus a 2px usage rule underneath.
   &__credits {
     margin-top: 8px;
   }
@@ -848,13 +852,14 @@ $providers-base-font: 0.8125rem;
     display: flex;
     flex-wrap: wrap;
     justify-content: space-between;
-    gap: 2px 10px;
+    gap: 4px 10px;
   }
 
   &__credits-item {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 4px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
     white-space: nowrap;
   }
 
@@ -872,6 +877,13 @@ $providers-base-font: 0.8125rem;
     color: $ink;
 
     &--highlight { color: $signal; }
+  }
+
+  &__credits-currency {
+    margin-left: 3px;
+    font-size: 0.9091em; // 10px of the 11px value size
+    font-weight: 600;
+    color: $ink-3;
   }
 
   &__credits-skeleton-bar {
