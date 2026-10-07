@@ -200,33 +200,30 @@ export default function Providers() {
                       <div className={styles['providers__credits']}>
                         {(isLoading || isReady) && (
                           <>
-                            <div className={styles['providers__credits-grid']}>
+                            <div className={styles['providers__credits-line']}>
                               {stats.map((st) => (
-                                <div key={st.label} className={styles['providers__credits-stat']}>
-                                  <span className={styles['providers__credits-stat-label']}>{st.label}</span>
+                                <span key={st.label} className={styles['providers__credits-item']}>
+                                  <span className={styles['providers__credits-label']}>{st.label}</span>
                                   {isLoading ? (
                                     <span className={styles['providers__credits-skeleton-bar']} />
                                   ) : (
                                     <span
-                                      className={`${styles['providers__credits-stat-value']} ${st.highlight ? styles['providers__credits-stat-value--highlight'] : ''}`}
+                                      className={`${styles['providers__credits-value']} ${st.highlight ? styles['providers__credits-value--highlight'] : ''}`}
                                     >
                                       {st.value}
                                     </span>
                                   )}
-                                </div>
+                                </span>
                               ))}
                             </div>
-                            {isReady && (
-                              <div
-                                className={styles['providers__credits-bar-track']}
-                                title={`${credits.total_usage.toLocaleString()} of ${credits.total_credits.toLocaleString()} ${credits.currency} used`}
-                              >
+                            <div className={styles['providers__credits-bar-track']}>
+                              {isReady && (
                                 <div
                                   className={`${styles['providers__credits-bar-fill']} ${styles[`providers__credits-bar-fill--${level}`]}`}
                                   style={{ width: `${pct}%` }}
                                 />
-                              </div>
-                            )}
+                              )}
+                            </div>
                           </>
                         )}
 
@@ -438,23 +435,6 @@ export default function Providers() {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -857,72 +837,65 @@ $providers-base-font: 0.8125rem;
   }
 
   // ---- OpenRouter credits widget --------------------------------------------
-  // Four labeled stats (Total Credits / Total Usage / Remaining / Currency) in
-  // one row, label stacked over value. The usage bar is pinned to the bottom
-  // edge of the box so it adds no extra height.
+  // Intentionally minimal: no box, just one line of "label value" pairs plus a
+  // 2px usage rule underneath (~20px total). Wraps onto a second line only if
+  // the card is too narrow.
   &__credits {
-    position: relative;
-    margin-top: 10px;
-    padding: 7px 10px 9px;
-    border-radius: 11px;
-    background: $paper;
-    border: 1px solid $line;
-    overflow: hidden;
+    margin-top: 8px;
   }
 
-  &__credits-grid {
-    display: grid;
-    grid-template-columns: repeat(4, auto);
-    justify-content: space-between;
-    gap: 8px;
-  }
-
-  &__credits-stat {
+  &__credits-line {
     display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 2px 10px;
   }
 
-  &__credits-stat-label {
+  &__credits-item {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    white-space: nowrap;
+  }
+
+  &__credits-label {
     font-family: $sans;
-    font-size: 0.8077em; // 0.65625rem / 0.8125rem
+    font-size: 0.7692em; // 0.625rem / 0.8125rem
     font-weight: 600;
     color: $ink-3;
-    white-space: nowrap;
   }
 
-  &__credits-stat-value {
+  &__credits-value {
     font-family: $mono;
+    font-size: 0.8462em; // 0.6875rem / 0.8125rem
     font-weight: 750;
-    font-size: 0.9231em; // 0.75rem / 0.8125rem
     color: $ink;
-    white-space: nowrap;
 
     &--highlight { color: $signal; }
   }
 
   &__credits-skeleton-bar {
-    display: block;
-    height: 11px;
-    width: 38px;
-    border-radius: 4px;
+    display: inline-block;
+    align-self: center;
+    height: 8px;
+    width: 26px;
+    border-radius: 3px;
     background: linear-gradient(90deg, $card 25%, $line 37%, $card 63%);
     background-size: 200px 100%;
     animation: providers-credits-shimmer 1.4s ease-in-out infinite;
   }
 
   &__credits-bar-track {
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    height: 3px;
+    margin-top: 4px;
+    height: 2px;
+    border-radius: 999px;
     background: $line;
+    overflow: hidden;
   }
 
   &__credits-bar-fill {
     height: 100%;
+    border-radius: 999px;
     transition: width 0.6s cubic-bezier(0.22, 0.72, 0.16, 1);
     animation: providers-credits-fill-in 0.6s ease both;
 
