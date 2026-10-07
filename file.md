@@ -1,1750 +1,1432 @@
-//testsuites.ts
-import { apiClient } from '../client';
-import type { TestSuite } from '../../store/slices/testSuitesSlice';
-
-interface TestSuitesResponse {
-  datasets: TestSuite[];
-}
-
-export type EvalType = 'model' | 'agent' | 'rag';
-
-export interface UploadDatasetParams {
-  file: File;
-  name: string;
-  description: string;
-  evalType: EvalType;
-}
-
-// Extensions routed to POST /datasets/upload
-const STRUCTURED_EXTENSIONS = ['json', 'arrow', 'parquet'];
-// Extension routed to POST /datasets/upload-jsonl
-const JSONL_EXTENSION = 'jsonl';
-
-export const SUPPORTED_UPLOAD_EXTENSIONS = [...STRUCTURED_EXTENSIONS, JSONL_EXTENSION];
-
-function getExtension(filename: string): string {
-  const idx = filename.lastIndexOf('.');
-  return idx >= 0 ? filename.slice(idx + 1).toLowerCase() : '';
-}
-
-export interface DeleteDatasetResponse {
-  status: string;
-  dataset_id: string;
-}
-
-export interface DatasetQuestion {
-  id: string;
-  category?: string | null;
-  question_type?: string | null;
-  input?: {
-    // The question text arrives under either `prompt` or `question`
-    // depending on the dataset — read it through getQuestionText().
-    prompt?: string | null;
-    question?: string | null;
-    language?: string | null;
-    // MinIO object keys, e.g. "datasets/ds-001/images/image1.jpg" — not
-    // directly-fetchable URLs. Resolved on demand via getImageBlobUrl()
-    // below, only when the user opens the lightbox for a given image.
-    images?: string[] | null;
-  } | null;
-  expected?: { answer?: string | null } | null;
-  // Shape varies across preview responses (level/source/annotator on some,
-  // something else entirely on others) — kept generic and flattened for
-  // display rather than typed field-by-field. See flattenMetadata() in
-  // Datasets.tsx.
-  metadata?: Record<string, unknown> | null;
-}
-
-// The preview API returns the question text as `input.prompt` for some
-// datasets and `input.question` for others. Returns whichever is present
-// (preferring a non-empty `prompt`) plus which field it came from, so the UI
-// can label it accordingly.
-export function getQuestionText(
-  q?: DatasetQuestion | null
-): { text: string | null; field: 'prompt' | 'question' } {
-  const prompt = q?.input?.prompt;
-  if (typeof prompt === 'string' && prompt.trim() !== '') return { text: prompt, field: 'prompt' };
-  const question = q?.input?.question;
-  if (typeof question === 'string' && question.trim() !== '') return { text: question, field: 'question' };
-  return { text: null, field: 'prompt' };
-}
-
-export interface DatasetPreviewResponse {
-  dataset_id: string;
-  questions: DatasetQuestion[];
-  total: number;
-}
-
-export const testSuitesApi = {
-  // GET /datasets
-  list: async (): Promise<TestSuite[]> => {
-    const { data } = await apiClient.get<TestSuitesResponse>('/datasets');
-    return data?.datasets ?? [];
-  },
-
-  // Routes to POST /datasets/upload (.json, .arrow, .parquet) or
-  // POST /datasets/upload-jsonl (.jsonl) based on the file extension.
-  // Both endpoints return a bare 200 on success — no dataset body — so the
-  // caller is expected to re-fetch the list afterward.
-  upload: async ({ file, name, description, evalType }: UploadDatasetParams): Promise<void> => {
-    const ext = getExtension(file.name);
-
-    if (!SUPPORTED_UPLOAD_EXTENSIONS.includes(ext)) {
-      throw new Error('Unsupported file type. Please upload a .json, .jsonl, .arrow, or .parquet file.');
-    }
-
-    const formData = new FormData();
-    formData.append('file', file);
-
-    if (ext === JSONL_EXTENSION) {
-      // Agent uploads additionally require category="Agents" per the API
-      // contract; Model and RAG uploads omit the field entirely.
-      const params: Record<string, string> = { eval_type: evalType, name, description };
-      if (evalType === 'agent') params.category = 'Agents';
-
-      await apiClient.post('/datasets/upload-jsonl', formData, { params });
-      return;
-    }
-
-    await apiClient.post('/datasets/upload', formData, { params: { eval_type: evalType, name, description } });
-  },
-
-  // DELETE /datasets/{dataset_id} — only offered in the UI for custom
-  // datasets (dataset_type === 'custom'); non-custom datasets aren't
-  // user-deletable.
-  remove: async (datasetId: string): Promise<DeleteDatasetResponse> => {
-    const { data } = await apiClient.delete<DeleteDatasetResponse>(`/datasets/${datasetId}`);
-    return data;
-  },
-
-  // GET /datasets/{dataset_id}/preview?limit=&offset= — paginated question
-  // preview shown in the slide-over drawer.
-  preview: async (datasetId: string, limit: number, offset: number): Promise<DatasetPreviewResponse> => {
-    const { data } = await apiClient.get<DatasetPreviewResponse>(`/datasets/${datasetId}/preview`, {
-      params: { limit, offset },
-    });
-    return data;
-  },
-
-  // POST /datasets/image — resolves a MinIO object key to the actual image
-  // bytes. Response is a raw blob, so this is fetched with responseType
-  // 'blob' and turned into an object URL for the <img> tag; the lightbox
-  // revokes it on close.
-  getImageBlobUrl: async (imagePath: string): Promise<string> => {
-    const { data } = await apiClient.post('/datasets/image', { path: imagePath }, {
-      responseType: 'blob',
-    });
-    return URL.createObjectURL(data as Blob);
-  },
-};
-
-
-
-
-
-
-
-
-
-
-//testsuitesslice.ts
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import { testSuitesApi } from '../../api/endpoints/testSuites';
-import type { UploadDatasetParams, DatasetQuestion } from '../../api/endpoints/testSuites';
-
-// Matches GET /datasets response — fields are typed optional/nullable
-// because real API responses have been seen omitting or nulling them.
-export interface TestSuite {
-  id: string;
-  name?: string | null;
-  description?: string | null;
-  category?: string | null;
-  eval_type?: string | null;
-  dataset_type?: string | null;
-  question_count?: number | null;
-  dataset_categories?: string[] | null;
-}
-
-export interface PreviewState {
-  datasetId: string | null;
-  questions: DatasetQuestion[];
-  total: number;
-  limit: number;
-  offset: number;
-  status: 'idle' | 'loading' | 'succeeded' | 'failed';
-  error: string | null;
-}
-
-interface TestSuitesState {
-  items: TestSuite[];
-  status: 'idle' | 'loading' | 'succeeded' | 'failed';
-  error: string | null;
-  uploadStatus: 'idle' | 'loading' | 'succeeded' | 'failed';
-  uploadError: string | null;
-  deletingId: string | null;
-  deleteError: string | null;
-  preview: PreviewState;
-}
-
-const initialState: TestSuitesState = {
-  items: [],
-  status: 'idle',
-  error: null,
-  uploadStatus: 'idle',
-  uploadError: null,
-  deletingId: null,
-  deleteError: null,
-  preview: {
-    datasetId: null,
-    questions: [],
-    total: 0,
-    limit: 20,
-    offset: 0,
-    status: 'idle',
-    error: null,
-  },
-};
-
-// GET /datasets
-export const fetchTestSuites = createAsyncThunk('testSuites/fetchAll', () => testSuitesApi.list());
-
-// POST /datasets/upload or /datasets/upload-jsonl, depending on file
-// extension — resolved inside testSuitesApi.upload(). Both endpoints just
-// return a 200 on success with no dataset body, so this thunk doesn't add
-// anything to `items`; the caller re-fetches the list on success.
-export const uploadDataset = createAsyncThunk(
-  'testSuites/upload',
-  async (params: UploadDatasetParams, { rejectWithValue }) => {
-    try {
-      await testSuitesApi.upload(params);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to upload dataset';
-      return rejectWithValue(message);
-    }
-  }
-);
-
-// DELETE /datasets/{dataset_id} — the id passed through as `meta.arg` on
-// the fulfilled action so the reducer knows which item to drop even though
-// the response body already echoes it back too.
-export const deleteTestSuite = createAsyncThunk(
-  'testSuites/delete',
-  async (datasetId: string, { rejectWithValue }) => {
-    try {
-      return await testSuitesApi.remove(datasetId);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to delete dataset';
-      return rejectWithValue(message);
-    }
-  }
-);
-
-// GET /datasets/{dataset_id}/preview?limit=&offset= — paginated question
-// preview. Takes the current page params as args so pagination controls in
-// the drawer can just re-dispatch with a new offset/limit.
-export const fetchDatasetPreview = createAsyncThunk(
-  'testSuites/preview',
-  async (
-    { datasetId, limit, offset }: { datasetId: string; limit: number; offset: number },
-    { rejectWithValue }
-  ) => {
-    try {
-      return await testSuitesApi.preview(datasetId, limit, offset);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to load dataset preview';
-      return rejectWithValue(message);
-    }
-  }
-);
-
-const testSuitesSlice = createSlice({
-  name: 'testSuites',
-  initialState,
-  reducers: {
-    resetUploadStatus: (state) => {
-      state.uploadStatus = 'idle';
-      state.uploadError = null;
-    },
-    resetDeleteError: (state) => {
-      state.deleteError = null;
-    },
-    resetPreview: (state) => {
-      state.preview = initialState.preview;
-    },
-  },
-  extraReducers: (builder) => {
-    builder
-      .addCase(fetchTestSuites.pending, (state) => {
-        state.status = 'loading';
-      })
-      .addCase(fetchTestSuites.fulfilled, (state, action) => {
-        state.status = 'succeeded';
-        state.items = Array.isArray(action.payload) ? action.payload : [];
-      })
-      .addCase(fetchTestSuites.rejected, (state, action) => {
-        state.status = 'failed';
-        state.error = action.error.message || 'Failed to load test suites';
-      })
-      .addCase(uploadDataset.pending, (state) => {
-        state.uploadStatus = 'loading';
-        state.uploadError = null;
-      })
-      .addCase(uploadDataset.fulfilled, (state) => {
-        state.uploadStatus = 'succeeded';
-      })
-      .addCase(uploadDataset.rejected, (state, action) => {
-        state.uploadStatus = 'failed';
-        state.uploadError = (action.payload as string) || action.error.message || 'Failed to upload dataset';
-      })
-      .addCase(deleteTestSuite.pending, (state, action) => {
-        state.deletingId = action.meta.arg;
-        state.deleteError = null;
-      })
-      .addCase(deleteTestSuite.fulfilled, (state, action) => {
-        const removedId = action.payload?.dataset_id || action.meta.arg;
-        state.items = state.items.filter((d) => d?.id !== removedId);
-        state.deletingId = null;
-      })
-      .addCase(deleteTestSuite.rejected, (state, action) => {
-        state.deletingId = null;
-        state.deleteError = (action.payload as string) || action.error.message || 'Failed to delete dataset';
-      })
-      .addCase(fetchDatasetPreview.pending, (state, action) => {
-        state.preview.status = 'loading';
-        state.preview.error = null;
-        state.preview.datasetId = action.meta.arg.datasetId;
-        state.preview.limit = action.meta.arg.limit;
-        state.preview.offset = action.meta.arg.offset;
-      })
-      .addCase(fetchDatasetPreview.fulfilled, (state, action) => {
-        // A later request could resolve out of order if the user paginates
-        // quickly — ignore a stale response for a dataset/offset that's no
-        // longer what's being viewed.
-        if (
-          state.preview.datasetId !== action.meta.arg.datasetId ||
-          state.preview.offset !== action.meta.arg.offset ||
-          state.preview.limit !== action.meta.arg.limit
-        ) {
-          return;
-        }
-        state.preview.status = 'succeeded';
-        // Normally an array; tolerate a single question object too.
-        const rawQuestions: unknown = action.payload?.questions;
-        state.preview.questions = Array.isArray(rawQuestions)
-          ? rawQuestions
-          : rawQuestions && typeof rawQuestions === 'object'
-            ? [rawQuestions as DatasetQuestion]
-            : [];
-        state.preview.total = typeof action.payload?.total === 'number' ? action.payload.total : 0;
-      })
-      .addCase(fetchDatasetPreview.rejected, (state, action) => {
-        if (
-          state.preview.datasetId !== action.meta.arg.datasetId ||
-          state.preview.offset !== action.meta.arg.offset ||
-          state.preview.limit !== action.meta.arg.limit
-        ) {
-          return;
-        }
-        state.preview.status = 'failed';
-        state.preview.error = (action.payload as string) || action.error.message || 'Failed to load dataset preview';
-      });
-  },
-});
-
-export const { resetUploadStatus, resetDeleteError, resetPreview } = testSuitesSlice.actions;
-export default testSuitesSlice.reducer;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Datasets.tsx
-//Datasets.tsx
-import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
-import type { CSSProperties } from 'react';
-import {
-  RefreshCw, Search, Layers, AlertTriangle, Database, ListFilter, X,
-  Check, Boxes, ArrowRight, Filter, ChevronsUpDown, Upload, Loader2,
-  FileUp, AlertCircle, CheckCircle2, Trash2, Eye, ChevronLeft, ChevronRight, HelpCircle,
-  Image as ImageIcon, Download, RotateCw, Copy,
-} from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Search, Check, Plus, Settings, Unlink, Loader2, Cable, Trash2, RefreshCw, Eye, ListPlus, ListFilter, ListChecks } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
 import {
-  fetchTestSuites, uploadDataset, resetUploadStatus, deleteTestSuite, resetDeleteError,
-  fetchDatasetPreview, resetPreview,
-} from '../../store/slices/testSuitesSlice';
-import type { TestSuite, PreviewState } from '../../store/slices/testSuitesSlice';
-import { testSuitesApi, SUPPORTED_UPLOAD_EXTENSIONS, getQuestionText } from '../../api/endpoints/testSuites';
-import type { EvalType } from '../../api/endpoints/testSuites';
-import { createRagDataset, resetRagCreate } from '../../store/slices/ragSlice';
-import { RAG_QUESTIONS_FILE_EXTENSIONS } from '../../api/endpoints/rag';
-import type { RagPhase } from '../../api/endpoints/rag';
-import RagPanel from './RagPanel';
-import styles from './Datasets.module.scss';
+  fetchProviders,
+  createProvider,
+  deleteProvider,
+  connectProvider,
+  disconnectProvider,
+  syncModels,
+} from '../../store/slices/providersSlice';
+import { fetchModelsByProvider, createCustomModel, deleteCustomModel, updateCustomModel } from '../../store/slices/modelsSlice';
+import { usageApi, type OpenRouterCreditsResponse } from '../../api/endpoints/usage';
+import AddProviderDrawer from './AddProviderDrawer';
+import AddCustomModelDrawer from './AddCustomModelDrawer';
+import ProviderModelsSidebar from './ProviderModelsSidebar';
+import { SkeletonCards } from '../common/Skeleton';
+import { useToast } from '../common/Toast';
+import styles from './Providers.module.scss';
+import type { Provider } from '../../types';
 
-// Deterministic color hash so the same category always gets the same pill
-// color across renders, without a hardcoded lookup table. Palette matches
-// the app's ink/paper/signal design tokens.
-const PILL_COLORS = [
-  { bg: '#ECEDFF', fg: '#2B2BF5' }, // signal
-  { bg: '#FDF3E3', fg: '#C56A00' }, // amber
-  { bg: '#E7F7EF', fg: '#0B8F58' }, // ok
-  { bg: '#FDECEC', fg: '#C81E1E' }, // danger
-  { bg: '#E6F4FB', fg: '#0369A1' }, // sky
-  { bg: '#F1EDFB', fg: '#6D28D9' }, // violet
-  { bg: '#EAF6EC', fg: '#3F7D20' }, // moss
-];
-function hashColor(label?: string | null) {
-  const safe = label || '—';
-  const sum = [...safe].reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
-  return PILL_COLORS[sum % PILL_COLORS.length];
-}
+type Filter = 'all' | 'connected' | 'available';
 
-// Categories/tags come back with inconsistent casing across datasets
-// (e.g. "Chemistry" vs "chemistry") but should be treated as the same
-// category for filtering, active-state highlighting, and color assignment.
-function normalizeTag(t?: string | null): string {
-  return (t || '').trim().toLowerCase();
-}
+const FILTERS: Filter[] = ['all', 'connected', 'available'];
 
-// Renders a readable filename from a MinIO object key
-// ("datasets/ds-001/images/image1.jpg" -> "image1.jpg").
-function imageBasename(path: string): string {
-  const parts = path.split('/');
-  return parts[parts.length - 1] || path;
-}
-
-// Question metadata shape varies across preview responses (level/source/
-// annotator on some, something else entirely on others) — rather than
-// typing and rendering every possible field by hand, flatten whatever
-// object comes back into displayable [label, value] pairs. Nested objects
-// become dotted labels ("annotator.number_of_steps"); arrays are joined
-// into a single readable string; null/undefined values are dropped.
-function flattenMetadata(obj: Record<string, unknown>, prefix = ''): [string, string][] {
-  const entries: [string, string][] = [];
-  for (const [key, value] of Object.entries(obj)) {
-    if (value === null || value === undefined) continue;
-    const label = prefix ? `${prefix}.${key}` : key;
-    if (Array.isArray(value)) {
-      entries.push([
-        label,
-        value.map((v) => (v !== null && typeof v === 'object' ? JSON.stringify(v) : String(v))).join(', '),
-      ]);
-    } else if (typeof value === 'object') {
-      entries.push(...flattenMetadata(value as Record<string, unknown>, label));
-    } else {
-      entries.push([label, String(value)]);
-    }
+// Thunks rejected via axios surface as either an Error (network/message) or
+// an object with a response payload — normalize both into a display string.
+function getErrorMessage(err: unknown, fallback: string): string {
+  if (err && typeof err === 'object') {
+    const anyErr = err as { response?: { data?: { message?: string; detail?: string } }; message?: string };
+    const serverMessage = anyErr.response?.data?.message || anyErr.response?.data?.detail;
+    if (serverMessage) return serverMessage;
+    if (anyErr.message) return anyErr.message;
   }
-  return entries;
+  return fallback;
 }
 
-// "annotator.number_of_steps" -> "Annotator · Number Of Steps"
-function formatMetaLabel(label: string): string {
-  return label
-    .split('.')
-    .map((seg) => seg.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()))
-    .join(' · ');
-}
-
-const EVAL_TYPE_OPTIONS: { value: EvalType; label: string }[] = [
-  { value: 'model', label: 'Model' },
-  { value: 'agent', label: 'Agent' },
-  { value: 'rag', label: 'RAG' },
-];
-
-const ACCEPT_ATTR = SUPPORTED_UPLOAD_EXTENSIONS.map((e) => `.${e}`).join(',');
-const PREVIEW_PAGE_SIZE_OPTIONS = [10, 20, 50];
-
-// Delete is only offered for user-uploaded custom datasets, not built-in
-// benchmark suites.
-function isCustomDataset(d: TestSuite | null | undefined): boolean {
-  return (d?.dataset_type || '').toLowerCase() === 'custom';
-}
-
-function isRagDataset(d: TestSuite | null | undefined): boolean {
-  return (d?.eval_type || '').toLowerCase() === 'rag';
-}
-
-// Heuristic for "this RAG dataset was created but setup was never
-// finished" — no retrieval questions have made it into the dataset yet.
-// The RAG studio itself always re-checks live status/files on open
-// regardless, so this only drives which affordance/label to surface, not
-// anything load-bearing.
-function isRagSetupIncomplete(d: TestSuite | null | undefined): boolean {
-  if (!isRagDataset(d)) return false;
-  return !(typeof d?.question_count === 'number' && d.question_count > 0);
-}
-
-export default function Datasets() {
+export default function Providers() {
   const dispatch = useAppDispatch();
-  const {
-    items,
-    status = 'idle',
-    error = null,
-    uploadStatus = 'idle',
-    uploadError = null,
-    deletingId = null,
-    deleteError = null,
-    preview,
-  } = useAppSelector((s) => s.testSuites) ?? {};
-  const safeItems = items ?? [];
-  const previewState = preview ?? {
-    datasetId: null, questions: [], total: 0, limit: 20, offset: 0, status: 'idle' as const, error: null,
-  };
-
-  const {
-    createStatus: ragCreateStatus = 'idle',
-    createError: ragCreateError = null,
-  } = useAppSelector((s) => s.rag) ?? {};
-
+  const { items, status, mutatingId, creating, syncingId } = useAppSelector((s) => s.providers);
+  const modelsByProvider = useAppSelector((s) => s.models.byProvider);
+  const modelsByProviderStatus = useAppSelector((s) => s.models.byProviderStatus);
+  const customModelCreating = useAppSelector((s) => s.models.creating);
+  const customModelDeletingId = useAppSelector((s) => s.models.deletingId);
+  const customModelUpdatingId = useAppSelector((s) => s.models.updatingId);
   const [search, setSearch] = useState('');
-  const [datasetTypeFilter, setDatasetTypeFilter] = useState('All');
-  const [tagFilter, setTagFilter] = useState<string[]>([]);       // active dataset_categories facets
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [uploadOpen, setUploadOpen] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<TestSuite | null>(null);
-  const [previewTarget, setPreviewTarget] = useState<TestSuite | null>(null);
-  const [lightboxPath, setLightboxPath] = useState<string | null>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
+  const [filter, setFilter] = useState<Filter>('all');
+  const [keyPromptFor, setKeyPromptFor] = useState<string | null>(null);
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [addModelOpen, setAddModelOpen] = useState(false);
+  const [viewModelsProvider, setViewModelsProvider] = useState<Provider | null>(null);
+  const toast = useToast();
+
+  const [openrouterCredits, setOpenrouterCredits] = useState<OpenRouterCreditsResponse | null>(null);
+  const [openrouterCreditsStatus, setOpenrouterCreditsStatus] = useState<'idle' | 'loading' | 'succeeded' | 'failed'>('idle');
 
   useEffect(() => {
-    dispatch(fetchTestSuites());
+    dispatch(fetchProviders());
   }, [dispatch]);
 
-  const datasetTypes = useMemo(
-    () => ['All', ...new Set(safeItems.map((d) => d?.dataset_type).filter((t): t is string => Boolean(t)))],
-    [safeItems]
-  );
-
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return safeItems.filter((d) => {
-      if (!d) return false;
-      if (datasetTypeFilter !== 'All' && (d.dataset_type ?? '') !== datasetTypeFilter) return false;
-      const tags = d.dataset_categories ?? [];
-      if (tagFilter.length && !tagFilter.some((t) => tags.some((tag) => normalizeTag(tag) === normalizeTag(t)))) return false;
-      if (!q) return true;
-      const name = (d.name ?? '').toLowerCase();
-      const desc = (d.description ?? '').toLowerCase();
-      return name.includes(q) || desc.includes(q);
-    });
-  }, [safeItems, search, datasetTypeFilter, tagFilter]);
-
-  // Keep a valid selection as the filtered set changes.
+  // Only the "openrouter" provider gets a credits widget — fetch its balance
+  // once that provider shows up in the list, not before.
+  const hasOpenRouterProvider = items.some((p) => p.id === 'openrouter');
   useEffect(() => {
-    if (!filtered.length) return;
-    if (!filtered.some((d) => d?.id && d.id === selectedId)) {
-      const first = filtered[0];
-      if (first?.id) setSelectedId(first.id);
-    }
-  }, [filtered, selectedId]);
+    if (!hasOpenRouterProvider || openrouterCreditsStatus !== 'idle') return;
+    setOpenrouterCreditsStatus('loading');
+    usageApi
+      .getOpenRouterCredits()
+      .then((res) => {
+        setOpenrouterCredits(res);
+        setOpenrouterCreditsStatus('succeeded');
+      })
+      .catch(() => {
+        setOpenrouterCreditsStatus('failed');
+      });
+  }, [hasOpenRouterProvider, openrouterCreditsStatus]);
 
-  const selected = safeItems.find((d) => d?.id && d.id === selectedId) ?? null;
+  const connectedCount = items.filter((p) => p.status === 'connected').length;
 
-  const toggleTag = useCallback((t: string) => {
-    setTagFilter((prev) => {
-      const normalized = normalizeTag(t);
-      const exists = prev.some((x) => normalizeTag(x) === normalized);
-      return exists ? prev.filter((x) => normalizeTag(x) !== normalized) : [...prev, t];
-    });
-  }, []);
+  const filtered = items.filter((p) => {
+    if (filter === 'connected' && p.status !== 'connected') return false;
+    if (filter === 'available' && p.status === 'connected') return false;
+    return !search || (p.name ?? '').toLowerCase().includes(search.toLowerCase());
+  });
 
-  // Keyboard: ↑/↓ walk the list, "/" focuses search.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const el = document.activeElement as HTMLElement | null;
-      const typing = el?.tagName === 'INPUT' || el?.tagName === 'TEXTAREA';
-      if (e.key === '/' && !typing) {
-        e.preventDefault();
-        searchRef.current?.focus();
-        return;
-      }
-      if (typing || (e.key !== 'ArrowDown' && e.key !== 'ArrowUp')) return;
-      e.preventDefault();
-      const idx = filtered.findIndex((d) => d?.id && d.id === selectedId);
-      if (idx === -1) {
-        const first = filtered[0];
-        if (first?.id) setSelectedId(first.id);
-        return;
-      }
-      const next = e.key === 'ArrowDown'
-        ? Math.min(idx + 1, filtered.length - 1)
-        : Math.max(idx - 1, 0);
-      const nextItem = filtered[next];
-      if (nextItem?.id) setSelectedId(nextItem.id);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [filtered, selectedId]);
-
-  // Closes the modal + refreshes the list once an upload succeeds. The
-  // upload endpoints return a bare 200 with no dataset body, so a re-fetch
-  // is the only way to pick up the new row.
-  useEffect(() => {
-    if (uploadStatus !== 'succeeded') return;
-    dispatch(fetchTestSuites());
-    setUploadOpen(false);
-    const t = setTimeout(() => dispatch(resetUploadStatus()), 300);
-    return () => clearTimeout(t);
-  }, [uploadStatus, dispatch]);
-
-  const closeUploadModal = () => {
-    setUploadOpen(false);
-    if (uploadStatus !== 'idle') dispatch(resetUploadStatus());
-    if (ragCreateStatus !== 'idle') dispatch(resetRagCreate());
+  const submitConnect = (providerId: string) => {
+    if (!apiKeyInput.trim()) return;
+    dispatch(connectProvider({ providerId, payload: { api_key: apiKeyInput } }));
+    setKeyPromptFor(null);
+    setApiKeyInput('');
   };
 
-  // Creates the RAG dataset in the modal. Once that succeeds the modal closes
-  // and the new dataset is selected in the library — its detail view shows
-  // the RAG upload/processing panel as a second column, so there's no
-  // separate studio to hand off to.
-  const handleCreateRagDataset = async (params: { name: string; description: string; questionsFile: File }) => {
-    try {
-      const newId = await dispatch(createRagDataset(params)).unwrap();
-      setUploadOpen(false);
-      dispatch(resetRagCreate());
-      // Clear filters so the new dataset can't be hidden by them, then wait
-      // for the refreshed list before selecting — otherwise the "keep a
-      // valid selection" effect would bounce the selection to the first row.
-      setSearch('');
-      setDatasetTypeFilter('All');
-      setTagFilter([]);
-      await dispatch(fetchTestSuites());
-      setSelectedId(newId);
-    } catch {
-      // ragCreateError is already populated in state; UploadModal renders it
-      // and stays open so the user can retry.
-    }
+  const openModelsSidebar = (p: Provider) => {
+    setViewModelsProvider(p);
+    dispatch(fetchModelsByProvider(p.id));
   };
 
-  // Called by the RAG panel when a dataset moves between phases (e.g.
-  // processing -> completed) so question counts etc. get refreshed.
-  const handleRagPhaseChange = useCallback(() => {
-    dispatch(fetchTestSuites());
-  }, [dispatch]);
-
-  const closeDeleteModal = () => {
-    setDeleteTarget(null);
-    if (deleteError) dispatch(resetDeleteError());
-  };
-
-  const confirmDelete = async () => {
-    if (!deleteTarget?.id) return;
-    try {
-      await dispatch(deleteTestSuite(deleteTarget.id)).unwrap();
-      if (selectedId === deleteTarget.id) setSelectedId(null);
-      setDeleteTarget(null);
-    } catch {
-      // deleteError is already populated in state; the confirm modal stays
-      // open and renders it.
-    }
-  };
-
-  // Fetches page 1 as soon as the preview drawer opens for a dataset.
-  const openPreview = (dataset: TestSuite) => {
-    setPreviewTarget(dataset);
-    if (dataset.id) {
-      dispatch(fetchDatasetPreview({ datasetId: dataset.id, limit: previewState.limit || 20, offset: 0 }));
-    }
-  };
-
-  const closePreview = () => {
-    setPreviewTarget(null);
-    dispatch(resetPreview());
-  };
-
-  const changePreviewOffset = (offset: number) => {
-    if (!previewTarget?.id) return;
-    dispatch(fetchDatasetPreview({ datasetId: previewTarget.id, limit: previewState.limit, offset }));
-  };
-
-  const changePreviewLimit = (limit: number) => {
-    if (!previewTarget?.id) return;
-    dispatch(fetchDatasetPreview({ datasetId: previewTarget.id, limit, offset: 0 }));
-  };
-
-  // Close the preview drawer with Escape — same pattern as History's
-  // details drawer. Yields to the lightbox first: if an image is open on
-  // top of the drawer, Escape should close just the image, not both.
-  useEffect(() => {
-    if (!previewTarget) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      if (lightboxPath) return;
-      closePreview();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [previewTarget, lightboxPath]);
-
-  // Close the image lightbox with Escape.
-  useEffect(() => {
-    if (!lightboxPath) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setLightboxPath(null);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [lightboxPath]);
+  const customProvider = items.find((p) => p.name === 'Custom') || null;
 
   return (
     <div className="page-enter pg-shell">
-      {/* ---- header (unchanged, + upload button) --------------------------- */}
-      <div className={styles['datasets__header']}>
+      <div className={styles.providers__header}>
         <div>
-          <p className={styles['datasets__header-eyebrow']}>Datasets</p>
-          <h1>Test Suite Library</h1>
-          <p className={styles['datasets__header-sub']}>
-            Browse every dataset available for evaluations, independent of any single wizard run.
-          </p>
+          <p className={styles['providers__header-eyebrow']}>Integrations</p>
+          <h1>Providers</h1>
+          <p className={styles['providers__header-sub']}>Manage your AI provider connections</p>
         </div>
-        <div className={styles['datasets__header-meta']}>
-          <span className={styles['datasets__header-count']}>
-            <Database size={13} /> {safeItems.length} datasets available
-          </span>
-          <button className={styles['datasets__refresh-btn']} onClick={() => dispatch(fetchTestSuites())}>
-            <RefreshCw size={14} /> Refresh
-          </button>
-          <button className={styles['datasets__upload-btn']} onClick={() => setUploadOpen(true)}>
-            <Upload size={14} /> Upload dataset
-          </button>
+        <div className={styles['providers__header-meta']}>
+          <Cable size={13} />
+          {connectedCount} of {items.length} connected
         </div>
       </div>
 
-      {/* ---- toolbar (unchanged) ------------------------------------------ */}
-      <div className={styles['datasets__toolbar']}>
-        <div className={styles['datasets__search']}>
+      <div className={styles['providers__toolbar']}>
+        <div className={styles['providers__search']}>
           <Search size={16} />
-          <input
-            ref={searchRef}
-            placeholder="Search datasets…  (press /)"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+          <input placeholder="Search providers…" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
-        <div className={styles['datasets__filters']}>
-          <span className={styles['datasets__toolbar-label']}>
-            <ListFilter size={11} />
-          </span>
-          {datasetTypes.map((t) => (
-            <button
-              key={t}
-              className={`${styles['datasets__filter-pill']} ${datasetTypeFilter === t ? styles['datasets__filter-pill--on'] : ''}`}
-              onClick={() => setDatasetTypeFilter(t)}
-            >
-              {t}
-            </button>
-          ))}
-        </div>
-      </div>
 
-      {/* ---- active tag facets --------------------------------------------- */}
-      {tagFilter.length > 0 && (
-        <div className={styles['datasets__facets']}>
-          <Filter size={12} />
-          <span className={styles['datasets__facets-lead']}>Showing datasets tagged</span>
-          {tagFilter.map((t) => {
-            const col = hashColor(normalizeTag(t));
-            return (
+        <div className={styles['providers__toolbar-right']}>
+          <div className={styles['providers__filter-group']}>
+            <span className={styles['providers__toolbar-label']}>
+              <ListFilter size={11} /> Status
+            </span>
+            {FILTERS.map((f) => (
               <button
-                key={t}
-                className={styles['datasets__facet']}
-                style={{ background: col.bg, color: col.fg }}
-                onClick={() => toggleTag(t)}
+                key={f}
+                className={`${styles['providers__filter-pill']} ${filter === f ? styles['providers__filter-pill--on'] : ''}`}
+                onClick={() => setFilter(f)}
               >
-                {t} <X size={11} />
+                {f[0].toUpperCase() + f.slice(1)}
               </button>
-            );
-          })}
-          <button className={styles['datasets__facets-clear']} onClick={() => setTagFilter([])}>
-            Clear all
+            ))}
+          </div>
+          <span className={styles['providers__toolbar-divider']} />
+          <button className={styles['providers__add-btn']} onClick={() => setDrawerOpen(true)}>
+            <Plus size={14} /> Add Provider
           </button>
         </div>
-      )}
-
-      {/* ---- body: master / detail ---------------------------------------- */}
-      <div className={styles['datasets__body']}>
-        {status === 'failed' && (
-          <div
-            className={`${styles['datasets__state']} ${styles['datasets__state--error']}`}
-            style={{ gridColumn: '1 / -1' }}
-          >
-            <AlertTriangle size={28} />
-            <div>{error || 'Failed to load datasets.'}</div>
-            <button className={styles['datasets__refresh-btn']} onClick={() => dispatch(fetchTestSuites())}>
-              Retry
-            </button>
-          </div>
-        )}
-
-        {status !== 'failed' && (
-          <>
-            {/* LIST RAIL — bordered cards, one per dataset */}
-            <aside className={styles['datasets__rail']}>
-              <div className={styles['datasets__rail-head']}>
-                <span>{filtered.length} of {safeItems.length}</span>
-                <span className={styles['datasets__rail-hint']}>
-                  <ChevronsUpDown size={11} /> ↑ ↓ to move
-                </span>
-              </div>
-              <div className={styles['datasets__rail-scroll']}>
-                {status === 'loading' &&
-                  Array.from({ length: 7 }).map((_, i) => (
-                    <div className={styles['datasets__skel-row']} key={i}>
-                      <span className={styles['datasets__skel']} style={{ width: '55%' }} />
-                      <span className={styles['datasets__skel']} style={{ width: '35%' }} />
-                    </div>
-                  ))}
-
-                {status !== 'loading' && filtered.length === 0 && (
-                  <div className={styles['datasets__empty-rail']}>
-                    <Layers size={22} />
-                    <p>No datasets match.<br />Loosen a filter to see more.</p>
-                  </div>
-                )}
-
-                {status !== 'loading' &&
-                  filtered.map((d, i) => {
-                    if (!d) return null;
-                    const rowKey = d.id ?? `row-${i}`;
-                    const on = !!d.id && d.id === selectedId;
-                    const dsType = d.dataset_type || 'Unknown';
-                    const evalTypeLabel = d.eval_type || null;
-                    const accent = hashColor(dsType);
-                    const tags = d.dataset_categories ?? [];
-                    const count = typeof d.question_count === 'number' ? d.question_count : 0;
-                    return (
-                      <button
-                        key={rowKey}
-                        className={`${styles['datasets__row']} ${on ? styles['datasets__row--on'] : ''}`}
-                        onClick={() => d.id && setSelectedId(d.id)}
-                        style={{ borderLeftColor: accent.fg }}
-                      >
-                        <div className={styles['datasets__row-top']}>
-                          <span className={styles['datasets__row-name']}>{d.name || 'Untitled dataset'}</span>
-                          <span className={styles['datasets__row-count']}>{count.toLocaleString()}</span>
-                        </div>
-                        <div className={styles['datasets__row-foot']}>
-                          <span className={styles['datasets__row-type-group']}>
-                            <span className={styles['datasets__row-type']} style={{ color: accent.fg }}>
-                              {dsType}
-                            </span>
-                            {evalTypeLabel && (
-                              <span className={styles['datasets__row-eval-tag']}>{evalTypeLabel}</span>
-                            )}
-                            {isRagSetupIncomplete(d) && (
-                              <span
-                                className={styles['datasets__row-needs-setup']}
-                                title="Setup isn't finished — open this dataset to upload files and start processing."
-                              >
-                                <i className={styles['datasets__row-needs-setup-dot']} /> Needs setup
-                              </span>
-                            )}
-                          </span>
-                          <span className={styles['datasets__row-dots']}>
-                            {tags.slice(0, 4).map((t, ti) => (
-                              <i key={t || ti} style={{ background: hashColor(normalizeTag(t)).fg }} title={t || undefined} />
-                            ))}
-                          </span>
-                        </div>
-                      </button>
-                    );
-                  })}
-              </div>
-            </aside>
-
-            {/* DETAIL */}
-            <section className={styles['datasets__detail']}>
-              {status === 'loading' && !selected ? (
-                <div className={styles['datasets__detail-scroll']}>
-                  <span className={styles['datasets__skel']} style={{ width: 120, height: 34, marginBottom: 22 }} />
-                  <span className={styles['datasets__skel']} style={{ width: '90%', marginBottom: 8 }} />
-                  <span className={styles['datasets__skel']} style={{ width: '70%' }} />
-                </div>
-              ) : !selected ? (
-                <div className={styles['datasets__detail-empty']}>
-                  <Boxes size={30} />
-                  <p>Select a dataset to inspect its categories, questions, and eval type.</p>
-                </div>
-              ) : (
-                <DetailView
-                  dataset={selected}
-                  tagFilter={tagFilter}
-                  toggleTag={toggleTag}
-                  onDeleteClick={() => setDeleteTarget(selected)}
-                  onPreviewClick={() => openPreview(selected)}
-                  onRagPhaseChange={handleRagPhaseChange}
-                />
-              )}
-            </section>
-          </>
-        )}
       </div>
 
-      {/* ---- upload dataset modal ------------------------------------------ */}
-      {uploadOpen && (
-        <UploadModal
-          uploadStatus={uploadStatus}
-          uploadError={uploadError}
-          ragCreateStatus={ragCreateStatus}
-          ragCreateError={ragCreateError}
-          onClose={closeUploadModal}
-          onSubmit={(params) => dispatch(uploadDataset(params))}
-          onSubmitRag={handleCreateRagDataset}
-        />
-      )}
-
-      {/* ---- delete dataset confirmation ------------------------------------ */}
-      {deleteTarget && (
-        <DeleteConfirmModal
-          dataset={deleteTarget}
-          isDeleting={!!deleteTarget.id && deletingId === deleteTarget.id}
-          deleteError={deleteError}
-          onCancel={closeDeleteModal}
-          onConfirm={confirmDelete}
-        />
-      )}
-
-      {/* ---- question preview slide-over drawer ----------------------------- */}
-      <div
-        className={`${styles['datasets__preview-overlay']} ${previewTarget ? styles['datasets__preview-overlay--open'] : ''}`}
-        onClick={closePreview}
-      />
-      <div
-        className={`${styles['datasets__preview-drawer']} ${previewTarget ? styles['datasets__preview-drawer--open'] : ''}`}
-        role="dialog"
-        aria-hidden={!previewTarget}
-        aria-label="Dataset question preview"
-      >
-        {previewTarget && (
-          <PreviewDrawer
-            dataset={previewTarget}
-            preview={previewState}
-            onClose={closePreview}
-            onChangeOffset={changePreviewOffset}
-            onChangeLimit={changePreviewLimit}
-            onOpenImage={setLightboxPath}
-          />
-        )}
-      </div>
-
-      {/* ---- MinIO image lightbox — mounted only while an image is open,
-          fetched lazily on demand rather than preloaded with the drawer */}
-      {lightboxPath && (
-        <ImageLightbox imagePath={lightboxPath} onClose={() => setLightboxPath(null)} />
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-
-interface DetailViewProps {
-  dataset: TestSuite;
-  tagFilter: string[];
-  toggleTag: (t: string) => void;
-  onDeleteClick: () => void;
-  onPreviewClick: () => void;
-  onRagPhaseChange: (phase: RagPhase) => void;
-}
-
-function DetailView({ dataset: d, tagFilter, toggleTag, onDeleteClick, onPreviewClick, onRagPhaseChange }: DetailViewProps) {
-  if (!d) return null;
-
-  const category = d.category || 'Uncategorized';
-  const datasetType = d.dataset_type || 'Unknown';
-  const evalType = d.eval_type || '—';
-  const questionCount = typeof d.question_count === 'number' ? d.question_count : 0;
-  const accent = hashColor(category);
-  const tags = d.dataset_categories ?? [];
-  const deletable = isCustomDataset(d);
-  const isRag = isRagDataset(d);
-
-  // Column 1 — what the detail view has always shown.
-  const mainContent = (
-    <>
-      <div className={styles['datasets__hero']}>
-        <span className={styles['datasets__hero-bar']} style={{ background: accent.fg }} />
-        <div className={styles['datasets__hero-top']}>
-          <div>
-            <span className={styles['datasets__hero-type']} style={{ color: accent.fg }}>{category}</span>
-            <h2>{d.name || 'Untitled dataset'}</h2>
-          </div>
-          <div className={styles['datasets__hero-actions']}>
-            <span className={styles['datasets__hero-badge-group']}>
-              <span className={styles['datasets__hero-badge-label']}>Dataset Type</span>
-              <span className={styles['datasets__source-badge']}>{datasetType}</span>
-            </span>
-            {d.eval_type && (
-              <span className={styles['datasets__hero-badge-group']}>
-                <span className={styles['datasets__hero-badge-label']}>Eval Type</span>
-                <span className={styles['datasets__eval-badge']}>{d.eval_type}</span>
-              </span>
-            )}
-            <button
-              type="button"
-              className={styles['datasets__preview-btn']}
-              onClick={onPreviewClick}
-              title="Preview questions"
-            >
-              <Eye size={14} /> Preview
-            </button>
-            {deletable && (
-              <button
-                type="button"
-                className={styles['datasets__delete-btn']}
-                onClick={onDeleteClick}
-                title="Delete this dataset"
-              >
-                <Trash2 size={14} />
-              </button>
-            )}
-          </div>
-        </div>
-        <DatasetIdChip id={d.id} />
-        <p className={styles['datasets__hero-desc']}>{d.description || 'No description provided.'}</p>
-      </div>
-
-      <div className={styles['datasets__stats']}>
-        <Stat label="Questions" value={questionCount.toLocaleString()} />
-        <Stat label="Categories" value={tags.length || '—'} />
-        <Stat label="Eval Type" value={evalType} mono />
-        <Stat label="Source" value={datasetType} mono />
-      </div>
-
-      <div className={styles['datasets__section']}>
-        <div className={styles['datasets__section-head']}>
-          <h3>Categories {tags.length > 0 && <em>{tags.length}</em>}</h3>
-          {tags.length > 0 && (
-            <span className={styles['datasets__section-hint']}>
-              click a category to see other datasets with it <ArrowRight size={11} />
-            </span>
-          )}
-        </div>
-
-        {tags.length === 0 ? (
-          <div className={styles['datasets__single']}>
-            <Boxes size={15} />
-            <div>
-              <strong>No categories tagged.</strong>
-              <span>This dataset isn't broken down into subject areas.</span>
-            </div>
-          </div>
-        ) : (
-          <div className={styles['datasets__caps']}>
-            {tags.filter(Boolean).map((t) => {
-              const col = hashColor(normalizeTag(t));
-              const active = tagFilter.some((x) => normalizeTag(x) === normalizeTag(t));
+      <div className="pg-body">
+        <div className={styles['providers__grid']}>
+          {status === 'loading' && <SkeletonCards count={6} />}
+          {status !== 'loading' &&
+            filtered.map((p) => {
+              const isCustom = p.name === 'Custom';
               return (
-                <button
-                  key={t}
-                  type="button"
-                  aria-pressed={active}
-                  className={`${styles['datasets__cap']} ${active ? styles['datasets__cap--active'] : ''}`}
-                  // Every chip is filled with its own color by default; the
-                  // selected one is set apart by a ring (via --cap-color),
-                  // a lift and the check mark — see .datasets__cap--active.
-                  style={{
-                    background: col.fg,
-                    color: '#fff',
-                    borderColor: col.fg,
-                    '--cap-color': col.fg,
-                  } as CSSProperties}
-                  onClick={() => toggleTag(t)}
+                <div
+                  className={`${styles['providers__card']} ${p.id === 'openrouter' ? styles['providers__card--fit-content'] : ''}`}
+                  key={p.id}
                 >
-                  {t}{active && <Check size={12} />}
-                </button>
+                  <div className={styles['providers__card-hdr']}>
+                    <div className={styles['providers__card-id']}>
+                      <div className={styles['providers__icon']}>
+                        {p.logo_url ? <img src={p.logo_url} alt={p.name ?? 'Provider'} /> : (p.name?.[0] ?? '?')}
+                      </div>
+                      <div style={{ minWidth: 0 }}>
+                        <div className={styles['providers__name']}>{p.name ?? 'Unnamed provider'}</div>
+                        <div className={styles['providers__count']}>{p.model_count ?? 0} models</div>
+                      </div>
+                    </div>
+                    <div className={styles['providers__card-top-actions']}>
+                      <button
+                        className={styles['providers__icon-btn']}
+                        onClick={() => openModelsSidebar(p)}
+                        title={isCustom ? 'Manage models' : 'View models'}
+                        aria-label={`${isCustom ? 'Manage' : 'View'} models for ${p.name ?? 'provider'}`}
+                      >
+                        {isCustom ? <ListChecks size={14} /> : <Eye size={14} />}
+                      </button>
+                      {p.status === 'connected' ? (
+                        <span className={styles['providers__badge-connected']}>
+                          <Check size={10} strokeWidth={3} /> Connected
+                        </span>
+                      ) : (
+                        <span className={styles['providers__badge-idle']}>Not connected</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className={styles['providers__desc']}>{p.description}</div>
+
+                  {p.id === 'openrouter' && (() => {
+                    const credits = openrouterCredits;
+                    const isLoading = openrouterCreditsStatus === 'loading';
+                    const isReady = openrouterCreditsStatus === 'succeeded' && credits;
+                    const pct = isReady && credits.total_credits > 0
+                      ? Math.min(100, (credits.total_usage / credits.total_credits) * 100)
+                      : 0;
+                    const level = pct >= 90 ? 'danger' : pct >= 70 ? 'warn' : 'ok';
+                    const stats = [
+                      { label: 'Total Credits', value: credits?.total_credits.toLocaleString() },
+                      { label: 'Total Usage', value: credits?.total_usage.toLocaleString() },
+                      { label: 'Remaining', value: credits?.remaining.toLocaleString(), highlight: true },
+                      { label: 'Currency', value: credits?.currency },
+                    ];
+                    return (
+                      <div className={styles['providers__credits']}>
+                        {(isLoading || isReady) && (
+                          <>
+                            <div className={styles['providers__credits-grid']}>
+                              {stats.map((st) => (
+                                <div key={st.label} className={styles['providers__credits-stat']}>
+                                  <span className={styles['providers__credits-stat-label']}>{st.label}</span>
+                                  {isLoading ? (
+                                    <span className={styles['providers__credits-skeleton-bar']} />
+                                  ) : (
+                                    <span
+                                      className={`${styles['providers__credits-stat-value']} ${st.highlight ? styles['providers__credits-stat-value--highlight'] : ''}`}
+                                    >
+                                      {st.value}
+                                    </span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                            {isReady && (
+                              <div
+                                className={styles['providers__credits-bar-track']}
+                                title={`${credits.total_usage.toLocaleString()} of ${credits.total_credits.toLocaleString()} ${credits.currency} used`}
+                              >
+                                <div
+                                  className={`${styles['providers__credits-bar-fill']} ${styles[`providers__credits-bar-fill--${level}`]}`}
+                                  style={{ width: `${pct}%` }}
+                                />
+                              </div>
+                            )}
+                          </>
+                        )}
+
+                        {openrouterCreditsStatus === 'failed' && (
+                          <span className={styles['providers__credits-error']}>Couldn't load credit balance</span>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {keyPromptFor === p.id ? (
+                    <div className={styles['providers__key-form']}>
+                      <input
+                        className={styles['providers__key-input']}
+                        type="password"
+                        placeholder="Paste API key…"
+                        value={apiKeyInput}
+                        onChange={(e) => setApiKeyInput(e.target.value)}
+                        autoFocus
+                      />
+                      <div className={styles['providers__key-actions']}>
+                        <button
+                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--primary']}`}
+                          onClick={() => submitConnect(p.id)}
+                        >
+                          Save
+                        </button>
+                        <button
+                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--ghost']}`}
+                          onClick={() => setKeyPromptFor(null)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className={styles['providers__foot-actions']}>
+                      {isCustom && (
+                        <button
+                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--accent']}`}
+                          onClick={() => setAddModelOpen(true)}
+                        >
+                          <ListPlus size={13} /> Add Model
+                        </button>
+                      )}
+                      {p.status !== 'connected' && (
+                        <button
+                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--primary']}`}
+                          disabled={mutatingId === p.id}
+                          onClick={() => setKeyPromptFor(p.id)}
+                        >
+                          {mutatingId === p.id ? (
+                            <Loader2 size={13} className={styles['providers__spin']} />
+                          ) : (
+                            <>
+                              <Plus size={13} /> Connect
+                            </>
+                          )}
+                        </button>
+                      )}
+                      {/* Configure button temporarily disabled per request
+                      {p.status === 'connected' && (
+                        <button
+                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--ghost']}`}
+                          disabled={mutatingId === p.id}
+                          onClick={() => setKeyPromptFor(p.id)}
+                        >
+                          {mutatingId === p.id ? (
+                            <Loader2 size={13} className={styles['providers__spin']} />
+                          ) : (
+                            <>
+                              <Settings size={13} /> Configure
+                            </>
+                          )}
+                        </button>
+                      )}
+                      */}
+                      {p.status === 'connected' && (
+                        <>
+                          <button
+                            className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--ghost']}`}
+                            disabled={syncingId === p.id}
+                            onClick={() => dispatch(syncModels(p.id))}
+                          >
+                            {syncingId === p.id ? (
+                              <Loader2 size={13} className={styles['providers__spin']} />
+                            ) : (
+                              <>
+                                <RefreshCw size={13} /> Sync
+                              </>
+                            )}
+                          </button>
+                          <button
+                            className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--danger']}`}
+                            disabled={mutatingId === p.id}
+                            onClick={() => dispatch(disconnectProvider(p.id))}
+                          >
+                            <Unlink size={13} /> Disconnect
+                          </button>
+                        </>
+                      )}
+                      {p.status !== 'connected' && (
+                        <button
+                          className={`${styles['providers__foot-btn']} ${styles['providers__foot-btn--danger']}`}
+                          disabled={mutatingId === p.id}
+                          onClick={() => {
+                            if (window.confirm(`Delete ${p.name ?? 'this provider'}? This cannot be undone.`)) {
+                              dispatch(deleteProvider(p.id));
+                            }
+                          }}
+                        >
+                          <Trash2 size={13} /> Delete
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
               );
             })}
-          </div>
-        )}
-      </div>
-    </>
-  );
-
-  // Non-RAG datasets: single column, unchanged.
-  if (!isRag) {
-    return (
-      <div className={styles['datasets__detail-scroll']} key={d.id ?? d.name ?? 'selected'}>
-        {mainContent}
-      </div>
-    );
-  }
-
-  // RAG datasets: split into two columns. Column 2 is the file upload +
-  // processing panel (formerly the RAG studio modal), which adapts to the
-  // dataset's current_state (upload / processing / completed).
-  return (
-    <div
-      className={`${styles['datasets__detail-scroll']} ${styles['datasets__detail-scroll--split']}`}
-      key={d.id ?? d.name ?? 'selected'}
-    >
-      <div className={styles['datasets__detail-col']}>
-        {mainContent}
-      </div>
-      <div className={`${styles['datasets__detail-col']} ${styles['datasets__detail-col--rag']}`}>
-        <RagPanel datasetId={d.id} onPhaseChange={onRagPhaseChange} />
-      </div>
-    </div>
-  );
-}
-
-// Copies text to the clipboard. navigator.clipboard only exists in secure
-// contexts (HTTPS or localhost), so on a plain http://<ip> deployment it's
-// undefined — fall back to a temporary textarea + execCommand('copy'), which
-// still works there. Returns whether the copy succeeded.
-async function copyToClipboard(text: string): Promise<boolean> {
-  if (navigator.clipboard && window.isSecureContext) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return true;
-    } catch {
-      // fall through to the legacy path
-    }
-  }
-
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  textarea.setAttribute('readonly', '');
-  // Off-screen rather than display:none — hidden elements can't be selected.
-  textarea.style.position = 'fixed';
-  textarea.style.top = '0';
-  textarea.style.left = '-9999px';
-  textarea.style.opacity = '0';
-  document.body.appendChild(textarea);
-
-  const previouslyFocused = document.activeElement as HTMLElement | null;
-  try {
-    textarea.focus();
-    textarea.select();
-    textarea.setSelectionRange(0, text.length);
-    return document.execCommand('copy');
-  } catch {
-    return false;
-  } finally {
-    document.body.removeChild(textarea);
-    previouslyFocused?.focus?.();
-  }
-}
-
-// Dataset id shown under the title, with a one-click copy.
-function DatasetIdChip({ id }: { id?: string | null }) {
-  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
-
-  if (!id) return null;
-
-  const copy = async () => {
-    const ok = await copyToClipboard(id);
-    setCopyState(ok ? 'copied' : 'failed');
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => setCopyState('idle'), 1500);
-  };
-
-  return (
-    <div className={styles['datasets__id']}>
-      <span className={styles['datasets__id-label']}>Dataset ID</span>
-      <code className={styles['datasets__id-value']} title={id}>{id}</code>
-      <button
-        type="button"
-        className={styles['datasets__id-copy']}
-        onClick={copy}
-        title={
-          copyState === 'copied' ? 'Copied'
-            : copyState === 'failed' ? 'Copy failed — select the ID and press Ctrl/Cmd+C'
-              : 'Copy dataset ID'
-        }
-        aria-label="Copy dataset ID"
-      >
-        {copyState === 'copied' ? <Check size={12} />
-          : copyState === 'failed' ? <AlertCircle size={12} />
-            : <Copy size={12} />}
-      </button>
-    </div>
-  );
-}
-
-function Stat({ label, value, mono }: { label: string; value: string | number | null | undefined; mono?: boolean }) {
-  const display = value === null || value === undefined || value === '' ? '—' : value;
-  return (
-    <div className={styles['datasets__stat']}>
-      <span className={`${styles['datasets__stat-val']} ${mono ? styles['datasets__stat-val--mono'] : ''}`}>
-        {display}
-      </span>
-      <span className={styles['datasets__stat-label']}>{label}</span>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Upload modal
-// ---------------------------------------------------------------------------
-
-interface UploadModalProps {
-  uploadStatus: 'idle' | 'loading' | 'succeeded' | 'failed';
-  uploadError: string | null;
-  ragCreateStatus: 'idle' | 'loading' | 'succeeded' | 'failed';
-  ragCreateError: string | null;
-  onClose: () => void;
-  onSubmit: (params: { file: File; name: string; description: string; evalType: EvalType }) => void;
-  onSubmitRag: (params: { name: string; description: string; questionsFile: File }) => void;
-}
-
-function getExtension(filename: string): string {
-  const idx = filename.lastIndexOf('.');
-  return idx >= 0 ? filename.slice(idx + 1).toLowerCase() : '';
-}
-
-function UploadModal({ uploadStatus, uploadError, ragCreateStatus, ragCreateError, onClose, onSubmit, onSubmitRag }: UploadModalProps) {
-  const [evalType, setEvalType] = useState<EvalType>('model');
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [file, setFile] = useState<File | null>(null);
-  const [localError, setLocalError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const isRag = evalType === 'rag';
-  const isLoading = isRag ? ragCreateStatus === 'loading' : uploadStatus === 'loading';
-  const ext = file ? getExtension(file.name) : '';
-  const isJsonl = ext === 'jsonl';
-
-  // RAG's step-1 file is a questions file (.json, .jsonl, .arrow or .parquet
-  // — SQuAD, BoolQ, standard, or simple flat format), the same extensions
-  // LLM/Agent accept but with a different meaning: source documents for RAG
-  // are uploaded later, in the dataset's upload/processing panel.
-  const acceptedExtensions = isRag ? RAG_QUESTIONS_FILE_EXTENSIONS : SUPPORTED_UPLOAD_EXTENSIONS;
-
-  // Switching eval type changes which extensions are valid — drop a
-  // previously-chosen file rather than silently carrying over something
-  // that may no longer be accepted (or mean something different) here.
-  const handleEvalTypeChange = (value: EvalType) => {
-    setEvalType(value);
-    setFile(null);
-    setLocalError(null);
-  };
-
-  const pickFile = (f: File | null) => {
-    setLocalError(null);
-    if (!f) {
-      setFile(null);
-      return;
-    }
-    const fExt = getExtension(f.name);
-    if (!acceptedExtensions.includes(fExt)) {
-      setFile(null);
-      setLocalError(`Unsupported file type ".${fExt || '?'}". Please choose a ${acceptedExtensions.map((e) => `.${e}`).join(', ')} file.`);
-      return;
-    }
-    setFile(f);
-  };
-
-  const handleSubmit = () => {
-    setLocalError(null);
-    if (!name.trim()) return setLocalError('Please enter a dataset name.');
-    if (!description.trim()) return setLocalError('Please enter a description.');
-    if (isRag) {
-      if (!file) return setLocalError(`Please choose a questions file (${acceptedExtensions.map((e) => `.${e}`).join(', ')}).`);
-      onSubmitRag({ name: name.trim(), description: description.trim(), questionsFile: file });
-      return;
-    }
-    if (!file) return setLocalError('Please choose a file to upload.');
-    onSubmit({ file, name: name.trim(), description: description.trim(), evalType });
-  };
-
-  const displayError = localError || (isRag
-    ? (ragCreateStatus === 'failed' ? ragCreateError : null)
-    : (uploadStatus === 'failed' ? uploadError : null));
-
-  return (
-    <div className={styles['datasets__modal-overlay']}>
-      <div
-        className={styles['datasets__modal']}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Upload dataset"
-      >
-        <div className={styles['datasets__modal-hdr']}>
-          <div>
-            <p className={styles['datasets__modal-eyebrow']}>New test suite</p>
-            <h3>Upload dataset</h3>
-          </div>
-          <button className={styles['datasets__modal-close']} onClick={onClose} disabled={isLoading} aria-label="Close">
-            <X size={16} />
-          </button>
-        </div>
-
-        <div className={styles['datasets__modal-body']}>
-          <div className={styles['datasets__field']}>
-            <label className={styles['datasets__field-label']}>Eval type</label>
-            <div className={styles['datasets__eval-pills']}>
-              {EVAL_TYPE_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  className={`${styles['datasets__eval-pill']} ${evalType === opt.value ? styles['datasets__eval-pill--on'] : ''}`}
-                  onClick={() => handleEvalTypeChange(opt.value)}
-                  disabled={isLoading}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className={styles['datasets__field']}>
-            <label className={styles['datasets__field-label']} htmlFor="ds-upload-name">Name</label>
-            <input
-              id="ds-upload-name"
-              className={styles['datasets__field-input']}
-              placeholder="e.g. Internal QA Set v2"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              disabled={isLoading}
-            />
-          </div>
-
-          <div className={styles['datasets__field']}>
-            <label className={styles['datasets__field-label']} htmlFor="ds-upload-desc">Description</label>
-            <textarea
-              id="ds-upload-desc"
-              className={styles['datasets__field-textarea']}
-              placeholder="What does this dataset cover?"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              disabled={isLoading}
-              rows={3}
-            />
-          </div>
-
-          <div className={styles['datasets__field']}>
-            <label className={styles['datasets__field-label']}>{isRag ? 'Questions file' : 'File'}</label>
-            <button
-              type="button"
-              className={styles['datasets__dropzone']}
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isLoading}
-            >
-              <FileUp size={18} />
-              <span className={styles['datasets__dropzone-text']}>
-                {file ? file.name : (isRag ? 'Choose a questions file' : 'Choose a file to upload')}
-              </span>
-              <span className={styles['datasets__dropzone-hint']}>
-                {acceptedExtensions.map((e, i) => (
-                  <span key={e}>
-                    {i > 0 && <>&nbsp;·&nbsp; </>}.{e}
-                  </span>
-                ))}
-              </span>
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept={acceptedExtensions.map((e) => `.${e}`).join(',')}
-              className={styles['datasets__file-input']}
-              onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
-              disabled={isLoading}
-            />
-            {isRag ? (
-              <p className={styles['datasets__field-note']}>
-                Any supported question format works — SQuAD, BoolQ, standard, or simple flat. Source
-                documents for retrieval are uploaded separately, once the dataset is created.
-              </p>
-            ) : (
-              isJsonl && evalType === 'agent' && (
-                <p className={styles['datasets__field-note']}>
-                  JSONL uploads for Agent evals are automatically tagged with category “Agents”.
-                </p>
-              )
-            )}
-          </div>
-
-          {displayError && (
-            <div className={styles['datasets__modal-error']}>
-              <AlertCircle size={14} />
-              {displayError}
-            </div>
-          )}
-
-          {!isRag && uploadStatus === 'succeeded' && (
-            <div className={styles['datasets__modal-success']}>
-              <CheckCircle2 size={14} />
-              Dataset uploaded — refreshing the library…
-            </div>
+          {status !== 'loading' && filtered.length === 0 && (
+            <p className={styles['providers__empty']}>No providers match your search or filter.</p>
           )}
         </div>
-
-        <div className={styles['datasets__modal-foot']}>
-          <button className={styles['datasets__modal-cancel']} onClick={onClose} disabled={isLoading}>
-            Cancel
-          </button>
-          <button className={styles['datasets__modal-submit']} onClick={handleSubmit} disabled={isLoading}>
-            {isLoading
-              ? <Loader2 size={14} className={styles['datasets__spin']} />
-              : (isRag ? <Database size={14} /> : <Upload size={14} />)}
-            {isLoading ? (isRag ? 'Creating…' : 'Uploading…') : (isRag ? 'Create RAG dataset' : 'Upload dataset')}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Delete confirmation modal
-// ---------------------------------------------------------------------------
-
-interface DeleteConfirmModalProps {
-  dataset: TestSuite;
-  isDeleting: boolean;
-  deleteError: string | null;
-  onCancel: () => void;
-  onConfirm: () => void;
-}
-
-function DeleteConfirmModal({ dataset, isDeleting, deleteError, onCancel, onConfirm }: DeleteConfirmModalProps) {
-  const name = dataset.name || 'this dataset';
-
-  return (
-    <div className={styles['datasets__modal-overlay']}>
-      <div
-        className={styles['datasets__modal']}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Delete dataset"
-      >
-        <div className={styles['datasets__modal-hdr']}>
-          <div>
-            <p className={`${styles['datasets__modal-eyebrow']} ${styles['datasets__modal-eyebrow--danger']}`}>
-              This can't be undone
-            </p>
-            <h3>Delete dataset</h3>
-          </div>
-          <button className={styles['datasets__modal-close']} onClick={onCancel} disabled={isDeleting} aria-label="Close">
-            <X size={16} />
-          </button>
-        </div>
-
-        <div className={styles['datasets__modal-body']}>
-          <p className={styles['datasets__delete-copy']}>
-            Are you sure you want to delete <strong>{name}</strong>? This will permanently remove
-            the dataset and it will no longer be available for evaluations.
-          </p>
-
-          {deleteError && (
-            <div className={styles['datasets__modal-error']}>
-              <AlertCircle size={14} />
-              {deleteError}
-            </div>
-          )}
-        </div>
-
-        <div className={styles['datasets__modal-foot']}>
-          <button className={styles['datasets__modal-cancel']} onClick={onCancel} disabled={isDeleting}>
-            Cancel
-          </button>
-          <button className={styles['datasets__modal-danger']} onClick={onConfirm} disabled={isDeleting}>
-            {isDeleting ? <Loader2 size={14} className={styles['datasets__spin']} /> : <Trash2 size={14} />}
-            {isDeleting ? 'Deleting…' : 'Delete dataset'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Question preview drawer — slides in from the right, same pattern as
-// History's test-detail/metric-score drawer: a separate fade-only overlay,
-// a fixed panel pinned to the right edge that translates in on open, its
-// own header + scrollable body, and a pagination footer.
-// ---------------------------------------------------------------------------
-
-interface PreviewDrawerProps {
-  dataset: TestSuite;
-  preview: PreviewState;
-  onClose: () => void;
-  onChangeOffset: (offset: number) => void;
-  onChangeLimit: (limit: number) => void;
-  onOpenImage: (imagePath: string) => void;
-}
-
-function PreviewDrawer({ dataset, preview, onClose, onChangeOffset, onChangeLimit, onOpenImage }: PreviewDrawerProps) {
-  const { questions, total, limit, offset, status, error } = preview;
-  const safeLimit = limit > 0 ? limit : 20;
-  const totalPages = Math.max(1, Math.ceil(total / safeLimit));
-  const currentPage = Math.floor(offset / safeLimit) + 1;
-  const rangeStart = total === 0 ? 0 : offset + 1;
-  const rangeEnd = Math.min(offset + safeLimit, total);
-  const isLoading = status === 'loading';
-
-  return (
-    <>
-      <div className={styles['datasets__preview-header']}>
-        <div>
-          <p className={styles['datasets__preview-eyebrow']}>Question preview</p>
-          <h3 className={styles['datasets__preview-title']}>{dataset.name || 'Untitled dataset'}</h3>
-          <div className={styles['datasets__preview-sub']}>
-            {total.toLocaleString()} question{total === 1 ? '' : 's'} total
-          </div>
-        </div>
-        <button type="button" className={styles['datasets__preview-close']} onClick={onClose} title="Close">
-          <X size={16} />
-        </button>
       </div>
 
-      <div className={styles['datasets__preview-body']}>
-        {isLoading && questions.length === 0 && (
-          <div className={styles['datasets__preview-loading']}>
-            <Loader2 size={16} className={styles['datasets__spin']} /> Loading questions…
-          </div>
-        )}
-
-        {status === 'failed' && questions.length === 0 && (
-          <div className={styles['datasets__preview-loading']}>
-            <AlertCircle size={16} /> {error || 'Failed to load questions.'}
-          </div>
-        )}
-
-        {status === 'succeeded' && questions.length === 0 && (
-          <div className={styles['datasets__preview-loading']}>
-            <HelpCircle size={16} /> No questions found for this dataset.
-          </div>
-        )}
-
-        {questions.map((q, i) => {
-          const { text: prompt, field: promptField } = getQuestionText(q);
-          const answer = q?.expected?.answer;
-          const language = q?.input?.language;
-          const images = (q?.input?.images ?? []).filter(Boolean) as string[];
-          return (
-            <div key={q?.id ?? i} className={styles['datasets__preview-card']}>
-              <div className={styles['datasets__preview-card-hdr']}>
-                <span className={styles['datasets__preview-card-num']}>Q{offset + i + 1}</span>
-                <span className={styles['datasets__preview-card-tags']}>
-                  {language && <span className={styles['datasets__preview-card-lang']}>{language}</span>}
-                  {q?.category && <span className={styles['datasets__preview-card-cat']}>{q.category}</span>}
-                </span>
-              </div>
-              <div className={styles['datasets__preview-field']}>
-                <span className={styles['datasets__preview-field-label']}>
-                  {promptField === 'question' ? 'Question' : 'Prompt'}
-                </span>
-                <div className={styles['datasets__preview-field-text']}>{prompt || '—'}</div>
-              </div>
-
-              {images.length > 0 && (
-                <div className={styles['datasets__preview-field']}>
-                  <span className={styles['datasets__preview-field-label']}>
-                    Image{images.length === 1 ? '' : `s (${images.length})`}
-                  </span>
-                  <div className={styles['datasets__preview-image-list']}>
-                    {images.map((imgPath, imgIdx) => (
-                      <button
-                        key={imgPath || imgIdx}
-                        type="button"
-                        className={styles['datasets__preview-image-chip']}
-                        onClick={() => onOpenImage(imgPath)}
-                        title={`Preview ${imageBasename(imgPath)}`}
-                      >
-                        <ImageIcon size={13} />
-                        <span>{imageBasename(imgPath)}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div className={styles['datasets__preview-field']}>
-                <span className={styles['datasets__preview-field-label']}>Expected answer</span>
-                <div
-                  className={`${styles['datasets__preview-field-text']} ${answer == null ? styles['datasets__preview-field-text--empty'] : ''}`}
-                >
-                  {answer ?? 'No expected answer'}
-                </div>
-              </div>
-
-              {q?.metadata && Object.keys(q.metadata).length > 0 && (
-                <div className={styles['datasets__preview-meta']}>
-                  {flattenMetadata(q.metadata).map(([label, value]) => (
-                    <div
-                      key={label}
-                      className={`${styles['datasets__preview-meta-item']} ${value.length > 40 ? styles['datasets__preview-meta-item--full'] : ''}`}
-                    >
-                      <span className={styles['datasets__preview-meta-label']}>{formatMetaLabel(label)}</span>
-                      <span className={styles['datasets__preview-meta-val']}>{value}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {total > 0 && (
-        <div className={styles['datasets__preview-pagination']}>
-          <div className={styles['datasets__preview-pagination-info']}>
-            {rangeStart}–{rangeEnd} of {total}
-          </div>
-          <div className={styles['datasets__preview-pagination-controls']}>
-            <select
-              className={styles['datasets__preview-size-select']}
-              value={safeLimit}
-              onChange={(e) => onChangeLimit(Number(e.target.value))}
-              disabled={isLoading}
-              title="Questions per page"
-            >
-              {PREVIEW_PAGE_SIZE_OPTIONS.map((n) => (
-                <option key={n} value={n}>{n} / page</option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className={styles['datasets__preview-nav-btn']}
-              onClick={() => onChangeOffset(Math.max(0, offset - safeLimit))}
-              disabled={offset <= 0 || isLoading}
-              title="Previous page"
-            >
-              <ChevronLeft size={14} />
-            </button>
-            <span className={styles['datasets__preview-page-label']}>{currentPage} / {totalPages}</span>
-            <button
-              type="button"
-              className={styles['datasets__preview-nav-btn']}
-              onClick={() => onChangeOffset(offset + safeLimit)}
-              disabled={currentPage >= totalPages || isLoading}
-              title="Next page"
-            >
-              <ChevronRight size={14} />
-            </button>
-          </div>
-        </div>
+      {drawerOpen && (
+        <AddProviderDrawer
+          submitting={creating}
+          onClose={() => setDrawerOpen(false)}
+          onSubmit={(payload) => {
+            dispatch(createProvider(payload)).then(() => setDrawerOpen(false));
+          }}
+        />
       )}
-    </>
-  );
-}
 
-// ---------------------------------------------------------------------------
-// MinIO image lightbox — mirrors the MinIO console's own object-preview
-// experience: a near-black backdrop, the image centered and scaled to fit
-// the viewport, a slim header bar with the filename and a download action,
-// and the image itself only fetched once this is actually opened (never
-// preloaded with the question list).
-// ---------------------------------------------------------------------------
+      {addModelOpen && customProvider && (
+        <AddCustomModelDrawer
+          mode="create"
+          submitting={customModelCreating}
+          onClose={() => setAddModelOpen(false)}
+          onSubmit={(result) => {
+            if (result.kind !== 'create') return;
+            dispatch(createCustomModel(result.payload))
+              .unwrap()
+              .then(() => {
+                setAddModelOpen(false);
+                toast.success(`"${result.payload.name}" was registered successfully.`, { title: 'Model registered' });
+                dispatch(fetchProviders());
+                dispatch(fetchModelsByProvider(customProvider.id));
+              })
+              .catch((err) => {
+                toast.error(getErrorMessage(err, 'Failed to register model.'), { title: 'Registration failed' });
+              });
+          }}
+        />
+      )}
 
-interface ImageLightboxProps {
-  imagePath: string;
-  onClose: () => void;
-}
-
-function ImageLightbox({ imagePath, onClose }: ImageLightboxProps) {
-  const [blobUrl, setBlobUrl] = useState<string | null>(null);
-  const [status, setStatus] = useState<'loading' | 'succeeded' | 'failed'>('loading');
-  const [error, setError] = useState<string | null>(null);
-  const [reloadKey, setReloadKey] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    let objectUrl: string | null = null;
-
-    setStatus('loading');
-    setError(null);
-
-    testSuitesApi
-      .getImageBlobUrl(imagePath)
-      .then((url) => {
-        if (cancelled) {
-          URL.revokeObjectURL(url);
-          return;
-        }
-        objectUrl = url;
-        setBlobUrl(url);
-        setStatus('succeeded');
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setError(err instanceof Error ? err.message : 'Failed to load image.');
-        setStatus('failed');
-      });
-
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [imagePath, reloadKey]);
-
-  const filename = imageBasename(imagePath);
-
-  return (
-    <div className={styles['datasets__lightbox-overlay']} onClick={onClose}>
-      <div className={styles['datasets__lightbox']} onClick={(e) => e.stopPropagation()}>
-        <div className={styles['datasets__lightbox-hdr']}>
-          <div className={styles['datasets__lightbox-hdr-info']}>
-            <ImageIcon size={14} />
-            <span className={styles['datasets__lightbox-filename']} title={imagePath}>{filename}</span>
-          </div>
-          <div className={styles['datasets__lightbox-hdr-actions']}>
-            {blobUrl && (
-              <a
-                className={styles['datasets__lightbox-action']}
-                href={blobUrl}
-                download={filename}
-                title="Download image"
-              >
-                <Download size={15} />
-              </a>
-            )}
-            <button
-              type="button"
-              className={styles['datasets__lightbox-action']}
-              onClick={onClose}
-              title="Close"
-            >
-              <X size={16} />
-            </button>
-          </div>
-        </div>
-
-        <div className={styles['datasets__lightbox-stage']}>
-          {status === 'loading' && (
-            <div className={styles['datasets__lightbox-state']}>
-              <Loader2 size={22} className={styles['datasets__spin']} />
-              <span>Loading image…</span>
-            </div>
-          )}
-
-          {status === 'failed' && (
-            <div className={styles['datasets__lightbox-state']}>
-              <AlertCircle size={22} />
-              <span>{error || "Couldn't load this image."}</span>
-              <button
-                type="button"
-                className={styles['datasets__lightbox-retry']}
-                onClick={() => setReloadKey((k) => k + 1)}
-              >
-                <RotateCw size={13} /> Retry
-              </button>
-            </div>
-          )}
-
-          {status === 'succeeded' && blobUrl && (
-            <img className={styles['datasets__lightbox-img']} src={blobUrl} alt={filename} />
-          )}
-        </div>
-      </div>
+      {viewModelsProvider && (
+        <ProviderModelsSidebar
+          provider={viewModelsProvider}
+          models={modelsByProvider[viewModelsProvider.id] || []}
+          status={modelsByProviderStatus[viewModelsProvider.id] || 'idle'}
+          onClose={() => setViewModelsProvider(null)}
+          canManage={viewModelsProvider.name === 'Custom'}
+          deletingId={customModelDeletingId}
+          updatingId={customModelUpdatingId}
+          creatingNew={customModelCreating}
+          onDelete={(modelId) => {
+            dispatch(deleteCustomModel({ modelId, providerId: viewModelsProvider.id }))
+              .unwrap()
+              .then(() => {
+                toast.success('Model removed successfully.', { title: 'Model removed' });
+                dispatch(fetchProviders());
+              })
+              .catch((err) => {
+                toast.error(getErrorMessage(err, 'Failed to remove model.'), { title: 'Removal failed' });
+              });
+          }}
+          onEditSubmit={(result) => {
+            if (result.kind === 'update') {
+              return dispatch(updateCustomModel(result.payload))
+                .unwrap()
+                .then((res) => {
+                  toast.success(`"${res.name}" was updated successfully.`, { title: 'Model updated' });
+                  dispatch(fetchProviders());
+                  dispatch(fetchModelsByProvider(viewModelsProvider.id));
+                })
+                .catch((err) => {
+                  toast.error(getErrorMessage(err, 'Failed to update model.'), { title: 'Update failed' });
+                  throw err;
+                });
+            }
+            // Discovery found a different model id — register it as a new
+            // model instead of mutating the one being edited.
+            return dispatch(createCustomModel(result.payload))
+              .unwrap()
+              .then(() => {
+                toast.success(`"${result.payload.name}" was registered as a new model.`, { title: 'Model registered' });
+                dispatch(fetchProviders());
+                dispatch(fetchModelsByProvider(viewModelsProvider.id));
+              })
+              .catch((err) => {
+                toast.error(getErrorMessage(err, 'Failed to register model.'), { title: 'Registration failed' });
+                throw err;
+              });
+          }}
+        />
+      )}
     </div>
   );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+@use '../../styles/_variables' as *;
+
+// ===========================================================================
+// Providers — matches the Run Console / Dashboard design system:
+// ink/paper palette, ultramarine signal accent, mono instrument labels,
+// hover-lift cards. Sidebar block keys are kept stable (shared with
+// ProviderModelsSidebar) but recolored to the same tokens.
+//
+// Neutral/status tokens ($ink, $paper, $card, $line, $signal, $wash, $ok,
+// $danger, etc.) now come from the shared "ink" block in _variables.scss
+// (theme-aware via _theme.scss custom properties) — only font aliases and
+// shadow tokens specific to this file are declared locally below.
+//
+// Font scaling: `.providers` sets a single base font-size. All descendant
+// font-sizes are expressed in `em` (relative to that base), so bumping
+// `.providers`'s font-size (e.g. on wide screens) scales the whole
+// component proportionally from one place — same convention as Sidebar.
+// ===========================================================================
+
+$mono:    $font-mono;
+$sans:    $font-body;
+$display: $font-display;
+
+$soft: 0 1px 2px rgba(20, 22, 27, 0.05);
+$lift: 0 14px 30px -14px rgba(20, 22, 27, 0.22);
+
+// base font-size the providers page's internal `em` scale is built on
+$providers-base-font: 0.8125rem;
+
+%micro {
+  font-family: $mono;
+  font-size: 0.8462em; // 0.6875rem / 0.8125rem
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.providers {
+  // master scale control — every em-based font-size below responds to this
+  font-size: $providers-base-font;
+
+  @media (min-width: 1800px) {
+    font-size: 1rem;
+  }
+
+  // ---- header -----------------------------------------------------------
+  &__header {
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 24px 32px 20px;
+    margin-bottom: 20px;
+    border-bottom: 1px solid $line;
+    background: $card;
+
+    h1 {
+      font-family: $display;
+      font-size: 1.8462em; // 1.5rem / 0.8125rem
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: $ink;
+      line-height: 1.2;
+    }
+  }
+
+  &__header-eyebrow {
+    @extend %micro;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: $signal;
+    margin-bottom: 6px;
+
+    &::before {
+      content: '';
+      width: 16px;
+      height: 2px;
+      border-radius: 2px;
+      background: $signal;
+    }
+  }
+
+  &__header-sub {
+    margin-top: 4px;
+    font-size: 1.0385em; // 0.84375rem / 0.8125rem
+    color: $ink-2;
+  }
+
+  &__header-meta {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 13px;
+    border-radius: 999px;
+    border: 1px solid $line;
+    background: $paper;
+    font-family: $mono;
+    font-size: 0.8846em; // 0.71875rem / 0.8125rem
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: $ink-2;
+    white-space: nowrap;
+    margin-bottom: 3px;
+  }
+
+  // ---- toolbar ------------------------------------------------------------
+  &__toolbar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 14px 32px;
+    background: $card;
+    border-bottom: 1px solid $line;
+    flex-wrap: wrap;
+  }
+
+  &__search {
+    position: relative;
+    flex: 1;
+    max-width: 340px;
+    min-width: 200px;
+
+    svg {
+      position: absolute;
+      top: 50%;
+      left: 13px;
+      transform: translateY(-50%);
+      color: $ink-3;
+      pointer-events: none;
+    }
+
+    input {
+      width: 100%;
+      border: 1.5px solid $line;
+      border-radius: 10px;
+      padding: 9px 12px 9px 38px;
+      font-size: 1.0385em; // 0.84375rem / 0.8125rem
+      font-family: $sans;
+      color: $ink;
+      background: $paper;
+      transition: border-color 0.15s ease, background 0.15s ease;
+
+      &::placeholder { color: $ink-3; }
+      &:focus {
+        outline: none;
+        border-color: $signal;
+        background: $card;
+      }
+    }
+  }
+
+  &__toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+
+  &__filter-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px;
+    background: $paper;
+    border: 1px solid $line;
+    border-radius: 999px;
+  }
+
+  &__toolbar-label {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px 5px 11px;
+    @extend %micro;
+    font-size: 0.7692em; // 0.625rem / 0.8125rem
+    color: $ink-3;
+    white-space: nowrap;
+  }
+
+  &__filter-pill {
+    padding: 6px 13px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: $ink-2;
+    font-size: 0.9615em; // 0.78125rem / 0.8125rem
+    font-weight: 650;
+    cursor: pointer;
+    transition: all 0.15s ease;
+
+    &:hover { color: $ink; }
+
+    &--on {
+      background: $card;
+      color: $signal;
+      box-shadow: $soft;
+    }
+  }
+
+  &__toolbar-divider {
+    flex-shrink: 0;
+    width: 1px;
+    height: 26px;
+    background: $line;
+  }
+
+  &__add-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 9px 15px;
+    border: 1px solid $signal;
+    border-radius: 10px;
+    background: $signal;
+    color: #fff;
+    font-family: $sans;
+    font-size: 1em; // 0.8125rem / 0.8125rem (base)
+    font-weight: 650;
+    cursor: pointer;
+    box-shadow: $soft;
+    transition: background 0.16s ease, border-color 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
+
+    &:hover { background: $signal-2; border-color: $signal-2; transform: translateY(-1px); box-shadow: $lift; }
+  }
+
+  // ---- provider card grid --------------------------------------------------
+  &__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    gap: 12px;
+  }
+
+  &__card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 17px 18px;
+    border: 1.5px solid $line;
+    border-radius: 16px;
+    background: $card;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+
+    // Cards still stretch to match the tallest card in their row by default
+    // (so a grid of plain provider cards stays uniform, as before). This
+    // modifier opts a specific card (the OpenRouter card, which grows for
+    // its credits widget) out of that stretch so it can be taller on its
+    // own without forcing its row siblings to grow too.
+    &--fit-content {
+      align-self: start;
+      height: auto;
+    }
+
+    &:hover {
+      border-color: $ink-3;
+      box-shadow: $lift;
+      transform: translateY(-2px);
+    }
+  }
+
+  &__card-hdr {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  &__card-id {
+    display: flex;
+    align-items: center;
+    gap: 13px;
+    min-width: 0;
+  }
+
+  &__icon {
+    flex-shrink: 0;
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    display: grid;
+    place-items: center;
+    background: $paper;
+    border: 1px solid $line;
+    color: $ink;
+    font-family: $display;
+    font-weight: 800;
+    font-size: 1.3077em; // 1.0625rem / 0.8125rem
+
+    img { width: 24px; height: 24px; object-fit: contain; }
+  }
+
+  &__name {
+    font-family: $display;
+    font-size: 1.1538em; // 0.9375rem / 0.8125rem
+    font-weight: 700;
+    color: $ink;
+    line-height: 1.25;
+  }
+
+  &__count {
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    color: $ink-3;
+    margin-top: 2px;
+  }
+
+  &__card-top-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  &__icon-btn {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border: 1px solid $line;
+    border-radius: 8px;
+    background: $card;
+    color: $ink-2;
+    cursor: pointer;
+    transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+
+    &:hover { border-color: $ink-3; color: $ink; background: $paper; }
+  }
+
+  &__badge-connected {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px 4px 8px;
+    border-radius: 999px;
+    font-family: $mono;
+    font-size: 0.7692em; // 0.625rem / 0.8125rem
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: $ok;
+    background: $ok-wash;
+    white-space: nowrap;
+
+    &::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: $ok; }
+  }
+
+  &__badge-idle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 11px;
+    border-radius: 999px;
+    font-size: 0.8462em; // 0.6875rem / 0.8125rem
+    font-weight: 600;
+    color: $ink-3;
+    background: transparent;
+    border: 1px dashed $line;
+    white-space: nowrap;
+
+    &::before {
+      content: '';
+      flex-shrink: 0;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: $ink-3;
+      opacity: 0.7;
+    }
+  }
+
+  &__desc {
+    flex: 1;
+    margin-top: 11px;
+    font-size: 1em; // 0.8125rem / 0.8125rem (base)
+    color: $ink-2;
+    line-height: 1.5;
+  }
+
+  // ---- OpenRouter credits widget --------------------------------------------
+  // Four labeled stats (Total Credits / Total Usage / Remaining / Currency) in
+  // one row, label stacked over value. The usage bar is pinned to the bottom
+  // edge of the box so it adds no extra height.
+  &__credits {
+    position: relative;
+    margin-top: 10px;
+    padding: 7px 10px 9px;
+    border-radius: 11px;
+    background: $paper;
+    border: 1px solid $line;
+    overflow: hidden;
+  }
+
+  &__credits-grid {
+    display: grid;
+    grid-template-columns: repeat(4, auto);
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  &__credits-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  &__credits-stat-label {
+    font-family: $sans;
+    font-size: 0.8077em; // 0.65625rem / 0.8125rem
+    font-weight: 600;
+    color: $ink-3;
+    white-space: nowrap;
+  }
+
+  &__credits-stat-value {
+    font-family: $mono;
+    font-weight: 750;
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    color: $ink;
+    white-space: nowrap;
+
+    &--highlight { color: $signal; }
+  }
+
+  &__credits-skeleton-bar {
+    display: block;
+    height: 11px;
+    width: 38px;
+    border-radius: 4px;
+    background: linear-gradient(90deg, $card 25%, $line 37%, $card 63%);
+    background-size: 200px 100%;
+    animation: providers-credits-shimmer 1.4s ease-in-out infinite;
+  }
+
+  &__credits-bar-track {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3px;
+    background: $line;
+  }
+
+  &__credits-bar-fill {
+    height: 100%;
+    transition: width 0.6s cubic-bezier(0.22, 0.72, 0.16, 1);
+    animation: providers-credits-fill-in 0.6s ease both;
+
+    &--ok { background: $ok; }
+    &--warn { background: $amber-dark; }
+    &--danger { background: $danger; }
+  }
+
+  &__credits-error {
+    font-size: 0.8462em; // 0.6875rem / 0.8125rem
+    color: $danger;
+  }
+
+  // ---- inline API key form -------------------------------------------------
+  &__key-form {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  &__key-input {
+    flex: 1;
+    border: 1.5px solid $line;
+    border-radius: 9px;
+    padding: 8px 11px;
+    font-size: 1em; // 0.8125rem / 0.8125rem (base)
+    font-family: $sans;
+    color: $ink;
+    background: $paper;
+    transition: border-color 0.15s ease, background 0.15s ease;
+
+    &::placeholder { color: $ink-3; }
+    &:focus { outline: none; border-color: $signal; background: $card; }
+  }
+
+  &__key-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  // ---- footer action row ---------------------------------------------------
+  &__foot-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 13px;
+  }
+
+  &__foot-btn {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 11px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    font-family: $sans;
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    font-weight: 650;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, transform 0.12s ease;
+
+    &:disabled { cursor: not-allowed; opacity: 0.55; }
+
+    &--primary {
+      border-color: $signal;
+      background: $signal;
+      color: #fff;
+      &:not(:disabled):hover { background: $signal-2; border-color: $signal-2; transform: translateY(-1px); }
+    }
+
+    &--accent {
+      background: $signal;
+      color: #fff;
+      &:not(:disabled):hover { background: $signal-2; transform: translateY(-1px); }
+    }
+
+    &--ghost {
+      background: $card;
+      border-color: $line;
+      color: $ink-2;
+      &:not(:disabled):hover { border-color: $ink-3; color: $ink; background: $paper; }
+    }
+
+    &--danger {
+      background: $danger-wash;
+      color: $danger;
+      &:not(:disabled):hover { background: rgba($danger, 0.16); }
+    }
+  }
+
+  &__spin { animation: providers-spin 0.8s linear infinite; }
+
+  &__empty {
+    grid-column: 1 / -1;
+    padding: 40px 20px;
+    text-align: center;
+    color: $ink-3;
+    font-size: 1.0385em; // 0.84375rem / 0.8125rem
+    border: 1px dashed $line;
+    border-radius: 14px;
+  }
+
+  // ===========================================================================
+  // Provider models sidebar — keys kept stable for ProviderModelsSidebar,
+  // recolored to the ink/paper/signal system.
+  // ===========================================================================
+  &__sidebar-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(20, 22, 27, 0.45);
+    z-index: 40;
+  }
+
+  &__sidebar {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(420px, 100vw);
+    background: $card;
+    border-left: 1px solid $line;
+    box-shadow: -20px 0 40px -16px rgba(20, 22, 27, 0.28);
+    z-index: 41;
+    display: flex;
+    flex-direction: column;
+    animation: providers-sidebar-in 0.22s cubic-bezier(0.22, 0.72, 0.16, 1);
+  }
+
+  &__sidebar-header {
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 20px 20px 16px;
+    border-bottom: 1px solid $line;
+  }
+
+  &__sidebar-title {
+    font-family: $display;
+    font-size: 1.3077em; // 1.0625rem / 0.8125rem
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: $ink;
+  }
+
+  &__sidebar-subtitle {
+    margin-top: 3px;
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    color: $ink-3;
+  }
+
+  &__sidebar-toolbar {
+    flex-shrink: 0;
+    padding: 10px 18px;
+    border-bottom: 1px solid $line;
+  }
+
+  &__sidebar-search {
+    position: relative;
+
+    svg {
+      position: absolute;
+      top: 50%;
+      left: 12px;
+      transform: translateY(-50%);
+      color: $ink-3;
+      pointer-events: none;
+    }
+
+    input {
+      width: 100%;
+      border: 1.5px solid $line;
+      border-radius: 10px;
+      padding: 8px 12px 8px 34px;
+      font-size: 1em;
+      font-family: $sans;
+      color: $ink;
+      background: $paper;
+      transition: border-color 0.15s ease, background 0.15s ease;
+
+      &::placeholder { color: $ink-3; }
+      &:focus {
+        outline: none;
+        border-color: $signal;
+        background: $card;
+      }
+    }
+  }
+
+  &__sidebar-more {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 14px 0 6px;
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    color: $ink-3;
+  }
+
+  &__sidebar-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  &__sidebar-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 48px 12px;
+    color: $ink-3;
+    font-size: 1em; // 0.8125rem / 0.8125rem (base)
+    text-align: center;
+  }
+
+  &__model-row {
+    border: 1px solid $line;
+    border-radius: 12px;
+    padding: 14px;
+    background: $paper;
+    transition: opacity 0.15s ease;
+
+    &--deleting {
+      opacity: 0.5;
+      pointer-events: none;
+    }
+  }
+
+  &__model-row-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  &__model-row-head-actions {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  &__model-row-delete {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 7px;
+    border: 1px solid $line;
+    background: $card;
+    color: $ink-3;
+    cursor: pointer;
+    transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+
+    &:hover:not(:disabled) {
+      border-color: rgba($danger, 0.35);
+      color: $danger;
+      background: $danger-wash;
+    }
+
+    &:disabled { cursor: not-allowed; opacity: 0.6; }
+  }
+
+  &__model-row-edit {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 7px;
+    border: 1px solid $line;
+    background: $card;
+    color: $ink-3;
+    cursor: pointer;
+    transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+
+    &:hover:not(:disabled) {
+      border-color: $signal;
+      color: $signal;
+      background: $wash;
+    }
+  }
+
+  &__model-row-desc {
+    margin: 6px 0 0;
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    line-height: 1.5;
+    color: $ink-2;
+  }
+
+  &__model-row-name {
+    font-family: $display;
+    font-weight: 700;
+    font-size: 1.0769em; // 0.875rem / 0.8125rem
+    color: $ink;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  &__model-row-tags {
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  &__tag-group {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  &__tag-group-label {
+    @extend %micro;
+    flex-shrink: 0;
+    font-size: 0.7692em; // 0.625rem / 0.8125rem
+    color: $ink-3;
+  }
+
+  &__tag-group-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  // Category is a single classifying value — a filled, accent-colored pill
+  // makes it read as "this model's category", distinct from the list below.
+  &__category-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 9px;
+    border-radius: 999px;
+    background: $signal;
+    color: #fff;
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    font-weight: 700;
+  }
+
+  // Capabilities are a set of tags — neutral outline pills keep them
+  // visually separate from the single filled category badge above.
+  &__capability-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 9px;
+    border-radius: 999px;
+    background: $card;
+    border: 1px solid $line;
+    color: $ink-2;
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    font-weight: 600;
+  }
+
+  // ---- inline model edit form ------------------------------------------------
+  &__model-edit {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  &__model-edit-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+
+    label {
+      font-size: 0.7692em; // 0.625rem / 0.8125rem
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: $ink-3;
+    }
+  }
+
+  &__model-edit-input,
+  &__model-edit-textarea {
+    width: 100%;
+    border: 1.5px solid $line;
+    border-radius: 8px;
+    padding: 7px 10px;
+    font-size: 1em; // 0.8125rem / 0.8125rem (base)
+    font-family: $sans;
+    color: $ink;
+    background: $card;
+    resize: vertical;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+
+    &::placeholder { color: $ink-3; }
+    &:focus { outline: none; border-color: $signal; box-shadow: 0 0 0 3px $wash; }
+    &:disabled { opacity: 0.6; cursor: not-allowed; }
+  }
+
+  &__model-edit-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+
+  &__model-edit-cancel,
+  &__model-edit-save {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 11px;
+    border-radius: 8px;
+    font-family: $sans;
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    font-weight: 650;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+
+    &:disabled { cursor: not-allowed; opacity: 0.6; }
+  }
+
+  &__model-edit-cancel {
+    border: 1px solid $line;
+    background: $card;
+    color: $ink-2;
+
+    &:hover:not(:disabled) { border-color: $ink-3; color: $ink; }
+  }
+
+  &__model-edit-save {
+    border: 1px solid $signal;
+    background: $signal;
+    color: #fff;
+
+    &:hover:not(:disabled) { background: $signal-2; border-color: $signal-2; }
+  }
+
+  &__model-row-meta {
+    margin-top: 10px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 12px;
+
+    > div {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      font-size: 1em; // 0.8125rem / 0.8125rem (base)
+      color: $ink;
+    }
+  }
+
+  &__model-row-meta-label {
+    @extend %micro;
+    font-size: 0.7692em; // 0.625rem / 0.8125rem
+    color: $ink-3;
+  }
+
+  &__model-row-url {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed $line;
+    font-family: $mono;
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    color: $ink-2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+@keyframes providers-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes providers-credits-shimmer {
+  0% { background-position: -200px 0; }
+  100% { background-position: 200px 0; }
+}
+
+@keyframes providers-credits-pulse {
+  0%, 100% { opacity: 0.45; transform: scale(0.92); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes providers-credits-fill-in {
+  from { width: 0; }
+}
+
+@keyframes providers-sidebar-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+@media (max-width: 768px) {
+  .providers__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
+  .providers__toolbar { padding: 12px 18px; }
+  .providers__grid { grid-template-columns: 1fr; }
 }
