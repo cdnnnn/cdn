@@ -429,6 +429,15 @@ export default function NewEvaluation() {
 
   const [providersLoading, setProvidersLoading] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(false);
+  // Which models have had a health check *complete during this visit* to
+  // the page, and whether the model list itself has been (re)fetched this
+  // visit. Redux keeps healthById/models/draft.models between visits, so a
+  // model can come back already marked 'success' from last time — these
+  // make sure Step 3 can't be continued on that stale result while this
+  // visit's re-check/refetch is still in flight (see canGo / selectedModels
+  // NotReady).
+  const [verifiedModelIds, setVerifiedModelIds] = useState<Record<string, true>>({});
+  const [modelsFetchedThisVisit, setModelsFetchedThisVisit] = useState(false);
   const [datasetsRefreshing, setDatasetsRefreshing] = useState(false);
   const [metricsRefreshing, setMetricsRefreshing] = useState(false);
   // Tracked locally rather than read from the datasets slice's own `error`
@@ -540,6 +549,8 @@ export default function NewEvaluation() {
       setModelsLoading(false);
       if (fetchModels.rejected.match(result)) {
         modelsFetchedRef.current = false;
+      } else {
+        setModelsFetchedThisVisit(true);
       }
     })();
   }, [step, dispatch]);
@@ -745,8 +756,9 @@ export default function NewEvaluation() {
 
   const refreshModels = async () => {
     setModelsLoading(true);
-    await dispatch(fetchModels());
+    const result = await dispatch(fetchModels());
     setModelsLoading(false);
+    if (!fetchModels.rejected.match(result)) setModelsFetchedThisVisit(true);
   };
 
   const refreshDatasets = async () => {
@@ -954,8 +966,23 @@ export default function NewEvaluation() {
   // Manual, single-model health check — still available via the "Check
   // health" button on each card, alongside the automatic parallel check
   // below.
+  // Every health check goes through here so we know when one has actually
+  // *completed this visit* (verifiedModelIds) — a stale 'success' left in
+  // Redux from an earlier visit doesn't count until it's re-confirmed.
+  const trackedHealthCheck = (modelId: string) => {
+    setVerifiedModelIds((prev) => {
+      if (!prev[modelId]) return prev;
+      const next = { ...prev };
+      delete next[modelId];
+      return next;
+    });
+    Promise.resolve(dispatch(checkModelHealth(modelId))).then(() =>
+      setVerifiedModelIds((prev) => ({ ...prev, [modelId]: true }))
+    );
+  };
+
   const runHealthCheck = (modelId: string) => {
-    dispatch(checkModelHealth(modelId));
+    trackedHealthCheck(modelId);
   };
 
   // Auto health-check: as soon as the models list for the currently
@@ -970,7 +997,7 @@ export default function NewEvaluation() {
     if (step !== 3 || availableModels.length === 0) return;
     if (autoHealthCheckedForModelsRef.current === models) return;
     autoHealthCheckedForModelsRef.current = models;
-    availableModels.forEach((m) => dispatch(checkModelHealth(m.id)));
+    availableModels.forEach((m) => trackedHealthCheck(m.id));
   }, [step, models, availableModels, dispatch]);
 
   const toggle = (list: string[], value: string) =>
@@ -1122,9 +1149,10 @@ export default function NewEvaluation() {
   // failed. Step 3 can't be continued past until this is empty, so a
   // stale selection doesn't let someone proceed with an unverified model.
   const selectedModelsNotReady = draft.models.filter(
-    (id) => availableModels.some((m) => m.id === id) && healthById?.[id] !== 'success'
+    (id) =>
+      availableModels.some((m) => m.id === id) && !(healthById?.[id] === 'success' && verifiedModelIds[id])
   );
-  const selectedModelsChecking = selectedModelsNotReady.some((id) => healthById?.[id] === 'loading');
+  const selectedModelsChecking = selectedModelsNotReady.some((id) => healthById?.[id] !== 'failed');
 
   // Judge model options — every model that's actually usable (health check
   // passed) AND belongs to a currently-selected provider, regardless of
@@ -1453,7 +1481,7 @@ export default function NewEvaluation() {
     if (step === 1) return Boolean(draft.type);
     if (step === 2) return draft.providers.length > 0;
     if (step === 3) {
-      if (modelsLoading || selectedModelsNotReady.length > 0) return false;
+      if (modelsLoading || !modelsFetchedThisVisit || selectedModelsNotReady.length > 0) return false;
       // RAG: Embedding and Reranker each require exactly one selection;
       // LLM is multi-select and just needs at least one (same "at least
       // one" rule as Model/Agent below).
@@ -2136,9 +2164,9 @@ export default function NewEvaluation() {
                           </button>
                         </div>
 
-                        {selectedModelsNotReady.length > 0 && (
+                        {(!modelsFetchedThisVisit || selectedModelsNotReady.length > 0) && (
                           <p className={styles['ev__metrics-required']}>
-                            {selectedModelsChecking
+                            {!modelsFetchedThisVisit || selectedModelsChecking
                               ? 'Checking the health of your selected models — you can continue once they\u2019re all available.'
                               : 'Some selected models aren\u2019t available yet — run a health check on them (or deselect them) to continue.'}
                           </p>
