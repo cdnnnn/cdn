@@ -227,16 +227,6 @@ function actFn(name, a) {
 
 
 
-
-
-
-
-
-
-
-
-
-
 //llm.js
 // Provider layer. The agent works internally with Anthropic-style messages
 // (content blocks: text / tool_use / tool_result). This file sends them to either:
@@ -305,7 +295,7 @@ function fromOpenAIResponse(data) {
 }
 
 // ---- Custom provider: user-defined request template + response path, prompt-based tool use ----
-const DEFAULT_CUSTOM_TEMPLATE = '{"model":"{{model}}","messages":"{{messages}}","max_tokens":"{{max_tokens}}"}';
+const DEFAULT_CUSTOM_TEMPLATE = '{"model":"{{model}}","messages":"{{messages}}","max_tokens":"{{max_tokens}}","stream":false}';
 
 function fillString(str, vars) {
   return String(str).replace(/\{\{(\w+)\}\}/g, (m, k) => {
@@ -374,14 +364,96 @@ function getByPath(obj, path) {
     .reduce((o, k) => (o == null ? o : o[k]), obj);
 }
 
-function autoExtractText(d) {
-  if (typeof d === "string") return d;
-  const paths = ["choices.0.message.content", "choices.0.text", "content.0.text", "output_text", "text", "response", "result", "output", "message", "answer", "reply", "data"];
-  for (const p of paths) {
-    const v = getByPath(d, p);
-    if (typeof v === "string" && v.trim()) return v;
+// Turn a value into text: string, or an array of parts like [{type:"text", text:"..."}].
+function asText(v) {
+  if (typeof v === "string") return v;
+  if (Array.isArray(v)) {
+    const t = v.map((p) => (typeof p === "string" ? p : p && typeof p.text === "string" ? p.text : "")).join("");
+    return t || null;
   }
-  throw new Error("Could not find the reply text in the response. Set \"Response text path\" in Settings. Response was: " + JSON.stringify(d).slice(0, 300));
+  return null;
+}
+
+const KNOWN_PATHS = [
+  "choices.0.message.content", "choices.0.text", "choices.0.delta.content",
+  "message.content", "output.choices.0.message.content", "output.text", "output.output_text",
+  "data.choices.0.message.content", "data.output.text", "data.text", "data.content", "data.response", "data.reply", "data.answer", "data.message.content",
+  "content.0.text", "content", "output_text", "response", "response.text", "text", "completion",
+  "result.response", "result.text", "result.content", "result.output", "result.answer", "result",
+  "candidates.0.content.parts.0.text", "generated_text", "0.generated_text", "outputs.0.text", "results.0.text", "results.0.generated_text",
+  "answer", "reply", "output", "message", "data",
+];
+const STREAM_PATHS = [
+  "choices.0.delta.content", "choices.0.message.content", "choices.0.text", "message.content", "response",
+  "delta.text", "output.text", "output.choices.0.message.content", "text", "content", "token.text", "candidates.0.content.parts.0.text",
+];
+const SKIP_KEYS = /^(id|model|object|role|type|created|created_at|finish_reason|done|done_reason|usage|index|name|status|code|logprobs|system_fingerprint|reasoning_content|reasoning|thinking|request_id|task_id|error|tool_calls)$/i;
+
+function findLongestString(node, path, depth, best) {
+  if (depth > 7 || node == null) return best;
+  if (typeof node === "string") {
+    if (node.trim() && (!best || node.length > best.text.length)) return { text: node, path };
+    return best;
+  }
+  if (Array.isArray(node)) {
+    node.forEach((v, i) => { best = findLongestString(v, path ? path + "." + i : String(i), depth + 1, best); });
+    return best;
+  }
+  if (typeof node === "object") {
+    for (const [k, v] of Object.entries(node)) {
+      if (SKIP_KEYS.test(k)) continue;
+      best = findLongestString(v, path ? path + "." + k : k, depth + 1, best);
+    }
+  }
+  return best;
+}
+
+function extractFromObject(d, paths) {
+  for (const p of paths) {
+    const v = asText(getByPath(d, p));
+    if (v && v.trim()) return { text: v, path: p };
+  }
+  return null;
+}
+
+// Streamed replies: Server-Sent Events ("data: {...}") or newline-delimited JSON (Ollama default).
+function extractFromStream(str, userPath) {
+  let acc = "", parsed = 0, path = null;
+  for (let line of str.split(/\r?\n/)) {
+    line = line.trim().replace(/^data:\s*/, "");
+    if (!line || line === "[DONE]") continue;
+    let o;
+    try { o = JSON.parse(line); } catch (e) { continue; }
+    parsed++;
+    const paths = userPath ? [userPath, ...STREAM_PATHS] : STREAM_PATHS;
+    for (const p of paths) {
+      const v = asText(getByPath(o, p));
+      if (v != null) { acc += v; path = path || p; break; }
+    }
+  }
+  return parsed > 0 && acc.trim() ? { text: acc, path: (path || "") + "  (streamed reply)" } : null;
+}
+
+// Find the reply text. Uses the configured path first, then auto-detects.
+function locateReply(data, userPath) {
+  const up = userPath && userPath.trim();
+  let note = "";
+  if (typeof data === "string") {
+    const st = extractFromStream(data, up);
+    if (st) return { ...st, note };
+    if (data.trim()) return { text: data, path: "(plain-text response)", note };
+    throw new Error("The provider returned an empty response.");
+  }
+  if (up) {
+    const v = asText(getByPath(data, up));
+    if (v != null) return { text: v, path: up, note };
+    note = `your path "${up}" matched nothing in the response, so it was auto-detected instead`;
+  }
+  const known = extractFromObject(data, KNOWN_PATHS);
+  if (known) return { ...known, note };
+  const guess = findLongestString(data, "", 0, null);
+  if (guess) return { ...guess, note: (note ? note + "; " : "") + "guessed the longest text field - set it explicitly in Response text path if this is wrong" };
+  throw new Error('Could not find any reply text in the response. Set "Response text path" in Settings. Response was: ' + JSON.stringify(data).slice(0, 600));
 }
 
 function stripThinking(t) {
@@ -456,25 +528,17 @@ function extractToolCall(text, tools) {
 const looksLikeBrokenCall = (t) => /"(tool|tool_name|tool_call|arguments)"\s*:|<tool_call>|\btool_call\b/i.test(t);
 
 function parseCustomResponse(data, responsePath, tools) {
-  let text;
-  if (responsePath && responsePath.trim()) {
-    const v = typeof data === "string" ? undefined : getByPath(data, responsePath.trim());
-    if (typeof v !== "string") {
-      throw new Error(`Response text path "${responsePath}" did not point to a string. Response was: ` + JSON.stringify(data).slice(0, 300));
-    }
-    text = v;
-  } else {
-    text = autoExtractText(data);
-  }
+  const loc = locateReply(data, responsePath);
+  let text = loc.text;
   const raw = text;
   text = stripThinking(text);
   if (tools.length) {
     const tc = extractToolCall(text, tools);
     if (tc) {
-      return { raw, content: [{ type: "tool_use", id: "call_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7), name: tc.name, input: tc.input }] };
+      return { raw, path: loc.path, note: loc.note, content: [{ type: "tool_use", id: "call_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7), name: tc.name, input: tc.input }] };
     }
   }
-  const res = { raw, content: [{ type: "text", text }] };
+  const res = { raw, path: loc.path, note: loc.note, content: [{ type: "text", text }] };
   if (tools.length && looksLikeBrokenCall(text)) {
     res.repairHint =
       'Your last reply was not a valid tool call. Reply with ONLY one JSON object like {"tool":"click","input":{"id":12}} using a tool name from the list and ids from the latest page snapshot. No other text.';
@@ -573,10 +637,6 @@ async function callLLM(opts) {
 
 
 
-
-
-
-
 //manifest.json
 {
   "manifest_version": 3,
@@ -590,11 +650,6 @@ async function callLLM(opts) {
   "options_page": "options.html",
   "action": { "default_title": "Page Agent" }
 }
-
-
-
-
-
 
 
 
@@ -692,16 +747,6 @@ async function callLLM(opts) {
 
 
 
-
-
-
-
-
-
-
-
-
-
 //options.js
 const $ = (id) => document.getElementById(id);
 
@@ -779,19 +824,14 @@ $("test").onclick = async () => {
       maxTokens: 20,
     });
     const text = r.content.filter((b) => b.type === "text").map((b) => b.text).join("").trim();
-    show("Connected. Model replied: " + (text || "(empty reply)"));
+    show(
+      "Connected. Model replied: " + (text || "(empty reply)") +
+      (r.path ? `\n\nReply text was found at: ${r.path}` + (r.note ? `\n(${r.note})` : "") + "\nTip: paste this into \"Response text path\" to lock it in." : "")
+    );
   } catch (e) {
     show(e.message, true);
   }
 };
-
-
-
-
-
-
-
-
 
 
 
@@ -894,11 +934,6 @@ textarea { flex: 1; resize: none; padding: 6px; font: inherit; border: 1px solid
   <script src="sidepanel.js"></script>
 </body>
 </html>
-
-
-
-
-
 
 
 
