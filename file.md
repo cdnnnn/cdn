@@ -462,21 +462,111 @@ function stripThinking(t) {
   return (afterClose.trim() || noBlocks.trim() || t.trim());
 }
 
+// Tolerant parser for "JSON-ish" text that small models produce: unquoted keys, single quotes,
+// trailing commas, bare words, True/False/None. Throws if the text is not fully consumed.
+function relaxedParse(src) {
+  let i = 0;
+  const ws = () => { while (i < src.length && /\s/.test(src[i])) i++; };
+  const fail = () => { throw new Error("bad json-ish"); };
+  const ESC = { n: "\n", t: "\t", r: "\r", b: "\b", f: "\f" };
+  function str() {
+    const q = src[i++];
+    let out = "";
+    while (i < src.length) {
+      const c = src[i++];
+      if (c === q) return out;
+      if (c === "\\") {
+        const n = src[i++];
+        if (n === "u") { out += String.fromCharCode(parseInt(src.slice(i, i + 4), 16)); i += 4; }
+        else out += ESC[n] !== undefined ? ESC[n] : n;
+      } else out += c;
+    }
+    return fail();
+  }
+  function key() {
+    ws();
+    if (src[i] === '"' || src[i] === "'") return str();
+    const m = /^[A-Za-z_$][\w$-]*/.exec(src.slice(i));
+    if (!m) fail();
+    i += m[0].length;
+    return m[0];
+  }
+  function value() {
+    ws();
+    const c = src[i];
+    if (c === "{") return obj();
+    if (c === "[") return arr();
+    if (c === '"' || c === "'") return str();
+    const n = /^-?\d+(\.\d+)?([eE][+-]?\d+)?/.exec(src.slice(i));
+    if (n) { i += n[0].length; return parseFloat(n[0]); }
+    const w = /^[A-Za-z_$][\w$]*/.exec(src.slice(i));
+    if (w) {
+      i += w[0].length;
+      const l = w[0].toLowerCase();
+      if (l === "true") return true;
+      if (l === "false") return false;
+      if (l === "null" || l === "none" || l === "undefined") return null;
+      return w[0];
+    }
+    return fail();
+  }
+  function obj() {
+    i++;
+    const o = {};
+    ws();
+    if (src[i] === "}") { i++; return o; }
+    for (;;) {
+      const k = key();
+      ws();
+      if (src[i++] !== ":") fail();
+      o[k] = value();
+      ws();
+      if (src[i] === ",") { i++; ws(); if (src[i] === "}") { i++; return o; } continue; }
+      if (src[i] === "}") { i++; return o; }
+      fail();
+    }
+  }
+  function arr() {
+    i++;
+    const a = [];
+    ws();
+    if (src[i] === "]") { i++; return a; }
+    for (;;) {
+      a.push(value());
+      ws();
+      if (src[i] === ",") { i++; ws(); if (src[i] === "]") { i++; return a; } continue; }
+      if (src[i] === "]") { i++; return a; }
+      fail();
+    }
+  }
+  const v = value();
+  ws();
+  if (i < src.length) fail();
+  return v;
+}
+
+function parseLoose(x) {
+  try { return JSON.parse(x); } catch (e) { return relaxedParse(x); }
+}
+
 function jsonObjectsIn(text) {
   const out = [];
-  const lenient = (x) => { try { return JSON.parse(x); } catch (e) { return JSON.parse(x.replace(/,\s*([}\]])/g, "$1")); } };
+  // "tool: click, input: {id: 3}" with the outer braces missing
+  if (/^\s*["']?(tool|tool_name|name|action)["']?\s*:/i.test(text)) {
+    try { return [parseLoose("{" + text.trim().replace(/[,;]\s*$/, "") + "}")]; } catch (e) {}
+  }
   for (let i = 0; i < text.length; i++) {
     if (text[i] !== "{") continue;
-    let depth = 0, inStr = false, esc = false;
+    let depth = 0, quote = null, esc = false;
     for (let j = i; j < text.length; j++) {
       const c = text[j];
-      if (inStr) { if (esc) esc = false; else if (c === "\\") esc = true; else if (c === '"') inStr = false; continue; }
-      if (c === '"') inStr = true;
+      if (quote) { if (esc) esc = false; else if (c === "\\") esc = true; else if (c === quote) quote = null; continue; }
+      if (c === '"' || c === "'") quote = c;
       else if (c === "{") depth++;
       else if (c === "}") {
         depth--;
         if (depth === 0) {
-          try { out.push(lenient(text.slice(i, j + 1))); i = j; } catch (e) {}
+          try { out.push(parseLoose(text.slice(i, j + 1))); i = j; } catch (e) {}
           break;
         }
       }
@@ -525,7 +615,7 @@ function extractToolCall(text, tools) {
   return null;
 }
 
-const looksLikeBrokenCall = (t) => /"(tool|tool_name|tool_call|arguments)"\s*:|<tool_call>|\btool_call\b/i.test(t);
+const looksLikeBrokenCall = (t) => /["']?\b(tool|tool_name|tool_call|arguments)\b["']?\s*:|<tool_call>|\btool_call\b/i.test(t);
 
 function parseCustomResponse(data, responsePath, tools) {
   const loc = locateReply(data, responsePath);
@@ -626,6 +716,16 @@ async function callLLM(opts) {
   }
   return r;
 }
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -747,6 +847,11 @@ async function callLLM(opts) {
 
 
 
+
+
+
+
+
 //options.js
 const $ = (id) => document.getElementById(id);
 
@@ -832,6 +937,11 @@ $("test").onclick = async () => {
     show(e.message, true);
   }
 };
+
+
+
+
+
 
 
 
