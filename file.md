@@ -13,7 +13,15 @@ chrome.runtime.onInstalled.addListener(() => {
 
 function snapshotFn(maxText, maxEls) {
   maxEls = maxEls || 200;
-  document.querySelectorAll("[data-aq-id]").forEach((e) => e.removeAttribute("data-aq-id"));
+  function deepAll(selector, root, out) {
+    root = root || document;
+    out = out || [];
+    root.querySelectorAll(selector).forEach((e) => out.push(e));
+    root.querySelectorAll("*").forEach((e) => { if (e.shadowRoot) deepAll(selector, e.shadowRoot, out); });
+    return out;
+  }
+
+  deepAll("[data-aq-id]").forEach((e) => e.removeAttribute("data-aq-id"));
   const SEL =
     'a[href],button,input,select,textarea,summary,[role=button],[role=link],[role=checkbox],[role=radio],' +
     '[role=tab],[role=menuitem],[role=option],[role=combobox],[role=switch],[role=textbox],' +
@@ -51,7 +59,7 @@ function snapshotFn(maxText, maxEls) {
     return l.slice(0, 80);
   };
 
-  const base = new Set(document.querySelectorAll(SEL));
+  const base = new Set(deepAll(SEL));
   // Hidden checkbox/radio (custom switches): the visible label is what a user clicks.
   base.forEach((el) => {
     if (el.tagName === "INPUT" && (el.type === "checkbox" || el.type === "radio") && !isVisible(el) && el.labels && el.labels[0]) base.add(el.labels[0]);
@@ -60,7 +68,7 @@ function snapshotFn(maxText, maxEls) {
   {
     const vw = window.innerWidth || 1200;
     let scanned = 0;
-    for (const el of document.querySelectorAll("div,span,li,label,svg,img,td,p,i,section,article")) {
+    for (const el of deepAll("div,span,li,label,svg,img,td,p,i,section,article")) {
       if (++scanned > 4000) break;
       if (base.has(el)) continue;
       if (getComputedStyle(el).cursor !== "pointer") continue;
@@ -118,6 +126,7 @@ function snapshotFn(maxText, maxEls) {
     title: document.title,
     scrollY: Math.round(window.scrollY),
     scrollMax: Math.max(0, Math.round(document.documentElement.scrollHeight - vh)),
+    iframes: document.querySelectorAll("iframe").length,
     elements,
     text: body.slice(0, maxText),
     totalChars: body.length,
@@ -131,7 +140,14 @@ function readFn(max) {
 }
 
 function actFn(name, a) {
-  const find = (id) => document.querySelector('[data-aq-id="' + id + '"]');
+  function deepAll(selector, root, out) {
+    root = root || document;
+    out = out || [];
+    root.querySelectorAll(selector).forEach((e) => out.push(e));
+    root.querySelectorAll("*").forEach((e) => { if (e.shadowRoot) deepAll(selector, e.shadowRoot, out); });
+    return out;
+  }
+  const find = (id) => deepAll('[data-aq-id="' + id + '"]')[0] || null;
   const notFound = { ok: false, msg: "Element not found. The page changed; use ids from the latest snapshot." };
   const key = (el, k) => {
     for (const t of ["keydown", "keypress", "keyup"]) {
@@ -216,7 +232,6 @@ function actFn(name, a) {
     return { ok: false, msg: String(e) };
   }
 }
-
 
 
 
@@ -580,7 +595,19 @@ function asToolCall(o, tools) {
   const fn = o.function && typeof o.function === "object" ? o.function : null;
   const name = o.tool || o.tool_name || o.name || o.action || (fn && fn.name);
   if (typeof name !== "string") return null;
-  const t = tools.find((x) => x.name === name) || tools.find((x) => x.name.toLowerCase() === name.toLowerCase());
+  const norm = String(name).toLowerCase().replace(/[\s-]+/g, "_");
+  const SYN = {
+    click: ["click_element", "left_click", "tap", "press", "click_button", "click_on", "click_link", "double_click"],
+    type_text: ["type", "input", "input_text", "fill", "fill_in", "fill_input", "enter_text", "write", "set_text", "send_keys", "type_into", "set_value"],
+    select_option: ["select", "choose", "choose_option", "select_dropdown", "set_select"],
+    scroll: ["scroll_down", "scroll_up", "scroll_page", "page_down", "page_up"],
+    press_key: ["key", "keypress", "key_press", "send_key", "hotkey"],
+    navigate: ["open_url", "goto", "go_to", "visit", "open", "navigate_to", "load_url", "open_page"],
+    wait: ["sleep", "pause", "wait_for"],
+    read_page: ["read", "get_text", "get_page", "read_text", "page_text"],
+  };
+  let t = tools.find((x) => x.name === name) || tools.find((x) => x.name === norm);
+  if (!t) { const canon = Object.keys(SYN).find((k) => SYN[k].includes(norm)); if (canon) t = tools.find((x) => x.name === canon); }
   if (!t) return null;
   let input = o.input ?? o.arguments ?? o.args ?? o.parameters ?? o.params ?? (fn && fn.arguments);
   if (typeof input === "string") { try { input = JSON.parse(input); } catch (e) { input = null; } }
@@ -597,6 +624,7 @@ function asToolCall(o, tools) {
   if (t.name === "type_text" && input.text == null) input.text = input.value ?? input.content ?? input.input;
   if (t.name === "select_option" && input.option == null) input.option = input.value ?? input.text;
   if (t.name === "press_key" && input.key == null) input.key = input.value;
+  if (t.name === "scroll" && input.direction == null) input.direction = /up/.test(norm) ? "up" : "down";
   return { name: t.name, input };
 }
 
@@ -621,6 +649,12 @@ function parseCustomResponse(data, responsePath, tools) {
   const loc = locateReply(data, responsePath);
   let text = loc.text;
   const raw = text;
+  if (/<think(?:ing)?>/i.test(text) && !/<\/think(?:ing)?>/i.test(text)) {
+    throw new Error(
+      "The model ran out of tokens while \"thinking\" and never produced an action. Raise max_tokens in the request template, " +
+      "or disable thinking (for Qwen3 put /no_think in Settings > Prompt suffix)."
+    );
+  }
   text = stripThinking(text);
   if (tools.length) {
     const tc = extractToolCall(text, tools);
@@ -637,7 +671,7 @@ function parseCustomResponse(data, responsePath, tools) {
 }
 
 async function callLLMOnce({ system, tools = [], messages, maxTokens = 1500 }) {
-  const s = await chrome.storage.local.get(["provider", "baseUrl", "apiKey", "model", "headers", "bodyTemplate", "responsePath"]);
+  const s = await chrome.storage.local.get(["provider", "baseUrl", "apiKey", "model", "headers", "bodyTemplate", "responsePath", "promptSuffix"]);
   const provider = s.provider || "anthropic";
   const extra = parseExtraHeaders(s.headers);
   let url, headers, body, parse;
@@ -649,8 +683,8 @@ async function callLLMOnce({ system, tools = [], messages, maxTokens = 1500 }) {
     catch (e) { throw new Error("Request body template must be valid JSON."); }
     const sys = system + (tools.length ? "\n\n" + toolPrompt(tools) : "");
     const chat = toPlainMessages(messages);
-    if (tools.length && chat.length && chat[chat.length - 1].role === "user") chat[chat.length - 1].content += REMINDER;
-    const vars = { model: s.model || "", apiKey: s.apiKey || "", system: sys, messages: chat, prompt: flattenPrompt(sys, chat), max_tokens: maxTokens };
+    if (tools.length && chat.length && chat[chat.length - 1].role === "user") chat[chat.length - 1].content += REMINDER + (s.promptSuffix ? "\n" + s.promptSuffix : "");
+    const vars = { model: s.model || "", apiKey: s.apiKey || "", system: sys, messages: chat, prompt: flattenPrompt(sys, chat), max_tokens: tools.length ? Math.max(maxTokens, 4096) : maxTokens };
     url = fillString(s.baseUrl, vars);
     headers = { "content-type": "application/json" };
     for (const [k, v] of Object.entries(extra)) headers[k] = fillString(v, vars);
@@ -723,20 +757,6 @@ async function callLLM(opts) {
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 //manifest.json
 {
   "manifest_version": 3,
@@ -750,11 +770,6 @@ async function callLLM(opts) {
   "options_page": "options.html",
   "action": { "default_title": "Page Agent" }
 }
-
-
-
-
-
 
 
 
@@ -826,6 +841,11 @@ async function callLLM(opts) {
     </label>
   </div>
 
+  <label>Prompt suffix (optional, custom provider)
+    <input id="promptSuffix" placeholder="e.g. /no_think   (Qwen3: turns off long reasoning)">
+    <small>Added to the end of every message sent to the model. Useful for switches like <code>/no_think</code>.</small>
+  </label>
+
   <label><span><input type="checkbox" id="compact" style="width:auto;margin-right:6px">Compact page snapshots (for small-context models)</span>
     <small>Sends fewer page elements and less text per step. Turn on if your model has a small context window (e.g. Ollama's default is only 2-4k tokens: raise num_ctx to 16k+ as well).</small>
   </label>
@@ -838,11 +858,6 @@ async function callLLM(opts) {
   <script src="options.js"></script>
 </body>
 </html>
-
-
-
-
-
 
 
 
@@ -875,7 +890,8 @@ function syncUI() {
   $("customFields").style.display = p === "custom" ? "block" : "none";
 }
 
-chrome.storage.local.get(["provider", "baseUrl", "apiKey", "model", "headers", "bodyTemplate", "responsePath", "compact"]).then((s) => {
+chrome.storage.local.get(["provider", "baseUrl", "apiKey", "model", "headers", "bodyTemplate", "responsePath", "compact", "promptSuffix"]).then((s) => {
+  $("promptSuffix").value = s.promptSuffix || "";
   $("compact").checked = !!s.compact;
   $("provider").value = s.provider || "anthropic";
   $("baseUrl").value = s.baseUrl || "";
@@ -898,6 +914,7 @@ async function save() {
     bodyTemplate: $("bodyTemplate").value.trim(),
     responsePath: $("responsePath").value.trim(),
     compact: $("compact").checked,
+    promptSuffix: $("promptSuffix").value.trim(),
   });
 }
 
@@ -937,13 +954,6 @@ $("test").onclick = async () => {
     show(e.message, true);
   }
 };
-
-
-
-
-
-
-
 
 
 
@@ -997,16 +1007,6 @@ textarea { flex: 1; resize: none; padding: 6px; font: inherit; border: 1px solid
 
 
 
-
-
-
-
-
-
-
-
-
-
 //sidepanel.html
 <!doctype html>
 <html>
@@ -1018,7 +1018,7 @@ textarea { flex: 1; resize: none; padding: 6px; font: inherit; border: 1px solid
 <body>
   <header>
     <div id="page" title="">Current page</div>
-    <div class="actions"><a href="#" id="clear">New chat</a> · <a href="#" id="settings">Settings</a></div>
+    <div class="actions"><a href="#" id="clear">New chat</a> · <a href="#" id="copylog">Copy debug log</a> · <a href="#" id="settings">Settings</a></div>
   </header>
 
   <main id="messages">
@@ -1052,11 +1052,6 @@ textarea { flex: 1; resize: none; padding: 6px; font: inherit; border: 1px solid
 
 
 
-
-
-
-
-
 //sidepanel.js
 // Page Agent: Claude tool-use loop that observes and acts on the active tab.
 // snapshotFn / actFn / readFn come from inpage.js (loaded before this file).
@@ -1076,6 +1071,9 @@ let newTabId = null;
 let elementMap = new Map();
 let typedLog = [];
 let approvalResolver = null;
+let lastSnap = null;
+let trace = [];
+const T = (kind, data) => { trace.push({ t: new Date().toISOString().slice(11, 23), kind, data }); if (trace.length > 300) trace.shift(); };
 
 const RISKY = /\b(submit|pay|payment|purchase|buy|book|booking|confirm|place order|checkout|delete|remove|cancel|send|post|publish|transfer|save|create|apply|register|sign ?up|subscribe|approve|reject|assign|complete|finish|reserve|order)\b/i;
 
@@ -1129,7 +1127,9 @@ async function takeSnapshot() {
     args: [SNAPSHOT_TEXT_CHARS, SNAPSHOT_MAX_Els],
   });
   const s = r.result;
+  lastSnap = s;
   elementMap = new Map(s.elements.map((e) => [e.id, e]));
+  T("snapshot", { url: s.url, elements: s.elements.length, iframes: s.iframes, textChars: s.totalChars, sample: s.elements.slice(0, 30).map((e) => `[${e.id}] ${e.role || e.tag} "${e.label}"`) });
   return formatSnapshot(s);
 }
 
@@ -1252,6 +1252,7 @@ async function runTool(tu) {
   try { tab = await chrome.tabs.get(agentTabId); } catch (e) { return { error: true, text: "The tab was closed." }; }
   const el = input.id != null ? elementMap.get(input.id) : null;
   logLine(`▶ ${describeAction(name, input, el)}`);
+  T("call", { name, input, label: el ? el.label : undefined });
 
   if (input.id != null && !el) {
     return { error: true, text: `No element with id ${input.id} in the latest snapshot. Ids change on every snapshot; use the most recent one.` };
@@ -1268,11 +1269,13 @@ async function runTool(tu) {
   const reason = needsApproval(name, input, el, tab);
   if (reason) {
     const filled = typedLog.length ? typedLog.map((f) => `  ${f.label}: ${f.value}`).join("\n") : "  (none)";
+    T("approval-requested", { name, reason });
     const ok = await requestApproval(
       `Approve? ${describeAction(name, input, el)}`,
       reason,
       `Page: ${tab.title}\n${tab.url}\n\nFields filled during this task:\n${filled}`
     );
+    T("approval", ok ? "approved" : "denied");
     if (!ok) return { error: true, text: "The user denied this action. Do not retry it. Ask the user how to proceed." };
   }
   if (stopFlag) return { error: true, text: "Stopped by user." };
@@ -1315,12 +1318,19 @@ async function agentLoop() {
     if (stopFlag) { addMessage("note", "Stopped."); return; }
     const resp = await callLLM({ system: SYSTEM_PROMPT, tools: TOOLS, messages: prepareMessages(), maxTokens: 1500 });
     if ($("debug").checked) addMessage("log", "model reply: " + String(resp.raw ?? JSON.stringify(resp.content)).slice(0, 700));
+    T("model", { raw: String(resp.raw ?? JSON.stringify(resp.content)).slice(0, 1500), foundAt: resp.path, parsed: resp.content.map((b) => (b.type === "tool_use" ? { tool: b.name, input: b.input } : "text")) });
     const content = resp.content.length ? resp.content : [{ type: "text", text: "Done." }];
     messages.push({ role: "assistant", content });
     const toolUses = content.filter((b) => b.type === "tool_use");
     const text = content.filter((b) => b.type === "text").map((b) => b.text).join("\n").trim();
 
-    if (!toolUses.length) { addMessage("bot", renderMarkdown(text), true); return; }
+    if (!toolUses.length) {
+      addMessage("bot", renderMarkdown(text), true);
+      if (/\b(you can|you could|you'll need|you will need|go to|navigate to|click on|steps?:)\b/i.test(text)) {
+        addMessage("note", "This looks like instructions rather than an action: the model did not call a tool. Tick \"Show model replies\", or use Copy debug log and send it to the developer.");
+      }
+      return;
+    }
     if (text) addMessage("note", text);
 
     const results = [];
@@ -1332,6 +1342,8 @@ async function agentLoop() {
         results.push({ type: "tool_result", tool_use_id: tu.id, content: "Skipped: stopped by user.", is_error: true });
       } else {
         const out = await runTool(tu);
+        T("result", { error: !!out.error, text: String(out.text).slice(0, 300) });
+        if (out.error) logLine("  ✖ " + String(out.text).slice(0, 160));
         results.push({ type: "tool_result", tool_use_id: tu.id, content: out.text, is_error: !!out.error });
       }
     }
@@ -1354,10 +1366,15 @@ async function startTask(text) {
   try {
     agentTabId = tab.id;
     typedLog = [];
+    T("request", text);
     const snap = await takeSnapshot();
+    if (lastSnap && lastSnap.elements.length === 0) {
+      addMessage("note", `I can't see any clickable controls on this page${lastSnap.iframes ? ` (it contains ${lastSnap.iframes} iframe(s); content inside iframes isn't visible to me)` : ""}. It may still be loading, or the app may run inside an iframe.`);
+    }
     pushUser([{ type: "text", text: `${text}\n\n${snap}` }]);
     await agentLoop();
   } catch (e) {
+    T("error", e.message);
     addMessage("err", e.message);
   } finally {
     setRunning(false);
@@ -1450,12 +1467,26 @@ $("input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!running) submit(); }
 });
 document.querySelectorAll(".chip").forEach((c) => (c.onclick = () => { if (!running) startTask(c.textContent); }));
+$("copylog").onclick = async (e) => {
+  e.preventDefault();
+  let cfg = {};
+  try {
+    const s = await chrome.storage.local.get(["provider", "baseUrl", "model", "responsePath", "compact", "promptSuffix", "bodyTemplate"]);
+    let host = "";
+    try { host = new URL(s.baseUrl).host; } catch (x) {}
+    cfg = { provider: s.provider, host, model: s.model, responsePath: s.responsePath, compact: !!s.compact, promptSuffix: s.promptSuffix, bodyTemplate: s.bodyTemplate };
+  } catch (x) {}
+  const text = JSON.stringify({ config: cfg, trace }, null, 1);
+  try { await navigator.clipboard.writeText(text); addMessage("note", "Debug log copied (no API key included). Paste it to the developer, after removing anything private."); }
+  catch (x) { addMessage("note", "Could not copy automatically."); }
+};
 $("settings").onclick = (e) => (e.preventDefault(), chrome.runtime.openOptionsPage());
 $("clear").onclick = (e) => {
   e.preventDefault();
   if (running) stop();
   messages = [];
   typedLog = [];
+  trace = [];
   $("messages").innerHTML = "";
   addMessage("note", "New chat. Ask about the current page or tell me what to do.");
 };
