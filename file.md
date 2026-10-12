@@ -11,7 +11,8 @@ chrome.runtime.onInstalled.addListener(() => {
 // Functions in this file are injected into the page via chrome.scripting.executeScript({func}).
 // They must be fully self-contained (no references to outside variables).
 
-function snapshotFn(maxText) {
+function snapshotFn(maxText, maxEls) {
+  maxEls = maxEls || 200;
   document.querySelectorAll("[data-aq-id]").forEach((e) => e.removeAttribute("data-aq-id"));
   const SEL =
     'a[href],button,input,select,textarea,summary,[role=button],[role=link],[role=checkbox],[role=radio],' +
@@ -38,17 +39,48 @@ function snapshotFn(maxText) {
     if (!l && ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName)) l = el.placeholder || el.name || el.id;
     if (!l && el.tagName === "INPUT" && ["submit", "button"].includes(el.type)) l = el.value;
     if (!l) { const img = el.querySelector && el.querySelector("img[alt]"); l = txt(el) || el.title || el.alt || (img && img.alt) || ""; }
-    return clean(l).slice(0, 80);
+    l = clean(l);
+    if (!l) {
+      const svgTitle = el.querySelector && el.querySelector("svg title");
+      l = clean(svgTitle ? svgTitle.textContent : "");
+    }
+    if (!l) {
+      const hint = clean(el.getAttribute("data-testid") || el.getAttribute("data-test") || el.id || (typeof el.className === "string" ? el.className : ""));
+      if (hint) l = "(icon: " + hint.slice(0, 40) + ")";
+    }
+    return l.slice(0, 80);
   };
 
-  let nodes = [...new Set(document.querySelectorAll(SEL))].filter(
+  const base = new Set(document.querySelectorAll(SEL));
+  // Hidden checkbox/radio (custom switches): the visible label is what a user clicks.
+  base.forEach((el) => {
+    if (el.tagName === "INPUT" && (el.type === "checkbox" || el.type === "radio") && !isVisible(el) && el.labels && el.labels[0]) base.add(el.labels[0]);
+  });
+  // Clickable things with no semantic markup (div/span with a click handler show a pointer cursor).
+  {
+    const vw = window.innerWidth || 1200;
+    let scanned = 0;
+    for (const el of document.querySelectorAll("div,span,li,label,svg,img,td,p,i,section,article")) {
+      if (++scanned > 4000) break;
+      if (base.has(el)) continue;
+      if (getComputedStyle(el).cursor !== "pointer") continue;
+      const par = el.parentElement;
+      if (par && getComputedStyle(par).cursor === "pointer") continue;
+      if (el.querySelector(SEL)) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width * r.height > 0.5 * vw * vh) continue;
+      base.add(el);
+    }
+  }
+  let nodes = [...base].filter(
     (el) => !(el.tagName === "INPUT" && el.type === "hidden") && isVisible(el)
   );
+  nodes.sort((a, b) => (a.compareDocumentPosition(b) & 4 ? -1 : 1));
   const inView = (el) => { const r = el.getBoundingClientRect(); return r.bottom > 0 && r.top < vh; };
-  if (nodes.length > 200) {
+  if (nodes.length > maxEls) {
     const a = nodes.filter(inView);
     const b = nodes.filter((n) => !inView(n));
-    const keep = new Set([...a, ...b].slice(0, 200));
+    const keep = new Set([...a, ...b].slice(0, maxEls));
     nodes = nodes.filter((n) => keep.has(n));
   }
 
@@ -69,7 +101,8 @@ function snapshotFn(maxText) {
       o.value = sel ? clean(sel.text) : "";
       o.options = [...el.options].slice(0, 25).map((x) => clean(x.text));
     }
-    if (type === "checkbox" || type === "radio") o.checked = !!el.checked;
+    if (tag === "label" && el.control && (el.control.type === "checkbox" || el.control.type === "radio")) { o.checked = !!el.control.checked; o.role = "toggle"; }
+    else if (type === "checkbox" || type === "radio") o.checked = !!el.checked;
     else if (el.getAttribute("aria-checked")) o.checked = el.getAttribute("aria-checked") === "true";
     if (el.disabled || el.getAttribute("aria-disabled") === "true") o.disabled = true;
     if (el.required) o.required = true;
@@ -116,6 +149,14 @@ function actFn(name, a) {
       if (el.disabled) return { ok: false, msg: "Element is disabled." };
       if (el.scrollIntoView) el.scrollIntoView({ block: "center", inline: "center" });
       if (el.focus) el.focus({ preventScroll: true });
+      try {
+        const r = el.getBoundingClientRect();
+        const o = { bubbles: true, cancelable: true, view: window, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0 };
+        if (typeof PointerEvent === "function") el.dispatchEvent(new PointerEvent("pointerdown", { ...o, pointerType: "mouse", isPrimary: true }));
+        el.dispatchEvent(new MouseEvent("mousedown", o));
+        if (typeof PointerEvent === "function") el.dispatchEvent(new PointerEvent("pointerup", { ...o, pointerType: "mouse", isPrimary: true }));
+        el.dispatchEvent(new MouseEvent("mouseup", o));
+      } catch (e) {}
       el.click();
       return { ok: true, msg: "Clicked." };
     }
@@ -175,7 +216,6 @@ function actFn(name, a) {
     return { ok: false, msg: String(e) };
   }
 }
-
 
 
 
@@ -289,11 +329,17 @@ function fillTemplate(node, vars) {
   return node;
 }
 
+const REMINDER =
+  '\n\n[Reply format reminder: to perform an action, reply with ONLY a JSON object such as {"tool":"click","input":{"id":12}} - no explanation, no markdown. Do not describe what you plan to do; call the tool. If the task is finished, or you must ask the user something, answer in plain text.]';
+
 function toolPrompt(tools) {
   return (
-    "You can use tools. To use a tool, reply with ONLY one JSON object and no other text, exactly like " +
-    '{"tool": "<name>", "input": {...}}. Use exactly one tool per reply. ' +
-    "When you are finished, or need to ask the user something, reply with plain text (no JSON).\n" +
+    "You control the user's browser tab through tools, so you CAN click, type and change settings on the page. Never say you cannot interact with the page and never just explain how the user could do it: do it with a tool.\n" +
+    "To use a tool, reply with ONLY one JSON object and nothing else, like:\n" +
+    '{"tool": "click", "input": {"id": 12}}\n' +
+    '{"tool": "type_text", "input": {"id": 5, "text": "hello"}}\n' +
+    "Use exactly one tool per reply, then wait for the result (it includes the updated page). " +
+    "When the task is finished, or you need to ask the user something, reply with plain text (no JSON).\n" +
     "Available tools:\n" +
     tools.map((t) => `- ${t.name}: ${t.description} Input schema: ${JSON.stringify(t.input_schema)}`).join("\n")
   );
@@ -338,6 +384,77 @@ function autoExtractText(d) {
   throw new Error("Could not find the reply text in the response. Set \"Response text path\" in Settings. Response was: " + JSON.stringify(d).slice(0, 300));
 }
 
+function stripThinking(t) {
+  const noBlocks = t.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, "");
+  const afterClose = noBlocks.replace(/^[\s\S]*<\/think(?:ing)?>/i, ""); // unmatched closing tag
+  return (afterClose.trim() || noBlocks.trim() || t.trim());
+}
+
+function jsonObjectsIn(text) {
+  const out = [];
+  const lenient = (x) => { try { return JSON.parse(x); } catch (e) { return JSON.parse(x.replace(/,\s*([}\]])/g, "$1")); } };
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== "{") continue;
+    let depth = 0, inStr = false, esc = false;
+    for (let j = i; j < text.length; j++) {
+      const c = text[j];
+      if (inStr) { if (esc) esc = false; else if (c === "\\") esc = true; else if (c === '"') inStr = false; continue; }
+      if (c === '"') inStr = true;
+      else if (c === "{") depth++;
+      else if (c === "}") {
+        depth--;
+        if (depth === 0) {
+          try { out.push(lenient(text.slice(i, j + 1))); i = j; } catch (e) {}
+          break;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function asToolCall(o, tools) {
+  if (!o || typeof o !== "object" || Array.isArray(o)) return null;
+  const fn = o.function && typeof o.function === "object" ? o.function : null;
+  const name = o.tool || o.tool_name || o.name || o.action || (fn && fn.name);
+  if (typeof name !== "string") return null;
+  const t = tools.find((x) => x.name === name) || tools.find((x) => x.name.toLowerCase() === name.toLowerCase());
+  if (!t) return null;
+  let input = o.input ?? o.arguments ?? o.args ?? o.parameters ?? o.params ?? (fn && fn.arguments);
+  if (typeof input === "string") { try { input = JSON.parse(input); } catch (e) { input = null; } }
+  if (!input || typeof input !== "object") {
+    input = { ...o };
+    ["tool", "tool_name", "name", "action", "function"].forEach((k) => delete input[k]);
+  }
+  input = { ...input };
+  if (input.id == null) {
+    const alt = input.element_id ?? input.elementId ?? input.element ?? input.index ?? input.ref ?? input.target;
+    if (alt != null) input.id = alt;
+  }
+  if (typeof input.id === "string") { const m = input.id.match(/\d+/); if (m) input.id = +m[0]; }
+  if (t.name === "type_text" && input.text == null) input.text = input.value ?? input.content ?? input.input;
+  if (t.name === "select_option" && input.option == null) input.option = input.value ?? input.text;
+  if (t.name === "press_key" && input.key == null) input.key = input.value;
+  return { name: t.name, input };
+}
+
+function extractToolCall(text, tools) {
+  const cands = [];
+  for (const o of jsonObjectsIn(text)) {
+    cands.push(o);
+    if (Array.isArray(o.tool_calls)) cands.push(...o.tool_calls);
+    if (Array.isArray(o.calls)) cands.push(...o.calls);
+    if (o.tool_call && typeof o.tool_call === "object") cands.push(o.tool_call);
+  }
+  for (const c of cands) {
+    const tc = asToolCall(c, tools);
+    if (tc) return tc;
+  }
+  return null;
+}
+
+const looksLikeBrokenCall = (t) => /"(tool|tool_name|tool_call|arguments)"\s*:|<tool_call>|\btool_call\b/i.test(t);
+
 function parseCustomResponse(data, responsePath, tools) {
   let text;
   if (responsePath && responsePath.trim()) {
@@ -349,25 +466,23 @@ function parseCustomResponse(data, responsePath, tools) {
   } else {
     text = autoExtractText(data);
   }
-  text = text.trim();
-  // Look for a JSON tool call (optionally inside ``` fences or surrounded by other text).
-  let candidate = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  let obj = null;
-  try { obj = JSON.parse(candidate); } catch (e) {
-    const a = candidate.indexOf("{"), b = candidate.lastIndexOf("}");
-    if (a !== -1 && b > a) { try { obj = JSON.parse(candidate.slice(a, b + 1)); } catch (e2) {} }
-  }
-  if (obj && typeof obj === "object") {
-    const name = obj.tool || obj.name;
-    const input = obj.input || obj.arguments || obj.args || {};
-    if (typeof name === "string" && tools.some((t) => t.name === name)) {
-      return { content: [{ type: "tool_use", id: "call_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7), name, input }] };
+  const raw = text;
+  text = stripThinking(text);
+  if (tools.length) {
+    const tc = extractToolCall(text, tools);
+    if (tc) {
+      return { raw, content: [{ type: "tool_use", id: "call_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7), name: tc.name, input: tc.input }] };
     }
   }
-  return { content: [{ type: "text", text }] };
+  const res = { raw, content: [{ type: "text", text }] };
+  if (tools.length && looksLikeBrokenCall(text)) {
+    res.repairHint =
+      'Your last reply was not a valid tool call. Reply with ONLY one JSON object like {"tool":"click","input":{"id":12}} using a tool name from the list and ids from the latest page snapshot. No other text.';
+  }
+  return res;
 }
 
-async function callLLM({ system, tools = [], messages, maxTokens = 1500 }) {
+async function callLLMOnce({ system, tools = [], messages, maxTokens = 1500 }) {
   const s = await chrome.storage.local.get(["provider", "baseUrl", "apiKey", "model", "headers", "bodyTemplate", "responsePath"]);
   const provider = s.provider || "anthropic";
   const extra = parseExtraHeaders(s.headers);
@@ -380,6 +495,7 @@ async function callLLM({ system, tools = [], messages, maxTokens = 1500 }) {
     catch (e) { throw new Error("Request body template must be valid JSON."); }
     const sys = system + (tools.length ? "\n\n" + toolPrompt(tools) : "");
     const chat = toPlainMessages(messages);
+    if (tools.length && chat.length && chat[chat.length - 1].role === "user") chat[chat.length - 1].content += REMINDER;
     const vars = { model: s.model || "", apiKey: s.apiKey || "", system: sys, messages: chat, prompt: flattenPrompt(sys, chat), max_tokens: maxTokens };
     url = fillString(s.baseUrl, vars);
     headers = { "content-type": "application/json" };
@@ -430,8 +546,22 @@ async function callLLM({ system, tools = [], messages, maxTokens = 1500 }) {
   }
 }
 
-
-
+// Public entry. For the custom provider, if the model attempted a tool call but produced something
+// unparseable, ask it once to resend a valid one.
+async function callLLM(opts) {
+  const r = await callLLMOnce(opts);
+  if (r.repairHint && opts.tools && opts.tools.length) {
+    return callLLMOnce({
+      ...opts,
+      messages: [
+        ...opts.messages,
+        { role: "assistant", content: [{ type: "text", text: r.raw }] },
+        { role: "user", content: [{ type: "text", text: r.repairHint }] },
+      ],
+    });
+  }
+  return r;
+}
 
 
 
@@ -541,6 +671,10 @@ async function callLLM({ system, tools = [], messages, maxTokens = 1500 }) {
     </label>
   </div>
 
+  <label><span><input type="checkbox" id="compact" style="width:auto;margin-right:6px">Compact page snapshots (for small-context models)</span>
+    <small>Sends fewer page elements and less text per step. Turn on if your model has a small context window (e.g. Ollama's default is only 2-4k tokens: raise num_ctx to 16k+ as well).</small>
+  </label>
+
   <button id="save">Save</button>
   <button id="test">Save &amp; test connection</button>
   <div id="result"></div>
@@ -549,6 +683,7 @@ async function callLLM({ system, tools = [], messages, maxTokens = 1500 }) {
   <script src="options.js"></script>
 </body>
 </html>
+
 
 
 
@@ -590,7 +725,8 @@ function syncUI() {
   $("customFields").style.display = p === "custom" ? "block" : "none";
 }
 
-chrome.storage.local.get(["provider", "baseUrl", "apiKey", "model", "headers", "bodyTemplate", "responsePath"]).then((s) => {
+chrome.storage.local.get(["provider", "baseUrl", "apiKey", "model", "headers", "bodyTemplate", "responsePath", "compact"]).then((s) => {
+  $("compact").checked = !!s.compact;
   $("provider").value = s.provider || "anthropic";
   $("baseUrl").value = s.baseUrl || "";
   $("key").value = s.apiKey || "";
@@ -611,6 +747,7 @@ async function save() {
     headers: $("headers").value.trim(),
     bodyTemplate: $("bodyTemplate").value.trim(),
     responsePath: $("responsePath").value.trim(),
+    compact: $("compact").checked,
   });
 }
 
@@ -647,8 +784,6 @@ $("test").onclick = async () => {
     show(e.message, true);
   }
 };
-
-
 
 
 
@@ -722,11 +857,6 @@ textarea { flex: 1; resize: none; padding: 6px; font: inherit; border: 1px solid
 
 
 
-
-
-
-
-
 //sidepanel.html
 <!doctype html>
 <html>
@@ -753,7 +883,7 @@ textarea { flex: 1; resize: none; padding: 6px; font: inherit; border: 1px solid
     </div>
   </main>
 
-  <div class="opts"><label><input type="checkbox" id="stepMode"> Approve every action</label></div>
+  <div class="opts"><label><input type="checkbox" id="stepMode"> Approve every action</label> &nbsp; <label><input type="checkbox" id="debug"> Show model replies (debug)</label></div>
   <footer>
     <textarea id="input" rows="2" placeholder="Ask or instruct… (Enter to send, Shift+Enter for new line)"></textarea>
     <button id="send">Send</button>
@@ -777,6 +907,11 @@ textarea { flex: 1; resize: none; padding: 6px; font: inherit; border: 1px solid
 
 
 
+
+
+
+
+
 //sidepanel.js
 // Page Agent: Claude tool-use loop that observes and acts on the active tab.
 // snapshotFn / actFn / readFn come from inpage.js (loaded before this file).
@@ -785,7 +920,8 @@ const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const MAX_STEPS = 40;
-const SNAPSHOT_TEXT_CHARS = 8000;
+let SNAPSHOT_TEXT_CHARS = 8000;
+let SNAPSHOT_MAX_Els = 200;
 
 let messages = [];
 let running = false;
@@ -837,10 +973,15 @@ async function refreshHeader() {
 }
 
 async function takeSnapshot() {
+  try {
+    const { compact } = await chrome.storage.local.get(["compact"]);
+    SNAPSHOT_TEXT_CHARS = compact ? 2500 : 8000;
+    SNAPSHOT_MAX_Els = compact ? 80 : 200;
+  } catch (e) {}
   const [r] = await chrome.scripting.executeScript({
     target: { tabId: agentTabId },
     func: snapshotFn,
-    args: [SNAPSHOT_TEXT_CHARS],
+    args: [SNAPSHOT_TEXT_CHARS, SNAPSHOT_MAX_Els],
   });
   const s = r.result;
   elementMap = new Map(s.elements.map((e) => [e.id, e]));
@@ -1028,6 +1169,7 @@ async function agentLoop() {
   for (let step = 0; step < MAX_STEPS; step++) {
     if (stopFlag) { addMessage("note", "Stopped."); return; }
     const resp = await callLLM({ system: SYSTEM_PROMPT, tools: TOOLS, messages: prepareMessages(), maxTokens: 1500 });
+    if ($("debug").checked) addMessage("log", "model reply: " + String(resp.raw ?? JSON.stringify(resp.content)).slice(0, 700));
     const content = resp.content.length ? resp.content : [{ type: "text", text: "Done." }];
     messages.push({ role: "assistant", content });
     const toolUses = content.filter((b) => b.type === "tool_use");
