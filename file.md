@@ -1,12 +1,11 @@
 //Datasets.tsx
-//Datasets.tsx
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import type { CSSProperties } from 'react';
 import {
   RefreshCw, Search, Layers, AlertTriangle, Database, ListFilter, X,
   Check, Boxes, ArrowRight, Filter, ChevronsUpDown, Upload, Loader2,
   FileUp, AlertCircle, CheckCircle2, Trash2, Eye, ChevronLeft, ChevronRight, HelpCircle,
-  Image as ImageIcon, Download, RotateCw, Copy, ChevronDown,
+  Image as ImageIcon, Download, RotateCw, Copy,
 } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
 import {
@@ -143,6 +142,7 @@ export default function Datasets() {
   const [tagFilter, setTagFilter] = useState<string[]>([]);       // active dataset_categories facets
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<TestSuite | null>(null);
   const [previewTarget, setPreviewTarget] = useState<TestSuite | null>(null);
   const [lightboxPath, setLightboxPath] = useState<string | null>(null);
@@ -347,6 +347,13 @@ export default function Datasets() {
           <button className={styles['datasets__refresh-btn']} onClick={() => dispatch(fetchTestSuites())}>
             <RefreshCw size={14} /> Refresh
           </button>
+          <button
+            className={styles['datasets__refresh-btn']}
+            onClick={() => setTemplatesOpen(true)}
+            title="Download sample files showing the format a custom dataset needs"
+          >
+            <Download size={14} /> Templates
+          </button>
           <button className={styles['datasets__upload-btn']} onClick={() => setUploadOpen(true)}>
             <Upload size={14} /> Upload dataset
           </button>
@@ -535,6 +542,9 @@ export default function Datasets() {
           onSubmitRag={handleCreateRagDataset}
         />
       )}
+
+      {/* ---- dataset format templates ---------------------------------------- */}
+      {templatesOpen && <TemplatesModal onClose={() => setTemplatesOpen(false)} />}
 
       {/* ---- delete dataset confirmation ------------------------------------ */}
       {deleteTarget && (
@@ -848,8 +858,8 @@ function saveBlob(blob: Blob, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function TemplateDownloads({ suggested }: { suggested: TemplateType }) {
-  const [open, setOpen] = useState(true);
+// Standalone modal opened from the "Templates" button in the page header.
+function TemplatesModal({ onClose }: { onClose: () => void }) {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [doneKey, setDoneKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -857,9 +867,17 @@ function TemplateDownloads({ suggested }: { suggested: TemplateType }) {
 
   useEffect(() => () => { if (doneTimerRef.current) clearTimeout(doneTimerRef.current); }, []);
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   const download = async (type: TemplateType, fileType: TemplateFileType) => {
-    const key = `${type}:${fileType}`;
     if (busyKey) return;
+    const key = `${type}:${fileType}`;
     setBusyKey(key);
     setError(null);
     try {
@@ -876,41 +894,38 @@ function TemplateDownloads({ suggested }: { suggested: TemplateType }) {
   };
 
   return (
-    <div className={styles['datasets__tpl']}>
-      <button
-        type="button"
-        className={styles['datasets__tpl-toggle']}
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
+    <div className={styles['datasets__modal-overlay']} onClick={onClose}>
+      <div
+        className={`${styles['datasets__modal']} ${styles['datasets__modal--wide']}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Dataset templates"
+        onClick={(e) => e.stopPropagation()}
       >
-        <span className={styles['datasets__tpl-toggle-icon']}><Download size={14} /></span>
-        <span className={styles['datasets__tpl-toggle-text']}>
-          <strong>Not sure about the format?</strong>
-          <span>Download a ready-made template to start from</span>
-        </span>
-        <ChevronDown
-          size={15}
-          className={`${styles['datasets__tpl-chevron']} ${open ? styles['datasets__tpl-chevron--open'] : ''}`}
-        />
-      </button>
+        <div className={styles['datasets__modal-hdr']}>
+          <div>
+            <p className={styles['datasets__modal-eyebrow']}>Custom datasets</p>
+            <h3>Dataset templates</h3>
+          </div>
+          <button className={styles['datasets__modal-close']} onClick={onClose} aria-label="Close">
+            <X size={16} />
+          </button>
+        </div>
 
-      {open && (
-        <div className={styles['datasets__tpl-body']}>
-          {TEMPLATE_OPTIONS.map((opt) => {
-            const isSuggested = opt.type === suggested;
-            return (
-              <div
-                key={opt.type}
-                className={`${styles['datasets__tpl-row']} ${isSuggested ? styles['datasets__tpl-row--suggested'] : ''}`}
-              >
+        <div className={styles['datasets__modal-body']}>
+          <p className={styles['datasets__field-note']}>
+            Building your own dataset? Download a sample file for the type you need and follow its
+            structure so your upload is accepted.
+          </p>
+
+          <div className={styles['datasets__tpl-list']}>
+            {TEMPLATE_OPTIONS.map((opt) => (
+              <div key={opt.type} className={styles['datasets__tpl-row']}>
                 <span className={`${styles['datasets__tpl-badge']} ${styles[`datasets__tpl-badge--${opt.type}`]}`}>
                   {opt.badge}
                 </span>
                 <div className={styles['datasets__tpl-info']}>
-                  <span className={styles['datasets__tpl-title']}>
-                    {opt.title}
-                    {isSuggested && <em className={styles['datasets__tpl-suggested']}>Suggested</em>}
-                  </span>
+                  <span className={styles['datasets__tpl-title']}>{opt.title}</span>
                   <span className={styles['datasets__tpl-desc']}>{opt.description}</span>
                 </div>
                 <div className={styles['datasets__tpl-actions']} role="group" aria-label={`${opt.title} template formats`}>
@@ -937,16 +952,23 @@ function TemplateDownloads({ suggested }: { suggested: TemplateType }) {
                   })}
                 </div>
               </div>
-            );
-          })}
+            ))}
+          </div>
 
           {error && (
-            <div className={styles['datasets__tpl-error']} role="alert">
-              <AlertCircle size={13} /> {error}
+            <div className={styles['datasets__modal-error']} role="alert">
+              <AlertCircle size={14} />
+              {error}
             </div>
           )}
         </div>
-      )}
+
+        <div className={styles['datasets__modal-foot']}>
+          <button className={styles['datasets__modal-cancel']} onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1128,8 +1150,6 @@ function UploadModal({ uploadStatus, uploadError, ragCreateStatus, ragCreateErro
               )
             )}
           </div>
-
-          <TemplateDownloads suggested={evalType === 'agent' ? 'agent' : 'qa'} />
 
           {displayError && (
             <div className={styles['datasets__modal-error']}>
@@ -1517,12 +1537,6 @@ function ImageLightbox({ imagePath, onClose }: ImageLightboxProps) {
 
 
 
-
-
-
-
-
-//Datasets.module.scss
 //Datasets.module.scss
 @use 'sass:color';
 @use '../../styles/_variables' as *;
@@ -1653,6 +1667,7 @@ $datasets-base-font: 0.8125rem;
 
   &__refresh-btn {
     display: inline-flex;
+    white-space: nowrap;
     align-items: center;
     gap: 6px;
     padding: 8px 13px;
@@ -1671,6 +1686,7 @@ $datasets-base-font: 0.8125rem;
 
   &__upload-btn {
     display: inline-flex;
+    white-space: nowrap;
     align-items: center;
     gap: 6px;
     padding: 8px 14px;
@@ -2431,6 +2447,8 @@ $datasets-base-font: 0.8125rem;
     animation: datasets-modal-in 0.18s cubic-bezier(0.22, 1, 0.36, 1);
   }
 
+  &__modal--wide { width: min(540px, 100%); }
+
   &__modal-hdr {
     flex-shrink: 0;
     display: flex;
@@ -2522,79 +2540,14 @@ $datasets-base-font: 0.8125rem;
     line-height: 1.5;
   }
 
-  // ---- template downloads (upload modal) ----------------------------------
-  &__tpl {
-    border: 1px solid $line;
-    border-radius: 14px;
-    background: $paper;
-    overflow: hidden;
-  }
-
-  &__tpl-toggle {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 11px 13px;
-    border: 0;
-    background: transparent;
-    text-align: left;
-    cursor: pointer;
-    transition: background 0.15s ease;
-
-    &:hover { background: $wash; }
-  }
-
-  &__tpl-toggle-icon {
-    flex-shrink: 0;
-    width: 30px;
-    height: 30px;
-    border-radius: 9px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    background: $wash;
-    color: $signal;
-  }
-
-  &__tpl-toggle-text {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-
-    strong {
-      font-family: $sans;
-      font-size: 1em;
-      font-weight: 700;
-      color: $ink;
-    }
-
-    span {
-      font-size: 0.8462em; // 0.6875rem / 0.8125rem
-      color: $ink-3;
-    }
-  }
-
-  &__tpl-chevron {
-    flex-shrink: 0;
-    color: $ink-3;
-    transition: transform 0.18s ease;
-
-    &--open { transform: rotate(180deg); }
-  }
-
-  &__tpl-body {
+  // ---- template downloads (Templates modal) ---------------------------------
+  &__tpl-list {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    padding: 12px;
-    border-top: 1px solid $line;
   }
 
   &__tpl-row {
-    position: relative;
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
@@ -2602,13 +2555,7 @@ $datasets-base-font: 0.8125rem;
     padding: 10px 11px;
     border: 1px solid $line;
     border-radius: 11px;
-    background: $card;
-
-    // The template matching the chosen eval type.
-    &--suggested {
-      border-color: $signal;
-      box-shadow: 0 0 0 3px $wash;
-    }
+    background: $paper;
   }
 
   &__tpl-badge {
@@ -2636,30 +2583,9 @@ $datasets-base-font: 0.8125rem;
   }
 
   &__tpl-title {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 6px;
     font-size: 0.9615em; // 0.78125rem / 0.8125rem
     font-weight: 700;
     color: $ink;
-  }
-
-  // Small tab sitting on the row's top border, so it adds no height.
-  &__tpl-suggested {
-    position: absolute;
-    top: -8px;
-    right: 12px;
-    font-style: normal;
-    font-family: $mono;
-    font-size: 0.6154em; // 0.5rem / 0.8125rem
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: #fff;
-    background: $signal;
-    border-radius: 999px;
-    padding: 2px 8px;
   }
 
   &__tpl-desc {
@@ -2680,7 +2606,7 @@ $datasets-base-font: 0.8125rem;
     padding: 5px 8px;
     border: 1px solid $line;
     border-radius: 8px;
-    background: $paper;
+    background: $card;
     color: $ink-2;
     font-family: $mono;
     font-size: 0.7692em; // 0.625rem / 0.8125rem
@@ -3448,8 +3374,6 @@ $datasets-base-font: 0.8125rem;
   .datasets__delete-btn,
   .datasets__preview-btn,
   .datasets__id-copy,
-  .datasets__tpl-toggle,
-  .datasets__tpl-chevron,
   .datasets__tpl-fmt,
   .datasets__preview-drawer,
   .datasets__preview-overlay,
@@ -3459,192 +3383,3 @@ $datasets-base-font: 0.8125rem;
   .datasets__lightbox-retry,
   .datasets__modal-cancel { transition: none; }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Testsuites.ts
-import { apiClient } from '../client';
-import type { TestSuite } from '../../store/slices/testSuitesSlice';
-
-interface TestSuitesResponse {
-  datasets: TestSuite[];
-}
-
-export type EvalType = 'model' | 'agent' | 'rag';
-
-// Sample/format templates users can download before building a custom
-// dataset — GET /templates/{template_type}?file_type={file_type}.
-export type TemplateType = 'qa' | 'mcq' | 'agent';
-export type TemplateFileType = 'json' | 'jsonl' | 'csv';
-export const TEMPLATE_FILE_TYPES: TemplateFileType[] = ['json', 'jsonl', 'csv'];
-
-export interface TemplateDownload {
-  blob: Blob;
-  filename: string;
-}
-
-// Pulls the filename out of a Content-Disposition header, if the server sent
-// one and CORS exposes it. Handles both filename="x" and filename*=UTF-8''x.
-function filenameFromDisposition(header?: string | null): string | null {
-  if (!header) return null;
-  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(header);
-  if (!m) return null;
-  try {
-    return decodeURIComponent(m[1].trim());
-  } catch {
-    return m[1].trim();
-  }
-}
-
-export interface UploadDatasetParams {
-  file: File;
-  name: string;
-  description: string;
-  evalType: EvalType;
-}
-
-// Extensions routed to POST /datasets/upload
-const STRUCTURED_EXTENSIONS = ['json', 'arrow', 'parquet'];
-// Extension routed to POST /datasets/upload-jsonl
-const JSONL_EXTENSION = 'jsonl';
-
-export const SUPPORTED_UPLOAD_EXTENSIONS = [...STRUCTURED_EXTENSIONS, JSONL_EXTENSION];
-
-function getExtension(filename: string): string {
-  const idx = filename.lastIndexOf('.');
-  return idx >= 0 ? filename.slice(idx + 1).toLowerCase() : '';
-}
-
-export interface DeleteDatasetResponse {
-  status: string;
-  dataset_id: string;
-}
-
-export interface DatasetQuestion {
-  id: string;
-  category?: string | null;
-  question_type?: string | null;
-  input?: {
-    // The question text arrives under either `prompt` or `question`
-    // depending on the dataset — read it through getQuestionText().
-    prompt?: string | null;
-    question?: string | null;
-    language?: string | null;
-    // MinIO object keys, e.g. "datasets/ds-001/images/image1.jpg" — not
-    // directly-fetchable URLs. Resolved on demand via getImageBlobUrl()
-    // below, only when the user opens the lightbox for a given image.
-    images?: string[] | null;
-  } | null;
-  expected?: { answer?: string | null } | null;
-  // Shape varies across preview responses (level/source/annotator on some,
-  // something else entirely on others) — kept generic and flattened for
-  // display rather than typed field-by-field. See flattenMetadata() in
-  // Datasets.tsx.
-  metadata?: Record<string, unknown> | null;
-}
-
-// The preview API returns the question text as `input.prompt` for some
-// datasets and `input.question` for others. Returns whichever is present
-// (preferring a non-empty `prompt`) plus which field it came from, so the UI
-// can label it accordingly.
-export function getQuestionText(
-  q?: DatasetQuestion | null
-): { text: string | null; field: 'prompt' | 'question' } {
-  const prompt = q?.input?.prompt;
-  if (typeof prompt === 'string' && prompt.trim() !== '') return { text: prompt, field: 'prompt' };
-  const question = q?.input?.question;
-  if (typeof question === 'string' && question.trim() !== '') return { text: question, field: 'question' };
-  return { text: null, field: 'prompt' };
-}
-
-export interface DatasetPreviewResponse {
-  dataset_id: string;
-  questions: DatasetQuestion[];
-  total: number;
-}
-
-export const testSuitesApi = {
-  // GET /datasets
-  list: async (): Promise<TestSuite[]> => {
-    const { data } = await apiClient.get<TestSuitesResponse>('/datasets');
-    return data?.datasets ?? [];
-  },
-
-  // Routes to POST /datasets/upload (.json, .arrow, .parquet) or
-  // POST /datasets/upload-jsonl (.jsonl) based on the file extension.
-  // Both endpoints return a bare 200 on success — no dataset body — so the
-  // caller is expected to re-fetch the list afterward.
-  upload: async ({ file, name, description, evalType }: UploadDatasetParams): Promise<void> => {
-    const ext = getExtension(file.name);
-
-    if (!SUPPORTED_UPLOAD_EXTENSIONS.includes(ext)) {
-      throw new Error('Unsupported file type. Please upload a .json, .jsonl, .arrow, or .parquet file.');
-    }
-
-    const formData = new FormData();
-    formData.append('file', file);
-
-    if (ext === JSONL_EXTENSION) {
-      // Agent uploads additionally require category="Agents" per the API
-      // contract; Model and RAG uploads omit the field entirely.
-      const params: Record<string, string> = { eval_type: evalType, name, description };
-      if (evalType === 'agent') params.category = 'Agents';
-
-      await apiClient.post('/datasets/upload-jsonl', formData, { params });
-      return;
-    }
-
-    await apiClient.post('/datasets/upload', formData, { params: { eval_type: evalType, name, description } });
-  },
-
-  // DELETE /datasets/{dataset_id} — only offered in the UI for custom
-  // datasets (dataset_type === 'custom'); non-custom datasets aren't
-  // user-deletable.
-  remove: async (datasetId: string): Promise<DeleteDatasetResponse> => {
-    const { data } = await apiClient.delete<DeleteDatasetResponse>(`/datasets/${datasetId}`);
-    return data;
-  },
-
-  // GET /datasets/{dataset_id}/preview?limit=&offset= — paginated question
-  // preview shown in the slide-over drawer.
-  preview: async (datasetId: string, limit: number, offset: number): Promise<DatasetPreviewResponse> => {
-    const { data } = await apiClient.get<DatasetPreviewResponse>(`/datasets/${datasetId}/preview`, {
-      params: { limit, offset },
-    });
-    return data;
-  },
-
-  // GET /templates/{template_type}?file_type={file_type} — returns the
-  // template file as a blob for the browser to save. Falls back to a sensible
-  // filename when the response carries no (or an unreadable) Content-Disposition.
-  downloadTemplate: async (templateType: TemplateType, fileType: TemplateFileType): Promise<TemplateDownload> => {
-    const res = await apiClient.get(`/templates/${templateType}`, {
-      params: { file_type: fileType },
-      responseType: 'blob',
-    });
-    const filename =
-      filenameFromDisposition(res.headers?.['content-disposition']) ?? `${templateType}_template.${fileType}`;
-    return { blob: res.data as Blob, filename };
-  },
-
-  // POST /datasets/image — resolves a MinIO object key to the actual image
-  // bytes. Response is a raw blob, so this is fetched with responseType
-  // 'blob' and turned into an object URL for the <img> tag; the lightbox
-  // revokes it on close.
-  getImageBlobUrl: async (imagePath: string): Promise<string> => {
-    const { data } = await apiClient.post('/datasets/image', { path: imagePath }, {
-      responseType: 'blob',
-    });
-    return URL.createObjectURL(data as Blob);
-  },
-};
