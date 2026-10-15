@@ -286,18 +286,36 @@ $ev-base-font: 0.8125rem;
   &__spec-row {
     @include sel-card;
     display: grid;
+    position: relative;
     grid-template-columns: 26px 1fr;
-    align-items: center;
+    align-items: start;
     gap: 12px;
     width: 100%;
     padding: 12px 16px 12px 14px;
     font-family: $sans;
+
+    // vertical connector threading each step's tick to the next one.
+    // top = row padding (12) + tick (26); bottom = -(border 1 + gap 10 +
+    // next border 1 + next padding 12) so it lands on the next tick.
+    &::before {
+      content: '';
+      position: absolute;
+      left: 26px;
+      top: 38px;
+      bottom: -24px;
+      width: 2px;
+      background: $line;
+      transition: background 0.2s ease;
+    }
+    &:last-child::before { display: none; }
 
     &:disabled { cursor: default; }
     &:disabled:hover { border-color: $line; box-shadow: none; transform: none; }
   }
 
   &__spec-tick {
+    position: relative;
+    z-index: 1;
     width: 26px;
     height: 26px;
     border-radius: 8px;
@@ -345,6 +363,7 @@ $ev-base-font: 0.8125rem;
 
   &__spec-row--done {
     border-left-color: $ok;
+    &::before { background: $ok; }
     .ev__spec-tick { background: $ok; border-color: $ok; color: #fff; }
   }
 
@@ -559,21 +578,30 @@ $ev-base-font: 0.8125rem;
     &:disabled { background: $paper; color: $ink-2; opacity: 0.8; cursor: not-allowed; }
   }
 
+  // Run name — original underline-style field
   &__name-input {
     width: 100%;
-    border: 1.5px solid $line;
-    border-radius: 10px;
-    padding: 12px 14px;
-    background: $card;
+    border: 0;
+    border-bottom: 2px solid $line;
+    border-radius: 0;
+    padding: 8px 2px 12px;
+    background: transparent;
     font-family: $display;
-    font-size: 1.3846em;
-    font-weight: 700;
-    letter-spacing: -0.01em;
+    font-size: 1.6923em;
+    font-weight: 800;
+    letter-spacing: -0.03em;
     color: $ink;
-    transition: border-color 0.15s ease;
+    transition: border-color 0.16s ease;
 
-    &::placeholder { color: $ink-3; font-weight: 600; }
+    &::placeholder { color: $ink-3; font-weight: 700; }
     &:focus { outline: none; border-color: $signal; }
+  }
+
+  &__field:has(> .ev__name-input) > .ev__label {
+    font-size: 0.8462em;
+    letter-spacing: 0.14em;
+    color: $ink-2;
+    margin-bottom: 9px;
   }
 
   &__name-caption {
@@ -585,55 +613,82 @@ $ev-base-font: 0.8125rem;
     gap: 7px;
   }
 
-  &__quick { margin-top: 28px; max-width: 620px; }
+  // ---- quick-start presets (original mono chips) --------------------------
+  &__quick {
+    margin-top: 30px;
+    max-width: 620px;
+  }
 
   &__quick-head {
     @extend %micro;
     font-size: 0.7692em;
-    letter-spacing: 0.1em;
     color: $ink-3;
     margin-bottom: 11px;
   }
 
-  &__quick-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  &__quick-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
 
   &__preset {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
-    padding: 6px 13px 6px 11px;
+    gap: 8px;
+    padding: 8px 12px 8px 11px;
     border: 1px solid $line;
     border-radius: 999px;
     background: $card;
     cursor: pointer;
     font-family: $mono;
     font-size: 0.9231em;
-    font-weight: 700;
+    font-weight: 600;
     color: $ink-2;
     transition: all 0.15s ease;
 
-    svg { color: $ink-3; }
+    svg { color: $ink-3; transition: color 0.15s ease; }
 
-    &:hover { border-color: $ink-3; color: $ink; transform: translateY(-1px); svg { color: $signal; } }
-    &--on { border-color: $signal; background: $wash; color: $signal; svg { color: $signal; } }
+    &:hover {
+      border-color: $ink;
+      color: $ink;
+      transform: translateY(-1px);
+      svg { color: $signal; }
+    }
+
+    &--on {
+      border-color: $signal;
+      background: $wash;
+      color: $signal;
+      svg { color: $signal; }
+    }
   }
 
-  // Datasets "single" info block (dashed)
+  // ---- "What makes a good name" tips note (original) ----------------------
   &__note {
-    margin-top: 26px;
+    margin-top: 28px;
     max-width: 620px;
     display: flex;
-    gap: 11px;
-    align-items: flex-start;
+    gap: 12px;
     padding: 14px 16px;
-    border: 1px dashed $line;
+    border: 1px solid $line;
+    border-left: 2.5px solid $signal;
     border-radius: 12px;
     background: $card;
   }
 
-  &__note-icon { flex-shrink: 0; color: $signal; margin-top: 1px; }
+  &__note-icon {
+    flex-shrink: 0;
+    color: $signal;
+    margin-top: 1px;
+  }
 
-  &__note-title { font-size: 1em; font-weight: 650; color: $ink; margin-bottom: 6px; }
+  &__note-title {
+    font-size: 1em;
+    font-weight: 700;
+    color: $ink;
+    margin-bottom: 6px;
+  }
 
   &__note-list {
     display: flex;
@@ -644,7 +699,11 @@ $ev-base-font: 0.8125rem;
     line-height: 1.5;
 
     li { display: flex; gap: 8px; }
-    li::before { content: '—'; color: $signal; flex-shrink: 0; }
+    li::before {
+      content: '—';
+      color: $signal;
+      flex-shrink: 0;
+    }
   }
 
   // ========================================================================
@@ -1331,9 +1390,22 @@ $ev-base-font: 0.8125rem;
     &--on { background: $card; color: $signal; box-shadow: $soft; }
   }
 
-  &__suite { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; }
+  // Split layout — same separation as the Datasets RAG "Upload & Processing"
+  // panel: the right column runs to the stage's edge with its own
+  // border-left, tinted background and independent scroll.
+  &__suite {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(340px, 440px);
+    grid-template-rows: minmax(0, 1fr);
+    gap: 0;
+    margin: 0 -30px -40px 0; // bleed through the stage-body padding (right/bottom)
+  }
+  // keeps the 0-question warning from sliding under the bled-out grid
+  &__suite + &__dataset-empty-warning { margin-top: 54px; }
 
-  &__suite-scroll { min-width: 0; min-height: 0; overflow-y: auto; margin: 0 -6px; padding: 2px 6px 6px; }
+  &__suite-scroll { min-width: 0; min-height: 0; overflow-y: auto; margin: 0 0 0 -6px; padding: 2px 30px 6px 6px; }
 
   &__dgrid {
     display: grid;
@@ -1444,17 +1516,16 @@ $ev-base-font: 0.8125rem;
 
   // ---- subgroup rail (Datasets rail look) ---------------------------------
   &__rail {
-    flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    border: 1px solid $line;
-    border-radius: 14px;
-    background: $card;
     min-height: 0;
     overflow: hidden;
+    border-left: 1px solid $line;
+    background: $card;
+    padding: 26px 24px 40px;
   }
 
-  &__rail-head { flex-shrink: 0; padding: 14px 16px; border-bottom: 1px solid $line-2; }
+  &__rail-head { flex-shrink: 0; padding: 0 0 14px; border-bottom: 1px solid $line-2; }
   &__rail-head-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
   &__rail-title {
     display: flex;
@@ -1475,7 +1546,7 @@ $ev-base-font: 0.8125rem;
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 12px;
+    padding: 14px 4px 4px;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -1564,13 +1635,15 @@ $ev-base-font: 0.8125rem;
   // ========================================================================
   // Metrics step
   // ========================================================================
+  // Split layout — same separation as the Datasets RAG panel (see &__suite).
   &__metrics {
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 300px;
+    grid-template-columns: minmax(0, 1fr) minmax(340px, 440px);
     grid-template-rows: minmax(0, 1fr);
-    gap: 16px;
+    gap: 0;
+    margin: -26px -30px -40px 0; // run to the stage's top/right/bottom edges
   }
 
   &__metrics-main {
@@ -1580,8 +1653,7 @@ $ev-base-font: 0.8125rem;
     flex-direction: column;
     gap: 16px;
     overflow-y: auto;
-    padding-right: 4px;
-    margin-right: -4px;
+    padding: 26px 30px 40px 0;
   }
 
   // section card — Datasets stats/section container
@@ -1768,17 +1840,16 @@ $ev-base-font: 0.8125rem;
 
   // ---- judge rail ---------------------------------------------------------
   &__judge {
-    flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    border: 1px solid $line;
-    border-radius: 14px;
-    background: $card;
     min-height: 0;
     overflow: hidden;
+    border-left: 1px solid $line;
+    background: $card;
+    padding: 26px 24px 40px;
   }
 
-  &__judge-head { flex-shrink: 0; padding: 14px 16px; border-bottom: 1px solid $line-2; }
+  &__judge-head { flex-shrink: 0; padding: 0 0 14px; border-bottom: 1px solid $line-2; }
   &__judge-head-row { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 
   &__judge-title {
@@ -1835,7 +1906,7 @@ $ev-base-font: 0.8125rem;
     display: flex;
     align-items: center;
     gap: 8px;
-    margin: 12px 12px 0;
+    margin: 14px 0 0;
     padding: 8px 11px;
     border: 1.5px solid $line;
     border-radius: 10px;
@@ -1860,7 +1931,7 @@ $ev-base-font: 0.8125rem;
 
   &__judge-required {
     flex-shrink: 0;
-    margin: 0 12px 12px;
+    margin: 12px 0 0;
     padding: 9px 11px;
     border-radius: 10px;
     background: $danger-wash;
@@ -1870,7 +1941,7 @@ $ev-base-font: 0.8125rem;
     line-height: 1.4;
   }
 
-  &__judge-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  &__judge-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 4px 4px; display: flex; flex-direction: column; gap: 10px; }
 
   &__judge-empty {
     margin: 10px;
@@ -2573,10 +2644,22 @@ $ev-base-font: 0.8125rem;
 }
 
 // ---- responsive (mirrors the Datasets breakpoints) --------------------------
+// Not enough width for two usable columns — stack them (same as the
+// Datasets split panel) and let the whole step scroll as one.
+@media (max-width: 1180px) {
+  .ev__suite { grid-template-columns: 1fr; grid-template-rows: none; margin: 0; }
+  .ev__suite-scroll { padding-right: 6px; }
+  .ev__suite + .ev__dataset-empty-warning { margin-top: 14px; }
+  .ev__metrics { display: flex; flex-direction: column; gap: 0; margin: 0; }
+  .ev__metrics > * { flex-shrink: 0; }
+  .ev__metrics-main { overflow: visible; padding: 0 0 20px; }
+  .ev__rail, .ev__judge { border-left: 0; border-top: 1px solid $line; padding: 20px 0 0; margin-top: 16px; }
+  .ev__rail { max-height: 22rem; }
+  .ev__judge { max-height: 26rem; }
+}
+
 @media (max-width: 1040px) {
-  .ev__suite, .ev__metrics { grid-template-columns: 1fr; }
   .ev__samples-instruction-row { grid-template-columns: 1fr; }
-  .ev__rail, .ev__judge { max-height: 15rem; }
 }
 
 @media (max-width: 820px) {
