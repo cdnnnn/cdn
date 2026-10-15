@@ -206,55 +206,56 @@ $ev-base-font: 0.8125rem;
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+    grid-template-columns: 288px minmax(0, 1fr);
     gap: 0;
+    padding-left: 30px;
   }
 
   // ========================================================================
-  // RAIL — the Run Manifest (Datasets list rail)
+  // Run Manifest — original steps design: floating card, a connected
+  // vertical signal rail through the step ticks, live value per step.
   // ========================================================================
   &__manifest {
+    margin: 22px 26px 26px 0;
+    background: $card;
+    border: 1px solid $line;
+    border-radius: 16px;
+    box-shadow: $soft;
     display: flex;
     flex-direction: column;
     min-height: 0;
     overflow: hidden;
-    border-right: 1px solid $line;
-    background: $card;
   }
 
   &__manifest-head {
     flex-shrink: 0;
-    padding: 14px 20px 16px;
+    padding: 18px 20px 16px;
     border-bottom: 1px solid $line-2;
   }
 
   &__manifest-eyebrow {
+    @extend %micro;
+    color: $ink-3;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    font-family: $mono;
-    font-size: 0.9231em;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: $ink-3;
   }
 
-  &__manifest-pct { color: $signal; }
+  &__manifest-pct { color: $signal; font-size: 0.9231em; letter-spacing: 0.06em; }
 
   &__manifest-title {
-    margin-top: 10px;
+    margin-top: 8px;
     font-family: $display;
     font-size: 1.2308em;
-    font-weight: 650;
-    letter-spacing: -0.01em;
+    font-weight: 800;
+    letter-spacing: -0.015em;
     color: $ink;
-    line-height: 1.3;
+    line-height: 1.15;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 
-    &[data-empty='true'] { color: $ink-3; }
+    &[data-empty='true'] { color: $ink-3; font-style: normal; }
   }
 
   &__meter {
@@ -276,31 +277,33 @@ $ev-base-font: 0.8125rem;
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 12px;
+    padding: 14px 12px 16px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 24px;
   }
 
-  // one bordered card per step, 4px left edge coloured by state
   &__spec-row {
-    @include sel-card;
-    display: grid;
     position: relative;
-    grid-template-columns: 26px 1fr;
+    display: grid;
+    grid-template-columns: 30px 1fr;
     align-items: start;
     gap: 12px;
     width: 100%;
-    padding: 12px 16px 12px 14px;
-    font-family: $sans;
+    text-align: left;
+    border: 0;
+    background: transparent;
+    padding: 12px 12px 12px 4px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background 0.15s ease;
 
-    // vertical connector threading each step's tick to the next one.
-    // top = row padding (12) + tick (26); bottom = -(border 1 + gap 10 +
-    // next border 1 + next padding 12) so it lands on the next tick.
+    // Extends past this row's own bottom edge by exactly the flex gap
+    // above (24px), so the line still reaches the next row's tick.
     &::before {
       content: '';
       position: absolute;
-      left: 26px;
+      left: 18px;
       top: 38px;
       bottom: -24px;
       width: 2px;
@@ -310,73 +313,75 @@ $ev-base-font: 0.8125rem;
     &:last-child::before { display: none; }
 
     &:disabled { cursor: default; }
-    &:disabled:hover { border-color: $line; box-shadow: none; transform: none; }
+    &:not(:disabled):hover { background: $paper; }
   }
 
   &__spec-tick {
     position: relative;
     z-index: 1;
-    width: 26px;
-    height: 26px;
-    border-radius: 8px;
+    width: 28px;
+    height: 28px;
+    border-radius: 9px;
     display: grid;
     place-items: center;
-    background: $paper;
-    border: 1px solid $line;
+    background: $card;
+    border: 1.5px solid $line;
     color: $ink-3;
-    transition: all 0.16s ease;
+    font-family: $mono;
+    font-size: 0.8462em;
+    font-weight: 700;
+    transition: all 0.18s ease;
   }
 
   &__spec-body {
     min-width: 0;
+    padding-top: 1px;
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 2px;
   }
 
   &__spec-label {
-    font-family: $mono;
-    font-size: 0.8462em;
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
+    @extend %micro;
+    font-size: 0.9231em;
     color: $ink-3;
+    transition: color 0.18s ease;
   }
 
   &__spec-value {
-    font-family: $display;
     font-size: 1.1538em;
-    font-weight: 650;
+    font-weight: 600;
     color: $ink;
-    line-height: 1.3;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 
     &[data-empty='true'] {
-      font-family: $mono;
-      font-size: 1em;
-      font-weight: 700;
       color: $ink-3;
+      font-weight: 500;
+      font-family: $mono;
     }
   }
 
   &__spec-row--done {
-    border-left-color: $ok;
-    &::before { background: $ok; }
-    .ev__spec-tick { background: $ok; border-color: $ok; color: #fff; }
+    &::before { background: $signal; }
+    .ev__spec-tick { background: $signal; border-color: $signal; color: #fff; }
+    .ev__spec-label { color: $ink-3; }
   }
 
   &__spec-row--active {
-    border-color: $signal;
     background: $wash;
-    box-shadow: $soft;
-    &:hover:not(:disabled) { border-color: $signal; transform: none; }
-    .ev__spec-tick { background: $card; border-color: $signal; color: $signal; }
+    .ev__spec-tick {
+      background: $card;
+      border-color: $signal;
+      color: $signal;
+      box-shadow: 0 0 0 4px rgba($signal, 0.14);
+    }
     .ev__spec-label { color: $signal; }
+    &:not(:disabled):hover { background: $wash; }
   }
 
-  &__spec-row--todo { border-left-color: $line; }
+  &__spec-row--todo { opacity: 0.9; }
 
   // ========================================================================
   // DETAIL — the current step (Datasets detail pane)
@@ -1397,7 +1402,7 @@ $ev-base-font: 0.8125rem;
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(340px, 440px);
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
     grid-template-rows: minmax(0, 1fr);
     gap: 0;
     margin: 0 -30px -40px 0; // bleed through the stage-body padding (right/bottom)
@@ -1640,7 +1645,7 @@ $ev-base-font: 0.8125rem;
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(340px, 440px);
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
     grid-template-rows: minmax(0, 1fr);
     gap: 0;
     margin: -26px -30px -40px 0; // run to the stage's top/right/bottom edges
@@ -2665,8 +2670,8 @@ $ev-base-font: 0.8125rem;
 @media (max-width: 820px) {
   .ev__header { padding: 20px 18px 16px; flex-direction: column; align-items: flex-start; gap: 10px; }
   // rail stacks above the detail pane, like Datasets
-  .ev__shell { grid-template-columns: 1fr; grid-template-rows: minmax(160px, 30vh) minmax(0, 1fr); }
-  .ev__manifest { border-right: 0; border-bottom: 1px solid $line; }
+  .ev__shell { grid-template-columns: 1fr; grid-template-rows: minmax(160px, 34vh) minmax(0, 1fr); padding-left: 0; }
+  .ev__manifest { margin: 14px 14px 0; }
   .ev__stage-head { padding: 20px 18px 16px 36px; }
   .ev__stage-head::before { left: 18px; top: 24px; bottom: 20px; }
   .ev__stage-body { padding: 20px 18px 32px; }
