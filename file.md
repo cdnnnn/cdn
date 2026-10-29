@@ -529,6 +529,7 @@ async function executeSkillInner(sk, values, tab) {
 
   // 2) replay the recorded UI steps, checking each one
   const done = [];
+  let noEffect = null;
   // Already past the first steps? (e.g. the recording began on page 1 and clicked through to page 2, and we are on page 2 now.)
   let i0 = 0;
   try {
@@ -565,28 +566,33 @@ async function executeSkillInner(sk, values, tab) {
     }
     if (!res.ok) {
       T("skill-step-failed", { i, text: txt, msg: res.msg });
-      return { ok: false, text: `Skill "${sk.name}" stopped at step ${i + 1}/${sk.steps.length} (${txt}): ${res.msg} Done so far: ${done.join("; ") || "(nothing)"}. Continue this task manually from the current page.` };
+      const suspect = noEffect ? ` Note: step ${noEffect.i + 1} (${noEffect.txt}) showed no visible change and may be the cause.` : "";
+      return { ok: false, text: `Skill "${sk.name}" stopped at step ${i + 1}/${sk.steps.length} (${txt}): ${res.msg}${suspect} Done so far: ${done.join("; ") || "(nothing)"}. Continue this task manually from the current page.` };
     }
+    if (st.t === "click" && st.effect) await sleep(350); // let a form postback / navigation actually begin before checking whether the tab is ready
     await settle(agentTabId, st.t !== "click" && st.t !== "key");
     if (newTabId) { agentTabId = newTabId; newTabId = null; await settle(agentTabId); }
     if (st.t === "click" && st.effect && sigBefore) {
-      // the recording showed this click changes the page: make sure it did (results can arrive a moment later)
+      // The recording showed this click changing the page. Give a slow result (server postback, partial update) time to arrive.
+      // If nothing visibly changes we do NOT click again (that could repeat an action) and we do not fail yet: the next step
+      // proves whether the click mattered; if that step cannot be found, the message names this click as the suspect.
       let changed = false;
-      for (let k = 0; k < 6 && !changed; k++) {
+      for (let k = 0; k < 10 && !changed; k++) {
         let sig = "";
         try { [{ result: sig }] = await chrome.scripting.executeScript({ target: { tabId: agentTabId }, func: pageSigFn }); } catch (e) { changed = true; break; }
         changed = sig !== sigBefore;
         if (!changed) await sleep(300);
       }
       if (!changed) {
-        T("skill-step-failed", { i, text: txt, msg: "no effect" });
-        return { ok: false, text: `Skill "${sk.name}" stopped at step ${i + 1}/${sk.steps.length} (${txt}): the click had no effect on the page. Done so far: ${done.join("; ") || "(nothing)"}. Continue manually.` };
-      }
+        noEffect = { i, txt };
+        T("skill-no-effect", { i, text: txt });
+        logLine("⚠ " + i18n("sk.noEffect", { n: i + 1 }));
+      } else if (noEffect && noEffect.i < i) noEffect = null;
     }
     done.push(txt);
     if (st.t === "type" && sk.params.length) typedLog.push({ label: lbl(st.d), value: String(val) });
   }
-  return { ok: true, mode: "ui", text: `Skill "${sk.name}" completed all ${sk.steps.length} steps.` };
+  return { ok: true, mode: "ui", text: `Skill "${sk.name}" completed all ${sk.steps.length} steps.${noEffect ? ` Note: step ${noEffect.i + 1} (${noEffect.txt}) showed no visible change; check the result.` : ""}` };
 }
 
 // ---------- wiring ----------
@@ -603,7 +609,6 @@ function skillsInit() {
   i18nOnChange(renderSkills);
 }
 skillsInit();
-
 
 
 
@@ -803,13 +808,8 @@ I18N.en = {
   "sk.switched": "Switching to your open tab on {host}…",
   "sk.opening": "Opening {host}…",
   "sk.skipped": "Already past the first {n} step(s); continuing from here.",
+  "sk.noEffect": "Step {n} showed no visible change; continuing and checking the next step.",
 };
-
-
-
-
-
-
 
 
 
@@ -1003,8 +1003,8 @@ I18N.ko = {
   "sk.switched": "{host}에서 열려 있는 탭으로 전환합니다…",
   "sk.opening": "{host}을(를) 여는 중…",
   "sk.skipped": "처음 {n}단계는 이미 지났습니다. 여기서부터 계속합니다.",
+  "sk.noEffect": "{n}단계에서 눈에 띄는 변화가 없습니다. 계속 진행하며 다음 단계를 확인합니다.",
 };
-
 
 
 
@@ -1031,7 +1031,7 @@ I18N.ko = {
 {
   "manifest_version": 3,
   "name": "Page Agent",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Ask questions about the current page, or tell it to do things (fill forms, create records, book tickets), now or later, with approval before final actions.",
   "permissions": [
     "tabs",
