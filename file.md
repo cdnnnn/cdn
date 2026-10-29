@@ -305,7 +305,6 @@ async function runTool(tu, more) {
   }
   if (stopFlag) return { error: true, text: "Stopped by user." };
 
-  const fpBefore = pageFingerprint(lastSnap, true);
   try {
     if (name === "query_page") {
       const [r] = await chrome.scripting.executeScript({ target: { tabId: agentTabId }, func: queryFn, args: [input] });
@@ -324,9 +323,7 @@ async function runTool(tu, more) {
     } else if (name === "navigate") {
       await chrome.tabs.update(agentTabId, { url: input.url });
     } else {
-      const aKey = actKey(name, input, el);
-      const alt = name === "click" ? Math.min(clickFails.get(aKey) || 0, 2) : 0;
-      const [r] = await chrome.scripting.executeScript({ target: { tabId: agentTabId }, func: actFn, args: [name, alt ? { ...input, alt } : input] });
+      const [r] = await chrome.scripting.executeScript({ target: { tabId: agentTabId }, func: actFn, args: [name, input] });
       const res = r.result;
       if (!res.ok) return { error: true, text: res.msg };
       note = res.msg;
@@ -342,23 +339,9 @@ async function runTool(tu, more) {
       note += " A new tab opened and is now the active page.";
     }
     const tSnap = Date.now();
-    let snap = await takeSnapshot();
-    const pageAction = name === "click" || name === "press_key";
-    let unchanged = false;
-    if (pageAction) {
-      if (pageFingerprint(lastSnap, true) === fpBefore) {
-        // Nothing yet: the page may be loading the result asynchronously (XHR, SPA route). Wait for it to settle once more.
-        try { await chrome.scripting.executeScript({ target: { tabId: agentTabId }, func: waitChangeFn, args: [1500, 300] }); } catch (e) { await sleep(600); }
-        snap = await takeSnapshot();
-        unchanged = pageFingerprint(lastSnap, true) === fpBefore;
-      }
-      if (name === "click") {
-        const k = actKey(name, input, el);
-        if (unchanged) clickFails.set(k, (clickFails.get(k) || 0) + 1); else clickFails.delete(k);
-      }
-    }
-    T("timing", { snapshotMs: Date.now() - tSnap, unchanged });
-    return { text: `${note || "Done."}${unchanged ? " NOTE: the page does not appear to have changed after this action (the next identical click will try a different click method)." : ""}\n\n${snap}` };
+    const snap = await takeSnapshot();
+    T("timing", { snapshotMs: Date.now() - tSnap });
+    return { text: `${note || "Done."}\n\n${snap}` };
   } catch (e) {
     return { error: true, text: `Could not act on this page: ${e.message}` };
   }
@@ -401,34 +384,6 @@ async function doSchedule(input, tab) {
   return { text: `Scheduled for ${new Date(res.runAt).toLocaleString()} (in about ${mins} min) on this tab. It runs automatically even if this panel is closed (auto-approve for it: ${auto ? "ON" : "OFF, it will pause and notify the user if it needs approval"}). Tell the user this in one short sentence and stop; do not perform the task now.` };
 }
 
-// ---------- loop guard: same action again and again with nothing changing ----------
-let recentActs = [];
-const READ_ONLY = ["read_page", "query_page", "wait", "schedule_task"];
-function pageFingerprint(sn, noScroll) {
-  if (!sn) return "";
-  const str = [sn.url, noScroll ? "" : sn.scrollY, sn.textHash, sn.totalElements, (sn.elements || []).map((e) => `${e.label}|${e.value || ""}|${e.checked ?? ""}|${e.disabled ? 1 : 0}`).join(";"), String(sn.text || "").slice(0, 1500)].join("#");
-  let h = 5381;
-  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
-  return String(h);
-}
-const clickFails = new Map(); // action key -> how many times in a row it changed nothing
-const actKey = (name, input, el) => name + "|" + JSON.stringify(input) + "|" + (el ? el.label : "");
-// Returns 0 (fine), 1 (warn the model) or 2 (give up) after an action that finished with a fresh snapshot.
-function loopCheck(tu, el) {
-  if (READ_ONLY.includes(tu.name)) return 0;
-  const key = actKey(tu.name, tu.input, el);
-  const fp = pageFingerprint(lastSnap);
-  recentActs.push({ key, fp });
-  if (recentActs.length > 14) recentActs.shift();
-  const same = recentActs.filter((a) => a.key === key && a.fp === fp).length;
-  // also catch A,B,A,B... : the page has not changed over the last 6 actions
-  const stuck = recentActs.length >= 6 && recentActs.slice(-6).every((a) => a.fp === fp);
-  T("loop-check", { key: key.slice(0, 120), same, stuck });
-  if (same >= 4 || (stuck && same >= 3)) return 2;
-  if (same >= 3 || stuck) return 1;
-  return 0;
-}
-
 // ---------- agent loop ----------
 async function agentLoop() {
   for (let step = 0; step < MAX_STEPS; step++) {
@@ -457,7 +412,7 @@ async function agentLoop() {
     // Several independent form-filling calls may arrive in one reply (saves a model round trip each). The batch stops after
     // anything that can change the page (click, key press, navigation) or after an error; the rest is skipped and re-planned.
     const SAFE_CHAIN = ["type_text", "select_option", "scroll", "wait", "read_page", "query_page"];
-    let cut = "", loopAbort = false;
+    let cut = "";
     for (let i = 0; i < toolUses.length; i++) {
       const tu = toolUses[i];
       if (stopFlag) {
@@ -467,13 +422,7 @@ async function agentLoop() {
       } else {
         const more = i + 1 < toolUses.length && i + 1 < 6 && SAFE_CHAIN.includes(tu.name);
         const t1 = Date.now();
-        const elBefore = tu.input && tu.input.id != null ? elementMap.get(tu.input.id) : null;
         const out = await runTool(tu, more);
-        if (!more && !out.error) {
-          const lc = loopCheck(tu, elBefore);
-          if (lc === 1) out.text = "WARNING: you have repeated this same action several times and the page did NOT change, so it is not working. Do NOT repeat it again. Try a different element or approach (another button, scroll, open a menu first, use the keyboard), or tell the user plainly what is blocking you.\n\n" + out.text;
-          if (lc === 2) loopAbort = true;
-        }
         T("result", { error: !!out.error, ms: Date.now() - t1, text: String(out.text).slice(0, 300) });
         if (out.error) logLine("  ✖ " + String(out.text).slice(0, 160));
         results.push({ type: "tool_result", tool_use_id: tu.id, content: out.text, is_error: !!out.error });
@@ -486,11 +435,6 @@ async function agentLoop() {
       }
     }
     pushUser(results);
-    if (loopAbort) {
-      addMessage("err", i18n("note.loop"));
-      outcome = { status: "failed", text: "Stopped: the same action was repeated with no effect on the page." };
-      return;
-    }
   }
   addMessage("note", i18n("note.stepLimit", { n: MAX_STEPS }));
   outcome = { status: "failed", text: `Reached the ${MAX_STEPS}-step limit before finishing.` };
@@ -509,7 +453,7 @@ async function startTask(text) {
   setRunning(true);
   try {
     agentTabId = tab.id;
-    typedLog = []; recentActs = []; clickFails.clear();
+    typedLog = [];
     T("request", text);
     const snap = await takeSnapshot();
     if (lastSnap && lastSnap.elements.length === 0) {
@@ -635,7 +579,7 @@ $("clear").onclick = (e) => {
   e.preventDefault();
   if (running) stop();
   messages = [];
-  typedLog = []; recentActs = []; clickFails.clear();
+  typedLog = [];
   trace = [];
   $("messages").innerHTML = "";
   addMessage("note", i18n("note.newChat"));
@@ -1098,7 +1042,7 @@ async function runnerMain() {
   let status = "done", result = "";
   try {
     agentTabId = task.tabId;
-    typedLog = []; recentActs = []; clickFails.clear();
+    typedLog = [];
     outcome = null;
     T("scheduled-run", task.instruction);
     const snap = await takeSnapshot();
@@ -1115,15 +1059,6 @@ async function runnerMain() {
   try { await bg({ type: "runnerDone", id: RUN_ID, status, result, log: runLines.slice(-40) }); } catch (e) {}
 }
 if (RUNNER) runnerMain();
-
-
-
-
-
-
-
-
-
 
 
 
@@ -1371,10 +1306,7 @@ function snapshotFn(maxText, maxEls, opts) {
   } catch (e) {}
 
   const body = (document.body ? txt(document.body) : "").replace(/\n{3,}/g, "\n\n");
-  let textHash = 5381;
-  for (let i = 0; i < body.length; i++) textHash = ((textHash << 5) + textHash + body.charCodeAt(i)) | 0;
   return {
-    textHash,
     repeats,
     totalElements,
     url: location.href,
@@ -1456,20 +1388,6 @@ function quietFn(quietMs, maxMs) {
   });
 }
 
-// Waits for the page to START changing (up to maxMs), then until it is quiet again. For slow results (XHR / SPA routes).
-function waitChangeFn(maxMs, quietMs) {
-  return new Promise((resolve) => {
-    const t0 = Date.now();
-    let changedAt = 0;
-    const mo = new MutationObserver(() => { changedAt = Date.now(); });
-    try { mo.observe(document.documentElement, { subtree: true, childList: true, characterData: true }); } catch (e) {}
-    const iv = setInterval(() => {
-      const now = Date.now();
-      if ((changedAt && now - changedAt >= quietMs) || now - t0 >= maxMs) { clearInterval(iv); mo.disconnect(); resolve(!!changedAt); }
-    }, 25);
-  });
-}
-
 function readFn(max) {
   const t = (document.body ? (document.body.innerText !== undefined ? document.body.innerText : document.body.textContent) : "") || "";
   const body = t.replace(/\n{3,}/g, "\n\n");
@@ -1502,42 +1420,16 @@ function actFn(name, a) {
       if (el.disabled) return { ok: false, msg: "Element is disabled." };
       if (el.scrollIntoView) el.scrollIntoView({ block: "center", inline: "center" });
       if (el.focus) el.focus({ preventScroll: true });
-      const alt = a.alt || 0;
-      // Full pointer + mouse + click sequence on a target element.
-      const press = (t) => {
-        try {
-          const r = t.getBoundingClientRect();
-          const o = { bubbles: true, cancelable: true, view: window, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0 };
-          if (typeof PointerEvent === "function") t.dispatchEvent(new PointerEvent("pointerdown", { ...o, pointerType: "mouse", isPrimary: true }));
-          t.dispatchEvent(new MouseEvent("mousedown", o));
-          if (typeof PointerEvent === "function") t.dispatchEvent(new PointerEvent("pointerup", { ...o, pointerType: "mouse", isPrimary: true }));
-          t.dispatchEvent(new MouseEvent("mouseup", o));
-        } catch (e) {}
-        t.click();
-      };
-      if (alt === 0) {
-        press(el);
-        return { ok: true, msg: "Clicked." };
-      }
-      // The normal click already had no effect. Try what a real mouse would hit, then the real interactive ancestor/descendant,
-      // and as a last resort follow a same-site link href directly.
-      let used = "alternative 1 (the element actually under the pointer)";
-      if (alt === 1) {
-        let hit = null;
-        try { const r = el.getBoundingClientRect(); hit = document.elementFromPoint ? document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) : null; } catch (e) {}
-        press(hit || el);
-      } else {
-        used = "alternative 2 (nearest clickable parent/child, or the link address)";
-        const anc = el.closest('a[href],button,[role=button],[role=link],[role=tab],[role=menuitem],[role=option],li,[onclick]') || el;
-        const desc = el.querySelector && el.querySelector('a[href],button,[role=button],[role=link]');
-        press(anc);
-        if (desc && desc !== anc) press(desc);
-        const link = el.closest && el.closest("a[href]");
-        if (link && link.href && /^https?:/.test(link.href) && link.origin === location.origin && link.getAttribute("href") !== "#" && link.href !== location.href) {
-          location.assign(link.href);
-        }
-      }
-      return { ok: true, msg: "Clicked using " + used + "." };
+      try {
+        const r = el.getBoundingClientRect();
+        const o = { bubbles: true, cancelable: true, view: window, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0 };
+        if (typeof PointerEvent === "function") el.dispatchEvent(new PointerEvent("pointerdown", { ...o, pointerType: "mouse", isPrimary: true }));
+        el.dispatchEvent(new MouseEvent("mousedown", o));
+        if (typeof PointerEvent === "function") el.dispatchEvent(new PointerEvent("pointerup", { ...o, pointerType: "mouse", isPrimary: true }));
+        el.dispatchEvent(new MouseEvent("mouseup", o));
+      } catch (e) {}
+      el.click();
+      return { ok: true, msg: "Clicked." };
     }
     if (name === "type_text") {
       const el = find(a.id);
@@ -1842,11 +1734,314 @@ function tourClearFn() {
 
 
 
+
+
+
+//lang en
+// English (source language). Every other lang-*.js file must contain exactly these keys and the same {placeholders}.
+I18N.en = {
+  "lang.label": "Language",
+  "lang.help": "Changes the language of the whole extension and the language the assistant replies in.",
+  "hdr.newChat": "New chat",
+  "hdr.debug": "Copy debug log",
+  "hdr.settings": "Settings",
+  "hdr.currentPage": "Current page",
+  "hint.intro": "Ask about the page, or tell me what to do on it. For example:",
+  "chip.1": "What tasks are assigned to John?",
+  "chip.2": "Create a new record using the details I give you",
+  "chip.3": "Book a ticket from Pune to Mumbai for tomorrow",
+  "hint.safety": "I'll ask for your approval before submitting, paying, booking, deleting or sending anything, and I never type passwords, card numbers or OTPs.",
+  "hint.tip": "Tip: add a time and I'll do it later, e.g. “in 5 minutes, submit this form”.",
+  "opt.step": "Approve every action",
+  "opt.auto": "Auto-approve actions",
+  "opt.debug": "Show model replies (debug)",
+  "input.ph": "Ask or instruct… (Enter to send, Shift+Enter for new line)",
+  "btn.send": "Send",
+  "btn.stop": "Stop",
+  "btn.approve": "Approve",
+  "btn.deny": "Deny",
+  "appr.title": "Approve? {action}",
+  "appr.approved": "Approved: {action}",
+  "appr.denied": "Denied: {action}",
+  "why.step": "“Approve every action” is on.",
+  "why.final": "This looks like a final or irreversible action.",
+  "why.submit": "This types and submits a form.",
+  "why.enter": "Pressing Enter can submit a form.",
+  "why.site": "This opens a different website.",
+  "why.schedule": "This will run later, on this page, without you watching. Auto-approve is OFF for it, so it will pause and ask you before final actions.",
+  "d.page": "Page",
+  "d.fields": "Fields filled during this task",
+  "d.none": "(none)",
+  "d.willDo": "What it will do",
+  "act.type": "type “{text}” into {target}",
+  "act.typeSubmit": "type “{text}” into {target} and submit",
+  "act.select": "select “{option}” in {target}",
+  "act.click": "click {target}",
+  "act.press": "press {key}",
+  "act.open": "open {url}",
+  "act.later": "schedule for later: “{text}”",
+  "act.scheduleAt": "schedule for {when}",
+  "log.auto": "✔ auto-approved: {action}",
+  "note.stopped": "Stopped.",
+  "note.newChat": "New chat. Ask about the current page or tell me what to do.",
+  "note.noControls": "I can't see any clickable controls on this page{iframes}. It may still be loading, or the app may run inside an iframe.",
+  "note.iframes": " (it contains {n} iframe(s); content inside iframes isn't visible to me)",
+  "note.stepLimit": "Reached the {n}-step limit. Tell me to continue if you want me to keep going.",
+  "note.notAction": "This looks like instructions rather than an action: the model did not call a tool. Tick “Show model replies”, or use Copy debug log and send it to the developer.",
+  "note.debugCopied": "Debug log copied (no API key included). Paste it to the developer, after removing anything private.",
+  "note.copyFailed": "Could not copy automatically.",
+  "err.unreadable": "This page can't be read or controlled (browser-internal pages like chrome:// or the Web Store are blocked). Switch to a normal web page.",
+  "run.title": "Scheduled task",
+  "run.autoOn": "Running unattended with auto-approve ON.",
+  "run.autoOff": "Running unattended. I will pause and ask you before final actions.",
+  "run.cannotStart": "Could not start the scheduled task.",
+  "run.window": "Page Agent: scheduled task",
+  "confirm.auto": "Auto-approve lets the agent submit, book, pay, save, send and delete WITHOUT asking you first.\n\nPasswords, card numbers and OTPs are still never typed by the agent, and you can press Stop at any time.\n\nTurn on auto-approve?",
+  "tasks.title": "Scheduled tasks ({n} active)",
+  "tasks.clear": "clear finished",
+  "tasks.at": "at {time}",
+  "tasks.starting": "starting…",
+  "tasks.in": "in {t}",
+  "tasks.auto": "auto-approve",
+  "tasks.waiting": "Waiting for your approval: {title}",
+  "tasks.open": "Open task window",
+  "tasks.cancel": "Cancel",
+  "tasks.stop": "Stop",
+  "tasks.result": "Result",
+  "tasks.log": "Log",
+  "st.scheduled": "Scheduled",
+  "st.launching": "Starting",
+  "st.running": "Running",
+  "st.needs_approval": "Needs approval",
+  "st.done": "Done",
+  "st.failed": "Failed",
+  "st.cancelled": "Stopped",
+  "st.missed": "Missed",
+  "st.interrupted": "Interrupted",
+  "set.title": "Settings",
+  "set.provider": "Provider type",
+  "prov.anthropic": "Anthropic Messages API (or compatible)",
+  "prov.openai": "OpenAI-compatible (/chat/completions)",
+  "prov.custom": "Custom (my own request/response format)",
+  "prov.help.anthropic": "Anthropic's API, or a proxy that uses the same /v1/messages format with tool use.",
+  "prov.help.openai": "Any server with POST {base}/chat/completions and tool calling, e.g. https://your-host/v1. The model must support tool calling.",
+  "prov.help.custom": "Any HTTP JSON API. You define the request body and where the reply text is in the response. Tools work through a JSON-in-text protocol, so the model only needs to follow instructions.",
+  "set.baseUrl": "Base URL",
+  "set.requestUrl": "Request URL (full endpoint, POST)",
+  "set.urlHelp": "Leave empty for the official endpoint of the selected type.",
+  "set.urlHelpCustom": "Required. {{model}} and {{apiKey}} can be used in the URL.",
+  "set.apiKey": "API key",
+  "set.apiKeyPh": "optional for local models",
+  "set.apiKeyHelp": "Stored only in this browser (chrome.storage.local) and sent only to the URL above.",
+  "set.model": "Model name",
+  "set.modelPh": "your provider's model id",
+  "set.headers": "Extra headers (optional, JSON)",
+  "set.headersHelp": "For providers that use a different auth header or need custom headers. {{apiKey}} and {{model}} work in the Custom type.",
+  "set.bodyTpl": "Request body template (JSON)",
+  "set.bodyTplHelp": "Placeholders: \"{{model}}\", \"{{system}}\", \"{{messages}}\" (list of {role, content}), \"{{prompt}}\" (everything as one text), \"{{max_tokens}}\" (number), \"{{chat}}\" (system message + messages, for OpenAI-style APIs), \"{{tools}}\" (tool definitions in OpenAI format, only if your API supports native tools). If the template has none of {{system}}, {{chat}} or {{prompt}}, the instructions and tools are added to the first user message automatically. A value that is exactly a placeholder gets the real value; placeholders inside longer text are inserted as text.",
+  "set.respPath": "Response text path",
+  "set.respPathPh": "e.g. choices.0.message.content or data.reply (empty = auto-detect)",
+  "set.respPathHelp": "Where the model's reply text is in the JSON response. If the response is plain text, leave empty.",
+  "set.suffix": "Prompt suffix (optional, custom provider)",
+  "set.suffixPh": "e.g. /no_think (Qwen3: turns off long reasoning)",
+  "set.suffixHelp": "Added to the end of every message sent to the model, e.g. switches like /no_think.",
+  "set.compact": "Compact page snapshots (for small-context models)",
+  "set.compactHelp": "Sends fewer page elements and less text per step. Turn on if your model has a small context window (Ollama's default is only 2-4k tokens: also raise num_ctx to 16k+).",
+  "btn.save": "Save",
+  "btn.test": "Save & test connection",
+  "set.saved": "Saved.",
+  "set.testing": "Testing…",
+  "set.connected": "Connected. Model replied: {reply}",
+  "set.emptyReply": "(empty reply)",
+  "set.foundAt": "Reply text was found at: {path}",
+  "set.pathTip": "Tip: paste this into “Response text path” to lock it in.",
+  "err.tplJson": "Request body template must be valid JSON.",
+  "bg.finished": "Task finished",
+  "bg.failed": "Task failed",
+  "bg.stopped": "Task stopped",
+  "bg.missed": "Task missed",
+  "bg.interrupted": "Task interrupted",
+  "bg.approval": "Approval needed",
+  "bg.cancelledBefore": "Cancelled before it ran.",
+  "bg.stoppedByYou": "Stopped by you.",
+  "bg.done": "Finished.",
+  "bg.noStart": "The task window did not start.",
+  "bg.couldNotStart": "Could not start: {err}",
+  "bg.missedMsg": "It was due at {when} but the browser was not running within {min} minutes of that time, so it was not run.",
+  "bg.winClosed": "The task window was closed before the task finished.",
+  "bg.restarted": "The browser was closed or restarted while this task was running.",
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//lang ko
+// Korean. Must contain exactly the same keys and {placeholders} as lang-en.js.
+I18N.ko = {
+  "lang.label": "언어",
+  "lang.help": "확장 프로그램 전체의 언어와 어시스턴트가 답변하는 언어를 바꿉니다.",
+  "hdr.newChat": "새 대화",
+  "hdr.debug": "디버그 로그 복사",
+  "hdr.settings": "설정",
+  "hdr.currentPage": "현재 페이지",
+  "hint.intro": "페이지에 대해 질문하거나, 페이지에서 할 일을 알려 주세요. 예를 들어:",
+  "chip.1": "John에게 배정된 작업은 무엇인가요?",
+  "chip.2": "내가 알려 주는 정보로 새 레코드를 만들어 줘",
+  "chip.3": "내일 푸네에서 뭄바이로 가는 티켓을 예약해 줘",
+  "hint.safety": "제출, 결제, 예약, 삭제, 전송을 하기 전에는 반드시 승인을 요청하며, 비밀번호, 카드 번호, OTP는 절대 입력하지 않습니다.",
+  "hint.tip": "팁: 시간을 함께 말하면 나중에 실행합니다. 예: “5분 후에 이 양식을 제출해 줘”.",
+  "opt.step": "모든 작업 승인",
+  "opt.auto": "작업 자동 승인",
+  "opt.debug": "모델 응답 표시(디버그)",
+  "input.ph": "질문하거나 지시하세요… (Enter로 전송, Shift+Enter로 줄바꿈)",
+  "btn.send": "보내기",
+  "btn.stop": "중지",
+  "btn.approve": "승인",
+  "btn.deny": "거부",
+  "appr.title": "승인하시겠습니까? {action}",
+  "appr.approved": "승인됨: {action}",
+  "appr.denied": "거부됨: {action}",
+  "why.step": "“모든 작업 승인”이 켜져 있습니다.",
+  "why.final": "최종 단계이거나 되돌릴 수 없는 작업으로 보입니다.",
+  "why.submit": "양식에 입력하고 제출합니다.",
+  "why.enter": "Enter 키를 누르면 양식이 제출될 수 있습니다.",
+  "why.site": "다른 웹사이트를 엽니다.",
+  "why.schedule": "나중에 이 페이지에서 사용자가 보지 않는 상태로 실행됩니다. 자동 승인은 꺼져 있으므로 최종 작업 전에 일시 중지하고 물어봅니다.",
+  "d.page": "페이지",
+  "d.fields": "이 작업 중 입력한 필드",
+  "d.none": "(없음)",
+  "d.willDo": "수행할 작업",
+  "act.type": "{target}에 “{text}” 입력",
+  "act.typeSubmit": "{target}에 “{text}” 입력 후 제출",
+  "act.select": "{target}에서 “{option}” 선택",
+  "act.click": "{target} 클릭",
+  "act.press": "{key} 키 누르기",
+  "act.open": "{url} 열기",
+  "act.later": "나중에 실행 예약: “{text}”",
+  "act.scheduleAt": "{when}에 실행 예약",
+  "log.auto": "✔ 자동 승인됨: {action}",
+  "note.stopped": "중지되었습니다.",
+  "note.newChat": "새 대화입니다. 현재 페이지에 대해 질문하거나 할 일을 알려 주세요.",
+  "note.noControls": "이 페이지에서 클릭할 수 있는 컨트롤이 보이지 않습니다{iframes}. 아직 로딩 중이거나 앱이 iframe 안에서 실행 중일 수 있습니다.",
+  "note.iframes": " (iframe {n}개가 있으며, iframe 안의 내용은 볼 수 없습니다)",
+  "note.stepLimit": "{n}단계 제한에 도달했습니다. 계속하려면 계속하라고 말씀해 주세요.",
+  "note.notAction": "작업이 아니라 설명처럼 보입니다. 모델이 도구를 호출하지 않았습니다. “모델 응답 표시”를 켜거나 디버그 로그를 복사해 개발자에게 보내 주세요.",
+  "note.debugCopied": "디버그 로그를 복사했습니다(API 키는 포함되지 않음). 개인 정보를 지운 뒤 개발자에게 붙여넣어 전달하세요.",
+  "note.copyFailed": "자동으로 복사하지 못했습니다.",
+  "err.unreadable": "이 페이지는 읽거나 제어할 수 없습니다(chrome:// 같은 브라우저 내부 페이지와 웹 스토어는 차단됩니다). 일반 웹 페이지로 이동하세요.",
+  "run.title": "예약된 작업",
+  "run.autoOn": "자동 승인을 켠 상태로 무인 실행 중입니다.",
+  "run.autoOff": "무인 실행 중입니다. 최종 작업 전에 일시 중지하고 물어보겠습니다.",
+  "run.cannotStart": "예약된 작업을 시작하지 못했습니다.",
+  "run.window": "Page Agent: 예약된 작업",
+  "confirm.auto": "자동 승인을 켜면 에이전트가 먼저 묻지 않고 제출, 예약, 결제, 저장, 전송, 삭제를 수행합니다.\n\n비밀번호, 카드 번호, OTP는 여전히 에이전트가 입력하지 않으며, 언제든 중지를 누를 수 있습니다.\n\n자동 승인을 켜시겠습니까?",
+  "tasks.title": "예약된 작업 (진행 중 {n}개)",
+  "tasks.clear": "완료된 항목 지우기",
+  "tasks.at": "{time}에",
+  "tasks.starting": "시작 중…",
+  "tasks.in": "{t} 후",
+  "tasks.auto": "자동 승인",
+  "tasks.waiting": "승인 대기 중: {title}",
+  "tasks.open": "작업 창 열기",
+  "tasks.cancel": "취소",
+  "tasks.stop": "중지",
+  "tasks.result": "결과",
+  "tasks.log": "로그",
+  "st.scheduled": "예약됨",
+  "st.launching": "시작 중",
+  "st.running": "실행 중",
+  "st.needs_approval": "승인 필요",
+  "st.done": "완료",
+  "st.failed": "실패",
+  "st.cancelled": "중지됨",
+  "st.missed": "놓침",
+  "st.interrupted": "중단됨",
+  "set.title": "설정",
+  "set.provider": "제공자 유형",
+  "prov.anthropic": "Anthropic Messages API (또는 호환)",
+  "prov.openai": "OpenAI 호환 (/chat/completions)",
+  "prov.custom": "사용자 지정 (직접 정의하는 요청/응답 형식)",
+  "prov.help.anthropic": "Anthropic API 또는 도구 사용이 가능한 동일한 /v1/messages 형식의 프록시입니다.",
+  "prov.help.openai": "POST {base}/chat/completions와 도구 호출을 지원하는 모든 서버입니다. 예: https://your-host/v1. 모델이 도구 호출을 지원해야 합니다.",
+  "prov.help.custom": "모든 HTTP JSON API입니다. 요청 본문과 응답에서 답변 텍스트의 위치를 직접 정의합니다. 도구는 텍스트 속 JSON 프로토콜로 동작하므로 모델은 지시를 따르기만 하면 됩니다.",
+  "set.baseUrl": "기본 URL",
+  "set.requestUrl": "요청 URL (전체 엔드포인트, POST)",
+  "set.urlHelp": "비워 두면 선택한 유형의 공식 엔드포인트를 사용합니다.",
+  "set.urlHelpCustom": "필수입니다. URL에 {{model}}과 {{apiKey}}를 사용할 수 있습니다.",
+  "set.apiKey": "API 키",
+  "set.apiKeyPh": "로컬 모델은 선택 사항",
+  "set.apiKeyHelp": "이 브라우저(chrome.storage.local)에만 저장되며 위의 URL로만 전송됩니다.",
+  "set.model": "모델 이름",
+  "set.modelPh": "제공자의 모델 ID",
+  "set.headers": "추가 헤더 (선택, JSON)",
+  "set.headersHelp": "다른 인증 헤더를 쓰거나 사용자 지정 헤더가 필요한 제공자용입니다. 사용자 지정 유형에서는 {{apiKey}}와 {{model}}을 사용할 수 있습니다.",
+  "set.bodyTpl": "요청 본문 템플릿 (JSON)",
+  "set.bodyTplHelp": "자리 표시자: \"{{model}}\", \"{{system}}\", \"{{messages}}\" ({role, content} 목록), \"{{prompt}}\" (전체를 하나의 텍스트로), \"{{max_tokens}}\" (숫자), \"{{chat}}\" (시스템 메시지 + 메시지, OpenAI 방식 API용), \"{{tools}}\" (OpenAI 형식의 도구 정의, API가 네이티브 도구를 지원할 때만). 템플릿에 {{system}}, {{chat}}, {{prompt}}가 하나도 없으면 지침과 도구가 첫 번째 사용자 메시지에 자동으로 추가됩니다. 값이 자리 표시자 하나로만 되어 있으면 실제 값으로 바뀌고, 긴 텍스트 안의 자리 표시자는 텍스트로 삽입됩니다.",
+  "set.respPath": "응답 텍스트 경로",
+  "set.respPathPh": "예: choices.0.message.content 또는 data.reply (비우면 자동 감지)",
+  "set.respPathHelp": "JSON 응답에서 모델의 답변 텍스트가 있는 위치입니다. 응답이 일반 텍스트이면 비워 두세요.",
+  "set.suffix": "프롬프트 접미사 (선택, 사용자 지정 제공자)",
+  "set.suffixPh": "예: /no_think (Qwen3: 긴 추론 끄기)",
+  "set.suffixHelp": "모델로 보내는 모든 메시지 끝에 추가됩니다. 예: /no_think 같은 스위치.",
+  "set.compact": "페이지 스냅샷 간소화 (작은 컨텍스트 모델용)",
+  "set.compactHelp": "단계마다 보내는 페이지 요소와 텍스트를 줄입니다. 모델의 컨텍스트 창이 작을 때 켜세요(Ollama 기본값은 2-4k 토큰뿐이므로 num_ctx도 16k 이상으로 올리세요).",
+  "btn.save": "저장",
+  "btn.test": "저장 및 연결 테스트",
+  "set.saved": "저장되었습니다.",
+  "set.testing": "테스트 중…",
+  "set.connected": "연결되었습니다. 모델 응답: {reply}",
+  "set.emptyReply": "(빈 응답)",
+  "set.foundAt": "응답 텍스트 위치: {path}",
+  "set.pathTip": "팁: 이 값을 “응답 텍스트 경로”에 붙여넣어 고정하세요.",
+  "err.tplJson": "요청 본문 템플릿은 올바른 JSON이어야 합니다.",
+  "bg.finished": "작업 완료",
+  "bg.failed": "작업 실패",
+  "bg.stopped": "작업 중지됨",
+  "bg.missed": "작업을 놓침",
+  "bg.interrupted": "작업 중단됨",
+  "bg.approval": "승인 필요",
+  "bg.cancelledBefore": "실행되기 전에 취소되었습니다.",
+  "bg.stoppedByYou": "사용자가 중지했습니다.",
+  "bg.done": "완료되었습니다.",
+  "bg.noStart": "작업 창이 시작되지 않았습니다.",
+  "bg.couldNotStart": "시작하지 못했습니다: {err}",
+  "bg.missedMsg": "{when}에 실행될 예정이었지만 그 시각으로부터 {min}분 이내에 브라우저가 실행 중이지 않아 실행되지 않았습니다.",
+  "bg.winClosed": "작업이 끝나기 전에 작업 창이 닫혔습니다.",
+  "bg.restarted": "이 작업이 실행되는 동안 브라우저가 닫히거나 다시 시작되었습니다.",
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 //manifest.json
 {
   "manifest_version": 3,
   "name": "Page Agent",
-  "version": "0.9.2",
+  "version": "0.9.0",
   "description": "Ask questions about the current page, or tell it to do things (fill forms, create records, book tickets), now or later, with approval before final actions.",
   "permissions": [
     "tabs",
