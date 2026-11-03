@@ -6,6 +6,13 @@
 //   fix   - corrections from the user (typed, or shown by recording)
 // The notes for the current site are added to the model's instructions on the next task.
 
+// own element helper, so this file does not depend on the load order of skills.js
+function lnEl(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
 let KNOW = {}; // { host: [ note ] }   note = { id, kind: flow|avoid|tip|field|page, text, req?, src, at, uses, ok? }
 let LEARN_AUTO = true;
 let failLog = []; // failed actions of the current agent run
@@ -116,9 +123,9 @@ function showFeedback(host) {
   const div = addMessage("note", "");
   div.classList.add("kfb");
   const flowId = lastFlowId, req = lastRequestText;
-  div.append(mkEl("span", "", i18n("kn.fb") + " "));
-  const yes = mkEl("button", "yes", i18n("kn.yes"));
-  const no = mkEl("button", "no", i18n("kn.no"));
+  div.append(lnEl("span", "", i18n("kn.fb") + " "));
+  const yes = lnEl("button", "yes", i18n("kn.yes"));
+  const no = lnEl("button", "no", i18n("kn.no"));
   yes.onclick = () => {
     const n = (KNOW[host] || []).find((x) => x.id === flowId);
     if (n) { n.ok = true; knowSave().then(renderKnow); }
@@ -128,11 +135,11 @@ function showFeedback(host) {
     // a wrong run must not be remembered as a good flow
     if (flowId && KNOW[host]) { KNOW[host] = KNOW[host].filter((x) => x.id !== flowId); knowSave().then(renderKnow); }
     div.textContent = "";
-    div.append(mkEl("div", "", i18n("kn.teachHow")));
-    const ta = mkEl("input");
+    div.append(lnEl("div", "", i18n("kn.teachHow")));
+    const ta = lnEl("input");
     ta.placeholder = i18n("kn.tellPh");
-    const tell = mkEl("button", "yes", i18n("kn.save"));
-    const show = mkEl("button", "no", i18n("kn.showMe"));
+    const tell = lnEl("button", "yes", i18n("kn.save"));
+    const show = lnEl("button", "no", i18n("kn.showMe"));
     tell.onclick = async () => {
       const t = ta.value.trim();
       if (!t) { ta.focus(); return; }
@@ -141,7 +148,7 @@ function showFeedback(host) {
       div.textContent = i18n("kn.fixSaved");
     };
     show.onclick = () => { div.remove(); startRecording({ teach: { req, host } }); };
-    const row = mkEl("div", "tbtns");
+    const row = lnEl("div", "tbtns");
     row.append(tell, show);
     div.append(ta, row);
     ta.focus();
@@ -207,11 +214,11 @@ function finishWatch(data, rec) {
   const res = analyzeWatch(data, rec);
   if (!res.total) { addMessage("note", i18n("kn.watchEmpty")); return; }
   const card = addMessage("skillcard", "");
-  card.append(mkEl("div", "title", i18n("kn.watchTitle", { n: res.total })));
+  card.append(lnEl("div", "title", i18n("kn.watchTitle", { n: res.total })));
   res.tasks.slice(0, 6).forEach((t, i) => {
-    const row = mkEl("div", "srow");
-    row.append(mkEl("span", "stext", i18n("kn.taskN", { i: i + 1, steps: t.segs[0].length }) + (t.count > 1 ? " · " + i18n("kn.repeated", { n: t.count }) : "") + " — " + flowText(t.segs[0]).slice(0, 110)));
-    const b = mkEl("button", "yes", i18n("kn.saveSkill"));
+    const row = lnEl("div", "srow");
+    row.append(lnEl("span", "stext", i18n("kn.taskN", { i: i + 1, steps: t.segs[0].length }) + (t.count > 1 ? " · " + i18n("kn.repeated", { n: t.count }) : "") + " — " + flowText(t.segs[0]).slice(0, 110)));
+    const b = lnEl("button", "yes", i18n("kn.saveSkill"));
     b.onclick = () => {
       const seg = t.segs[0];
       const draft = draftFromRecording({ steps: seg, reqs: [] }, { host: rec.host, startUrl: seg[0].url || rec.startUrl });
@@ -222,10 +229,10 @@ function finishWatch(data, rec) {
   });
   const boxes = [];
   if (res.notes.length) {
-    card.append(mkEl("div", "small", i18n("kn.factsTitle")));
+    card.append(lnEl("div", "small", i18n("kn.factsTitle")));
     res.notes.forEach((n) => {
-      const lab = mkEl("label", "mrow");
-      const cb = mkEl("input");
+      const lab = lnEl("label", "mrow");
+      const cb = lnEl("input");
       cb.type = "checkbox";
       cb.checked = n.kind !== "flow";
       lab.append(cb, document.createTextNode(" " + n.text));
@@ -233,9 +240,9 @@ function finishWatch(data, rec) {
       boxes.push([cb, n]);
     });
   }
-  const btns = mkEl("div", "btns");
-  const save = mkEl("button", "yes", i18n("kn.saveNotes"));
-  const close = mkEl("button", "no", i18n("sk.cancel"));
+  const btns = lnEl("div", "btns");
+  const save = lnEl("button", "yes", i18n("kn.saveNotes"));
+  const close = lnEl("button", "no", i18n("sk.cancel"));
   save.onclick = async () => {
     let k = 0;
     for (const [cb, n] of boxes) if (cb.checked) { addNote(rec.host, { ...n }); k++; }
@@ -256,29 +263,29 @@ function renderKnow() {
   const hosts = Object.keys(KNOW).filter((h) => KNOW[h] && KNOW[h].length).sort((a, b) => (b === agentHost) - (a === agentHost) || a.localeCompare(b));
   const total = hosts.reduce((s, h) => s + KNOW[h].length, 0);
   $("knowTitle").textContent = i18n("kn.title", { n: total });
-  const top = mkEl("div", "skform");
-  const auto = mkEl("label", "mrow");
-  const cb = mkEl("input");
+  const topRow = lnEl("div", "skform");
+  const auto = lnEl("label", "mrow");
+  const cb = lnEl("input");
   cb.type = "checkbox";
   cb.checked = LEARN_AUTO;
   cb.onchange = async () => { LEARN_AUTO = cb.checked; try { await chrome.storage.local.set({ learnAuto: LEARN_AUTO }); } catch (e) {} };
   auto.append(cb, document.createTextNode(" " + i18n("kn.auto")));
-  top.append(auto);
-  box.append(top);
-  if (!hosts.length) box.append(mkEl("div", "small", i18n("kn.empty")));
+  topRow.append(auto);
+  box.append(topRow);
+  if (!hosts.length) box.append(lnEl("div", "small", i18n("kn.empty")));
   for (const h of hosts) {
-    const row = mkEl("div", "skill");
-    const hd = mkEl("div", "sktop");
-    hd.append(mkEl("b", "", h));
-    const clr = mkEl("a", "sdel", i18n("kn.clearSite"));
+    const row = lnEl("div", "skill");
+    const hd = lnEl("div", "sktop");
+    hd.append(lnEl("b", "", h));
+    const clr = lnEl("a", "sdel", i18n("kn.clearSite"));
     clr.href = "#";
     clr.onclick = async (e) => { e.preventDefault(); if (!confirm(i18n("kn.clearConfirm", { host: h }))) return; delete KNOW[h]; await knowSave(); renderKnow(); };
     hd.append(clr);
     row.append(hd);
     for (const n of KNOW[h]) {
-      const r = mkEl("div", "srow");
-      r.append(mkEl("span", "stext", (n.kind === "avoid" ? "⚠ " : n.kind === "flow" ? "↻ " : "• ") + n.text + (n.src ? "  (" + n.src + (n.ok ? " ✓" : "") + ")" : "")));
-      const del = mkEl("a", "sdel", "✕");
+      const r = lnEl("div", "srow");
+      r.append(lnEl("span", "stext", (n.kind === "avoid" ? "⚠ " : n.kind === "flow" ? "↻ " : "• ") + n.text + (n.src ? "  (" + n.src + (n.ok ? " ✓" : "") + ")" : "")));
+      const del = lnEl("a", "sdel", "✕");
       del.href = "#";
       del.onclick = async (e) => { e.preventDefault(); KNOW[h] = KNOW[h].filter((x) => x.id !== n.id); if (!KNOW[h].length) delete KNOW[h]; await knowSave(); renderKnow(); };
       r.append(del);
@@ -286,9 +293,9 @@ function renderKnow() {
     }
     box.append(row);
   }
-  const bt = mkEl("div", "tbtns");
-  const ex = mkEl("button", "no", i18n("kn.export"));
-  const im = mkEl("button", "no", i18n("kn.import"));
+  const bt = lnEl("div", "tbtns");
+  const ex = lnEl("button", "no", i18n("kn.export"));
+  const im = lnEl("button", "no", i18n("kn.import"));
   ex.onclick = async () => {
     await skillsLoad();
     const blob = new Blob([JSON.stringify({ pageAgent: 1, exported: new Date().toISOString(), knowledge: KNOW, skills: SKILLS }, null, 1)], { type: "application/json" });
@@ -300,7 +307,7 @@ function renderKnow() {
   };
   im.onclick = () => { const f = $("knowFile"); if (f) f.click(); };
   bt.append(ex, im);
-  box.append(bt, mkEl("div", "small", i18n("kn.exportWarn")));
+  box.append(bt, lnEl("div", "small", i18n("kn.exportWarn")));
 }
 async function importKnow(file) {
   try {
@@ -347,11 +354,14 @@ learnInit();
 
 
 
+
+
+
 //manifest.json
 {
   "manifest_version": 3,
   "name": "Page Agent",
-  "version": "1.1.3",
+  "version": "1.1.4",
   "description": "Ask questions about the current page, or tell it to do things (fill forms, create records, book tickets), now or later, with approval before final actions.",
   "permissions": [
     "tabs",
