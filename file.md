@@ -1,602 +1,3 @@
-//llm.js
-// Provider layer (runs in the background worker; the popup also loads it for validation helpers).
-// The agent works internally with Anthropic-style messages (content blocks: text / image / tool_use / tool_result).
-// callLLM() sends them to one of three provider types:
-//   - "anthropic": Anthropic Messages API, or any Anthropic-compatible endpoint (native tool use)
-//   - "openai":    any OpenAI-compatible /chat/completions endpoint (OpenAI, Azure, OpenRouter, Groq, vLLM,
-//                  Ollama, LM Studio, DashScope/Qwen, Zhipu/GLM ...). Native tool calling; if the endpoint
-//                  rejects "tools" or the model answers in text, the JSON-in-text protocol is used instead.
-//   - "custom":    any HTTP JSON API. You define the request body template and where the reply text is in
-//                  the response; tools work through a JSON-in-text protocol, so the model only has to
-//                  follow instructions.
-// Settings (the `ai` object in chrome.storage.local): provider, baseUrl, apiKey, model, headers (JSON string),
-// bodyTemplate, responsePath, promptSuffix.
-
-const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
-
-function parseExtraHeaders(str) {
-  if (!str || !str.trim()) return {};
-  try {
-    const h = JSON.parse(str);
-    if (h && typeof h === 'object' && !Array.isArray(h)) return h;
-  } catch (e) { /* fall through */ }
-  throw new Error('"Extra headers" must be a JSON object, e.g. {"api-key": "..."}');
-}
-
-// ---- Anthropic-style -> OpenAI-style ----
-function toOpenAIMessages(system, messages) {
-  const out = [{ role: 'system', content: system }];
-  for (const m of messages) {
-    const blocks = Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }];
-    if (m.role === 'assistant') {
-      const text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
-      const calls = blocks
-        .filter((b) => b.type === 'tool_use')
-        .map((b) => ({ id: b.id, type: 'function', function: { name: b.name, arguments: JSON.stringify(b.input || {}) } }));
-      const msg = { role: 'assistant', content: text || null };
-      if (calls.length) msg.tool_calls = calls;
-      out.push(msg);
-    } else {
-      for (const b of blocks) {
-        if (b.type === 'tool_result') {
-          const c = typeof b.content === 'string' ? b.content : JSON.stringify(b.content);
-          out.push({ role: 'tool', tool_call_id: b.tool_use_id, content: (b.is_error ? 'Error: ' : '') + c });
-        }
-      }
-      const hasImage = blocks.some((b) => b.type === 'image');
-      if (hasImage) {
-        // vision models: keep screenshots as image_url parts
-        const parts = [];
-        for (const b of blocks) {
-          if (b.type === 'text') parts.push({ type: 'text', text: b.text });
-          else if (b.type === 'image' && b.source) parts.push({ type: 'image_url', image_url: { url: 'data:' + (b.source.media_type || 'image/jpeg') + ';base64,' + b.source.data } });
-        }
-        if (parts.length) out.push({ role: 'user', content: parts });
-      } else {
-        const text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n\n');
-        if (text) out.push({ role: 'user', content: text });
-      }
-    }
-  }
-  return out;
-}
-
-const toOpenAITools = (tools) =>
-  tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } }));
-
-// ---- OpenAI-style -> Anthropic-style ----
-function fromOpenAIResponse(data, tools) {
-  const msg = data && data.choices && data.choices[0] && data.choices[0].message;
-  if (!msg) throw new Error('Unexpected response from provider: ' + JSON.stringify(data).slice(0, 300));
-  const content = [];
-  let text = '';
-  if (typeof msg.content === 'string') text = msg.content;
-  else if (Array.isArray(msg.content)) text = msg.content.map((p) => p.text || '').join('');
-  if (text.trim()) content.push({ type: 'text', text });
-  (msg.tool_calls || []).forEach((c, i) => {
-    let input = {};
-    try { input = JSON.parse((c.function && c.function.arguments) || '{}'); } catch (e) { try { input = parseLoose((c.function && c.function.arguments) || '{}'); } catch (e2) { /* keep {} */ } }
-    content.push({ type: 'tool_use', id: c.id || 'call_' + Date.now() + '_' + i, name: c.function.name, input });
-  });
-  // Many OpenAI-compatible models answer with the JSON in text instead of tool_calls.
-  if (tools && tools.length && !content.some((b) => b.type === 'tool_use') && text.trim()) {
-    const clean = stripThinking(text);
-    const tcs = extractToolCalls(clean, tools);
-    tcs.forEach((tc, i) => content.push({ type: 'tool_use', id: 'call_' + Date.now() + '_' + i, name: tc.name, input: tc.input }));
-  }
-  return { content };
-}
-
-// ---- Custom provider: user-defined request template + response path, prompt-based tool use ----
-const DEFAULT_CUSTOM_TEMPLATE = '{"model":"{{model}}","messages":"{{messages}}","max_tokens":"{{max_tokens}}","stream":false}';
-
-function fillString(str, vars) {
-  return String(str).replace(/\{\{(\w+)\}\}/g, (m, k) => {
-    if (!(k in vars)) return m;
-    const v = vars[k];
-    return typeof v === 'string' || typeof v === 'number' ? String(v) : JSON.stringify(v);
-  });
-}
-
-// A string that is exactly "{{name}}" is replaced by the raw value (array / number / string).
-function fillTemplate(node, vars) {
-  if (typeof node === 'string') {
-    const m = node.match(/^\{\{(\w+)\}\}$/);
-    if (m && m[1] in vars) return vars[m[1]];
-    return fillString(node, vars);
-  }
-  if (Array.isArray(node)) return node.map((n) => fillTemplate(n, vars));
-  if (node && typeof node === 'object') {
-    return Object.fromEntries(Object.entries(node).map(([k, v]) => [k, fillTemplate(v, vars)]));
-  }
-  return node;
-}
-
-const REMINDER =
-  '\n\n[Reply format reminder: to perform an action, reply with ONLY a JSON object such as {"tool":"click","input":{"id":12}} - no explanation, no markdown. Do not describe what you plan to do; call the tool. If the task is finished, call the "done" tool.]';
-
-function toolPrompt(tools) {
-  return (
-    "You control the user's browser tab through tools, so you CAN click, type and change settings on the page. Never say you cannot interact with the page and never just explain how the user could do it: do it with a tool.\n" +
-    'To use a tool, reply with ONLY one JSON object and nothing else, like:\n' +
-    '{"tool": "click", "input": {"id": 12}}\n' +
-    '{"tool": "type_text", "input": {"id": 5, "text": "hello"}}\n' +
-    '{"tool": "done", "input": {"summary": "what you did", "data": "values you read"}}\n' +
-    'Use ONE tool per reply and wait for the result (the next message contains the updated page).\n' +
-    'Available tools:\n' +
-    tools.map((t) => `- ${t.name}: ${t.description} Input schema: ${JSON.stringify(t.input_schema)}`).join('\n')
-  );
-}
-
-function toPlainMessages(messages) {
-  return messages.map((m) => {
-    const blocks = Array.isArray(m.content) ? m.content : [{ type: 'text', text: m.content }];
-    const parts = [];
-    for (const b of blocks) {
-      if (b.type === 'text') parts.push(b.text);
-      else if (b.type === 'tool_use') parts.push(JSON.stringify({ tool: b.name, input: b.input || {} }));
-      else if (b.type === 'tool_result') {
-        const c = typeof b.content === 'string' ? b.content : JSON.stringify(b.content);
-        parts.push('Tool result' + (b.is_error ? ' (error)' : '') + ':\n' + c);
-      }
-      // images are not sent to the custom / text-tools path
-    }
-    return { role: m.role, content: parts.join('\n\n') };
-  });
-}
-
-function flattenPrompt(system, chat) {
-  const label = { user: 'User', assistant: 'Assistant' };
-  return system + '\n\n' + chat.map((m) => `${label[m.role] || m.role}: ${m.content}`).join('\n\n') + '\n\nAssistant:';
-}
-
-// Append the prompt suffix (e.g. "/no_think") to the last user message.
-function withSuffix(messages, suffix, active) {
-  if (!suffix || !active || !messages.length) return messages;
-  const out = messages.map((m) => ({ ...m }));
-  const last = out[out.length - 1];
-  if (last.role !== 'user') return out;
-  const blocks = Array.isArray(last.content) ? last.content.slice() : [{ type: 'text', text: last.content }];
-  blocks.push({ type: 'text', text: suffix });
-  last.content = blocks;
-  return out;
-}
-
-function getByPath(obj, path) {
-  return path
-    .replace(/\[(\d+)\]/g, '.$1')
-    .split('.')
-    .filter(Boolean)
-    .reduce((o, k) => (o == null ? o : o[k]), obj);
-}
-
-// Turn a value into text: string, or an array of parts like [{type:"text", text:"..."}].
-function asText(v) {
-  if (typeof v === 'string') return v;
-  if (Array.isArray(v)) {
-    const t = v.map((p) => (typeof p === 'string' ? p : p && typeof p.text === 'string' ? p.text : '')).join('');
-    return t || null;
-  }
-  return null;
-}
-
-const KNOWN_PATHS = [
-  'choices.0.message.content', 'choices.0.text', 'choices.0.delta.content',
-  'message.content', 'output.choices.0.message.content', 'output.text', 'output.output_text',
-  'data.choices.0.message.content', 'data.output.text', 'data.text', 'data.content', 'data.response', 'data.reply', 'data.answer', 'data.message.content',
-  'content.0.text', 'content', 'output_text', 'response', 'response.text', 'text', 'completion',
-  'result.response', 'result.text', 'result.content', 'result.output', 'result.answer', 'result',
-  'candidates.0.content.parts.0.text', 'generated_text', '0.generated_text', 'outputs.0.text', 'results.0.text', 'results.0.generated_text',
-  'answer', 'reply', 'output', 'message', 'data',
-];
-const STREAM_PATHS = [
-  'choices.0.delta.content', 'choices.0.message.content', 'choices.0.text', 'message.content', 'response',
-  'delta.text', 'output.text', 'output.choices.0.message.content', 'text', 'content', 'token.text', 'candidates.0.content.parts.0.text',
-];
-const SKIP_KEYS = /^(id|model|object|role|type|created|created_at|finish_reason|done|done_reason|usage|index|name|status|code|logprobs|system_fingerprint|reasoning_content|reasoning|thinking|request_id|task_id|error|tool_calls)$/i;
-
-function findLongestString(node, path, depth, best) {
-  if (depth > 7 || node == null) return best;
-  if (typeof node === 'string') {
-    if (node.trim() && (!best || node.length > best.text.length)) return { text: node, path };
-    return best;
-  }
-  if (Array.isArray(node)) {
-    node.forEach((v, i) => { best = findLongestString(v, path ? path + '.' + i : String(i), depth + 1, best); });
-    return best;
-  }
-  if (typeof node === 'object') {
-    for (const [k, v] of Object.entries(node)) {
-      if (SKIP_KEYS.test(k)) continue;
-      best = findLongestString(v, path ? path + '.' + k : k, depth + 1, best);
-    }
-  }
-  return best;
-}
-
-function extractFromObject(d, paths) {
-  for (const p of paths) {
-    const v = asText(getByPath(d, p));
-    if (v && v.trim()) return { text: v, path: p };
-  }
-  return null;
-}
-
-// Streamed replies: Server-Sent Events ("data: {...}") or newline-delimited JSON (Ollama default).
-function extractFromStream(str, userPath) {
-  let acc = '', parsed = 0, path = null;
-  for (let line of str.split(/\r?\n/)) {
-    line = line.trim().replace(/^data:\s*/, '');
-    if (!line || line === '[DONE]') continue;
-    let o;
-    try { o = JSON.parse(line); } catch (e) { continue; }
-    parsed++;
-    const paths = userPath ? [userPath, ...STREAM_PATHS] : STREAM_PATHS;
-    for (const p of paths) {
-      const v = asText(getByPath(o, p));
-      if (v != null) { acc += v; path = path || p; break; }
-    }
-  }
-  return parsed > 0 && acc.trim() ? { text: acc, path: (path || '') + '  (streamed reply)' } : null;
-}
-
-// Find the reply text. Uses the configured path first, then auto-detects.
-function locateReply(data, userPath) {
-  const up = userPath && userPath.trim();
-  let note = '';
-  if (typeof data === 'string') {
-    const st = extractFromStream(data, up);
-    if (st) return { ...st, note };
-    if (data.trim()) return { text: data, path: '(plain-text response)', note };
-    throw new Error('The provider returned an empty response.');
-  }
-  if (up) {
-    const v = asText(getByPath(data, up));
-    if (v != null) return { text: v, path: up, note };
-    note = `your path "${up}" matched nothing in the response, so it was auto-detected instead`;
-  }
-  const known = extractFromObject(data, KNOWN_PATHS);
-  if (known) return { ...known, note };
-  const guess = findLongestString(data, '', 0, null);
-  if (guess) return { ...guess, note: (note ? note + '; ' : '') + 'guessed the longest text field - set it explicitly in Response text path if this is wrong' };
-  throw new Error('Could not find any reply text in the response. Set "Response text path" in AI settings. Response was: ' + JSON.stringify(data).slice(0, 600));
-}
-
-function stripThinking(t) {
-  const noBlocks = t.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '');
-  const afterClose = noBlocks.replace(/^[\s\S]*<\/think(?:ing)?>/i, ''); // unmatched closing tag
-  return (afterClose.trim() || noBlocks.trim() || t.trim());
-}
-
-// Tolerant parser for "JSON-ish" text that small models produce: unquoted keys, single quotes,
-// trailing commas, bare words, True/False/None. Throws if the text is not fully consumed.
-function relaxedParse(src) {
-  let i = 0;
-  const ws = () => { while (i < src.length && /\s/.test(src[i])) i++; };
-  const fail = () => { throw new Error('bad json-ish'); };
-  const ESC = { n: '\n', t: '\t', r: '\r', b: '\b', f: '\f' };
-  function str() {
-    const q = src[i++];
-    let out = '';
-    while (i < src.length) {
-      const c = src[i++];
-      if (c === q) return out;
-      if (c === '\\') {
-        const n = src[i++];
-        if (n === 'u') { out += String.fromCharCode(parseInt(src.slice(i, i + 4), 16)); i += 4; }
-        else out += ESC[n] !== undefined ? ESC[n] : n;
-      } else out += c;
-    }
-    return fail();
-  }
-  function key() {
-    ws();
-    if (src[i] === '"' || src[i] === "'") return str();
-    const m = /^[A-Za-z_$][\w$-]*/.exec(src.slice(i));
-    if (!m) fail();
-    i += m[0].length;
-    return m[0];
-  }
-  function value() {
-    ws();
-    const c = src[i];
-    if (c === '{') return obj();
-    if (c === '[') return arr();
-    if (c === '"' || c === "'") return str();
-    const n = /^-?\d+(\.\d+)?([eE][+-]?\d+)?/.exec(src.slice(i));
-    if (n) { i += n[0].length; return parseFloat(n[0]); }
-    const w = /^[A-Za-z_$][\w$]*/.exec(src.slice(i));
-    if (w) {
-      i += w[0].length;
-      const l = w[0].toLowerCase();
-      if (l === 'true') return true;
-      if (l === 'false') return false;
-      if (l === 'null' || l === 'none' || l === 'undefined') return null;
-      return w[0];
-    }
-    return fail();
-  }
-  function obj() {
-    i++;
-    const o = {};
-    ws();
-    if (src[i] === '}') { i++; return o; }
-    for (;;) {
-      const k = key();
-      ws();
-      if (src[i++] !== ':') fail();
-      o[k] = value();
-      ws();
-      if (src[i] === ',') { i++; ws(); if (src[i] === '}') { i++; return o; } continue; }
-      if (src[i] === '}') { i++; return o; }
-      fail();
-    }
-  }
-  function arr() {
-    i++;
-    const a = [];
-    ws();
-    if (src[i] === ']') { i++; return a; }
-    for (;;) {
-      a.push(value());
-      ws();
-      if (src[i] === ',') { i++; ws(); if (src[i] === ']') { i++; return a; } continue; }
-      if (src[i] === ']') { i++; return a; }
-      fail();
-    }
-  }
-  const v = value();
-  ws();
-  if (i < src.length) fail();
-  return v;
-}
-
-function parseLoose(x) {
-  try { return JSON.parse(x); } catch (e) { return relaxedParse(x); }
-}
-
-function jsonObjectsIn(text) {
-  const out = [];
-  // "tool: click, input: {id: 3}" with the outer braces missing
-  if (/^\s*["']?(tool|tool_name|name|action)["']?\s*:/i.test(text)) {
-    try { return [parseLoose('{' + text.trim().replace(/[,;]\s*$/, '') + '}')]; } catch (e) { /* keep scanning */ }
-  }
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] !== '{') continue;
-    let depth = 0, quote = null, esc = false;
-    for (let j = i; j < text.length; j++) {
-      const c = text[j];
-      if (quote) { if (esc) esc = false; else if (c === '\\') esc = true; else if (c === quote) quote = null; continue; }
-      if (c === '"' || c === "'") quote = c;
-      else if (c === '{') depth++;
-      else if (c === '}') {
-        depth--;
-        if (depth === 0) {
-          try { out.push(parseLoose(text.slice(i, j + 1))); i = j; } catch (e) { /* not json */ }
-          break;
-        }
-      }
-    }
-  }
-  return out;
-}
-
-// Names small models use for the tools of this extension.
-const TOOL_SYNONYMS = {
-  click: ['click_element', 'left_click', 'tap', 'press', 'click_button', 'click_on', 'click_link', 'double_click'],
-  hover: ['mouse_over', 'hover_over', 'mouseover'],
-  type_text: ['type', 'input', 'input_text', 'fill', 'fill_in', 'fill_input', 'enter_text', 'write', 'set_text', 'send_keys', 'type_into', 'set_value'],
-  select_option: ['select', 'choose', 'choose_option', 'select_dropdown', 'set_select'],
-  scroll: ['scroll_down', 'scroll_up', 'scroll_page', 'page_down', 'page_up'],
-  press_key: ['key', 'keypress', 'key_press', 'send_key', 'hotkey'],
-  go_to_url: ['navigate', 'open_url', 'goto', 'go_to', 'visit', 'open', 'navigate_to', 'load_url', 'open_page'],
-  wait: ['sleep', 'pause', 'wait_for'],
-  ask_user: ['ask', 'ask_human', 'ask_the_user', 'request_help', 'need_help'],
-  done: ['finish', 'finished', 'complete', 'task_complete', 'task_done', 'success', 'final_answer'],
-  fail: ['give_up', 'abort', 'cannot_complete', 'failure'],
-};
-
-function asToolCall(o, tools) {
-  if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
-  const fn = o.function && typeof o.function === 'object' ? o.function : null;
-  const name = o.tool || o.tool_name || o.name || o.action || (fn && fn.name);
-  if (typeof name !== 'string') return null;
-  const norm = String(name).toLowerCase().replace(/[\s-]+/g, '_');
-  let t = tools.find((x) => x.name === name) || tools.find((x) => x.name === norm);
-  if (!t) { const canon = Object.keys(TOOL_SYNONYMS).find((k) => TOOL_SYNONYMS[k].includes(norm)); if (canon) t = tools.find((x) => x.name === canon); }
-  if (!t) return null;
-  let input = o.input != null ? o.input : o.arguments != null ? o.arguments : o.args != null ? o.args : o.parameters != null ? o.parameters : o.params != null ? o.params : fn && fn.arguments;
-  if (typeof input === 'string') { try { input = parseLoose(input); } catch (e) { input = null; } }
-  if (!input || typeof input !== 'object') {
-    input = { ...o };
-    ['tool', 'tool_name', 'name', 'action', 'function'].forEach((k) => delete input[k]);
-  }
-  input = { ...input };
-  if (input.id == null) {
-    const alt = [input.element_id, input.elementId, input.element, input.index, input.ref, input.target].find((v) => v != null);
-    if (alt != null) input.id = alt;
-  }
-  if (typeof input.id === 'string') { const m = input.id.match(/\d+/); if (m) input.id = +m[0]; }
-  const first = (...vs) => vs.find((v) => v != null);
-  if (t.name === 'type_text' && input.text == null) input.text = first(input.value, input.content, input.input);
-  if (t.name === 'select_option' && input.option == null) input.option = first(input.value, input.text);
-  if (t.name === 'press_key' && input.key == null) input.key = input.value;
-  if (t.name === 'scroll' && input.direction == null && input.id == null) input.direction = /up/.test(norm) ? 'up' : 'down';
-  if (t.name === 'go_to_url' && input.url == null) input.url = first(input.value, input.link, input.href);
-  if (t.name === 'wait' && input.seconds == null) input.seconds = first(input.duration, input.time, input.value, 2);
-  if (t.name === 'done' && input.summary == null) input.summary = first(input.result, input.message, input.text, input.answer, 'Done');
-  if (t.name === 'fail' && input.reason == null) input.reason = first(input.message, input.error, input.text, 'Task could not be completed');
-  if (t.name === 'ask_user' && input.message == null) input.message = first(input.question, input.text, 'Please take over');
-  return { name: t.name, input };
-}
-
-function extractToolCalls(text, tools) {
-  const cands = [];
-  for (const o of jsonObjectsIn(text)) {
-    cands.push(o);
-    if (Array.isArray(o.tool_calls)) cands.push(...o.tool_calls);
-    if (Array.isArray(o.calls)) cands.push(...o.calls);
-    if (Array.isArray(o.actions)) cands.push(...o.actions);
-    if (o.tool_call && typeof o.tool_call === 'object') cands.push(o.tool_call);
-  }
-  const out = [], seen = new Set();
-  for (const c of cands) {
-    const tc = asToolCall(c, tools);
-    if (!tc) continue;
-    const k = tc.name + JSON.stringify(tc.input);
-    if (seen.has(k)) continue; // the same call can be found both wrapped and unwrapped
-    seen.add(k);
-    out.push(tc);
-    if (out.length >= 6) break;
-  }
-  return out;
-}
-
-const looksLikeBrokenCall = (t) => /["']?\b(tool|tool_name|tool_call|arguments)\b["']?\s*:|<tool_call>|\btool_call\b/i.test(t);
-
-function parseCustomResponse(data, responsePath, tools) {
-  const loc = locateReply(data, responsePath);
-  let text = loc.text;
-  const raw = text;
-  if (/<think(?:ing)?>/i.test(text) && !/<\/think(?:ing)?>/i.test(text)) {
-    throw new Error(
-      'The model ran out of tokens while "thinking" and never produced an action. Raise max_tokens in the request template, ' +
-      'or disable thinking (for Qwen3 put /no_think in AI settings > Prompt suffix).'
-    );
-  }
-  text = stripThinking(text);
-  if (tools.length) {
-    const tcs = extractToolCalls(text, tools);
-    if (tcs.length) {
-      return { raw, path: loc.path, note: loc.note, content: tcs.map((tc, i) => ({ type: 'tool_use', id: 'call_' + Date.now() + '_' + i + Math.random().toString(36).slice(2, 6), name: tc.name, input: tc.input })) };
-    }
-  }
-  const res = { raw, path: loc.path, note: loc.note, content: [{ type: 'text', text }] };
-  if (tools.length && looksLikeBrokenCall(text)) {
-    res.repairHint =
-      'Your last reply was not a valid tool call. Reply with ONLY one JSON object like {"tool":"click","input":{"id":12}} using a tool name from the list and ids from the latest page snapshot. No other text.';
-  }
-  return res;
-}
-
-async function callLLMOnce({ ai, system, tools = [], messages, maxTokens = 1500 }) {
-  const s = ai || {};
-  const provider = s.provider || 'anthropic';
-  const extra = parseExtraHeaders(s.headers);
-  let url, headers, body, parse, fallback = null;
-
-  if (provider === 'custom') {
-    if (!s.baseUrl) throw new Error('Set the request URL in AI settings.');
-    let tpl;
-    try { tpl = JSON.parse(s.bodyTemplate && s.bodyTemplate.trim() ? s.bodyTemplate : DEFAULT_CUSTOM_TEMPLATE); }
-    catch (e) { throw new Error('Request body template must be valid JSON.'); }
-    const sys = system + (tools.length ? '\n\n' + toolPrompt(tools) : '');
-    const chat = toPlainMessages(messages);
-    if (tools.length && chat.length && chat[chat.length - 1].role === 'user') chat[chat.length - 1].content += REMINDER + (s.promptSuffix ? '\n' + s.promptSuffix : '');
-    // If the template never mentions the system prompt, the tool instructions would never reach the model.
-    // Fold them into the first user message instead.
-    const tplText = JSON.stringify(tpl);
-    let msgs = chat;
-    if (!/\{\{(system|prompt|chat)\}\}/.test(tplText) && chat.length) {
-      msgs = chat.map((m) => ({ ...m }));
-      const i = msgs.findIndex((m) => m.role === 'user');
-      msgs[i < 0 ? 0 : i].content = sys + '\n\n---\n\n' + msgs[i < 0 ? 0 : i].content;
-    }
-    const vars = {
-      model: s.model || '', apiKey: s.apiKey || '', system: sys, messages: msgs,
-      chat: [{ role: 'system', content: sys }, ...chat], tools: toOpenAITools(tools), prompt: flattenPrompt(sys, chat),
-      max_tokens: tools.length ? Math.max(maxTokens, 4096) : maxTokens,
-    };
-    url = fillString(s.baseUrl, vars);
-    headers = { 'content-type': 'application/json' };
-    for (const [k, v] of Object.entries(extra)) headers[k] = fillString(v, vars);
-    body = fillTemplate(tpl, vars);
-    parse = (d) => parseCustomResponse(d, s.responsePath, tools);
-  } else if (provider === 'openai') {
-    if (!s.model) throw new Error('Set a model name in AI settings.');
-    const base = (s.baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
-    url = /\/chat\/completions$/.test(base) ? base : base + '/chat/completions';
-    headers = { 'content-type': 'application/json', ...(s.apiKey ? { authorization: 'Bearer ' + s.apiKey } : {}), ...extra };
-    body = { model: s.model, messages: toOpenAIMessages(system, withSuffix(messages, s.promptSuffix, tools.length)), max_tokens: maxTokens };
-    if (tools.length) body.tools = toOpenAITools(tools);
-    parse = (d) => fromOpenAIResponse(d, tools);
-    if (tools.length) {
-      // endpoint rejects native "tools" -> same JSON-in-text protocol as the custom provider
-      fallback = () => {
-        const chat = toPlainMessages(withSuffix(messages, s.promptSuffix, true));
-        if (chat.length && chat[chat.length - 1].role === 'user') chat[chat.length - 1].content += REMINDER;
-        body = { model: s.model, messages: [{ role: 'system', content: system + '\n\n' + toolPrompt(tools) }, ...chat], max_tokens: Math.max(maxTokens, 4096) };
-        parse = (d) => parseCustomResponse(d, '', tools);
-      };
-    }
-  } else {
-    if (!s.apiKey) throw new Error('No API key set. Open AI settings and add your API key.');
-    const base = (s.baseUrl || 'https://api.anthropic.com').replace(/\/+$/, '');
-    url = /\/v1\/messages$/.test(base) ? base : base + '/v1/messages';
-    headers = {
-      'content-type': 'application/json', 'x-api-key': s.apiKey, 'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true', ...extra,
-    };
-    body = { model: s.model || 'claude-sonnet-5-5', max_tokens: maxTokens, system, messages: withSuffix(messages, s.promptSuffix, tools.length) };
-    if (tools.length) { body.tools = tools; if (!s.baseUrl) body.tool_choice = { type: 'any' }; }
-    parse = (d) => ({ content: d.content || [] });
-  }
-
-  for (let attempt = 0; ; attempt++) {
-    let resp;
-    try { resp = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) }); }
-    catch (e) {
-      throw new Error('Cannot reach ' + url + ' - ' + ((e && e.message) || e) + '. For a local server check it is running and allows extension origins (Ollama: set OLLAMA_ORIGINS="chrome-extension://*").');
-    }
-    if (resp.ok) {
-      const raw = await resp.text();
-      let data;
-      try { data = JSON.parse(raw); } catch (e) { data = raw; }
-      return parse(data);
-    }
-    const errText = await resp.text();
-    // Newer OpenAI-style models want max_completion_tokens instead of max_tokens.
-    if (resp.status === 400 && body.max_tokens && /max_completion_tokens/.test(errText)) {
-      body.max_completion_tokens = body.max_tokens;
-      delete body.max_tokens;
-      continue;
-    }
-    if (resp.status === 400 && fallback) { const f = fallback; fallback = null; f(); continue; }
-    if ((resp.status === 429 || resp.status >= 500) && attempt < 3) { await sleepMs(2000 * (attempt + 1)); continue; }
-    const hint = resp.status === 401 || resp.status === 403 ? ' (check the API key / extra headers in AI settings)' : resp.status === 404 ? ' (check the Base URL and the model name)' : '';
-    throw new Error(`Provider error ${resp.status}${hint}: ${errText.slice(0, 500)}`);
-  }
-}
-
-// Public entry. If the model attempted a tool call but produced something unparseable, ask it once to resend.
-async function callLLM(opts) {
-  const r = await callLLMOnce(opts);
-  if (r.repairHint && opts.tools && opts.tools.length) {
-    return callLLMOnce({
-      ...opts,
-      messages: [
-        ...opts.messages,
-        { role: 'assistant', content: [{ type: 'text', text: r.raw }] },
-        { role: 'user', content: [{ type: 'text', text: r.repairHint }] },
-      ],
-    });
-  }
-  return r;
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 //agent.js
 // AI agent engine (runs in the background service worker).
 // It looks at the live page (element list + page text + optional screenshot), asks Claude for the next
@@ -854,7 +255,7 @@ async function getAi() {
   const s = (await chrome.storage.local.get('ai')).ai || {};
   return {
     provider: 'anthropic', apiKey: '', baseUrl: '', model: 'claude-sonnet-5-5', headers: '', bodyTemplate: '',
-    responsePath: '', promptSuffix: '', lite: 'auto', maxSteps: 40, vision: true, ...s,
+    responsePath: '', promptSuffix: '', lite: 'auto', maxSteps: 40, vision: true, real: false, ...s,
   };
 }
 function aiReady(ai) {
@@ -996,7 +397,7 @@ async function callModel(ai, content, lite) {
     messages: [{ role: 'user', content }], maxTokens: 1500,
   });
   const tu = (r.content || []).find((b) => b.type === 'tool_use');
-  if (tu) return { name: tu.name, input: tu.input || {} };
+  if (tu) return { name: tu.name, input: tu.input || {}, raw: r.raw || '' };
   const text = (r.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n');
   return { none: true, text: text || r.raw || '' };
 }
@@ -1056,7 +457,82 @@ function describeAction(name, input, snap) {
   }
 }
 
-async function performAction(run, name, input, snap) {
+// ---------------------------------------------------------------------------------------------
+// Real input mode (optional): trusted mouse/keyboard events through chrome.debugger.
+// Needs the optional "debugger" permission; Chrome shows a "debugging this browser" banner while attached.
+// ---------------------------------------------------------------------------------------------
+function pageRect(localId) {
+  const deepFind = (root, sel) => {
+    const f = root.querySelector(sel);
+    if (f) return f;
+    for (const el of root.querySelectorAll('*')) { if (el.shadowRoot) { const r = deepFind(el.shadowRoot, sel); if (r) return r; } }
+    return null;
+  };
+  const el = deepFind(document, '[data-ra="' + localId + '"]');
+  if (!el) return { ok: false, error: 'That element is no longer on the page (it changed). Use the new element list.' };
+  try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (e) { /* ignore */ }
+  const r = el.getBoundingClientRect();
+  return { ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+}
+
+const dbg = { tabs: new Set() };
+const dbgSend = (tabId, method, params) => new Promise((res, rej) => chrome.debugger.sendCommand({ tabId }, method, params || {}, (r) => (chrome.runtime.lastError ? rej(new Error(chrome.runtime.lastError.message)) : res(r))));
+async function dbgAttach(tabId) {
+  if (dbg.tabs.has(tabId)) return;
+  await new Promise((res, rej) => chrome.debugger.attach({ tabId }, '1.3', () => (chrome.runtime.lastError ? rej(new Error(chrome.runtime.lastError.message)) : res())));
+  dbg.tabs.add(tabId);
+}
+async function dbgDetach(tabId) {
+  if (!dbg.tabs.has(tabId)) return;
+  dbg.tabs.delete(tabId);
+  try { await new Promise((res) => chrome.debugger.detach({ tabId }, () => { void chrome.runtime.lastError; res(); })); } catch (e) { /* ignore */ }
+}
+const KEYDEF = {
+  Enter: [13, 'Enter', '\r'], Tab: [9, 'Tab'], Escape: [27, 'Escape'], Backspace: [8, 'Backspace'], Delete: [46, 'Delete'],
+  ArrowDown: [40, 'ArrowDown'], ArrowUp: [38, 'ArrowUp'], ArrowLeft: [37, 'ArrowLeft'], ArrowRight: [39, 'ArrowRight'],
+  Space: [32, 'Space', ' '], Home: [36, 'Home'], End: [35, 'End'], PageDown: [34, 'PageDown'], PageUp: [33, 'PageUp'],
+};
+async function dbgKey(tabId, k) {
+  const d = KEYDEF[k] || [k.length === 1 ? k.toUpperCase().charCodeAt(0) : 0, k, k.length === 1 ? k : undefined];
+  const base = { key: k === 'Space' ? ' ' : k, code: d[1], windowsVirtualKeyCode: d[0], nativeVirtualKeyCode: d[0] };
+  await dbgSend(tabId, 'Input.dispatchKeyEvent', { type: d[2] ? 'keyDown' : 'rawKeyDown', ...base, text: d[2] });
+  await dbgSend(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+}
+async function dbgClick(tabId, x, y, hoverOnly) {
+  await dbgSend(tabId, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+  if (hoverOnly) return;
+  await dbgSend(tabId, 'Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+  await dbgSend(tabId, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+}
+// Returns a result string, or null when real input can't handle this action (caller falls back to synthetic events).
+async function realAction(run, name, input, target, text) {
+  const tabId = run.tabId;
+  if (!['click', 'hover', 'type_text', 'press_key'].includes(name)) return null;
+  if (name === 'press_key' && input.id != null) return null;
+  if (target && target.frameId !== 0) return null; // coordinates inside iframes: use synthetic events
+  try {
+    await dbgAttach(tabId);
+    if (name === 'press_key') { await dbgKey(tabId, String(input.key)); return 'pressed ' + input.key; }
+    const [res] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, func: pageRect, args: [target.localId] });
+    const r = res && res.result;
+    if (!r) return null;
+    if (!r.ok) return 'ERROR: ' + r.error;
+    await dbgClick(tabId, r.x, r.y, name === 'hover');
+    if (name === 'click' || name === 'hover') return name === 'click' ? 'clicked (real input)' : 'hovered (real input)';
+    await sleep(120);
+    await dbgSend(tabId, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2, commands: ['selectAll'] });
+    await dbgSend(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
+    if (text) await dbgSend(tabId, 'Input.insertText', { text });
+    else await dbgKey(tabId, 'Backspace');
+    if (input.submit) { await sleep(100); await dbgKey(tabId, 'Enter'); }
+    return 'typed (real input)';
+  } catch (e) {
+    await dbgDetach(tabId);
+    return null; // permission missing, another debugger attached, etc. -> synthetic fallback
+  }
+}
+
+async function performAction(run, name, input, snap, ai) {
   const tabId = run.tabId;
   const needsEl = ['click', 'hover', 'type_text', 'select_option'];
   const target = input && input.id != null ? snap.map[input.id] : null;
@@ -1074,6 +550,10 @@ async function performAction(run, name, input, snap) {
   }
   const frameId = target ? target.frameId : 0;
   const text = name === 'type_text' ? fillPlaceholders(input.text == null ? '' : input.text, run) : null;
+  if (ai && ai.real) {
+    const rr = await realAction(run, name, input, target, text);
+    if (rr !== null) return rr;
+  }
   let res;
   try {
     [res] = await chrome.scripting.executeScript({
@@ -1114,9 +594,28 @@ function keepAlive(on) {
   if (keepAliveCount <= 0) { keepAliveCount = 0; if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; } }
 }
 
+// Per-step run log (last run only) so failures can be diagnosed: Copy it from AI settings.
+const AGENT_LOG_KEY = 'agentLog';
+const logBuf = { runId: null, entries: [] };
+async function logStep(runId, entry) {
+  if (logBuf.runId !== runId) { logBuf.runId = runId; logBuf.entries = []; }
+  logBuf.entries.push(entry);
+  if (logBuf.entries.length > 150) logBuf.entries.shift();
+  try { await chrome.storage.local.set({ [AGENT_LOG_KEY]: { runId, at: Date.now(), entries: logBuf.entries } }); } catch (e) { /* ignore */ }
+}
+const clipLog = (s, n) => String(s == null ? '' : s).slice(0, n);
+const pageSig = (text) => {
+  // ignore the Scroll line and numbering noise; hash the rest
+  const t = String(text).replace(/^Scroll:.*$/m, '');
+  let h = 5381;
+  for (let i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) | 0;
+  return h;
+};
+const STATE_CHANGING = ['click', 'type_text', 'select_option', 'press_key', 'go_to_url'];
+
 function startAgent(runId) {
   keepAlive(true);
-  agentLoop(runId).catch(() => {}).finally(() => keepAlive(false));
+  agentLoop(runId).catch(() => {}).finally(async () => { keepAlive(false); const r = await getRun().catch(() => null); if (r) await dbgDetach(r.tabId); for (const t of [...dbg.tabs]) await dbgDetach(t); });
 }
 
 async function agentLoop(runId) {
@@ -1129,12 +628,20 @@ async function agentLoop(runId) {
     if (first) await waitTabComplete(first.tabId, 20000);
     const history = [];
     let lastSig = '', repeats = 0, noAct = 0, nudge = '', lastReply = '';
+    let prevPage = null, noChange = 0;
     const lite = isLite(ai);
     for (let step = 1; step <= ai.maxSteps; step++) {
       const run = await getRun();
       if (!run || run.id !== runId || run.status !== 'running' || !run.agent || !run.agent.active) return;
       await waitTabComplete(run.tabId, 10000);
       const snap = await takeSnapshot(run.tabId, lite);
+      const curSig = pageSig(snap.text);
+      if (prevPage && prevPage.sig === curSig && STATE_CHANGING.includes(prevPage.name)) {
+        noChange++;
+        history[history.length - 1] += ' → NOTHING CHANGED on the page';
+        nudge += `\nThe page did not change after your last action (${prevPage.desc}). Do NOT repeat it. Try a different element, open the control first, scroll, or use another approach` + (noChange >= 3 ? '. This has happened ' + noChange + ' times in a row: if the task cannot be done, call fail with the reason.' : '.');
+      } else if (prevPage) noChange = 0;
+      if (noChange >= 8) return void (await finishAgent(runId, false, 'The page stopped responding to the agent\'s actions (8 actions in a row had no visible effect). Last action: ' + (prevPage && prevPage.desc) + '. Try enabling Real input mode in AI settings, or a stronger model.'));
       const shot = ai.vision && ai.provider !== 'custom' ? await takeShot(run.tabId) : null;
 
       const content = [
@@ -1150,6 +657,7 @@ async function agentLoop(runId) {
       if (act.none) {
         lastReply = (act.text || '').replace(/\s+/g, ' ').trim().slice(0, 200);
         history.push(`${step}. (the model replied without calling a tool)`);
+        await logStep(runId, { step, action: '(none)', modelReply: clipLog(act.text, 600) });
         if (++noAct >= 3) return void (await finishAgent(runId, false, 'The model did not return a usable action 3 times in a row.' + (lastReply ? ' Its last reply was: "' + lastReply + '".' : ' It returned an empty reply.') + ' Use a model that follows tool calling / JSON instructions, enable Small-model mode, or adjust the Response text path in AI settings.'));
         nudge = '\nYour last reply was not a tool call. Reply with ONLY a JSON object such as {"tool":"click","input":{"id":3}}.';
         continue;
@@ -1160,6 +668,7 @@ async function agentLoop(runId) {
       await updateRun(runId, (r) => { if (r.agent) { r.agent.step = step; r.agent.last = desc; } });
       notifyTab(run.tabId);
 
+      await logStep(runId, { step, action: name, input, desc, modelReply: clipLog(act.raw, 400) });
       if (name === 'done') return void (await finishAgent(runId, true, { summary: String(input.summary || 'Done'), data: input.data ? String(input.data) : null }));
       if (name === 'fail') return void (await finishAgent(runId, false, String(input.reason || 'The agent could not complete the task')));
       if (name === 'ask_user') {
@@ -1167,8 +676,10 @@ async function agentLoop(runId) {
         history.push(`${step}. ${desc} → user continued`);
         continue;
       }
-      const result = await performAction(run, name, input || {}, snap);
+      const result = await performAction(run, name, input || {}, snap, ai);
       history.push(`${step}. ${desc} → ${result}`);
+      prevPage = { sig: curSig, name, desc };
+      await logStep(runId, { step, url: (snap.text.match(/^URL: .*/) || [''])[0], action: name, input: name === 'type_text' ? { ...input, text: /\{\{/.test(String(input.text)) ? input.text : '(typed)' } : input, desc, result: clipLog(result, 200), modelReply: clipLog(act.raw, 400), elementsSeen: (snap.text.match(/^\[\d+\]/gm) || []).length });
       const sig = name + JSON.stringify(input) + result;
       repeats = sig === lastSig ? repeats + 1 : 0;
       lastSig = sig;
@@ -1185,392 +696,6 @@ async function agentLoop(runId) {
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-//background.js
-// Service worker: owns recording state, saved workflows and the replay "run" state.
-// Replay state lives in chrome.storage.session so it survives page navigations and worker restarts.
-importScripts('shared.js', 'llm.js', 'agent.js');
-
-const SS = chrome.storage.session;
-const SL = chrome.storage.local;
-
-// ---------- storage helpers ----------
-const getRec = async () => (await SS.get('rec')).rec || null;
-const getRun = async () => (await SS.get('run')).run || null;
-const getWorkflows = async () => (await SL.get('workflows')).workflows || {};
-async function getSettings() {
-  const s = (await SL.get('settings')).settings || {};
-  return { stepDelay: 300, waitTimeout: 15, ...s };
-}
-async function setRec(r) {
-  if (r) await SS.set({ rec: r }); else await SS.remove('rec');
-  await refreshBadge();
-}
-async function setRun(r) {
-  if (r) await SS.set({ run: r }); else await SS.remove('run');
-  await refreshBadge();
-}
-
-// Handlers read-modify-write shared state, so run them one at a time.
-let chain = Promise.resolve();
-function locked(fn) {
-  const p = chain.then(fn, fn);
-  chain = p.catch(() => {});
-  return p;
-}
-
-async function refreshBadge() {
-  const [rec, run] = await Promise.all([getRec(), getRun()]);
-  let text = '', color = '#555';
-  if (rec && rec.active) { text = 'REC'; color = '#d93025'; }
-  else if (run) {
-    if (run.status === 'running') { text = '▶'; color = '#1a73e8'; }
-    else if (run.status === 'failed') { text = '!'; color = '#d93025'; }
-    else if (run.status === 'done') { text = '✓'; color = '#188038'; }
-  }
-  try {
-    await chrome.action.setBadgeText({ text });
-    await chrome.action.setBadgeBackgroundColor({ color });
-  } catch (e) { /* ignore */ }
-}
-
-function notifyTab(tabId) {
-  if (tabId == null) return;
-  chrome.tabs.sendMessage(tabId, { type: 'mode-changed' }).catch(() => {});
-}
-
-async function gotoUrl(tabId, url) {
-  const strip = (u) => (u || '').split('#')[0];
-  const tab = await chrome.tabs.get(tabId);
-  if (strip(tab.url) === strip(url)) await chrome.tabs.reload(tabId);
-  else await chrome.tabs.update(tabId, { url });
-}
-
-const startIndexOf = (wf) => (wf.steps[0] && wf.steps[0].type === 'navigate' ? 1 : 0);
-const startUrlOf = (wf) => (wf.steps[0] && wf.steps[0].type === 'navigate' ? wf.steps[0].url : wf.startUrl);
-
-function sameLoc(a, b) {
-  return !!a && !!b && a.css === b.css && a.id === b.id && a.name === b.name && a.value === b.value;
-}
-
-function finalizeSteps(steps) {
-  const used = new Set();
-  const strip = (u) => (u || '').split('#')[0];
-  steps.forEach((s, i) => {
-    // A click / Enter whose next recorded step happened on a different page leads to a navigation.
-    const next = steps[i + 1];
-    if ((s.type === 'click' || s.type === 'key') && next && next.url && s.url && strip(next.url) !== strip(s.url)) {
-      s.navigates = true;
-    }
-    if (s.type === 'click' && s.choice) {
-      // Picking an item from a custom dropdown / filter list: make "which item" a field.
-      const prev = steps[i - 1];
-      s.variable = true;
-      s.value = (s.loc && s.loc.text) || s.label || '';
-      if (prev && prev.type === 'input' && prev.variable) {
-        s.param = prev.param; // type-ahead: typed text and chosen suggestion share one value
-        s.fieldLabel = prev.label;
-      } else {
-        const opener = prev && prev.type === 'click' && !prev.choice ? prev.label : '';
-        s.fieldLabel = opener || 'choice';
-        s.param = RA.uniqueName(RA.slug(s.fieldLabel), used);
-      }
-    } else if (s.type === 'input' || s.type === 'select') {
-      s.variable = true;
-      s.param = RA.uniqueName(RA.slug(s.label || (s.loc && (s.loc.name || s.loc.placeholder || s.loc.id)) || s.type), used);
-    } else if (s.type === 'check') {
-      s.variable = false;
-      s.param = RA.uniqueName(RA.slug(s.label || (s.loc && (s.loc.name || s.loc.id)) || 'checkbox'), used);
-    }
-    s.desc = RA.describe(s);
-  });
-  return steps;
-}
-
-// ---------- run progression ----------
-async function endRowOrRun(run, ok, error, extra) {
-  const secrets = new Set((run.workflow.steps || []).filter((x) => x.secret && x.param).map((x) => x.param));
-  const params = {};
-  Object.entries(run.rows[run.rowIndex] || {}).forEach(([k, v]) => { if (!secrets.has(k)) params[k] = v; });
-  run.results.push({
-    row: run.rowIndex, ok, error: error || null, params,
-    summary: (extra && extra.summary) || null, data: (extra && extra.data) || null,
-  });
-  run.claimedBy = null;
-  run.agent = null;
-  const more = run.rowIndex + 1 < run.rows.length;
-  if (ok || (run.continueOnError && more)) {
-    if (more) {
-      run.rowIndex += 1;
-      run.stepIndex = run.startIndex;
-      if (run.mode === 'ai') run.agent = freshAgent();
-      await setRun(run);
-      if (!run.noNav) await gotoUrl(run.tabId, run.startUrl);
-      if (run.mode === 'ai') startAgent(run.id);
-      return { ok: true, next: true };
-    }
-    run.status = 'done';
-    run.finishedAt = Date.now();
-    await setRun(run);
-    return { ok: true, done: true };
-  }
-  run.status = 'failed';
-  run.error = error || 'Failed';
-  run.errorStep = run.stepIndex;
-  run.finishedAt = Date.now();
-  await setRun(run);
-  return { ok: true, failed: true };
-}
-
-async function modeFor(tabId, resetClaim) {
-  const [rec, run] = await Promise.all([getRec(), getRun()]);
-  const out = { recording: false, stepCount: 0, run: false, agent: null, runInfo: null };
-  if (rec && rec.active && rec.tabId === tabId) {
-    out.recording = true;
-    out.stepCount = Math.max(0, rec.steps.length - 1);
-  }
-  if (run && run.tabId === tabId) {
-    if (run.status === 'running') {
-      const agentOn = run.mode === 'ai' || !!(run.agent && run.agent.active);
-      if (resetClaim && run.claimedBy) { run.claimedBy = null; await setRun(run); }
-      if (agentOn) out.agent = run.agent ? { step: run.agent.step, last: run.agent.last, paused: run.agent.paused } : { step: 0, last: 'Starting…', paused: null };
-      else out.run = true;
-    }
-    out.runInfo = {
-      status: run.status, error: run.error, rowIndex: run.rowIndex,
-      rowCount: run.rows.length, results: run.results, name: run.workflowName,
-    };
-  }
-  return out;
-}
-
-// ---------- message handling ----------
-async function handle(msg, sender) {
-  const tabId = sender && sender.tab ? sender.tab.id : null;
-
-  switch (msg.type) {
-    case 'aiTest': {
-      const ai = await getAi();
-      if (!aiReady(ai)) return { ok: false, error: aiNotReady(ai) };
-      try {
-        const r = await callLLM({ ai, system: 'You are a helpful assistant.', tools: [], messages: [{ role: 'user', content: [{ type: 'text', text: 'Reply with the single word: OK' }] }], maxTokens: 20 });
-        const text = (r.content || []).filter((b) => b.type === 'text').map((b) => b.text).join(' ').trim();
-        return { ok: true, reply: stripThinking(text) || text, path: r.path || '', note: r.note || '' };
-      } catch (e) { return { ok: false, error: String((e && e.message) || e) }; }
-    }
-    case 'hello': return modeFor(tabId, true);
-    case 'mode': return modeFor(tabId, false);
-
-    // ----- recording -----
-    case 'recStart': {
-      const existing = await getRec();
-      if (existing && existing.active) return { ok: false, error: 'Already recording' };
-      const run = await getRun();
-      if (run && run.status === 'running') return { ok: false, error: 'A replay is running' };
-      await setRec({
-        active: true, tabId: msg.tabId, name: msg.name || 'Untitled workflow',
-        startUrl: msg.url, startedAt: Date.now(),
-        steps: [{ type: 'navigate', url: msg.url }],
-      });
-      notifyTab(msg.tabId);
-      return { ok: true };
-    }
-    case 'recStep': {
-      const rec = await getRec();
-      if (!rec || !rec.active || rec.tabId !== tabId) return { ok: false };
-      const step = msg.step;
-      const last = rec.steps[rec.steps.length - 1];
-      if (msg.replace && last && last.type === step.type && sameLoc(last.loc, step.loc)) {
-        rec.steps[rec.steps.length - 1] = step;
-      } else {
-        rec.steps.push(step);
-      }
-      await setRec(rec);
-      return { ok: true, count: rec.steps.length - 1 };
-    }
-    case 'recStop': {
-      const rec = await getRec();
-      if (!rec) return { ok: false, error: 'Not recording' };
-      await setRec(null);
-      notifyTab(rec.tabId);
-      if (msg.cancel) return { ok: true, cancelled: true };
-      if (rec.steps.length < 2) return { ok: false, error: 'No steps were recorded' };
-      const wf = {
-        id: 'wf_' + Date.now().toString(36),
-        name: rec.name, createdAt: Date.now(),
-        startUrl: rec.startUrl, steps: finalizeSteps(rec.steps),
-      };
-      const all = await getWorkflows();
-      all[wf.id] = wf;
-      await SL.set({ workflows: all });
-      return { ok: true, workflowId: wf.id };
-    }
-
-    // ----- saved workflows -----
-    case 'wfSave': {
-      const all = await getWorkflows();
-      all[msg.workflow.id] = msg.workflow;
-      await SL.set({ workflows: all });
-      return { ok: true };
-    }
-    case 'wfDelete': {
-      const all = await getWorkflows();
-      delete all[msg.id];
-      await SL.set({ workflows: all });
-      return { ok: true };
-    }
-
-    // ----- replay -----
-    case 'runStart': {
-      const mode = msg.mode || 'replay';
-      if (mode !== 'replay') {
-        const ai = await getAi();
-        if (!aiReady(ai)) return { ok: false, error: aiNotReady(ai) };
-      }
-      let wf;
-      if (msg.adhoc) {
-        wf = { id: 'adhoc', name: msg.adhoc.name || 'AI task', startUrl: msg.adhoc.url, steps: [{ type: 'navigate', url: msg.adhoc.url }] };
-      } else {
-        wf = (await getWorkflows())[msg.workflowId];
-        if (!wf) return { ok: false, error: 'Workflow not found' };
-      }
-      const existing = await getRun();
-      if (existing && existing.status === 'running') return { ok: false, error: 'A replay is already running' };
-      const rec = await getRec();
-      if (rec && rec.active) return { ok: false, error: 'Stop recording first' };
-      const url = startUrlOf(wf);
-      let runTab = msg.tabId;
-      if (msg.newTab && !msg.adhoc) {
-        const t = await chrome.tabs.create({ url, active: true });
-        runTab = t.id;
-      }
-      const run = {
-        id: 'run_' + Date.now().toString(36),
-        workflowId: wf.id, workflowName: wf.name, workflow: wf, mode, note: (msg.note || '').trim(),
-        noNav: !!msg.adhoc,
-        tabId: runTab, rows: msg.rows && msg.rows.length ? msg.rows : [{}],
-        rowIndex: 0, startIndex: startIndexOf(wf), startUrl: url,
-        stepIndex: startIndexOf(wf), status: 'running', claimedBy: null,
-        agent: mode === 'ai' ? freshAgent() : null,
-        continueOnError: !!msg.continueOnError, error: null, results: [],
-        startedAt: Date.now(),
-      };
-      await setRun(run);
-      if (!msg.newTab && !msg.adhoc) await gotoUrl(runTab, url);
-      if (mode === 'ai') startAgent(run.id);
-      return { ok: true };
-    }
-    case 'claim': {
-      const run = await getRun();
-      if (!run || run.status !== 'running' || run.tabId !== tabId) return { ok: false, reason: 'idle' };
-      if (run.mode === 'ai' || (run.agent && run.agent.active)) return { ok: false, reason: 'agent' };
-      if (run.claimedBy && run.claimedBy !== msg.instance) return { ok: false, reason: 'claimed' };
-      run.claimedBy = msg.instance;
-      await setRun(run);
-      const settings = await getSettings();
-      const base = {
-        ok: true, rowIndex: run.rowIndex, rowCount: run.rows.length,
-        total: run.workflow.steps.length, stepDelay: settings.stepDelay,
-        waitTimeout: settings.waitTimeout * 1000,
-      };
-      if (run.stepIndex >= run.workflow.steps.length) return { ...base, finalize: true };
-      return {
-        ...base, index: run.stepIndex, step: run.workflow.steps[run.stepIndex],
-        params: run.rows[run.rowIndex] || {},
-      };
-    }
-    case 'advance': {
-      const run = await getRun();
-      if (!run || run.status !== 'running' || run.tabId !== tabId) return { ok: false };
-      if (run.stepIndex !== msg.index || run.claimedBy !== msg.instance) return { ok: false };
-      run.stepIndex += 1;
-      run.claimedBy = null;
-      await setRun(run);
-      return { ok: true };
-    }
-    case 'finishRow': {
-      const run = await getRun();
-      if (!run || run.status !== 'running' || run.tabId !== tabId || run.claimedBy !== msg.instance) return { ok: false };
-      return endRowOrRun(run, true);
-    }
-    case 'fail': {
-      const run = await getRun();
-      if (!run || run.status !== 'running' || run.tabId !== tabId) return { ok: false };
-      run.stepIndex = Math.min(msg.index != null ? msg.index : run.stepIndex, run.workflow.steps.length - 1);
-      if (run.mode === 'hybrid' && !(run.agent && run.agent.active) && aiReady(await getAi())) {
-        run.claimedBy = null;
-        run.agent = { ...freshAgent(), last: 'Replay hit a problem — AI is taking over…', resumeFrom: run.stepIndex, error: msg.message };
-        await setRun(run);
-        startAgent(run.id);
-        return { ok: true, agent: true };
-      }
-      return endRowOrRun(run, false, msg.message);
-    }
-    case 'navigate': {
-      const run = await getRun();
-      if (!run || run.status !== 'running' || run.tabId !== tabId) return { ok: false };
-      await chrome.tabs.update(tabId, { url: msg.url });
-      return { ok: true };
-    }
-    case 'agentContinue': {
-      const run = await getRun();
-      if (run && run.agent) { run.agent.paused = null; await setRun(run); }
-      return { ok: true };
-    }
-    case 'stopRun': {
-      const run = await getRun();
-      if (!run) return { ok: true };
-      if (run.status === 'running') {
-        run.status = 'stopped'; run.claimedBy = null; run.finishedAt = Date.now();
-        if (run.agent) run.agent.active = false;
-        await setRun(run);
-      }
-      notifyTab(run.tabId);
-      return { ok: true };
-    }
-    case 'clearRun': {
-      const run = await getRun();
-      await setRun(null);
-      if (run) notifyTab(run.tabId);
-      return { ok: true };
-    }
-    default:
-      return { ok: false, error: 'Unknown message ' + msg.type };
-  }
-}
-
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  locked(() => handle(msg, sender))
-    .then(sendResponse)
-    .catch((e) => sendResponse({ ok: false, error: String((e && e.message) || e) }));
-  return true;
-});
-
-chrome.tabs.onRemoved.addListener((tabId) => {
-  locked(async () => {
-    const run = await getRun();
-    if (run && run.status === 'running' && run.tabId === tabId) {
-      run.status = 'failed';
-      run.error = 'The tab was closed during the run';
-      run.finishedAt = Date.now();
-      await setRun(run);
-    }
-  });
-});
-
-chrome.runtime.onInstalled.addListener(() => refreshBadge());
-chrome.runtime.onStartup.addListener(() => refreshBadge());
 
 
 
@@ -1600,7 +725,7 @@ chrome.runtime.onStartup.addListener(() => refreshBadge());
   const S = {
     workflows: {}, rec: null, run: null,
     settings: { stepDelay: 300, waitTimeout: 15 },
-    ai: { provider: 'anthropic', apiKey: '', baseUrl: '', model: 'claude-sonnet-5-5', headers: '', bodyTemplate: '', responsePath: '', promptSuffix: '', lite: 'auto', maxSteps: 40, vision: true },
+    ai: { provider: 'anthropic', apiKey: '', baseUrl: '', model: 'claude-sonnet-5-5', headers: '', bodyTemplate: '', responsePath: '', promptSuffix: '', lite: 'auto', maxSteps: 40, vision: true, real: false },
     view: { name: 'home' }, draft: null, notice: '',
   };
 
@@ -1611,7 +736,7 @@ chrome.runtime.onStartup.addListener(() => refreshBadge());
     ]);
     S.workflows = l.workflows || {};
     S.settings = { stepDelay: 300, waitTimeout: 15, ...(l.settings || {}) };
-    S.ai = { provider: 'anthropic', apiKey: '', baseUrl: '', model: 'claude-sonnet-5-5', headers: '', bodyTemplate: '', responsePath: '', promptSuffix: '', lite: 'auto', maxSteps: 40, vision: true, ...(l.ai || {}) };
+    S.ai = { provider: 'anthropic', apiKey: '', baseUrl: '', model: 'claude-sonnet-5-5', headers: '', bodyTemplate: '', responsePath: '', promptSuffix: '', lite: 'auto', maxSteps: 40, vision: true, real: false, ...(l.ai || {}) };
     S.rec = s.rec || null;
     S.run = s.run || null;
   }
@@ -1729,8 +854,10 @@ chrome.runtime.onStartup.addListener(() => refreshBadge());
           </select></label>
         <label class="f">Max steps per run <input type="number" id="aiSteps" min="5" max="150" value="${S.ai.maxSteps}"></label>
         <label class="c"><input type="checkbox" id="aiVision" ${S.ai.vision ? 'checked' : ''}> Send screenshots <small>(vision models only; ignored by Custom APIs)</small></label>
+        <label class="c"><input type="checkbox" id="aiReal" ${S.ai.real ? 'checked' : ''}> Real input mode <small>(trusted clicks &amp; typing for custom widgets; Chrome shows a “debugging this browser” banner during runs)</small></label>
         <div style="display:flex;gap:6px;margin:6px 0"><button data-act="aiSave">Save</button><button data-act="aiTest" class="primary" style="width:auto">Save &amp; test connection</button></div>
         <div id="aiResult" class="hint"></div>
+        <button data-act="copylog">Copy last agent run log</button>
         <p class="hint">AI modes send the page's text, element list and (optionally) screenshots to the endpoint above, so avoid them on pages with data that must not go there. A local model keeps everything on your machine. Ollama: start it with OLLAMA_ORIGINS="chrome-extension://*".</p>
       </details>
       <details><summary>Settings &amp; import</summary>
@@ -1965,6 +1092,13 @@ chrome.runtime.onStartup.addListener(() => refreshBadge());
   }
 
   const handlers = {
+    copylog: async () => {
+      const l = (await chrome.storage.local.get('agentLog')).agentLog;
+      const out = $('#aiResult');
+      if (!l || !l.entries.length) { out.textContent = 'No agent run logged yet.'; return; }
+      try { await navigator.clipboard.writeText(JSON.stringify(l, null, 1)); out.textContent = '✓ Log copied (' + l.entries.length + ' steps). Paste it to share.'; }
+      catch (e) { out.textContent = '✗ Could not copy: ' + e.message; }
+    },
     aiSave: () => saveAi(false),
     aiTest: () => saveAi(true),
     rec: startRecording,
@@ -2048,10 +1182,18 @@ chrome.runtime.onStartup.addListener(() => refreshBadge());
       lite: $('#aiLite').value,
       maxSteps: Math.min(150, Math.max(5, +$('#aiSteps').value || 40)),
       vision: $('#aiVision').checked,
+      real: $('#aiReal').checked,
     };
   }
   async function saveAi(test) {
     const ai = readAi();
+    let denied = false;
+    if (ai.real) {
+      // must run inside the click gesture, before any other await
+      let granted = false;
+      try { granted = await chrome.permissions.request({ permissions: ['debugger'] }); } catch (e) { /* ignore */ }
+      if (!granted) { ai.real = false; $('#aiReal').checked = false; denied = true; }
+    }
     const out = $('#aiResult');
     try { parseExtraHeaders(ai.headers); } catch (err) { out.textContent = '✗ ' + err.message; return; }
     if (ai.provider === 'custom' && ai.bodyTemplate) {
@@ -2059,7 +1201,8 @@ chrome.runtime.onStartup.addListener(() => refreshBadge());
     }
     await chrome.storage.local.set({ ai });
     S.ai = ai;
-    if (!test) { out.textContent = '✓ Saved.'; return; }
+    const dn = denied ? ' Real input mode stays off: the debugger permission was not granted.' : '';
+    if (!test) { out.textContent = '✓ Saved.' + dn; return; }
     out.textContent = 'Saved. Testing…';
     const r = await bg({ type: 'aiTest' });
     out.textContent = r && r.ok
@@ -2127,54 +1270,43 @@ chrome.runtime.onStartup.addListener(() => refreshBadge());
 
 
 
-//popup.html
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <link rel="stylesheet" href="popup.css">
-</head>
-<body>
-  <header><b>Repeat Agent</b><span class="sub">record once · replay with new values</span></header>
-  <div id="banner"></div>
-  <main id="main"></main>
-  <script src="shared.js"></script>
-  <script src="llm.js"></script>
-  <script src="popup.js"></script>
-</body>
-</html>
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 //manifest.json
 {
   "manifest_version": 3,
   "name": "Repeat Agent",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Record a web task once, then replay it with new values - by fast replay or an AI agent that reads the page.",
-  "permissions": ["storage", "tabs", "scripting"],
-  "host_permissions": ["<all_urls>"],
-  "background": { "service_worker": "background.js" },
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_popup": "popup.html",
     "default_title": "Repeat Agent",
-    "default_icon": { "16": "icons/icon16.png", "32": "icons/icon32.png" }
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    }
   },
   "content_scripts": [
     {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["shared.js", "content.js"],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "shared.js",
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ],
@@ -2183,5 +1315,8 @@ chrome.runtime.onStartup.addListener(() => refreshBadge());
     "32": "icons/icon32.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  }
+  },
+  "optional_permissions": [
+    "debugger"
+  ]
 }
