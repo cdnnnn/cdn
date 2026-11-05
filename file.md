@@ -252,7 +252,15 @@ function pageAct(localId, action, input, text) {
 // ---------------------------------------------------------------------------------------------
 async function getAi() {
   const s = (await chrome.storage.local.get('ai')).ai || {};
-  return { apiKey: '', model: 'claude-sonnet-5-5', maxSteps: 40, vision: true, ...s };
+  return { provider: 'anthropic', apiKey: '', baseUrl: '', model: 'claude-sonnet-5-5', toolMode: 'native', maxSteps: 40, vision: true, ...s };
+}
+function aiReady(ai) {
+  return ai.provider === 'openai' ? !!(ai.baseUrl && ai.model) : !!ai.apiKey;
+}
+function aiNotReady(ai) {
+  return ai.provider === 'openai'
+    ? 'Set the Base URL and Model of your AI endpoint under AI settings first.'
+    : 'Add your Anthropic API key under AI settings first.';
 }
 
 function updateRun(runId, mut) {
@@ -390,6 +398,102 @@ async function callClaude(ai, messages) {
   throw lastErr || new Error('Anthropic API request failed');
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// Model clients: Anthropic Messages API, or any OpenAI-compatible /chat/completions endpoint
+// (Qwen via DashScope, GLM via Zhipu / Z.ai, Ollama, vLLM, LM Studio, OpenAI ...)
+// ---------------------------------------------------------------------------------------------
+const TOOL_NAMES = AGENT_TOOLS.map((t) => t.name);
+
+function jsonToolSpec() {
+  const lines = AGENT_TOOLS.map((t) => `- ${t.name}(${Object.keys(t.input_schema.properties || {}).join(', ')}): ${t.description}`);
+  return `You have these tools:\n${lines.join('\n')}\n\nReply with ONLY one JSON object and nothing else, in the form {"tool": "<tool name>", "input": {<arguments>}}. Example: {"tool": "click", "input": {"id": 12}}`;
+}
+
+// Pull the first valid {"tool":...} object out of free text (handles <think> blocks and ``` fences).
+function extractToolJson(text) {
+  let t = String(text || '').replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<think>[\s\S]*$/i, '').replace(/```(?:json)?/gi, '');
+  for (let i = t.indexOf('{'); i !== -1; i = t.indexOf('{', i + 1)) {
+    let depth = 0, inStr = false, esc = false;
+    for (let j = i; j < t.length; j++) {
+      const c = t[j];
+      if (inStr) { if (esc) esc = false; else if (c === '\\') esc = true; else if (c === '"') inStr = false; continue; }
+      if (c === '"') inStr = true;
+      else if (c === '{') depth++;
+      else if (c === '}' && --depth === 0) {
+        try {
+          const o = JSON.parse(t.slice(i, j + 1));
+          const name = o.tool || o.name || o.action || (o.function && o.function.name);
+          let input = o.input || o.arguments || o.parameters || o.args || (o.function && o.function.arguments) || {};
+          if (typeof input === 'string') { try { input = JSON.parse(input); } catch (e) { input = {}; } }
+          if (TOOL_NAMES.includes(name)) return { name, input };
+        } catch (e) { /* keep scanning */ }
+        break;
+      }
+    }
+  }
+  return null;
+}
+
+async function callOpenAICompat(ai, content) {
+  let jsonMode = ai.toolMode === 'json';
+  const hasImg = content.some((b) => b.type === 'image');
+  const userContent = hasImg
+    ? content.map((b) => (b.type === 'image' ? { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,' + b.source.data } } : { type: 'text', text: b.text }))
+    : content.map((b) => b.text).join('\n\n');
+  const url = ai.baseUrl.replace(/\/+$/, '') + '/chat/completions';
+  let lastErr;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const body = {
+      model: ai.model, max_tokens: 2048, temperature: 0.2,
+      messages: [
+        { role: 'system', content: AGENT_SYSTEM + '\n\n' + (jsonMode ? jsonToolSpec() : 'If you cannot call a tool, reply with ONLY a JSON object like {"tool":"click","input":{"id":3}}.') },
+        { role: 'user', content: userContent },
+      ],
+    };
+    if (!jsonMode) {
+      body.tools = AGENT_TOOLS.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } }));
+      body.tool_choice = 'auto';
+    }
+    const headers = { 'content-type': 'application/json' };
+    if (ai.apiKey) headers.authorization = 'Bearer ' + ai.apiKey;
+    let res;
+    try { res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) }); }
+    catch (e) { lastErr = new Error('Cannot reach ' + url + ' — ' + ((e && e.message) || e) + '. For a local server check it is running and allows browser-extension origins (Ollama: set OLLAMA_ORIGINS="chrome-extension://*").'); await sleep(1500 * (attempt + 1)); continue; }
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      if (res.status === 400 && !jsonMode) { jsonMode = true; continue; } // endpoint rejected "tools": retry with JSON-in-text
+      if (res.status === 401 || res.status === 403) throw new Error('The AI endpoint rejected the credentials (' + res.status + '). Check the API key / base URL in AI settings.');
+      if (res.status === 404) throw new Error('Endpoint or model not found (404) at ' + url + '. Check the Base URL and Model name.');
+      lastErr = new Error('AI endpoint error ' + res.status + ': ' + txt.slice(0, 200));
+      if (res.status === 429 || res.status >= 500) { await sleep(2000 * (attempt + 1)); continue; }
+      throw lastErr;
+    }
+    const data = await res.json();
+    const msg = data && data.choices && data.choices[0] && data.choices[0].message;
+    if (!msg) throw new Error('Unexpected response from the AI endpoint');
+    const tc = msg.tool_calls && msg.tool_calls[0] && msg.tool_calls[0].function;
+    if (tc && TOOL_NAMES.includes(tc.name)) {
+      let input = tc.arguments;
+      if (typeof input === 'string') { try { input = JSON.parse(input || '{}'); } catch (e) { const x = extractToolJson('{"tool":"' + tc.name + '","input":' + input + '}'); input = x ? x.input : {}; } }
+      return { name: tc.name, input: input || {} };
+    }
+    const fromText = extractToolJson((msg.content || '') + '\n' + (msg.reasoning_content || ''));
+    if (fromText) return fromText;
+    if (!jsonMode) { jsonMode = true; continue; } // model ignored tools: ask for JSON text instead
+    return null;
+  }
+  throw lastErr || new Error('AI request failed');
+}
+
+// Returns {name, input} or null.
+async function callModel(ai, content) {
+  if (ai.provider === 'openai') return callOpenAICompat(ai, content);
+  const resp = await callClaude(ai, [{ role: 'user', content }]);
+  const tu = (resp.content || []).find((b) => b.type === 'tool_use');
+  return tu ? { name: tu.name, input: tu.input || {} } : null;
+}
+
 function fillPlaceholders(s, run) {
   const row = run.rows[run.rowIndex] || {};
   return String(s).replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g, (m, k) => (row[k] !== undefined ? row[k] : m));
@@ -512,12 +616,12 @@ async function agentLoop(runId) {
   let ai;
   try {
     ai = await getAi();
-    if (!ai.apiKey) throw new Error('No Anthropic API key set. Add it under Settings in the extension popup.');
+    if (!aiReady(ai)) throw new Error(aiNotReady(ai));
     await sleep(1200);
     const first = await getRun();
     if (first) await waitTabComplete(first.tabId, 20000);
     const history = [];
-    let lastSig = '', repeats = 0;
+    let lastSig = '', repeats = 0, noAct = 0;
     for (let step = 1; step <= ai.maxSteps; step++) {
       const run = await getRun();
       if (!run || run.id !== runId || run.status !== 'running' || !run.agent || !run.agent.active) return;
@@ -533,10 +637,14 @@ async function agentLoop(runId) {
       if (shot) content.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: shot } });
       content.push({ type: 'text', text: `Step ${step} of at most ${ai.maxSteps}. Call exactly one tool.` });
 
-      const resp = await callClaude(ai, [{ role: 'user', content }]);
-      const tu = (resp.content || []).find((b) => b.type === 'tool_use');
-      if (!tu) { history.push(`${step}. (no action chosen)`); continue; }
-      const { name, input } = tu;
+      const act = await callModel(ai, content);
+      if (!act) {
+        history.push(`${step}. (the model returned no usable action)`);
+        if (++noAct >= 3) return void (await finishAgent(runId, false, 'The model did not return a usable action 3 times in a row. For models without reliable tool calling set "Tool calling" to "JSON in text" in AI settings, or try a stronger model.'));
+        continue;
+      }
+      noAct = 0;
+      const { name, input } = act;
       const desc = describeAction(name, input || {}, snap);
       await updateRun(runId, (r) => { if (r.agent) { r.agent.step = step; r.agent.last = desc; } });
       notifyTab(run.tabId);
@@ -561,14 +669,6 @@ async function agentLoop(runId) {
     await finishAgent(runId, false, String((e && e.message) || e));
   }
 }
-
-
-
-
-
-
-
-
 
 
 
@@ -817,7 +917,7 @@ async function handle(msg, sender) {
       const mode = msg.mode || 'replay';
       if (mode !== 'replay') {
         const ai = await getAi();
-        if (!ai.apiKey) return { ok: false, error: 'Add your Anthropic API key under Settings first.' };
+        if (!aiReady(ai)) return { ok: false, error: aiNotReady(ai) };
       }
       let wf;
       if (msg.adhoc) {
@@ -889,7 +989,7 @@ async function handle(msg, sender) {
       const run = await getRun();
       if (!run || run.status !== 'running' || run.tabId !== tabId) return { ok: false };
       run.stepIndex = Math.min(msg.index != null ? msg.index : run.stepIndex, run.workflow.steps.length - 1);
-      if (run.mode === 'hybrid' && !(run.agent && run.agent.active) && (await getAi()).apiKey) {
+      if (run.mode === 'hybrid' && !(run.agent && run.agent.active) && aiReady(await getAi())) {
         run.claimedBy = null;
         run.agent = { ...freshAgent(), last: 'Replay hit a problem — AI is taking over…', resumeFrom: run.stepIndex, error: msg.message };
         await setRun(run);
@@ -967,721 +1067,6 @@ chrome.runtime.onStartup.addListener(() => refreshBadge());
 
 
 
-
-
-
-
-
-
-
-
-
-
-//content.js
-// Content script: records what you do on the page, and replays recorded workflows.
-(() => {
-  if (window.__repeatAgentLoaded) return;
-  window.__repeatAgentLoaded = true;
-
-  const instance = Math.random().toString(36).slice(2) + Date.now().toString(36);
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
-  const esc = (s) =>
-    String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const send = (msg) =>
-    new Promise((resolve) => {
-      try {
-        chrome.runtime.sendMessage(msg, (r) => { void chrome.runtime.lastError; resolve(r); });
-      } catch (e) { resolve(undefined); }
-    });
-  class Abort extends Error {}
-
-  let unloading = false;
-  window.addEventListener('pagehide', () => { unloading = true; });
-  window.addEventListener('beforeunload', () => { unloading = true; });
-  window.addEventListener('pageshow', (e) => { if (e.persisted) { unloading = false; refreshMode(); } });
-
-  // =====================================================================
-  // Overlay (small floating panel in a shadow root)
-  // =====================================================================
-  let host = null, box = null;
-  function ensureOverlay() {
-    if (host && host.isConnected) return;
-    host = document.createElement('div');
-    host.id = '__repeat_agent_overlay';
-    host.style.cssText = 'all:initial;position:fixed;z-index:2147483647;right:16px;bottom:16px;';
-    const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML = `<style>
-      .box{font:13px/1.4 system-ui,sans-serif;color:#202124;background:#fff;border:1px solid #dadce0;border-left:4px solid var(--c,#1a73e8);
-        border-radius:8px;padding:10px 12px;min-width:240px;max-width:340px;box-shadow:0 4px 16px rgba(0,0,0,.2)}
-      .t{font-weight:600;margin-bottom:2px}.m{color:#5f6368;word-break:break-word}
-      .r{margin-top:8px;display:flex;gap:6px;justify-content:flex-end}
-      button{font:inherit;cursor:pointer;border:0;border-radius:6px;padding:5px 10px;background:var(--c,#1a73e8);color:#fff}
-      button.g{background:#f1f3f4;color:#202124}
-    </style><div class="box"></div>`;
-    box = root.querySelector('.box');
-    document.documentElement.appendChild(host);
-  }
-  function setOverlay(html, handlers, color) {
-    ensureOverlay();
-    box.style.setProperty('--c', color || '#1a73e8');
-    box.innerHTML = html;
-    box.querySelectorAll('[data-act]').forEach((b) => {
-      const fn = handlers && handlers[b.getAttribute('data-act')];
-      if (fn) b.addEventListener('click', fn);
-    });
-  }
-  function hideOverlay() {
-    if (host) host.remove();
-    host = null; box = null;
-  }
-  const inOverlay = (e) => !!host && e.composedPath().includes(host);
-
-  function showRecording(count) {
-    setOverlay(
-      `<div class="t">● Recording</div><div class="m">${count} step${count === 1 ? '' : 's'} captured. Do the task once as usual.</div>
-       <div class="r"><button class="g" data-act="cancel">Discard</button><button data-act="stop">Stop &amp; save</button></div>`,
-      {
-        stop: async () => {
-          const r = await send({ type: 'recStop' });
-          if (r && r.ok) {
-            setOverlay('<div class="t">Saved ✓</div><div class="m">Open the Repeat Agent popup to review the fields and run it.</div>', {}, '#188038');
-            setTimeout(refreshMode, 3500);
-          } else {
-            setOverlay(`<div class="t">Could not save</div><div class="m">${esc((r && r.error) || 'Unknown error')}</div>
-              <div class="r"><button data-act="ok">OK</button></div>`, { ok: refreshMode }, '#d93025');
-          }
-        },
-        cancel: async () => { await send({ type: 'recStop', cancel: true }); },
-      },
-      '#d93025'
-    );
-  }
-
-  // =====================================================================
-  // Locators: describe an element in several ways so it can be found again
-  // =====================================================================
-  const stableId = (id) => !!id && !/(\d{3,}|[:«»]|^(react|radix|headlessui|ember|mui|rc)[-_])/i.test(id);
-  const attrSel = (n, v) => `[${n}="${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"]`;
-
-  function labelOf(el) {
-    const lb = el.getAttribute && el.getAttribute('aria-labelledby');
-    if (lb) {
-      const t = lb.split(/\s+/).map((id) => document.getElementById(id)).filter(Boolean).map((n) => norm(n.textContent)).join(' ');
-      if (t) return clean(t);
-    }
-    if (el.labels && el.labels.length) {
-      const t = norm(el.labels[0].textContent);
-      if (t) return clean(t);
-    }
-    const wrap = el.closest && el.closest('label');
-    if (wrap) {
-      const t = norm(wrap.textContent);
-      if (t) return clean(t);
-    }
-    const aria = el.getAttribute && el.getAttribute('aria-label');
-    return aria ? clean(aria) : '';
-  }
-  const clean = (t) => t.replace(/\s*[*:]+\s*$/, '').slice(0, 80);
-
-  function cssPath(el) {
-    const parts = [];
-    let node = el;
-    while (node && node.nodeType === 1 && node !== document.documentElement) {
-      if (node.id && stableId(node.id)) { parts.unshift('#' + CSS.escape(node.id)); break; }
-      let part = node.tagName.toLowerCase();
-      const parent = node.parentElement;
-      if (parent) {
-        const same = Array.from(parent.children).filter((c) => c.tagName === node.tagName);
-        if (same.length > 1) part += `:nth-of-type(${same.indexOf(node) + 1})`;
-      }
-      parts.unshift(part);
-      node = parent;
-    }
-    return parts.join(' > ');
-  }
-
-  const isFormControl = (el) => ['INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName);
-
-  function visibleText(el) {
-    if (el.tagName === 'INPUT') return norm(el.value);
-    return norm(el.textContent);
-  }
-
-  function buildLocator(el) {
-    const tag = el.tagName.toLowerCase();
-    const loc = { tag };
-    if (el.id && stableId(el.id)) loc.id = el.id;
-    for (const a of ['data-testid', 'data-test', 'data-cy', 'data-qa', 'data-test-id']) {
-      const v = el.getAttribute(a);
-      if (v) { loc.testAttr = a; loc.testVal = v; break; }
-    }
-    const name = el.getAttribute('name');
-    if (name) loc.name = name;
-    if (tag === 'input') {
-      loc.type = (el.type || 'text').toLowerCase();
-      if (loc.type === 'radio' || loc.type === 'checkbox') loc.value = el.value;
-    }
-    const aria = el.getAttribute('aria-label');
-    if (aria) loc.aria = aria;
-    const ph = el.getAttribute('placeholder');
-    if (ph) loc.placeholder = ph;
-    const lbl = labelOf(el);
-    if (lbl) loc.label = lbl;
-    const role = el.getAttribute('role');
-    if (role) loc.role = role;
-    if (!el.isContentEditable && !['SELECT', 'TEXTAREA'].includes(el.tagName) && !(el.tagName === 'INPUT' && !['submit', 'button', 'reset'].includes(loc.type))) {
-      const t = visibleText(el);
-      if (t && t.length <= 80) loc.text = t;
-    }
-    if (tag === 'a') {
-      const h = el.getAttribute('href');
-      if (h && !/^javascript:/i.test(h)) loc.href = h.slice(0, 200);
-    }
-    loc.css = cssPath(el);
-    return loc;
-  }
-
-  function isVisible(el) {
-    const r = el.getBoundingClientRect();
-    if (!(r.width > 0 && r.height > 0)) return false;
-    const cs = getComputedStyle(el);
-    return cs.visibility !== 'hidden' && cs.display !== 'none';
-  }
-
-  function resolveLocator(loc, allowHidden) {
-    const qa = (sel) => { try { return Array.from(document.querySelectorAll(sel)); } catch (e) { return []; } };
-    const typeOk = (e) => !loc.type || (e.type || '').toLowerCase() === loc.type;
-    const valueOk = (e) => loc.value === undefined || e.value === loc.value;
-    const textEq = (e) => visibleText(e) === loc.text;
-    const deepest = (list) => list.filter((c) => !Array.from(c.children).some((ch) => list.includes(ch)));
-
-    const strategies = [
-      () => (loc.id ? [document.getElementById(loc.id)].filter(Boolean) : []),
-      () => (loc.testAttr ? qa(attrSel(loc.testAttr, loc.testVal)) : []),
-      () => (loc.name ? qa(loc.tag + attrSel('name', loc.name)).filter(typeOk).filter(valueOk) : []),
-      () => (loc.aria ? qa(loc.tag + attrSel('aria-label', loc.aria)) : []),
-      () => (loc.label && (isFormLike(loc)) ? qa(loc.tag).filter((e) => labelOf(e) === loc.label).filter(typeOk).filter(valueOk) : []),
-      () => (loc.placeholder ? qa(loc.tag + attrSel('placeholder', loc.placeholder)) : []),
-      () => (loc.text && loc.href ? deepest(qa(loc.tag).filter(textEq)).filter((e) => e.getAttribute('href') === loc.href) : []),
-      () => (loc.text ? deepest(qa(loc.tag).filter(textEq)) : []),
-      () => (loc.css ? qa(loc.css) : []),
-    ];
-
-    let fallback = null;
-    for (const fn of strategies) {
-      const list = fn();
-      if (!list.length) continue;
-      const pool = allowHidden ? list : list.filter(isVisible);
-      if (pool.length === 1) return pool[0];
-      if (pool.length > 1 && !fallback) fallback = pool[0];
-    }
-    return fallback;
-  }
-  const isFormLike = (loc) => ['input', 'select', 'textarea'].includes(loc.tag) || !!loc.role || loc.tag === 'div';
-
-  // Find the list item / button whose visible text matches a value the user supplied this run.
-  function resolveByText(step, value, allowHidden) {
-    const loc = step.loc || {};
-    const want = norm(value).toLowerCase();
-    if (!want) return null;
-    const gen = (p) => String(p || '').replace(/:nth-of-type\(\d+\)/g, '').replace(/#[^ >]+/g, '#');
-    const qa = (sel) => { try { return Array.from(document.querySelectorAll(sel)); } catch (e) { return []; } };
-    const textOf = (e) => norm(e.tagName === 'INPUT' ? e.value : e.textContent).toLowerCase();
-    const pools = [
-      qa(loc.role ? `[role="${loc.role}"]` : loc.tag),
-      qa('[role="option"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], li, label, button, a, td, span, div'),
-    ];
-    const tiers = [(t) => t === want, (t) => t.startsWith(want), (t) => t.includes(want) && t.length <= want.length + 40];
-    for (const pool of pools) {
-      const vis = allowHidden ? pool : pool.filter(isVisible);
-      for (const tier of tiers) {
-        let hits = vis.filter((e) => { const t = textOf(e); return t && tier(t); });
-        hits = hits.filter((c) => !Array.from(c.children).some((ch) => hits.includes(ch)));
-        if (!hits.length) continue;
-        const same = hits.filter((e) => gen(cssPath(e)) === gen(loc.css));
-        return (same[0] || hits[0]);
-      }
-    }
-    return null;
-  }
-
-  async function waitFor(step, timeoutMs, allowHidden, valueOverride) {
-    const end = Date.now() + timeoutMs;
-    for (;;) {
-      const el = valueOverride !== undefined ? resolveByText(step, valueOverride, allowHidden) : resolveLocator(step.loc, allowHidden);
-      if (el) return el;
-      if (Date.now() > end) {
-        const loc = step.loc || {};
-        const what = valueOverride !== undefined ? valueOverride : step.label || loc.text || loc.aria || loc.placeholder || loc.name || loc.css || 'the element';
-        throw new Error('Could not find "' + what + '" on the page (' + step.type + ' step)');
-      }
-      await sleep(200);
-    }
-  }
-
-  // =====================================================================
-  // Recorder
-  // =====================================================================
-  let recOn = false;
-  const lastVal = new WeakMap();
-  const initialVal = new WeakMap();
-
-  function startRecorder() {
-    if (recOn) return;
-    recOn = true;
-    document.addEventListener('click', onClick, true);
-    document.addEventListener('change', onChange, true);
-    document.addEventListener('keydown', onKey, true);
-    document.addEventListener('focusin', onFocusIn, true);
-    document.addEventListener('focusout', onFocusOut, true);
-  }
-  function stopRecorder() {
-    if (!recOn) return;
-    recOn = false;
-    document.removeEventListener('click', onClick, true);
-    document.removeEventListener('change', onChange, true);
-    document.removeEventListener('keydown', onKey, true);
-    document.removeEventListener('focusin', onFocusIn, true);
-    document.removeEventListener('focusout', onFocusOut, true);
-  }
-
-  async function record(step, replace) {
-    step.url = location.href;
-    const r = await send({ type: 'recStep', step, replace: !!replace });
-    if (r && r.ok) showRecording(r.count);
-  }
-
-  const CLICKABLE =
-    'button, a, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="option"], [role="checkbox"], [role="radio"], [role="switch"], input[type="submit"], input[type="button"], input[type="reset"], input[type="image"], summary, label, [onclick]';
-
-  function onClick(e) {
-    if (!e.isTrusted || inOverlay(e) || !(e.target instanceof Element)) return;
-    let el = e.target.closest(CLICKABLE) || e.target;
-    if (el === document.body || el === document.documentElement) return;
-    if (el.tagName === 'LABEL' && el.control) return; // the control's own change event is recorded
-    if (['SELECT', 'TEXTAREA'].includes(el.tagName) || el.isContentEditable) return;
-    if (el.tagName === 'INPUT' && !['submit', 'button', 'reset', 'image'].includes((el.type || '').toLowerCase())) return;
-    const label = clickLabel(el);
-    const step = { type: 'click', loc: buildLocator(el), label };
-    if (label && label.length <= 60 && looksLikeChoice(el)) step.choice = true;
-    record(step);
-  }
-
-  // Clicks on items of a custom dropdown / list / filter menu: the *which one* is usually what you want to vary.
-  function looksLikeChoice(el) {
-    const role = (el.getAttribute('role') || '').toLowerCase();
-    if (['option', 'menuitemradio', 'menuitemcheckbox', 'treeitem'].includes(role)) return true;
-    if (el.closest('[role="listbox"], [role="menu"]')) return true;
-    const rx = /option|dropdown|select|menu-?item|picker|choice|suggest|autocomplete|combobox|listbox/i;
-    for (let n = el, i = 0; n && i < 3; n = n.parentElement, i++) {
-      const cls = typeof n.className === 'string' ? n.className : '';
-      if (rx.test(cls)) return true;
-    }
-    return false;
-  }
-  function clickLabel(el) {
-    return clean(visibleText(el) || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('value') || '');
-  }
-
-  function onChange(e) {
-    if (!e.isTrusted || inOverlay(e) || !(e.target instanceof Element)) return;
-    recordField(e.target);
-  }
-  function onFocusIn(e) {
-    const el = e.target;
-    if (el instanceof Element && el.isContentEditable && !isFormControl(el)) initialVal.set(el, el.innerText);
-  }
-  function onFocusOut(e) {
-    const el = e.target;
-    if (!(el instanceof Element) || !el.isContentEditable || isFormControl(el) || inOverlay(e)) return;
-    if (el.innerText !== initialVal.get(el)) recordField(el);
-  }
-  function onKey(e) {
-    if (!e.isTrusted || e.key !== 'Enter' || inOverlay(e) || !(e.target instanceof Element)) return;
-    const el = e.target;
-    if (el.tagName !== 'INPUT' || !isTextLike(el)) return;
-    recordField(el); // flush the typed value first so the order is right
-    record({ type: 'key', key: 'Enter', loc: buildLocator(el), label: labelOf(el) || el.name || '' });
-  }
-
-  function isTextLike(el) {
-    const t = (el.type || 'text').toLowerCase();
-    return !['checkbox', 'radio', 'file', 'submit', 'button', 'reset', 'image', 'hidden'].includes(t);
-  }
-  const fieldLabel = (el) => labelOf(el) || clean(el.getAttribute('placeholder') || el.getAttribute('name') || el.id || el.type || '');
-
-  function recordField(el) {
-    const tag = el.tagName;
-    if (tag === 'SELECT') {
-      const opts = Array.from(el.options).slice(0, 80).map((o) => norm(o.textContent));
-      if (el.multiple) {
-        const sel = Array.from(el.selectedOptions).map((o) => norm(o.textContent));
-        record({ type: 'select', multi: true, loc: buildLocator(el), label: fieldLabel(el), value: sel.join(','), text: sel.join(','), options: opts }, true);
-      } else {
-        const o = el.selectedOptions[0];
-        record({ type: 'select', loc: buildLocator(el), label: fieldLabel(el), value: el.value, text: o ? norm(o.textContent) : '', options: opts }, true);
-      }
-      return;
-    }
-    if (tag === 'INPUT') {
-      const type = (el.type || 'text').toLowerCase();
-      if (type === 'checkbox' || type === 'radio') {
-        record({ type: 'check', kind: type, loc: buildLocator(el), label: fieldLabel(el), checked: el.checked }, true);
-        return;
-      }
-      if (type === 'file') {
-        record({ type: 'manual', message: 'Choose the file for "' + (fieldLabel(el) || 'file upload') + '", then press Continue' });
-        return;
-      }
-      if (!isTextLike(el)) return;
-    }
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || el.isContentEditable) {
-      const editable = !isFormControl(el);
-      const host = editable ? el.closest('[contenteditable]:not([contenteditable="false"])') || el : el;
-      const value = editable ? host.innerText : el.value;
-      if (lastVal.get(host) === value) return;
-      lastVal.set(host, value);
-      const ac = (el.getAttribute('autocomplete') || '').toLowerCase();
-      const secret = (el.type || '').toLowerCase() === 'password' || /cc-|one-time-code/.test(ac);
-      record({
-        type: 'input', editable, loc: buildLocator(host), label: fieldLabel(host),
-        value: secret ? '' : value, secret,
-      }, true);
-    }
-  }
-
-  // =====================================================================
-  // Replayer
-  // =====================================================================
-  function setNativeValue(el, value) {
-    const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
-    if (desc && desc.set) desc.set.call(el, value); else el.value = value;
-  }
-  const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
-
-  function highlight(el) {
-    try {
-      const old = el.style.outline;
-      el.style.outline = '3px solid #f9ab00';
-      setTimeout(() => { el.style.outline = old; }, 700);
-    } catch (e) { /* ignore */ }
-  }
-
-  function fillInput(el, value) {
-    el.scrollIntoView({ block: 'center', inline: 'center' });
-    el.focus();
-    if (el.isContentEditable && !isFormControl(el)) {
-      document.execCommand('selectAll', false);
-      if (!document.execCommand('insertText', false, value)) {
-        el.textContent = value;
-        el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
-      }
-    } else {
-      setNativeValue(el, value);
-      fire(el, 'input');
-      fire(el, 'change');
-    }
-    if (el.blur) el.blur();
-  }
-
-  function chooseOption(el, step, value) {
-    const wanted = String(value).split(step.multi ? ',' : '\u0000').map((v) => v.trim()).filter((v, i, a) => v !== '' || a.length === 1);
-    const opts = Array.from(el.options);
-    if (step.multi) opts.forEach((o) => { o.selected = false; });
-    wanted.forEach((w) => {
-      const lw = w.toLowerCase();
-      const o =
-        opts.find((x) => x.value === w) ||
-        opts.find((x) => norm(x.textContent).toLowerCase() === lw) ||
-        opts.find((x) => x.value.toLowerCase() === lw) ||
-        opts.find((x) => norm(x.textContent).toLowerCase().includes(lw) && lw !== '');
-      if (!o) throw new Error('Option "' + w + '" not found in "' + (step.label || 'dropdown') + '"');
-      if (step.multi) o.selected = true; else el.value = o.value;
-    });
-    fire(el, 'input');
-    fire(el, 'change');
-  }
-
-  const parseBool = (v) => /^(true|yes|y|1|on|checked)$/i.test(String(v).trim());
-
-  function clickElement(el) {
-    el.scrollIntoView({ block: 'center', inline: 'center' });
-    highlight(el);
-    const o = { bubbles: true, cancelable: true, view: window };
-    try { el.dispatchEvent(new PointerEvent('pointerdown', o)); } catch (e) { /* older engines */ }
-    el.dispatchEvent(new MouseEvent('mousedown', o));
-    if (el.focus) el.focus();
-    try { el.dispatchEvent(new PointerEvent('pointerup', o)); } catch (e) { /* ignore */ }
-    el.dispatchEvent(new MouseEvent('mouseup', o));
-    el.click();
-  }
-
-  function pressEnter(el) {
-    const o = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
-    const proceed = el.dispatchEvent(new KeyboardEvent('keydown', o));
-    el.dispatchEvent(new KeyboardEvent('keypress', o));
-    if (proceed) {
-      const form = el.form || el.closest('form');
-      if (form) { if (form.requestSubmit) form.requestSubmit(); else form.submit(); }
-    }
-    el.dispatchEvent(new KeyboardEvent('keyup', o));
-  }
-
-  async function settle(ms) {
-    const end = Date.now() + ms;
-    while (Date.now() < end) {
-      if (unloading) return 'unloading';
-      await sleep(50);
-    }
-    return unloading ? 'unloading' : 'ok';
-  }
-
-  // After a click / Enter. If the recording showed this step leads to another page, wait for that
-  // navigation (or an in-page URL change) so the next step never runs against the old page.
-  async function afterAction(r, step) {
-    const href = location.href;
-    const expectNav = !!step.navigates;
-    const end = Date.now() + (expectNav ? 15000 : Math.max(r.stepDelay, 500));
-    while (Date.now() < end) {
-      if (unloading) return 'unloading';
-      if (expectNav && location.href !== href) {
-        await sleep(300);
-        return unloading ? 'unloading' : 'ok';
-      }
-      await sleep(50);
-    }
-    return unloading ? 'unloading' : 'ok';
-  }
-
-  function valueFor(step, params) {
-    if (step.variable && step.param && Object.prototype.hasOwnProperty.call(params || {}, step.param)) {
-      return params[step.param];
-    }
-    if (step.secret) throw new Error('No value was provided for the secret field "' + (step.label || step.param) + '"');
-    if (step.type === 'select') return step.text || step.value;
-    return step.value;
-  }
-
-  async function waitManual(message) {
-    const res = await new Promise((resolve) => {
-      setOverlay(
-        `<div class="t">⏸ Your turn</div><div class="m">${esc(message)}</div>
-         <div class="r"><button class="g" data-act="stop">Stop</button><button data-act="go">Continue</button></div>`,
-        {
-          go: () => resolve('go'),
-          stop: async () => { await send({ type: 'stopRun' }); resolve('stop'); },
-        },
-        '#f9ab00'
-      );
-    });
-    if (res === 'stop') throw new Abort();
-  }
-
-  async function executeStep(r) {
-    const { step, params, index } = r;
-    const timeout = r.waitTimeout;
-    const commit = async () => {
-      const a = await send({ type: 'advance', instance, index });
-      if (!a || !a.ok) throw new Abort();
-    };
-    try {
-      if (step.pauseBefore) await waitManual('Paused before: ' + RA.describe(step));
-      showStatus(r);
-      switch (step.type) {
-        case 'navigate':
-          await commit();
-          await send({ type: 'navigate', url: step.url });
-          return (await settle(8000)) === 'unloading' ? 'unloading' : 'ok';
-        case 'click': {
-          if (step.variable) {
-            // "click the item named {{param}}"; several items can be given separated by ;
-            const values = String(valueFor(step, params)).split(/\s*;\s*/).filter((v) => v !== '');
-            if (!values.length) throw new Error('No value was provided for "' + (step.fieldLabel || step.param) + '"');
-            let first = true;
-            for (const v of values) {
-              const el = await waitFor(step, timeout, false, v);
-              if (first) { await commit(); first = false; }
-              clickElement(el);
-              if (values.length > 1) await sleep(Math.max(r.stepDelay, 250));
-            }
-            return afterAction(r, step);
-          }
-          const el = await waitFor(step, timeout, false);
-          await commit();
-          clickElement(el);
-          return afterAction(r, step);
-        }
-        case 'input': {
-          const el = await waitFor(step, timeout, false);
-          highlight(el);
-          fillInput(el, String(valueFor(step, params)));
-          await commit();
-          return 'ok';
-        }
-        case 'select': {
-          const el = await waitFor(step, timeout, true);
-          highlight(el);
-          chooseOption(el, step, valueFor(step, params));
-          await commit();
-          return 'ok';
-        }
-        case 'check': {
-          const el = await waitFor(step, timeout, true);
-          const want = step.kind === 'radio' ? true : step.variable ? parseBool(valueFor(step, params)) : !!step.checked;
-          if (el.checked !== want) el.click();
-          await commit();
-          return 'ok';
-        }
-        case 'key': {
-          const el = await waitFor(step, timeout, false);
-          await commit();
-          pressEnter(el);
-          return afterAction(r, step);
-        }
-        case 'manual':
-          await waitManual(step.message || 'Please do this step manually');
-          await commit();
-          return 'ok';
-        default:
-          throw new Error('Unknown step type: ' + step.type);
-      }
-    } catch (e) {
-      if (e instanceof Abort) return 'abort';
-      await send({ type: 'fail', instance, index, message: (e && e.message) || String(e) });
-      return 'failed';
-    }
-  }
-
-  function showStatus(r) {
-    const row = r.rowCount > 1 ? `Row ${r.rowIndex + 1}/${r.rowCount} · ` : '';
-    setOverlay(
-      `<div class="t">▶ Replaying</div><div class="m">${row}Step ${r.index + 1}/${r.total}: ${esc(RA.describe(r.step))}</div>
-       <div class="r"><button class="g" data-act="stop">Stop</button></div>`,
-      { stop: async () => { await send({ type: 'stopRun' }); } }
-    );
-  }
-
-  let looping = false;
-  let navigatingAway = false; // the background is sending this tab to the next batch row
-  async function runLoop() {
-    if (looping || navigatingAway) return;
-    looping = true;
-    try {
-      if (document.readyState !== 'complete') await new Promise((res) => window.addEventListener('load', res, { once: true }));
-      await sleep(300);
-      for (;;) {
-        if (unloading) return;
-        const r = await send({ type: 'claim', instance });
-        if (!r || !r.ok) break;
-        if (r.finalize) {
-          setOverlay('<div class="t">▶ Finishing…</div>', {});
-          if ((await settle(1200)) === 'unloading') return;
-          const f = await send({ type: 'finishRow', instance });
-          if (f && f.ok && f.next) { navigatingAway = true; return; } // tab is reloading for the next row
-          break;
-        }
-        const res = await executeStep(r);
-        if (res === 'unloading' || res === 'abort' || res === 'failed') break;
-        await sleep(r.stepDelay);
-      }
-    } finally {
-      looping = false;
-      if (!unloading && !navigatingAway) refreshMode();
-    }
-  }
-
-  // =====================================================================
-  // Mode handling
-  // =====================================================================
-  function applyMode(m) {
-    if (!m) return;
-    if (m.recording) {
-      startRecorder();
-      showRecording(m.stepCount);
-      return;
-    }
-    stopRecorder();
-    if (m.run) {
-      runLoop();
-      return;
-    }
-    if (m.agent) {
-      showAgent(m.agent);
-      return;
-    }
-    const ri = m.runInfo;
-    if (ri && ri.status === 'done') {
-      const bad = ri.results.filter((x) => !x.ok).length;
-      const lastRes = ri.results[ri.results.length - 1] || {};
-      const extra = [lastRes.summary, lastRes.data].filter(Boolean).join(' — ').slice(0, 300);
-      setOverlay(
-        `<div class="t">✓ Finished</div><div class="m">${esc(ri.name)} — ${ri.results.length - bad} succeeded${bad ? ', ' + bad + ' failed' : ''}.${extra ? '<br>' + esc(extra) : ''}</div>
-         <div class="r"><button data-act="ok">Dismiss</button></div>`,
-        { ok: async () => { await send({ type: 'clearRun' }); } }, '#188038'
-      );
-    } else if (ri && ri.status === 'failed') {
-      setOverlay(
-        `<div class="t">✗ Stopped</div><div class="m">${esc(ri.error || 'Something went wrong')}</div>
-         <div class="r"><button data-act="ok">Dismiss</button></div>`,
-        { ok: async () => { await send({ type: 'clearRun' }); } }, '#d93025'
-      );
-    } else {
-      hideOverlay();
-    }
-  }
-
-  function showAgent(a) {
-    if (a.paused) {
-      setOverlay(
-        `<div class="t">⏸ The AI agent needs you</div><div class="m">${esc(a.paused)}</div>
-         <div class="r"><button class="g" data-act="stop">Stop</button><button data-act="go">Continue</button></div>`,
-        {
-          go: async () => { await send({ type: 'agentContinue' }); refreshMode(); },
-          stop: async () => { await send({ type: 'stopRun' }); },
-        },
-        '#f9ab00'
-      );
-      return;
-    }
-    setOverlay(
-      `<div class="t">🤖 AI agent working${a.step ? ' · step ' + a.step : ''}</div><div class="m">${esc(a.last || '')}</div>
-       <div class="r"><button class="g" data-act="stop">Stop</button></div>`,
-      { stop: async () => { await send({ type: 'stopRun' }); } },
-      '#7b1fa2'
-    );
-  }
-
-  async function refreshMode() { applyMode(await send({ type: 'mode' })); }
-
-  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (msg && msg.type === 'ping') sendResponse({ pong: true });
-    else if (msg && msg.type === 'mode-changed') refreshMode();
-  });
-
-  (async () => { applyMode(await send({ type: 'hello' })); })();
-})();
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 //popup.js
 (() => {
   const $ = (s, r = document) => r.querySelector(s);
@@ -1695,7 +1080,7 @@ chrome.runtime.onStartup.addListener(() => refreshBadge());
   const S = {
     workflows: {}, rec: null, run: null,
     settings: { stepDelay: 300, waitTimeout: 15 },
-    ai: { apiKey: '', model: 'claude-sonnet-5-5', maxSteps: 40, vision: true },
+    ai: { provider: 'anthropic', apiKey: '', baseUrl: '', model: 'claude-sonnet-5-5', toolMode: 'native', maxSteps: 40, vision: true },
     view: { name: 'home' }, draft: null, notice: '',
   };
 
@@ -1706,10 +1091,11 @@ chrome.runtime.onStartup.addListener(() => refreshBadge());
     ]);
     S.workflows = l.workflows || {};
     S.settings = { stepDelay: 300, waitTimeout: 15, ...(l.settings || {}) };
-    S.ai = { apiKey: '', model: 'claude-sonnet-5-5', maxSteps: 40, vision: true, ...(l.ai || {}) };
+    S.ai = { provider: 'anthropic', apiKey: '', baseUrl: '', model: 'claude-sonnet-5-5', toolMode: 'native', maxSteps: 40, vision: true, ...(l.ai || {}) };
     S.rec = s.rec || null;
     S.run = s.run || null;
   }
+  const aiReady = (a) => (a.provider === 'openai' ? !!(a.baseUrl && a.model) : !!a.apiKey);
   const flash = (text, err) => { S.notice = text ? `<div class="notice${err ? ' err' : ''}">${esc(text)}</div>` : ''; };
 
   // ---------------------------------------------------------------- banner
@@ -1773,13 +1159,40 @@ chrome.runtime.onStartup.addListener(() => refreshBadge());
         <textarea id="adhoc" placeholder="e.g. On this dashboard set Region to APAC and Quarter to Q2 2026, then tell me the overall project KPI numbers."></textarea>
         <button data-act="adhoc">Run on this tab</button></section>
       <section><h4>Saved workflows</h4>${cards || '<p class="hint">Nothing saved yet.</p>'}</section>
-      <details${S.ai.apiKey ? '' : ' open'}><summary>AI settings ${S.ai.apiKey ? '' : '(needed for AI modes)'}</summary>
-        <label class="f">Anthropic API key <small>stored only in this browser</small>
-          <input type="password" id="aiKey" autocomplete="off" value="${esc(S.ai.apiKey)}" placeholder="sk-ant-..."></label>
-        <label class="f">Model <input type="text" id="aiModel" value="${esc(S.ai.model)}"></label>
+      <details${aiReady(S.ai) ? '' : ' open'}><summary>AI settings ${aiReady(S.ai) ? '' : '(needed for AI modes)'}</summary>
+        <label class="f">Provider
+          <select id="aiProvider">
+            <option value="anthropic">Anthropic (Claude)</option>
+            <option value="openai">Custom / OpenAI-compatible (Qwen, GLM, Ollama, vLLM, LM Studio…)</option>
+          </select></label>
+        ${S.ai.provider === 'openai' ? `
+        <label class="f">Preset <small>(fills the Base URL — check your provider's docs)</small>
+          <select id="aiPreset">
+            <option value="">— choose —</option>
+            <option value="https://dashscope-intl.aliyuncs.com/compatible-mode/v1">Qwen — Alibaba DashScope (international)</option>
+            <option value="https://dashscope.aliyuncs.com/compatible-mode/v1">Qwen — Alibaba DashScope (China)</option>
+            <option value="https://open.bigmodel.cn/api/paas/v4">GLM — Zhipu (open.bigmodel.cn)</option>
+            <option value="https://api.z.ai/api/paas/v4">GLM — Z.ai</option>
+            <option value="http://localhost:11434/v1">Ollama (local)</option>
+            <option value="http://localhost:1234/v1">LM Studio (local)</option>
+            <option value="http://localhost:8000/v1">vLLM (local)</option>
+            <option value="https://api.openai.com/v1">OpenAI</option>
+          </select></label>
+        <label class="f">Base URL <small>(without /chat/completions)</small>
+          <input type="text" id="aiBase" value="${esc(S.ai.baseUrl)}" placeholder="https://your-endpoint/v1"></label>` : ''}
+        <label class="f">${S.ai.provider === 'openai' ? 'API key <small>(leave empty for local servers)</small>' : 'Anthropic API key'} <small>stored only in this browser</small>
+          <input type="password" id="aiKey" autocomplete="off" value="${esc(S.ai.apiKey)}" placeholder="${S.ai.provider === 'openai' ? 'optional' : 'sk-ant-...'}"></label>
+        <label class="f">Model name
+          <input type="text" id="aiModel" value="${esc(S.ai.model)}" placeholder="${S.ai.provider === 'openai' ? 'e.g. qwen-plus, glm-4.5, qwen2.5:14b' : 'claude-sonnet-5-5'}"></label>
+        ${S.ai.provider === 'openai' ? `
+        <label class="f">Tool calling
+          <select id="aiToolMode">
+            <option value="native">Native function calling (falls back to JSON automatically)</option>
+            <option value="json">JSON in text (for models without function calling)</option>
+          </select></label>` : ''}
         <label class="f">Max steps per run <input type="number" id="aiSteps" min="5" max="150" value="${S.ai.maxSteps}"></label>
-        <label class="c"><input type="checkbox" id="aiVision" ${S.ai.vision ? 'checked' : ''}> Send screenshots (needed for charts / canvas)</label>
-        <p class="hint">AI modes send the page's text, element list and screenshots to the Anthropic API using your key, so avoid them on pages with data you must not share.</p>
+        <label class="c"><input type="checkbox" id="aiVision" ${S.ai.vision ? 'checked' : ''}> Send screenshots <small>(only for vision models, e.g. Qwen-VL / GLM-4V; needed for charts)</small></label>
+        <p class="hint">AI modes send the page's text, element list and (optionally) screenshots to the endpoint above, so avoid them on pages with data that must not go there. A local model keeps everything on your machine.</p>
       </details>
       <details><summary>Settings &amp; import</summary>
         <label class="f">Speed
@@ -1793,6 +1206,8 @@ chrome.runtime.onStartup.addListener(() => refreshBadge());
         <button data-act="import">Import</button>
       </details>`;
     $('#speed').value = String(S.settings.stepDelay);
+    $('#aiProvider').value = S.ai.provider;
+    if ($('#aiToolMode')) $('#aiToolMode').value = S.ai.toolMode;
   }
 
   // ---------------------------------------------------------------- run view
@@ -1842,7 +1257,7 @@ chrome.runtime.onStartup.addListener(() => refreshBadge());
       <label class="c"><input type="checkbox" id="newTab" checked> Open in a new tab</label>
       <label class="c"><input type="checkbox" id="skip"> Keep going if a row fails</label>
       <button class="primary" data-act="go" data-id="${wf.id}">▶ Run</button>`;
-    $('#mode').value = S.ai.apiKey ? 'ai' : 'replay';
+    $('#mode').value = aiReady(S.ai) ? 'ai' : 'replay';
   }
 
   // ---------------------------------------------------------------- edit view
@@ -2088,13 +1503,31 @@ chrome.runtime.onStartup.addListener(() => refreshBadge());
     }
   });
   document.addEventListener('change', async (e) => {
-    if (['aiKey', 'aiModel', 'aiSteps', 'aiVision'].includes(e.target.id)) {
+    if (e.target.id === 'aiPreset' && e.target.value) {
+      $('#aiBase').value = e.target.value;
+      e.target.value = '';
+    }
+    if (['aiProvider', 'aiPreset', 'aiBase', 'aiKey', 'aiModel', 'aiToolMode', 'aiSteps', 'aiVision'].includes(e.target.id)) {
+      const val = (id, d) => ($(id) ? $(id).value.trim() : d);
+      const provider = $('#aiProvider').value;
       const ai = {
-        apiKey: $('#aiKey').value.trim(), model: $('#aiModel').value.trim() || 'claude-sonnet-5-5',
-        maxSteps: Math.min(150, Math.max(5, +$('#aiSteps').value || 40)), vision: $('#aiVision').checked,
+        provider,
+        apiKey: val('#aiKey', ''),
+        baseUrl: provider === 'openai' ? val('#aiBase', S.ai.baseUrl) : S.ai.baseUrl,
+        model: val('#aiModel', '') || (provider === 'anthropic' ? 'claude-sonnet-5-5' : ''),
+        toolMode: $('#aiToolMode') ? $('#aiToolMode').value : S.ai.toolMode,
+        maxSteps: Math.min(150, Math.max(5, +$('#aiSteps').value || 40)),
+        vision: $('#aiVision').checked,
       };
+      if (provider !== S.ai.provider) {
+        // switching provider: sensible defaults, keep the key field the user may have typed
+        ai.model = provider === 'anthropic' ? 'claude-sonnet-5-5' : '';
+        ai.vision = provider === 'anthropic';
+      }
       await chrome.storage.local.set({ ai });
+      const rerender = provider !== S.ai.provider || e.target.id === 'aiPreset';
       S.ai = ai;
+      if (rerender) render();
       return;
     }
     if (e.target.id === 'speed' || e.target.id === 'timeout') {
@@ -2129,89 +1562,11 @@ chrome.runtime.onStartup.addListener(() => refreshBadge());
 
 
 
-
-
-
-//popup.css
-* { box-sizing: border-box; }
-body { width: 400px; max-height: 580px; overflow-y: auto; margin: 0; font: 13px/1.4 system-ui, sans-serif; color: #202124; background: #fff; }
-header { padding: 10px 14px; background: #1a73e8; color: #fff; display: flex; flex-direction: column; }
-header .sub { font-size: 11px; opacity: .85; }
-main { padding: 10px 14px 14px; }
-h4 { margin: 12px 0 6px; font-size: 13px; }
-h4:first-child { margin-top: 0; }
-section { margin-bottom: 8px; }
-input[type=text], input:not([type]), input[type=password], input[type=number], select, textarea {
-  width: 100%; padding: 6px 8px; border: 1px solid #dadce0; border-radius: 6px; font: inherit; margin: 2px 0 6px;
-}
-textarea { min-height: 70px; font-family: ui-monospace, monospace; font-size: 12px; }
-button { font: inherit; cursor: pointer; border: 1px solid #dadce0; background: #f8f9fa; border-radius: 6px; padding: 5px 10px; }
-button:hover { background: #f1f3f4; }
-button.primary { background: #1a73e8; color: #fff; border-color: #1a73e8; width: 100%; padding: 8px; }
-button.primary:hover { background: #1765cc; }
-button.link { border: 0; background: none; color: #1a73e8; padding: 2px 4px; }
-button.danger { color: #d93025; }
-.hint { color: #5f6368; font-size: 12px; margin: 4px 0; }
-.card { border: 1px solid #dadce0; border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
-.card .nm { font-weight: 600; }
-.card .meta { color: #5f6368; font-size: 12px; margin-bottom: 6px; }
-.card .acts { display: flex; gap: 6px; flex-wrap: wrap; }
-.bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 14px; font-size: 12px; }
-.bar.rec { background: #fce8e6; color: #a50e0e; }
-.bar.run { background: #e8f0fe; color: #174ea6; }
-.bar.ok { background: #e6f4ea; color: #0d652d; }
-.bar.err { background: #fce8e6; color: #a50e0e; }
-.bar span.b { display: flex; gap: 6px; flex-shrink: 0; }
-.notice { padding: 6px 8px; border-radius: 6px; background: #e8f0fe; color: #174ea6; margin-bottom: 8px; }
-.notice.err { background: #fce8e6; color: #a50e0e; }
-label.f { display: block; font-size: 12px; color: #3c4043; }
-label.f small { color: #80868b; }
-label.c { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
-label.c input { width: auto; margin: 0; }
-details { margin: 6px 0; }
-summary { cursor: pointer; color: #1a73e8; }
-.step { border-top: 1px solid #eee; padding: 6px 0; }
-.step .sd { font-size: 12px; margin-bottom: 4px; word-break: break-word; }
-.step .n { display: inline-block; min-width: 18px; color: #80868b; }
-.step .row { display: flex; gap: 6px; align-items: center; }
-.step .row input[type=text] { margin: 0; }
-.step .sa { display: flex; justify-content: space-between; align-items: center; font-size: 12px; margin-top: 2px; }
-.step label.c { margin: 0; font-size: 12px; }
-
-.resbox { padding: 8px 14px; background: #f8f9fa; border-bottom: 1px solid #eee; font-size: 12px; max-height: 200px; overflow: auto; }
-.resbox .res { margin: 4px 0; }
-.resbox pre { margin: 2px 0 0; padding: 6px; background: #fff; border: 1px solid #dadce0; border-radius: 6px; white-space: pre-wrap; word-break: break-word; font-size: 12px; }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 //manifest.json
 {
   "manifest_version": 3,
   "name": "Repeat Agent",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Record a web task once, then replay it with new values - by fast replay or an AI agent that reads the page.",
   "permissions": ["storage", "tabs", "scripting"],
   "host_permissions": ["<all_urls>"],
