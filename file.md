@@ -1,3 +1,682 @@
+//content.js
+// Content script: records what you do on the page, and replays recorded workflows.
+(() => {
+  if (window.__repeatAgentLoaded) return;
+  window.__repeatAgentLoaded = true;
+
+  const instance = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+  const esc = (s) =>
+    String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const send = (msg) =>
+    new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage(msg, (r) => { void chrome.runtime.lastError; resolve(r); });
+      } catch (e) { resolve(undefined); }
+    });
+  class Abort extends Error {}
+
+  let unloading = false;
+  window.addEventListener('pagehide', () => { unloading = true; });
+  window.addEventListener('beforeunload', () => { unloading = true; });
+  window.addEventListener('pageshow', (e) => { if (e.persisted) { unloading = false; refreshMode(); } });
+
+  // =====================================================================
+  // Overlay (small floating panel in a shadow root)
+  // =====================================================================
+  let host = null, box = null;
+  function ensureOverlay() {
+    if (host && host.isConnected) return;
+    host = document.createElement('div');
+    host.id = '__repeat_agent_overlay';
+    host.style.cssText = 'all:initial;position:fixed;z-index:2147483647;right:16px;bottom:16px;';
+    const root = host.attachShadow({ mode: 'open' });
+    root.innerHTML = `<style>
+      .box{font:13px/1.4 system-ui,sans-serif;color:#202124;background:#fff;border:1px solid #dadce0;border-left:4px solid var(--c,#1a73e8);
+        border-radius:8px;padding:10px 12px;min-width:240px;max-width:340px;box-shadow:0 4px 16px rgba(0,0,0,.2)}
+      .t{font-weight:600;margin-bottom:2px}.m{color:#5f6368;word-break:break-word}
+      .r{margin-top:8px;display:flex;gap:6px;justify-content:flex-end}
+      button{font:inherit;cursor:pointer;border:0;border-radius:6px;padding:5px 10px;background:var(--c,#1a73e8);color:#fff}
+      button.g{background:#f1f3f4;color:#202124}
+    </style><div class="box"></div>`;
+    box = root.querySelector('.box');
+    document.documentElement.appendChild(host);
+  }
+  function setOverlay(html, handlers, color) {
+    ensureOverlay();
+    box.style.setProperty('--c', color || '#1a73e8');
+    box.innerHTML = html;
+    box.querySelectorAll('[data-act]').forEach((b) => {
+      const fn = handlers && handlers[b.getAttribute('data-act')];
+      if (fn) b.addEventListener('click', fn);
+    });
+  }
+  function hideOverlay() {
+    if (host) host.remove();
+    host = null; box = null;
+  }
+  const inOverlay = (e) => !!host && e.composedPath().includes(host);
+
+  function showRecording(count) {
+    setOverlay(
+      `<div class="t">● Recording</div><div class="m">${count} step${count === 1 ? '' : 's'} captured. Do the task once as usual.</div>
+       <div class="r"><button class="g" data-act="cancel">Discard</button><button data-act="stop">Stop &amp; save</button></div>`,
+      {
+        stop: async () => {
+          const r = await send({ type: 'recStop' });
+          if (r && r.ok) {
+            setOverlay('<div class="t">Saved ✓</div><div class="m">Open the Repeat Agent popup to review the fields and run it.</div>', {}, '#188038');
+            setTimeout(refreshMode, 3500);
+          } else {
+            setOverlay(`<div class="t">Could not save</div><div class="m">${esc((r && r.error) || 'Unknown error')}</div>
+              <div class="r"><button data-act="ok">OK</button></div>`, { ok: refreshMode }, '#d93025');
+          }
+        },
+        cancel: async () => { await send({ type: 'recStop', cancel: true }); },
+      },
+      '#d93025'
+    );
+  }
+
+  // =====================================================================
+  // Locators: describe an element in several ways so it can be found again
+  // =====================================================================
+  const stableId = (id) => !!id && !/(\d{3,}|[:«»]|^(react|radix|headlessui|ember|mui|rc)[-_])/i.test(id);
+  const attrSel = (n, v) => `[${n}="${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"]`;
+
+  function labelOf(el) {
+    const lb = el.getAttribute && el.getAttribute('aria-labelledby');
+    if (lb) {
+      const t = lb.split(/\s+/).map((id) => document.getElementById(id)).filter(Boolean).map((n) => norm(n.textContent)).join(' ');
+      if (t) return clean(t);
+    }
+    if (el.labels && el.labels.length) {
+      const t = norm(el.labels[0].textContent);
+      if (t) return clean(t);
+    }
+    const wrap = el.closest && el.closest('label');
+    if (wrap) {
+      const t = norm(wrap.textContent);
+      if (t) return clean(t);
+    }
+    const aria = el.getAttribute && el.getAttribute('aria-label');
+    return aria ? clean(aria) : '';
+  }
+  const clean = (t) => t.replace(/\s*[*:]+\s*$/, '').slice(0, 80);
+
+  function cssPath(el) {
+    const parts = [];
+    let node = el;
+    while (node && node.nodeType === 1 && node !== document.documentElement) {
+      if (node.id && stableId(node.id)) { parts.unshift('#' + CSS.escape(node.id)); break; }
+      let part = node.tagName.toLowerCase();
+      const parent = node.parentElement;
+      if (parent) {
+        const same = Array.from(parent.children).filter((c) => c.tagName === node.tagName);
+        if (same.length > 1) part += `:nth-of-type(${same.indexOf(node) + 1})`;
+      }
+      parts.unshift(part);
+      node = parent;
+    }
+    return parts.join(' > ');
+  }
+
+  const isFormControl = (el) => ['INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName);
+
+  function visibleText(el) {
+    if (el.tagName === 'INPUT') return norm(el.value);
+    return norm(el.textContent);
+  }
+
+  function buildLocator(el) {
+    const tag = el.tagName.toLowerCase();
+    const loc = { tag };
+    if (el.id && stableId(el.id)) loc.id = el.id;
+    for (const a of ['data-testid', 'data-test', 'data-cy', 'data-qa', 'data-test-id']) {
+      const v = el.getAttribute(a);
+      if (v) { loc.testAttr = a; loc.testVal = v; break; }
+    }
+    const name = el.getAttribute('name');
+    if (name) loc.name = name;
+    if (tag === 'input') {
+      loc.type = (el.type || 'text').toLowerCase();
+      if (loc.type === 'radio' || loc.type === 'checkbox') loc.value = el.value;
+    }
+    const aria = el.getAttribute('aria-label');
+    if (aria) loc.aria = aria;
+    const ph = el.getAttribute('placeholder');
+    if (ph) loc.placeholder = ph;
+    const lbl = labelOf(el);
+    if (lbl) loc.label = lbl;
+    const role = el.getAttribute('role');
+    if (role) loc.role = role;
+    if (!el.isContentEditable && !['SELECT', 'TEXTAREA'].includes(el.tagName) && !(el.tagName === 'INPUT' && !['submit', 'button', 'reset'].includes(loc.type))) {
+      const t = visibleText(el);
+      if (t && t.length <= 80) loc.text = t;
+    }
+    if (tag === 'a') {
+      const h = el.getAttribute('href');
+      if (h && !/^javascript:/i.test(h)) loc.href = h.slice(0, 200);
+    }
+    loc.css = cssPath(el);
+    return loc;
+  }
+
+  function isVisible(el) {
+    const r = el.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0)) return false;
+    const cs = getComputedStyle(el);
+    return cs.visibility !== 'hidden' && cs.display !== 'none';
+  }
+
+  function resolveLocator(loc, allowHidden) {
+    const qa = (sel) => { try { return Array.from(document.querySelectorAll(sel)); } catch (e) { return []; } };
+    const typeOk = (e) => !loc.type || (e.type || '').toLowerCase() === loc.type;
+    const valueOk = (e) => loc.value === undefined || e.value === loc.value;
+    const textEq = (e) => visibleText(e) === loc.text;
+    const deepest = (list) => list.filter((c) => !Array.from(c.children).some((ch) => list.includes(ch)));
+
+    const strategies = [
+      () => (loc.id ? [document.getElementById(loc.id)].filter(Boolean) : []),
+      () => (loc.testAttr ? qa(attrSel(loc.testAttr, loc.testVal)) : []),
+      () => (loc.name ? qa(loc.tag + attrSel('name', loc.name)).filter(typeOk).filter(valueOk) : []),
+      () => (loc.aria ? qa(loc.tag + attrSel('aria-label', loc.aria)) : []),
+      () => (loc.label && (isFormLike(loc)) ? qa(loc.tag).filter((e) => labelOf(e) === loc.label).filter(typeOk).filter(valueOk) : []),
+      () => (loc.placeholder ? qa(loc.tag + attrSel('placeholder', loc.placeholder)) : []),
+      () => (loc.text && loc.href ? deepest(qa(loc.tag).filter(textEq)).filter((e) => e.getAttribute('href') === loc.href) : []),
+      () => (loc.text ? deepest(qa(loc.tag).filter(textEq)) : []),
+      () => (loc.css ? qa(loc.css) : []),
+    ];
+
+    let fallback = null;
+    for (const fn of strategies) {
+      const list = fn();
+      if (!list.length) continue;
+      const pool = allowHidden ? list : list.filter(isVisible);
+      if (pool.length === 1) return pool[0];
+      if (pool.length > 1 && !fallback) fallback = pool[0];
+    }
+    return fallback;
+  }
+  const isFormLike = (loc) => ['input', 'select', 'textarea'].includes(loc.tag) || !!loc.role || loc.tag === 'div';
+
+  // Find the list item / button whose visible text matches a value the user supplied this run.
+  function resolveByText(step, value, allowHidden) {
+    const loc = step.loc || {};
+    const want = norm(value).toLowerCase();
+    if (!want) return null;
+    const gen = (p) => String(p || '').replace(/:nth-of-type\(\d+\)/g, '').replace(/#[^ >]+/g, '#');
+    const qa = (sel) => { try { return Array.from(document.querySelectorAll(sel)); } catch (e) { return []; } };
+    const textOf = (e) => norm(e.tagName === 'INPUT' ? e.value : e.textContent).toLowerCase();
+    const pools = [
+      qa(loc.role ? `[role="${loc.role}"]` : loc.tag),
+      qa('[role="option"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], li, label, button, a, td, span, div'),
+    ];
+    const tiers = [(t) => t === want, (t) => t.startsWith(want), (t) => t.includes(want) && t.length <= want.length + 40];
+    for (const pool of pools) {
+      const vis = allowHidden ? pool : pool.filter(isVisible);
+      for (const tier of tiers) {
+        let hits = vis.filter((e) => { const t = textOf(e); return t && tier(t); });
+        hits = hits.filter((c) => !Array.from(c.children).some((ch) => hits.includes(ch)));
+        if (!hits.length) continue;
+        const same = hits.filter((e) => gen(cssPath(e)) === gen(loc.css));
+        return (same[0] || hits[0]);
+      }
+    }
+    return null;
+  }
+
+  async function waitFor(step, timeoutMs, allowHidden, valueOverride) {
+    const end = Date.now() + timeoutMs;
+    for (;;) {
+      const el = valueOverride !== undefined ? resolveByText(step, valueOverride, allowHidden) : resolveLocator(step.loc, allowHidden);
+      if (el) return el;
+      if (Date.now() > end) {
+        const loc = step.loc || {};
+        const what = valueOverride !== undefined ? valueOverride : step.label || loc.text || loc.aria || loc.placeholder || loc.name || loc.css || 'the element';
+        throw new Error('Could not find "' + what + '" on the page (' + step.type + ' step)');
+      }
+      await sleep(200);
+    }
+  }
+
+  // =====================================================================
+  // Recorder
+  // =====================================================================
+  let recOn = false;
+  const lastVal = new WeakMap();
+  const initialVal = new WeakMap();
+
+  function startRecorder() {
+    if (recOn) return;
+    recOn = true;
+    document.addEventListener('click', onClick, true);
+    document.addEventListener('change', onChange, true);
+    document.addEventListener('keydown', onKey, true);
+    document.addEventListener('focusin', onFocusIn, true);
+    document.addEventListener('focusout', onFocusOut, true);
+  }
+  function stopRecorder() {
+    if (!recOn) return;
+    recOn = false;
+    document.removeEventListener('click', onClick, true);
+    document.removeEventListener('change', onChange, true);
+    document.removeEventListener('keydown', onKey, true);
+    document.removeEventListener('focusin', onFocusIn, true);
+    document.removeEventListener('focusout', onFocusOut, true);
+  }
+
+  async function record(step, replace) {
+    step.url = location.href;
+    const r = await send({ type: 'recStep', step, replace: !!replace });
+    if (r && r.ok) showRecording(r.count);
+  }
+
+  const CLICKABLE =
+    'button, a, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="option"], [role="checkbox"], [role="radio"], [role="switch"], input[type="submit"], input[type="button"], input[type="reset"], input[type="image"], summary, label, [onclick]';
+
+  function onClick(e) {
+    if (!e.isTrusted || inOverlay(e) || !(e.target instanceof Element)) return;
+    let el = e.target.closest(CLICKABLE) || e.target;
+    if (el === document.body || el === document.documentElement) return;
+    if (el.tagName === 'LABEL' && el.control) return; // the control's own change event is recorded
+    if (['SELECT', 'TEXTAREA'].includes(el.tagName) || el.isContentEditable) return;
+    if (el.tagName === 'INPUT' && !['submit', 'button', 'reset', 'image'].includes((el.type || '').toLowerCase())) return;
+    const label = clickLabel(el);
+    const step = { type: 'click', loc: buildLocator(el), label };
+    if (label && label.length <= 60 && looksLikeChoice(el)) step.choice = true;
+    record(step);
+  }
+
+  // Clicks on items of a custom dropdown / list / filter menu: the *which one* is usually what you want to vary.
+  function looksLikeChoice(el) {
+    const role = (el.getAttribute('role') || '').toLowerCase();
+    if (['option', 'menuitemradio', 'menuitemcheckbox', 'treeitem'].includes(role)) return true;
+    if (el.closest('[role="listbox"], [role="menu"]')) return true;
+    const rx = /option|dropdown|select|menu-?item|picker|choice|suggest|autocomplete|combobox|listbox/i;
+    for (let n = el, i = 0; n && i < 3; n = n.parentElement, i++) {
+      const cls = typeof n.className === 'string' ? n.className : '';
+      if (rx.test(cls)) return true;
+    }
+    return false;
+  }
+  function clickLabel(el) {
+    return clean(visibleText(el) || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('value') || '');
+  }
+
+  function onChange(e) {
+    if (!e.isTrusted || inOverlay(e) || !(e.target instanceof Element)) return;
+    recordField(e.target);
+  }
+  function onFocusIn(e) {
+    const el = e.target;
+    if (el instanceof Element && el.isContentEditable && !isFormControl(el)) initialVal.set(el, el.innerText);
+  }
+  function onFocusOut(e) {
+    const el = e.target;
+    if (!(el instanceof Element) || !el.isContentEditable || isFormControl(el) || inOverlay(e)) return;
+    if (el.innerText !== initialVal.get(el)) recordField(el);
+  }
+  function onKey(e) {
+    if (!e.isTrusted || e.key !== 'Enter' || inOverlay(e) || !(e.target instanceof Element)) return;
+    const el = e.target;
+    if (el.tagName !== 'INPUT' || !isTextLike(el)) return;
+    recordField(el); // flush the typed value first so the order is right
+    record({ type: 'key', key: 'Enter', loc: buildLocator(el), label: labelOf(el) || el.name || '' });
+  }
+
+  function isTextLike(el) {
+    const t = (el.type || 'text').toLowerCase();
+    return !['checkbox', 'radio', 'file', 'submit', 'button', 'reset', 'image', 'hidden'].includes(t);
+  }
+  const fieldLabel = (el) => labelOf(el) || clean(el.getAttribute('placeholder') || el.getAttribute('name') || el.id || el.type || '');
+
+  function recordField(el) {
+    const tag = el.tagName;
+    if (tag === 'SELECT') {
+      const opts = Array.from(el.options).slice(0, 80).map((o) => norm(o.textContent));
+      if (el.multiple) {
+        const sel = Array.from(el.selectedOptions).map((o) => norm(o.textContent));
+        record({ type: 'select', multi: true, loc: buildLocator(el), label: fieldLabel(el), value: sel.join(','), text: sel.join(','), options: opts }, true);
+      } else {
+        const o = el.selectedOptions[0];
+        record({ type: 'select', loc: buildLocator(el), label: fieldLabel(el), value: el.value, text: o ? norm(o.textContent) : '', options: opts }, true);
+      }
+      return;
+    }
+    if (tag === 'INPUT') {
+      const type = (el.type || 'text').toLowerCase();
+      if (type === 'checkbox' || type === 'radio') {
+        record({ type: 'check', kind: type, loc: buildLocator(el), label: fieldLabel(el), checked: el.checked }, true);
+        return;
+      }
+      if (type === 'file') {
+        record({ type: 'manual', message: 'Choose the file for "' + (fieldLabel(el) || 'file upload') + '", then press Continue' });
+        return;
+      }
+      if (!isTextLike(el)) return;
+    }
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || el.isContentEditable) {
+      const editable = !isFormControl(el);
+      const host = editable ? el.closest('[contenteditable]:not([contenteditable="false"])') || el : el;
+      const value = editable ? host.innerText : el.value;
+      if (lastVal.get(host) === value) return;
+      lastVal.set(host, value);
+      const ac = (el.getAttribute('autocomplete') || '').toLowerCase();
+      const secret = (el.type || '').toLowerCase() === 'password' || /cc-|one-time-code/.test(ac);
+      record({
+        type: 'input', editable, loc: buildLocator(host), label: fieldLabel(host),
+        value: secret ? '' : value, secret,
+      }, true);
+    }
+  }
+
+  // =====================================================================
+  // Replayer
+  // =====================================================================
+  function setNativeValue(el, value) {
+    const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
+    if (desc && desc.set) desc.set.call(el, value); else el.value = value;
+  }
+  const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
+
+  function highlight(el) {
+    try {
+      const old = el.style.outline;
+      el.style.outline = '3px solid #f9ab00';
+      setTimeout(() => { el.style.outline = old; }, 700);
+    } catch (e) { /* ignore */ }
+  }
+
+  function fillInput(el, value) {
+    el.scrollIntoView({ block: 'center', inline: 'center' });
+    el.focus();
+    if (el.isContentEditable && !isFormControl(el)) {
+      document.execCommand('selectAll', false);
+      if (!document.execCommand('insertText', false, value)) {
+        el.textContent = value;
+        el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
+      }
+    } else {
+      setNativeValue(el, value);
+      fire(el, 'input');
+      fire(el, 'change');
+    }
+    if (el.blur) el.blur();
+  }
+
+  function chooseOption(el, step, value) {
+    const wanted = String(value).split(step.multi ? ',' : '\u0000').map((v) => v.trim()).filter((v, i, a) => v !== '' || a.length === 1);
+    const opts = Array.from(el.options);
+    if (step.multi) opts.forEach((o) => { o.selected = false; });
+    wanted.forEach((w) => {
+      const lw = w.toLowerCase();
+      const o =
+        opts.find((x) => x.value === w) ||
+        opts.find((x) => norm(x.textContent).toLowerCase() === lw) ||
+        opts.find((x) => x.value.toLowerCase() === lw) ||
+        opts.find((x) => norm(x.textContent).toLowerCase().includes(lw) && lw !== '');
+      if (!o) throw new Error('Option "' + w + '" not found in "' + (step.label || 'dropdown') + '"');
+      if (step.multi) o.selected = true; else el.value = o.value;
+    });
+    fire(el, 'input');
+    fire(el, 'change');
+  }
+
+  const parseBool = (v) => /^(true|yes|y|1|on|checked)$/i.test(String(v).trim());
+
+  function clickElement(el) {
+    el.scrollIntoView({ block: 'center', inline: 'center' });
+    highlight(el);
+    const o = { bubbles: true, cancelable: true, view: window };
+    try { el.dispatchEvent(new PointerEvent('pointerdown', o)); } catch (e) { /* older engines */ }
+    el.dispatchEvent(new MouseEvent('mousedown', o));
+    if (el.focus) el.focus();
+    try { el.dispatchEvent(new PointerEvent('pointerup', o)); } catch (e) { /* ignore */ }
+    el.dispatchEvent(new MouseEvent('mouseup', o));
+    el.click();
+  }
+
+  function pressEnter(el) {
+    const o = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
+    const proceed = el.dispatchEvent(new KeyboardEvent('keydown', o));
+    el.dispatchEvent(new KeyboardEvent('keypress', o));
+    if (proceed) {
+      const form = el.form || el.closest('form');
+      if (form) { if (form.requestSubmit) form.requestSubmit(); else form.submit(); }
+    }
+    el.dispatchEvent(new KeyboardEvent('keyup', o));
+  }
+
+  async function settle(ms) {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      if (unloading) return 'unloading';
+      await sleep(50);
+    }
+    return unloading ? 'unloading' : 'ok';
+  }
+
+  // After a click / Enter. If the recording showed this step leads to another page, wait for that
+  // navigation (or an in-page URL change) so the next step never runs against the old page.
+  async function afterAction(r, step) {
+    const href = location.href;
+    const expectNav = !!step.navigates;
+    const end = Date.now() + (expectNav ? 15000 : Math.max(r.stepDelay, 500));
+    while (Date.now() < end) {
+      if (unloading) return 'unloading';
+      if (expectNav && location.href !== href) {
+        await sleep(300);
+        return unloading ? 'unloading' : 'ok';
+      }
+      await sleep(50);
+    }
+    return unloading ? 'unloading' : 'ok';
+  }
+
+  function valueFor(step, params) {
+    if (step.variable && step.param && Object.prototype.hasOwnProperty.call(params || {}, step.param)) {
+      return params[step.param];
+    }
+    if (step.secret) throw new Error('No value was provided for the secret field "' + (step.label || step.param) + '"');
+    if (step.type === 'select') return step.text || step.value;
+    return step.value;
+  }
+
+  async function waitManual(message) {
+    const res = await new Promise((resolve) => {
+      setOverlay(
+        `<div class="t">⏸ Your turn</div><div class="m">${esc(message)}</div>
+         <div class="r"><button class="g" data-act="stop">Stop</button><button data-act="go">Continue</button></div>`,
+        {
+          go: () => resolve('go'),
+          stop: async () => { await send({ type: 'stopRun' }); resolve('stop'); },
+        },
+        '#f9ab00'
+      );
+    });
+    if (res === 'stop') throw new Abort();
+  }
+
+  async function executeStep(r) {
+    const { step, params, index } = r;
+    const timeout = r.waitTimeout;
+    const commit = async () => {
+      const a = await send({ type: 'advance', instance, index });
+      if (!a || !a.ok) throw new Abort();
+    };
+    try {
+      if (step.pauseBefore) await waitManual('Paused before: ' + RA.describe(step));
+      showStatus(r);
+      switch (step.type) {
+        case 'navigate':
+          await commit();
+          await send({ type: 'navigate', url: step.url });
+          return (await settle(8000)) === 'unloading' ? 'unloading' : 'ok';
+        case 'click': {
+          if (step.variable) {
+            // "click the item named {{param}}"; several items can be given separated by ;
+            const values = String(valueFor(step, params)).split(/\s*;\s*/).filter((v) => v !== '');
+            if (!values.length) throw new Error('No value was provided for "' + (step.fieldLabel || step.param) + '"');
+            let first = true;
+            for (const v of values) {
+              const el = await waitFor(step, timeout, false, v);
+              if (first) { await commit(); first = false; }
+              clickElement(el);
+              if (values.length > 1) await sleep(Math.max(r.stepDelay, 250));
+            }
+            return afterAction(r, step);
+          }
+          const el = await waitFor(step, timeout, false);
+          await commit();
+          clickElement(el);
+          return afterAction(r, step);
+        }
+        case 'input': {
+          const el = await waitFor(step, timeout, false);
+          highlight(el);
+          fillInput(el, String(valueFor(step, params)));
+          await commit();
+          return 'ok';
+        }
+        case 'select': {
+          const el = await waitFor(step, timeout, true);
+          highlight(el);
+          chooseOption(el, step, valueFor(step, params));
+          await commit();
+          return 'ok';
+        }
+        case 'check': {
+          const el = await waitFor(step, timeout, true);
+          const want = step.kind === 'radio' ? true : step.variable ? parseBool(valueFor(step, params)) : !!step.checked;
+          if (el.checked !== want) el.click();
+          await commit();
+          return 'ok';
+        }
+        case 'key': {
+          const el = await waitFor(step, timeout, false);
+          await commit();
+          pressEnter(el);
+          return afterAction(r, step);
+        }
+        case 'manual':
+          await waitManual(step.message || 'Please do this step manually');
+          await commit();
+          return 'ok';
+        default:
+          throw new Error('Unknown step type: ' + step.type);
+      }
+    } catch (e) {
+      if (e instanceof Abort) return 'abort';
+      await send({ type: 'fail', instance, index, message: (e && e.message) || String(e) });
+      return 'failed';
+    }
+  }
+
+  function showStatus(r) {
+    const row = r.rowCount > 1 ? `Row ${r.rowIndex + 1}/${r.rowCount} · ` : '';
+    setOverlay(
+      `<div class="t">▶ Replaying</div><div class="m">${row}Step ${r.index + 1}/${r.total}: ${esc(RA.describe(r.step))}</div>
+       <div class="r"><button class="g" data-act="stop">Stop</button></div>`,
+      { stop: async () => { await send({ type: 'stopRun' }); } }
+    );
+  }
+
+  let looping = false;
+  let navigatingAway = false; // the background is sending this tab to the next batch row
+  async function runLoop() {
+    if (looping || navigatingAway) return;
+    looping = true;
+    try {
+      if (document.readyState !== 'complete') await new Promise((res) => window.addEventListener('load', res, { once: true }));
+      await sleep(300);
+      for (;;) {
+        if (unloading) return;
+        const r = await send({ type: 'claim', instance });
+        if (!r || !r.ok) break;
+        if (r.finalize) {
+          setOverlay('<div class="t">▶ Finishing…</div>', {});
+          if ((await settle(1200)) === 'unloading') return;
+          const f = await send({ type: 'finishRow', instance });
+          if (f && f.ok && f.next) { navigatingAway = true; return; } // tab is reloading for the next row
+          break;
+        }
+        const res = await executeStep(r);
+        if (res === 'unloading' || res === 'abort' || res === 'failed') break;
+        await sleep(r.stepDelay);
+      }
+    } finally {
+      looping = false;
+      if (!unloading && !navigatingAway) refreshMode();
+    }
+  }
+
+  // =====================================================================
+  // Mode handling
+  // =====================================================================
+  function applyMode(m) {
+    if (!m) return;
+    if (m.recording) {
+      startRecorder();
+      showRecording(m.stepCount);
+      return;
+    }
+    stopRecorder();
+    if (m.run) {
+      runLoop();
+      return;
+    }
+    const ri = m.runInfo;
+    if (ri && ri.status === 'done') {
+      const bad = ri.results.filter((x) => !x.ok).length;
+      setOverlay(
+        `<div class="t">✓ Finished</div><div class="m">${esc(ri.name)} — ${ri.results.length - bad} succeeded${bad ? ', ' + bad + ' failed' : ''}.</div>
+         <div class="r"><button data-act="ok">Dismiss</button></div>`,
+        { ok: async () => { await send({ type: 'clearRun' }); } }, '#188038'
+      );
+    } else if (ri && ri.status === 'failed') {
+      setOverlay(
+        `<div class="t">✗ Stopped</div><div class="m">${esc(ri.error || 'Something went wrong')}</div>
+         <div class="r"><button data-act="ok">Dismiss</button></div>`,
+        { ok: async () => { await send({ type: 'clearRun' }); } }, '#d93025'
+      );
+    } else {
+      hideOverlay();
+    }
+  }
+
+  async function refreshMode() { applyMode(await send({ type: 'mode' })); }
+
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg && msg.type === 'ping') sendResponse({ pong: true });
+    else if (msg && msg.type === 'mode-changed') refreshMode();
+  });
+
+  (async () => { applyMode(await send({ type: 'hello' })); })();
+})();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 //background.js
 // Service worker: owns recording state, saved workflows and the replay "run" state.
 // Replay state lives in chrome.storage.session so it survives page navigations and worker restarts.
@@ -74,7 +753,20 @@ function finalizeSteps(steps) {
     if ((s.type === 'click' || s.type === 'key') && next && next.url && s.url && strip(next.url) !== strip(s.url)) {
       s.navigates = true;
     }
-    if (s.type === 'input' || s.type === 'select') {
+    if (s.type === 'click' && s.choice) {
+      // Picking an item from a custom dropdown / filter list: make "which item" a field.
+      const prev = steps[i - 1];
+      s.variable = true;
+      s.value = (s.loc && s.loc.text) || s.label || '';
+      if (prev && prev.type === 'input' && prev.variable) {
+        s.param = prev.param; // type-ahead: typed text and chosen suggestion share one value
+        s.fieldLabel = prev.label;
+      } else {
+        const opener = prev && prev.type === 'click' && !prev.choice ? prev.label : '';
+        s.fieldLabel = opener || 'choice';
+        s.param = RA.uniqueName(RA.slug(s.fieldLabel), used);
+      }
+    } else if (s.type === 'input' || s.type === 'select') {
       s.variable = true;
       s.param = RA.uniqueName(RA.slug(s.label || (s.loc && (s.loc.name || s.loc.placeholder || s.loc.id)) || s.type), used);
     } else if (s.type === 'check') {
@@ -337,607 +1029,116 @@ chrome.runtime.onStartup.addListener(() => refreshBadge());
 
 
 
-//content.js
-// Content script: records what you do on the page, and replays recorded workflows.
-(() => {
-  if (window.__repeatAgentLoaded) return;
-  window.__repeatAgentLoaded = true;
 
-  const instance = Math.random().toString(36).slice(2) + Date.now().toString(36);
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
-  const esc = (s) =>
-    String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const send = (msg) =>
-    new Promise((resolve) => {
-      try {
-        chrome.runtime.sendMessage(msg, (r) => { void chrome.runtime.lastError; resolve(r); });
-      } catch (e) { resolve(undefined); }
+
+
+//shared.js
+// Helpers shared by the popup, the background worker and the content script.
+var RA = (() => {
+  const slug = (s) =>
+    String(s == null ? '' : s)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 40) || 'field';
+
+  const uniqueName = (base, used) => {
+    let n = base, i = 2;
+    while (used.has(n)) n = base + '_' + i++;
+    used.add(n);
+    return n;
+  };
+
+  const q = (s) => '"' + String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, 50) + '"';
+
+  function describe(s) {
+    const loc = s.loc || {};
+    const target = s.label || loc.text || loc.aria || loc.placeholder || loc.name || loc.css || 'element';
+    switch (s.type) {
+      case 'navigate':
+        return 'Open ' + s.url;
+      case 'click':
+        if (s.variable) return 'Click the item {{' + s.param + '}}' + (s.fieldLabel ? ' (' + s.fieldLabel + ')' : '');
+        return 'Click ' + q(target);
+      case 'input':
+        if (s.variable) return 'Type {{' + s.param + '}} into ' + q(target);
+        return 'Type ' + (s.secret ? '(secret)' : q(s.value)) + ' into ' + q(target);
+      case 'select':
+        if (s.variable) return 'Choose {{' + s.param + '}} in ' + q(target);
+        return 'Choose ' + q(s.text || s.value) + ' in ' + q(target);
+      case 'check':
+        if (s.variable) return 'Set {{' + s.param + '}} (yes/no) on ' + q(target);
+        return (s.checked ? 'Check ' : 'Uncheck ') + q(target);
+      case 'key':
+        return 'Press ' + (s.key || 'Enter') + ' in ' + q(target);
+      case 'manual':
+        return s.message || 'Wait for you to do something';
+      default:
+        return s.type;
+    }
+  }
+
+  // CSV / TSV parser (quotes supported). Tabs are accepted so rows pasted from a spreadsheet work.
+  function parseCsv(text) {
+    const rows = [];
+    let row = [], cell = '', inQ = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (inQ) {
+        if (c === '"') {
+          if (text[i + 1] === '"') { cell += '"'; i++; } else inQ = false;
+        } else cell += c;
+      } else if (c === '"') inQ = true;
+      else if (c === ',' || c === '\t') { row.push(cell); cell = ''; }
+      else if (c === '\n' || c === '\r') {
+        if (c === '\r' && text[i + 1] === '\n') i++;
+        row.push(cell); rows.push(row); row = []; cell = '';
+      } else cell += c;
+    }
+    if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+    return rows.filter((r) => r.some((c) => c.trim() !== ''));
+  }
+
+  const slugKeys = (obj) => {
+    const out = {};
+    for (const k of Object.keys(obj)) out[slug(k)] = obj[k] == null ? '' : String(obj[k]);
+    return out;
+  };
+
+  // "[{...},{...}]", "{...}" or CSV with a header row -> array of {param: value}
+  function parseTable(text) {
+    const t = (text || '').trim();
+    if (!t) return [];
+    if (t[0] === '[') {
+      const arr = JSON.parse(t);
+      if (!Array.isArray(arr)) throw new Error('JSON must be a list of objects');
+      return arr.map(slugKeys);
+    }
+    if (t[0] === '{') return [slugKeys(JSON.parse(t))];
+    const rows = parseCsv(t);
+    if (rows.length < 2) throw new Error('Need a header row plus at least one data row');
+    const head = rows[0].map((h) => slug(h));
+    return rows.slice(1).map((r) => {
+      const o = {};
+      head.forEach((h, i) => { o[h] = r[i] == null ? '' : r[i]; });
+      return o;
     });
-  class Abort extends Error {}
-
-  let unloading = false;
-  window.addEventListener('pagehide', () => { unloading = true; });
-  window.addEventListener('beforeunload', () => { unloading = true; });
-  window.addEventListener('pageshow', (e) => { if (e.persisted) { unloading = false; refreshMode(); } });
-
-  // =====================================================================
-  // Overlay (small floating panel in a shadow root)
-  // =====================================================================
-  let host = null, box = null;
-  function ensureOverlay() {
-    if (host && host.isConnected) return;
-    host = document.createElement('div');
-    host.id = '__repeat_agent_overlay';
-    host.style.cssText = 'all:initial;position:fixed;z-index:2147483647;right:16px;bottom:16px;';
-    const root = host.attachShadow({ mode: 'open' });
-    root.innerHTML = `<style>
-      .box{font:13px/1.4 system-ui,sans-serif;color:#202124;background:#fff;border:1px solid #dadce0;border-left:4px solid var(--c,#1a73e8);
-        border-radius:8px;padding:10px 12px;min-width:240px;max-width:340px;box-shadow:0 4px 16px rgba(0,0,0,.2)}
-      .t{font-weight:600;margin-bottom:2px}.m{color:#5f6368;word-break:break-word}
-      .r{margin-top:8px;display:flex;gap:6px;justify-content:flex-end}
-      button{font:inherit;cursor:pointer;border:0;border-radius:6px;padding:5px 10px;background:var(--c,#1a73e8);color:#fff}
-      button.g{background:#f1f3f4;color:#202124}
-    </style><div class="box"></div>`;
-    box = root.querySelector('.box');
-    document.documentElement.appendChild(host);
-  }
-  function setOverlay(html, handlers, color) {
-    ensureOverlay();
-    box.style.setProperty('--c', color || '#1a73e8');
-    box.innerHTML = html;
-    box.querySelectorAll('[data-act]').forEach((b) => {
-      const fn = handlers && handlers[b.getAttribute('data-act')];
-      if (fn) b.addEventListener('click', fn);
-    });
-  }
-  function hideOverlay() {
-    if (host) host.remove();
-    host = null; box = null;
-  }
-  const inOverlay = (e) => !!host && e.composedPath().includes(host);
-
-  function showRecording(count) {
-    setOverlay(
-      `<div class="t">● Recording</div><div class="m">${count} step${count === 1 ? '' : 's'} captured. Do the task once as usual.</div>
-       <div class="r"><button class="g" data-act="cancel">Discard</button><button data-act="stop">Stop &amp; save</button></div>`,
-      {
-        stop: async () => {
-          const r = await send({ type: 'recStop' });
-          if (r && r.ok) {
-            setOverlay('<div class="t">Saved ✓</div><div class="m">Open the Repeat Agent popup to review the fields and run it.</div>', {}, '#188038');
-            setTimeout(refreshMode, 3500);
-          } else {
-            setOverlay(`<div class="t">Could not save</div><div class="m">${esc((r && r.error) || 'Unknown error')}</div>
-              <div class="r"><button data-act="ok">OK</button></div>`, { ok: refreshMode }, '#d93025');
-          }
-        },
-        cancel: async () => { await send({ type: 'recStop', cancel: true }); },
-      },
-      '#d93025'
-    );
   }
 
-  // =====================================================================
-  // Locators: describe an element in several ways so it can be found again
-  // =====================================================================
-  const stableId = (id) => !!id && !/(\d{3,}|[:«»]|^(react|radix|headlessui|ember|mui|rc)[-_])/i.test(id);
-  const attrSel = (n, v) => `[${n}="${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"]`;
-
-  function labelOf(el) {
-    const lb = el.getAttribute && el.getAttribute('aria-labelledby');
-    if (lb) {
-      const t = lb.split(/\s+/).map((id) => document.getElementById(id)).filter(Boolean).map((n) => norm(n.textContent)).join(' ');
-      if (t) return clean(t);
+  // "name: John\nemail: j@x.com" or JSON object -> {name:'John', email:'j@x.com'}
+  function parseQuickFill(text) {
+    const t = (text || '').trim();
+    if (!t) return {};
+    if (t[0] === '{') return slugKeys(JSON.parse(t));
+    const out = {};
+    for (const line of t.split(/\r?\n/)) {
+      const m = line.match(/^\s*([^:=]+?)\s*[:=]\s*(.*)$/);
+      if (m) out[slug(m[1])] = m[2].trim();
     }
-    if (el.labels && el.labels.length) {
-      const t = norm(el.labels[0].textContent);
-      if (t) return clean(t);
-    }
-    const wrap = el.closest && el.closest('label');
-    if (wrap) {
-      const t = norm(wrap.textContent);
-      if (t) return clean(t);
-    }
-    const aria = el.getAttribute && el.getAttribute('aria-label');
-    return aria ? clean(aria) : '';
-  }
-  const clean = (t) => t.replace(/\s*[*:]+\s*$/, '').slice(0, 80);
-
-  function cssPath(el) {
-    const parts = [];
-    let node = el;
-    while (node && node.nodeType === 1 && node !== document.documentElement) {
-      if (node.id && stableId(node.id)) { parts.unshift('#' + CSS.escape(node.id)); break; }
-      let part = node.tagName.toLowerCase();
-      const parent = node.parentElement;
-      if (parent) {
-        const same = Array.from(parent.children).filter((c) => c.tagName === node.tagName);
-        if (same.length > 1) part += `:nth-of-type(${same.indexOf(node) + 1})`;
-      }
-      parts.unshift(part);
-      node = parent;
-    }
-    return parts.join(' > ');
+    return out;
   }
 
-  const isFormControl = (el) => ['INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName);
-
-  function visibleText(el) {
-    if (el.tagName === 'INPUT') return norm(el.value);
-    return norm(el.textContent);
-  }
-
-  function buildLocator(el) {
-    const tag = el.tagName.toLowerCase();
-    const loc = { tag };
-    if (el.id && stableId(el.id)) loc.id = el.id;
-    for (const a of ['data-testid', 'data-test', 'data-cy', 'data-qa', 'data-test-id']) {
-      const v = el.getAttribute(a);
-      if (v) { loc.testAttr = a; loc.testVal = v; break; }
-    }
-    const name = el.getAttribute('name');
-    if (name) loc.name = name;
-    if (tag === 'input') {
-      loc.type = (el.type || 'text').toLowerCase();
-      if (loc.type === 'radio' || loc.type === 'checkbox') loc.value = el.value;
-    }
-    const aria = el.getAttribute('aria-label');
-    if (aria) loc.aria = aria;
-    const ph = el.getAttribute('placeholder');
-    if (ph) loc.placeholder = ph;
-    const lbl = labelOf(el);
-    if (lbl) loc.label = lbl;
-    const role = el.getAttribute('role');
-    if (role) loc.role = role;
-    if (!el.isContentEditable && !['SELECT', 'TEXTAREA'].includes(el.tagName) && !(el.tagName === 'INPUT' && !['submit', 'button', 'reset'].includes(loc.type))) {
-      const t = visibleText(el);
-      if (t && t.length <= 80) loc.text = t;
-    }
-    if (tag === 'a') {
-      const h = el.getAttribute('href');
-      if (h && !/^javascript:/i.test(h)) loc.href = h.slice(0, 200);
-    }
-    loc.css = cssPath(el);
-    return loc;
-  }
-
-  function isVisible(el) {
-    const r = el.getBoundingClientRect();
-    if (!(r.width > 0 && r.height > 0)) return false;
-    const cs = getComputedStyle(el);
-    return cs.visibility !== 'hidden' && cs.display !== 'none';
-  }
-
-  function resolveLocator(loc, allowHidden) {
-    const qa = (sel) => { try { return Array.from(document.querySelectorAll(sel)); } catch (e) { return []; } };
-    const typeOk = (e) => !loc.type || (e.type || '').toLowerCase() === loc.type;
-    const valueOk = (e) => loc.value === undefined || e.value === loc.value;
-    const textEq = (e) => visibleText(e) === loc.text;
-    const deepest = (list) => list.filter((c) => !Array.from(c.children).some((ch) => list.includes(ch)));
-
-    const strategies = [
-      () => (loc.id ? [document.getElementById(loc.id)].filter(Boolean) : []),
-      () => (loc.testAttr ? qa(attrSel(loc.testAttr, loc.testVal)) : []),
-      () => (loc.name ? qa(loc.tag + attrSel('name', loc.name)).filter(typeOk).filter(valueOk) : []),
-      () => (loc.aria ? qa(loc.tag + attrSel('aria-label', loc.aria)) : []),
-      () => (loc.label && (isFormLike(loc)) ? qa(loc.tag).filter((e) => labelOf(e) === loc.label).filter(typeOk).filter(valueOk) : []),
-      () => (loc.placeholder ? qa(loc.tag + attrSel('placeholder', loc.placeholder)) : []),
-      () => (loc.text && loc.href ? deepest(qa(loc.tag).filter(textEq)).filter((e) => e.getAttribute('href') === loc.href) : []),
-      () => (loc.text ? deepest(qa(loc.tag).filter(textEq)) : []),
-      () => (loc.css ? qa(loc.css) : []),
-    ];
-
-    let fallback = null;
-    for (const fn of strategies) {
-      const list = fn();
-      if (!list.length) continue;
-      const pool = allowHidden ? list : list.filter(isVisible);
-      if (pool.length === 1) return pool[0];
-      if (pool.length > 1 && !fallback) fallback = pool[0];
-    }
-    return fallback;
-  }
-  const isFormLike = (loc) => ['input', 'select', 'textarea'].includes(loc.tag) || !!loc.role || loc.tag === 'div';
-
-  async function waitFor(step, timeoutMs, allowHidden) {
-    const end = Date.now() + timeoutMs;
-    for (;;) {
-      const el = resolveLocator(step.loc, allowHidden);
-      if (el) return el;
-      if (Date.now() > end) {
-        const loc = step.loc || {};
-        const what = step.label || loc.text || loc.aria || loc.placeholder || loc.name || loc.css || 'the element';
-        throw new Error('Could not find "' + what + '" on the page (' + step.type + ' step)');
-      }
-      await sleep(200);
-    }
-  }
-
-  // =====================================================================
-  // Recorder
-  // =====================================================================
-  let recOn = false;
-  const lastVal = new WeakMap();
-  const initialVal = new WeakMap();
-
-  function startRecorder() {
-    if (recOn) return;
-    recOn = true;
-    document.addEventListener('click', onClick, true);
-    document.addEventListener('change', onChange, true);
-    document.addEventListener('keydown', onKey, true);
-    document.addEventListener('focusin', onFocusIn, true);
-    document.addEventListener('focusout', onFocusOut, true);
-  }
-  function stopRecorder() {
-    if (!recOn) return;
-    recOn = false;
-    document.removeEventListener('click', onClick, true);
-    document.removeEventListener('change', onChange, true);
-    document.removeEventListener('keydown', onKey, true);
-    document.removeEventListener('focusin', onFocusIn, true);
-    document.removeEventListener('focusout', onFocusOut, true);
-  }
-
-  async function record(step, replace) {
-    step.url = location.href;
-    const r = await send({ type: 'recStep', step, replace: !!replace });
-    if (r && r.ok) showRecording(r.count);
-  }
-
-  const CLICKABLE =
-    'button, a, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="option"], [role="checkbox"], [role="radio"], [role="switch"], input[type="submit"], input[type="button"], input[type="reset"], input[type="image"], summary, label, [onclick]';
-
-  function onClick(e) {
-    if (!e.isTrusted || inOverlay(e) || !(e.target instanceof Element)) return;
-    let el = e.target.closest(CLICKABLE) || e.target;
-    if (el === document.body || el === document.documentElement) return;
-    if (el.tagName === 'LABEL' && el.control) return; // the control's own change event is recorded
-    if (['SELECT', 'TEXTAREA'].includes(el.tagName) || el.isContentEditable) return;
-    if (el.tagName === 'INPUT' && !['submit', 'button', 'reset', 'image'].includes((el.type || '').toLowerCase())) return;
-    record({ type: 'click', loc: buildLocator(el), label: clickLabel(el) });
-  }
-  function clickLabel(el) {
-    return clean(visibleText(el) || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('value') || '');
-  }
-
-  function onChange(e) {
-    if (!e.isTrusted || inOverlay(e) || !(e.target instanceof Element)) return;
-    recordField(e.target);
-  }
-  function onFocusIn(e) {
-    const el = e.target;
-    if (el instanceof Element && el.isContentEditable && !isFormControl(el)) initialVal.set(el, el.innerText);
-  }
-  function onFocusOut(e) {
-    const el = e.target;
-    if (!(el instanceof Element) || !el.isContentEditable || isFormControl(el) || inOverlay(e)) return;
-    if (el.innerText !== initialVal.get(el)) recordField(el);
-  }
-  function onKey(e) {
-    if (!e.isTrusted || e.key !== 'Enter' || inOverlay(e) || !(e.target instanceof Element)) return;
-    const el = e.target;
-    if (el.tagName !== 'INPUT' || !isTextLike(el)) return;
-    recordField(el); // flush the typed value first so the order is right
-    record({ type: 'key', key: 'Enter', loc: buildLocator(el), label: labelOf(el) || el.name || '' });
-  }
-
-  function isTextLike(el) {
-    const t = (el.type || 'text').toLowerCase();
-    return !['checkbox', 'radio', 'file', 'submit', 'button', 'reset', 'image', 'hidden'].includes(t);
-  }
-  const fieldLabel = (el) => labelOf(el) || clean(el.getAttribute('placeholder') || el.getAttribute('name') || el.id || el.type || '');
-
-  function recordField(el) {
-    const tag = el.tagName;
-    if (tag === 'SELECT') {
-      const opts = Array.from(el.options).slice(0, 80).map((o) => norm(o.textContent));
-      if (el.multiple) {
-        const sel = Array.from(el.selectedOptions).map((o) => norm(o.textContent));
-        record({ type: 'select', multi: true, loc: buildLocator(el), label: fieldLabel(el), value: sel.join(','), text: sel.join(','), options: opts }, true);
-      } else {
-        const o = el.selectedOptions[0];
-        record({ type: 'select', loc: buildLocator(el), label: fieldLabel(el), value: el.value, text: o ? norm(o.textContent) : '', options: opts }, true);
-      }
-      return;
-    }
-    if (tag === 'INPUT') {
-      const type = (el.type || 'text').toLowerCase();
-      if (type === 'checkbox' || type === 'radio') {
-        record({ type: 'check', kind: type, loc: buildLocator(el), label: fieldLabel(el), checked: el.checked }, true);
-        return;
-      }
-      if (type === 'file') {
-        record({ type: 'manual', message: 'Choose the file for "' + (fieldLabel(el) || 'file upload') + '", then press Continue' });
-        return;
-      }
-      if (!isTextLike(el)) return;
-    }
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || el.isContentEditable) {
-      const editable = !isFormControl(el);
-      const host = editable ? el.closest('[contenteditable]:not([contenteditable="false"])') || el : el;
-      const value = editable ? host.innerText : el.value;
-      if (lastVal.get(host) === value) return;
-      lastVal.set(host, value);
-      const ac = (el.getAttribute('autocomplete') || '').toLowerCase();
-      const secret = (el.type || '').toLowerCase() === 'password' || /cc-|one-time-code/.test(ac);
-      record({
-        type: 'input', editable, loc: buildLocator(host), label: fieldLabel(host),
-        value: secret ? '' : value, secret,
-      }, true);
-    }
-  }
-
-  // =====================================================================
-  // Replayer
-  // =====================================================================
-  function setNativeValue(el, value) {
-    const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
-    if (desc && desc.set) desc.set.call(el, value); else el.value = value;
-  }
-  const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
-
-  function highlight(el) {
-    try {
-      const old = el.style.outline;
-      el.style.outline = '3px solid #f9ab00';
-      setTimeout(() => { el.style.outline = old; }, 700);
-    } catch (e) { /* ignore */ }
-  }
-
-  function fillInput(el, value) {
-    el.scrollIntoView({ block: 'center', inline: 'center' });
-    el.focus();
-    if (el.isContentEditable && !isFormControl(el)) {
-      document.execCommand('selectAll', false);
-      if (!document.execCommand('insertText', false, value)) {
-        el.textContent = value;
-        el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
-      }
-    } else {
-      setNativeValue(el, value);
-      fire(el, 'input');
-      fire(el, 'change');
-    }
-    if (el.blur) el.blur();
-  }
-
-  function chooseOption(el, step, value) {
-    const wanted = String(value).split(step.multi ? ',' : '\u0000').map((v) => v.trim()).filter((v, i, a) => v !== '' || a.length === 1);
-    const opts = Array.from(el.options);
-    if (step.multi) opts.forEach((o) => { o.selected = false; });
-    wanted.forEach((w) => {
-      const lw = w.toLowerCase();
-      const o =
-        opts.find((x) => x.value === w) ||
-        opts.find((x) => norm(x.textContent).toLowerCase() === lw) ||
-        opts.find((x) => x.value.toLowerCase() === lw) ||
-        opts.find((x) => norm(x.textContent).toLowerCase().includes(lw) && lw !== '');
-      if (!o) throw new Error('Option "' + w + '" not found in "' + (step.label || 'dropdown') + '"');
-      if (step.multi) o.selected = true; else el.value = o.value;
-    });
-    fire(el, 'input');
-    fire(el, 'change');
-  }
-
-  const parseBool = (v) => /^(true|yes|y|1|on|checked)$/i.test(String(v).trim());
-
-  function clickElement(el) {
-    el.scrollIntoView({ block: 'center', inline: 'center' });
-    highlight(el);
-    const o = { bubbles: true, cancelable: true, view: window };
-    try { el.dispatchEvent(new PointerEvent('pointerdown', o)); } catch (e) { /* older engines */ }
-    el.dispatchEvent(new MouseEvent('mousedown', o));
-    if (el.focus) el.focus();
-    try { el.dispatchEvent(new PointerEvent('pointerup', o)); } catch (e) { /* ignore */ }
-    el.dispatchEvent(new MouseEvent('mouseup', o));
-    el.click();
-  }
-
-  function pressEnter(el) {
-    const o = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
-    const proceed = el.dispatchEvent(new KeyboardEvent('keydown', o));
-    el.dispatchEvent(new KeyboardEvent('keypress', o));
-    if (proceed) {
-      const form = el.form || el.closest('form');
-      if (form) { if (form.requestSubmit) form.requestSubmit(); else form.submit(); }
-    }
-    el.dispatchEvent(new KeyboardEvent('keyup', o));
-  }
-
-  async function settle(ms) {
-    const end = Date.now() + ms;
-    while (Date.now() < end) {
-      if (unloading) return 'unloading';
-      await sleep(50);
-    }
-    return unloading ? 'unloading' : 'ok';
-  }
-
-  // After a click / Enter. If the recording showed this step leads to another page, wait for that
-  // navigation (or an in-page URL change) so the next step never runs against the old page.
-  async function afterAction(r, step) {
-    const href = location.href;
-    const expectNav = !!step.navigates;
-    const end = Date.now() + (expectNav ? 15000 : Math.max(r.stepDelay, 500));
-    while (Date.now() < end) {
-      if (unloading) return 'unloading';
-      if (expectNav && location.href !== href) {
-        await sleep(300);
-        return unloading ? 'unloading' : 'ok';
-      }
-      await sleep(50);
-    }
-    return unloading ? 'unloading' : 'ok';
-  }
-
-  function valueFor(step, params) {
-    if (step.variable && step.param && Object.prototype.hasOwnProperty.call(params || {}, step.param)) {
-      return params[step.param];
-    }
-    if (step.secret) throw new Error('No value was provided for the secret field "' + (step.label || step.param) + '"');
-    if (step.type === 'select') return step.text || step.value;
-    return step.value;
-  }
-
-  async function waitManual(message) {
-    const res = await new Promise((resolve) => {
-      setOverlay(
-        `<div class="t">⏸ Your turn</div><div class="m">${esc(message)}</div>
-         <div class="r"><button class="g" data-act="stop">Stop</button><button data-act="go">Continue</button></div>`,
-        {
-          go: () => resolve('go'),
-          stop: async () => { await send({ type: 'stopRun' }); resolve('stop'); },
-        },
-        '#f9ab00'
-      );
-    });
-    if (res === 'stop') throw new Abort();
-  }
-
-  async function executeStep(r) {
-    const { step, params, index } = r;
-    const timeout = r.waitTimeout;
-    const commit = async () => {
-      const a = await send({ type: 'advance', instance, index });
-      if (!a || !a.ok) throw new Abort();
-    };
-    try {
-      if (step.pauseBefore) await waitManual('Paused before: ' + RA.describe(step));
-      showStatus(r);
-      switch (step.type) {
-        case 'navigate':
-          await commit();
-          await send({ type: 'navigate', url: step.url });
-          return (await settle(8000)) === 'unloading' ? 'unloading' : 'ok';
-        case 'click': {
-          const el = await waitFor(step, timeout, false);
-          await commit();
-          clickElement(el);
-          return afterAction(r, step);
-        }
-        case 'input': {
-          const el = await waitFor(step, timeout, false);
-          highlight(el);
-          fillInput(el, String(valueFor(step, params)));
-          await commit();
-          return 'ok';
-        }
-        case 'select': {
-          const el = await waitFor(step, timeout, true);
-          highlight(el);
-          chooseOption(el, step, valueFor(step, params));
-          await commit();
-          return 'ok';
-        }
-        case 'check': {
-          const el = await waitFor(step, timeout, true);
-          const want = step.kind === 'radio' ? true : step.variable ? parseBool(valueFor(step, params)) : !!step.checked;
-          if (el.checked !== want) el.click();
-          await commit();
-          return 'ok';
-        }
-        case 'key': {
-          const el = await waitFor(step, timeout, false);
-          await commit();
-          pressEnter(el);
-          return afterAction(r, step);
-        }
-        case 'manual':
-          await waitManual(step.message || 'Please do this step manually');
-          await commit();
-          return 'ok';
-        default:
-          throw new Error('Unknown step type: ' + step.type);
-      }
-    } catch (e) {
-      if (e instanceof Abort) return 'abort';
-      await send({ type: 'fail', instance, index, message: (e && e.message) || String(e) });
-      return 'failed';
-    }
-  }
-
-  function showStatus(r) {
-    const row = r.rowCount > 1 ? `Row ${r.rowIndex + 1}/${r.rowCount} · ` : '';
-    setOverlay(
-      `<div class="t">▶ Replaying</div><div class="m">${row}Step ${r.index + 1}/${r.total}: ${esc(RA.describe(r.step))}</div>
-       <div class="r"><button class="g" data-act="stop">Stop</button></div>`,
-      { stop: async () => { await send({ type: 'stopRun' }); } }
-    );
-  }
-
-  let looping = false;
-  let navigatingAway = false; // the background is sending this tab to the next batch row
-  async function runLoop() {
-    if (looping || navigatingAway) return;
-    looping = true;
-    try {
-      if (document.readyState !== 'complete') await new Promise((res) => window.addEventListener('load', res, { once: true }));
-      await sleep(300);
-      for (;;) {
-        if (unloading) return;
-        const r = await send({ type: 'claim', instance });
-        if (!r || !r.ok) break;
-        if (r.finalize) {
-          setOverlay('<div class="t">▶ Finishing…</div>', {});
-          if ((await settle(1200)) === 'unloading') return;
-          const f = await send({ type: 'finishRow', instance });
-          if (f && f.ok && f.next) { navigatingAway = true; return; } // tab is reloading for the next row
-          break;
-        }
-        const res = await executeStep(r);
-        if (res === 'unloading' || res === 'abort' || res === 'failed') break;
-        await sleep(r.stepDelay);
-      }
-    } finally {
-      looping = false;
-      if (!unloading && !navigatingAway) refreshMode();
-    }
-  }
-
-  // =====================================================================
-  // Mode handling
-  // =====================================================================
-  function applyMode(m) {
-    if (!m) return;
-    if (m.recording) {
-      startRecorder();
-      showRecording(m.stepCount);
-      return;
-    }
-    stopRecorder();
-    if (m.run) {
-      runLoop();
-      return;
-    }
-    const ri = m.runInfo;
-    if (ri && ri.status === 'done') {
-      const bad = ri.results.filter((x) => !x.ok).length;
-      setOverlay(
-        `<div class="t">✓ Finished</div><div class="m">${esc(ri.name)} — ${ri.results.length - bad} succeeded${bad ? ', ' + bad + ' failed' : ''}.</div>
-         <div class="r"><button data-act="ok">Dismiss</button></div>`,
-        { ok: async () => { await send({ type: 'clearRun' }); } }, '#188038'
-      );
-    } else if (ri && ri.status === 'failed') {
-      setOverlay(
-        `<div class="t">✗ Stopped</div><div class="m">${esc(ri.error || 'Something went wrong')}</div>
-         <div class="r"><button data-act="ok">Dismiss</button></div>`,
-        { ok: async () => { await send({ type: 'clearRun' }); } }, '#d93025'
-      );
-    } else {
-      hideOverlay();
-    }
-  }
-
-  async function refreshMode() { applyMode(await send({ type: 'mode' })); }
-
-  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (msg && msg.type === 'ping') sendResponse({ pong: true });
-    else if (msg && msg.type === 'mode-changed') refreshMode();
-  });
-
-  (async () => { applyMode(await send({ type: 'hello' })); })();
+  return { slug, uniqueName, describe, parseCsv, parseTable, parseQuickFill };
 })();
 
 
@@ -946,147 +1147,6 @@ chrome.runtime.onStartup.addListener(() => refreshBadge());
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//manifest.json
-{
-  "manifest_version": 3,
-  "name": "Repeat Agent",
-  "version": "0.1.0",
-  "description": "Record a repetitive web task once (e.g. filling a form), then replay it with new values.",
-  "permissions": ["storage", "tabs", "scripting"],
-  "host_permissions": ["<all_urls>"],
-  "background": { "service_worker": "background.js" },
-  "action": {
-    "default_popup": "popup.html",
-    "default_title": "Repeat Agent",
-    "default_icon": { "16": "icons/icon16.png", "32": "icons/icon32.png" }
-  },
-  "content_scripts": [
-    {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["shared.js", "content.js"],
-      "run_at": "document_idle"
-    }
-  ],
-  "icons": {
-    "16": "icons/icon16.png",
-    "32": "icons/icon32.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
-  }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//popup.css
-* { box-sizing: border-box; }
-body { width: 400px; max-height: 580px; overflow-y: auto; margin: 0; font: 13px/1.4 system-ui, sans-serif; color: #202124; background: #fff; }
-header { padding: 10px 14px; background: #1a73e8; color: #fff; display: flex; flex-direction: column; }
-header .sub { font-size: 11px; opacity: .85; }
-main { padding: 10px 14px 14px; }
-h4 { margin: 12px 0 6px; font-size: 13px; }
-h4:first-child { margin-top: 0; }
-section { margin-bottom: 8px; }
-input[type=text], input:not([type]), input[type=password], input[type=number], select, textarea {
-  width: 100%; padding: 6px 8px; border: 1px solid #dadce0; border-radius: 6px; font: inherit; margin: 2px 0 6px;
-}
-textarea { min-height: 70px; font-family: ui-monospace, monospace; font-size: 12px; }
-button { font: inherit; cursor: pointer; border: 1px solid #dadce0; background: #f8f9fa; border-radius: 6px; padding: 5px 10px; }
-button:hover { background: #f1f3f4; }
-button.primary { background: #1a73e8; color: #fff; border-color: #1a73e8; width: 100%; padding: 8px; }
-button.primary:hover { background: #1765cc; }
-button.link { border: 0; background: none; color: #1a73e8; padding: 2px 4px; }
-button.danger { color: #d93025; }
-.hint { color: #5f6368; font-size: 12px; margin: 4px 0; }
-.card { border: 1px solid #dadce0; border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
-.card .nm { font-weight: 600; }
-.card .meta { color: #5f6368; font-size: 12px; margin-bottom: 6px; }
-.card .acts { display: flex; gap: 6px; flex-wrap: wrap; }
-.bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 14px; font-size: 12px; }
-.bar.rec { background: #fce8e6; color: #a50e0e; }
-.bar.run { background: #e8f0fe; color: #174ea6; }
-.bar.ok { background: #e6f4ea; color: #0d652d; }
-.bar.err { background: #fce8e6; color: #a50e0e; }
-.bar span.b { display: flex; gap: 6px; flex-shrink: 0; }
-.notice { padding: 6px 8px; border-radius: 6px; background: #e8f0fe; color: #174ea6; margin-bottom: 8px; }
-.notice.err { background: #fce8e6; color: #a50e0e; }
-label.f { display: block; font-size: 12px; color: #3c4043; }
-label.f small { color: #80868b; }
-label.c { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
-label.c input { width: auto; margin: 0; }
-details { margin: 6px 0; }
-summary { cursor: pointer; color: #1a73e8; }
-.step { border-top: 1px solid #eee; padding: 6px 0; }
-.step .sd { font-size: 12px; margin-bottom: 4px; word-break: break-word; }
-.step .n { display: inline-block; min-width: 18px; color: #80868b; }
-.step .row { display: flex; gap: 6px; align-items: center; }
-.step .row input[type=text] { margin: 0; }
-.step .sa { display: flex; justify-content: space-between; align-items: center; font-size: 12px; margin-top: 2px; }
-.step label.c { margin: 0; font-size: 12px; }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//popup.html
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <link rel="stylesheet" href="popup.css">
-</head>
-<body>
-  <header><b>Repeat Agent</b><span class="sub">record once · replay with new values</span></header>
-  <div id="banner"></div>
-  <main id="main"></main>
-  <script src="shared.js"></script>
-  <script src="popup.js"></script>
-</body>
-</html>
 
 
 
@@ -1202,7 +1262,7 @@ summary { cursor: pointer; color: #1a73e8; }
       if (!s.variable || !s.param || seen.has(s.param)) continue;
       seen.add(s.param);
       out.push({
-        param: s.param, label: s.label || s.param, type: s.type, secret: !!s.secret, options: s.options || [],
+        param: s.param, label: s.fieldLabel || s.label || s.param, type: s.type, secret: !!s.secret, options: s.options || [],
         def: s.type === 'check' ? (s.checked ? 'yes' : 'no') : s.type === 'select' ? s.text || s.value || '' : s.secret ? '' : s.value || '',
       });
     }
@@ -1244,6 +1304,13 @@ summary { cursor: pointer; color: #1a73e8; }
       let editor = '';
       if (s.type === 'navigate') {
         editor = `<input type="text" data-f="url" value="${esc(s.url)}">`;
+      } else if (s.type === 'click') {
+        const dflt = s.value != null ? s.value : (s.loc && s.loc.text) || s.label || '';
+        editor = `<div class="row">
+          <label class="c"><input type="checkbox" data-f="variable" ${s.variable ? 'checked' : ''}> field</label>
+          <input type="text" data-f="param" value="${esc(s.param || RA.slug(s.fieldLabel || s.label))}" title="Field name">
+          <input type="text" data-f="def" value="${esc(dflt)}" title="Item to click by default" placeholder="default item">
+        </div>`;
       } else if (['input', 'select', 'check'].includes(s.type)) {
         const secret = !!s.secret;
         editor = `<div class="row">
@@ -1264,7 +1331,8 @@ summary { cursor: pointer; color: #1a73e8; }
       <button class="link" data-act="back">← Back</button>
       <h4>Edit workflow</h4>
       <input type="text" id="wfRename" value="${esc(d.name)}">
-      <p class="hint">Tick <b>field</b> on a step to make its value something you supply each run. Untick to keep the recorded value fixed.</p>
+      <p class="hint">Tick <b>field</b> on a step to make its value something you supply each run; untick to keep it fixed.
+      Filters picked from a custom list show up as <i>Click …</i> steps — tick <b>field</b> on them. Give several items separated by <b>;</b>.</p>
       ${steps}
       <button class="primary" data-act="savedit" style="margin-top:10px">Save changes</button>`;
   }
@@ -1288,6 +1356,7 @@ summary { cursor: pointer; color: #1a73e8; }
         const v = get('def').value;
         if (s.type === 'select') { s.text = v; s.value = v; } else s.value = v;
       }
+      if (s.type === 'click' && s.variable && !s.value) s.value = (s.loc && s.loc.text) || s.label || '';
     });
   }
 
@@ -1462,135 +1531,4 @@ summary { cursor: pointer; color: #1a73e8; }
   });
 
   load().then(render);
-})();
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//shared.js
-// Helpers shared by the popup, the background worker and the content script.
-var RA = (() => {
-  const slug = (s) =>
-    String(s == null ? '' : s)
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '_')
-      .replace(/^_+|_+$/g, '')
-      .slice(0, 40) || 'field';
-
-  const uniqueName = (base, used) => {
-    let n = base, i = 2;
-    while (used.has(n)) n = base + '_' + i++;
-    used.add(n);
-    return n;
-  };
-
-  const q = (s) => '"' + String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, 50) + '"';
-
-  function describe(s) {
-    const loc = s.loc || {};
-    const target = s.label || loc.text || loc.aria || loc.placeholder || loc.name || loc.css || 'element';
-    switch (s.type) {
-      case 'navigate':
-        return 'Open ' + s.url;
-      case 'click':
-        return 'Click ' + q(target);
-      case 'input':
-        if (s.variable) return 'Type {{' + s.param + '}} into ' + q(target);
-        return 'Type ' + (s.secret ? '(secret)' : q(s.value)) + ' into ' + q(target);
-      case 'select':
-        if (s.variable) return 'Choose {{' + s.param + '}} in ' + q(target);
-        return 'Choose ' + q(s.text || s.value) + ' in ' + q(target);
-      case 'check':
-        if (s.variable) return 'Set {{' + s.param + '}} (yes/no) on ' + q(target);
-        return (s.checked ? 'Check ' : 'Uncheck ') + q(target);
-      case 'key':
-        return 'Press ' + (s.key || 'Enter') + ' in ' + q(target);
-      case 'manual':
-        return s.message || 'Wait for you to do something';
-      default:
-        return s.type;
-    }
-  }
-
-  // CSV / TSV parser (quotes supported). Tabs are accepted so rows pasted from a spreadsheet work.
-  function parseCsv(text) {
-    const rows = [];
-    let row = [], cell = '', inQ = false;
-    for (let i = 0; i < text.length; i++) {
-      const c = text[i];
-      if (inQ) {
-        if (c === '"') {
-          if (text[i + 1] === '"') { cell += '"'; i++; } else inQ = false;
-        } else cell += c;
-      } else if (c === '"') inQ = true;
-      else if (c === ',' || c === '\t') { row.push(cell); cell = ''; }
-      else if (c === '\n' || c === '\r') {
-        if (c === '\r' && text[i + 1] === '\n') i++;
-        row.push(cell); rows.push(row); row = []; cell = '';
-      } else cell += c;
-    }
-    if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
-    return rows.filter((r) => r.some((c) => c.trim() !== ''));
-  }
-
-  const slugKeys = (obj) => {
-    const out = {};
-    for (const k of Object.keys(obj)) out[slug(k)] = obj[k] == null ? '' : String(obj[k]);
-    return out;
-  };
-
-  // "[{...},{...}]", "{...}" or CSV with a header row -> array of {param: value}
-  function parseTable(text) {
-    const t = (text || '').trim();
-    if (!t) return [];
-    if (t[0] === '[') {
-      const arr = JSON.parse(t);
-      if (!Array.isArray(arr)) throw new Error('JSON must be a list of objects');
-      return arr.map(slugKeys);
-    }
-    if (t[0] === '{') return [slugKeys(JSON.parse(t))];
-    const rows = parseCsv(t);
-    if (rows.length < 2) throw new Error('Need a header row plus at least one data row');
-    const head = rows[0].map((h) => slug(h));
-    return rows.slice(1).map((r) => {
-      const o = {};
-      head.forEach((h, i) => { o[h] = r[i] == null ? '' : r[i]; });
-      return o;
-    });
-  }
-
-  // "name: John\nemail: j@x.com" or JSON object -> {name:'John', email:'j@x.com'}
-  function parseQuickFill(text) {
-    const t = (text || '').trim();
-    if (!t) return {};
-    if (t[0] === '{') return slugKeys(JSON.parse(t));
-    const out = {};
-    for (const line of t.split(/\r?\n/)) {
-      const m = line.match(/^\s*([^:=]+?)\s*[:=]\s*(.*)$/);
-      if (m) out[slug(m[1])] = m[2].trim();
-    }
-    return out;
-  }
-
-  return { slug, uniqueName, describe, parseCsv, parseTable, parseQuickFill };
 })();
