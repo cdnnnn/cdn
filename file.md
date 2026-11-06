@@ -1012,6 +1012,11 @@ async function agentLoop(runId) {
 
 
 
+
+
+
+
+
 //llm.js
 // Provider layer (runs in the background worker; the popup also loads it for validation helpers).
 // The agent works internally with Anthropic-style messages (content blocks: text / image / tool_use / tool_result).
@@ -2622,6 +2627,16 @@ chrome.runtime.onStartup.addListener(() => refreshBadge());
 
 
 
+
+
+
+
+
+
+
+
+
+
 //popup.html
 <!doctype html>
 <html>
@@ -2841,11 +2856,6 @@ RA.toCsv = function (rows, columns) {
   };
   return '\ufeff' + [cols.map(cell).join(',')].concat(rows.map((r) => cols.map((c) => cell(r[c])).join(','))).join('\r\n');
 };
-
-
-
-
-
 
 
 
