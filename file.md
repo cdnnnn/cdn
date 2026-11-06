@@ -3998,3 +3998,912 @@ code { background: #f1f3f4; padding: 0 3px; border-radius: 3px; }
     "default_path": "popup.html"
   }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//shared.js
+// Helpers shared by the popup, the background worker and the content script.
+var RA = (() => {
+  const slug = (s) =>
+    String(s == null ? '' : s)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 40) || 'field';
+
+  const uniqueName = (base, used) => {
+    let n = base, i = 2;
+    while (used.has(n)) n = base + '_' + i++;
+    used.add(n);
+    return n;
+  };
+
+  const q = (s) => '"' + String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, 50) + '"';
+
+  function describe(s) {
+    const loc = s.loc || {};
+    const target = s.label || loc.text || loc.aria || loc.placeholder || loc.name || loc.css || 'element';
+    switch (s.type) {
+      case 'navigate':
+        return 'Open ' + s.url;
+      case 'click':
+        if (s.variable) return 'Click the item {{' + s.param + '}}' + (s.fieldLabel ? ' (' + s.fieldLabel + ')' : '');
+        return 'Click ' + q(target);
+      case 'input':
+        if (s.variable) return 'Type {{' + s.param + '}} into ' + q(target);
+        return 'Type ' + (s.secret ? '(secret)' : q(s.value)) + ' into ' + q(target);
+      case 'select':
+        if (s.variable) return 'Choose {{' + s.param + '}} in ' + q(target);
+        return 'Choose ' + q(s.text || s.value) + ' in ' + q(target);
+      case 'check':
+        if (s.variable) return 'Set {{' + s.param + '}} (yes/no) on ' + q(target);
+        return (s.checked ? 'Check ' : 'Uncheck ') + q(target);
+      case 'key':
+        return 'Press ' + (s.key || 'Enter') + ' in ' + q(target);
+      case 'manual':
+        return s.message || 'Wait for you to do something';
+      default:
+        return s.type;
+    }
+  }
+
+  // CSV / TSV parser (quotes supported). Tabs are accepted so rows pasted from a spreadsheet work.
+  function parseCsv(text) {
+    const rows = [];
+    let row = [], cell = '', inQ = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (inQ) {
+        if (c === '"') {
+          if (text[i + 1] === '"') { cell += '"'; i++; } else inQ = false;
+        } else cell += c;
+      } else if (c === '"') inQ = true;
+      else if (c === ',' || c === '\t') { row.push(cell); cell = ''; }
+      else if (c === '\n' || c === '\r') {
+        if (c === '\r' && text[i + 1] === '\n') i++;
+        row.push(cell); rows.push(row); row = []; cell = '';
+      } else cell += c;
+    }
+    if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+    return rows.filter((r) => r.some((c) => c.trim() !== ''));
+  }
+
+  const slugKeys = (obj) => {
+    const out = {};
+    for (const k of Object.keys(obj)) out[slug(k)] = obj[k] == null ? '' : String(obj[k]);
+    return out;
+  };
+
+  // "[{...},{...}]", "{...}" or CSV with a header row -> array of {param: value}
+  function parseTable(text) {
+    const t = (text || '').trim();
+    if (!t) return [];
+    if (t[0] === '[') {
+      const arr = JSON.parse(t);
+      if (!Array.isArray(arr)) throw new Error('JSON must be a list of objects');
+      return arr.map(slugKeys);
+    }
+    if (t[0] === '{') return [slugKeys(JSON.parse(t))];
+    const rows = parseCsv(t);
+    if (rows.length < 2) throw new Error('Need a header row plus at least one data row');
+    const head = rows[0].map((h) => slug(h));
+    return rows.slice(1).map((r) => {
+      const o = {};
+      head.forEach((h, i) => { o[h] = r[i] == null ? '' : r[i]; });
+      return o;
+    });
+  }
+
+  // "name: John\nemail: j@x.com" or JSON object -> {name:'John', email:'j@x.com'}
+  function parseQuickFill(text) {
+    const t = (text || '').trim();
+    if (!t) return {};
+    if (t[0] === '{') return slugKeys(JSON.parse(t));
+    const out = {};
+    for (const line of t.split(/\r?\n/)) {
+      const m = line.match(/^\s*([^:=]+?)\s*[:=]\s*(.*)$/);
+      if (m) out[slug(m[1])] = m[2].trim();
+    }
+    return out;
+  }
+
+  return { slug, uniqueName, describe, parseCsv, parseTable, parseQuickFill };
+})();
+
+// CSV export (UTF-8 with BOM for Excel). Cells that could be run as formulas get a leading apostrophe.
+RA.toCsv = function (rows, columns) {
+  const cols = columns && columns.length ? columns : Array.from(new Set(rows.flatMap((r) => Object.keys(r))));
+  const cell = (v) => {
+    let t = v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v);
+    if (/^[=@]/.test(t) || /^[+\-][^\d.\s]/.test(t)) t = "'" + t;
+    return /[",\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+  };
+  return '\ufeff' + [cols.map(cell).join(',')].concat(rows.map((r) => cols.map((c) => cell(r[c])).join(','))).join('\r\n');
+};
+RA.fieldLabel = (function () {
+  // Human label of a form control, including UI-framework widgets (PrimeNG, Bootstrap, Material, Ant, Select2 ...)
+  // whose visible label is a separate element near the widget rather than a <label for>.
+  function fieldLabelOf(el) {
+    const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+    const tidy = (s) => norm(s).replace(/\s*[*:]+\s*$/, '').slice(0, 70);
+    const own = (n) => norm(n.innerText != null ? n.innerText : n.textContent);
+    const root = el.getRootNode && el.getRootNode().getElementById ? el.getRootNode() : document;
+    const lb = el.getAttribute && el.getAttribute('aria-labelledby');
+    if (lb) {
+      const t = lb.split(/\s+/).map((id) => root.getElementById(id)).filter(Boolean).map(own).join(' ');
+      if (t) return tidy(t);
+    }
+    const inner = el.matches('input,select,textarea') ? el : el.querySelector('input:not([type=hidden]),select,textarea');
+    for (const c of [el, inner]) {
+      if (c && c.labels && c.labels.length) { const t = own(c.labels[0]); if (t) return tidy(t); }
+    }
+    for (const id of [el.id, inner && inner.id]) {
+      if (!id) continue;
+      let l = null;
+      try { l = root.querySelector('label[for="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]'); } catch (e) { /* ignore */ }
+      if (l && own(l)) return tidy(own(l));
+    }
+    const aria = el.getAttribute && el.getAttribute('aria-label');
+    if (aria) return tidy(aria);
+    const FIELD = 'input:not([type=hidden]):not([type=checkbox]):not([type=radio]),select,textarea,[role=combobox],[role=listbox],[role=textbox],[contenteditable=true],p-dropdown,p-calendar,p-multiselect,p-autocomplete,p-inputnumber,p-inputmask,p-password,p-cascadeselect,p-treeselect,mat-select,ng-select,.p-dropdown,.p-multiselect,.p-calendar,.p-autocomplete,.p-inputnumber,.ant-select,.select2-container';
+    const LABEL = 'label,legend,mat-label,.form-label,.control-label,.col-form-label,.ant-form-item-label,.field-label,.p-field-label,[class*=label],[class*=Label]';
+    const SKIPCLS = /(dropdown|select|multiselect|autocomplete|calendar|chip|token|placeholder|inputtext)[-_]?label|label[-_]?(text|value)|p-hidden|sr-only|visually-hidden/i;
+    const plain = (p) => p && !p.matches(FIELD) && !p.querySelector(FIELD + ',button,a,input,select,textarea') && own(p) && own(p).length <= 60;
+    let child = el;
+    for (let i = 0; i < 5 && child.parentElement; i++) {
+      const node = child.parentElement;
+      // short plain text right before this widget (e.g. <span>Budget</span><div><input></div>)
+      const ps = child.previousElementSibling;
+      if (plain(ps)) return tidy(own(ps));
+      const fields = Array.from(node.querySelectorAll(FIELD)).filter((f) => !el.contains(f) && !f.contains(el));
+      const labels = Array.from(node.querySelectorAll(LABEL)).filter((l) => {
+        if (el.contains(l) || l.contains(el) || l.querySelector(FIELD)) return false;
+        if (SKIPCLS.test(typeof l.className === 'string' ? l.className : '')) return false;
+        const t = own(l);
+        return t && t.length <= 80;
+      });
+      if (labels.length) {
+        const before = labels.filter((l) => l.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
+        // a label followed by another field before reaching us belongs to that other field
+        const mine = before.filter((l) => !fields.some((f) => (l.compareDocumentPosition(f) & Node.DOCUMENT_POSITION_FOLLOWING) && (f.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)));
+        if (mine.length) return tidy(own(mine[mine.length - 1]));
+        if (!fields.length) return tidy(own(labels[0])); // floating label after the control
+      }
+      if (fields.length) break;
+      child = node;
+    }
+    return '';
+  }
+  return fieldLabelOf;
+})();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//content.js
+// Content script: records what you do on the page, and replays recorded workflows.
+(() => {
+  if (window.__repeatAgentLoaded) return;
+  window.__repeatAgentLoaded = true;
+
+  const instance = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+  const esc = (s) =>
+    String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const send = (msg) =>
+    new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage(msg, (r) => { void chrome.runtime.lastError; resolve(r); });
+      } catch (e) { resolve(undefined); }
+    });
+  class Abort extends Error {}
+
+  let unloading = false;
+  window.addEventListener('pagehide', () => { unloading = true; });
+  window.addEventListener('beforeunload', () => { unloading = true; });
+  window.addEventListener('pageshow', (e) => { if (e.persisted) { unloading = false; refreshMode(); } });
+
+  // =====================================================================
+  // Overlay (small floating panel in a shadow root)
+  // =====================================================================
+  let host = null, box = null;
+  function ensureOverlay() {
+    if (host && host.isConnected) return;
+    host = document.createElement('div');
+    host.id = '__repeat_agent_overlay';
+    host.style.cssText = 'all:initial;position:fixed;z-index:2147483647;right:16px;bottom:16px;';
+    const root = host.attachShadow({ mode: 'open' });
+    root.innerHTML = `<style>
+      .box{font:13px/1.4 system-ui,sans-serif;color:#202124;background:#fff;border:1px solid #dadce0;border-left:4px solid var(--c,#1a73e8);
+        border-radius:8px;padding:10px 12px;min-width:240px;max-width:340px;box-shadow:0 4px 16px rgba(0,0,0,.2)}
+      .t{font-weight:600;margin-bottom:2px}.m{color:#5f6368;word-break:break-word}
+      .r{margin-top:8px;display:flex;gap:6px;justify-content:flex-end}
+      button{font:inherit;cursor:pointer;border:0;border-radius:6px;padding:5px 10px;background:var(--c,#1a73e8);color:#fff}
+      button.g{background:#f1f3f4;color:#202124}
+    </style><div class="box"></div>`;
+    box = root.querySelector('.box');
+    document.documentElement.appendChild(host);
+  }
+  function setOverlay(html, handlers, color) {
+    ensureOverlay();
+    box.style.setProperty('--c', color || '#1a73e8');
+    box.innerHTML = html;
+    box.querySelectorAll('[data-act]').forEach((b) => {
+      const fn = handlers && handlers[b.getAttribute('data-act')];
+      if (fn) b.addEventListener('click', fn);
+    });
+  }
+  function hideOverlay() {
+    if (host) host.remove();
+    host = null; box = null;
+  }
+  const inOverlay = (e) => !!host && e.composedPath().includes(host);
+
+  function showRecording(count) {
+    setOverlay(
+      `<div class="t">● Recording</div><div class="m">${count} step${count === 1 ? '' : 's'} captured. Do the task once as usual.</div>
+       <div class="r"><button class="g" data-act="cancel">Discard</button><button data-act="stop">Stop &amp; save</button></div>`,
+      {
+        stop: async () => {
+          const r = await send({ type: 'recStop' });
+          if (r && r.ok) {
+            setOverlay('<div class="t">Saved ✓</div><div class="m">Open the Repeat Agent popup to review the fields and run it.</div>', {}, '#188038');
+            setTimeout(refreshMode, 3500);
+          } else {
+            setOverlay(`<div class="t">Could not save</div><div class="m">${esc((r && r.error) || 'Unknown error')}</div>
+              <div class="r"><button data-act="ok">OK</button></div>`, { ok: refreshMode }, '#d93025');
+          }
+        },
+        cancel: async () => { await send({ type: 'recStop', cancel: true }); },
+      },
+      '#d93025'
+    );
+  }
+
+  // =====================================================================
+  // Locators: describe an element in several ways so it can be found again
+  // =====================================================================
+  const stableId = (id) => !!id && !/(\d{3,}|[:«»]|^(react|radix|headlessui|ember|mui|rc)[-_])/i.test(id);
+  const attrSel = (n, v) => `[${n}="${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"]`;
+
+  function labelOf(el) {
+    const lb = el.getAttribute && el.getAttribute('aria-labelledby');
+    if (lb) {
+      const t = lb.split(/\s+/).map((id) => document.getElementById(id)).filter(Boolean).map((n) => norm(n.textContent)).join(' ');
+      if (t) return clean(t);
+    }
+    if (el.labels && el.labels.length) {
+      const t = norm(el.labels[0].textContent);
+      if (t) return clean(t);
+    }
+    const wrap = el.closest && el.closest('label');
+    if (wrap) {
+      const t = norm(wrap.textContent);
+      if (t) return clean(t);
+    }
+    const aria = el.getAttribute && el.getAttribute('aria-label');
+    return aria ? clean(aria) : '';
+  }
+  const clean = (t) => t.replace(/\s*[*:]+\s*$/, '').slice(0, 80);
+
+  function cssPath(el) {
+    const parts = [];
+    let node = el;
+    while (node && node.nodeType === 1 && node !== document.documentElement) {
+      if (node.id && stableId(node.id)) { parts.unshift('#' + CSS.escape(node.id)); break; }
+      let part = node.tagName.toLowerCase();
+      const parent = node.parentElement;
+      if (parent) {
+        const same = Array.from(parent.children).filter((c) => c.tagName === node.tagName);
+        if (same.length > 1) part += `:nth-of-type(${same.indexOf(node) + 1})`;
+      }
+      parts.unshift(part);
+      node = parent;
+    }
+    return parts.join(' > ');
+  }
+
+  const isFormControl = (el) => ['INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName);
+
+  function visibleText(el) {
+    if (el.tagName === 'INPUT') return norm(el.value);
+    return norm(el.textContent);
+  }
+
+  function buildLocator(el) {
+    const tag = el.tagName.toLowerCase();
+    const loc = { tag };
+    if (el.id && stableId(el.id)) loc.id = el.id;
+    for (const a of ['data-testid', 'data-test', 'data-cy', 'data-qa', 'data-test-id']) {
+      const v = el.getAttribute(a);
+      if (v) { loc.testAttr = a; loc.testVal = v; break; }
+    }
+    const name = el.getAttribute('name');
+    if (name) loc.name = name;
+    if (tag === 'input') {
+      loc.type = (el.type || 'text').toLowerCase();
+      if (loc.type === 'radio' || loc.type === 'checkbox') loc.value = el.value;
+    }
+    const aria = el.getAttribute('aria-label');
+    if (aria) loc.aria = aria;
+    const ph = el.getAttribute('placeholder');
+    if (ph) loc.placeholder = ph;
+    const lbl = labelOf(el);
+    if (lbl) loc.label = lbl;
+    const role = el.getAttribute('role');
+    if (role) loc.role = role;
+    if (!el.isContentEditable && !['SELECT', 'TEXTAREA'].includes(el.tagName) && !(el.tagName === 'INPUT' && !['submit', 'button', 'reset'].includes(loc.type))) {
+      const t = visibleText(el);
+      if (t && t.length <= 80) loc.text = t;
+    }
+    if (tag === 'a') {
+      const h = el.getAttribute('href');
+      if (h && !/^javascript:/i.test(h)) loc.href = h.slice(0, 200);
+    }
+    loc.css = cssPath(el);
+    return loc;
+  }
+
+  function isVisible(el) {
+    const r = el.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0)) return false;
+    const cs = getComputedStyle(el);
+    return cs.visibility !== 'hidden' && cs.display !== 'none';
+  }
+
+  function resolveLocator(loc, allowHidden) {
+    const qa = (sel) => { try { return Array.from(document.querySelectorAll(sel)); } catch (e) { return []; } };
+    const typeOk = (e) => !loc.type || (e.type || '').toLowerCase() === loc.type;
+    const valueOk = (e) => loc.value === undefined || e.value === loc.value;
+    const textEq = (e) => visibleText(e) === loc.text;
+    const deepest = (list) => list.filter((c) => !Array.from(c.children).some((ch) => list.includes(ch)));
+
+    const strategies = [
+      () => (loc.id ? [document.getElementById(loc.id)].filter(Boolean) : []),
+      () => (loc.testAttr ? qa(attrSel(loc.testAttr, loc.testVal)) : []),
+      () => (loc.name ? qa(loc.tag + attrSel('name', loc.name)).filter(typeOk).filter(valueOk) : []),
+      () => (loc.aria ? qa(loc.tag + attrSel('aria-label', loc.aria)) : []),
+      () => (loc.label && (isFormLike(loc)) ? qa(loc.tag).filter((e) => labelOf(e) === loc.label).filter(typeOk).filter(valueOk) : []),
+      () => (loc.placeholder ? qa(loc.tag + attrSel('placeholder', loc.placeholder)) : []),
+      () => (loc.text && loc.href ? deepest(qa(loc.tag).filter(textEq)).filter((e) => e.getAttribute('href') === loc.href) : []),
+      () => (loc.text ? deepest(qa(loc.tag).filter(textEq)) : []),
+      () => (loc.css ? qa(loc.css) : []),
+    ];
+
+    let fallback = null;
+    for (const fn of strategies) {
+      const list = fn();
+      if (!list.length) continue;
+      const pool = allowHidden ? list : list.filter(isVisible);
+      if (pool.length === 1) return pool[0];
+      if (pool.length > 1 && !fallback) fallback = pool[0];
+    }
+    return fallback;
+  }
+  const isFormLike = (loc) => ['input', 'select', 'textarea'].includes(loc.tag) || !!loc.role || loc.tag === 'div';
+
+  // Find the list item / button whose visible text matches a value the user supplied this run.
+  function resolveByText(step, value, allowHidden) {
+    const loc = step.loc || {};
+    const want = norm(value).toLowerCase();
+    if (!want) return null;
+    const gen = (p) => String(p || '').replace(/:nth-of-type\(\d+\)/g, '').replace(/#[^ >]+/g, '#');
+    const qa = (sel) => { try { return Array.from(document.querySelectorAll(sel)); } catch (e) { return []; } };
+    const textOf = (e) => norm(e.tagName === 'INPUT' ? e.value : e.textContent).toLowerCase();
+    const pools = [
+      qa(loc.role ? `[role="${loc.role}"]` : loc.tag),
+      qa('[role="option"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], li, label, button, a, td, span, div'),
+    ];
+    const tiers = [(t) => t === want, (t) => t.startsWith(want), (t) => t.includes(want) && t.length <= want.length + 40];
+    for (const pool of pools) {
+      const vis = allowHidden ? pool : pool.filter(isVisible);
+      for (const tier of tiers) {
+        let hits = vis.filter((e) => { const t = textOf(e); return t && tier(t); });
+        hits = hits.filter((c) => !Array.from(c.children).some((ch) => hits.includes(ch)));
+        if (!hits.length) continue;
+        const same = hits.filter((e) => gen(cssPath(e)) === gen(loc.css));
+        return (same[0] || hits[0]);
+      }
+    }
+    return null;
+  }
+
+  async function waitFor(step, timeoutMs, allowHidden, valueOverride) {
+    const end = Date.now() + timeoutMs;
+    for (;;) {
+      const el = valueOverride !== undefined ? resolveByText(step, valueOverride, allowHidden) : resolveLocator(step.loc, allowHidden);
+      if (el) return el;
+      if (Date.now() > end) {
+        const loc = step.loc || {};
+        const what = valueOverride !== undefined ? valueOverride : step.label || loc.text || loc.aria || loc.placeholder || loc.name || loc.css || 'the element';
+        throw new Error('Could not find "' + what + '" on the page (' + step.type + ' step)');
+      }
+      await sleep(200);
+    }
+  }
+
+  // =====================================================================
+  // Recorder
+  // =====================================================================
+  let recOn = false;
+  const lastVal = new WeakMap();
+  const initialVal = new WeakMap();
+
+  function startRecorder() {
+    if (recOn) return;
+    recOn = true;
+    document.addEventListener('click', onClick, true);
+    document.addEventListener('change', onChange, true);
+    document.addEventListener('keydown', onKey, true);
+    document.addEventListener('focusin', onFocusIn, true);
+    document.addEventListener('focusout', onFocusOut, true);
+  }
+  function stopRecorder() {
+    if (!recOn) return;
+    recOn = false;
+    document.removeEventListener('click', onClick, true);
+    document.removeEventListener('change', onChange, true);
+    document.removeEventListener('keydown', onKey, true);
+    document.removeEventListener('focusin', onFocusIn, true);
+    document.removeEventListener('focusout', onFocusOut, true);
+  }
+
+  async function record(step, replace) {
+    step.url = location.href;
+    const r = await send({ type: 'recStep', step, replace: !!replace });
+    if (r && r.ok) showRecording(r.count);
+  }
+
+  const CLICKABLE =
+    'button, a, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="option"], [role="checkbox"], [role="radio"], [role="switch"], input[type="submit"], input[type="button"], input[type="reset"], input[type="image"], summary, label, [onclick]';
+
+  function onClick(e) {
+    if (!e.isTrusted || inOverlay(e) || !(e.target instanceof Element)) return;
+    let el = e.target.closest(CLICKABLE) || e.target;
+    if (el === document.body || el === document.documentElement) return;
+    if (el.tagName === 'LABEL' && el.control) return; // the control's own change event is recorded
+    if (['SELECT', 'TEXTAREA'].includes(el.tagName) || el.isContentEditable) return;
+    if (el.tagName === 'INPUT' && !['submit', 'button', 'reset', 'image'].includes((el.type || '').toLowerCase())) return;
+    const label = clickLabel(el);
+    const step = { type: 'click', loc: buildLocator(el), label };
+    if (!looksLikeChoice(el)) { try { const fl = RA.fieldLabel(el.closest('[class*=dropdown],[class*=select],[class*=picker],[class*=combobox],[role=combobox],[role=listbox],[class*=autocomplete],[class*=calendar]') || el); if (fl) step.field = fl; } catch (e) { /* ignore */ } }
+    if (label && label.length <= 60 && looksLikeChoice(el)) step.choice = true;
+    record(step);
+  }
+
+  // Clicks on items of a custom dropdown / list / filter menu: the *which one* is usually what you want to vary.
+  function looksLikeChoice(el) {
+    const role = (el.getAttribute('role') || '').toLowerCase();
+    if (['option', 'menuitemradio', 'menuitemcheckbox', 'treeitem'].includes(role)) return true;
+    if (el.closest('[role="listbox"], [role="menu"]')) return true;
+    const rx = /option|dropdown|select|menu-?item|picker|choice|suggest|autocomplete|combobox|listbox/i;
+    for (let n = el, i = 0; n && i < 3; n = n.parentElement, i++) {
+      const cls = typeof n.className === 'string' ? n.className : '';
+      if (rx.test(cls)) return true;
+    }
+    return false;
+  }
+  function clickLabel(el) {
+    return clean(visibleText(el) || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('value') || '');
+  }
+
+  function onChange(e) {
+    if (!e.isTrusted || inOverlay(e) || !(e.target instanceof Element)) return;
+    recordField(e.target);
+  }
+  function onFocusIn(e) {
+    const el = e.target;
+    if (el instanceof Element && el.isContentEditable && !isFormControl(el)) initialVal.set(el, el.innerText);
+  }
+  function onFocusOut(e) {
+    const el = e.target;
+    if (!(el instanceof Element) || !el.isContentEditable || isFormControl(el) || inOverlay(e)) return;
+    if (el.innerText !== initialVal.get(el)) recordField(el);
+  }
+  function onKey(e) {
+    if (!e.isTrusted || e.key !== 'Enter' || inOverlay(e) || !(e.target instanceof Element)) return;
+    const el = e.target;
+    if (el.tagName !== 'INPUT' || !isTextLike(el)) return;
+    recordField(el); // flush the typed value first so the order is right
+    record({ type: 'key', key: 'Enter', loc: buildLocator(el), label: labelOf(el) || el.name || '' });
+  }
+
+  function isTextLike(el) {
+    const t = (el.type || 'text').toLowerCase();
+    return !['checkbox', 'radio', 'file', 'submit', 'button', 'reset', 'image', 'hidden'].includes(t);
+  }
+  const fieldLabel = (el) => labelOf(el) || (() => { try { return RA.fieldLabel(el); } catch (e) { return ''; } })() || clean(el.getAttribute('placeholder') || el.getAttribute('name') || el.id || el.type || '');
+
+  function recordField(el) {
+    const tag = el.tagName;
+    if (tag === 'SELECT') {
+      const opts = Array.from(el.options).slice(0, 80).map((o) => norm(o.textContent));
+      if (el.multiple) {
+        const sel = Array.from(el.selectedOptions).map((o) => norm(o.textContent));
+        record({ type: 'select', multi: true, loc: buildLocator(el), label: fieldLabel(el), value: sel.join(','), text: sel.join(','), options: opts }, true);
+      } else {
+        const o = el.selectedOptions[0];
+        record({ type: 'select', loc: buildLocator(el), label: fieldLabel(el), value: el.value, text: o ? norm(o.textContent) : '', options: opts }, true);
+      }
+      return;
+    }
+    if (tag === 'INPUT') {
+      const type = (el.type || 'text').toLowerCase();
+      if (type === 'checkbox' || type === 'radio') {
+        record({ type: 'check', kind: type, loc: buildLocator(el), label: fieldLabel(el), checked: el.checked }, true);
+        return;
+      }
+      if (type === 'file') {
+        record({ type: 'manual', message: 'Choose the file for "' + (fieldLabel(el) || 'file upload') + '", then press Continue' });
+        return;
+      }
+      if (!isTextLike(el)) return;
+    }
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || el.isContentEditable) {
+      const editable = !isFormControl(el);
+      const host = editable ? el.closest('[contenteditable]:not([contenteditable="false"])') || el : el;
+      const value = editable ? host.innerText : el.value;
+      if (lastVal.get(host) === value) return;
+      lastVal.set(host, value);
+      const ac = (el.getAttribute('autocomplete') || '').toLowerCase();
+      const secret = (el.type || '').toLowerCase() === 'password' || /cc-|one-time-code/.test(ac);
+      record({
+        type: 'input', editable, loc: buildLocator(host), label: fieldLabel(host),
+        value: secret ? '' : value, secret,
+      }, true);
+    }
+  }
+
+  // =====================================================================
+  // Replayer
+  // =====================================================================
+  function setNativeValue(el, value) {
+    const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
+    if (desc && desc.set) desc.set.call(el, value); else el.value = value;
+  }
+  const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
+
+  function highlight(el) {
+    try {
+      const old = el.style.outline;
+      el.style.outline = '3px solid #f9ab00';
+      setTimeout(() => { el.style.outline = old; }, 700);
+    } catch (e) { /* ignore */ }
+  }
+
+  function fillInput(el, value) {
+    el.scrollIntoView({ block: 'center', inline: 'center' });
+    el.focus();
+    if (el.isContentEditable && !isFormControl(el)) {
+      document.execCommand('selectAll', false);
+      if (!document.execCommand('insertText', false, value)) {
+        el.textContent = value;
+        el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
+      }
+    } else {
+      setNativeValue(el, value);
+      fire(el, 'input');
+      fire(el, 'change');
+    }
+    if (el.blur) el.blur();
+  }
+
+  function chooseOption(el, step, value) {
+    const wanted = String(value).split(step.multi ? ',' : '\u0000').map((v) => v.trim()).filter((v, i, a) => v !== '' || a.length === 1);
+    const opts = Array.from(el.options);
+    if (step.multi) opts.forEach((o) => { o.selected = false; });
+    wanted.forEach((w) => {
+      const lw = w.toLowerCase();
+      const o =
+        opts.find((x) => x.value === w) ||
+        opts.find((x) => norm(x.textContent).toLowerCase() === lw) ||
+        opts.find((x) => x.value.toLowerCase() === lw) ||
+        opts.find((x) => norm(x.textContent).toLowerCase().includes(lw) && lw !== '');
+      if (!o) throw new Error('Option "' + w + '" not found in "' + (step.label || 'dropdown') + '"');
+      if (step.multi) o.selected = true; else el.value = o.value;
+    });
+    fire(el, 'input');
+    fire(el, 'change');
+  }
+
+  const parseBool = (v) => /^(true|yes|y|1|on|checked)$/i.test(String(v).trim());
+
+  function clickElement(el) {
+    el.scrollIntoView({ block: 'center', inline: 'center' });
+    highlight(el);
+    const o = { bubbles: true, cancelable: true, view: window };
+    try { el.dispatchEvent(new PointerEvent('pointerdown', o)); } catch (e) { /* older engines */ }
+    el.dispatchEvent(new MouseEvent('mousedown', o));
+    if (el.focus) el.focus();
+    try { el.dispatchEvent(new PointerEvent('pointerup', o)); } catch (e) { /* ignore */ }
+    el.dispatchEvent(new MouseEvent('mouseup', o));
+    el.click();
+  }
+
+  function pressEnter(el) {
+    const o = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
+    const proceed = el.dispatchEvent(new KeyboardEvent('keydown', o));
+    el.dispatchEvent(new KeyboardEvent('keypress', o));
+    if (proceed) {
+      const form = el.form || el.closest('form');
+      if (form) { if (form.requestSubmit) form.requestSubmit(); else form.submit(); }
+    }
+    el.dispatchEvent(new KeyboardEvent('keyup', o));
+  }
+
+  async function settle(ms) {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      if (unloading) return 'unloading';
+      await sleep(50);
+    }
+    return unloading ? 'unloading' : 'ok';
+  }
+
+  // After a click / Enter. If the recording showed this step leads to another page, wait for that
+  // navigation (or an in-page URL change) so the next step never runs against the old page.
+  async function afterAction(r, step) {
+    const href = location.href;
+    const expectNav = !!step.navigates;
+    const end = Date.now() + (expectNav ? 15000 : Math.max(r.stepDelay, 500));
+    while (Date.now() < end) {
+      if (unloading) return 'unloading';
+      if (expectNav && location.href !== href) {
+        await sleep(300);
+        return unloading ? 'unloading' : 'ok';
+      }
+      await sleep(50);
+    }
+    return unloading ? 'unloading' : 'ok';
+  }
+
+  function valueFor(step, params) {
+    if (step.variable && step.param && Object.prototype.hasOwnProperty.call(params || {}, step.param)) {
+      return params[step.param];
+    }
+    if (step.secret) throw new Error('No value was provided for the secret field "' + (step.label || step.param) + '"');
+    if (step.type === 'select') return step.text || step.value;
+    return step.value;
+  }
+
+  async function waitManual(message) {
+    const res = await new Promise((resolve) => {
+      setOverlay(
+        `<div class="t">⏸ Your turn</div><div class="m">${esc(message)}</div>
+         <div class="r"><button class="g" data-act="stop">Stop</button><button data-act="go">Continue</button></div>`,
+        {
+          go: () => resolve('go'),
+          stop: async () => { await send({ type: 'stopRun' }); resolve('stop'); },
+        },
+        '#f9ab00'
+      );
+    });
+    if (res === 'stop') throw new Abort();
+  }
+
+  async function executeStep(r) {
+    const { step, params, index } = r;
+    const timeout = r.waitTimeout;
+    const commit = async () => {
+      const a = await send({ type: 'advance', instance, index });
+      if (!a || !a.ok) throw new Abort();
+    };
+    try {
+      if (step.pauseBefore) await waitManual('Paused before: ' + RA.describe(step));
+      showStatus(r);
+      switch (step.type) {
+        case 'navigate':
+          await commit();
+          await send({ type: 'navigate', url: step.url });
+          return (await settle(8000)) === 'unloading' ? 'unloading' : 'ok';
+        case 'click': {
+          if (step.variable) {
+            // "click the item named {{param}}"; several items can be given separated by ;
+            const values = String(valueFor(step, params)).split(/\s*;\s*/).filter((v) => v !== '');
+            if (!values.length) throw new Error('No value was provided for "' + (step.fieldLabel || step.param) + '"');
+            let first = true;
+            for (const v of values) {
+              const el = await waitFor(step, timeout, false, v);
+              if (first) { await commit(); first = false; }
+              clickElement(el);
+              if (values.length > 1) await sleep(Math.max(r.stepDelay, 250));
+            }
+            return afterAction(r, step);
+          }
+          const el = await waitFor(step, timeout, false);
+          await commit();
+          clickElement(el);
+          return afterAction(r, step);
+        }
+        case 'input': {
+          const el = await waitFor(step, timeout, false);
+          highlight(el);
+          fillInput(el, String(valueFor(step, params)));
+          await commit();
+          return 'ok';
+        }
+        case 'select': {
+          const el = await waitFor(step, timeout, true);
+          highlight(el);
+          chooseOption(el, step, valueFor(step, params));
+          await commit();
+          return 'ok';
+        }
+        case 'check': {
+          const el = await waitFor(step, timeout, true);
+          const want = step.kind === 'radio' ? true : step.variable ? parseBool(valueFor(step, params)) : !!step.checked;
+          if (el.checked !== want) el.click();
+          await commit();
+          return 'ok';
+        }
+        case 'key': {
+          const el = await waitFor(step, timeout, false);
+          await commit();
+          pressEnter(el);
+          return afterAction(r, step);
+        }
+        case 'manual':
+          await waitManual(step.message || 'Please do this step manually');
+          await commit();
+          return 'ok';
+        default:
+          throw new Error('Unknown step type: ' + step.type);
+      }
+    } catch (e) {
+      if (e instanceof Abort) return 'abort';
+      await send({ type: 'fail', instance, index, message: (e && e.message) || String(e) });
+      return 'failed';
+    }
+  }
+
+  function showStatus(r) {
+    const row = r.rowCount > 1 ? `Row ${r.rowIndex + 1}/${r.rowCount} · ` : '';
+    setOverlay(
+      `<div class="t">▶ Replaying</div><div class="m">${row}Step ${r.index + 1}/${r.total}: ${esc(RA.describe(r.step))}</div>
+       <div class="r"><button class="g" data-act="stop">Stop</button></div>`,
+      { stop: async () => { await send({ type: 'stopRun' }); } }
+    );
+  }
+
+  let looping = false;
+  let navigatingAway = false; // the background is sending this tab to the next batch row
+  async function runLoop() {
+    if (looping || navigatingAway) return;
+    looping = true;
+    try {
+      if (document.readyState !== 'complete') await new Promise((res) => window.addEventListener('load', res, { once: true }));
+      await sleep(300);
+      for (;;) {
+        if (unloading) return;
+        const r = await send({ type: 'claim', instance });
+        if (!r || !r.ok) break;
+        if (r.finalize) {
+          setOverlay('<div class="t">▶ Finishing…</div>', {});
+          if ((await settle(1200)) === 'unloading') return;
+          const f = await send({ type: 'finishRow', instance });
+          if (f && f.ok && f.next) { navigatingAway = true; return; } // tab is reloading for the next row
+          break;
+        }
+        const res = await executeStep(r);
+        if (res === 'unloading' || res === 'abort' || res === 'failed') break;
+        await sleep(r.stepDelay);
+      }
+    } finally {
+      looping = false;
+      if (!unloading && !navigatingAway) refreshMode();
+    }
+  }
+
+  // =====================================================================
+  // Mode handling
+  // =====================================================================
+  function applyMode(m) {
+    if (!m) return;
+    if (m.recording) {
+      startRecorder();
+      showRecording(m.stepCount);
+      return;
+    }
+    stopRecorder();
+    if (m.run) {
+      runLoop();
+      return;
+    }
+    if (m.agent) {
+      showAgent(m.agent);
+      return;
+    }
+    const ri = m.runInfo;
+    if (ri && ri.status === 'done') {
+      const bad = ri.results.filter((x) => !x.ok).length;
+      const lastRes = ri.results[ri.results.length - 1] || {};
+      const extra = [lastRes.summary, lastRes.data].filter(Boolean).join(' — ').slice(0, 300);
+      setOverlay(
+        `<div class="t">✓ Finished</div><div class="m">${esc(ri.name)} — ${ri.results.length - bad} succeeded${bad ? ', ' + bad + ' failed' : ''}.${extra ? '<br>' + esc(extra) : ''}</div>
+         <div class="r"><button data-act="ok">Dismiss</button></div>`,
+        { ok: async () => { await send({ type: 'clearRun' }); } }, '#188038'
+      );
+    } else if (ri && ri.status === 'failed') {
+      setOverlay(
+        `<div class="t">✗ Stopped</div><div class="m">${esc(ri.error || 'Something went wrong')}</div>
+         <div class="r"><button data-act="ok">Dismiss</button></div>`,
+        { ok: async () => { await send({ type: 'clearRun' }); } }, '#d93025'
+      );
+    } else {
+      hideOverlay();
+    }
+  }
+
+  function showAgent(a) {
+    if (a.paused) {
+      setOverlay(
+        `<div class="t">⏸ The AI agent needs you</div><div class="m">${esc(a.paused)}</div>
+         <div class="r"><button class="g" data-act="stop">Stop</button><button data-act="go">Continue</button></div>`,
+        {
+          go: async () => { await send({ type: 'agentContinue' }); refreshMode(); },
+          stop: async () => { await send({ type: 'stopRun' }); },
+        },
+        '#f9ab00'
+      );
+      return;
+    }
+    setOverlay(
+      `<div class="t">🤖 AI agent working${a.step ? ' · step ' + a.step : ''}</div><div class="m">${esc(a.last || '')}</div>
+       <div class="r"><button class="g" data-act="stop">Stop</button></div>`,
+      { stop: async () => { await send({ type: 'stopRun' }); } },
+      '#7b1fa2'
+    );
+  }
+
+  async function refreshMode() { applyMode(await send({ type: 'mode' })); }
+
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg && msg.type === 'ping') sendResponse({ pong: true });
+    else if (msg && msg.type === 'mode-changed') refreshMode();
+  });
+
+  (async () => { applyMode(await send({ type: 'hello' })); })();
+})();
