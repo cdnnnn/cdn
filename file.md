@@ -1,4 +1,3 @@
-//Newevaluation.tsx
 import { Component, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -1647,6 +1646,38 @@ export default function NewEvaluation() {
     return true;
   };
 
+  // Plain-language reason "Next" is disabled on the current step, shown
+  // beside the button in the footer so nobody has to guess what is missing.
+  // Mirrors canGo() branch for branch; null whenever canGo() is true.
+  const blockReason = (): string | null => {
+    if (canGo()) return null;
+    if (step === 0) return 'Give the run a name to continue.';
+    if (step === 1) return !draft.type ? 'Choose what you are evaluating.' : 'Select at least one agent to compare.';
+    if (step === 2) return 'Select at least one provider.';
+    if (step === 3) {
+      if (modelsLoading || !modelsFetchedThisVisit) return 'Loading models…';
+      if (selectedModelsNotReady.length > 0) return 'Every selected model needs a passed health check.';
+      if (draft.type === 'rag') return 'Select one embedding model, one reranker and at least one LLM.';
+      return 'Select at least one model.';
+    }
+    if (step === 4) {
+      if (isHarness) {
+        return selectedHarnessSuites.length === 0
+          ? 'Select at least one suite.'
+          : 'Deselect the suites that have no questions.';
+      }
+      return !draft.dataset ? 'Select a test suite.' : 'This suite has no questions. Select another one.';
+    }
+    if (step === 5) {
+      if (!draft.judgeModelId) return 'Select a judge model.';
+      const metricsAvailable = !hideMetricsStep && (metricsCatalog.length > 0 || customMetricsForType.length > 0);
+      if (metricsAvailable && draft.metrics.length === 0) return 'Select at least one metric.';
+      if (draft.retestOnWrong && !draft.retestVerifyMetric) return 'Choose a verify metric for Retest on Wrong.';
+      if (isHarness) return 'Fill in the harness settings.';
+    }
+    return 'Complete this step to continue.';
+  };
+
   const goNext = () => {
     if (!canGo()) return;
     setStep((s) => Math.min(totalSteps - 1, s + 1));
@@ -1923,7 +1954,6 @@ export default function NewEvaluation() {
     }
   };
 
-  const progressPct = Math.round((step / (totalSteps - 1)) * 100);
 
   // ---- live Run Manifest values (one per step) ----------------------------
   const providerNames = draft.providers.map((id) => providers.find((p) => p?.id === id)?.name || id);
@@ -1958,6 +1988,7 @@ export default function NewEvaluation() {
   ];
 
   const CrumbIcon = STEP_ICONS[step];
+  const continueBlockedReason = blockReason();
 
   // ---- shared "Run samples" control (Custom / Full) ------------------------
   // Used by both branches of Step 5 (the simplified model-benchmark view and
@@ -2037,24 +2068,28 @@ export default function NewEvaluation() {
         <div className={styles.ev}>
           {/* ---- shell ---- */}
           <div className={styles.ev__shell}>
-            {/* SIGNATURE: Run Manifest */}
-            <aside className={styles.ev__manifest}>
+            {/* Step checklist: sits directly on the page, the stage is the only card */}
+            <aside className={styles.ev__manifest} aria-label="Run steps">
               <div className={styles['ev__manifest-head']}>
-                <div className={styles['ev__manifest-eyebrow']}>
-                  <span>Run manifest</span>
-                  <span className={styles['ev__manifest-pct']}>{progressPct}%</span>
-                </div>
                 <div className={styles['ev__manifest-title']} data-empty={!draft.name}>
                   {draft.name || 'Untitled run'}
                 </div>
-                <div className={styles.ev__meter}>
-                  <div className={styles['ev__meter-fill']} style={{ width: `${progressPct}%` }} />
+                <div className={styles['ev__manifest-eyebrow']}>
+                  {step} of {totalSteps} steps done
+                </div>
+                <div className={styles.ev__meter} aria-hidden="true">
+                  {STEPS.map((s, i) => (
+                    <span
+                      key={s.label}
+                      className={styles['ev__meter-seg']}
+                      data-state={i < step ? 'done' : i === step ? 'active' : 'todo'}
+                    />
+                  ))}
                 </div>
               </div>
               <div className={styles.ev__spec}>
                 {STEPS.map((s, i) => {
                   const state = i === step ? 'active' : i < step ? 'done' : 'todo';
-                  const Icon = STEP_ICONS[i];
                   const row = manifest[i];
                   return (
                     <button
@@ -2063,16 +2098,18 @@ export default function NewEvaluation() {
                       className={`${styles['ev__spec-row']} ${styles[`ev__spec-row--${state}`]}`}
                       onClick={() => goToStep(i)}
                       disabled={i > step}
+                      aria-current={state === 'active' ? 'step' : undefined}
                     >
                       <span className={styles['ev__spec-tick']}>
-                        {state === 'done' ? <Check size={13} strokeWidth={3} /> : <Icon size={14} />}
+                        {state === 'done' ? <Check size={13} strokeWidth={3} /> : i + 1}
                       </span>
                       <span className={styles['ev__spec-body']}>
                         <span className={styles['ev__spec-label']}>{s.label}</span>
                         <span className={styles['ev__spec-value']} data-empty={row.empty}>
-                          {row.value}
+                          {row.empty ? (state === 'active' ? 'In progress' : 'Not set') : row.value}
                         </span>
                       </span>
+                      {state === 'done' && <span className={styles['ev__spec-edit']}>Edit</span>}
                     </button>
                   );
                 })}
@@ -2082,19 +2119,16 @@ export default function NewEvaluation() {
             {/* STAGE */}
             <section className={styles.ev__stage}>
               <div className={styles['ev__stage-head']}>
-                <div className={styles.ev__crumb}>
-                  <span>
-                    <CrumbIcon size={13} /> Step
-                  </span>
-                  <span className={styles['ev__crumb-sep']} />
-                  <span>
-                    <b>{String(step + 1).padStart(2, '0')}</b> / {String(totalSteps).padStart(2, '0')}
-                  </span>
-                  <span className={styles['ev__crumb-sep']} />
-                  <span>{STEPS[step].label}</span>
+                <span className={styles['ev__stage-icon']} aria-hidden="true">
+                  <CrumbIcon size={18} />
+                </span>
+                <div className={styles['ev__stage-head-text']}>
+                  <p className={styles.ev__crumb}>
+                    Step {step + 1} of {totalSteps}
+                  </p>
+                  <h2 className={styles['ev__stage-title']}>{STAGE[step].title}</h2>
+                  <p className={styles['ev__stage-sub']}>{STAGE[step].sub}</p>
                 </div>
-                <h2 className={styles['ev__stage-title']}>{STAGE[step].title}</h2>
-                <p className={styles['ev__stage-sub']}>{STAGE[step].sub}</p>
               </div>
 
               <div className={styles['ev__stage-body']}>
@@ -3845,7 +3879,12 @@ export default function NewEvaluation() {
                   <ChevronLeft size={16} /> {step === 0 ? 'Cancel' : 'Back'}
                 </button>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                <div className={styles['ev__footer-actions']}>
+                  {continueBlockedReason && step < totalSteps - 1 && (
+                    <span className={styles['ev__footer-reason']} role="status">
+                      <Info size={14} /> {continueBlockedReason}
+                    </span>
+                  )}
                   {step === 0 && canGo() && (
                     <span className={styles.ev__hint}>
                       <kbd>↵</kbd> Enter to continue
@@ -3853,7 +3892,7 @@ export default function NewEvaluation() {
                   )}
                   {step < totalSteps - 1 ? (
                     <button type="button" className={`${styles.ev__btn} ${styles['ev__btn--primary']}`} onClick={goNext} disabled={!canGo()}>
-                      Continue <ChevronRight size={16} />
+                      Next: {STEPS[step + 1].label} <ChevronRight size={16} />
                     </button>
                   ) : (
                     <button type="button" className={`${styles.ev__btn} ${styles['ev__btn--launch']}`} onClick={launch} disabled={launching}>
@@ -4192,7 +4231,22 @@ export default function NewEvaluation() {
 
 
 
-//Newevaluation.module.scss
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
@@ -4231,7 +4285,19 @@ $ring:  0 0 0 3px rgba(43, 43, 245, 0.16);
 // itself so inheritance covers everything nested inside it.
 $ev-base-font: 0.8125rem;
 
+// Small field/section labels inside the wizard: plain sentence-case sans.
+// (Was tracked uppercase mono, which made every label shout at 9-11px.)
 %micro {
+  font-family: $sans;
+  font-size: 0.8462em; // 0.6875rem / 0.8125rem
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+// The page header eyebrow keeps the tracked uppercase mono treatment so it
+// still matches the History / Reports / Comparison headers.
+%micro-caps {
   font-family: $mono;
   font-size: 0.8462em; // 0.6875rem / 0.8125rem
   font-weight: 700;
@@ -4270,7 +4336,7 @@ $ev-base-font: 0.8125rem;
 }
 
 .ev__header-eyebrow {
-  @extend %micro;
+  @extend %micro-caps;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -4371,115 +4437,106 @@ $ev-base-font: 0.8125rem;
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: 288px 1fr;
-    gap: 16px;
+    grid-template-columns: 268px 1fr;
+    gap: 22px;
   }
 
   // ========================================================================
-  // SIGNATURE: Run Manifest
+  // Step checklist (left rail)
+  // Sits directly on the page with no card of its own, so the stage is the
+  // one surface on screen. Each row is a step: number, name, and the value
+  // chosen so far. Done rows are links back to that step.
   // ========================================================================
   &__manifest {
-    background: $card;
-    border: 1px solid $line;
-    border-radius: 16px;
-    box-shadow: $soft;
     display: flex;
     flex-direction: column;
     min-height: 0;
-    overflow: hidden;
   }
 
   &__manifest-head {
     flex-shrink: 0;
-    padding: 18px 20px 16px;
-    border-bottom: 1px solid $line-2;
+    padding: 6px 12px 18px;
   }
-
-  &__manifest-eyebrow {
-    @extend %micro;
-    color: $ink-3;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  &__manifest-pct {
-    color: $signal;
-    font-size: 0.9231em; letter-spacing: 0.06em; } // 0.75rem / 0.8125rem
 
   &__manifest-title {
-    margin-top: 8px;
     font-family: $display;
-    font-size: 1.2308em; // 1rem / 0.8125rem
+    font-size: 1.3846em; // 1.125rem / 0.8125rem
     font-weight: 800;
-    letter-spacing: -0.015em;
+    letter-spacing: -0.02em;
     color: $ink;
-    line-height: 1.15;
+    line-height: 1.2;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 
-    &[data-empty='true'] { color: $ink-3; font-style: normal; }
+    &[data-empty='true'] { color: $ink-3; }
   }
 
+  &__manifest-eyebrow {
+    margin-top: 4px;
+    font-size: 0.9615em; // 0.78125rem / 0.8125rem
+    font-weight: 500;
+    color: $ink-2;
+  }
+
+  // one segment per step, so the bar reads as "which steps", not a percent
   &__meter {
     margin-top: 12px;
+    display: flex;
+    gap: 4px;
+  }
+
+  &__meter-seg {
+    flex: 1;
     height: 4px;
     border-radius: 999px;
     background: $line;
-    overflow: hidden;
+    transition: background 0.25s ease;
+
+    &[data-state='done'] { background: $signal; }
+    &[data-state='active'] { background: rgba($signal, 0.35); }
   }
 
-  &__meter-fill {
-    height: 100%;
-    border-radius: 999px;
-    background: linear-gradient(90deg, $signal, $signal-2);
-    transition: width 0.4s cubic-bezier(0.32, 0.72, 0, 1);
-  }
-
-  // ---- the spec list (each row = a step, with its live value) -------------
   &__spec {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 14px 12px 16px;
+    padding: 2px;
     display: flex;
     flex-direction: column;
-    gap: 24px;
+    gap: 2px;
   }
 
   &__spec-row {
     position: relative;
     display: grid;
-    grid-template-columns: 30px 1fr;
-    align-items: start;
+    grid-template-columns: 28px 1fr auto;
+    align-items: center;
     gap: 12px;
     width: 100%;
     text-align: left;
-    border: 0;
+    border: 1px solid transparent;
     background: transparent;
-    padding: 12px 12px 12px 4px;
+    padding: 10px 12px 10px 10px;
     border-radius: 12px;
     cursor: pointer;
-    transition: background 0.15s ease;
+    transition: background 0.15s ease, border-color 0.15s ease;
 
-    // Extends past this row's own bottom edge by exactly the flex `gap`
-    // above (24px), so the line still reaches the next row's tick — the
-    // larger the gap, the more this needs to stretch to stay unbroken.
+    // connector from this tick down to the next one (rows are 2px apart)
     &::before {
       content: '';
       position: absolute;
-      left: 18px;
-      top: 38px;
-      bottom: -24px;
+      left: 23px;
+      top: calc(50% + 17px);
+      height: calc(100% - 32px);
       width: 2px;
+      border-radius: 2px;
       background: $line;
       transition: background 0.2s ease;
     }
     &:last-child::before { display: none; }
 
     &:disabled { cursor: default; }
-    &:not(:disabled):hover { background: $paper; }
   }
 
   &__spec-tick {
@@ -4487,67 +4544,75 @@ $ev-base-font: 0.8125rem;
     z-index: 1;
     width: 28px;
     height: 28px;
-    border-radius: 9px;
+    border-radius: 50%;
     display: grid;
     place-items: center;
-    background: $card;
+    background: $paper;
     border: 1.5px solid $line;
     color: $ink-3;
     font-family: $mono;
-    font-size: 0.8462em; // 0.6875rem / 0.8125rem
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
     font-weight: 700;
-    transition: all 0.18s ease;
+    transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
   }
 
   &__spec-body {
     min-width: 0;
-    padding-top: 1px;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 1px;
   }
 
   &__spec-label {
-    @extend %micro;
     font-size: 0.9231em; // 0.75rem / 0.8125rem
-    color: $ink-3;
+    font-weight: 600;
+    color: $ink-2;
     transition: color 0.18s ease;
   }
 
   &__spec-value {
-    font-size: 1.1538em; // 0.9375rem / 0.8125rem
+    font-size: 1.0769em; // 0.875rem / 0.8125rem
     font-weight: 600;
     color: $ink;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 
-    &[data-empty='true'] {
-      color: $ink-3;
-      font-weight: 500;
-      font-family: $mono;
-    }
+    &[data-empty='true'] { color: $ink-3; font-weight: 500; }
+  }
+
+  // "Edit" appears on a finished row when it is hovered or focused
+  &__spec-edit {
+    font-size: 0.8462em; // 0.6875rem / 0.8125rem
+    font-weight: 600;
+    color: $signal;
+    opacity: 0;
+    transition: opacity 0.15s ease;
   }
 
   &__spec-row--done {
     &::before { background: $signal; }
     .ev__spec-tick { background: $signal; border-color: $signal; color: #fff; }
-    .ev__spec-label { color: $ink-3; }
+
+    &:hover,
+    &:focus-visible {
+      background: $card;
+      border-color: $line;
+      .ev__spec-edit { opacity: 1; }
+    }
   }
 
   &__spec-row--active {
-    background: $wash;
-    .ev__spec-tick {
-      background: $card;
-      border-color: $signal;
-      color: $signal;
-      box-shadow: 0 0 0 4px rgba($signal, 0.14);
-    }
+    background: $card;
+    border-color: $line;
+    box-shadow: $soft;
+    .ev__spec-tick { background: $wash; border-color: $signal; color: $signal; }
     .ev__spec-label { color: $signal; }
-    &:not(:disabled):hover { background: $wash; }
   }
 
-  &__spec-row--todo { opacity: 0.9; }
+  &__spec-row--todo {
+    .ev__spec-label { color: $ink-3; }
+  }
 
   // ========================================================================
   // Stage (the working area for the current step)
@@ -4565,50 +4630,48 @@ $ev-base-font: 0.8125rem;
 
   &__stage-head {
     flex-shrink: 0;
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
     padding: 22px 28px 18px;
     border-bottom: 1px solid $line-2;
   }
 
-  &__crumb {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    @extend %micro;
-    color: $ink-3;
-
-    b { color: $signal; font-weight: 700; }
-
-    span:first-child {
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-      color: $signal;
-    }
+  &__stage-icon {
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    border-radius: 11px;
+    display: grid;
+    place-items: center;
+    background: $wash;
+    color: $signal;
   }
 
-  &__crumb-sep {
-    width: 3px;
-    height: 3px;
-    border-radius: 50%;
-    background: $ink-3;
+  &__stage-head-text { min-width: 0; }
+
+  &__crumb {
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    font-weight: 600;
+    color: $signal;
   }
 
   &__stage-title {
-    margin-top: 12px;
+    margin-top: 2px;
     font-family: $display;
     font-size: 1.6923em; // 1.375rem / 0.8125rem
     font-weight: 800;
     letter-spacing: -0.025em;
     color: $ink;
-    line-height: 1.1;
+    line-height: 1.15;
   }
 
   &__stage-sub {
-    margin-top: 6px;
+    margin-top: 5px;
     font-size: 1.0385em; // 0.84375rem / 0.8125rem
     color: $ink-2;
     line-height: 1.5;
-    max-width: 60ch;
+    max-width: 68ch;
   }
 
   &__stage-body {
@@ -4633,6 +4696,28 @@ $ev-base-font: 0.8125rem;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
+  }
+
+  &__footer-actions {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+  }
+
+  // why "Next" is disabled, in plain words
+  &__footer-reason {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    font-size: 0.9615em; // 0.78125rem / 0.8125rem
+    font-weight: 500;
+    color: $ink-2;
+    line-height: 1.35;
+    text-align: right;
+
+    svg { flex-shrink: 0; color: $ink-3; }
   }
 
   &__hint {
@@ -4683,14 +4768,14 @@ $ev-base-font: 0.8125rem;
       background: $ink-solid;
       color: #fff;
       box-shadow: $soft;
-      &:not(:disabled):hover { background: $ink-solid-hover; transform: translateY(-1px); box-shadow: $lift; }
+      &:not(:disabled):hover { background: $ink-solid-hover; }
     }
 
     &--launch {
       background: $signal;
       color: #fff;
       box-shadow: 0 8px 20px -8px rgba($signal, 0.7);
-      &:not(:disabled):hover { background: $signal-2; transform: translateY(-1px); }
+      &:not(:disabled):hover { background: $signal-2; }
     }
   }
 
@@ -4786,7 +4871,7 @@ $ev-base-font: 0.8125rem;
 
   &__quick-head {
     @extend %micro;
-    font-size: 0.7692em; // 0.625rem / 0.8125rem
+    font-size: 0.8462em; // 0.625rem / 0.8125rem
     color: $ink-3;
     margin-bottom: 11px;
   }
@@ -4817,7 +4902,6 @@ $ev-base-font: 0.8125rem;
     &:hover {
       border-color: $ink;
       color: $ink;
-      transform: translateY(-1px);
       svg { color: $signal; }
     }
 
@@ -4895,15 +4979,12 @@ $ev-base-font: 0.8125rem;
     cursor: pointer;
     transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease, background 0.18s ease;
 
-    &:hover {
-      border-color: $ink-3;
-      box-shadow: $lift;
-      transform: translateY(-2px);
-    }
+    &:hover { border-color: $ink-3; }
 
     &--on {
       border-color: $signal;
       background: $wash;
+      box-shadow: inset 0 0 0 1px $signal;
       &:hover { border-color: $signal; }
     }
 
@@ -4958,7 +5039,7 @@ $ev-base-font: 0.8125rem;
 
   &__badge {
     @extend %micro;
-    font-size: 0.6923em; // 0.5625rem / 0.8125rem
+    font-size: 0.8462em; // 0.5625rem / 0.8125rem
     color: $ink-3;
     background: $paper;
     border: 1px solid $line;
@@ -5020,8 +5101,8 @@ $ev-base-font: 0.8125rem;
     cursor: pointer;
     transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
 
-    &:hover { border-color: $ink-3; transform: translateY(-2px); box-shadow: $lift; }
-    &--on { border-color: $signal; background: $wash; }
+    &:hover { border-color: $ink-3; }
+    &--on { border-color: $signal; background: $wash; box-shadow: inset 0 0 0 1px $signal; }
   }
 
   &__fw-icon {
@@ -5395,8 +5476,8 @@ $ev-base-font: 0.8125rem;
     cursor: pointer;
     transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
 
-    &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
-    &--on { border-color: $signal; background: $wash; &:hover { border-color: $signal; } }
+    &:hover { border-color: $ink-3; }
+    &--on { border-color: $signal; background: $wash; box-shadow: inset 0 0 0 1px $signal; &:hover { border-color: $signal; } }
   }
 
   &__pcard-icon {
@@ -5451,8 +5532,8 @@ $ev-base-font: 0.8125rem;
     cursor: pointer;
     transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
 
-    &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
-    &--on { border-color: $signal; background: $wash; &:hover { border-color: $signal; } }
+    &:hover { border-color: $ink-3; }
+    &--on { border-color: $signal; background: $wash; box-shadow: inset 0 0 0 1px $signal; &:hover { border-color: $signal; } }
   }
 
   // locked = provider chosen but health not yet confirmed successful;
@@ -5597,7 +5678,7 @@ $ev-base-font: 0.8125rem;
   }
 
   &__stat { display: flex; flex-direction: column; gap: 1px; }
-  &__stat-k { @extend %micro; font-size: 0.6923em; color: $ink-3; } // 0.5625rem / 0.8125rem
+  &__stat-k { @extend %micro; font-size: 0.8462em; color: $ink-3; } // 0.5625rem / 0.8125rem
   &__stat-v { font-family: $mono; font-size: 0.9615em; font-weight: 700; color: $ink; letter-spacing: -0.01em; } // 0.78125rem / 0.8125rem
 
   // Per-model retry/timeout — shown on a model card once it's selected.
@@ -5634,7 +5715,7 @@ $ev-base-font: 0.8125rem;
 
     label {
       @extend %micro;
-      font-size: 0.6923em; // 0.5625rem / 0.8125rem
+      font-size: 0.8462em; // 0.5625rem / 0.8125rem
       color: $ink-3;
     }
 
@@ -5824,7 +5905,7 @@ $ev-base-font: 0.8125rem;
     p + p { margin-top: 5px; }
     p span {
       @extend %micro;
-      font-size: 0.7692em;
+      font-size: 0.8462em;
       color: $ink-3;
       margin-right: 6px;
     }
@@ -5861,8 +5942,8 @@ $ev-base-font: 0.8125rem;
     cursor: pointer;
     transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
 
-    &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
-    &--on { border-color: $signal; background: $wash; &:hover { border-color: $signal; } }
+    &:hover { border-color: $ink-3; }
+    &--on { border-color: $signal; background: $wash; box-shadow: inset 0 0 0 1px $signal; &:hover { border-color: $signal; } }
 
     // A dataset with 0 questions can still be picked (so the info icon
     // and warning banner are reachable), but reads visibly muted/flagged
@@ -6592,7 +6673,7 @@ $ev-base-font: 0.8125rem;
     align-items: center;
     gap: 6px;
     @extend %micro;
-    font-size: 0.6923em; // 0.5625rem / 0.8125rem
+    font-size: 0.8462em; // 0.5625rem / 0.8125rem
     color: $ink-3;
     margin-bottom: 8px;
     svg { color: $signal; }
@@ -6608,7 +6689,7 @@ $ev-base-font: 0.8125rem;
     align-items: center;
     gap: 7px;
     @extend %micro;
-    font-size: 0.7692em; // 0.625rem / 0.8125rem
+    font-size: 0.8462em; // 0.625rem / 0.8125rem
     color: $ink-2;
     margin-bottom: 12px;
     svg { color: $signal; }
@@ -6630,7 +6711,7 @@ $ev-base-font: 0.8125rem;
     border-bottom: 1px solid $line-2;
     font-size: 1.0385em; &:last-child { border-bottom: 0; } // 0.84375rem / 0.8125rem
 
-    span:first-child { @extend %micro; font-size: 0.7692em; color: $ink-3; } // 0.625rem / 0.8125rem
+    span:first-child { @extend %micro; font-size: 0.8462em; color: $ink-3; } // 0.625rem / 0.8125rem
     span:last-child { color: $ink; font-weight: 600; text-align: right; }
   }
 
@@ -6749,7 +6830,7 @@ $ev-base-font: 0.8125rem;
 
 .ev-preview-eyebrow {
   @extend %micro;
-  font-size: 0.7692em; color: $signal; } // 0.625rem / 0.8125rem
+  font-size: 0.8462em; color: $signal; } // 0.625rem / 0.8125rem
 
 .ev-preview-title {
   margin-top: 6px;
@@ -6931,7 +7012,7 @@ $ev-base-font: 0.8125rem;
 
 .ev-preview-limit-label {
   @extend %micro;
-  font-size: 0.7692em; // 0.625rem / 0.8125rem
+  font-size: 0.8462em; // 0.625rem / 0.8125rem
   color: $ink-2;
   display: block;
   margin-bottom: 8px;
@@ -7041,7 +7122,7 @@ $ev-base-font: 0.8125rem;
 
   span {
     @extend %micro;
-    font-size: 0.7308em; // 0.59375rem / 0.8125rem
+    font-size: 0.8462em; // 0.59375rem / 0.8125rem
     color: $ink-3;
     margin-right: 6px;
   }
@@ -7108,7 +7189,7 @@ $ev-base-font: 0.8125rem;
 
   span {
     @extend %micro;
-    font-size: 0.7308em; // 0.59375rem / 0.8125rem
+    font-size: 0.8462em; // 0.59375rem / 0.8125rem
     color: $ink-3;
     margin-right: 7px;
   }
@@ -7142,7 +7223,7 @@ $ev-base-font: 0.8125rem;
 
   b {
     @extend %micro;
-    font-size: 0.7692em; // 0.625rem / 0.8125rem
+    font-size: 0.8462em; // 0.625rem / 0.8125rem
     color: $ink-3;
     font-weight: 700;
   }
@@ -7255,1306 +7336,13 @@ $ev-base-font: 0.8125rem;
 }
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Evaluations.tsx
-//Evaluations.ts
-import api from '../axiosInstance';
-import {
-  USE_HARNESS_MOCK,
-  mockGetHarnessMetrics,
-  mockGetHarnessSuites,
-  mockRunAgentHarness,
-} from '../mock/harnessMock';
-import type {
-  AgentHarnessRunRequest,
-  Dataset,
-  DatasetsResponse,
-  AgentBenchmarkRunMultiRequest,
-  AgentBenchmarkRunRequest,
-  CreateEvaluationRequest,
-  CreateEvaluationResponse,
-  DatasetPreviewResponse,
-  EvaluationsListResponse,
-  EvaluationResultsResponse,
-  EvaluationListItem,
-  ModelResult,
-  GenerateInstructionRequest,
-  GenerateInstructionResponse,
-  MetricsResponse,
-} from '../../types';
-
-// Re-exported for convenience so existing imports of these two request
-// types from this module (e.g. in evaluationsSlice.ts) keep working —
-// the canonical definitions now live in ../../types.
-export type { AgentBenchmarkRunRequest, AgentBenchmarkRunMultiRequest };
-
-// Normalizes one list-item so array fields the UI iterates over
-// (model_ids.length, selected_metrics.map, etc.) are never null/undefined,
-// even if the backend omits them for a given row. Same normalize-at-the-
-// boundary pattern as benchmarksApi.list's `tasks`.
-function normalizeListItem(e: EvaluationListItem): EvaluationListItem {
-  return {
-    ...e,
-    model_ids: e.model_ids || [],
-    selected_metrics: e.selected_metrics || [],
-    selected_category: e.selected_category || [],
-    datasets_config: e.datasets_config || [],
-  };
-}
-
-export const evaluationsApi = {
-  // Populates the History sidebar list. Called on mount and every 10s
-  // (silent poll) — see History.tsx.
-  list: () =>
-    api.get<EvaluationsListResponse>('/evaluations').then((r) => (r.data.evaluations || []).map(normalizeListItem)),
-
-  create: (payload: CreateEvaluationRequest) =>
-    api.post<CreateEvaluationResponse>('/evaluations', payload).then((r) => r.data),
-
-  start: (evaluationId: string) =>
-    api.post<void>(`/evaluations/${evaluationId}/start`).then(() => undefined),
-
-  // Only ever called when the selected evaluation's status === 'completed'.
-  // The backend returns 400 with { detail: "Execution not completed." } if
-  // called too early — callers should surface err.response.data.detail.
-  //
-  // Also normalizes at the boundary: `total_test` (singular, as sent by the
-  // API) -> `total_tests`; and `results`/`metric_scores`/`details`/
-  // `selected_metrics` default to []/{} when the backend omits them, so
-  // downstream code can rely on them always being iterable.
-  results: (evaluationId: string) =>
-    api.get<EvaluationResultsResponse>(`/evaluations/${evaluationId}/results`).then((r) => {
-      const data = r.data;
-      return {
-        ...data,
-        selected_metrics: data.selected_metrics || [],
-        results: (data.results || []).map((m) => {
-          const raw = m as unknown as ModelResult & { total_test?: number };
-          return {
-            ...raw,
-            total_tests: raw.total_tests ?? raw.total_test ?? 0,
-            metric_scores: raw.metric_scores || {},
-            details: raw.details || [],
-          };
-        }),
-      };
-    }),
-
-  // Convenience helper used by the wizard's "Start Evaluation" (step 7):
-  // create, then immediately start. Only for draft.type 'model' | 'rag'.
-  createAndStart: async (payload: CreateEvaluationRequest) => {
-    const created = await evaluationsApi.create(payload);
-    const id = created.id || created.evaluation_id;
-    if (!id) {
-      throw new Error('Evaluation was created but no id was returned by the server.');
-    }
-    await evaluationsApi.start(id);
-    return id;
-  },
-
-  // POST /agent-benchmark/run — draft.type === 'agent', no framework selected.
-  // 200 OK response means successful submission; no meaningful body is relied upon.
-  runAgentBenchmark: (payload: AgentBenchmarkRunRequest) =>
-    api.post<void>('/agent-benchmark/run', payload).then(() => undefined),
-
-  // POST /agent-benchmark/run-multi — draft.type === 'agent', framework selected.
-  // 200 OK response means successful submission; no meaningful body is relied upon.
-  runAgentBenchmarkMulti: (payload: AgentBenchmarkRunMultiRequest) =>
-    api.post<void>('/agent-benchmark/run-multi', payload).then(() => undefined),
-
-  // POST /agent-harness/run — draft.type === 'agent' && draft.agentHarness
-  // (Document-agent harness: Hermes / Co-Work on the same tasks, one
-  // scorecard). MOCKED while USE_HARNESS_MOCK is true — see
-  // api/mock/harnessMock.ts. 200 OK means successful submission.
-  runAgentHarness: (payload: AgentHarnessRunRequest) =>
-    USE_HARNESS_MOCK
-      ? mockRunAgentHarness(payload)
-      : api.post<void>('/agent-harness/run', payload).then(() => undefined),
-
-  // GET /datasets?eval_type=agent_harness — the harness Test Suite pool
-  // (BFCL, FinanceBench, Spreadsheet, In-house docs), each carrying a
-  // `use_case`. Called directly from NewEvaluation.tsx rather than through
-  // the datasets slice, so the existing dataset thunks stay untouched.
-  // MOCKED while USE_HARNESS_MOCK is true.
-  getHarnessSuites: (): Promise<Dataset[]> =>
-    USE_HARNESS_MOCK
-      ? mockGetHarnessSuites()
-      : api
-          .get<DatasetsResponse>('/datasets', { params: { eval_type: 'agent_harness' } })
-          .then((r) => r.data.datasets || []),
-
-  // GET /metrics?eval_type=agent_harness — scorer list for harness mode
-  // (same MetricsResponse shape as the normal metrics endpoint). Used by
-  // metricsSlice.fetchMetrics. MOCKED while USE_HARNESS_MOCK is true.
-  getHarnessMetrics: () =>
-    USE_HARNESS_MOCK
-      ? mockGetHarnessMetrics()
-      : api.get<MetricsResponse>('/metrics', { params: { eval_type: 'agent_harness' } }).then((r) => r.data),
-
-  // GET /datasets/{id}/preview?limit={limit}&offset={offset} — lives here
-  // (not in the datasets API module) since it's only ever used from the
-  // evaluation wizard's Test Suite step preview slider. Paginated, 20
-  // questions per page by default (limit=20, offset starts at 0). Total
-  // page count is derived on the caller's side from the dataset's own
-  // `question_count` (from the /datasets list), not from this response.
-  previewDataset: (datasetId: string, limit: number, offset: number) =>
-    api
-      .get<DatasetPreviewResponse>(`/datasets/${datasetId}/preview`, { params: { limit, offset } })
-      .then((r) => r.data),
-
-  // POST /evaluations/generate-instruction — Metrics step's "Generate
-  // Instruction" button. See NewEvaluation.tsx `generateInstruction` for
-  // how model_id/eval_type/questions are assembled.
-  generateInstruction: (payload: GenerateInstructionRequest) =>
-    api.post<GenerateInstructionResponse>('/evaluations/generate-instruction', payload).then((r) => r.data),
-
-  // POST /datasets/image — resolves a MinIO object key (as seen in a
-  // preview question's input.images[]) to the actual image bytes. Response
-  // is a raw blob, so this is fetched with responseType 'blob' and turned
-  // into an object URL for the <img> tag; the caller (the image lightbox
-  // in NewEvaluation.tsx) revokes it on close/navigate.
-  getImageBlobUrl: async (imagePath: string): Promise<string> => {
-    const { data } = await api.post('/datasets/image', { path: imagePath }, { responseType: 'blob' });
-    return URL.createObjectURL(data as Blob);
-  },
-
-  // GET /code-execution-metrics — used instead of GET /metrics?eval_type=
-  // {type} on the Metrics step, but ONLY when eval_type is 'model' and the
-  // selected Test Suite dataset's `name` is one of the two code-execution
-  // built-ins ('Livecodebench_code_generation_lite' / 'MdEval') — see NewEvaluation.tsx's
-  // metrics-fetch effect for that gating. Same response shape as GET
-  // /metrics?eval_type={type} (MetricsResponse).
-  getCodeExecutionMetrics: () =>
-    api.get<MetricsResponse>('/code-execution-metrics').then((r) => r.data),
-
-  // POST /models/check-multimodal — pre-flight check run by NewEvaluation.
-  // tsx's `launch` before creating/starting ANY evaluation (Model, Agent,
-  // or RAG) whose dataset has has_images: true (GET /datasets?eval_type=
-  // {type}). model_ids is every selected model plus the judge model. A
-  // non-2xx response (thrown by axios) means at least one model can't
-  // handle image input — the caller catches that and skips the create/run
-  // call entirely rather than calling this for its response body, since
-  // only the status code carries meaning here.
-  checkMultimodal: (modelIds: string[]) =>
-    api.post<void>('/models/check-multimodal', { model_ids: modelIds }).then(() => undefined),
-};
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Evaluationsslice.ts
-//Evaluationsslice.ts
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import type { PayloadAction } from '@reduxjs/toolkit';
-import { evaluationsApi } from '../../api/endpoints/evaluations';
-import type { AgentBenchmarkRunMultiRequest, AgentBenchmarkRunRequest } from '../../api/endpoints/evaluations';
-import type {
-  AgentHarnessRunRequest,
-  HarnessSettings,
-  CreateEvaluationRequest,
-  EvaluationDraft,
-  EvaluationListItem,
-  EvaluationResultsResponse,
-} from '../../types';
-
-type AsyncStatus = 'idle' | 'loading' | 'succeeded' | 'failed';
-
-interface EvaluationsState {
-  draft: EvaluationDraft;
-
-  // History list (GET /evaluations) — silently re-fetched every 10s from
-  // History.tsx. `listStatus` only gates the *initial* loading/error UI;
-  // components should check `list.length === 0` alongside it so a failed
-  // background poll never shows a spinner/error over existing data (spec §2.4).
-  list: EvaluationListItem[];
-  listStatus: AsyncStatus;
-  listError: string | null;
-
-  // Per-evaluation results (GET /evaluations/{id}/results), fetched lazily
-  // and only once status === 'completed' (spec §2.3).
-  resultsByEvalId: Record<string, EvaluationResultsResponse>;
-  resultsStatusByEvalId: Record<string, AsyncStatus>;
-  resultsErrorByEvalId: Record<string, string | null>;
-
-  launching: boolean;
-  launchError: string | null;
-}
-
-// Document-agent harness defaults — also exported so the wizard's clamp
-// bounds and the slice's resets share one source of truth.
-export const DEFAULT_HARNESS_SETTINGS: HarnessSettings = { max_steps: 30, task_timeout: 300, save_traces: true };
-
-const initialDraft: EvaluationDraft = {
-  name: '',
-  type: null,
-  providers: [],
-  models: [],
-  retryConfigMode: 'individual',
-  retryConfigAll: { max_retries: 1, timeout: 60 },
-  modelRetryConfig: {},
-  dataset: null,
-  subgroup: [],
-  runSamplesMode: 'custom',
-  runSamples: 10,
-  metrics: [],
-  judgeModelId: null,
-  agentFramework: null,
-  topK: 5,
-  instruction: '',
-  retestOnWrong: false,
-  retestMaxRounds: 3,
-  retestVerifyMetric: null,
-  agentHarness: false,
-  harnessAgents: [],
-  harnessSuiteIds: [],
-  harnessSettings: { ...DEFAULT_HARNESS_SETTINGS },
-};
-
-const initialState: EvaluationsState = {
-  draft: initialDraft,
-  list: [],
-  listStatus: 'idle',
-  listError: null,
-  resultsByEvalId: {},
-  resultsStatusByEvalId: {},
-  resultsErrorByEvalId: {},
-  launching: false,
-  launchError: null,
-};
-
-export const fetchEvaluations = createAsyncThunk('evaluations/fetchList', () => evaluationsApi.list());
-
-export const fetchEvaluationResults = createAsyncThunk(
-  'evaluations/fetchResults',
-  async (evaluationId: string, { rejectWithValue }) => {
-    try {
-      const data = await evaluationsApi.results(evaluationId);
-      return { evaluationId, data };
-    } catch (err) {
-      const detail =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-        (err as Error)?.message ||
-        'Failed to load results';
-      return rejectWithValue({ evaluationId, message: detail });
-    }
+// Visible keyboard focus on every control in the wizard.
+.ev,
+.ev__header {
+  button:focus-visible,
+  [role='button']:focus-visible,
+  a:focus-visible {
+    outline: 2px solid $signal;
+    outline-offset: 2px;
   }
-);
-
-// Shared across all three launch thunks below (and fetchEvaluationResults
-// above) — the backend's error body on 4xx responses is { detail: string },
-// so that's what should end up in state.launchError, not axios's generic
-// "Request failed with status code 400".
-function extractErrorDetail(err: unknown, fallback: string): string {
-  return (
-    (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-    (err as Error)?.message ||
-    fallback
-  );
-}
-
-// POST /evaluations then /evaluations/{id}/start — draft.type 'model' | 'rag'.
-export const launchEvaluation = createAsyncThunk(
-  'evaluations/launch',
-  async (payload: CreateEvaluationRequest, { rejectWithValue }) => {
-    try {
-      return await evaluationsApi.createAndStart(payload);
-    } catch (err) {
-      return rejectWithValue(extractErrorDetail(err, 'Failed to launch evaluation'));
-    }
-  }
-);
-
-// POST /agent-benchmark/run — draft.type 'agent', no agentFramework selected.
-export const runAgentBenchmark = createAsyncThunk(
-  'evaluations/runAgentBenchmark',
-  async (payload: AgentBenchmarkRunRequest, { rejectWithValue }) => {
-    try {
-      return await evaluationsApi.runAgentBenchmark(payload);
-    } catch (err) {
-      return rejectWithValue(extractErrorDetail(err, 'Failed to launch agent benchmark'));
-    }
-  }
-);
-
-// POST /agent-benchmark/run-multi — draft.type 'agent', agentFramework selected.
-export const runAgentBenchmarkMulti = createAsyncThunk(
-  'evaluations/runAgentBenchmarkMulti',
-  async (payload: AgentBenchmarkRunMultiRequest, { rejectWithValue }) => {
-    try {
-      return await evaluationsApi.runAgentBenchmarkMulti(payload);
-    } catch (err) {
-      return rejectWithValue(extractErrorDetail(err, 'Failed to launch agent benchmark'));
-    }
-  }
-);
-
-// POST /agent-harness/run — draft.type 'agent' && draft.agentHarness
-// (Document-agent harness). Mocked in the API layer for now.
-export const runAgentHarness = createAsyncThunk(
-  'evaluations/runAgentHarness',
-  async (payload: AgentHarnessRunRequest, { rejectWithValue }) => {
-    try {
-      return await evaluationsApi.runAgentHarness(payload);
-    } catch (err) {
-      return rejectWithValue(extractErrorDetail(err, 'Failed to launch agent harness'));
-    }
-  }
-);
-
-const evaluationsSlice = createSlice({
-  name: 'evaluations',
-  initialState,
-  reducers: {
-    setDraft(state, action: PayloadAction<Partial<EvaluationDraft>>) {
-      state.draft = { ...state.draft, ...action.payload };
-    },
-    // Step 2: changing type invalidates everything chosen after it — the
-    // available providers/models/datasets/metrics all depend on type, so
-    // stale selections from a previous type must not silently carry over.
-    // Providers and models in particular are toggle-based multi-select
-    // (see NewEvaluation.tsx `toggle`), so without this reset, switching
-    // from e.g. Model -> Agent -> Model again and picking a *different*
-    // model each time would leave BOTH models checked (the old selection
-    // was never cleared, only added to) — that's the bug this fixes.
-    setDraftType(state, action: PayloadAction<EvaluationDraft['type']>) {
-      state.draft.type = action.payload;
-      state.draft.providers = [];
-      state.draft.models = [];
-      state.draft.retryConfigMode = 'individual';
-      state.draft.retryConfigAll = { max_retries: 1, timeout: 60 };
-      state.draft.modelRetryConfig = {};
-      state.draft.dataset = null;
-      state.draft.subgroup = [];
-      state.draft.metrics = [];
-      state.draft.judgeModelId = null;
-      state.draft.runSamplesMode = 'custom';
-      state.draft.runSamples = 10;
-      state.draft.topK = 5;
-      state.draft.instruction = '';
-      state.draft.retestOnWrong = false;
-      state.draft.retestMaxRounds = 3;
-      state.draft.retestVerifyMetric = null;
-      state.draft.agentHarness = false;
-      state.draft.harnessAgents = [];
-      state.draft.harnessSuiteIds = [];
-      state.draft.harnessSettings = { ...DEFAULT_HARNESS_SETTINGS };
-      if (action.payload !== 'agent') {
-        state.draft.agentFramework = null;
-      }
-    },
-    resetDraft(state) {
-      state.draft = initialDraft;
-    },
-    // Local-only removal — no DELETE /evaluations/{id} endpoint exists yet
-    // (spec §4.6). Does not persist; a background poll will bring it back
-    // if the backend still has it.
-    removeEvaluationLocal(state, action: PayloadAction<string>) {
-      state.list = state.list.filter((e) => e.id !== action.payload);
-    },
-    // Plain synchronous setters for the launching/launchError flags —
-    // used by NewEvaluation.tsx's multimodal pre-flight check (POST
-    // /models/check-multimodal), which runs *before* any of the three
-    // launch thunks below and needs to drive the same loading/error UI
-    // without going through a thunk itself.
-    setLaunching(state, action: PayloadAction<boolean>) {
-      state.launching = action.payload;
-    },
-    setLaunchError(state, action: PayloadAction<string | null>) {
-      state.launchError = action.payload;
-    },
-  },
-  extraReducers: (builder) => {
-    builder
-      .addCase(fetchEvaluations.pending, (state) => {
-        if (state.list.length === 0) state.listStatus = 'loading';
-      })
-      .addCase(fetchEvaluations.fulfilled, (state, action) => {
-        state.listStatus = 'succeeded';
-        state.listError = null;
-        state.list = action.payload;
-      })
-      .addCase(fetchEvaluations.rejected, (state, action) => {
-        // Background polls fail silently (spec §2.4) — only surface the
-        // error state when we have nothing on screen yet.
-        if (state.list.length === 0) {
-          state.listStatus = 'failed';
-          state.listError = action.error.message || 'Failed to load evaluations';
-        }
-      })
-      .addCase(fetchEvaluationResults.pending, (state, action) => {
-        state.resultsStatusByEvalId[action.meta.arg] = 'loading';
-        state.resultsErrorByEvalId[action.meta.arg] = null;
-      })
-      .addCase(fetchEvaluationResults.fulfilled, (state, action) => {
-        const { evaluationId, data } = action.payload;
-        state.resultsStatusByEvalId[evaluationId] = 'succeeded';
-        state.resultsByEvalId[evaluationId] = data;
-      })
-      .addCase(fetchEvaluationResults.rejected, (state, action) => {
-        const payload = action.payload as { evaluationId: string; message: string } | undefined;
-        const id = payload?.evaluationId ?? action.meta.arg;
-        state.resultsStatusByEvalId[id] = 'failed';
-        state.resultsErrorByEvalId[id] = payload?.message || 'Failed to load results';
-      })
-
-      // ---- launch: three thunks (Model/RAG, Agent-benchmark, Agent-multi) ---
-      // all share the same launching/launchError flags and all clear the
-      // draft on success, exactly like the original launchEvaluation did.
-      .addCase(launchEvaluation.pending, (state) => {
-        state.launching = true;
-        state.launchError = null;
-      })
-      .addCase(launchEvaluation.fulfilled, (state) => {
-        state.launching = false;
-        state.draft = initialDraft;
-      })
-      .addCase(launchEvaluation.rejected, (state, action) => {
-        state.launching = false;
-        state.launchError = (action.payload as string) || action.error.message || 'Failed to launch evaluation';
-      })
-
-      .addCase(runAgentBenchmark.pending, (state) => {
-        state.launching = true;
-        state.launchError = null;
-      })
-      .addCase(runAgentBenchmark.fulfilled, (state) => {
-        state.launching = false;
-        state.draft = initialDraft;
-      })
-      .addCase(runAgentBenchmark.rejected, (state, action) => {
-        state.launching = false;
-        state.launchError = (action.payload as string) || action.error.message || 'Failed to launch agent benchmark';
-      })
-
-      .addCase(runAgentBenchmarkMulti.pending, (state) => {
-        state.launching = true;
-        state.launchError = null;
-      })
-      .addCase(runAgentBenchmarkMulti.fulfilled, (state) => {
-        state.launching = false;
-        state.draft = initialDraft;
-      })
-      .addCase(runAgentBenchmarkMulti.rejected, (state, action) => {
-        state.launching = false;
-        state.launchError = (action.payload as string) || action.error.message || 'Failed to launch agent benchmark';
-      })
-
-      .addCase(runAgentHarness.pending, (state) => {
-        state.launching = true;
-        state.launchError = null;
-      })
-      .addCase(runAgentHarness.fulfilled, (state) => {
-        state.launching = false;
-        state.draft = initialDraft;
-      })
-      .addCase(runAgentHarness.rejected, (state, action) => {
-        state.launching = false;
-        state.launchError = (action.payload as string) || action.error.message || 'Failed to launch agent harness';
-      });
-  },
-});
-
-export const { setDraft, setDraftType, resetDraft, removeEvaluationLocal, setLaunching, setLaunchError } =
-  evaluationsSlice.actions;
-export default evaluationsSlice.reducer;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Metricsslice.ts
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import { metricsApi } from '../../api/endpoints/metrics';
-import { evaluationsApi } from '../../api/endpoints/evaluations';
-import type { CustomMetric } from '../../types';
-
-interface MetricsState {
-  allMetrics: string[];
-  // Richer "custom metric" objects from the same GET /metrics response's
-  // `custom` field (id/name/metrics_type/required_judge/eval_types/
-  // description) — previously dropped entirely by the fulfilled reducer
-  // below, which only ever captured `all_metrics`.
-  customMetrics: CustomMetric[];
-  status: 'idle' | 'loading' | 'succeeded' | 'failed';
-  error: string | null;
-}
-
-const initialState: MetricsState = {
-  allMetrics: [],
-  customMetrics: [],
-  status: 'idle',
-  error: null,
-};
-
-// GET /metrics?eval_type={type} normally. Model evaluations against one of
-// the two code-execution built-in datasets ('Livecodebench_code_generation_lite' / 'MdEval')
-// instead call GET /code-execution-metrics — same response shape, just a
-// different set of metrics — chosen by the caller via `useCodeExecution`
-// (see NewEvaluation.tsx's metrics-fetch effect for the dataset-name check
-// that decides this).
-export const fetchMetrics = createAsyncThunk(
-  'metrics/fetchAll',
-  (arg: { evalType: string; useCodeExecution?: boolean }) =>
-    // 'agent_harness' (Document-agent harness) gets its own scorer list —
-    // mocked until the backend endpoint exists, see api/mock/harnessMock.ts.
-    arg.evalType === 'agent_harness'
-      ? evaluationsApi.getHarnessMetrics()
-      : arg.useCodeExecution
-        ? evaluationsApi.getCodeExecutionMetrics()
-        : metricsApi.list(arg.evalType)
-);
-
-const metricsSlice = createSlice({
-  name: 'metrics',
-  initialState,
-  reducers: {},
-  extraReducers: (builder) => {
-    builder
-      .addCase(fetchMetrics.pending, (state) => {
-        state.status = 'loading';
-      })
-      .addCase(fetchMetrics.fulfilled, (state, action) => {
-        state.status = 'succeeded';
-        state.allMetrics = action.payload.all_metrics || [];
-        state.customMetrics = action.payload.custom || [];
-      })
-      .addCase(fetchMetrics.rejected, (state, action) => {
-        state.status = 'failed';
-        state.error = action.error.message || 'failed to load metrics';
-      });
-  },
-});
-
-export default metricsSlice.reducer;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//index.ts
-// ---------- Auth ----------
-export interface SsoLoginRequest {
-  token: string;
-  data: string;
-}
-export interface SsoLoginResult {
-  token: string;
-  username: string;
-  email: string;
-  language: string;
-  profile_name: string;
-}
-export interface SsoLoginResponse {
-  status: string;
-  message: string;
-  result: SsoLoginResult;
-}
-
-// ---------- Providers ----------
-export interface Provider {
-  id: string;
-  name: string;
-  description: string;
-  logo_url: string | null;
-  base_url: string | null;
-  url_template: string | null;
-  model_count: number;
-  status: 'connected' | 'not_connected' | string;
-}
-export interface ConnectProviderRequest {
-  api_key: string;
-}
-export interface ConnectProviderResponse {
-  status: 'connected';
-  provider_id: string;
-  models_synced: number;
-}
-export interface DisconnectProviderResponse {
-  status: 'disconnected';
-  provider_id: string;
-}
-
-// ---------- Models ----------
-export interface Model {
-  id: string;
-  name: string;
-  provider_id: string;
-  category: string;
-  capabilities: string[];
-  context_window: number;
-  input_price: number | null;
-  output_price: number | null;
-  accuracy_score: number | null;
-  agent_score: number | null;
-  is_active: boolean;
-  base_url: string | null;
-}
-export interface CustomModelRequest {
-  base_url: string;
-  category: string;
-  api_key: string;
-  model_id: string;
-  name: string;
-  context_window: number;
-  description: string;
-}
-
-// ---------- Benchmarks ----------
-export interface BenchmarkTask {
-  name: string;
-  value: string;
-}
-export interface Benchmark {
-  name: string;
-  description: string;
-  // ⚠️ Not always present on the real API response — normalized to [] at the
-  // fetch boundary (benchmarksApi.list), so consumers can trust these are
-  // always arrays. See spec §5 "Known data-contract gap".
-  tasks: BenchmarkTask[];
-  task_count: number;
-  required_capabilities: string[];
-  huggingface_dataset: string;
-  type: string;
-}
-export interface BenchmarksResponse {
-  benchmarks: Benchmark[];
-  total: number;
-}
-
-// ---------- Datasets (Test Suite step) ----------
-// `dataset_type` distinguishes the built-in DeepEval suites from datasets a
-// user uploaded themselves. Both are shown in the Test Suite grid; only
-// 'custom' gets the "Custom" tag, and both are filterable via the
-// All / Custom / Deepeval chip group in the step header (spec: Test Suite
-// Change-1).
-export type DatasetType = 'custom' | 'deepeval' | string;
-
-export interface Dataset {
-  id: string;
-  name: string;
-  description?: string;
-  category: string;
-  eval_type: string;
-  dataset_type: DatasetType;
-  question_count: number;
-  dataset_categories: string[];
-  // When true, this dataset's questions include images (MinIO object keys
-  // under input.images[] — see DatasetPreviewQuestion below). Selecting
-  // such a dataset triggers a POST /models/check-multimodal pre-flight
-  // check (every selected model + the judge model) before the evaluation
-  // is created — see NewEvaluation.tsx `launch`. Optional/absent on
-  // datasets that predate this field, treated the same as false.
-  has_images?: boolean;
-  // Document-agent harness only — which scorecard use case this suite covers
-  // ('Tool Calling' | 'Document reading' | 'Spreadsheet editing' |
-  // 'Document editing'). Drives the use-case filter chips in the Test Suite
-  // step. Absent on every non-harness dataset.
-  use_case?: string;
-  // Document-agent harness only — how the suite is scored (display text).
-  scoring?: string;
-}
-export interface DatasetsResponse {
-  datasets: Dataset[];
-}
-
-// GET /datasets/{id}/preview?limit={limit}&offset={offset} — paginated,
-// 20 per page by default. Powers the right-to-left preview slider on each
-// dataset card.
-//
-// Two response shapes are both observed in practice for `input`/`expected`
-// (and whether `choices`/`metadata`/`subgroup` are present at all depends
-// on the dataset), so every field below is optional except `id` — the UI
-// renders whichever subset actually shows up rather than assuming one
-// fixed shape:
-//   Shape A (e.g. multiple-choice): input.prompt, expected.answer, choices
-//   Shape B (e.g. RAG/retrieval):   input.question/source/type,
-//                                   expected.answer/doc_id/section_id,
-//                                   metadata, subgroup
-//   Shape C (e.g. vision/multimodal): input.prompt, input.images (MinIO
-//                                   object keys — see evaluationsApi.
-//                                   getImageBlobUrl and NewEvaluation.tsx's
-//                                   image lightbox), input.language
-export interface DatasetPreviewQuestion {
-  id: string;
-  input?: {
-    prompt?: string;
-    question?: string;
-    source?: string;
-    type?: string;
-    // MinIO object keys (e.g. "datasets/ds-001/images/image1.jpg"), not
-    // usable directly as <img src> — resolve each one to a blob URL via
-    // evaluationsApi.getImageBlobUrl (POST /datasets/image) first.
-    images?: string[];
-    language?: string;
-    [key: string]: unknown;
-  };
-  expected?: {
-    answer?: string;
-    doc_id?: string;
-    section_id?: number;
-    [key: string]: unknown;
-  };
-  metadata?: Record<string, unknown>;
-  category?: string;
-  subgroup?: string;
-  choices?: string[];
-  // Seen alongside the Shape C vision payload — a free-text tag, not to be
-  // confused with input.type.
-  question_type?: string;
-}
-export interface DatasetPreviewResponse {
-  dataset_id: string;
-  questions: DatasetPreviewQuestion[];
-}
-
-// ---------- Metrics ----------
-// GET /metrics?eval_type={type}
-export interface CustomMetric {
-  id: string;
-  name: string;
-  metrics_type: string;
-  // When true, this specific custom metric needs a judge model to grade
-  // it — surfaced as a small indicator on its chip. Doesn't gate whether
-  // the Judge Model picker itself shows (that's now always shown/mandatory
-  // regardless of metric selection — see NewEvaluation.tsx).
-  required_judge: boolean;
-  eval_types: string[];
-  description: string;
-}
-export interface MetricsResponse {
-  eval_type: string;
-  all_metrics: string[];
-  custom: CustomMetric[];
-}
-
-// ---------- Evaluations: create/start ----------
-// Per-model retry/timeout config, set in the Models step. max_retries: 1–30.
-// timeout: 60–900 (seconds). Also reused verbatim inside judge_config below.
-export interface ModelRetryConfig {
-  max_retries: number;
-  timeout: number;
-}
-export interface JudgeConfig extends ModelRetryConfig {
-  model_id: string;
-  base_url: string;
-  // NOTE: populated with the judge model's own id, not a real credential —
-  // the Judge API Key field was removed from the UI entirely (spec §1.4).
-  api_key: string;
-}
-export interface CreateEvaluationRequest {
-  name: string;
-  description?: string;
-  eval_type: 'model' | 'agent' | 'rag' | string;
-  dataset_id: string;
-  benchmark?: string;
-  // For eval_type 'rag': holds only the selected LLM model id(s) — the
-  // Embedding and Reranker selections (each exactly one, enforced in the
-  // Models step) go in the two fields below instead, not in this array.
-  // For 'model'/'agent': every selected model, as before.
-  model_ids: string[];
-  // RAG-only — the Models step's single-select Embedding/Reranker
-  // columns. Always present together when eval_type is 'rag'; omitted
-  // entirely for 'model'/'agent'.
-  embedding_model_id?: string;
-  reranker_model_id?: string;
-  // The Models step lets the user apply retry/timeout either the same way
-  // to every selected model, or individually per model — exactly one of
-  // these two shapes is sent, never both:
-  //   "Apply to all" -> top-level max_retries/timeout, no model_retry_config
-  //   "Individually"  -> model_retry_config (one entry per id in model_ids),
-  //                       no top-level max_retries/timeout
-  max_retries?: number;
-  timeout?: number;
-  model_retry_config?: Record<string, ModelRetryConfig>;
-  metrics_config?: Record<string, unknown>;
-  selected_metrics: string[];
-  // The subset of selected_metrics that are custom metrics (their `id`s,
-  // as opposed to the plain name strings used for built-in metrics) —
-  // selected_metrics itself still contains both mixed together (see
-  // NewEvaluation.tsx draft.metrics), this is purely additive so the
-  // backend can tell which entries are custom. Omitted when no custom
-  // metric is selected.
-  selected_metric_ids?: string[];
-  dataset_limit?: number;
-  // null when the wizard's Run Samples is set to "Full" — the backend
-  // treats a null run_samples as "use the whole dataset" for this endpoint
-  // (POST /evaluations), distinct from the agent-benchmark endpoints below
-  // which use 0 for the same "full" concept.
-  run_samples: number | null;
-  selected_category?: string[];
-  judge_config?: JudgeConfig;
-  // RAG-only — how many retrieved documents/chunks to consider per query.
-  // Test Suite step shows this input only when draft.type === 'rag'
-  // (default 5, 1–50); omitted entirely for Model/Agent.
-  top_k?: number;
-  // Free-text evaluation instruction — optional. Either typed by the user
-  // directly or pre-filled via POST /evaluations/generate-instruction and
-  // then edited. See GenerateInstructionRequest/Response below.
-  instruction?: string;
-  // Model and RAG — Metrics step's "Retest on Wrong" control. Always sent
-  // for eval_type 'model'/'rag'; retest_max_rounds/retest_verify_metric
-  // are only included when retest_on_wrong is true.
-  retest_on_wrong?: boolean;
-  retest_max_rounds?: number;
-  retest_verify_metric?: string;
-}
-export interface CreateEvaluationResponse {
-  id?: string;
-  evaluation_id?: string;
-  [key: string]: unknown;
-}
-
-// POST /evaluations/generate-instruction — Metrics step's "Generate
-// Instruction" button. `questions` is built from a 5-question dataset
-// preview (see NewEvaluation.tsx `generateInstruction`), reusing the same
-// `input`/`expected` shapes as DatasetPreviewQuestion.
-export interface GenerateInstructionQuestion {
-  input?: DatasetPreviewQuestion['input'];
-  expected?: DatasetPreviewQuestion['expected'];
-}
-export interface GenerateInstructionRequest {
-  model_id: string;
-  eval_type: string;
-  questions: GenerateInstructionQuestion[];
-}
-export interface GenerateInstructionResponse {
-  instruction: string;
-}
-
-// ---------- Evaluations: agent-benchmark launch ----------
-// draft.type === 'agent'. Which request shape is sent depends on whether
-// an agent framework was chosen in Step 2 (see NewEvaluation.tsx `launch`):
-//   no framework  -> POST /agent-benchmark/run       (AgentBenchmarkRunRequest)
-//   framework set -> POST /agent-benchmark/run-multi (AgentBenchmarkRunMultiRequest)
-export interface AgentBenchmarkRunRequest {
-  dataset_id: string;
-  model_ids: string[];
-  evaluation_name: string;
-  run_samples: number;
-  // Same retry/timeout shape as CreateEvaluationRequest — exactly one of
-  // the two is sent, matching the Models step's "Apply to all" /
-  // "Individually" toggle. See NewEvaluation.tsx `launch`.
-  max_retries?: number;
-  timeout?: number;
-  model_retry_config?: Record<string, ModelRetryConfig>;
-}
-export interface AgentBenchmarkRunMultiRequest {
-  dataset_id: string;
-  model_ids: string[];
-  evaluation_name: string;
-  selected_metrics: string[];
-  // Same as CreateEvaluationRequest.selected_metric_ids — the subset of
-  // selected_metrics that are custom metric ids. Omitted when none selected.
-  selected_metric_ids?: string[];
-  selected_categories: string[];
-  run_samples: number;
-  // Same retry/timeout shape as CreateEvaluationRequest — exactly one of
-  // the two is sent, matching the Models step's "Apply to all" /
-  // "Individually" toggle. See NewEvaluation.tsx `launch`.
-  max_retries?: number;
-  timeout?: number;
-  model_retry_config?: Record<string, ModelRetryConfig>;
-  // Same as CreateEvaluationRequest's Retest on Wrong control — always
-  // sent for this endpoint (an agent framework is selected, so metrics
-  // config applies); retest_max_rounds/retest_verify_metric only included
-  // when retest_on_wrong is true. See NewEvaluation.tsx `launch`.
-  retest_on_wrong?: boolean;
-  retest_max_rounds?: number;
-  retest_verify_metric?: string;
-}
-
-// ---------- Evaluations: document-agent harness launch ----------
-// draft.type === 'agent' && draft.agentHarness. One harness, one adapter per
-// agent (Hermes / Co-Work), every task in a clean sandbox, traces stored for
-// replay. POST /agent-harness/run (MOCKED for now — see api/mock/harnessMock).
-export type HarnessAdapterId = 'hermes' | 'cowork';
-
-export interface HarnessSettings {
-  max_steps: number; // 1–100, default 30
-  task_timeout: number; // seconds, 60–900, default 300
-  save_traces: boolean; // keep every run in the trace store, default true
-}
-export interface AgentHarnessSuiteRun {
-  dataset_id: string;
-  run_samples: number; // 0 = full suite (same convention as agent-benchmark)
-}
-export interface AgentHarnessRunRequest {
-  evaluation_name: string;
-  agents: HarnessAdapterId[];
-  model_ids: string[];
-  suites: AgentHarnessSuiteRun[];
-  selected_metrics: string[];
-  selected_metric_ids?: string[];
-  judge_config: JudgeConfig;
-  harness: HarnessSettings;
-  max_retries?: number;
-  timeout?: number;
-  model_retry_config?: Record<string, ModelRetryConfig>;
-}
-
-// ---------- Evaluations: list (History) ----------
-export type EvaluationStatusValue = 'pending' | 'running' | 'completed' | 'failed' | 'canceled';
-
-// Nested summary of the report generated for this evaluation, if any.
-// Only present once the backend has created a report row for the eval —
-// absent/undefined while the eval is still pending/running with no report yet.
-export interface EvaluationReportSummary {
-  report_id: string;
-  title: string;
-  status: string;
-  created_at: string;
-}
-
-export interface EvaluationListItem {
-  id: string;
-  name: string;
-  description: string;
-  eval_type: string;
-  dataset_id: string;
-  datasets_config: { dataset_id: string }[];
-  benchmark: string;
-  model_ids: string[];
-  selected_metrics: string[];
-  run_samples: number;
-  selected_category: string[];
-  status: EvaluationStatusValue;
-  progress: number;
-  total_questions: number;
-  top_model: string | null;
-  top_score: number | null;
-  created_at: string;
-  started_at: string | null;
-  completed_at: string | null;
-  // Present once a report has been generated for this evaluation (spec: new
-  // "download from History" requirement). When `report.report_id` is set,
-  // History should offer the same download options as the Reports page.
-  report?: EvaluationReportSummary | null;
-}
-export interface EvaluationsListResponse {
-  evaluations: EvaluationListItem[];
-}
-
-// ---------- Evaluations: results ----------
-export interface TestDetail {
-  task: string;
-  input: string;
-  expected_output: string;
-  actual_output: string;
-  passed: boolean;
-}
-export interface ModelResult {
-  model_id: string;
-  provider: string | null;
-  rank: number;
-  score: number;
-  accuracy: number;
-  passed_tests: number;
-  failed_tests: number;
-  // Normalized from the API's `total_test` (singular) at the fetch boundary
-  // (evaluationsApi.results) — see benchmarksApi.list for the same pattern.
-  total_tests: number;
-  metric_scores: Record<string, number>;
-  details: TestDetail[];
-}
-export interface EvaluationResultsResponse {
-  evaluation_id: string;
-  name: string;
-  eval_type: string;
-  dataset_id: string;
-  benchmark: string;
-  model_ids: string[];
-  selected_metrics: string[];
-  status: EvaluationStatusValue;
-  total_questions: number;
-  top_model: string;
-  top_score: number;
-  started_at: string | null;
-  results: ModelResult[];
-}
-
-// UI-only draft built up across the wizard's 7 steps (spec §6).
-export interface EvaluationDraft {
-  name: string;
-  type: 'model' | 'agent' | 'rag' | null;
-  providers: string[];
-  models: string[];
-  // How the Models step's max_retries/timeout are applied: 'all' sends one
-  // shared value for every selected model (top-level max_retries/timeout
-  // on the request); 'individual' sends model_retry_config, one entry per
-  // model. retryConfigAll is only meaningful in 'all' mode; modelRetryConfig
-  // entries are still kept in sync with `models` regardless of mode, so
-  // switching modes never loses previously-entered per-model values.
-  retryConfigMode: 'all' | 'individual'; // default 'individual'
-  retryConfigAll: ModelRetryConfig; // default { max_retries: 1, timeout: 60 }
-  modelRetryConfig: Record<string, ModelRetryConfig>;
-  dataset: string | null;
-  subgroup: string[];
-  // 'custom': runSamples is a user-entered count, sent as-is.
-  // 'full': the whole dataset is used — runSamples is sent as 0 regardless
-  // of the last custom value entered (see NewEvaluation.tsx `launch`).
-  runSamplesMode: 'custom' | 'full'; // default 'custom'
-  runSamples: number; // default 10 — only meaningful when runSamplesMode === 'custom'
-  metrics: string[];
-  judgeModelId: string | null;
-  // judgeApiKey intentionally omitted — no longer collected (spec §1.4)
-  agentFramework: string | null;
-  // RAG-only — see CreateEvaluationRequest.top_k. Only meaningful (and
-  // only shown in the UI) when type === 'rag'.
-  topK: number; // default 5, 1–50
-  // Optional free-text evaluation instruction (Metrics step). Either
-  // typed directly or pre-filled via the "Generate Instruction" button
-  // and then edited — always editable either way.
-  instruction: string; // default ''
-  // Model-only (Metrics step) — retest a wrong answer against the judge up
-  // to retestMaxRounds times, using retestVerifyMetric (a single built-in
-  // metric name) to decide pass/fail on each retest. retestMaxRounds/
-  // retestVerifyMetric are only meaningful — and only shown in the UI —
-  // when retestOnWrong is true.
-  retestOnWrong: boolean; // default false
-  retestMaxRounds: number; // default 3, 1–30
-  retestVerifyMetric: string | null; // default null
-  // Agent-only. false = Standard (benchmark / Hermes framework flows,
-  // unchanged); true = Document-agent harness (this file's harness types).
-  // Mutually exclusive with agentFramework.
-  agentHarness: boolean; // default false
-  harnessAgents: HarnessAdapterId[]; // agents to compare, default []
-  harnessSuiteIds: string[]; // multi-select Test Suite, default []
-  harnessSettings: HarnessSettings;
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//harnessmock.ts
-// api/mock/harnessMock.ts
-//
-// MOCK DATA for the Document-agent harness flow (Workstream 2).
-// Everything the wizard needs from the backend for harness mode lives here,
-// behind one switch, so swapping to real endpoints later is a one-line change:
-//
-//   export const USE_HARNESS_MOCK = false;
-//
-// With the flag off, evaluationsApi (api/endpoints/evaluations.ts) calls:
-//   GET  /datasets?eval_type=agent_harness   -> Dataset[] (with use_case)
-//   GET  /metrics?eval_type=agent_harness    -> MetricsResponse
-//   POST /agent-harness/run                  -> 200 OK (optionally { id })
-//
-// Shapes below match the real types in ../../types so nothing else changes.
-import type {
-  AgentHarnessRunRequest,
-  Dataset,
-  HarnessAdapterId,
-  MetricsResponse,
-} from '../../types';
-
-export const USE_HARNESS_MOCK = true;
-
-// Simulated network latency so skeletons/spinners are exercised.
-const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-// ---- Agents (static catalog — adapters live server-side) ------------------
-export const HARNESS_AGENTS: { id: HarnessAdapterId; title: string; desc: string }[] = [
-  { id: 'hermes', title: 'Hermes', desc: 'Lightweight tool-calling agent runtime' },
-  { id: 'cowork', title: 'Co-Work', desc: 'Document-focused agent (API / MCP endpoint)' },
-];
-
-// ---- Use cases (filter chips on the Test Suite step) ----------------------
-export const HARNESS_USE_CASES = [
-  'Tool Calling',
-  'Document reading',
-  'Spreadsheet editing',
-  'Document editing',
-] as const;
-
-// ---- Suites: the 4 benchmark suites from the spec -------------------------
-export const MOCK_HARNESS_SUITES: Dataset[] = [
-  {
-    id: 'harness-bfcl',
-    name: 'BFCL',
-    description:
-      'Berkeley Function Calling Leaderboard — right tool, right arguments: simple, parallel, multi-turn and "no tool needed" cases.',
-    category: 'Agents',
-    eval_type: 'agent_harness',
-    dataset_type: 'deepeval',
-    question_count: 400,
-    dataset_categories: ['Simple', 'Parallel', 'Multi-turn', 'No tool needed'],
-    use_case: 'Tool Calling',
-    scoring: 'Tool name + argument match; state check for multi-turn',
-  },
-  {
-    id: 'harness-financebench',
-    name: 'FinanceBench',
-    description: 'Answering questions from long financial reports.',
-    category: 'Agents',
-    eval_type: 'agent_harness',
-    dataset_type: 'deepeval',
-    question_count: 150,
-    dataset_categories: ['Metrics-generated', 'Domain-relevant', 'Novel-generated'],
-    use_case: 'Document reading',
-    scoring: 'Answer correctness (LLM judge + human spot check)',
-  },
-  {
-    id: 'harness-spreadsheet',
-    name: 'Spreadsheet',
-    description: 'Real spreadsheet tasks: formulas, cleaning and edits.',
-    category: 'Agents',
-    eval_type: 'agent_harness',
-    dataset_type: 'deepeval',
-    question_count: 200,
-    dataset_categories: ['Formulas', 'Cleaning', 'Edits'],
-    use_case: 'Spreadsheet editing',
-    scoring: 'Output file compared with expected file',
-  },
-  {
-    id: 'harness-inhouse-docs',
-    name: 'In-house document task set',
-    description:
-      'Edit docx / pptx / xlsx, write reports and documentation from sources. 60–100 real team tasks with a domain-written pass/fail checklist.',
-    category: 'Agents',
-    eval_type: 'agent_harness',
-    dataset_type: 'custom',
-    question_count: 80,
-    dataset_categories: ['Word tables', 'Slides from report', 'Spreadsheet fixes', 'Summaries', 'User guides'],
-    use_case: 'Document editing',
-    scoring: 'Checklist rubric + LLM judge + file checks',
-  },
-];
-
-// ---- Scorers (shown as the Metrics step's chips in harness mode) ----------
-export const MOCK_HARNESS_METRICS: MetricsResponse = {
-  eval_type: 'agent_harness',
-  all_metrics: [
-    'Task Success Rate',
-    'Task Completion',
-    'Tool Correctness',
-    'Tool-call Accuracy',
-    'Answer Faithfulness',
-    'Steps per Task',
-    'Wasted Steps',
-    'Cost per Task',
-    'Time per Task',
-    'Error Types',
-  ],
-  custom: [],
-};
-
-// ---- Mock "API" -----------------------------------------------------------
-export async function mockGetHarnessSuites(): Promise<Dataset[]> {
-  await delay(450);
-  return MOCK_HARNESS_SUITES.map((s) => ({ ...s }));
-}
-
-export async function mockGetHarnessMetrics(): Promise<MetricsResponse> {
-  await delay(350);
-  return { ...MOCK_HARNESS_METRICS, all_metrics: [...MOCK_HARNESS_METRICS.all_metrics] };
-}
-
-export async function mockRunAgentHarness(payload: AgentHarnessRunRequest): Promise<void> {
-  await delay(900);
-  // Visible in the console so you can inspect exactly what the real backend
-  // will receive once USE_HARNESS_MOCK is turned off.
-  // eslint-disable-next-line no-console
-  console.info('[harness mock] POST /agent-harness/run', payload);
 }
