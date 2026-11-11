@@ -12,6 +12,7 @@ import {
   Gavel,
   Layers,
   Loader2,
+  Waypoints,
   Lightbulb,
   Plus,
   Upload,
@@ -131,7 +132,7 @@ const STEPS = [
 
 const STAGE = [
   { title: 'Name your run', sub: 'A recognizable name makes this run easy to find later in your history.' },
-  { title: 'What are you evaluating?', sub: 'Your answer decides which test suites and scorers the next steps offer.' },
+  { title: 'What are you evaluating?', sub: 'The system under test shapes which datasets and metrics you can pick.' },
   { title: 'Select providers', sub: 'Choose which connected providers to draw candidate models from.' },
   {
     title: 'Choose models',
@@ -141,13 +142,6 @@ const STAGE = [
   { title: 'Set up scoring', sub: 'Work top to bottom. Each part shows what is still missing.' },
   { title: 'Review and launch', sub: 'This is exactly what will run. Use Edit to change any part.' },
 ];
-
-// Short one-line descriptions for the Type step's radio cards.
-const TYPE_SHORT: Record<string, string> = {
-  model: 'Compare models answering the same questions directly.',
-  agent: 'Test agents that call tools and work through multi-step tasks.',
-  rag: 'Test retrieval plus generation: embedding, reranker and LLM.',
-};
 
 // `value` matches draft.type exactly (lowercase); `label` is for display.
 const TYPE_OPTIONS: {
@@ -298,6 +292,14 @@ function formatContextWindow(tokens: number | null | undefined): string {
 
 function formatPrice(price: number | null | undefined): string {
   return price === null || price === undefined || Number.isNaN(price) ? '—' : `$${price.toFixed(2)}`;
+}
+
+function providerInitials(name: string | null | undefined): string {
+  const safeName = name?.trim() || '';
+  if (!safeName) return '??';
+  const parts = safeName.replace(/[^a-zA-Z0-9 ]/g, '').split(' ').filter(Boolean);
+  const letters = parts.slice(0, 2).map((w) => w[0]).join('');
+  return (letters || safeName.slice(0, 2)).toUpperCase();
 }
 
 type HealthStatus = 'idle' | 'loading' | 'success' | 'failed';
@@ -2475,160 +2477,176 @@ export default function NewEvaluation() {
                   {/* STEP 1 — TYPE */}
                   {step === 1 && (
                     <>
-                      <p className={styles.ev__q}>System under test</p>
-                      <div className={styles['ev__choice-row']}>
+                      <div className={styles.ev__options}>
                         {TYPE_OPTIONS.map((o) => {
+                          const Icon = o.icon;
                           const on = draft.type === o.value;
                           return (
                             <button
                               key={o.value}
                               type="button"
-                              className={`${styles.ev__choice} ${on ? styles['ev__choice--on'] : ''}`}
-                              onClick={() => !o.disabled && !on && dispatch(setDraftType(o.value))}
+                              className={`${styles.ev__option} ${on ? styles['ev__option--on'] : ''} ${
+                                o.disabled ? styles['ev__option--off'] : ''
+                              }`}
+                              onClick={() => !o.disabled && dispatch(setDraftType(o.value))}
                               disabled={o.disabled}
-                              aria-pressed={on}
                             >
-                              <span className={styles['ev__choice-head']}>
-                                <span className={`${styles.ev__radio} ${on ? styles['ev__radio--on'] : ''}`} />
-                                <span className={styles['ev__choice-name']}>{o.label}</span>
+                              <span
+                                className={`${styles['ev__option-icon']} ${
+                                  o.variant ? styles[`ev__option-icon--${o.variant}`] : ''
+                                }`}
+                              >
+                                <Icon size={20} />
                               </span>
-                              <span className={styles['ev__choice-desc']}>{TYPE_SHORT[o.value ?? ''] ?? o.sub}</span>
+                              <span className={styles['ev__option-main']}>
+                                <span className={styles['ev__option-name']}>
+                                  {o.label}
+                                  {o.disabled && <span className={styles.ev__badge}>Soon</span>}
+                                </span>
+                                <span className={styles['ev__option-desc']}>{o.sub}</span>
+                              </span>
+                              {on && (
+                                <span className={styles.ev__mark}>
+                                  <Check size={13} strokeWidth={3} />
+                                </span>
+                              )}
                             </button>
                           );
                         })}
                       </div>
 
-                      {/* Follow-up questions for Agent. Standard keeps today's
-                          benchmark / Hermes-framework flows; the harness compares
-                          agents on the same tasks. The two are mutually exclusive,
-                          so switching clears agentFramework / harness picks. */}
+                      {/* Agent evaluation mode — Standard keeps today's benchmark /
+                          Hermes-framework flows untouched; Document-agent harness
+                          runs Hermes and Co-Work on the same tasks through one
+                          harness. The two are mutually exclusive, so switching
+                          clears agentFramework (harness) / harness picks (standard). */}
                       {draft.type === 'agent' && (
-                        <div className={styles.ev__followup}>
-                          <p className={styles['ev__followup-eyebrow']}>Because you chose Agent</p>
-
-                          <p className={styles.ev__q}>How should the agents be tested?</p>
-                          <div className={styles['ev__choice-col']}>
+                        <div className={styles.ev__section}>
+                          <label className={styles.ev__label}>
+                            <Layers size={13} /> Agent evaluation mode
+                          </label>
+                          <p className={styles['ev__section-hint']}>
+                            Standard runs a single agent on a benchmark. The document-agent harness compares agents on
+                            tool calling, document Q&amp;A, spreadsheet work and document editing, with one scorecard.
+                          </p>
+                          <div className={styles['ev__radio-row']}>
                             {[
-                              {
-                                v: false,
-                                l: 'One agent on a benchmark',
-                                d: 'Run a single agent on one agent benchmark. You can add the Hermes framework.',
-                              },
-                              {
-                                v: true,
-                                l: 'Compare agents on document work',
-                                d: 'Every agent runs the same tasks in a clean sandbox and gets one scorecard.',
-                              },
-                            ].map((o) => {
-                              const on = draft.agentHarness === o.v;
+                              { v: false, l: 'Standard' },
+                              { v: true, l: 'Document-agent harness' },
+                            ].map((o) => (
+                              <button
+                                key={String(o.v)}
+                                type="button"
+                                className={`${styles['ev__radio-opt']} ${
+                                  draft.agentHarness === o.v ? styles['ev__radio-opt--on'] : ''
+                                }`}
+                                onClick={() =>
+                                  dispatch(
+                                    setDraft({
+                                      agentHarness: o.v,
+                                      agentFramework: o.v ? null : draft.agentFramework,
+                                      harnessAgents: o.v ? draft.harnessAgents : [],
+                                      harnessSuiteIds: [],
+                                      // the scorer catalog differs per mode, so drop stale picks
+                                      metrics: [],
+                                      retestOnWrong: false,
+                                      retestVerifyMetric: null,
+                                    })
+                                  )
+                                }
+                              >
+                                <span
+                                  className={`${styles.ev__radio} ${draft.agentHarness === o.v ? styles['ev__radio--on'] : ''}`}
+                                />
+                                {o.l}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {isHarness && (
+                        <div className={styles.ev__section}>
+                          <label className={styles.ev__label}>
+                            <Waypoints size={13} /> Agents to compare
+                          </label>
+                          <p className={styles['ev__section-hint']}>
+                            Every selected agent runs the same tasks in a clean sandbox through the same harness, so
+                            the scorecard is directly comparable. Pick one or more.
+                          </p>
+                          <div className={styles['ev__fw-grid']}>
+                            {HARNESS_AGENTS.map((a) => {
+                              const on = draft.harnessAgents.includes(a.id);
                               return (
                                 <button
-                                  key={String(o.v)}
+                                  key={a.id}
                                   type="button"
-                                  className={`${styles.ev__choice} ${styles['ev__choice--row']} ${
-                                    on ? styles['ev__choice--on'] : ''
-                                  }`}
-                                  aria-pressed={on}
-                                  onClick={() => {
-                                    if (on) return;
+                                  className={`${styles.ev__fw} ${on ? styles['ev__fw--on'] : ''}`}
+                                  onClick={() =>
                                     dispatch(
-                                      setDraft({
-                                        agentHarness: o.v,
-                                        agentFramework: o.v ? null : draft.agentFramework,
-                                        harnessAgents: o.v ? draft.harnessAgents : [],
-                                        harnessSuiteIds: [],
-                                        // the scorer catalog differs per mode, so drop stale picks
-                                        metrics: [],
-                                        retestOnWrong: false,
-                                        retestVerifyMetric: null,
-                                      })
-                                    );
-                                  }}
+                                      setDraft({ harnessAgents: toggle(draft.harnessAgents, a.id) as HarnessAdapterId[] })
+                                    )
+                                  }
                                 >
-                                  <span className={`${styles.ev__radio} ${on ? styles['ev__radio--on'] : ''}`} />
-                                  <span className={styles['ev__choice-body']}>
-                                    <span className={styles['ev__choice-name']}>{o.l}</span>
-                                    <span className={styles['ev__choice-desc']}>{o.d}</span>
-                                    {o.v && (
-                                      <span className={styles['ev__choice-tags']}>
-                                        {HARNESS_USE_CASES.map((u) => (
-                                          <span key={u} className={styles.ev__pilltag}>
-                                            {u}
-                                          </span>
-                                        ))}
-                                      </span>
-                                    )}
+                                  <span className={styles['ev__fw-icon']}>
+                                    <Waypoints size={16} />
                                   </span>
+                                  <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                                    <span className={styles['ev__fw-name']}>{a.title}</span>
+                                    <span className={styles['ev__fw-desc']}>{a.desc}</span>
+                                  </span>
+                                  {on && (
+                                    <span className={styles.ev__mark}>
+                                      <Check size={12} strokeWidth={3} />
+                                    </span>
+                                  )}
                                 </button>
                               );
                             })}
                           </div>
-
-                          {isHarness ? (
-                            <>
-                              <p className={styles.ev__q}>
-                                Which agents? <span>Pick one or more</span>
-                              </p>
-                              <div className={styles['ev__choice-grid']}>
-                                {HARNESS_AGENTS.map((a) => {
-                                  const on = draft.harnessAgents.includes(a.id);
-                                  return (
-                                    <button
-                                      key={a.id}
-                                      type="button"
-                                      className={`${styles.ev__choice} ${styles['ev__choice--row']} ${
-                                        on ? styles['ev__choice--on'] : ''
-                                      }`}
-                                      aria-pressed={on}
-                                      onClick={() =>
-                                        dispatch(
-                                          setDraft({ harnessAgents: toggle(draft.harnessAgents, a.id) as HarnessAdapterId[] })
-                                        )
-                                      }
-                                    >
-                                      <span className={`${styles.ev__check} ${on ? styles['ev__check--on'] : ''}`}>
-                                        {on && <Check size={11} strokeWidth={3} />}
-                                      </span>
-                                      <span className={styles['ev__choice-body']}>
-                                        <span className={styles['ev__choice-name']}>{a.title}</span>
-                                        <span className={styles['ev__choice-desc']}>{a.desc}</span>
-                                      </span>
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </>
-                          ) : (
-                            <>
-                              <p className={styles.ev__q}>
-                                Agent framework <span>Optional. Also decides which test suites are offered.</span>
-                              </p>
-                              <div className={styles['ev__choice-grid']}>
-                                {AGENT_FRAMEWORKS.map((f) => {
-                                  const on = draft.agentFramework === f.id;
-                                  return (
-                                    <button
-                                      key={f.id}
-                                      type="button"
-                                      className={`${styles.ev__choice} ${styles['ev__choice--row']} ${
-                                        on ? styles['ev__choice--on'] : ''
-                                      }`}
-                                      aria-pressed={on}
-                                      onClick={() => dispatch(setDraft({ agentFramework: on ? null : f.id }))}
-                                    >
-                                      <span className={`${styles.ev__check} ${on ? styles['ev__check--on'] : ''}`}>
-                                        {on && <Check size={11} strokeWidth={3} />}
-                                      </span>
-                                      <span className={styles['ev__choice-body']}>
-                                        <span className={styles['ev__choice-name']}>{f.title}</span>
-                                        <span className={styles['ev__choice-desc']}>{f.desc}</span>
-                                      </span>
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            </>
+                          {draft.harnessAgents.length === 0 && (
+                            <p className={styles['ev__metrics-required']} style={{ marginTop: 12, marginBottom: 0 }}>
+                              Select at least one agent to continue.
+                            </p>
                           )}
+                        </div>
+                      )}
+
+                      {draft.type === 'agent' && !draft.agentHarness && (
+                        <div className={styles.ev__section}>
+                          <label className={styles.ev__label}>
+                            <Waypoints size={13} /> Agent framework <span className="opt">optional</span>
+                          </label>
+                          <p className={styles['ev__section-hint']}>
+                            Tell us which framework the agent runs on, if applicable. This also determines which test
+                            suites are available in the next steps.
+                          </p>
+                          <div className={styles['ev__fw-grid']}>
+                            {AGENT_FRAMEWORKS.map((f) => {
+                              const on = draft.agentFramework === f.id;
+                              return (
+                                <button
+                                  key={f.id}
+                                  type="button"
+                                  className={`${styles.ev__fw} ${on ? styles['ev__fw--on'] : ''}`}
+                                  onClick={() => dispatch(setDraft({ agentFramework: on ? null : f.id }))}
+                                >
+                                  <span className={styles['ev__fw-icon']}>
+                                    <Waypoints size={16} />
+                                  </span>
+                                  <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                                    <span className={styles['ev__fw-name']}>{f.title}</span>
+                                    <span className={styles['ev__fw-desc']}>{f.desc}</span>
+                                  </span>
+                                  {on && (
+                                    <span className={styles.ev__mark}>
+                                      <Check size={12} strokeWidth={3} />
+                                    </span>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
                         </div>
                       )}
                     </>
@@ -2677,19 +2695,20 @@ export default function NewEvaluation() {
                               <button
                                 key={p.id}
                                 type="button"
-                                className={`${styles.ev__choice} ${styles['ev__choice--row']} ${
-                                  on ? styles['ev__choice--on'] : ''
-                                }`}
-                                aria-pressed={on}
+                                className={`${styles.ev__pcard} ${on ? styles['ev__pcard--on'] : ''}`}
                                 onClick={() => dispatch(setDraft({ providers: toggle(draft.providers, p.id) }))}
                               >
-                                <span className={`${styles.ev__check} ${on ? styles['ev__check--on'] : ''}`}>
-                                  {on && <Check size={11} strokeWidth={3} />}
+                                <span className={styles['ev__pcard-icon']}>{providerInitials(p.name)}</span>
+                                <span className={styles['ev__pcard-body']}>
+                                  <span className={styles['ev__pcard-name']}>{p.name || 'Unnamed provider'}</span>
+                                  <span className={styles['ev__pcard-meta']}>{p.model_count ?? 0} models available</span>
+                                  <span className={styles.ev__pill}>Connected</span>
                                 </span>
-                                <span className={styles['ev__choice-body']}>
-                                  <span className={styles['ev__choice-name']}>{p.name || 'Unnamed provider'}</span>
-                                  <span className={styles['ev__choice-desc']}>{p.model_count ?? 0} models available</span>
-                                </span>
+                                {on && (
+                                  <span className={styles.ev__mark}>
+                                    <Check size={12} strokeWidth={3} />
+                                  </span>
+                                )}
                               </button>
                             );
                           })}
@@ -4265,6 +4284,12 @@ export default function NewEvaluation() {
     </div>
   );
 }
+
+
+
+
+
+
 
 
 
