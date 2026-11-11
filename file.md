@@ -3364,7 +3364,8 @@ export default function NewEvaluation() {
 
                   {/* STEP 5 — SCORING */}
                   {step === 5 && (
-                    <div className={styles.ev__form}>
+                    <div className={styles.ev__split}>
+                    <div className={`${styles.ev__form} ${styles['ev__form--scroll']}`}>
                       {/* How much to run */}
                       <section className={styles.ev__frow}>
                         <div className={styles['ev__frow-side']}>
@@ -3573,65 +3574,6 @@ export default function NewEvaluation() {
                                 </>
                               )}
                             </>
-                          )}
-                        </div>
-                      </section>
-
-                      {/* Who judges — mandatory for every type */}
-                      <section className={styles.ev__frow}>
-                        <div className={styles['ev__frow-side']}>
-                          <h3>Who judges</h3>
-                          <p>One model grades open-ended answers. Pick one that is not under test if you can.</p>
-                          {!draft.judgeModelId && <p className={styles['ev__frow-req']}>Required: no judge selected yet</p>}
-                        </div>
-                        <div className={styles['ev__frow-main']}>
-                          <div className={styles['ev__toolbar-search']}>
-                            <Search size={14} />
-                            <input
-                              placeholder="Search judge models"
-                              value={judgeSearch}
-                              onChange={(e) => setJudgeSearch(e.target.value)}
-                            />
-                          </div>
-                          {judgeCandidateModels.length === 0 ? (
-                            <p className={styles['ev__inline-note']}>No healthy models available yet.</p>
-                          ) : filteredJudgeModels.length === 0 ? (
-                            <p className={styles['ev__inline-note']}>No models match "{judgeSearch}".</p>
-                          ) : (
-                            <div className={styles.ev__jgrid}>
-                              {filteredJudgeModels.map((m) => {
-                                const on = draft.judgeModelId === m.id;
-                                const providerName = providers.find((p) => p?.id === m.provider_id)?.name ?? m.provider_id;
-                                const hasPrice = m.input_price != null || m.output_price != null;
-                                return (
-                                  <button
-                                    key={m.id}
-                                    type="button"
-                                    className={`${styles.ev__choice} ${styles['ev__choice--row']} ${
-                                      on ? styles['ev__choice--on'] : ''
-                                    }`}
-                                    aria-pressed={on}
-                                    onClick={() => dispatch(setDraft({ judgeModelId: on ? null : m.id }))}
-                                  >
-                                    <span className={`${styles.ev__radio} ${on ? styles['ev__radio--on'] : ''}`} />
-                                    <span className={styles['ev__choice-body']}>
-                                      <span className={styles['ev__choice-name']} title={m.name || 'Unnamed model'}>
-                                        {m.name || 'Unnamed model'}
-                                      </span>
-                                      <span className={styles['ev__choice-desc']}>
-                                        {providerName}
-                                        {draft.models.includes(m.id) ? ', also under test' : ''}
-                                      </span>
-                                    </span>
-                                    {hasPrice && (
-                                      <span className={styles['ev__choice-price']} title="Price per 1M tokens, input / output">
-                                        {formatPrice(m.input_price)} / {formatPrice(m.output_price)}
-                                      </span>
-                                    )}
-                                  </button>
-                                );
-                              })}
-                            </div>
                           )}
                         </div>
                       </section>
@@ -3846,6 +3788,67 @@ export default function NewEvaluation() {
                           </div>
                         </section>
                       )}
+                    </div>
+
+                    {/* Who judges — mandatory for every type. Its own side panel,
+                        same pattern as the Models step's "In this run". */}
+                    <aside className={styles.ev__panel}>
+                      <p className={styles['ev__panel-title']}>Who judges</p>
+                      <p className={styles['ev__panel-note']}>
+                        One model grades open-ended answers. Pick one that is not under test if you can.
+                      </p>
+                      {!draft.judgeModelId && (
+                        <p className={styles['ev__panel-req']}>Required: no judge selected yet</p>
+                      )}
+                      <div className={styles['ev__toolbar-search']}>
+                        <Search size={14} />
+                        <input
+                          placeholder="Search judge models"
+                          value={judgeSearch}
+                          onChange={(e) => setJudgeSearch(e.target.value)}
+                        />
+                      </div>
+                      {judgeCandidateModels.length === 0 ? (
+                        <p className={styles['ev__panel-note']}>No healthy models available yet.</p>
+                      ) : filteredJudgeModels.length === 0 ? (
+                        <p className={styles['ev__panel-note']}>No models match "{judgeSearch}".</p>
+                      ) : (
+                        <div className={styles['ev__panel-list']}>
+                          {filteredJudgeModels.map((m) => {
+                            const on = draft.judgeModelId === m.id;
+                            const providerName = providers.find((p) => p?.id === m.provider_id)?.name ?? m.provider_id;
+                            const hasPrice = m.input_price != null || m.output_price != null;
+                            return (
+                              <button
+                                key={m.id}
+                                type="button"
+                                className={`${styles.ev__choice} ${styles['ev__choice--row']} ${
+                                  on ? styles['ev__choice--on'] : ''
+                                }`}
+                                aria-pressed={on}
+                                onClick={() => dispatch(setDraft({ judgeModelId: on ? null : m.id }))}
+                              >
+                                <span className={`${styles.ev__radio} ${on ? styles['ev__radio--on'] : ''}`} />
+                                <span className={styles['ev__choice-body']}>
+                                  <span className={styles['ev__choice-name']} title={m.name || 'Unnamed model'}>
+                                    {m.name || 'Unnamed model'}
+                                  </span>
+                                  <span className={styles['ev__choice-desc']}>
+                                    {providerName}
+                                    {draft.models.includes(m.id) ? ', also under test' : ''}
+                                  </span>
+                                </span>
+                                {hasPrice && (
+                                  <span className={styles['ev__choice-price']} title="Price per 1M tokens, input / output">
+                                    {formatPrice(m.input_price)} / {formatPrice(m.output_price)}
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </aside>
                     </div>
                   )}
 
@@ -4290,6 +4293,8 @@ export default function NewEvaluation() {
     </div>
   );
 }
+
+
 
 
 
@@ -7313,6 +7318,14 @@ $ev-base-font: 0.8125rem;
 
   // ---- sectioned form rows (Scoring step) --------------------------------
   &__form { display: flex; flex-direction: column; }
+
+  // Scoring step: the form is the main column of an &__split (judge panel
+  // on the right), so it scrolls on its own.
+  &__form--scroll { min-width: 0; min-height: 0; overflow-y: auto; padding-right: 8px; }
+  &__split &__frow { grid-template-columns: 180px minmax(0, 1fr); gap: 22px; }
+  &__form &__toolbar-refresh { margin-left: 0; }
+  &__panel &__toolbar-search { flex: none; max-width: none; }
+  &__panel-req { font-size: 0.9231em; font-weight: 700; color: $danger; }
 
   &__frow {
     display: grid;
