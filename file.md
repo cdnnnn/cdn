@@ -18,7 +18,6 @@ import {
   Layers,
   Loader2,
   Waypoints,
-  Lightbulb,
   Plus,
   Upload,
   FileText,
@@ -133,27 +132,28 @@ import styles from './NewEvaluation.module.scss';
 //     a refresh button that re-dispatches that step's existing fetch thunk.
 // ─────────────────────────────────────────────────────────────────────────
 
-const STEPS = [
-  { label: 'Name' },
-  { label: 'Type' },
-  { label: 'Providers' },
-  { label: 'Models' },
-  { label: 'Test Suite' },
-  { label: 'Metrics' },
-  { label: 'Review' },
-];
+// Condensed 4-step flow. The old 7 steps map onto these as:
+//   0 Setup   = Name + Type (+ agent mode / framework / harness agents)
+//   1 Models  = Providers (now filter chips above the grid) + Models
+//   2 Tasks   = Test Suite + subgroups + run samples (+ Top K for RAG)
+//   3 Scoring = Metrics + judge + retest / harness settings / instruction
+// Review is no longer a step — it's a launch drawer opened from Scoring.
+const STEPS = [{ label: 'Setup' }, { label: 'Models' }, { label: 'Tasks' }, { label: 'Scoring' }];
 
 const STAGE = [
-  { title: 'Name your run', sub: 'A recognizable name makes this run easy to find later in your history.' },
-  { title: 'What are you evaluating?', sub: 'The system under test shapes which datasets and metrics you can pick.' },
-  { title: 'Select providers', sub: 'Choose which connected providers to draw candidate models from.' },
-  { title: 'Choose models', sub: 'Check a model\u2019s health before selecting it — only models that pass the check can be added to the run.' },
-  { title: 'Pick a test suite', sub: 'Select a dataset to evaluate against, or upload your own.' },
-  { title: 'Configure metrics', sub: 'Choose what to measure, and optionally a model to judge open-ended answers.' },
-  { title: 'Review & launch', sub: 'Confirm the run manifest, then launch.' },
+  {
+    title: 'Set up your run',
+    sub: 'Name the run and choose what you\u2019re evaluating — the type shapes which suites and metrics you can pick.',
+  },
+  {
+    title: 'Choose models',
+    sub: 'Filter by provider, then pick models. Health checks run automatically — only models that pass can be added.',
+  },
+  { title: 'Pick the tasks', sub: 'Select a test suite and how much of it to run.' },
+  { title: 'Configure scoring', sub: 'Choose what to measure and a judge model, then review and launch.' },
 ];
 
-const STEP_ICONS: LucideIcon[] = [Tag, LayoutGrid, Plug, Cpu, Database, Target, ClipboardCheck];
+const STEP_ICONS: LucideIcon[] = [Tag, Cpu, Database, Target];
 
 // `value` matches draft.type exactly (lowercase); `label` is for display.
 const TYPE_OPTIONS: {
@@ -289,12 +289,6 @@ const SUGGESTED_NAMES = [
   'GLM-4.6 vs Claude',
 ];
 
-const NAMING_TIPS = [
-  "Include what you're testing — a model, a product feature, or a use case.",
-  'Add a date or version so you can track changes over time (e.g. "Q3", "v2").',
-  'Keep it specific enough to tell apart from similar past runs later.',
-];
-
 function formatContextWindow(tokens: number | null | undefined): string {
   if (tokens === null || tokens === undefined || Number.isNaN(tokens)) return '—';
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toLocaleString()}M`;
@@ -304,14 +298,6 @@ function formatContextWindow(tokens: number | null | undefined): string {
 
 function formatPrice(price: number | null | undefined): string {
   return price === null || price === undefined || Number.isNaN(price) ? '—' : `$${price.toFixed(2)}`;
-}
-
-function providerInitials(name: string | null | undefined): string {
-  const safeName = name?.trim() || '';
-  if (!safeName) return '??';
-  const parts = safeName.replace(/[^a-zA-Z0-9 ]/g, '').split(' ').filter(Boolean);
-  const letters = parts.slice(0, 2).map((w) => w[0]).join('');
-  return (letters || safeName.slice(0, 2)).toUpperCase();
 }
 
 type HealthStatus = 'idle' | 'loading' | 'success' | 'failed';
@@ -427,7 +413,8 @@ export default function NewEvaluation() {
 
   // ---- search (client-side filter) + refresh (re-fetch) state, one pair
   // per searchable step: Providers, Models, Test Suite, Metrics. ----------
-  const [providerSearch, setProviderSearch] = useState('');
+  // Review & launch drawer (replaces the old Review step).
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [modelSearch, setModelSearch] = useState('');
   // RAG-only: one independent search box per category (Embedding/
   // Reranker/LLM) instead of the single global model search used by the
@@ -558,7 +545,7 @@ export default function NewEvaluation() {
   // to Step 2 retries it automatically, instead of silently reusing a
   // failed attempt forever (the Refresh button already bypasses this).
   useEffect(() => {
-    if (step !== 2 || providersFetchedRef.current) return;
+    if (step !== 1 || providersFetchedRef.current) return;
     providersFetchedRef.current = true;
     (async () => {
       setProvidersLoading(true);
@@ -574,7 +561,7 @@ export default function NewEvaluation() {
   // providers are already selected, since Step 2 requires it to advance).
   // Same retry-on-failure behavior as providers above.
   useEffect(() => {
-    if (step !== 3 || modelsFetchedRef.current) return;
+    if (step !== 1 || modelsFetchedRef.current) return;
     modelsFetchedRef.current = true;
     (async () => {
       setModelsLoading(true);
@@ -610,7 +597,7 @@ export default function NewEvaluation() {
   // failed attempt permanently "used up" the marker for that type, so
   // going back and forward again silently reused the failure.
   useEffect(() => {
-    if (step !== 4 || !datasetType) return;
+    if (step !== 2 || !datasetType) return;
     if (datasetsFetchedForTypeRef.current === datasetType) return;
     datasetsFetchedForTypeRef.current = datasetType;
     (async () => {
@@ -682,7 +669,7 @@ export default function NewEvaluation() {
   const metricsEvalType = isHarness ? 'agent_harness' : draft.type;
   const metricsCacheKey = `${metricsEvalType ?? ''}:${isCodeExecutionDataset}`;
   useEffect(() => {
-    if (step !== 5 || !draft.type || !metricsEvalType) return;
+    if (step !== 3 || !draft.type || !metricsEvalType) return;
     if (metricsFetchedForTypeRef.current === metricsCacheKey) return;
     metricsFetchedForTypeRef.current = metricsCacheKey;
     (async () => {
@@ -735,11 +722,6 @@ export default function NewEvaluation() {
   }, [draft.dataset, harnessSuiteKey]);
 
   const connectedProviders = providers.filter((p) => p?.status === 'connected');
-  const filteredProviders = useMemo(
-    () => connectedProviders.filter((p) => (p?.name ?? '').toLowerCase().includes(providerSearch.trim().toLowerCase())),
-    [connectedProviders, providerSearch]
-  );
-
   const availableModels = useMemo(
     () => models.filter((m) => draft.providers.includes(m?.provider_id)),
     [models, draft.providers]
@@ -1033,7 +1015,7 @@ export default function NewEvaluation() {
         if (mCtx > bestCtx) bestModel = m;
       }
       if (!bestModel) {
-        setInstructionError('None of the selected models could be found — try reselecting them in Step 4.');
+        setInstructionError('None of the selected models could be found — try reselecting them in the Models step.');
         return;
       }
 
@@ -1093,15 +1075,45 @@ export default function NewEvaluation() {
   // navigation-triggered fetch, or a manual refresh) rather than on every
   // render or on unrelated state changes like typing in the search box.
   const autoHealthCheckedForModelsRef = useRef<typeof models | null>(null);
+  // Which model ids have already been auto-checked for the current `models`
+  // fetch — providers are toggled on this same screen now, so each newly
+  // added provider's models need their own check without re-checking the rest.
+  const autoHealthCheckedIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (step !== 3 || availableModels.length === 0) return;
-    if (autoHealthCheckedForModelsRef.current === models) return;
-    autoHealthCheckedForModelsRef.current = models;
-    availableModels.forEach((m) => trackedHealthCheck(m.id));
+    if (step !== 1 || availableModels.length === 0) return;
+    if (autoHealthCheckedForModelsRef.current !== models) {
+      autoHealthCheckedForModelsRef.current = models;
+      autoHealthCheckedIdsRef.current = new Set();
+    }
+    availableModels.forEach((m) => {
+      if (autoHealthCheckedIdsRef.current.has(m.id)) return;
+      autoHealthCheckedIdsRef.current.add(m.id);
+      trackedHealthCheck(m.id);
+    });
   }, [step, models, availableModels, dispatch]);
 
   const toggle = (list: string[], value: string) =>
     list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
+
+  // Provider filter chips (Models step). Turning a provider off also drops
+  // any models already selected from it (and their retry config), so the
+  // run never carries a model whose provider is no longer in scope.
+  const toggleProvider = (providerId: string) => {
+    if (!draft.providers.includes(providerId)) {
+      dispatch(setDraft({ providers: [...draft.providers, providerId] }));
+      return;
+    }
+    const dropped = new Set(models.filter((m) => m?.provider_id === providerId).map((m) => m.id));
+    const nextRetryConfig = { ...draft.modelRetryConfig };
+    dropped.forEach((id) => delete nextRetryConfig[id]);
+    dispatch(
+      setDraft({
+        providers: draft.providers.filter((id) => id !== providerId),
+        models: draft.models.filter((id) => !dropped.has(id)),
+        modelRetryConfig: nextRetryConfig,
+      })
+    );
+  };
 
   // Built-in metrics (plain name strings) and custom metrics (ids) share
   // the same draft.metrics array, so "select all" / "clear" for one
@@ -1303,10 +1315,10 @@ export default function NewEvaluation() {
   // without this the person has to notice it needs scrolling themselves.
   const launchErrorRef = useRef<HTMLParagraphElement | null>(null);
   useEffect(() => {
-    if (launchError && step === totalSteps - 1) {
+    if (launchError && reviewOpen) {
       launchErrorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }
-  }, [launchError, step, totalSteps]);
+  }, [launchError, reviewOpen]);
 
   useEffect(() => {
     if (draft.judgeModelId && !judgeCandidateModels.some((m) => m.id === draft.judgeModelId)) {
@@ -1587,96 +1599,67 @@ export default function NewEvaluation() {
     dispatch(setDraft({ retryConfigAll: { ...draft.retryConfigAll, [field]: clamped } }));
   };
 
-  const canGo = () => {
-    if (step === 0) return Boolean(draft.name.trim());
-    // Harness mode additionally needs at least one agent to compare.
-    if (step === 1) return Boolean(draft.type) && (!isHarness || draft.harnessAgents.length > 0);
-    if (step === 2) return draft.providers.length > 0;
-    if (step === 3) {
-      if (modelsLoading || !modelsFetchedThisVisit || selectedModelsNotReady.length > 0) return false;
-      // RAG: Embedding and Reranker each require exactly one selection;
-      // LLM is multi-select and just needs at least one (same "at least
-      // one" rule as Model/Agent below).
-      if (draft.type === 'rag') {
-        const embeddingCount = (modelsByCategory.get('Embedding') ?? []).filter((m) =>
-          draft.models.includes(m.id)
-        ).length;
-        const rerankerCount = (modelsByCategory.get('Reranker') ?? []).filter((m) =>
-          draft.models.includes(m.id)
-        ).length;
-        const llmCount = (modelsByCategory.get('LLM') ?? []).filter((m) => draft.models.includes(m.id)).length;
-        return embeddingCount === 1 && rerankerCount === 1 && llmCount > 0;
-      }
-      return draft.models.length > 0;
+  // Why the current step can't be continued yet — null means good to go.
+  // Same rules as before, just regrouped for the 4-step flow and returning
+  // the reason, which is shown next to the (disabled) Next button.
+  const stepBlocker = (): string | null => {
+    if (step === 0) {
+      if (!draft.name.trim()) return 'Give the run a name.';
+      if (!draft.type) return 'Choose what you\u2019re evaluating.';
+      // Harness mode additionally needs at least one agent to compare.
+      if (isHarness && draft.harnessAgents.length === 0) return 'Select at least one agent to compare.';
+      return null;
     }
-    // A dataset with 0 questions can't actually be run against — block
-    // continuing until one with at least one question is picked.
-    if (step === 4) {
+    if (step === 1) {
+      if (draft.providers.length === 0) return 'Pick at least one provider.';
+      if (modelsLoading || !modelsFetchedThisVisit) return 'Loading models\u2026';
+      // RAG: Embedding and Reranker each require exactly one selection;
+      // LLM is multi-select and just needs at least one.
+      if (draft.type === 'rag') {
+        const countIn = (cat: string) =>
+          (modelsByCategory.get(cat) ?? []).filter((m) => draft.models.includes(m.id)).length;
+        if (countIn('Embedding') !== 1 || countIn('Reranker') !== 1 || countIn('LLM') === 0) {
+          return 'Select one Embedding, one Reranker and at least one LLM.';
+        }
+      } else if (draft.models.length === 0) {
+        return 'Select at least one model.';
+      }
+      if (selectedModelsNotReady.length > 0) return 'Every selected model needs a passed health check.';
+      return null;
+    }
+    if (step === 2) {
       // Harness: at least one suite, and every picked suite must have questions.
       if (isHarness) {
-        return (
-          selectedHarnessSuites.length > 0 && selectedHarnessSuites.every((d) => (d.question_count ?? 0) > 0)
-        );
+        if (selectedHarnessSuites.length === 0) return 'Select at least one suite.';
+        if (!selectedHarnessSuites.every((d) => (d.question_count ?? 0) > 0)) {
+          return 'Deselect the suites that have no questions.';
+        }
+        return null;
       }
-      return Boolean(draft.dataset) && (suite?.question_count ?? 0) > 0;
+      if (!draft.dataset) return 'Select a test suite.';
+      if ((suite?.question_count ?? 0) <= 0) return 'This suite has no questions \u2014 pick another.';
+      return null;
     }
-    if (step === 5) {
-      // Judge model is mandatory for every type now — no more LLM_Judge /
-      // hideMetricsStep / agent-framework gating.
-      if (!draft.judgeModelId) return false;
-      // If the metrics catalog (built-in or custom) actually has anything
-      // in it for this type, picking at least one is mandatory too. When
-      // the whole metrics section is hidden (hideMetricsStep) or the
-      // catalog is genuinely empty, there's nothing to require.
-      const metricsAvailable = !hideMetricsStep && (metricsCatalog.length > 0 || customMetricsForType.length > 0);
-      if (metricsAvailable && draft.metrics.length === 0) return false;
-      // Retest on Wrong requires a verify metric — Model and RAG always,
-      // Agent only when a framework is selected (that's the only agent
-      // path with a metrics-capable endpoint; POST /agent-benchmark/run
-      // has none).
-      const retestApplies =
-        draft.type === 'model' || draft.type === 'rag' || (draft.type === 'agent' && Boolean(draft.agentFramework));
-      if (retestApplies && draft.retestOnWrong && !draft.retestVerifyMetric) return false;
-      // Harness settings must be filled in (NaN = emptied field, mid-edit).
-      if (isHarness && (Number.isNaN(draft.harnessSettings.max_steps) || Number.isNaN(draft.harnessSettings.task_timeout))) {
-        return false;
-      }
-      return true;
+    // step 3 — Scoring
+    const metricsAvailable = !hideMetricsStep && (metricsCatalog.length > 0 || customMetricsForType.length > 0);
+    if (metricsAvailable && draft.metrics.length === 0) return 'Select at least one metric.';
+    // Retest on Wrong requires a verify metric — Model and RAG always,
+    // Agent only when a framework is selected.
+    const retestApplies =
+      draft.type === 'model' || draft.type === 'rag' || (draft.type === 'agent' && Boolean(draft.agentFramework));
+    if (retestApplies && draft.retestOnWrong && !draft.retestVerifyMetric) {
+      return 'Pick a verify metric for Retest on Wrong.';
     }
-    return true;
+    // Harness settings must be filled in (NaN = emptied field, mid-edit).
+    if (isHarness && (Number.isNaN(draft.harnessSettings.max_steps) || Number.isNaN(draft.harnessSettings.task_timeout))) {
+      return 'Fill in the harness settings.';
+    }
+    // Judge model is mandatory for every type.
+    if (!draft.judgeModelId) return 'Select a judge model.';
+    return null;
   };
-
-  // Plain-language reason "Next" is disabled on the current step, shown
-  // beside the button in the footer so nobody has to guess what is missing.
-  // Mirrors canGo() branch for branch; null whenever canGo() is true.
-  const blockReason = (): string | null => {
-    if (canGo()) return null;
-    if (step === 0) return 'Give the run a name to continue.';
-    if (step === 1) return !draft.type ? 'Choose what you are evaluating.' : 'Select at least one agent to compare.';
-    if (step === 2) return 'Select at least one provider.';
-    if (step === 3) {
-      if (modelsLoading || !modelsFetchedThisVisit) return 'Loading models…';
-      if (selectedModelsNotReady.length > 0) return 'Every selected model needs a passed health check.';
-      if (draft.type === 'rag') return 'Select one embedding model, one reranker and at least one LLM.';
-      return 'Select at least one model.';
-    }
-    if (step === 4) {
-      if (isHarness) {
-        return selectedHarnessSuites.length === 0
-          ? 'Select at least one suite.'
-          : 'Deselect the suites that have no questions.';
-      }
-      return !draft.dataset ? 'Select a test suite.' : 'This suite has no questions. Select another one.';
-    }
-    if (step === 5) {
-      if (!draft.judgeModelId) return 'Select a judge model.';
-      const metricsAvailable = !hideMetricsStep && (metricsCatalog.length > 0 || customMetricsForType.length > 0);
-      if (metricsAvailable && draft.metrics.length === 0) return 'Select at least one metric.';
-      if (draft.retestOnWrong && !draft.retestVerifyMetric) return 'Choose a verify metric for Retest on Wrong.';
-      if (isHarness) return 'Fill in the harness settings.';
-    }
-    return 'Complete this step to continue.';
-  };
+  const blocker = stepBlocker();
+  const canGo = () => blocker === null;
 
   const goNext = () => {
     if (!canGo()) return;
@@ -1689,12 +1672,12 @@ export default function NewEvaluation() {
   // selections. Forward navigation (goNext, and reaching Review) leaves it
   // untouched, since that's the normal "continue with what I have" path.
   const goBack = () => {
-    if (step === 5) dispatch(setDraft({ instruction: '' }));
+    if (step === 3) dispatch(setDraft({ instruction: '' }));
     setStep((s) => Math.max(0, s - 1));
   };
   const goToStep = (target: number) => {
     if (target < step) {
-      if (step === 5) dispatch(setDraft({ instruction: '' }));
+      if (step === 3) dispatch(setDraft({ instruction: '' }));
       setStep(target);
     }
   };
@@ -1946,6 +1929,10 @@ export default function NewEvaluation() {
       runAgentHarness.fulfilled.match(result);
 
     if (succeeded) {
+      // The draft is reset by the slice on success — close the drawer and
+      // return to a clean first step behind the toast.
+      setReviewOpen(false);
+      setStep(0);
       setToast(true);
       setTimeout(() => {
         setToast(false);
@@ -1954,10 +1941,11 @@ export default function NewEvaluation() {
     }
   };
 
+  const progressPct = Math.round((step / (totalSteps - 1)) * 100);
 
   // ---- live Run Manifest values (one per step) ----------------------------
   const providerNames = draft.providers.map((id) => providers.find((p) => p?.id === id)?.name || id);
-  const mf = (value: string, filled: boolean) => ({ value: filled ? value : '—', empty: !filled });
+  const mf = (value: string, filled: boolean) => ({ value: filled ? value : 'Not set', empty: !filled });
   const typeLabel = TYPE_OPTIONS.find((o) => o.value === draft.type)?.label ?? '';
   const frameworkTitle = draft.agentFramework ? AGENT_FRAMEWORKS.find((f) => f.id === draft.agentFramework)?.title : null;
   const harnessAgentTitles = draft.harnessAgents.map((id) => HARNESS_AGENTS.find((a) => a.id === id)?.title || id);
@@ -1969,26 +1957,30 @@ export default function NewEvaluation() {
     : frameworkTitle
       ? `${typeLabel} · ${frameworkTitle}`
       : typeLabel;
+  const scoringManifestValue = [
+    hideMetricsStep || draft.metrics.length === 0
+      ? null
+      : `${draft.metrics.length} metric${draft.metrics.length === 1 ? '' : 's'}`,
+    judgeModel ? `Judge \u00b7 ${judgeModel.name || 'Unnamed model'}` : null,
+  ]
+    .filter(Boolean)
+    .join(' \u00b7 ');
   const manifest = [
-    mf(draft.name, Boolean(draft.name)),
     mf(typeManifestValue, Boolean(draft.type)),
-    mf(draft.providers.length === 1 ? providerNames[0] : `${draft.providers.length} providers`, draft.providers.length > 0),
-    mf(`${draft.models.length} models`, draft.models.length > 0),
+    mf(
+      `${draft.models.length} model${draft.models.length === 1 ? '' : 's'} \u00b7 ${providerNames.join(', ')}`,
+      draft.models.length > 0
+    ),
     isHarness
       ? mf(
           selectedHarnessSuites.length === 1 ? selectedHarnessSuites[0].name : `${selectedHarnessSuites.length} suites`,
           selectedHarnessSuites.length > 0
         )
       : mf(suite?.name || '', Boolean(suite)),
-    mf(hideMetricsStep ? 'Not required' : `${draft.metrics.length} metrics`, hideMetricsStep || draft.metrics.length > 0),
-    mf(
-      judgeModel ? `Judge · ${judgeModel.name || 'Unnamed model'}` : 'Judge required',
-      Boolean(judgeModel)
-    ),
+    mf(scoringManifestValue, scoringManifestValue !== ''),
   ];
 
   const CrumbIcon = STEP_ICONS[step];
-  const continueBlockedReason = blockReason();
 
   // ---- shared "Run samples" control (Custom / Full) ------------------------
   // Used by both branches of Step 5 (the simplified model-benchmark view and
@@ -2037,13 +2029,121 @@ export default function NewEvaluation() {
               if (Number.isNaN(draft.runSamples)) dispatch(setDraft({ runSamples: 0 }));
             }}
           />
-          <p className={styles['ev__radio-full-note']}>Up to {maxRunSamples.toLocaleString()} questions available in this suite.</p>
+          <p className={styles['ev__radio-full-note']}>
+            {selectedDatasetQuestionCount > 0
+              ? `Up to ${maxRunSamples.toLocaleString()} questions available${isHarness ? ' in the largest selected suite' : ' in this suite'}.`
+              : 'Pick a suite to see how many questions are available.'}
+          </p>
         </>
       ) : (
         <p className={styles['ev__radio-full-note']}>Every question in the suite will be used — no count needed.</p>
       )}
     </div>
   );
+
+  // ---- Tasks step: right-hand "Run settings" card ---------------------------
+  // Run samples used to live on the Metrics step; it's a property of the
+  // tasks being run, so it now sits beside the suite picker (with Top K
+  // for RAG).
+  const runSettingsCard = (
+    <div className={`${styles.ev__msec} ${styles['ev__msec--side']}`}>
+      <div className={styles['ev__msec-head']}>
+        <div className={styles['ev__msec-head-text']}>
+          <p className={styles['ev__msec-title']}>
+            <SlidersHorizontal size={14} /> Run settings
+          </p>
+          <p className={styles['ev__msec-sub']}>
+            {isHarness
+              ? 'How many questions to run per suite, for each agent and model.'
+              : 'How many questions to run per model.'}
+          </p>
+        </div>
+      </div>
+      <div className={styles['ev__msec-body']}>
+        {runSamplesControl}
+        {isRag && (
+          <div className={`${styles.ev__field} ${styles['ev__field--topk']}`}>
+            <label className={styles.ev__label}>Top K</label>
+            <input
+              type="number"
+              min={1}
+              max={50}
+              className={`${styles.ev__input} ${styles['ev__input--topk']}`}
+              value={draft.topK}
+              onChange={(e) => {
+                const raw = e.target.value === '' ? 5 : Number(e.target.value);
+                const val = Number.isNaN(raw) ? 5 : Math.min(50, Math.max(1, Math.round(raw)));
+                dispatch(setDraft({ topK: val }));
+              }}
+            />
+            <p className={styles['ev__radio-full-note']}>Retrieved documents considered per query (1–50).</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  // ---- Models step: provider filter chips ----------------------------------
+  // Replaces the old standalone Providers step. draft.providers keeps the
+  // same meaning (which providers' models are in scope), so everything
+  // downstream — availableModels, judge candidates, health checks — is
+  // unchanged.
+  const providerBar = (
+    <div className={styles['ev__provbar']}>
+      <span className={styles['ev__provbar-label']}>
+        <Plug size={13} /> Providers
+      </span>
+      <div className={styles['ev__provbar-chips']}>
+        {providersLoading
+          ? Array.from({ length: 3 }).map((_, i) => (
+              <span
+                key={i}
+                className={`${styles['ev__skel-block']} ${styles['ev__skel-block--chip']}`}
+                style={{ width: 96 + i * 18 }}
+              />
+            ))
+          : connectedProviders.map((p) => {
+              const on = draft.providers.includes(p.id);
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={`${styles['ev__filter-chip']} ${on ? styles['ev__filter-chip--on'] : ''}`}
+                  onClick={() => toggleProvider(p.id)}
+                  aria-pressed={on}
+                >
+                  {p.name || 'Unnamed provider'}
+                  <span className={styles['ev__filter-chip-count']}>{p.model_count ?? 0}</span>
+                </button>
+              );
+            })}
+        {!providersLoading && connectedProviders.length === 0 && (
+          <span className={styles['ev__provbar-empty']}>
+            No connected providers yet — connect one from the Providers page.
+          </span>
+        )}
+      </div>
+      <button
+        type="button"
+        className={styles['ev__toolbar-refresh']}
+        onClick={refreshProviders}
+        disabled={providersLoading}
+        title="Refresh providers"
+      >
+        <RefreshCw size={14} className={providersLoading ? styles.ev__spin : ''} />
+      </button>
+    </div>
+  );
+
+  // ---- Review & launch drawer ----------------------------------------------
+  const openReview = () => {
+    if (!canGo()) return;
+    dispatch(setLaunchError(null));
+    setReviewOpen(true);
+  };
+  const closeReview = () => {
+    if (!launching) setReviewOpen(false);
+  };
 
   return (
     <div className="page-enter" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -2068,28 +2168,26 @@ export default function NewEvaluation() {
         <div className={styles.ev}>
           {/* ---- shell ---- */}
           <div className={styles.ev__shell}>
-            {/* Step checklist: sits directly on the page, the stage is the only card */}
-            <aside className={styles.ev__manifest} aria-label="Run steps">
+            {/* SIGNATURE: Run Manifest */}
+            <aside className={styles.ev__manifest}>
               <div className={styles['ev__manifest-head']}>
+                <div className={styles['ev__manifest-eyebrow']}>
+                  <span>Run manifest</span>
+                  <span className={styles['ev__manifest-pct']}>
+                    Step {step + 1} / {totalSteps}
+                  </span>
+                </div>
                 <div className={styles['ev__manifest-title']} data-empty={!draft.name}>
                   {draft.name || 'Untitled run'}
                 </div>
-                <div className={styles['ev__manifest-eyebrow']}>
-                  {step} of {totalSteps} steps done
-                </div>
-                <div className={styles.ev__meter} aria-hidden="true">
-                  {STEPS.map((s, i) => (
-                    <span
-                      key={s.label}
-                      className={styles['ev__meter-seg']}
-                      data-state={i < step ? 'done' : i === step ? 'active' : 'todo'}
-                    />
-                  ))}
+                <div className={styles.ev__meter}>
+                  <div className={styles['ev__meter-fill']} style={{ width: `${progressPct}%` }} />
                 </div>
               </div>
               <div className={styles.ev__spec}>
                 {STEPS.map((s, i) => {
                   const state = i === step ? 'active' : i < step ? 'done' : 'todo';
+                  const Icon = STEP_ICONS[i];
                   const row = manifest[i];
                   return (
                     <button
@@ -2098,18 +2196,16 @@ export default function NewEvaluation() {
                       className={`${styles['ev__spec-row']} ${styles[`ev__spec-row--${state}`]}`}
                       onClick={() => goToStep(i)}
                       disabled={i > step}
-                      aria-current={state === 'active' ? 'step' : undefined}
                     >
                       <span className={styles['ev__spec-tick']}>
-                        {state === 'done' ? <Check size={13} strokeWidth={3} /> : i + 1}
+                        {state === 'done' ? <Check size={13} strokeWidth={3} /> : <Icon size={14} />}
                       </span>
                       <span className={styles['ev__spec-body']}>
                         <span className={styles['ev__spec-label']}>{s.label}</span>
                         <span className={styles['ev__spec-value']} data-empty={row.empty}>
-                          {row.empty ? (state === 'active' ? 'In progress' : 'Not set') : row.value}
+                          {row.value}
                         </span>
                       </span>
-                      {state === 'done' && <span className={styles['ev__spec-edit']}>Edit</span>}
                     </button>
                   );
                 })}
@@ -2119,16 +2215,19 @@ export default function NewEvaluation() {
             {/* STAGE */}
             <section className={styles.ev__stage}>
               <div className={styles['ev__stage-head']}>
-                <span className={styles['ev__stage-icon']} aria-hidden="true">
-                  <CrumbIcon size={18} />
-                </span>
-                <div className={styles['ev__stage-head-text']}>
-                  <p className={styles.ev__crumb}>
-                    Step {step + 1} of {totalSteps}
-                  </p>
-                  <h2 className={styles['ev__stage-title']}>{STAGE[step].title}</h2>
-                  <p className={styles['ev__stage-sub']}>{STAGE[step].sub}</p>
+                <div className={styles.ev__crumb}>
+                  <span>
+                    <CrumbIcon size={13} /> Step
+                  </span>
+                  <span className={styles['ev__crumb-sep']} />
+                  <span>
+                    <b>{String(step + 1).padStart(2, '0')}</b> / {String(totalSteps).padStart(2, '0')}
+                  </span>
+                  <span className={styles['ev__crumb-sep']} />
+                  <span>{STEPS[step].label}</span>
                 </div>
+                <h2 className={styles['ev__stage-title']}>{STAGE[step].title}</h2>
+                <p className={styles['ev__stage-sub']}>{STAGE[step].sub}</p>
               </div>
 
               <div className={styles['ev__stage-body']}>
@@ -2139,7 +2238,7 @@ export default function NewEvaluation() {
                   canGoBack={step > 0}
                 >
                 <div className={styles.ev__anim} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-                  {/* STEP 0 — NAME */}
+                  {/* STEP 0 — SETUP (name + type) */}
                   {step === 0 && (
                     <>
                       <div className={styles.ev__field} style={{ maxWidth: 620 }}>
@@ -2178,25 +2277,11 @@ export default function NewEvaluation() {
                         </div>
                       </div>
 
-                      <div className={styles.ev__note}>
-                        <span className={styles['ev__note-icon']}>
-                          <Lightbulb size={16} />
-                        </span>
-                        <div>
-                          <p className={styles['ev__note-title']}>What makes a good name</p>
-                          <ul className={styles['ev__note-list']}>
-                            {NAMING_TIPS.map((tip) => (
-                              <li key={tip}>{tip}</li>
-                            ))}
-                          </ul>
-                        </div>
+                      <div className={styles['ev__setup-type']}>
+                        <label className={styles.ev__label}>
+                          <LayoutGrid size={13} /> What are you evaluating?
+                        </label>
                       </div>
-                    </>
-                  )}
-
-                  {/* STEP 1 — TYPE */}
-                  {step === 1 && (
-                    <>
                       <div className={styles.ev__options}>
                         {TYPE_OPTIONS.map((o) => {
                           const Icon = o.icon;
@@ -2372,81 +2457,12 @@ export default function NewEvaluation() {
                     </>
                   )}
 
-                  {/* STEP 2 — PROVIDERS */}
-                  {step === 2 && (
-                    <div className={styles.ev__scroll}>
-                      <div className={styles['ev__step-toolbar']}>
-                        <div className={styles['ev__toolbar-search']}>
-                          <Search size={14} />
-                          <input
-                            placeholder="Search providers…"
-                            value={providerSearch}
-                            onChange={(e) => setProviderSearch(e.target.value)}
-                          />
-                        </div>
-                        <button
-                          type="button"
-                          className={styles['ev__toolbar-refresh']}
-                          onClick={refreshProviders}
-                          disabled={providersLoading}
-                          title="Refresh providers"
-                        >
-                          <RefreshCw size={14} className={providersLoading ? styles.ev__spin : ''} />
-                        </button>
-                      </div>
-                      {providersLoading ? (
-                        <div className={styles.ev__grid} aria-busy="true" aria-label="Refreshing providers">
-                          {Array.from({ length: SKELETON_CARD_COUNT }).map((_, i) => (
-                            <div key={i} className={styles['ev__skel-pcard']}>
-                              <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--icon']}`} />
-                              <span className={styles['ev__skel-lines']}>
-                                <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '70%' }} />
-                                <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '45%' }} />
-                                <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--pill']}`} />
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className={styles.ev__grid}>
-                          {filteredProviders.map((p) => {
-                            const on = draft.providers.includes(p.id);
-                            return (
-                              <button
-                                key={p.id}
-                                type="button"
-                                className={`${styles.ev__pcard} ${on ? styles['ev__pcard--on'] : ''}`}
-                                onClick={() => dispatch(setDraft({ providers: toggle(draft.providers, p.id) }))}
-                              >
-                                <span className={styles['ev__pcard-icon']}>{providerInitials(p.name)}</span>
-                                <span className={styles['ev__pcard-body']}>
-                                  <span className={styles['ev__pcard-name']}>{p.name || 'Unnamed provider'}</span>
-                                  <span className={styles['ev__pcard-meta']}>{p.model_count ?? 0} models available</span>
-                                  <span className={styles.ev__pill}>Connected</span>
-                                </span>
-                                {on && (
-                                  <span className={styles.ev__mark}>
-                                    <Check size={12} strokeWidth={3} />
-                                  </span>
-                                )}
-                              </button>
-                            );
-                          })}
-                          {connectedProviders.length === 0 && (
-                            <p className={styles.ev__empty}>No connected providers yet. Connect one from the Providers page to continue.</p>
-                          )}
-                          {connectedProviders.length > 0 && filteredProviders.length === 0 && (
-                            <p className={styles.ev__empty}>No providers match "{providerSearch}".</p>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* STEP 3 — MODELS */}
-                  {step === 3 &&
-                    (availableModels.length > 0 ? (
-                      <div className={styles['ev__models-panel']}>
+                  {/* STEP 1 — MODELS (provider chips + model grid) */}
+                  {step === 1 && (
+                    <div className={styles['ev__models-panel']}>
+                      {providerBar}
+                      {availableModels.length > 0 ? (
+                      <>
                         <div className={styles['ev__step-toolbar']}>
                           {/* RAG uses per-category search boxes instead (see
                               the Embedding/Reranker/LLM columns below) — no
@@ -2655,13 +2671,21 @@ export default function NewEvaluation() {
                         </div>
                         )}
                         </div>
-                      </div>
+                      </>
                     ) : (
-                      <p className={styles.ev__empty}>Select providers first to see their available models.</p>
-                    ))}
+                      <p className={styles.ev__empty}>
+                        {draft.providers.length === 0
+                          ? 'Pick one or more providers above to list their models.'
+                          : modelsLoading
+                            ? 'Loading models…'
+                            : 'No models available for the selected providers.'}
+                      </p>
+                    )}
+                    </div>
+                  )}
 
-                  {/* STEP 4 — TEST SUITE */}
-                  {step === 4 && (
+                  {/* STEP 2 — TASKS (test suite + run settings) */}
+                  {step === 2 && (
                     <>
                       {/* Upload isn't offered for Agent benchmarks with no
                           framework selected (POST /agent-benchmark/run only
@@ -2688,28 +2712,8 @@ export default function NewEvaluation() {
                         </div>
                       )}
 
-                      {isRag && (
-                        <div className={`${styles.ev__field} ${styles['ev__field--topk']}`}>
-                          <label className={styles.ev__label}>
-                            Top K <span className="opt">how many retrieved documents to consider per query</span>
-                          </label>
-                          <input
-                            type="number"
-                            min={1}
-                            max={50}
-                            className={`${styles.ev__input} ${styles['ev__input--topk']}`}
-                            value={draft.topK}
-                            onChange={(e) => {
-                              const raw = e.target.value === '' ? 5 : Number(e.target.value);
-                              const val = Number.isNaN(raw) ? 5 : Math.min(50, Math.max(1, Math.round(raw)));
-                              dispatch(setDraft({ topK: val }));
-                            }}
-                          />
-                        </div>
-                      )}
-
                       {datasetTab === 'browse' && (
-                        <div className={`${styles.ev__suite} ${isHarness ? styles['ev__suite--single'] : ''}`}>
+                        <div className={styles.ev__suite}>
                           <div className={styles['ev__suite-scroll']}>
                             <div className={styles['ev__step-toolbar']}>
                               <div className={styles['ev__toolbar-search']}>
@@ -2932,6 +2936,8 @@ export default function NewEvaluation() {
 
                           {/* Subgroups apply to a single dataset — not shown for the
                               multi-suite harness. */}
+                          <div className={styles['ev__suite-side']}>
+                          {runSettingsCard}
                           {!isHarness && (
                           <aside className={styles.ev__rail}>
                             <div className={styles['ev__rail-head']}>
@@ -2981,6 +2987,7 @@ export default function NewEvaluation() {
                             </div>
                           </aside>
                           )}
+                          </div>
                         </div>
                       )}
 
@@ -3086,31 +3093,18 @@ export default function NewEvaluation() {
                     </>
                   )}
 
-                  {/* STEP 5 — METRICS */}
-                  {step === 5 && (
+                  {/* STEP 3 — SCORING (metrics + judge) */}
+                  {step === 3 && (
                     <div className={styles.ev__metrics}>
                       <div className={styles['ev__metrics-main']}>
-                        <div className={styles['ev__samples-instruction-row']}>
-                          {/* Run Samples card */}
-                          <div className={styles.ev__msec}>
-                            <div className={styles['ev__msec-head']}>
-                              <div className={styles['ev__msec-head-text']}>
-                                <p className={styles['ev__msec-title']}>
-                                  <SlidersHorizontal size={14} /> Run Samples
-                                </p>
-                                <p className={styles['ev__msec-sub']}>
-                                  {isHarness
-                                    ? 'How many questions to run per suite, for each agent and model.'
-                                    : hideMetricsStep
-                                    ? isAgentBenchmarkNoFramework
-                                      ? "Metrics aren\u2019t configurable without a selected framework — a judge model is still required, though."
-                                      : "Metrics aren\u2019t configurable for standard (non-custom) benchmarks — a judge model is still required, though."
-                                    : 'How many questions to run per model.'}
-                                </p>
-                              </div>
-                            </div>
-                            <div className={styles['ev__msec-body']}>{runSamplesControl}</div>
-                          </div>
+                        {hideMetricsStep && (
+                          <p className={styles['ev__scoring-note']}>
+                            <Info size={13} />
+                            {isAgentBenchmarkNoFramework
+                              ? 'Metrics aren’t configurable without a selected framework — only a judge model is needed here.'
+                              : 'Metrics aren’t configurable for standard (non-custom) benchmarks — only a judge model is needed here.'}
+                          </p>
+                        )}
 
                           {/* Harness mode swaps the Instruction card for harness settings
                               (the suites carry their own task instructions). */}
@@ -3277,7 +3271,6 @@ export default function NewEvaluation() {
                             </div>
                           </div>
                           )}
-                        </div>
 
                         {!hideMetricsStep && (
                           <>
@@ -3637,9 +3630,77 @@ export default function NewEvaluation() {
                     </div>
                   )}
 
-                  {/* STEP 6 — REVIEW */}
-                  {step === 6 && (
-                    <>
+                </div>
+                </StepErrorBoundary>
+              </div>
+
+              {/* ---- footer nav ---- */}
+              <div className={styles.ev__footer}>
+                <button
+                  type="button"
+                  className={`${styles.ev__btn} ${styles['ev__btn--ghost']}`}
+                  onClick={() => (step > 0 ? goBack() : navigate('/app/dashboard'))}
+                  disabled={launching}
+                >
+                  <ChevronLeft size={16} /> {step === 0 ? 'Cancel' : 'Back'}
+                </button>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                  {step === 0 && canGo() && (
+                    <span className={styles.ev__hint}>
+                      <kbd>↵</kbd> Enter to continue
+                    </span>
+                  )}
+                  {blocker && (
+                    <span className={styles.ev__blocker}>
+                      <Info size={13} /> {blocker}
+                    </span>
+                  )}
+                  {step < totalSteps - 1 ? (
+                    <button type="button" className={`${styles.ev__btn} ${styles['ev__btn--primary']}`} onClick={goNext} disabled={!canGo()}>
+                      Next: {STEPS[step + 1].label} <ChevronRight size={16} />
+                    </button>
+                  ) : (
+                    <button type="button" className={`${styles.ev__btn} ${styles['ev__btn--launch']}`} onClick={openReview} disabled={!canGo()}>
+                      <ClipboardCheck size={16} /> Review &amp; launch
+                    </button>
+                  )}
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+
+      {/* Review & launch drawer — replaces the old Review step. Same
+          right-to-left panel pattern as the dataset preview below; opened
+          from the Scoring step's "Review & launch" button. */}
+      {reviewOpen && (
+        <div className={styles['ev-preview-overlay']} onClick={closeReview}>
+          <aside
+            className={`${styles['ev-preview-panel']} ${styles['ev-review-panel']}`}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Review and launch"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className={styles['ev-preview-head']}>
+              <div className={styles['ev-preview-head-main']}>
+                <p className={styles['ev-preview-eyebrow']}>Review &amp; launch</p>
+                <h3 className={styles['ev-preview-title']}>{draft.name || 'Untitled run'}</h3>
+              </div>
+              <button
+                type="button"
+                className={styles['ev-preview-close']}
+                onClick={closeReview}
+                disabled={launching}
+                title="Close"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className={styles['ev-preview-body']}>
                       <div className={styles.ev__summary}>
                         <div className={styles['ev__summary-cell']}>
                           <div className={styles['ev__summary-k']}>
@@ -3862,57 +3923,37 @@ export default function NewEvaluation() {
                           {launchError}
                         </p>
                       )}
-                    </>
-                  )}
-                </div>
-                </StepErrorBoundary>
-              </div>
+            </div>
 
-              {/* ---- footer nav ---- */}
-              <div className={styles.ev__footer}>
-                <button
-                  type="button"
-                  className={`${styles.ev__btn} ${styles['ev__btn--ghost']}`}
-                  onClick={() => (step > 0 ? goBack() : navigate('/app/dashboard'))}
-                  disabled={launching}
-                >
-                  <ChevronLeft size={16} /> {step === 0 ? 'Cancel' : 'Back'}
-                </button>
-
-                <div className={styles['ev__footer-actions']}>
-                  {continueBlockedReason && step < totalSteps - 1 && (
-                    <span className={styles['ev__footer-reason']} role="status">
-                      <Info size={14} /> {continueBlockedReason}
-                    </span>
-                  )}
-                  {step === 0 && canGo() && (
-                    <span className={styles.ev__hint}>
-                      <kbd>↵</kbd> Enter to continue
-                    </span>
-                  )}
-                  {step < totalSteps - 1 ? (
-                    <button type="button" className={`${styles.ev__btn} ${styles['ev__btn--primary']}`} onClick={goNext} disabled={!canGo()}>
-                      Next: {STEPS[step + 1].label} <ChevronRight size={16} />
-                    </button>
-                  ) : (
-                    <button type="button" className={`${styles.ev__btn} ${styles['ev__btn--launch']}`} onClick={launch} disabled={launching}>
-                      {launching ? (
-                        <>
-                          <Loader2 size={16} className={styles.ev__spin} /> Launching…
-                        </>
-                      ) : (
-                        <>
-                          <Play size={16} /> Launch run
-                        </>
-                      )}
-                    </button>
-                  )}
-                </div>
-              </div>
-            </section>
-          </div>
+            <div className={styles['ev-review-foot']}>
+              <button
+                type="button"
+                className={`${styles.ev__btn} ${styles['ev__btn--ghost']}`}
+                onClick={closeReview}
+                disabled={launching}
+              >
+                Keep editing
+              </button>
+              <button
+                type="button"
+                className={`${styles.ev__btn} ${styles['ev__btn--launch']}`}
+                onClick={launch}
+                disabled={launching}
+              >
+                {launching ? (
+                  <>
+                    <Loader2 size={16} className={styles.ev__spin} /> Launching…
+                  </>
+                ) : (
+                  <>
+                    <Play size={16} /> Launch run
+                  </>
+                )}
+              </button>
+            </div>
+          </aside>
         </div>
-      </div>
+      )}
 
       {/* Change-2: dataset preview slider — right-to-left panel showing
           GET /datasets/{id}/preview?limit={limit} for the clicked suite. */}
@@ -4231,22 +4272,6 @@ export default function NewEvaluation() {
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
@@ -4285,19 +4310,7 @@ $ring:  0 0 0 3px rgba(43, 43, 245, 0.16);
 // itself so inheritance covers everything nested inside it.
 $ev-base-font: 0.8125rem;
 
-// Small field/section labels inside the wizard: plain sentence-case sans.
-// (Was tracked uppercase mono, which made every label shout at 9-11px.)
 %micro {
-  font-family: $sans;
-  font-size: 0.8462em; // 0.6875rem / 0.8125rem
-  font-weight: 600;
-  letter-spacing: 0;
-  text-transform: none;
-}
-
-// The page header eyebrow keeps the tracked uppercase mono treatment so it
-// still matches the History / Reports / Comparison headers.
-%micro-caps {
   font-family: $mono;
   font-size: 0.8462em; // 0.6875rem / 0.8125rem
   font-weight: 700;
@@ -4336,7 +4349,7 @@ $ev-base-font: 0.8125rem;
 }
 
 .ev__header-eyebrow {
-  @extend %micro-caps;
+  @extend %micro;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -4437,106 +4450,115 @@ $ev-base-font: 0.8125rem;
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: 268px 1fr;
-    gap: 22px;
+    grid-template-columns: 288px 1fr;
+    gap: 16px;
   }
 
   // ========================================================================
-  // Step checklist (left rail)
-  // Sits directly on the page with no card of its own, so the stage is the
-  // one surface on screen. Each row is a step: number, name, and the value
-  // chosen so far. Done rows are links back to that step.
+  // SIGNATURE: Run Manifest
   // ========================================================================
   &__manifest {
+    background: $card;
+    border: 1px solid $line;
+    border-radius: 16px;
+    box-shadow: $soft;
     display: flex;
     flex-direction: column;
     min-height: 0;
+    overflow: hidden;
   }
 
   &__manifest-head {
     flex-shrink: 0;
-    padding: 6px 12px 18px;
+    padding: 18px 20px 16px;
+    border-bottom: 1px solid $line-2;
   }
 
+  &__manifest-eyebrow {
+    @extend %micro;
+    color: $ink-3;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  &__manifest-pct {
+    color: $signal;
+    font-size: 0.9231em; letter-spacing: 0.06em; } // 0.75rem / 0.8125rem
+
   &__manifest-title {
+    margin-top: 8px;
     font-family: $display;
-    font-size: 1.3846em; // 1.125rem / 0.8125rem
+    font-size: 1.2308em; // 1rem / 0.8125rem
     font-weight: 800;
-    letter-spacing: -0.02em;
+    letter-spacing: -0.015em;
     color: $ink;
-    line-height: 1.2;
+    line-height: 1.15;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 
-    &[data-empty='true'] { color: $ink-3; }
+    &[data-empty='true'] { color: $ink-3; font-style: normal; }
   }
 
-  &__manifest-eyebrow {
-    margin-top: 4px;
-    font-size: 0.9615em; // 0.78125rem / 0.8125rem
-    font-weight: 500;
-    color: $ink-2;
-  }
-
-  // one segment per step, so the bar reads as "which steps", not a percent
   &__meter {
     margin-top: 12px;
-    display: flex;
-    gap: 4px;
-  }
-
-  &__meter-seg {
-    flex: 1;
     height: 4px;
     border-radius: 999px;
     background: $line;
-    transition: background 0.25s ease;
-
-    &[data-state='done'] { background: $signal; }
-    &[data-state='active'] { background: rgba($signal, 0.35); }
+    overflow: hidden;
   }
 
+  &__meter-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, $signal, $signal-2);
+    transition: width 0.4s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  // ---- the spec list (each row = a step, with its live value) -------------
   &__spec {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 2px;
+    padding: 14px 12px 16px;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 24px;
   }
 
   &__spec-row {
     position: relative;
     display: grid;
-    grid-template-columns: 28px 1fr auto;
-    align-items: center;
+    grid-template-columns: 30px 1fr;
+    align-items: start;
     gap: 12px;
     width: 100%;
     text-align: left;
-    border: 1px solid transparent;
+    border: 0;
     background: transparent;
-    padding: 10px 12px 10px 10px;
+    padding: 12px 12px 12px 4px;
     border-radius: 12px;
     cursor: pointer;
-    transition: background 0.15s ease, border-color 0.15s ease;
+    transition: background 0.15s ease;
 
-    // connector from this tick down to the next one (rows are 2px apart)
+    // Extends past this row's own bottom edge by exactly the flex `gap`
+    // above (24px), so the line still reaches the next row's tick — the
+    // larger the gap, the more this needs to stretch to stay unbroken.
     &::before {
       content: '';
       position: absolute;
-      left: 23px;
-      top: calc(50% + 17px);
-      height: calc(100% - 32px);
+      left: 18px;
+      top: 38px;
+      bottom: -24px;
       width: 2px;
-      border-radius: 2px;
       background: $line;
       transition: background 0.2s ease;
     }
     &:last-child::before { display: none; }
 
     &:disabled { cursor: default; }
+    &:not(:disabled):hover { background: $paper; }
   }
 
   &__spec-tick {
@@ -4544,75 +4566,67 @@ $ev-base-font: 0.8125rem;
     z-index: 1;
     width: 28px;
     height: 28px;
-    border-radius: 50%;
+    border-radius: 9px;
     display: grid;
     place-items: center;
-    background: $paper;
+    background: $card;
     border: 1.5px solid $line;
     color: $ink-3;
     font-family: $mono;
-    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    font-size: 0.8462em; // 0.6875rem / 0.8125rem
     font-weight: 700;
-    transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+    transition: all 0.18s ease;
   }
 
   &__spec-body {
     min-width: 0;
+    padding-top: 1px;
     display: flex;
     flex-direction: column;
-    gap: 1px;
+    gap: 2px;
   }
 
   &__spec-label {
+    @extend %micro;
     font-size: 0.9231em; // 0.75rem / 0.8125rem
-    font-weight: 600;
-    color: $ink-2;
+    color: $ink-3;
     transition: color 0.18s ease;
   }
 
   &__spec-value {
-    font-size: 1.0769em; // 0.875rem / 0.8125rem
+    font-size: 1.1538em; // 0.9375rem / 0.8125rem
     font-weight: 600;
     color: $ink;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 
-    &[data-empty='true'] { color: $ink-3; font-weight: 500; }
-  }
-
-  // "Edit" appears on a finished row when it is hovered or focused
-  &__spec-edit {
-    font-size: 0.8462em; // 0.6875rem / 0.8125rem
-    font-weight: 600;
-    color: $signal;
-    opacity: 0;
-    transition: opacity 0.15s ease;
+    &[data-empty='true'] {
+      color: $ink-3;
+      font-weight: 500;
+      font-family: $mono;
+    }
   }
 
   &__spec-row--done {
     &::before { background: $signal; }
     .ev__spec-tick { background: $signal; border-color: $signal; color: #fff; }
-
-    &:hover,
-    &:focus-visible {
-      background: $card;
-      border-color: $line;
-      .ev__spec-edit { opacity: 1; }
-    }
+    .ev__spec-label { color: $ink-3; }
   }
 
   &__spec-row--active {
-    background: $card;
-    border-color: $line;
-    box-shadow: $soft;
-    .ev__spec-tick { background: $wash; border-color: $signal; color: $signal; }
+    background: $wash;
+    .ev__spec-tick {
+      background: $card;
+      border-color: $signal;
+      color: $signal;
+      box-shadow: 0 0 0 4px rgba($signal, 0.14);
+    }
     .ev__spec-label { color: $signal; }
+    &:not(:disabled):hover { background: $wash; }
   }
 
-  &__spec-row--todo {
-    .ev__spec-label { color: $ink-3; }
-  }
+  &__spec-row--todo { opacity: 0.9; }
 
   // ========================================================================
   // Stage (the working area for the current step)
@@ -4630,48 +4644,50 @@ $ev-base-font: 0.8125rem;
 
   &__stage-head {
     flex-shrink: 0;
-    display: flex;
-    align-items: flex-start;
-    gap: 14px;
     padding: 22px 28px 18px;
     border-bottom: 1px solid $line-2;
   }
 
-  &__stage-icon {
-    flex-shrink: 0;
-    width: 40px;
-    height: 40px;
-    border-radius: 11px;
-    display: grid;
-    place-items: center;
-    background: $wash;
-    color: $signal;
+  &__crumb {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    @extend %micro;
+    color: $ink-3;
+
+    b { color: $signal; font-weight: 700; }
+
+    span:first-child {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: $signal;
+    }
   }
 
-  &__stage-head-text { min-width: 0; }
-
-  &__crumb {
-    font-size: 0.9231em; // 0.75rem / 0.8125rem
-    font-weight: 600;
-    color: $signal;
+  &__crumb-sep {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: $ink-3;
   }
 
   &__stage-title {
-    margin-top: 2px;
+    margin-top: 12px;
     font-family: $display;
     font-size: 1.6923em; // 1.375rem / 0.8125rem
     font-weight: 800;
     letter-spacing: -0.025em;
     color: $ink;
-    line-height: 1.15;
+    line-height: 1.1;
   }
 
   &__stage-sub {
-    margin-top: 5px;
+    margin-top: 6px;
     font-size: 1.0385em; // 0.84375rem / 0.8125rem
     color: $ink-2;
     line-height: 1.5;
-    max-width: 68ch;
+    max-width: 60ch;
   }
 
   &__stage-body {
@@ -4696,28 +4712,6 @@ $ev-base-font: 0.8125rem;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-  }
-
-  &__footer-actions {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    min-width: 0;
-  }
-
-  // why "Next" is disabled, in plain words
-  &__footer-reason {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    min-width: 0;
-    font-size: 0.9615em; // 0.78125rem / 0.8125rem
-    font-weight: 500;
-    color: $ink-2;
-    line-height: 1.35;
-    text-align: right;
-
-    svg { flex-shrink: 0; color: $ink-3; }
   }
 
   &__hint {
@@ -4768,14 +4762,14 @@ $ev-base-font: 0.8125rem;
       background: $ink-solid;
       color: #fff;
       box-shadow: $soft;
-      &:not(:disabled):hover { background: $ink-solid-hover; }
+      &:not(:disabled):hover { background: $ink-solid-hover; transform: translateY(-1px); box-shadow: $lift; }
     }
 
     &--launch {
       background: $signal;
       color: #fff;
       box-shadow: 0 8px 20px -8px rgba($signal, 0.7);
-      &:not(:disabled):hover { background: $signal-2; }
+      &:not(:disabled):hover { background: $signal-2; transform: translateY(-1px); }
     }
   }
 
@@ -4871,7 +4865,7 @@ $ev-base-font: 0.8125rem;
 
   &__quick-head {
     @extend %micro;
-    font-size: 0.8462em; // 0.625rem / 0.8125rem
+    font-size: 0.7692em; // 0.625rem / 0.8125rem
     color: $ink-3;
     margin-bottom: 11px;
   }
@@ -4902,6 +4896,7 @@ $ev-base-font: 0.8125rem;
     &:hover {
       border-color: $ink;
       color: $ink;
+      transform: translateY(-1px);
       svg { color: $signal; }
     }
 
@@ -4959,32 +4954,39 @@ $ev-base-font: 0.8125rem;
   // Option rows (Type step) & framework
   // ========================================================================
   &__options {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    max-width: 720px;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    max-width: 960px;
   }
 
   &__option {
     position: relative;
     display: flex;
-    align-items: center;
-    gap: 15px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
     width: 100%;
     text-align: left;
-    padding: 16px 52px 16px 16px;
+    padding: 16px;
+
+    // selection mark sits in the card's top-right corner in this layout
+    .ev__mark { top: 16px; transform: none; }
     border: 1.5px solid $line;
     border-radius: 14px;
     background: $card;
     cursor: pointer;
     transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease, background 0.18s ease;
 
-    &:hover { border-color: $ink-3; }
+    &:hover {
+      border-color: $ink-3;
+      box-shadow: $lift;
+      transform: translateY(-2px);
+    }
 
     &--on {
       border-color: $signal;
       background: $wash;
-      box-shadow: inset 0 0 0 1px $signal;
       &:hover { border-color: $signal; }
     }
 
@@ -5039,7 +5041,7 @@ $ev-base-font: 0.8125rem;
 
   &__badge {
     @extend %micro;
-    font-size: 0.8462em; // 0.5625rem / 0.8125rem
+    font-size: 0.6923em; // 0.5625rem / 0.8125rem
     color: $ink-3;
     background: $paper;
     border: 1px solid $line;
@@ -5048,7 +5050,7 @@ $ev-base-font: 0.8125rem;
   }
 
   &__option-desc {
-    font-size: 1.1538em; // 0.9375rem / 0.8125rem
+    font-size: 1em; // 0.8125rem / 0.8125rem (base)
     color: $ink-2;
     line-height: 1.5;
   }
@@ -5073,7 +5075,7 @@ $ev-base-font: 0.8125rem;
     margin-top: 26px;
     padding-top: 22px;
     border-top: 1px solid $line-2;
-    max-width: 720px;
+    max-width: 960px;
   }
 
   &__section-hint {
@@ -5101,8 +5103,8 @@ $ev-base-font: 0.8125rem;
     cursor: pointer;
     transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
 
-    &:hover { border-color: $ink-3; }
-    &--on { border-color: $signal; background: $wash; box-shadow: inset 0 0 0 1px $signal; }
+    &:hover { border-color: $ink-3; transform: translateY(-2px); box-shadow: $lift; }
+    &--on { border-color: $signal; background: $wash; }
   }
 
   &__fw-icon {
@@ -5476,8 +5478,8 @@ $ev-base-font: 0.8125rem;
     cursor: pointer;
     transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
 
-    &:hover { border-color: $ink-3; }
-    &--on { border-color: $signal; background: $wash; box-shadow: inset 0 0 0 1px $signal; &:hover { border-color: $signal; } }
+    &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
+    &--on { border-color: $signal; background: $wash; &:hover { border-color: $signal; } }
   }
 
   &__pcard-icon {
@@ -5532,8 +5534,8 @@ $ev-base-font: 0.8125rem;
     cursor: pointer;
     transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
 
-    &:hover { border-color: $ink-3; }
-    &--on { border-color: $signal; background: $wash; box-shadow: inset 0 0 0 1px $signal; &:hover { border-color: $signal; } }
+    &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
+    &--on { border-color: $signal; background: $wash; &:hover { border-color: $signal; } }
   }
 
   // locked = provider chosen but health not yet confirmed successful;
@@ -5678,7 +5680,7 @@ $ev-base-font: 0.8125rem;
   }
 
   &__stat { display: flex; flex-direction: column; gap: 1px; }
-  &__stat-k { @extend %micro; font-size: 0.8462em; color: $ink-3; } // 0.5625rem / 0.8125rem
+  &__stat-k { @extend %micro; font-size: 0.6923em; color: $ink-3; } // 0.5625rem / 0.8125rem
   &__stat-v { font-family: $mono; font-size: 0.9615em; font-weight: 700; color: $ink; letter-spacing: -0.01em; } // 0.78125rem / 0.8125rem
 
   // Per-model retry/timeout — shown on a model card once it's selected.
@@ -5715,7 +5717,7 @@ $ev-base-font: 0.8125rem;
 
     label {
       @extend %micro;
-      font-size: 0.8462em; // 0.5625rem / 0.8125rem
+      font-size: 0.6923em; // 0.5625rem / 0.8125rem
       color: $ink-3;
     }
 
@@ -5877,12 +5879,25 @@ $ev-base-font: 0.8125rem;
     min-height: 0;
     display: grid;
     grid-template-columns: 1fr 300px;
+    // same reasoning as &__metrics below: pin the row to the available
+    // height so each column scrolls on its own.
+    grid-template-rows: minmax(0, 1fr);
     gap: 16px;
   }
 
-  // Document-agent harness: multi-select suites, no Subgroups rail, so the
-  // grid collapses to a single column.
-  &__suite--single { grid-template-columns: 1fr; }
+  // Right-hand column of the Tasks step: Run settings card on top, then
+  // the Subgroups rail (not shown for the multi-suite harness).
+  &__suite-side {
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow-y: auto;
+
+    .ev__rail { flex: 1 1 0; min-height: 9rem; }
+  }
+  &__msec--side { flex-shrink: 0; }
 
   // "N suites selected" counter, pushed to the right of the use-case chips.
   &__suite-selected {
@@ -5905,7 +5920,7 @@ $ev-base-font: 0.8125rem;
     p + p { margin-top: 5px; }
     p span {
       @extend %micro;
-      font-size: 0.8462em;
+      font-size: 0.7692em;
       color: $ink-3;
       margin-right: 6px;
     }
@@ -5942,8 +5957,8 @@ $ev-base-font: 0.8125rem;
     cursor: pointer;
     transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
 
-    &:hover { border-color: $ink-3; }
-    &--on { border-color: $signal; background: $wash; box-shadow: inset 0 0 0 1px $signal; &:hover { border-color: $signal; } }
+    &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
+    &--on { border-color: $signal; background: $wash; &:hover { border-color: $signal; } }
 
     // A dataset with 0 questions can still be picked (so the info icon
     // and warning banner are reachable), but reads visibly muted/flagged
@@ -6276,8 +6291,7 @@ $ev-base-font: 0.8125rem;
   // the label's long hint text to stay on one line; the actual number
   // input is kept narrow separately via &__input--topk below.
   &__field--topk {
-    max-width: 480px;
-    margin-bottom: 20px;
+    max-width: 260px;
 
     .opt {
       white-space: nowrap;
@@ -6673,7 +6687,7 @@ $ev-base-font: 0.8125rem;
     align-items: center;
     gap: 6px;
     @extend %micro;
-    font-size: 0.8462em; // 0.5625rem / 0.8125rem
+    font-size: 0.6923em; // 0.5625rem / 0.8125rem
     color: $ink-3;
     margin-bottom: 8px;
     svg { color: $signal; }
@@ -6689,7 +6703,7 @@ $ev-base-font: 0.8125rem;
     align-items: center;
     gap: 7px;
     @extend %micro;
-    font-size: 0.8462em; // 0.625rem / 0.8125rem
+    font-size: 0.7692em; // 0.625rem / 0.8125rem
     color: $ink-2;
     margin-bottom: 12px;
     svg { color: $signal; }
@@ -6711,7 +6725,7 @@ $ev-base-font: 0.8125rem;
     border-bottom: 1px solid $line-2;
     font-size: 1.0385em; &:last-child { border-bottom: 0; } // 0.84375rem / 0.8125rem
 
-    span:first-child { @extend %micro; font-size: 0.8462em; color: $ink-3; } // 0.625rem / 0.8125rem
+    span:first-child { @extend %micro; font-size: 0.7692em; color: $ink-3; } // 0.625rem / 0.8125rem
     span:last-child { color: $ink; font-weight: 600; text-align: right; }
   }
 
@@ -6779,6 +6793,77 @@ $ev-base-font: 0.8125rem;
   }
 
   &__spin { animation: ev-spin 0.8s linear infinite; }
+
+  // ========================================================================
+  // Condensed 4-step flow additions
+  // ========================================================================
+
+  // Setup step: "What are you evaluating?" label between name and type.
+  &__setup-type { margin-top: 30px; }
+
+  // Models step: provider filter chips (replaces the old Providers step).
+  &__provbar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 14px;
+    padding: 10px 12px;
+    border: 1px solid $line;
+    border-radius: 12px;
+    background: $paper;
+  }
+
+  &__provbar-label {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    @extend %micro;
+    color: $ink-2;
+
+    svg { color: $signal; }
+  }
+
+  &__provbar-chips {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  &__provbar-empty { font-size: 0.9231em; color: $ink-3; } // 0.75rem / 0.8125rem
+
+  // Scoring step: note shown when the metrics section doesn't apply.
+  &__scoring-note {
+    flex-shrink: 0;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid $line;
+    border-radius: 10px;
+    background: $paper;
+    color: $ink-2;
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    line-height: 1.45;
+
+    svg { flex-shrink: 0; margin-top: 2px; color: $signal; }
+  }
+
+  // Footer: why the Next button is disabled.
+  &__blocker {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    color: $ink-2;
+
+    svg { flex-shrink: 0; color: $ink-3; }
+  }
 }
 
 // ===========================================================================
@@ -6830,7 +6915,7 @@ $ev-base-font: 0.8125rem;
 
 .ev-preview-eyebrow {
   @extend %micro;
-  font-size: 0.8462em; color: $signal; } // 0.625rem / 0.8125rem
+  font-size: 0.7692em; color: $signal; } // 0.625rem / 0.8125rem
 
 .ev-preview-title {
   margin-top: 6px;
@@ -7012,7 +7097,7 @@ $ev-base-font: 0.8125rem;
 
 .ev-preview-limit-label {
   @extend %micro;
-  font-size: 0.8462em; // 0.625rem / 0.8125rem
+  font-size: 0.7692em; // 0.625rem / 0.8125rem
   color: $ink-2;
   display: block;
   margin-bottom: 8px;
@@ -7122,7 +7207,7 @@ $ev-base-font: 0.8125rem;
 
   span {
     @extend %micro;
-    font-size: 0.8462em; // 0.59375rem / 0.8125rem
+    font-size: 0.7308em; // 0.59375rem / 0.8125rem
     color: $ink-3;
     margin-right: 6px;
   }
@@ -7189,7 +7274,7 @@ $ev-base-font: 0.8125rem;
 
   span {
     @extend %micro;
-    font-size: 0.8462em; // 0.59375rem / 0.8125rem
+    font-size: 0.7308em; // 0.59375rem / 0.8125rem
     color: $ink-3;
     margin-right: 7px;
   }
@@ -7223,10 +7308,27 @@ $ev-base-font: 0.8125rem;
 
   b {
     @extend %micro;
-    font-size: 0.8462em; // 0.625rem / 0.8125rem
+    font-size: 0.7692em; // 0.625rem / 0.8125rem
     color: $ink-3;
     font-weight: 700;
   }
+}
+
+// ---- Review & launch drawer — same shell as the dataset preview panel,
+// a little wider, with a pinned action footer. ---------------------------
+.ev-review-panel { width: min(580px, 100vw); }
+
+.ev-preview-close:disabled { cursor: not-allowed; opacity: 0.5; }
+
+.ev-review-foot {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-top: 1px solid $line-2;
+  background: $card;
 }
 
 @keyframes ev-fade-in {
@@ -7306,7 +7408,8 @@ $ev-base-font: 0.8125rem;
   .ev__shell { grid-template-columns: 1fr; }
   .ev__manifest { display: none; }
   .ev__suite, .ev__metrics { grid-template-columns: 1fr; }
-  .ev__samples-instruction-row { grid-template-columns: 1fr; }
+  .ev__options { grid-template-columns: 1fr; }
+
   .ev__rail, .ev__judge { max-height: 15rem; }
 }
 
@@ -7333,16 +7436,4 @@ $ev-base-font: 0.8125rem;
 
 @media (prefers-reduced-motion: reduce) {
   .ev *, .ev-toast { animation: none !important; transition: none !important; }
-}
-
-
-// Visible keyboard focus on every control in the wizard.
-.ev,
-.ev__header {
-  button:focus-visible,
-  [role='button']:focus-visible,
-  a:focus-visible {
-    outline: 2px solid $signal;
-    outline-offset: 2px;
-  }
 }
