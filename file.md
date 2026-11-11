@@ -2079,7 +2079,8 @@ export default function NewEvaluation() {
                         key={m.id}
                         className={`${on ? styles['ev__table-row--on'] : ''} ${
                           !selectable && !on ? styles['ev__table-row--locked'] : ''
-                        }`}
+                        } ${health === 'loading' ? styles['ev__table-row--checking'] : ''}`}
+                        aria-busy={health === 'loading'}
                         onClick={() => toggleModel(m.id)}
                       >
                         <td>
@@ -2113,7 +2114,7 @@ export default function NewEvaluation() {
                             )}
                             {health === 'loading' && (
                               <span className={`${styles['ev__health-badge']} ${styles['ev__health-badge--loading']}`}>
-                                Checking
+                                <Loader2 size={11} className={styles.ev__spin} /> Checking
                               </span>
                             )}
                             {health === 'failed' && (
@@ -4289,12 +4290,6 @@ export default function NewEvaluation() {
     </div>
   );
 }
-
-
-
-
-
-
 
 
 
@@ -6850,6 +6845,10 @@ $ev-base-font: 0.8125rem;
     &--active { background: rgba($signal, 0.4); }
   }
 
+  // shell: tighter gutter, square sidebar (aside) and stage (section)
+  &__shell { gap: 6px; }
+  &__manifest, &__stage { border-radius: 0; }
+
   &__spec { gap: 4px; padding: 12px 10px 14px; }
 
   &__spec-row {
@@ -6878,11 +6877,12 @@ $ev-base-font: 0.8125rem;
     border: 1.5px solid $line;
     background: $card;
     color: $ink-3;
+    font-size: 0.9231em;
   }
 
   &__spec-label {
     font-family: $sans;
-    font-size: 0.8462em;
+    font-size: 0.9615em;
     font-weight: 600;
     letter-spacing: 0;
     text-transform: none;
@@ -6890,7 +6890,7 @@ $ev-base-font: 0.8125rem;
   }
 
   &__spec-value {
-    font-size: 1em;
+    font-size: 1.1538em;
     font-weight: 650;
 
     &[data-empty='true'] { font-family: $sans; font-weight: 500; color: $ink-3; }
@@ -7218,6 +7218,21 @@ $ev-base-font: 0.8125rem;
 
     tbody tr.ev__table-row--on td { background: $wash; }
     tbody tr.ev__table-row--locked { cursor: default; }
+
+    // Health check in flight: a soft signal sheen sweeps across the whole
+    // row and a bar pulses on its left edge. The sheen lives on the <tr>
+    // (cells go transparent) so it travels as one band, not per cell.
+    tbody tr.ev__table-row--checking {
+      background-image: linear-gradient(100deg, transparent 30%, rgba($signal, 0.1) 50%, transparent 70%);
+      background-size: 200% 100%;
+      background-repeat: no-repeat;
+      animation: ev-mcard-sheen 1.6s ease-in-out infinite;
+
+      td { background: transparent; }
+      td:first-child { animation: ev-row-bar 1.6s ease-in-out infinite; }
+      &:hover td { background: transparent; }
+    }
+    tbody tr.ev__table-row--checking.ev__table-row--on { background-color: $wash; }
 
     &--static {
       th { position: static; }
@@ -7940,6 +7955,10 @@ $ev-base-font: 0.8125rem;
 @keyframes ev-mcard-pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(43, 43, 245, 0.16); }
   50% { box-shadow: 0 0 0 5px rgba(43, 43, 245, 0); }
+}
+@keyframes ev-row-bar {
+  0%, 100% { box-shadow: inset 3px 0 0 rgba(43, 43, 245, 0.25); }
+  50% { box-shadow: inset 3px 0 0 rgba(43, 43, 245, 0.9); }
 }
 @keyframes ev-mcard-sheen {
   0% { background-position: 140% 0; }
