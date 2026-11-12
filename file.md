@@ -1440,6 +1440,134 @@ export default function NewEvaluation() {
             : 'Run a health check to enable selection.'
         : undefined;
 
+    // Health badge / action — shared by both card layouts below.
+    const healthBadge = (
+      <>
+        {health === 'success' && (
+          <span className={`${styles['ev__health-badge']} ${styles['ev__health-badge--success']}`}>
+            <ShieldCheck size={12} /> Available
+          </span>
+        )}
+        {health === 'failed' && (
+          <button
+            type="button"
+            className={`${styles['ev__health-badge']} ${styles['ev__health-badge--failed']}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              runHealthCheck(m.id);
+            }}
+            title="Retry health check"
+          >
+            <ShieldAlert size={12} /> Unavailable
+          </button>
+        )}
+        {health === 'loading' && (
+          <span className={`${styles['ev__health-badge']} ${styles['ev__health-badge--loading']}`}>
+            <Loader2 size={12} className={styles.ev__spin} /> Checking…
+          </span>
+        )}
+        {health === 'idle' && (
+          <button
+            type="button"
+            className={styles['ev__health-check-btn']}
+            onClick={(e) => {
+              e.stopPropagation();
+              runHealthCheck(m.id);
+            }}
+          >
+            <HeartPulse size={12} /> Check health
+          </button>
+        )}
+      </>
+    );
+
+    // Model / Agent grid: same card design as the Test Suite step — header
+    // (selection control, icon tile, name), tags, a labelled chip section,
+    // and a footer of figures. Retries and timeout live in the side panel.
+    if (!inlineRetry) {
+      return (
+        <div
+          key={m.id}
+          role="button"
+          tabIndex={0}
+          className={`${styles.ev__srow} ${styles['ev__srow--model']} ${on ? styles['ev__srow--on'] : ''} ${
+            !selectable && !on ? styles['ev__srow--locked'] : ''
+          } ${health === 'loading' ? styles['ev__mcard--checking'] : ''}`}
+          onClick={onToggle}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onToggle();
+            }
+          }}
+          aria-pressed={on}
+          aria-disabled={!selectable && !on}
+          title={lockedHint}
+        >
+          <div className={styles['ev__srow-head']}>
+            <span className={`${styles.ev__check} ${on ? styles['ev__check--on'] : ''}`}>
+              {on && <Check size={11} strokeWidth={3} />}
+            </span>
+            <span className={styles['ev__srow-icon']}>
+              <Cpu size={15} />
+            </span>
+            <span className={styles['ev__srow-name']} title={m.name || 'Unnamed model'}>
+              {m.name || 'Unnamed model'}
+            </span>
+          </div>
+
+          <div className={styles['ev__srow-tags']}>
+            <span className={`${styles.ev__pilltag} ${styles['ev__pilltag--muted']}`}>{providerName}</span>
+            {m.category && <span className={`${styles.ev__pilltag} ${styles['ev__pilltag--muted']}`}>{m.category}</span>}
+            <span className={styles['ev__srow-health']}>{healthBadge}</span>
+          </div>
+
+          <div className={styles['ev__srow-subs']}>
+            <span className={styles['ev__srow-k']}>Capabilities</span>
+            <div className={styles['ev__srow-chips']}>
+              {caps && caps.length > 0 ? (
+                <>
+                  {caps.slice(0, 4).map((c) => (
+                    <span key={c} className={styles.ev__cap}>
+                      {c}
+                    </span>
+                  ))}
+                  {caps.length > 4 && (
+                    <span className={styles.ev__cap} title={caps.slice(4).join(', ')}>
+                      +{caps.length - 4} more
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span className={styles['ev__srow-none']}>Not listed</span>
+              )}
+            </div>
+          </div>
+
+          <div className={styles['ev__srow-side']}>
+            <div className={styles.ev__stat}>
+              <span className={styles['ev__stat-k']}>Context</span>
+              <span className={styles['ev__stat-v']}>{formatContextWindow(m.context_window)}</span>
+            </div>
+            <div className={styles.ev__stat}>
+              <span className={styles['ev__stat-k']}>Input /1M</span>
+              <span className={styles['ev__stat-v']}>{formatPrice(inputPrice)}</span>
+            </div>
+            <div className={styles.ev__stat}>
+              <span className={styles['ev__stat-k']}>Output /1M</span>
+              <span className={styles['ev__stat-v']}>{formatPrice(outputPrice)}</span>
+            </div>
+            {typeof accuracy === 'number' && Number.isFinite(accuracy) && (
+              <div className={styles.ev__stat}>
+                <span className={styles['ev__stat-k']}>Accuracy</span>
+                <span className={styles['ev__stat-v']}>{accuracy.toFixed(1)}%</span>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
     return (
       // Not a <button> — it contains a nested "Check health" control, so
       // it's a clickable div with keyboard support instead (nested
@@ -1460,7 +1588,6 @@ export default function NewEvaluation() {
         }}
         aria-pressed={on}
         aria-disabled={!selectable && !on}
-        title={inlineRetry ? undefined : lockedHint}
       >
         <div className={styles['ev__mcard-top']}>
           <div className={styles['ev__mcard-name']}>{m.name || 'Unnamed model'}</div>
@@ -1474,45 +1601,7 @@ export default function NewEvaluation() {
         {/* Provider name + health badge, same line, badge on the right */}
         <div className={styles['ev__mcard-provider-row']}>
           <span className={styles['ev__mcard-provider']}>{providerName}</span>
-
-          {health === 'success' && (
-            <span className={`${styles['ev__health-badge']} ${styles['ev__health-badge--success']}`}>
-              <ShieldCheck size={12} /> Available
-            </span>
-          )}
-
-          {health === 'failed' && (
-            <button
-              type="button"
-              className={`${styles['ev__health-badge']} ${styles['ev__health-badge--failed']}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                runHealthCheck(m.id);
-              }}
-              title="Retry health check"
-            >
-              <ShieldAlert size={12} /> Unavailable
-            </button>
-          )}
-
-          {health === 'loading' && (
-            <span className={`${styles['ev__health-badge']} ${styles['ev__health-badge--loading']}`}>
-              <Loader2 size={12} className={styles.ev__spin} /> Checking…
-            </span>
-          )}
-
-          {health === 'idle' && (
-            <button
-              type="button"
-              className={styles['ev__health-check-btn']}
-              onClick={(e) => {
-                e.stopPropagation();
-                runHealthCheck(m.id);
-              }}
-            >
-              <HeartPulse size={12} /> Check health
-            </button>
-          )}
+          {healthBadge}
         </div>
 
         {caps && caps.length > 0 && (
@@ -4646,6 +4735,7 @@ export default function NewEvaluation() {
     </div>
   );
 }
+
 
 
 
@@ -8245,6 +8335,18 @@ $ev-base-font: 0.8125rem;
   &__srow-subs { display: flex; flex-direction: column; gap: 6px; }
   &__srow-k { @extend %micro; font-size: 0.6923em; color: $ink-3; }
   &__srow-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+
+  // Model cards (Models step) use this same card. They carry less text than
+  // a suite, so no minimum height; locked = can't be selected until its
+  // health check passes.
+  &__srow--model { min-height: 0; }
+  &__srow--locked {
+    cursor: default;
+    &:hover { border-color: $line; box-shadow: none; transform: none; }
+  }
+  // health badge sits at the end of the tags row
+  &__srow-health { margin-left: auto; display: inline-flex; }
+  &__srow-none { font-size: 0.9231em; color: $ink-3; }
 
   // footer: stats on the left, Preview pushed to the right
   &__srow-side {
