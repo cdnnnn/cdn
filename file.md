@@ -2915,141 +2915,221 @@ export default function NewEvaluation() {
                           agent options instead, so those stay near the top. */}
                       {draft.type !== 'agent' && typeAboutPanel}
 
-                      {/* Agent evaluation mode — Standard keeps today's benchmark /
-                          Hermes-framework flows untouched; Document-agent harness
-                          runs Hermes and Co-Work on the same tasks through one
-                          harness. The two are mutually exclusive, so switching
-                          clears agentFramework (harness) / harness picks (standard). */}
+                      {/* Agent setup — the two follow-up choices that only apply to
+                          Agent, as one panel with numbered steps:
+                            1. how to test (Standard benchmark / Document-agent harness)
+                            2. harness: which agents to compare (required)
+                               standard: which framework (optional)
+                          The two modes are mutually exclusive, so switching clears
+                          agentFramework (harness) / harness picks (standard). */}
                       {draft.type === 'agent' && (
-                        <div className={styles.ev__section}>
-                          <label className={styles.ev__label}>
-                            <Layers size={13} /> Agent evaluation mode
-                          </label>
-                          <p className={styles['ev__section-hint']}>
-                            Standard runs a single agent on a benchmark. The document-agent harness compares agents on
-                            tool calling, document Q&amp;A, spreadsheet work and document editing, with one scorecard.
-                          </p>
-                          <div className={styles['ev__radio-row']}>
-                            {[
-                              { v: false, l: 'Standard' },
-                              { v: true, l: 'Document-agent harness' },
-                            ].map((o) => (
-                              <button
-                                key={String(o.v)}
-                                type="button"
-                                className={`${styles['ev__radio-opt']} ${
-                                  draft.agentHarness === o.v ? styles['ev__radio-opt--on'] : ''
-                                }`}
-                                onClick={() =>
-                                  dispatch(
-                                    setDraft({
-                                      agentHarness: o.v,
-                                      agentFramework: o.v ? null : draft.agentFramework,
-                                      harnessAgents: o.v ? draft.harnessAgents : [],
-                                      harnessSuiteIds: [],
-                                      // the scorer catalog differs per mode, so drop stale picks
-                                      metrics: [],
-                                      retestOnWrong: false,
-                                      retestVerifyMetric: null,
-                                    })
-                                  )
-                                }
-                              >
-                                <span
-                                  className={`${styles.ev__radio} ${draft.agentHarness === o.v ? styles['ev__radio--on'] : ''}`}
-                                />
-                                {o.l}
-                              </button>
-                            ))}
+                        <div className={`${styles.ev__asetup} ${styles.ev__anim}`}>
+                          <div className={styles['ev__asetup-head']}>
+                            <span className={`${styles['ev__option-icon']} ${styles['ev__option-icon--agent']}`}>
+                              <Bot size={18} />
+                            </span>
+                            <div className={styles['ev__asetup-title']}>
+                              <h3>Agent setup</h3>
+                              <p>Two more choices, because you picked Agent.</p>
+                            </div>
+                            {isHarness && draft.harnessAgents.length === 0 ? (
+                              <span className={`${styles['ev__asetup-status']} ${styles['ev__asetup-status--todo']}`}>
+                                1 choice left
+                              </span>
+                            ) : (
+                              <span className={styles['ev__asetup-status']}>
+                                <Check size={12} strokeWidth={3} /> All set
+                              </span>
+                            )}
                           </div>
-                        </div>
-                      )}
 
-                      {isHarness && (
-                        <div className={styles.ev__section}>
-                          <label className={styles.ev__label}>
-                            <Waypoints size={13} /> Agents to compare
-                          </label>
-                          <p className={styles['ev__section-hint']}>
-                            Every selected agent runs the same tasks in a clean sandbox through the same harness, so
-                            the scorecard is directly comparable. Pick one or more.
-                          </p>
-                          <div className={styles['ev__fw-grid']}>
-                            {HARNESS_AGENTS.map((a) => {
-                              const on = draft.harnessAgents.includes(a.id);
-                              return (
-                                <button
-                                  key={a.id}
-                                  type="button"
-                                  className={`${styles.ev__fw} ${on ? styles['ev__fw--on'] : ''}`}
-                                  onClick={() =>
-                                    dispatch(
-                                      setDraft({ harnessAgents: toggle(draft.harnessAgents, a.id) as HarnessAdapterId[] })
-                                    )
-                                  }
-                                >
-                                  <span className={styles['ev__fw-icon']}>
-                                    <Waypoints size={16} />
-                                  </span>
-                                  <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-                                    <span className={styles['ev__fw-name']}>{a.title}</span>
-                                    <span className={styles['ev__fw-desc']}>{a.desc}</span>
-                                  </span>
-                                  {on && (
-                                    <span className={styles.ev__mark}>
-                                      <Check size={12} strokeWidth={3} />
-                                    </span>
-                                  )}
-                                </button>
-                              );
-                            })}
+                          {/* 1 — how to test */}
+                          <div className={styles['ev__asetup-step']}>
+                            <span className={`${styles['ev__asetup-n']} ${styles['ev__asetup-n--done']}`}>
+                              <Check size={12} strokeWidth={3} />
+                            </span>
+                            <div className={styles['ev__asetup-body']}>
+                              <p className={styles['ev__asetup-q']}>How should the agent be tested?</p>
+                              <div className={styles['ev__asetup-grid']}>
+                                {[
+                                  {
+                                    v: false,
+                                    icon: Bot,
+                                    l: 'Standard benchmark',
+                                    d: 'Run one agent on a single agent benchmark. You can add the framework it runs on.',
+                                    tags: ['One benchmark', 'Optional framework'],
+                                  },
+                                  {
+                                    v: true,
+                                    icon: Layers,
+                                    l: 'Document-agent harness',
+                                    d: 'Compare agents on the same document tasks, each in a clean sandbox, with one scorecard.',
+                                    tags: [...HARNESS_USE_CASES],
+                                  },
+                                ].map((o) => {
+                                  const on = draft.agentHarness === o.v;
+                                  const ModeIcon = o.icon;
+                                  return (
+                                    <button
+                                      key={String(o.v)}
+                                      type="button"
+                                      className={`${styles.ev__acard} ${on ? styles['ev__acard--on'] : ''}`}
+                                      aria-pressed={on}
+                                      onClick={() => {
+                                        if (on) return;
+                                        dispatch(
+                                          setDraft({
+                                            agentHarness: o.v,
+                                            agentFramework: o.v ? null : draft.agentFramework,
+                                            harnessAgents: o.v ? draft.harnessAgents : [],
+                                            harnessSuiteIds: [],
+                                            // the scorer catalog differs per mode, so drop stale picks
+                                            metrics: [],
+                                            retestOnWrong: false,
+                                            retestVerifyMetric: null,
+                                          })
+                                        );
+                                      }}
+                                    >
+                                      <span className={styles['ev__acard-head']}>
+                                        <span className={`${styles.ev__radio} ${on ? styles['ev__radio--on'] : ''}`} />
+                                        <span className={styles['ev__srow-icon']}>
+                                          <ModeIcon size={15} />
+                                        </span>
+                                        <span className={styles['ev__acard-name']}>{o.l}</span>
+                                      </span>
+                                      <span className={styles['ev__acard-desc']}>{o.d}</span>
+                                      <span className={styles['ev__acard-tags']}>
+                                        {o.tags.map((t) => (
+                                          <span key={t} className={`${styles.ev__pilltag} ${on ? '' : styles['ev__pilltag--muted']}`}>
+                                            {t}
+                                          </span>
+                                        ))}
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
                           </div>
-                          {draft.harnessAgents.length === 0 && (
-                            <p className={styles['ev__metrics-required']} style={{ marginTop: 12, marginBottom: 0 }}>
-                              Select at least one agent to continue.
-                            </p>
+
+                          {/* 2 — harness: agents to compare (required) */}
+                          {isHarness && (
+                            <div className={styles['ev__asetup-step']}>
+                              <span
+                                className={`${styles['ev__asetup-n']} ${
+                                  draft.harnessAgents.length > 0 ? styles['ev__asetup-n--done'] : styles['ev__asetup-n--active']
+                                }`}
+                              >
+                                {draft.harnessAgents.length > 0 ? <Check size={12} strokeWidth={3} /> : 2}
+                              </span>
+                              <div className={styles['ev__asetup-body']}>
+                                <p className={styles['ev__asetup-q']}>
+                                  Which agents should be compared? <span>Pick one or more</span>
+                                </p>
+                                <div className={styles['ev__asetup-grid']}>
+                                  {HARNESS_AGENTS.map((a) => {
+                                    const on = draft.harnessAgents.includes(a.id);
+                                    return (
+                                      <button
+                                        key={a.id}
+                                        type="button"
+                                        className={`${styles.ev__acard} ${on ? styles['ev__acard--on'] : ''}`}
+                                        aria-pressed={on}
+                                        onClick={() =>
+                                          dispatch(
+                                            setDraft({ harnessAgents: toggle(draft.harnessAgents, a.id) as HarnessAdapterId[] })
+                                          )
+                                        }
+                                      >
+                                        <span className={styles['ev__acard-head']}>
+                                          <span className={`${styles.ev__check} ${on ? styles['ev__check--on'] : ''}`}>
+                                            {on && <Check size={11} strokeWidth={3} />}
+                                          </span>
+                                          <span className={styles['ev__srow-icon']}>
+                                            <Waypoints size={15} />
+                                          </span>
+                                          <span className={styles['ev__acard-name']}>{a.title}</span>
+                                        </span>
+                                        <span className={styles['ev__acard-desc']}>{a.desc}</span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                                {draft.harnessAgents.length === 0 ? (
+                                  <p className={`${styles['ev__asetup-sum']} ${styles['ev__asetup-sum--req']}`}>
+                                    <AlertTriangle size={13} /> Select at least one agent to continue.
+                                  </p>
+                                ) : (
+                                  <p className={styles['ev__asetup-sum']}>
+                                    <Info size={13} />
+                                    {draft.harnessAgents.length === 1 ? (
+                                      <span>
+                                        <b>{harnessAgentTitles[0]}</b> runs alone. Add another agent to compare them side by side.
+                                      </span>
+                                    ) : (
+                                      <span>
+                                        <b>{harnessAgentTitles.join(' vs ')}</b>: same tasks, same sandbox, one scorecard.
+                                      </span>
+                                    )}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* 2 — standard: framework (optional) */}
+                          {!isHarness && (
+                            <div className={styles['ev__asetup-step']}>
+                              <span
+                                className={`${styles['ev__asetup-n']} ${draft.agentFramework ? styles['ev__asetup-n--done'] : ''}`}
+                              >
+                                {draft.agentFramework ? <Check size={12} strokeWidth={3} /> : 2}
+                              </span>
+                              <div className={styles['ev__asetup-body']}>
+                                <p className={styles['ev__asetup-q']}>
+                                  Which framework does the agent run on? <span>Optional</span>
+                                </p>
+                                <div className={styles['ev__asetup-grid']}>
+                                  {AGENT_FRAMEWORKS.map((f) => {
+                                    const on = draft.agentFramework === f.id;
+                                    return (
+                                      <button
+                                        key={f.id}
+                                        type="button"
+                                        className={`${styles.ev__acard} ${on ? styles['ev__acard--on'] : ''}`}
+                                        aria-pressed={on}
+                                        onClick={() => dispatch(setDraft({ agentFramework: on ? null : f.id }))}
+                                      >
+                                        <span className={styles['ev__acard-head']}>
+                                          <span className={`${styles.ev__check} ${on ? styles['ev__check--on'] : ''}`}>
+                                            {on && <Check size={11} strokeWidth={3} />}
+                                          </span>
+                                          <span className={styles['ev__srow-icon']}>
+                                            <Waypoints size={15} />
+                                          </span>
+                                          <span className={styles['ev__acard-name']}>{f.title}</span>
+                                        </span>
+                                        <span className={styles['ev__acard-desc']}>{f.desc}</span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                                <p className={styles['ev__asetup-sum']}>
+                                  <Info size={13} />
+                                  {draft.agentFramework ? (
+                                    <span>
+                                      Runs on <b>{frameworkTitle}</b>. This also decides which test suites the next steps offer.
+                                    </span>
+                                  ) : (
+                                    <span>No framework selected. The run uses an agent benchmark, and scoring needs only a judge model.</span>
+                                  )}
+                                </p>
+                              </div>
+                            </div>
                           )}
                         </div>
                       )}
-
-                      {draft.type === 'agent' && !draft.agentHarness && (
-                        <div className={styles.ev__section}>
-                          <label className={styles.ev__label}>
-                            <Waypoints size={13} /> Agent framework <span className="opt">optional</span>
-                          </label>
-                          <p className={styles['ev__section-hint']}>
-                            Tell us which framework the agent runs on, if applicable. This also determines which test
-                            suites are available in the next steps.
-                          </p>
-                          <div className={styles['ev__fw-grid']}>
-                            {AGENT_FRAMEWORKS.map((f) => {
-                              const on = draft.agentFramework === f.id;
-                              return (
-                                <button
-                                  key={f.id}
-                                  type="button"
-                                  className={`${styles.ev__fw} ${on ? styles['ev__fw--on'] : ''}`}
-                                  onClick={() => dispatch(setDraft({ agentFramework: on ? null : f.id }))}
-                                >
-                                  <span className={styles['ev__fw-icon']}>
-                                    <Waypoints size={16} />
-                                  </span>
-                                  <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-                                    <span className={styles['ev__fw-name']}>{f.title}</span>
-                                    <span className={styles['ev__fw-desc']}>{f.desc}</span>
-                                  </span>
-                                  {on && (
-                                    <span className={styles.ev__mark}>
-                                      <Check size={12} strokeWidth={3} />
-                                    </span>
-                                  )}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-
 
                       {draft.type === 'agent' && typeAboutPanel}
                     </>
@@ -7857,6 +7937,166 @@ $ev-base-font: 0.8125rem;
     &--on { background: $signal; border-color: $signal; }
   }
 
+  // ---- Type step: "Agent setup" panel -------------------------------------
+  // The follow-up choices for Agent, as one panel: a header with a status
+  // chip, then numbered steps joined by a rail (1 how to test, 2 agents or
+  // framework). Choice cards use the same anatomy as the suite/model cards.
+  &__asetup {
+    flex-shrink: 0;
+    margin-top: 16px;
+    border: 1px solid $line;
+    border-radius: 14px;
+    background: $paper;
+    overflow: hidden;
+  }
+  &__asetup-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 16px 20px;
+    border-bottom: 1px solid $line;
+    background: $card;
+
+    .ev__option-icon { width: 40px; height: 40px; border-radius: 11px; }
+  }
+  &__asetup-title {
+    flex: 1;
+    min-width: 0;
+
+    h3 { font-family: $display; font-size: 1.2308em; font-weight: 800; letter-spacing: -0.01em; color: $ink; }
+    p { margin-top: 2px; font-size: 1.0385em; color: $ink-2; }
+  }
+  &__asetup-status {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 11px;
+    border-radius: 999px;
+    background: $ok-wash;
+    font-size: 0.9231em;
+    font-weight: 700;
+    color: $ok;
+
+    &--todo { background: $danger-wash; color: $danger; }
+  }
+
+  &__asetup-step {
+    position: relative;
+    display: grid;
+    grid-template-columns: 26px minmax(0, 1fr);
+    gap: 14px;
+    padding: 18px 20px 0;
+
+    &:last-child { padding-bottom: 20px; }
+
+    // rail down to the next step's marker
+    &:not(:last-child)::before {
+      content: '';
+      position: absolute;
+      left: 32px;
+      top: 50px;
+      bottom: -14px;
+      width: 2px;
+      border-radius: 2px;
+      background: $line;
+    }
+  }
+  &__asetup-n {
+    position: relative;
+    z-index: 1;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    border: 1.5px solid $line;
+    background: $card;
+    font-family: $mono;
+    font-size: 0.9231em;
+    font-weight: 700;
+    color: $ink-3;
+
+    &--active { border-color: $signal; color: $signal; box-shadow: 0 0 0 4px rgba($signal, 0.14); }
+    &--done { border-color: $signal; background: $signal; color: #fff; }
+  }
+  &__asetup-body { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+  &__asetup-q {
+    padding-top: 3px;
+    font-family: $display;
+    font-size: 1.1538em;
+    font-weight: 700;
+    color: $ink;
+
+    span {
+      margin-left: 8px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: $card;
+      border: 1px solid $line;
+      font-family: $sans;
+      font-size: 0.7667em;
+      font-weight: 650;
+      color: $ink-2;
+      vertical-align: 2px;
+    }
+  }
+  &__asetup-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+
+  &__acard {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    text-align: left;
+    padding: 14px 16px;
+    border: 1.5px solid $line;
+    border-radius: 12px;
+    background: $card;
+    font-family: $sans;
+    cursor: pointer;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
+
+    &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
+
+    &--on {
+      border-color: $signal;
+      background: $wash;
+      &:hover { border-color: $signal; }
+      .ev__srow-icon { background: $signal; border-color: $signal; color: #fff; }
+      .ev__pilltag { background: $card; }
+    }
+  }
+  &__acard-head { display: flex; align-items: center; gap: 10px; }
+  &__acard-name { font-family: $display; font-size: 1.1538em; font-weight: 700; color: $ink; }
+  &__acard-desc { font-size: 1.0385em; color: $ink-2; line-height: 1.5; }
+  &__acard-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
+
+  // one-line consequence of the current choice
+  &__asetup-sum {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: $card;
+    border: 1px solid $line;
+    font-size: 1em;
+    color: $ink-2;
+    line-height: 1.45;
+
+    svg { flex-shrink: 0; margin-top: 2px; color: $signal; }
+    b { font-weight: 700; color: $ink; }
+
+    &--req {
+      border-color: rgba($danger, 0.3);
+      background: $danger-wash;
+      color: $danger;
+      font-weight: 650;
+      svg { color: $danger; }
+    }
+  }
+  &__asetup + &__about { margin-top: 16px; margin-bottom: 22px; }
+
   // ---- Type step: "About" panel -------------------------------------------
   // Sits under the three type cards and describes the selected one: what it
   // measures, what it's good for, and how a run of that type works.
@@ -9202,6 +9442,7 @@ $ev-base-font: 0.8125rem;
   .ev__suite, .ev__metrics { grid-template-columns: 1fr; }
   .ev__samples-instruction-row { grid-template-columns: 1fr; }
   .ev__split, .ev__frow, .ev__choice-row, .ev__namegrid { grid-template-columns: 1fr; }
+  .ev__asetup-grid { grid-template-columns: 1fr; }
   .ev__about-cols { grid-template-columns: 1fr; }
   .ev__about-col + .ev__about-col { border-left: 0; border-top: 1px solid $line; }
   .ev__hprev { position: static; }
