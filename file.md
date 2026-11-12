@@ -2004,20 +2004,34 @@ export default function NewEvaluation() {
   const listHead = (o: {
     title: string;
     meta: ReactNode;
+    // how many items the list is showing right now (drives the result chip)
+    count: number;
     search: { placeholder: string; value: string; onChange: (v: string) => void };
     refresh: { onClick: () => void; busy: boolean; title: string };
     filters?: ReactNode;
     sticky?: boolean;
-  }) => (
-    <div className={`${styles.ev__lhead} ${o.sticky ? styles['ev__lhead--sticky'] : ''}`}>
-      <div className={styles['ev__lhead-row']}>
+  }) => {
+    const hasQuery = o.search.value.trim() !== '';
+    return (
+      <div className={`${styles.ev__lhead} ${o.sticky ? styles['ev__lhead--sticky'] : ''}`}>
         <div className={styles['ev__lhead-title']}>
           <h3>{o.title}</h3>
           <span>{o.meta}</span>
         </div>
-        <label className={styles.ev__sbar}>
+
+        {/* Search bar: one full-width control holding the icon, the field,
+            a live result count, the "/" hint or clear button, and refresh. */}
+        <div
+          className={`${styles.ev__sbar} ${hasQuery ? styles['ev__sbar--active'] : ''}`}
+          onMouseDown={(e) => {
+            // clicking anywhere on the bar (not on its buttons) focuses the field
+            if ((e.target as HTMLElement).closest('button, input')) return;
+            e.preventDefault();
+            listSearchRef.current?.focus();
+          }}
+        >
           <span className={styles['ev__sbar-icon']}>
-            <Search size={14} />
+            <Search size={15} strokeWidth={2.4} />
           </span>
           <input
             ref={listSearchRef}
@@ -2033,6 +2047,14 @@ export default function NewEvaluation() {
               else e.currentTarget.blur();
             }}
           />
+          {hasQuery && (
+            <span
+              className={`${styles['ev__sbar-count']} ${o.count === 0 ? styles['ev__sbar-count--none'] : ''}`}
+              aria-live="polite"
+            >
+              {o.count === 0 ? 'No matches' : `${o.count} result${o.count === 1 ? '' : 's'}`}
+            </span>
+          )}
           {o.search.value ? (
             <button
               type="button"
@@ -2050,20 +2072,23 @@ export default function NewEvaluation() {
               /
             </kbd>
           )}
-        </label>
-        <button
-          type="button"
-          className={styles['ev__toolbar-refresh']}
-          onClick={o.refresh.onClick}
-          disabled={o.refresh.busy}
-          title={o.refresh.title}
-        >
-          <RefreshCw size={14} className={o.refresh.busy ? styles.ev__spin : ''} />
-        </button>
+          <span className={styles['ev__sbar-sep']} />
+          <button
+            type="button"
+            className={styles['ev__sbar-refresh']}
+            onClick={o.refresh.onClick}
+            disabled={o.refresh.busy}
+            title={o.refresh.title}
+            aria-label={o.refresh.title}
+          >
+            <RefreshCw size={15} className={o.refresh.busy ? styles.ev__spin : ''} />
+          </button>
+        </div>
+
+        {o.filters && <div className={styles['ev__lhead-filters']}>{o.filters}</div>}
       </div>
-      {o.filters && <div className={styles['ev__lhead-filters']}>{o.filters}</div>}
-    </div>
-  );
+    );
+  };
 
   // One − / value / + control. The buttons step by `step` and clamp to the
   // field's range straight away; typing still works as before (free typing,
@@ -2130,7 +2155,8 @@ export default function NewEvaluation() {
               {tableModels.length} of {llmAvailable.length} shown · <b>{draft.models.length}</b> selected
             </>
           ),
-          search: { placeholder: 'Search models', value: modelSearch, onChange: setModelSearch },
+          count: tableModels.length,
+          search: { placeholder: 'Search models by name', value: modelSearch, onChange: setModelSearch },
           refresh: { onClick: refreshModels, busy: modelsLoading, title: 'Refresh models' },
           filters: (
             <>
@@ -2724,7 +2750,8 @@ export default function NewEvaluation() {
                             {filteredProviders.length} of {connectedProviders.length} shown · <b>{draft.providers.length}</b> selected
                           </>
                         ),
-                        search: { placeholder: 'Search providers', value: providerSearch, onChange: setProviderSearch },
+                        count: filteredProviders.length,
+                        search: { placeholder: 'Search providers by name', value: providerSearch, onChange: setProviderSearch },
                         refresh: { onClick: refreshProviders, busy: providersLoading, title: 'Refresh providers' },
                       })}
                       {providersLoading ? (
@@ -3065,7 +3092,8 @@ export default function NewEvaluation() {
                                   <b>{isHarness ? draft.harnessSuiteIds.length : draft.dataset ? 1 : 0}</b> selected
                                 </>
                               ),
-                              search: { placeholder: 'Search test suites', value: datasetSearch, onChange: setDatasetSearch },
+                              count: filteredDatasets.length,
+                              search: { placeholder: 'Search test suites by name', value: datasetSearch, onChange: setDatasetSearch },
                               refresh: { onClick: refreshDatasets, busy: datasetsRefreshing, title: 'Refresh test suites' },
                               sticky: true,
                               // Harness mode filters by use case; every other mode keeps
@@ -4336,6 +4364,8 @@ export default function NewEvaluation() {
     </div>
   );
 }
+
+
 
 
 
@@ -7338,18 +7368,15 @@ $ev-base-font: 0.8125rem;
       box-shadow: 0 8px 10px -10px rgba(20, 22, 27, 0.28);
     }
 
-    // refresh button matches the search bar's height and corner
-    .ev__toolbar-refresh { margin-left: 0; width: 40px; height: 40px; border-radius: 12px; }
+
   }
 
-  &__lhead-row { display: flex; align-items: center; gap: 10px; }
-
   &__lhead-title {
-    flex: 1;
-    min-width: 0;
     display: flex;
-    flex-direction: column;
-    gap: 2px;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 2px 16px;
 
     h3 { font-family: $display; font-size: 1.1538em; font-weight: 800; letter-spacing: -0.01em; color: $ink; }
     span { font-size: 0.9231em; color: $ink-2; }
@@ -7357,31 +7384,44 @@ $ev-base-font: 0.8125rem;
   }
 
   // ---- search bar ---------------------------------------------------------
-  // Soft-filled field with an icon tile on the left and, on the right, a
-  // "/" shortcut hint that swaps to a clear button once there's text. On
-  // focus it lifts to white, the border and icon tile turn signal blue, and
-  // the field grows a little.
+  // A full-width "command bar": gradient icon tile, large field, live result
+  // count, "/" hint or clear button, then refresh behind a divider. Resting
+  // it's a white bar with a soft shadow; on focus the border becomes a
+  // signal gradient, the bar lifts and a glow spreads under it.
   &__sbar {
-    flex: 0 1 320px;
-    min-width: 180px;
-    height: 40px;
+    position: relative;
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 0 8px 0 6px;
-    border: 1.5px solid $line;
-    border-radius: 12px;
-    background: $paper;
+    gap: 12px;
+    height: 52px;
+    padding: 0 8px 0 9px;
+    border: 1.5px solid transparent;
+    border-radius: 16px;
+    // two layers: the fill (padding-box) and the border colour (border-box),
+    // so the border can be a gradient on focus
+    background:
+      linear-gradient($card, $card) padding-box,
+      linear-gradient($line, $line) border-box;
+    box-shadow: 0 1px 2px rgba(20, 22, 27, 0.05), 0 6px 16px -10px rgba(20, 22, 27, 0.18);
     cursor: text;
-    transition: flex-basis 0.22s ease, border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+    transition: box-shadow 0.2s ease, transform 0.2s ease;
 
-    &:hover { border-color: $ink-3; }
+    &:hover {
+      background:
+        linear-gradient($card, $card) padding-box,
+        linear-gradient($ink-3, $ink-3) border-box;
+    }
+
+    &:focus-within,
+    &--active {
+      background:
+        linear-gradient($card, $card) padding-box,
+        linear-gradient(120deg, $signal, $signal-2 55%, rgba($signal, 0.35)) border-box;
+    }
 
     &:focus-within {
-      flex-basis: 380px;
-      border-color: $signal;
-      background: $card;
-      box-shadow: $ring;
+      transform: translateY(-1px);
+      box-shadow: 0 0 0 4px rgba($signal, 0.12), 0 14px 28px -14px rgba($signal, 0.55);
     }
 
     input {
@@ -7391,7 +7431,7 @@ $ev-base-font: 0.8125rem;
       border: 0;
       background: transparent;
       font-family: $sans;
-      font-size: 1.0385em;
+      font-size: 1.1538em;
       font-weight: 500;
       color: $ink;
       outline: none;
@@ -7402,29 +7442,45 @@ $ev-base-font: 0.8125rem;
 
   &__sbar-icon {
     flex-shrink: 0;
-    width: 28px;
-    height: 28px;
-    border-radius: 8px;
+    width: 34px;
+    height: 34px;
+    border-radius: 11px;
     display: grid;
     place-items: center;
-    border: 1px solid $line;
-    background: $card;
-    color: $ink-2;
-    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    background: linear-gradient(140deg, $signal, $signal-2);
+    color: #fff;
+    box-shadow: 0 6px 12px -6px rgba($signal, 0.7);
+    transition: transform 0.2s ease;
   }
-  &__sbar:focus-within &__sbar-icon { background: $signal; border-color: $signal; color: #fff; }
+  &__sbar:focus-within &__sbar-icon { transform: scale(1.06) rotate(-6deg); }
+
+  // live result count, shown while there's a query
+  &__sbar-count {
+    flex-shrink: 0;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: $wash;
+    font-family: $sans;
+    font-size: 0.8846em;
+    font-weight: 700;
+    color: $signal;
+    white-space: nowrap;
+    animation: ev-rise 0.2s ease both;
+
+    &--none { background: $danger-wash; color: $danger; }
+  }
 
   &__sbar-kbd {
     flex-shrink: 0;
-    min-width: 22px;
-    padding: 2px 6px;
+    min-width: 24px;
+    padding: 3px 7px;
     border: 1px solid $line;
     border-bottom-width: 2px;
-    border-radius: 6px;
-    background: $card;
+    border-radius: 7px;
+    background: $paper;
     text-align: center;
     font-family: $mono;
-    font-size: 0.8462em;
+    font-size: 0.8846em;
     font-weight: 700;
     color: $ink-3;
   }
@@ -7432,8 +7488,8 @@ $ev-base-font: 0.8125rem;
 
   &__sbar-clear {
     flex-shrink: 0;
-    width: 22px;
-    height: 22px;
+    width: 24px;
+    height: 24px;
     display: grid;
     place-items: center;
     border: 0;
@@ -7444,6 +7500,25 @@ $ev-base-font: 0.8125rem;
     transition: background 0.12s ease, color 0.12s ease;
 
     &:hover { background: $ink-2; color: #fff; }
+  }
+
+  &__sbar-sep { flex-shrink: 0; width: 1px; height: 24px; background: $line; }
+
+  &__sbar-refresh {
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 11px;
+    background: transparent;
+    color: $ink-2;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+
+    &:hover:not(:disabled) { background: $wash; color: $signal; }
+    &:disabled { cursor: default; color: $signal; }
   }
 
   &__lhead-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
