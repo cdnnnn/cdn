@@ -294,6 +294,14 @@ function formatPrice(price: number | null | undefined): string {
   return price === null || price === undefined || Number.isNaN(price) ? '—' : `$${price.toFixed(2)}`;
 }
 
+function providerInitials(name: string | null | undefined): string {
+  const safeName = name?.trim() || '';
+  if (!safeName) return '??';
+  const parts = safeName.replace(/[^a-zA-Z0-9 ]/g, '').split(' ').filter(Boolean);
+  const letters = parts.slice(0, 2).map((w) => w[0]).join('');
+  return (letters || safeName.slice(0, 2)).toUpperCase();
+}
+
 type HealthStatus = 'idle' | 'loading' | 'success' | 'failed';
 
 // Pulls a displayable message out of a rejected createAsyncThunk action,
@@ -2651,171 +2659,73 @@ export default function NewEvaluation() {
                   )}
 
                   {/* STEP 2 — PROVIDERS */}
-                  {/* There are usually only a handful of providers, so instead of
-                      a card grid they're rows in a compact table, with an "In
-                      scope" panel on the right — same layout as the Models step. */}
                   {step === 2 && (
-                    <div className={styles.ev__split}>
-                      <div className={styles['ev__split-main']}>
-                        <div className={styles['ev__step-toolbar']}>
-                          <div className={styles['ev__toolbar-search']}>
-                            <Search size={14} />
-                            <input
-                              placeholder="Search providers"
-                              value={providerSearch}
-                              onChange={(e) => setProviderSearch(e.target.value)}
-                            />
-                          </div>
-                          {connectedProviders.length > 1 && (
-                            <div className={styles['ev__metrics-actions']}>
-                              <button
-                                type="button"
-                                className={styles.ev__link}
-                                onClick={() => dispatch(setDraft({ providers: connectedProviders.map((p) => p.id) }))}
-                              >
-                                Select all
-                              </button>
-                              <button type="button" className={styles.ev__link} onClick={() => dispatch(setDraft({ providers: [] }))}>
-                                Clear
-                              </button>
-                            </div>
-                          )}
-                          <button
-                            type="button"
-                            className={styles['ev__toolbar-refresh']}
-                            onClick={refreshProviders}
-                            disabled={providersLoading}
-                            title="Refresh providers"
-                          >
-                            <RefreshCw size={14} className={providersLoading ? styles.ev__spin : ''} />
-                          </button>
+                    <div className={styles.ev__scroll}>
+                      <div className={styles['ev__step-toolbar']}>
+                        <div className={styles['ev__toolbar-search']}>
+                          <Search size={14} />
+                          <input
+                            placeholder="Search providers…"
+                            value={providerSearch}
+                            onChange={(e) => setProviderSearch(e.target.value)}
+                          />
                         </div>
-
-                        {/* Compact table, same component as the Models step. */}
-                        <div className={styles['ev__table-wrap']}>
-                          <table className={styles.ev__table}>
-                            <thead>
-                              <tr>
-                                <th>Provider</th>
-                                <th>Status</th>
-                                <th className={styles['ev__table-num']}>Models</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {providersLoading
-                                ? Array.from({ length: 3 }).map((_, i) => (
-                                    <tr key={i}>
-                                      <td colSpan={3}>
-                                        <span
-                                          className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`}
-                                          style={{ width: `${60 - i * 12}%` }}
-                                        />
-                                      </td>
-                                    </tr>
-                                  ))
-                                : filteredProviders.map((p) => {
-                                    const on = draft.providers.includes(p.id);
-                                    const pick = () => dispatch(setDraft({ providers: toggle(draft.providers, p.id) }));
-                                    return (
-                                      <tr key={p.id} className={on ? styles['ev__table-row--on'] : ''} onClick={pick}>
-                                        <td>
-                                          <span className={styles['ev__table-model']}>
-                                            <button
-                                              type="button"
-                                              role="checkbox"
-                                              aria-checked={on}
-                                              aria-label={`Use ${p.name || 'provider'}`}
-                                              className={`${styles.ev__check} ${on ? styles['ev__check--on'] : ''}`}
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                pick();
-                                              }}
-                                            >
-                                              {on && <Check size={11} strokeWidth={3} />}
-                                            </button>
-                                            <span>
-                                              <b>{p.name || 'Unnamed provider'}</b>
-                                              {p.description && <small>{p.description}</small>}
-                                            </span>
-                                          </span>
-                                        </td>
-                                        <td>
-                                          <span className={`${styles['ev__health-badge']} ${styles['ev__health-badge--success']}`}>
-                                            Connected
-                                          </span>
-                                        </td>
-                                        <td className={styles['ev__table-num']}>{p.model_count ?? 0}</td>
-                                      </tr>
-                                    );
-                                  })}
-                              {!providersLoading && filteredProviders.length === 0 && (
-                                <tr className={styles['ev__table-row--locked']}>
-                                  <td colSpan={3} style={{ textAlign: 'center' }}>
-                                    {connectedProviders.length === 0
-                                      ? 'No connected providers yet. Connect one from the Providers page to continue.'
-                                      : `No providers match "${providerSearch}".`}
-                                  </td>
-                                </tr>
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
+                        <button
+                          type="button"
+                          className={styles['ev__toolbar-refresh']}
+                          onClick={refreshProviders}
+                          disabled={providersLoading}
+                          title="Refresh providers"
+                        >
+                          <RefreshCw size={14} className={providersLoading ? styles.ev__spin : ''} />
+                        </button>
                       </div>
-
-                      <aside className={styles.ev__panel}>
-                        <p className={styles['ev__panel-title']}>
-                          In scope: {draft.providers.length} provider{draft.providers.length === 1 ? '' : 's'}
-                        </p>
-                        {draft.providers.length === 0 ? (
-                          <p className={styles['ev__panel-note']}>
-                            Nothing selected yet. Tick the providers whose models you want to compare.
-                          </p>
-                        ) : (
-                          <div className={styles['ev__panel-list']}>
-                            {draft.providers.map((id) => {
-                              const p = providers.find((x) => x?.id === id);
-                              return (
-                                <div key={id} className={styles['ev__panel-item']}>
-                                  <div className={styles['ev__panel-item-row']}>
-                                    <span>
-                                      {p?.name || id}
-                                      <small>{p?.model_count ?? 0} models</small>
-                                    </span>
-                                    <button
-                                      type="button"
-                                      className={styles['ev__panel-x']}
-                                      onClick={() => dispatch(setDraft({ providers: toggle(draft.providers, id) }))}
-                                      aria-label={`Remove ${p?.name || id}`}
-                                    >
-                                      <X size={14} />
-                                    </button>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                        <div className={styles['ev__panel-stats']}>
-                          <div>
-                            <span>Providers selected</span>
-                            <b>
-                              {draft.providers.length} of {connectedProviders.length}
-                            </b>
-                          </div>
-                          <div>
-                            <span>Models available</span>
-                            <b>
-                              {draft.providers
-                                .reduce((n, id) => n + (providers.find((x) => x?.id === id)?.model_count ?? 0), 0)
-                                .toLocaleString()}
-                            </b>
-                          </div>
+                      {providersLoading ? (
+                        <div className={styles.ev__grid} aria-busy="true" aria-label="Refreshing providers">
+                          {Array.from({ length: SKELETON_CARD_COUNT }).map((_, i) => (
+                            <div key={i} className={styles['ev__skel-pcard']}>
+                              <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--icon']}`} />
+                              <span className={styles['ev__skel-lines']}>
+                                <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '70%' }} />
+                                <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '45%' }} />
+                                <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--pill']}`} />
+                              </span>
+                            </div>
+                          ))}
                         </div>
-                        <p className={styles['ev__panel-note']}>
-                          Their models are listed in the next step, where each one is health-checked. Only connected
-                          providers appear here.
-                        </p>
-                      </aside>
+                      ) : (
+                        <div className={styles.ev__grid}>
+                          {filteredProviders.map((p) => {
+                            const on = draft.providers.includes(p.id);
+                            return (
+                              <button
+                                key={p.id}
+                                type="button"
+                                className={`${styles.ev__pcard} ${on ? styles['ev__pcard--on'] : ''}`}
+                                onClick={() => dispatch(setDraft({ providers: toggle(draft.providers, p.id) }))}
+                              >
+                                <span className={styles['ev__pcard-icon']}>{providerInitials(p.name)}</span>
+                                <span className={styles['ev__pcard-body']}>
+                                  <span className={styles['ev__pcard-name']}>{p.name || 'Unnamed provider'}</span>
+                                  <span className={styles['ev__pcard-meta']}>{p.model_count ?? 0} models available</span>
+                                  <span className={styles.ev__pill}>Connected</span>
+                                </span>
+                                {on && (
+                                  <span className={styles.ev__mark}>
+                                    <Check size={12} strokeWidth={3} />
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                          {connectedProviders.length === 0 && (
+                            <p className={styles.ev__empty}>No connected providers yet. Connect one from the Providers page to continue.</p>
+                          )}
+                          {connectedProviders.length > 0 && filteredProviders.length === 0 && (
+                            <p className={styles.ev__empty}>No providers match "{providerSearch}".</p>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
 
