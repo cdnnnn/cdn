@@ -1981,6 +1981,52 @@ export default function NewEvaluation() {
   const tableModels = filteredModels.filter(
     (m) => modelProviderFilter === 'all' || m.provider_id === modelProviderFilter
   );
+  // ---- list header ---------------------------------------------------------
+  // Shared header for the Providers, Models and Test Suite lists: a title
+  // with a live count on the left, search + refresh on the right, an optional
+  // row of filter chips underneath, and a rule separating it from the list.
+  const listHead = (o: {
+    title: string;
+    meta: ReactNode;
+    search: { placeholder: string; value: string; onChange: (v: string) => void };
+    refresh: { onClick: () => void; busy: boolean; title: string };
+    filters?: ReactNode;
+    sticky?: boolean;
+  }) => (
+    <div className={`${styles.ev__lhead} ${o.sticky ? styles['ev__lhead--sticky'] : ''}`}>
+      <div className={styles['ev__lhead-row']}>
+        <div className={styles['ev__lhead-title']}>
+          <h3>{o.title}</h3>
+          <span>{o.meta}</span>
+        </div>
+        <div className={styles['ev__toolbar-search']}>
+          <Search size={14} />
+          <input
+            placeholder={o.search.placeholder}
+            aria-label={o.search.placeholder}
+            value={o.search.value}
+            onChange={(e) => o.search.onChange(e.target.value)}
+          />
+          {o.search.value && (
+            <button type="button" className={styles['ev__lhead-clear']} onClick={() => o.search.onChange('')} aria-label="Clear search">
+              <X size={13} />
+            </button>
+          )}
+        </div>
+        <button
+          type="button"
+          className={styles['ev__toolbar-refresh']}
+          onClick={o.refresh.onClick}
+          disabled={o.refresh.busy}
+          title={o.refresh.title}
+        >
+          <RefreshCw size={14} className={o.refresh.busy ? styles.ev__spin : ''} />
+        </button>
+      </div>
+      {o.filters && <div className={styles['ev__lhead-filters']}>{o.filters}</div>}
+    </div>
+  );
+
   // One − / value / + control. The buttons step by `step` and clamp to the
   // field's range straight away; typing still works as before (free typing,
   // clamped on blur).
@@ -2039,12 +2085,17 @@ export default function NewEvaluation() {
   const modelsTableView = (
     <div className={styles.ev__split}>
       <div className={styles['ev__split-main']}>
-        <div className={styles['ev__step-toolbar']}>
-          <div className={styles['ev__toolbar-search']}>
-            <Search size={14} />
-            <input placeholder="Search models" value={modelSearch} onChange={(e) => setModelSearch(e.target.value)} />
-          </div>
-          <div className={styles.ev__viewchips}>
+        {listHead({
+          title: 'Available models',
+          meta: (
+            <>
+              {tableModels.length} of {llmAvailable.length} shown · <b>{draft.models.length}</b> selected
+            </>
+          ),
+          search: { placeholder: 'Search models', value: modelSearch, onChange: setModelSearch },
+          refresh: { onClick: refreshModels, busy: modelsLoading, title: 'Refresh models' },
+          filters: (
+            <>
             <button
               type="button"
               className={`${styles['ev__filter-chip']} ${modelProviderFilter === 'all' ? styles['ev__filter-chip--on'] : ''}`}
@@ -2068,17 +2119,9 @@ export default function NewEvaluation() {
                 </button>
               );
             })}
-          </div>
-          <button
-            type="button"
-            className={styles['ev__toolbar-refresh']}
-            onClick={refreshModels}
-            disabled={modelsLoading}
-            title="Refresh models"
-          >
-            <RefreshCw size={14} className={modelsLoading ? styles.ev__spin : ''} />
-          </button>
-        </div>
+            </>
+          ),
+        })}
 
         {/* Model cards (original card design). Retries and timeout for the
             selected models are managed in the side panel, so the cards
@@ -2636,25 +2679,16 @@ export default function NewEvaluation() {
                   {/* STEP 2 — PROVIDERS */}
                   {step === 2 && (
                     <div className={styles.ev__scroll}>
-                      <div className={styles['ev__step-toolbar']}>
-                        <div className={styles['ev__toolbar-search']}>
-                          <Search size={14} />
-                          <input
-                            placeholder="Search providers…"
-                            value={providerSearch}
-                            onChange={(e) => setProviderSearch(e.target.value)}
-                          />
-                        </div>
-                        <button
-                          type="button"
-                          className={styles['ev__toolbar-refresh']}
-                          onClick={refreshProviders}
-                          disabled={providersLoading}
-                          title="Refresh providers"
-                        >
-                          <RefreshCw size={14} className={providersLoading ? styles.ev__spin : ''} />
-                        </button>
-                      </div>
+                      {listHead({
+                        title: 'Connected providers',
+                        meta: (
+                          <>
+                            {filteredProviders.length} of {connectedProviders.length} shown · <b>{draft.providers.length}</b> selected
+                          </>
+                        ),
+                        search: { placeholder: 'Search providers', value: providerSearch, onChange: setProviderSearch },
+                        refresh: { onClick: refreshProviders, busy: providersLoading, title: 'Refresh providers' },
+                      })}
                       {providersLoading ? (
                         <div className={styles.ev__grid} aria-busy="true" aria-label="Refreshing providers">
                           {Array.from({ length: SKELETON_CARD_COUNT }).map((_, i) => (
@@ -2985,32 +3019,21 @@ export default function NewEvaluation() {
                       {datasetTab === 'browse' && (
                         <div className={styles.ev__suite}>
                           <div className={styles['ev__suite-scroll']}>
-                            <div className={styles['ev__step-toolbar']}>
-                              <div className={styles['ev__toolbar-search']}>
-                                <Search size={14} />
-                                <input
-                                  placeholder="Search test suites…"
-                                  value={datasetSearch}
-                                  onChange={(e) => setDatasetSearch(e.target.value)}
-                                />
-                              </div>
-                              <button
-                                type="button"
-                                className={styles['ev__toolbar-refresh']}
-                                onClick={refreshDatasets}
-                                disabled={datasetsRefreshing}
-                                title="Refresh test suites"
-                              >
-                                <RefreshCw size={14} className={datasetsRefreshing ? styles.ev__spin : ''} />
-                              </button>
-                            </div>
-
-                            {/* Harness mode: multi-select suites, filtered by use case
-                                (All / Tool Calling / Document reading / …) with a live
-                                "N selected" count. Every other mode keeps the original
-                                All / Custom / Deepeval chips below. */}
-                            {isHarness ? (
-                              <div className={styles['ev__filter-row']}>
+                            {listHead({
+                              title: 'Test suites',
+                              meta: (
+                                <>
+                                  {filteredDatasets.length} shown ·{' '}
+                                  <b>{isHarness ? draft.harnessSuiteIds.length : draft.dataset ? 1 : 0}</b> selected
+                                </>
+                              ),
+                              search: { placeholder: 'Search test suites', value: datasetSearch, onChange: setDatasetSearch },
+                              refresh: { onClick: refreshDatasets, busy: datasetsRefreshing, title: 'Refresh test suites' },
+                              sticky: true,
+                              // Harness mode filters by use case; every other mode keeps
+                              // the All / Custom / Deepeval chips.
+                              filters: isHarness ? (
+                                <>
                                 {['all', ...harnessUseCases].map((u) => {
                                   const on = useCaseFilter === u;
                                   const count =
@@ -3027,12 +3050,9 @@ export default function NewEvaluation() {
                                     </button>
                                   );
                                 })}
-                                <span className={styles['ev__suite-selected']}>
-                                  <b>{draft.harnessSuiteIds.length}</b> suite{draft.harnessSuiteIds.length === 1 ? '' : 's'} selected
-                                </span>
-                              </div>
-                            ) : (
-                            <div className={styles['ev__filter-row']}>
+                                </>
+                              ) : (
+                                <>
                               {DATASET_TYPE_FILTERS.map((f) => {
                                 const on = datasetTypeFilter === f.value;
                                 const count = datasetTypeCounts[f.value];
@@ -3048,8 +3068,9 @@ export default function NewEvaluation() {
                                   </button>
                                 );
                               })}
-                            </div>
-                            )}
+                                </>
+                              ),
+                            })}
 
                             {(() => {
                               // Both the busy flag and the error message are
@@ -4277,6 +4298,10 @@ export default function NewEvaluation() {
     </div>
   );
 }
+
+
+
+
 
 
 
@@ -7254,6 +7279,62 @@ $ev-base-font: 0.8125rem;
 
     &--on { background: $signal; border-color: $signal; }
   }
+
+  // ---- list header (Providers / Models / Test Suite) ---------------------
+  // Title + live count on the left, search and refresh on the right, filter
+  // chips on a second row, and a rule underneath separating it from the list.
+  &__lhead {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 16px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid $line;
+
+    // inside a scrolling list (Test Suite) the header stays in view
+    &--sticky {
+      position: sticky;
+      top: -2px;
+      z-index: 2;
+      padding-top: 2px;
+      background: $card;
+      // soft edge so the rule still reads when cards scroll underneath
+      box-shadow: 0 8px 10px -10px rgba(20, 22, 27, 0.28);
+    }
+
+    .ev__toolbar-search { flex: 0 1 280px; max-width: none; background: $paper; }
+    .ev__toolbar-search:focus-within { background: $card; }
+    .ev__toolbar-refresh { margin-left: 0; }
+  }
+
+  &__lhead-row { display: flex; align-items: center; gap: 10px; }
+
+  &__lhead-title {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+
+    h3 { font-family: $display; font-size: 1.1538em; font-weight: 800; letter-spacing: -0.01em; color: $ink; }
+    span { font-size: 0.9231em; color: $ink-2; }
+    b { font-weight: 700; color: $signal; }
+  }
+
+  &__lhead-clear {
+    flex-shrink: 0;
+    display: inline-flex;
+    padding: 2px;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: $ink-3;
+    cursor: pointer;
+    &:hover { color: $ink; }
+  }
+
+  &__lhead-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 
   // ---- provider cards (Providers step) -----------------------------------
   // Header (initials tile, name, connected status, selection ring), the
