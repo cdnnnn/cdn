@@ -3407,6 +3407,7 @@ export default function NewEvaluation() {
                                     const isCustom = d?.dataset_type === 'custom';
                                     const isDeepeval = d?.dataset_type === 'deepeval';
                                     const hasNoQuestions = (d.question_count ?? 0) <= 0;
+                                    const subgroups = d.dataset_categories || [];
                                     // Preview: hidden for harness suites while the catalog is
                                     // mocked, and for agent_benchmark except the three
                                     // previewable datasets (same rules as before).
@@ -3430,65 +3431,114 @@ export default function NewEvaluation() {
                                         }}
                                         aria-pressed={on}
                                       >
-                                        {isHarness ? (
-                                          <span className={`${styles.ev__check} ${on ? styles['ev__check--on'] : ''}`}>
-                                            {on && <Check size={11} strokeWidth={3} />}
-                                          </span>
-                                        ) : (
-                                          <span className={`${styles.ev__radio} ${on ? styles['ev__radio--on'] : ''}`} />
-                                        )}
-                                        <div className={styles['ev__srow-main']}>
-                                          <div className={styles['ev__srow-head']}>
-                                            <span className={styles['ev__srow-name']} title={d.name || 'Untitled dataset'}>
-                                              {d.name || 'Untitled dataset'}
+                                        {/* Header: selection control + name */}
+                                        <div className={styles['ev__srow-head']}>
+                                          {isHarness ? (
+                                            <span className={`${styles.ev__check} ${on ? styles['ev__check--on'] : ''}`}>
+                                              {on && <Check size={11} strokeWidth={3} />}
                                             </span>
-                                            {isHarness && d.use_case && (
-                                              <span className={`${styles.ev__pilltag} ${on ? '' : styles['ev__pilltag--muted']}`}>
-                                                {d.use_case}
-                                              </span>
-                                            )}
-                                            {!isHarness && d.category && (
-                                              <span className={`${styles.ev__pilltag} ${styles['ev__pilltag--muted']}`}>
-                                                {d.category}
-                                              </span>
-                                            )}
-                                            {!isHarness && isCustom && <span className={styles.ev__pilltag}>Custom</span>}
-                                            {!isHarness && isDeepeval && (
-                                              <span className={`${styles.ev__pilltag} ${styles['ev__pilltag--muted']}`}>
-                                                Deepeval
-                                              </span>
-                                            )}
-                                          </div>
-                                          {d.description && <p className={styles['ev__srow-desc']}>{d.description}</p>}
-                                          {d.scoring && (
-                                            <p className={styles['ev__srow-desc']}>
-                                              <b>Scored by</b> {d.scoring}
-                                            </p>
+                                          ) : (
+                                            <span className={`${styles.ev__radio} ${on ? styles['ev__radio--on'] : ''}`} />
+                                          )}
+                                          <span className={styles['ev__srow-icon']}>
+                                            <Database size={15} />
+                                          </span>
+                                          <span className={styles['ev__srow-name']} title={d.name || 'Untitled dataset'}>
+                                            {d.name || 'Untitled dataset'}
+                                          </span>
+                                        </div>
+
+                                        {/* Tags: use case / category, source, images */}
+                                        <div className={styles['ev__srow-tags']}>
+                                          {isHarness && d.use_case && (
+                                            <span className={`${styles.ev__pilltag} ${on ? '' : styles['ev__pilltag--muted']}`}>
+                                              {d.use_case}
+                                            </span>
+                                          )}
+                                          {/* category tag, unless it would just repeat the Custom / Deepeval tag */}
+                                          {!isHarness && d.category && d.category.toLowerCase() !== String(d.dataset_type ?? '').toLowerCase() && (
+                                            <span className={`${styles.ev__pilltag} ${styles['ev__pilltag--muted']}`}>
+                                              {d.category}
+                                            </span>
+                                          )}
+                                          {isCustom && <span className={styles.ev__pilltag}>Custom</span>}
+                                          {isDeepeval && (
+                                            <span className={`${styles.ev__pilltag} ${styles['ev__pilltag--muted']}`}>Deepeval</span>
+                                          )}
+                                          {d.has_images && (
+                                            <span
+                                              className={`${styles.ev__pilltag} ${styles['ev__pilltag--muted']}`}
+                                              title="Questions include images, so every selected model must accept image input"
+                                            >
+                                              <ImageIcon size={11} /> Images
+                                            </span>
                                           )}
                                         </div>
+
+                                        <p
+                                          className={`${styles['ev__srow-desc']} ${
+                                            d.description ? '' : styles['ev__srow-desc--none']
+                                          }`}
+                                          title={d.description || undefined}
+                                        >
+                                          {d.description || 'No description provided.'}
+                                        </p>
+                                        {d.scoring && (
+                                          <p className={styles['ev__srow-scoring']}>
+                                            <b>Scored by</b> {d.scoring}
+                                          </p>
+                                        )}
+
+                                        {/* Subgroups this suite is split into (first few) */}
+                                        {subgroups.length > 0 && (
+                                          <div className={styles['ev__srow-subs']}>
+                                            <span className={styles['ev__srow-k']}>Subgroups</span>
+                                            <div className={styles['ev__srow-chips']}>
+                                              {subgroups.slice(0, 3).map((g) => (
+                                                <span key={g} className={styles.ev__cap}>
+                                                  {g}
+                                                </span>
+                                              ))}
+                                              {subgroups.length > 3 && (
+                                                <span className={styles.ev__cap} title={subgroups.slice(3).join(', ')}>
+                                                  +{subgroups.length - 3} more
+                                                </span>
+                                              )}
+                                            </div>
+                                          </div>
+                                        )}
+
+                                        {/* Footer: numbers on the left, Preview on the right */}
                                         <div className={styles['ev__srow-side']}>
-                                          <span
-                                            className={`${styles['ev__srow-count']} ${
-                                              hasNoQuestions ? styles['ev__srow-count--empty'] : ''
-                                            }`}
-                                            title={
-                                              hasNoQuestions
-                                                ? "This test suite has no questions yet, so it can't be used."
-                                                : undefined
-                                            }
-                                          >
-                                            {(d.question_count ?? 0).toLocaleString()} questions
-                                          </span>
+                                          <div className={styles.ev__stat}>
+                                            <span className={styles['ev__stat-k']}>Questions</span>
+                                            <span
+                                              className={`${styles['ev__stat-v']} ${
+                                                hasNoQuestions ? styles['ev__srow-count--empty'] : ''
+                                              }`}
+                                              title={
+                                                hasNoQuestions
+                                                  ? "This test suite has no questions yet, so it can't be used."
+                                                  : undefined
+                                              }
+                                            >
+                                              {(d.question_count ?? 0).toLocaleString()}
+                                            </span>
+                                          </div>
+                                          <div className={styles.ev__stat}>
+                                            <span className={styles['ev__stat-k']}>Subgroups</span>
+                                            <span className={styles['ev__stat-v']}>{subgroups.length || '—'}</span>
+                                          </div>
                                           {canPreview && (
                                             <button
                                               type="button"
-                                              className={styles.ev__link}
+                                              className={styles['ev__srow-preview']}
                                               onClick={(e) => {
                                                 e.stopPropagation();
                                                 openPreview(d.id, d.name, d.question_count ?? 0);
                                               }}
                                             >
-                                              Preview
+                                              <FileText size={13} /> Preview
                                             </button>
                                           )}
                                         </div>
@@ -4596,16 +4646,6 @@ export default function NewEvaluation() {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -8120,59 +8160,121 @@ $ev-base-font: 0.8125rem;
   &__table-health { display: flex; align-items: center; gap: 8px; color: $ink-2; white-space: nowrap; }
 
   // ---- suite rows (Test Suite step) --------------------------------------
-  // Suite cards: as many per row as fit (same auto-fill pattern as the
-  // other card grids), instead of one full-width row each.
+  // Suite cards: as many per row as fit, all the same height. Each card
+  // shows everything the dataset carries — name, tags, description, how it's
+  // scored (harness), its subgroups, and question / subgroup counts.
   &__slist {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    grid-auto-rows: 1fr;
     gap: 12px;
   }
 
   &__srow {
     display: flex;
-    flex-wrap: wrap;
-    align-items: flex-start;
-    align-content: space-between;
-    gap: 12px;
-    padding: 14px 16px;
+    flex-direction: column;
+    gap: 10px;
+    height: 100%;
+    min-height: 236px;
+    padding: 16px;
     border: 1.5px solid $line;
-    border-radius: 12px;
+    border-radius: 14px;
     background: $card;
     cursor: pointer;
-    transition: border-color 0.16s ease, background 0.16s ease;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
 
-    &:hover { border-color: $ink-3; }
-    > .ev__radio, > .ev__check { margin-top: 3px; }
+    &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
 
     &--on {
       border-color: $signal;
       background: $wash;
       &:hover { border-color: $signal; }
       .ev__pilltag { background: $card; }
+      .ev__srow-icon { background: $signal; border-color: $signal; color: #fff; }
+      .ev__srow-side { border-top-color: rgba($signal, 0.18); }
     }
     &--empty { border-color: rgba($danger, 0.3); }
   }
-  &__srow-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-  &__srow-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-  &__srow-name { font-family: $display; font-size: 1.1538em; font-weight: 700; color: $ink; overflow-wrap: anywhere; }
-  &__srow-desc { font-size: 1em; color: $ink-2; line-height: 1.45; b { font-weight: 700; color: $ink; } }
-  // question count + Preview sit on the card's bottom line
-  &__srow-side {
-    flex: 0 0 100%;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding-top: 10px;
-    border-top: 1px solid $line-2;
+
+  &__srow-head { display: flex; align-items: center; gap: 10px; }
+  &__srow-icon {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+    display: grid;
+    place-items: center;
+    border: 1px solid $line;
+    background: $paper;
+    color: $ink;
+    transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
   }
-  &__srow--on &__srow-side { border-top-color: rgba($signal, 0.18); }
-  &__srow-count {
-    font-size: 1em;
+  &__srow-name {
+    min-width: 0;
+    font-family: $display;
+    font-size: 1.2308em;
     font-weight: 700;
     color: $ink;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
-    &--empty { color: $danger; }
+  }
+
+  &__srow-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+  &__srow-tags .ev__pilltag { display: inline-flex; align-items: center; gap: 4px; }
+
+  &__srow-desc {
+    font-size: 1.0385em;
+    color: $ink-2;
+    line-height: 1.5;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    overflow: hidden;
+
+    &--none { color: $ink-3; font-style: italic; }
+  }
+  &__srow-scoring {
+    font-size: 0.9615em;
+    color: $ink-2;
+    line-height: 1.45;
+    b { font-weight: 700; color: $ink; }
+  }
+
+  &__srow-subs { display: flex; flex-direction: column; gap: 6px; }
+  &__srow-k { @extend %micro; font-size: 0.6923em; color: $ink-3; }
+  &__srow-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+
+  // footer: stats on the left, Preview pushed to the right
+  &__srow-side {
+    margin-top: auto;
+    display: flex;
+    align-items: flex-end;
+    gap: 18px;
+    padding-top: 12px;
+    border-top: 1px solid $line-2;
+
+    .ev__stat-v { font-size: 1.1538em; }
+  }
+  &__srow-side .ev__stat-v.ev__srow-count--empty { color: $danger; }
+  &__srow-preview {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border: 1px solid $line;
+    border-radius: 999px;
+    background: $card;
+    font-family: $sans;
+    font-size: 0.9231em;
+    font-weight: 650;
+    color: $ink-2;
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+    &:hover { border-color: $signal; color: $signal; background: $wash; }
   }
 
   // the Subgroups rail matches the side panel: square, bordered on all sides
