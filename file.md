@@ -2089,67 +2089,71 @@ export default function NewEvaluation() {
         </div>
       </div>
 
-      <aside className={styles.ev__panel}>
-        <p className={styles['ev__panel-title']}>
-          In this run: {selectedModels.length} model{selectedModels.length === 1 ? '' : 's'}
-        </p>
-        {selectedModels.length === 0 ? (
-          <p className={styles['ev__panel-note']}>Nothing ticked yet. Tick a healthy model in the table.</p>
-        ) : (
-          <div className={styles['ev__panel-list']}>
-            {selectedModels.map((m) => {
-              const health: HealthStatus = healthById?.[m.id] ?? 'idle';
-              const ready = health === 'success' && Boolean(verifiedModelIds[m.id]);
-              return (
-                <div key={m.id} className={styles['ev__panel-item']}>
-                  <div className={styles['ev__panel-item-row']}>
-                    <span>
-                      {m.name || 'Unnamed model'}
-                      {!ready && <small>{health === 'failed' ? 'Health check failed' : 'Waiting for health check'}</small>}
-                    </span>
-                    <button
-                      type="button"
-                      className={styles['ev__panel-x']}
-                      onClick={() => toggleModel(m.id)}
-                      aria-label={`Remove ${m.name || 'model'}`}
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-                  {draft.retryConfigMode === 'individual' &&
-                    retryFields(
-                      draft.modelRetryConfig[m.id],
-                      (field, raw) => updateModelRetryConfig(m.id, field, raw),
-                      (field) => clampModelRetryConfig(m.id, field)
-                    )}
-                </div>
-              );
-            })}
+      {/* Retries and timeout stay pinned at the top of the panel; the list
+          of selected models scrolls underneath. */}
+      <aside className={`${styles.ev__panel} ${styles['ev__panel--pinned']}`}>
+        <div className={styles['ev__panel-fixed']}>
+          <p className={styles['ev__panel-title']}>Retries and timeout</p>
+          <div className={`${styles.ev__segctl} ${styles['ev__segctl--full']}`}>
+            {[
+              { v: 'all' as const, l: 'Same for all' },
+              { v: 'individual' as const, l: 'Per model' },
+            ].map((o) => (
+              <button
+                key={o.v}
+                type="button"
+                className={`${styles.ev__segbtn} ${draft.retryConfigMode === o.v ? styles['ev__segbtn--on'] : ''}`}
+                onClick={() => dispatch(setDraft({ retryConfigMode: o.v }))}
+              >
+                {o.l}
+              </button>
+            ))}
           </div>
-        )}
-
-        <div className={styles['ev__panel-divider']} />
-        <p className={styles['ev__panel-title']}>Retries and timeout</p>
-        <div className={`${styles.ev__segctl} ${styles['ev__segctl--full']}`}>
-          {[
-            { v: 'all' as const, l: 'Same for all' },
-            { v: 'individual' as const, l: 'Per model' },
-          ].map((o) => (
-            <button
-              key={o.v}
-              type="button"
-              className={`${styles.ev__segbtn} ${draft.retryConfigMode === o.v ? styles['ev__segbtn--on'] : ''}`}
-              onClick={() => dispatch(setDraft({ retryConfigMode: o.v }))}
-            >
-              {o.l}
-            </button>
-          ))}
+          {draft.retryConfigMode === 'all' && retryFields(draft.retryConfigAll, updateRetryConfigAll, clampRetryConfigAll)}
+          <p className={styles['ev__panel-note']}>
+            {draft.retryConfigMode === 'individual' ? 'Set on each model below. ' : ''}Retries {MIN_MAX_RETRIES} to{' '}
+            {MAX_MAX_RETRIES}. Timeout {MIN_TIMEOUT} to {MAX_TIMEOUT} seconds.
+          </p>
         </div>
-        {draft.retryConfigMode === 'all' && retryFields(draft.retryConfigAll, updateRetryConfigAll, clampRetryConfigAll)}
-        <p className={styles['ev__panel-note']}>
-          {draft.retryConfigMode === 'individual' ? 'Set on each model above. ' : ''}Retries {MIN_MAX_RETRIES} to{' '}
-          {MAX_MAX_RETRIES}. Timeout {MIN_TIMEOUT} to {MAX_TIMEOUT} seconds.
-        </p>
+        <div className={styles['ev__panel-scroll']}>
+          <p className={styles['ev__panel-title']}>
+            In this run: {selectedModels.length} model{selectedModels.length === 1 ? '' : 's'}
+          </p>
+          {selectedModels.length === 0 ? (
+            <p className={styles['ev__panel-note']}>Nothing selected yet. Pick a healthy model card.</p>
+          ) : (
+            <div className={styles['ev__panel-list']}>
+              {selectedModels.map((m) => {
+                const health: HealthStatus = healthById?.[m.id] ?? 'idle';
+                const ready = health === 'success' && Boolean(verifiedModelIds[m.id]);
+                return (
+                  <div key={m.id} className={styles['ev__panel-item']}>
+                    <div className={styles['ev__panel-item-row']}>
+                      <span>
+                        {m.name || 'Unnamed model'}
+                        {!ready && <small>{health === 'failed' ? 'Health check failed' : 'Waiting for health check'}</small>}
+                      </span>
+                      <button
+                        type="button"
+                        className={styles['ev__panel-x']}
+                        onClick={() => toggleModel(m.id)}
+                        aria-label={`Remove ${m.name || 'model'}`}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                    {draft.retryConfigMode === 'individual' &&
+                      retryFields(
+                        draft.modelRetryConfig[m.id],
+                        (field, raw) => updateModelRetryConfig(m.id, field, raw),
+                        (field) => clampModelRetryConfig(m.id, field)
+                      )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </aside>
     </div>
   );
@@ -4227,15 +4231,6 @@ export default function NewEvaluation() {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
 
 
 
@@ -7041,6 +7036,26 @@ $ev-base-font: 0.8125rem;
     border: 1px solid $line;
     border-radius: 0;
     background: $paper;
+  }
+  // Pinned variant (Models step): the top block stays put, the rest scrolls.
+  &__panel--pinned { overflow: hidden; padding: 0; gap: 0; }
+  &__panel-fixed {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 18px;
+    border-bottom: 1px solid $line;
+    background: $paper;
+  }
+  &__panel-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 18px;
   }
   &__panel-title { font-family: $display; font-size: 1.0769em; font-weight: 800; color: $ink; }
   &__panel-sub { margin-top: -6px; font-size: 0.9231em; color: $ink-2; }
