@@ -280,6 +280,65 @@ const SUGGESTED_NAMES = [
   'GLM-4.6 vs Claude',
 ];
 
+// Type step: what each system under test is about — shown in the "About"
+// panel under the three cards for whichever one is selected.
+const TYPE_ABOUT: Record<string, { tagline: string; measures: string[]; goodFor: string[]; flow: string[] }> = {
+  model: {
+    tagline: 'Models answer the same questions directly, with no tools and no retrieval.',
+    measures: [
+      'Answer quality on every question, per model',
+      'Pass and fail counts for each metric you pick',
+      'A side-by-side ranking with a top model',
+    ],
+    goodFor: [
+      'Choosing between models or providers',
+      'Checking a new model version against the current one',
+      'Benchmarking on standard suites or your own dataset',
+    ],
+    flow: [
+      'Every selected model answers the same set of questions.',
+      'Answers are scored by your metrics, with a judge model.',
+      'Models are ranked side by side in History.',
+    ],
+  },
+  agent: {
+    tagline: 'An agent plans, calls tools and works through a task over several steps.',
+    measures: [
+      'Whether multi-step tasks are actually completed',
+      'Tool use: the right tool with the right arguments',
+      'Steps, cost and time per task in the document-agent harness',
+    ],
+    goodFor: [
+      'Testing an agent before rolling it out',
+      'Comparing agents on the same tasks, such as Hermes and Co-Work',
+      'Comparing the models behind an agent',
+    ],
+    flow: [
+      'The agent receives a task and plans its approach.',
+      'It calls tools and works through the steps.',
+      'The outcome is scored on task completion.',
+    ],
+  },
+  rag: {
+    tagline: 'A retrieval pipeline finds documents first, then an LLM answers from them.',
+    measures: [
+      'Whether answers stay faithful to the retrieved context',
+      'How well retrieval surfaces the right documents',
+      'The combined quality of embedding, reranker and LLM',
+    ],
+    goodFor: [
+      'Comparing LLMs on the same retrieval setup',
+      'Trying different Top K values',
+      'Checking grounding for a knowledge assistant',
+    ],
+    flow: [
+      'The embedding model and reranker fetch the Top K documents for each question.',
+      'Each LLM answers using that retrieved context.',
+      'Answers are scored for accuracy and grounding.',
+    ],
+  },
+};
+
 const NAMING_TIPS = [
   "Include what you're testing — a model, a product feature, or a use case.",
   'Add a date or version so you can track changes over time (e.g. "Q3", "v2").',
@@ -1981,6 +2040,71 @@ export default function NewEvaluation() {
   const tableModels = filteredModels.filter(
     (m) => modelProviderFilter === 'all' || m.provider_id === modelProviderFilter
   );
+  // ---- Type step: "About" panel -------------------------------------------
+  // What the selected type measures, what it's good for, and how a run of
+  // that type works (copy in TYPE_ABOUT).
+  const typeAboutPanel = (() => {
+    const opt = TYPE_OPTIONS.find((o) => o.value === draft.type);
+    const about = draft.type ? TYPE_ABOUT[draft.type] : undefined;
+    if (!opt || !about) {
+      return (
+        <p className={styles['ev__about-empty']}>
+          <Info size={14} /> Select a system under test to see what it measures and when to use it.
+        </p>
+      );
+    }
+    const Icon = opt.icon;
+    return (
+      <div className={`${styles.ev__about} ${styles.ev__anim}`} key={opt.label}>
+        <div className={styles['ev__about-head']}>
+          <span
+            className={`${styles['ev__option-icon']} ${
+              opt.variant ? styles[`ev__option-icon--${opt.variant}`] : ''
+            }`}
+          >
+            <Icon size={18} />
+          </span>
+          <div>
+            <h3>About {opt.label} evaluation</h3>
+            <p>{about.tagline}</p>
+          </div>
+        </div>
+        <div className={styles['ev__about-cols']}>
+          <div className={styles['ev__about-col']}>
+            <p className={styles['ev__about-k']}>What it measures</p>
+            <ul className={styles['ev__about-list']}>
+              {about.measures.map((t) => (
+                <li key={t}>
+                  <Check size={13} strokeWidth={3} /> {t}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div className={styles['ev__about-col']}>
+            <p className={styles['ev__about-k']}>Good for</p>
+            <ul className={styles['ev__about-list']}>
+              {about.goodFor.map((t) => (
+                <li key={t}>
+                  <ChevronRight size={13} strokeWidth={3} /> {t}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div className={styles['ev__about-col']}>
+            <p className={styles['ev__about-k']}>How a run works</p>
+            <ol className={styles['ev__about-flow']}>
+              {about.flow.map((t, n) => (
+                <li key={t}>
+                  <span>{n + 1}</span> {t}
+                </li>
+              ))}
+            </ol>
+          </div>
+        </div>
+      </div>
+    );
+  })();
+
   // ---- Name step: quick-add tokens ----------------------------------------
   // One-click suffixes for the run name: this quarter, a version, today's
   // date. Clicking a token that's already in the name takes it back out.
@@ -2698,6 +2822,10 @@ export default function NewEvaluation() {
                         })}
                       </div>
 
+                      {/* About the selected type. For Agent it goes below the
+                          agent options instead, so those stay near the top. */}
+                      {draft.type !== 'agent' && typeAboutPanel}
+
                       {/* Agent evaluation mode — Standard keeps today's benchmark /
                           Hermes-framework flows untouched; Document-agent harness
                           runs Hermes and Co-Work on the same tasks through one
@@ -2832,6 +2960,9 @@ export default function NewEvaluation() {
                           </div>
                         </div>
                       )}
+
+
+                      {draft.type === 'agent' && typeAboutPanel}
                     </>
                   )}
 
@@ -4459,6 +4590,10 @@ export default function NewEvaluation() {
     </div>
   );
 }
+
+
+
+
 
 
 
@@ -7435,6 +7570,82 @@ $ev-base-font: 0.8125rem;
     &--on { background: $signal; border-color: $signal; }
   }
 
+  // ---- Type step: "About" panel -------------------------------------------
+  // Sits under the three type cards and describes the selected one: what it
+  // measures, what it's good for, and how a run of that type works.
+  &__about {
+    // the stage body is a flex column; without this the panel (overflow:
+    // hidden) would be squeezed to nothing when the step's content is tall
+    flex-shrink: 0;
+    margin-top: 16px;
+    border: 1px solid $line;
+    border-radius: 14px;
+    background: $paper;
+    overflow: hidden;
+  }
+  &__about-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 16px 20px;
+    border-bottom: 1px solid $line;
+    background: $card;
+
+    .ev__option-icon { width: 40px; height: 40px; border-radius: 11px; }
+    h3 { font-family: $display; font-size: 1.2308em; font-weight: 800; letter-spacing: -0.01em; color: $ink; }
+    p { margin-top: 2px; font-size: 1.0385em; color: $ink-2; }
+  }
+  &__about-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  &__about-col {
+    padding: 18px 20px 20px;
+    & + & { border-left: 1px solid $line; }
+  }
+  &__about-k { @extend %micro; font-size: 0.7692em; color: $ink-3; margin-bottom: 12px; }
+
+  &__about-list,
+  &__about-flow {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    list-style: none;
+    font-size: 1.0385em;
+    color: $ink;
+    line-height: 1.45;
+
+    li { display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: start; gap: 8px; }
+    svg { margin-top: 3px; color: $signal; }
+  }
+  &__about-flow span {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: $signal;
+    color: #fff;
+    font-family: $mono;
+    font-size: 0.7692em;
+    font-weight: 700;
+  }
+  // below the agent options it needs a little more room above
+  &__section + &__about { margin-top: 26px; margin-bottom: 22px; }
+
+  &__about-empty {
+    flex-shrink: 0;
+    margin-top: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 16px 18px;
+    border: 1px dashed $line;
+    border-radius: 12px;
+    background: $paper;
+    font-size: 1em;
+    color: $ink-2;
+
+    svg { flex-shrink: 0; color: $signal; }
+  }
+
   // ---- Name step ----------------------------------------------------------
   // Two columns: the form on the left, a live "Preview in History" card on
   // the right.
@@ -8677,6 +8888,8 @@ $ev-base-font: 0.8125rem;
   .ev__suite, .ev__metrics { grid-template-columns: 1fr; }
   .ev__samples-instruction-row { grid-template-columns: 1fr; }
   .ev__split, .ev__frow, .ev__choice-row, .ev__namegrid { grid-template-columns: 1fr; }
+  .ev__about-cols { grid-template-columns: 1fr; }
+  .ev__about-col + .ev__about-col { border-left: 0; border-top: 1px solid $line; }
   .ev__hprev { position: static; }
   .ev__split { grid-template-rows: none; }
   .ev__frow { gap: 12px; }
