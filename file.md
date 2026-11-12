@@ -1981,6 +1981,22 @@ export default function NewEvaluation() {
   const tableModels = filteredModels.filter(
     (m) => modelProviderFilter === 'all' || m.provider_id === modelProviderFilter
   );
+  // Search field of whichever list header is on screen (one step at a time).
+  // Pressing "/" anywhere outside a text field jumps to it.
+  const listSearchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (!listSearchRef.current) return;
+      e.preventDefault();
+      listSearchRef.current.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // ---- list header ---------------------------------------------------------
   // Shared header for the Providers, Models and Test Suite lists: a title
   // with a live count on the left, search + refresh on the right, an optional
@@ -1999,20 +2015,42 @@ export default function NewEvaluation() {
           <h3>{o.title}</h3>
           <span>{o.meta}</span>
         </div>
-        <div className={styles['ev__toolbar-search']}>
-          <Search size={14} />
+        <label className={styles.ev__sbar}>
+          <span className={styles['ev__sbar-icon']}>
+            <Search size={14} />
+          </span>
           <input
+            ref={listSearchRef}
+            type="text"
             placeholder={o.search.placeholder}
             aria-label={o.search.placeholder}
             value={o.search.value}
             onChange={(e) => o.search.onChange(e.target.value)}
+            onKeyDown={(e) => {
+              // Esc clears first, then leaves the field
+              if (e.key !== 'Escape') return;
+              if (o.search.value) o.search.onChange('');
+              else e.currentTarget.blur();
+            }}
           />
-          {o.search.value && (
-            <button type="button" className={styles['ev__lhead-clear']} onClick={() => o.search.onChange('')} aria-label="Clear search">
-              <X size={13} />
+          {o.search.value ? (
+            <button
+              type="button"
+              className={styles['ev__sbar-clear']}
+              onClick={() => {
+                o.search.onChange('');
+                listSearchRef.current?.focus();
+              }}
+              aria-label="Clear search"
+            >
+              <X size={12} strokeWidth={2.5} />
             </button>
+          ) : (
+            <kbd className={styles['ev__sbar-kbd']} title="Press / to search">
+              /
+            </kbd>
           )}
-        </div>
+        </label>
         <button
           type="button"
           className={styles['ev__toolbar-refresh']}
@@ -4298,9 +4336,6 @@ export default function NewEvaluation() {
     </div>
   );
 }
-
-
-
 
 
 
@@ -7303,9 +7338,8 @@ $ev-base-font: 0.8125rem;
       box-shadow: 0 8px 10px -10px rgba(20, 22, 27, 0.28);
     }
 
-    .ev__toolbar-search { flex: 0 1 280px; max-width: none; background: $paper; }
-    .ev__toolbar-search:focus-within { background: $card; }
-    .ev__toolbar-refresh { margin-left: 0; }
+    // refresh button matches the search bar's height and corner
+    .ev__toolbar-refresh { margin-left: 0; width: 40px; height: 40px; border-radius: 12px; }
   }
 
   &__lhead-row { display: flex; align-items: center; gap: 10px; }
@@ -7322,16 +7356,94 @@ $ev-base-font: 0.8125rem;
     b { font-weight: 700; color: $signal; }
   }
 
-  &__lhead-clear {
+  // ---- search bar ---------------------------------------------------------
+  // Soft-filled field with an icon tile on the left and, on the right, a
+  // "/" shortcut hint that swaps to a clear button once there's text. On
+  // focus it lifts to white, the border and icon tile turn signal blue, and
+  // the field grows a little.
+  &__sbar {
+    flex: 0 1 320px;
+    min-width: 180px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 8px 0 6px;
+    border: 1.5px solid $line;
+    border-radius: 12px;
+    background: $paper;
+    cursor: text;
+    transition: flex-basis 0.22s ease, border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+
+    &:hover { border-color: $ink-3; }
+
+    &:focus-within {
+      flex-basis: 380px;
+      border-color: $signal;
+      background: $card;
+      box-shadow: $ring;
+    }
+
+    input {
+      flex: 1;
+      min-width: 0;
+      height: 100%;
+      border: 0;
+      background: transparent;
+      font-family: $sans;
+      font-size: 1.0385em;
+      font-weight: 500;
+      color: $ink;
+      outline: none;
+
+      &::placeholder { color: $ink-3; font-weight: 400; }
+    }
+  }
+
+  &__sbar-icon {
     flex-shrink: 0;
-    display: inline-flex;
-    padding: 2px;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    display: grid;
+    place-items: center;
+    border: 1px solid $line;
+    background: $card;
+    color: $ink-2;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  }
+  &__sbar:focus-within &__sbar-icon { background: $signal; border-color: $signal; color: #fff; }
+
+  &__sbar-kbd {
+    flex-shrink: 0;
+    min-width: 22px;
+    padding: 2px 6px;
+    border: 1px solid $line;
+    border-bottom-width: 2px;
+    border-radius: 6px;
+    background: $card;
+    text-align: center;
+    font-family: $mono;
+    font-size: 0.8462em;
+    font-weight: 700;
+    color: $ink-3;
+  }
+  &__sbar:focus-within &__sbar-kbd { display: none; }
+
+  &__sbar-clear {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    display: grid;
+    place-items: center;
     border: 0;
     border-radius: 50%;
-    background: transparent;
-    color: $ink-3;
+    background: $line;
+    color: $ink-2;
     cursor: pointer;
-    &:hover { color: $ink; }
+    transition: background 0.12s ease, color 0.12s ease;
+
+    &:hover { background: $ink-2; color: #fff; }
   }
 
   &__lhead-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
