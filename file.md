@@ -3001,29 +3001,35 @@ export default function NewEvaluation() {
                               <button
                                 key={p.id}
                                 type="button"
-                                className={`${styles.ev__pv} ${on ? styles['ev__pv--on'] : ''}`}
+                                className={`${styles.ev__option} ${styles['ev__option--provider']} ${
+                                  on ? styles['ev__option--on'] : ''
+                                }`}
                                 onClick={() => dispatch(setDraft({ providers: toggle(draft.providers, p.id) }))}
                                 aria-pressed={on}
                               >
-                                <span className={styles['ev__pv-top']}>
-                                  <span className={styles['ev__pcard-icon']}>{providerInitials(p.name)}</span>
-                                  <span className={styles['ev__pv-id']}>
-                                    <span className={styles['ev__pv-name']}>{p.name || 'Unnamed provider'}</span>
+                                {/* Same card as the Type step: icon tile, name,
+                                    description, selection mark on the right. */}
+                                <span className={styles['ev__option-icon']}>{providerInitials(p.name)}</span>
+                                <span className={styles['ev__option-main']}>
+                                  <span className={styles['ev__option-name']}>
+                                    {p.name || 'Unnamed provider'}
                                     <span className={styles['ev__pv-status']}>Connected</span>
                                   </span>
-                                  <span className={`${styles['ev__pv-mark']} ${on ? styles['ev__pv-mark--on'] : ''}`}>
-                                    {on && <Check size={13} strokeWidth={3} />}
+                                  {p.description && (
+                                    <span className={styles['ev__option-desc']} title={p.description}>
+                                      {p.description}
+                                    </span>
+                                  )}
+                                  <span className={styles['ev__option-meta']}>
+                                    <Cpu size={13} />
+                                    <b>{p.model_count ?? 0}</b> model{(p.model_count ?? 0) === 1 ? '' : 's'} available
                                   </span>
                                 </span>
-                                {p.description && (
-                                  <span className={styles['ev__pv-desc']} title={p.description}>
-                                    {p.description}
+                                {on && (
+                                  <span className={styles.ev__mark}>
+                                    <Check size={13} strokeWidth={3} />
                                   </span>
                                 )}
-                                <span className={styles['ev__pv-foot']}>
-                                  <Cpu size={13} />
-                                  <b>{p.model_count ?? 0}</b> model{(p.model_count ?? 0) === 1 ? '' : 's'} available
-                                </span>
                               </button>
                             );
                           })}
@@ -4590,6 +4596,15 @@ export default function NewEvaluation() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
 
 
 
@@ -7942,102 +7957,54 @@ $ev-base-font: 0.8125rem;
   &__lhead-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 
   // ---- provider cards (Providers step) -----------------------------------
-  // Header (initials tile, name, connected status, selection ring), the
-  // provider's description clamped to three lines, and a footer with the
-  // model count pinned to the bottom so every card in a row lines up.
+  // Same card as the Type step's options (&__option: icon tile on the left,
+  // name + description, selection mark on the right), with the provider's
+  // initials in the tile, a "Connected" status beside the name and the model
+  // count as a last line.
   &__grid--providers {
     grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
     grid-auto-rows: 1fr;
-    gap: 14px;
+    gap: 10px;
   }
 
-  &__pv {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
+  &__option--provider {
     height: 100%;
-    min-height: 196px;
-    text-align: left;
-    padding: 20px;
 
-    // larger initials tile on this card
-    .ev__pcard-icon { width: 46px; height: 46px; border-radius: 13px; font-size: 1.3846em; }
-    border: 1.5px solid $line;
-    border-radius: 14px;
-    background: $card;
-    font-family: $sans;
-    cursor: pointer;
-    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
-
-    &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
-
-    &--on {
-      border-color: $signal;
-      background: $wash;
-      &:hover { border-color: $signal; }
-      .ev__pcard-icon { background: $signal; border-color: $signal; color: #fff; }
-      .ev__pv-foot { border-top-color: rgba($signal, 0.18); }
+    .ev__option-icon {
+      font-family: $display;
+      font-size: 1.3846em;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+    .ev__option-name { flex-wrap: wrap; gap: 4px 10px; }
+    .ev__option-desc {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 3;
+      line-clamp: 3;
+      overflow: hidden;
     }
   }
+  &__option--provider.ev__option--on .ev__option-icon { background: $signal; }
 
-  &__pv-top { display: flex; align-items: center; gap: 14px; }
-  &__pv-id { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-  &__pv-name {
-    font-family: $display;
-    font-size: 1.3846em;
-    font-weight: 700;
-    color: $ink;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
   &__pv-status {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    font-size: 0.9615em;
+    font-family: $sans;
+    font-size: 0.6944em; // back to ~0.96em of the base inside the larger name
     font-weight: 650;
     color: $ok;
 
     &::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: $ok; }
   }
 
-  // selection ring: empty until picked, so it reads as selectable
-  &__pv-mark {
-    flex-shrink: 0;
-    align-self: flex-start;
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    border: 1.5px solid $ink-3;
-    background: $card;
-    display: grid;
-    place-items: center;
-    color: #fff;
-    transition: background 0.15s ease, border-color 0.15s ease;
-
-    &--on { background: $signal; border-color: $signal; }
-  }
-
-  &__pv-desc {
-    font-size: 1.0769em;
-    color: $ink-2;
-    line-height: 1.55;
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 3;
-    line-clamp: 3;
-    overflow: hidden;
-  }
-
-  &__pv-foot {
-    margin-top: auto;
-    display: flex;
+  &__option-meta {
+    display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding-top: 14px;
-    border-top: 1px solid $line-2;
-    font-size: 1.0385em;
+    margin-top: 4px;
+    font-size: 1em;
     color: $ink-2;
 
     svg { color: $ink-3; }
