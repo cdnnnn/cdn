@@ -4,6 +4,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Check,
+  Minus,
+  Timer,
+  RotateCw,
   Cpu,
   Bot,
   Database,
@@ -1978,36 +1981,58 @@ export default function NewEvaluation() {
   const tableModels = filteredModels.filter(
     (m) => modelProviderFilter === 'all' || m.provider_id === modelProviderFilter
   );
+  // One − / value / + control. The buttons step by `step` and clamp to the
+  // field's range straight away; typing still works as before (free typing,
+  // clamped on blur).
+  const retryStepper = (
+    field: keyof ModelRetryConfig,
+    label: string,
+    icon: ReactNode,
+    step: number,
+    value: ModelRetryConfig | undefined,
+    onChange: (field: keyof ModelRetryConfig, raw: number) => void,
+    onBlur: (field: keyof ModelRetryConfig) => void
+  ) => {
+    const min = field === 'max_retries' ? MIN_MAX_RETRIES : MIN_TIMEOUT;
+    const max = field === 'max_retries' ? MAX_MAX_RETRIES : MAX_TIMEOUT;
+    const fallback = field === 'max_retries' ? DEFAULT_MAX_RETRIES : DEFAULT_TIMEOUT;
+    const raw = value?.[field] ?? fallback;
+    const current = Number.isNaN(raw) ? fallback : raw;
+    const bump = (dir: 1 | -1) => onChange(field, clampRetryField(field, current + dir * step));
+    return (
+      <div className={styles.ev__stepfield}>
+        <span className={styles['ev__stepfield-label']}>
+          {icon} {label}
+        </span>
+        <div className={styles.ev__stepper}>
+          <button type="button" onClick={() => bump(-1)} disabled={current <= min} aria-label={`Decrease ${label}`}>
+            <Minus size={13} />
+          </button>
+          <input
+            type="number"
+            min={min}
+            max={max}
+            aria-label={label}
+            value={displayNumInput(raw)}
+            onChange={(e) => onChange(field, parseNumInput(e.target.value))}
+            onBlur={() => onBlur(field)}
+          />
+          <button type="button" onClick={() => bump(1)} disabled={current >= max} aria-label={`Increase ${label}`}>
+            <Plus size={13} />
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   const retryFields = (
     value: ModelRetryConfig | undefined,
     onChange: (field: keyof ModelRetryConfig, raw: number) => void,
     onBlur: (field: keyof ModelRetryConfig) => void
   ) => (
-    <div className={styles['ev__mcard-retry-fields']}>
-      <div className={styles['ev__numfield']}>
-        <label>Max retries</label>
-        <input
-          type="number"
-          className={styles.ev__num}
-          min={MIN_MAX_RETRIES}
-          max={MAX_MAX_RETRIES}
-          value={displayNumInput(value?.max_retries ?? DEFAULT_MAX_RETRIES)}
-          onChange={(e) => onChange('max_retries', parseNumInput(e.target.value))}
-          onBlur={() => onBlur('max_retries')}
-        />
-      </div>
-      <div className={styles['ev__numfield']}>
-        <label>Timeout (seconds)</label>
-        <input
-          type="number"
-          className={styles.ev__num}
-          min={MIN_TIMEOUT}
-          max={MAX_TIMEOUT}
-          value={displayNumInput(value?.timeout ?? DEFAULT_TIMEOUT)}
-          onChange={(e) => onChange('timeout', parseNumInput(e.target.value))}
-          onBlur={() => onBlur('timeout')}
-        />
-      </div>
+    <div className={styles.ev__stepfields}>
+      {retryStepper('max_retries', 'Max retries', <RotateCw size={12} />, 1, value, onChange, onBlur)}
+      {retryStepper('timeout', 'Timeout (s)', <Timer size={12} />, 30, value, onChange, onBlur)}
     </div>
   );
 
@@ -2127,11 +2152,20 @@ export default function NewEvaluation() {
                 const health: HealthStatus = healthById?.[m.id] ?? 'idle';
                 const ready = health === 'success' && Boolean(verifiedModelIds[m.id]);
                 return (
-                  <div key={m.id} className={styles['ev__panel-item']}>
-                    <div className={styles['ev__panel-item-row']}>
-                      <span>
+                  <div key={m.id} className={styles.ev__pm}>
+                    <div className={styles['ev__pm-head']}>
+                      <span
+                        className={`${styles['ev__pm-dot']} ${
+                          ready ? styles['ev__pm-dot--ok'] : health === 'failed' ? styles['ev__pm-dot--fail'] : ''
+                        }`}
+                        title={ready ? 'Healthy' : health === 'failed' ? 'Health check failed' : 'Waiting for health check'}
+                      />
+                      <span className={styles['ev__pm-name']}>
                         {m.name || 'Unnamed model'}
-                        {!ready && <small>{health === 'failed' ? 'Health check failed' : 'Waiting for health check'}</small>}
+                        <small>
+                          {providers.find((p) => p?.id === m.provider_id)?.name ?? m.provider_id}
+                          {!ready && (health === 'failed' ? ' · health check failed' : ' · waiting for health check')}
+                        </small>
                       </span>
                       <button
                         type="button"
@@ -2142,12 +2176,15 @@ export default function NewEvaluation() {
                         <X size={14} />
                       </button>
                     </div>
-                    {draft.retryConfigMode === 'individual' &&
-                      retryFields(
-                        draft.modelRetryConfig[m.id],
-                        (field, raw) => updateModelRetryConfig(m.id, field, raw),
-                        (field) => clampModelRetryConfig(m.id, field)
-                      )}
+                    {draft.retryConfigMode === 'individual' && (
+                      <div className={styles['ev__pm-body']}>
+                        {retryFields(
+                          draft.modelRetryConfig[m.id],
+                          (field, raw) => updateModelRetryConfig(m.id, field, raw),
+                          (field) => clampModelRetryConfig(m.id, field)
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -4231,6 +4268,14 @@ export default function NewEvaluation() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
 
 
 
@@ -7057,6 +7102,103 @@ $ev-base-font: 0.8125rem;
     gap: 10px;
     padding: 18px;
   }
+  // ---- per-model item ("In this run") ------------------------------------
+  // Header: health dot, model name + provider, remove. In "Per model" mode a
+  // tinted body underneath holds that model's two steppers, so each model
+  // reads as one self-contained unit.
+  &__pm {
+    border: 1px solid $line;
+    border-radius: 10px;
+    background: $card;
+    overflow: hidden;
+  }
+  &__pm-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
+  &__pm-dot {
+    flex-shrink: 0;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: $ink-3;
+
+    &--ok { background: $ok; }
+    &--fail { background: $danger; }
+  }
+  &__pm-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 1em;
+    font-weight: 700;
+    color: $ink;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    small { display: block; font-size: 0.8846em; font-weight: 500; color: $ink-2; overflow: hidden; text-overflow: ellipsis; }
+  }
+  &__pm-body { padding: 10px 12px 12px; border-top: 1px solid $line-2; background: $paper; }
+
+  // ---- stepper fields (retries / timeout) --------------------------------
+  &__stepfields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  &__stepfield { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  &__stepfield-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.8846em;
+    font-weight: 650;
+    color: $ink-2;
+
+    svg { color: $signal; }
+  }
+
+  &__stepper {
+    display: flex;
+    align-items: stretch;
+    height: 34px;
+    border: 1.5px solid $line;
+    border-radius: 9px;
+    background: $card;
+    overflow: hidden;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+
+    &:focus-within { border-color: $signal; box-shadow: $ring; }
+
+    button {
+      flex: 0 0 30px;
+      display: grid;
+      place-items: center;
+      border: 0;
+      background: $paper;
+      color: $ink-2;
+      cursor: pointer;
+      transition: background 0.12s ease, color 0.12s ease;
+
+      &:hover:not(:disabled) { background: $wash; color: $signal; }
+      &:disabled { opacity: 0.35; cursor: not-allowed; }
+    }
+
+    input {
+      flex: 1;
+      min-width: 0;
+      width: 100%;
+      border: 0;
+      border-left: 1px solid $line-2;
+      border-right: 1px solid $line-2;
+      background: transparent;
+      text-align: center;
+      font-family: $mono;
+      font-size: 1em;
+      font-weight: 700;
+      color: $ink;
+      -moz-appearance: textfield;
+      appearance: textfield;
+
+      &:focus { outline: none; }
+      &::-webkit-outer-spin-button,
+      &::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    }
+  }
+
   &__panel-title { font-family: $display; font-size: 1.0769em; font-weight: 800; color: $ink; }
   &__panel-sub { margin-top: -6px; font-size: 0.9231em; color: $ink-2; }
   &__panel-list { display: flex; flex-direction: column; gap: 8px; }
