@@ -1366,6 +1366,17 @@ export default function NewEvaluation() {
     const outputPrice = (m as any).output_price as number | null | undefined;
     const accuracy = (m as any).accuracy_score as number | null | undefined;
     const providerName = providers.find((p) => p?.id === m.provider_id)?.name ?? m.provider_id;
+    // Why this card can't be selected yet. Shown as a line inside the card in
+    // the RAG columns; in the Model/Agent grid it's the card's tooltip
+    // instead, so every card keeps the same content and the same size.
+    const lockedHint =
+      !selectable && !on
+        ? health === 'loading'
+          ? 'Waiting for health check to complete…'
+          : health === 'failed'
+            ? 'This model failed its health check and can\u2019t be selected.'
+            : 'Run a health check to enable selection.'
+        : undefined;
 
     return (
       // Not a <button> — it contains a nested "Check health" control, so
@@ -1387,6 +1398,7 @@ export default function NewEvaluation() {
         }}
         aria-pressed={on}
         aria-disabled={!selectable && !on}
+        title={inlineRetry ? undefined : lockedHint}
       >
         <div className={styles['ev__mcard-top']}>
           <div className={styles['ev__mcard-name']}>{m.name || 'Unnamed model'}</div>
@@ -1471,13 +1483,7 @@ export default function NewEvaluation() {
           )}
         </div>
 
-        {!selectable && !on && (
-          <p className={styles['ev__mcard-hint']}>
-            {health === 'idle' && 'Run a health check to enable selection.'}
-            {health === 'loading' && 'Waiting for health check to complete…'}
-            {health === 'failed' && 'This model failed its health check and can\u2019t be selected.'}
-          </p>
-        )}
+        {inlineRetry && lockedHint && <p className={styles['ev__mcard-hint']}>{lockedHint}</p>}
 
         {/* Per-model retry/timeout — only rendered once the card is
             selected AND the user has chosen "Individually" mode (in
@@ -4221,12 +4227,6 @@ export default function NewEvaluation() {
     </div>
   );
 }
-
-
-
-
-
-
 
 
 
@@ -7012,10 +7012,16 @@ $ev-base-font: 0.8125rem;
   }
   &__split-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
   // model cards inside the split: slightly narrower minimum so two or more
-  // fit beside the 390px panel, and selected/unselected cards keep their
-  // own heights
+  // fit beside the 390px panel, and every card is the same size — equal
+  // row heights, cards stretched to fill, stats pinned to the bottom edge
   &__split &__models-scroll { margin-top: 0; }
-  &__split &__grid--wide { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); align-items: start; }
+  &__split &__grid--wide {
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    grid-auto-rows: 1fr;
+    align-items: stretch;
+  }
+  &__split &__mcard { height: 100%; }
+  &__split &__mcard-stats { margin-top: auto; }
 
   &__step-toolbar { flex-wrap: wrap; }
   &__viewchips { flex: 0 1 auto; display: flex; flex-wrap: wrap; gap: 8px; }
