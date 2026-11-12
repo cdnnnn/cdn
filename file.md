@@ -2014,13 +2014,14 @@ export default function NewEvaluation() {
     const hasQuery = o.search.value.trim() !== '';
     return (
       <div className={`${styles.ev__lhead} ${o.sticky ? styles['ev__lhead--sticky'] : ''}`}>
+        <div className={styles['ev__lhead-row']}>
         <div className={styles['ev__lhead-title']}>
           <h3>{o.title}</h3>
           <span>{o.meta}</span>
         </div>
 
-        {/* Search bar: one full-width control holding the icon, the field,
-            a live result count, the "/" hint or clear button, and refresh. */}
+        {/* Search bar: one compact control holding the icon, the field, a
+            live result count, the "/" hint or clear button, and refresh. */}
         <div
           className={`${styles.ev__sbar} ${hasQuery ? styles['ev__sbar--active'] : ''}`}
           onMouseDown={(e) => {
@@ -2031,7 +2032,7 @@ export default function NewEvaluation() {
           }}
         >
           <span className={styles['ev__sbar-icon']}>
-            <Search size={15} strokeWidth={2.4} />
+            <Search size={13} strokeWidth={2.6} />
           </span>
           <input
             ref={listSearchRef}
@@ -2081,8 +2082,9 @@ export default function NewEvaluation() {
             title={o.refresh.title}
             aria-label={o.refresh.title}
           >
-            <RefreshCw size={15} className={o.refresh.busy ? styles.ev__spin : ''} />
+            <RefreshCw size={14} className={o.refresh.busy ? styles.ev__spin : ''} />
           </button>
+        </div>
         </div>
 
         {o.filters && <div className={styles['ev__lhead-filters']}>{o.filters}</div>}
@@ -2156,7 +2158,7 @@ export default function NewEvaluation() {
             </>
           ),
           count: tableModels.length,
-          search: { placeholder: 'Search models by name', value: modelSearch, onChange: setModelSearch },
+          search: { placeholder: 'Search models', value: modelSearch, onChange: setModelSearch },
           refresh: { onClick: refreshModels, busy: modelsLoading, title: 'Refresh models' },
           filters: (
             <>
@@ -2751,7 +2753,7 @@ export default function NewEvaluation() {
                           </>
                         ),
                         count: filteredProviders.length,
-                        search: { placeholder: 'Search providers by name', value: providerSearch, onChange: setProviderSearch },
+                        search: { placeholder: 'Search providers', value: providerSearch, onChange: setProviderSearch },
                         refresh: { onClick: refreshProviders, busy: providersLoading, title: 'Refresh providers' },
                       })}
                       {providersLoading ? (
@@ -3093,7 +3095,7 @@ export default function NewEvaluation() {
                                 </>
                               ),
                               count: filteredDatasets.length,
-                              search: { placeholder: 'Search test suites by name', value: datasetSearch, onChange: setDatasetSearch },
+                              search: { placeholder: 'Search test suites', value: datasetSearch, onChange: setDatasetSearch },
                               refresh: { onClick: refreshDatasets, busy: datasetsRefreshing, title: 'Refresh test suites' },
                               sticky: true,
                               // Harness mode filters by use case; every other mode keeps
@@ -4364,8 +4366,6 @@ export default function NewEvaluation() {
     </div>
   );
 }
-
-
 
 
 
@@ -7371,12 +7371,14 @@ $ev-base-font: 0.8125rem;
 
   }
 
+  &__lhead-row { display: flex; align-items: center; gap: 16px; }
+
   &__lhead-title {
+    flex: 1;
+    min-width: 0;
     display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 2px 16px;
+    flex-direction: column;
+    gap: 2px;
 
     h3 { font-family: $display; font-size: 1.1538em; font-weight: 800; letter-spacing: -0.01em; color: $ink; }
     span { font-size: 0.9231em; color: $ink-2; }
@@ -7384,19 +7386,22 @@ $ev-base-font: 0.8125rem;
   }
 
   // ---- search bar ---------------------------------------------------------
-  // A full-width "command bar": gradient icon tile, large field, live result
-  // count, "/" hint or clear button, then refresh behind a divider. Resting
+  // A compact "command bar" on the right of the list title: gradient icon
+  // tile, field, live result count, "/" hint or clear button, then refresh
+  // behind a divider. Resting
   // it's a white bar with a soft shadow; on focus the border becomes a
   // signal gradient, the bar lifts and a glow spreads under it.
   &__sbar {
     position: relative;
     display: flex;
     align-items: center;
-    gap: 12px;
-    height: 52px;
-    padding: 0 8px 0 9px;
+    flex: 0 1 340px;
+    min-width: 220px;
+    gap: 9px;
+    height: 38px;
+    padding: 0 5px 0 5px;
     border: 1.5px solid transparent;
-    border-radius: 16px;
+    border-radius: 11px;
     // two layers: the fill (padding-box) and the border colour (border-box),
     // so the border can be a gradient on focus
     background:
@@ -7421,7 +7426,7 @@ $ev-base-font: 0.8125rem;
 
     &:focus-within {
       transform: translateY(-1px);
-      box-shadow: 0 0 0 4px rgba($signal, 0.12), 0 14px 28px -14px rgba($signal, 0.55);
+      box-shadow: 0 0 0 3px rgba($signal, 0.12), 0 10px 20px -12px rgba($signal, 0.55);
     }
 
     input {
@@ -7431,7 +7436,7 @@ $ev-base-font: 0.8125rem;
       border: 0;
       background: transparent;
       font-family: $sans;
-      font-size: 1.1538em;
+      font-size: 1em;
       font-weight: 500;
       color: $ink;
       outline: none;
@@ -7442,14 +7447,14 @@ $ev-base-font: 0.8125rem;
 
   &__sbar-icon {
     flex-shrink: 0;
-    width: 34px;
-    height: 34px;
-    border-radius: 11px;
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
     display: grid;
     place-items: center;
     background: linear-gradient(140deg, $signal, $signal-2);
     color: #fff;
-    box-shadow: 0 6px 12px -6px rgba($signal, 0.7);
+    box-shadow: 0 4px 8px -4px rgba($signal, 0.7);
     transition: transform 0.2s ease;
   }
   &__sbar:focus-within &__sbar-icon { transform: scale(1.06) rotate(-6deg); }
@@ -7457,11 +7462,11 @@ $ev-base-font: 0.8125rem;
   // live result count, shown while there's a query
   &__sbar-count {
     flex-shrink: 0;
-    padding: 4px 10px;
+    padding: 2px 8px;
     border-radius: 999px;
     background: $wash;
     font-family: $sans;
-    font-size: 0.8846em;
+    font-size: 0.8077em;
     font-weight: 700;
     color: $signal;
     white-space: nowrap;
@@ -7472,15 +7477,15 @@ $ev-base-font: 0.8125rem;
 
   &__sbar-kbd {
     flex-shrink: 0;
-    min-width: 24px;
-    padding: 3px 7px;
+    min-width: 20px;
+    padding: 1px 5px;
     border: 1px solid $line;
     border-bottom-width: 2px;
-    border-radius: 7px;
+    border-radius: 6px;
     background: $paper;
     text-align: center;
     font-family: $mono;
-    font-size: 0.8846em;
+    font-size: 0.7692em;
     font-weight: 700;
     color: $ink-3;
   }
@@ -7488,8 +7493,8 @@ $ev-base-font: 0.8125rem;
 
   &__sbar-clear {
     flex-shrink: 0;
-    width: 24px;
-    height: 24px;
+    width: 20px;
+    height: 20px;
     display: grid;
     place-items: center;
     border: 0;
@@ -7502,16 +7507,16 @@ $ev-base-font: 0.8125rem;
     &:hover { background: $ink-2; color: #fff; }
   }
 
-  &__sbar-sep { flex-shrink: 0; width: 1px; height: 24px; background: $line; }
+  &__sbar-sep { flex-shrink: 0; width: 1px; height: 18px; background: $line; }
 
   &__sbar-refresh {
     flex-shrink: 0;
-    width: 36px;
-    height: 36px;
+    width: 28px;
+    height: 28px;
     display: grid;
     place-items: center;
     border: 0;
-    border-radius: 11px;
+    border-radius: 8px;
     background: transparent;
     color: $ink-2;
     cursor: pointer;
