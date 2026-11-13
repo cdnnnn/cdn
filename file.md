@@ -1,1378 +1,803 @@
-//Harnessscorecard.tsx
-import { Fragment, useEffect, useMemo, useState } from 'react';
-import { Award, Check, CheckCircle2, ChevronDown, ChevronRight, Clock, Coins, Footprints, Loader2, Repeat, Timer, X, XCircle } from 'lucide-react';
-import { harnessResultsApi } from '../../api/endpoints/harnessResults';
-import type {
-  HarnessCell,
-  HarnessErrorType,
-  HarnessResultsResponse,
-} from '../../api/endpoints/harnessResults';
-import styles from './HarnessScorecard.module.scss';
+//app.js
+/* AIDLC Workspace — demo.
+   Sections: 1 helpers · 2 mock content · 3 state · 4 lifecycle engine · 5 chat assistant · 6 views · 7 events */
+(function(){
+'use strict';
 
-// ---------------------------------------------------------------------------
-// HarnessScorecard — the detail view for a Document-agent harness run
-// (eval_type 'agent_harness'), rendered by History.tsx in place of the
-// per-model results table. Four parts, matching the Workstream 2 outputs:
-//   1. Agent scorecard   — one column per agent (Hermes vs SEMCo-Work), task
-//                          success rate as the headline metric
-//   2. By use case       — success rate per agent x model x suite
-//   3. Error analysis    — failed tasks by error type, per agent
-//   4. Trace store       — stored runs, expandable to their tool calls
-//
-// Self-contained on purpose: it fetches its own data through
-// harnessResultsApi (mocked for now) into local state, so the evaluations
-// slice and the existing results flow stay untouched.
-// ---------------------------------------------------------------------------
-
-const ERROR_LABEL: Record<HarnessErrorType, string> = {
-  wrong_tool: 'Wrong tool',
-  wrong_argument: 'Wrong argument',
-  gave_up: 'Gave up',
-  loop: 'Loop',
-  file_broken: 'File broken',
-};
-const ERROR_TYPES = Object.keys(ERROR_LABEL) as HarnessErrorType[];
-
-// Plain-language reading of each error type, shown in an opened trace.
-const ERROR_HELP: Record<HarnessErrorType, string> = {
-  wrong_tool: 'The agent picked a tool that could not do what the step needed.',
-  wrong_argument: 'The agent picked the right tool but passed it a wrong value.',
-  gave_up: 'The agent stopped before the task was finished.',
-  loop: 'The agent kept repeating the same call without making progress.',
-  file_broken: 'The agent produced a file, but the checker could not open it.',
-};
-
-interface AgentSummary {
-  id: string;
-  title: string;
-  tasks: number;
-  passed: number;
-  rate: number;
-  toolAcc: number;
-  steps: number;
-  wasted: number;
-  faithfulness: number | null;
-  cost: number;
-  time: number;
-  errors: Record<HarnessErrorType, number>;
+/* ================= 1. Helpers ================= */
+var $ = function(id){ return document.getElementById(id); };
+function esc(t){ return String(t).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+function when(iso){ try { return new Date(iso).toLocaleString(undefined,{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}); } catch(e){ return ''; } }
+function now(){ return new Date().toISOString(); }
+function tbl(heads, rows){
+  return '<div class="table-wrap"><table><thead><tr>' + heads.map(function(h){return '<th scope="col">'+h+'</th>';}).join('') +
+    '</tr></thead><tbody>' + rows.map(function(r){return '<tr>'+r.map(function(c){return '<td>'+c+'</td>';}).join('')+'</tr>';}).join('') + '</tbody></table></div>';
 }
-
-// Task-weighted roll-up of a set of cells.
-function summarize(cells: HarnessCell[]) {
-  const tasks = cells.reduce((n, c) => n + c.tasks, 0);
-  const w = (pick: (c: HarnessCell) => number) =>
-    tasks > 0 ? cells.reduce((n, c) => n + pick(c) * c.tasks, 0) / tasks : 0;
-  const faithCells = cells.filter((c) => c.faithfulness !== null);
-  const faithTasks = faithCells.reduce((n, c) => n + c.tasks, 0);
-  const errors = { wrong_tool: 0, wrong_argument: 0, gave_up: 0, loop: 0, file_broken: 0 };
-  cells.forEach((c) => ERROR_TYPES.forEach((t) => (errors[t] += c.errors?.[t] ?? 0)));
-  const passed = cells.reduce((n, c) => n + c.passed, 0);
-  return {
-    tasks,
-    passed,
-    rate: tasks > 0 ? passed / tasks : 0,
-    toolAcc: w((c) => c.tool_call_accuracy),
-    steps: w((c) => c.avg_steps),
-    wasted: w((c) => c.wasted_steps),
-    faithfulness:
-      faithTasks > 0 ? faithCells.reduce((n, c) => n + (c.faithfulness ?? 0) * c.tasks, 0) / faithTasks : null,
-    cost: w((c) => c.cost_per_task),
-    time: w((c) => c.time_per_task),
-    errors,
-  };
+function mono(t){ return '<span class="mono">'+t+'</span>'; }
+function pill(t, kind){ return '<span class="pill pill--'+kind+'">'+t+'</span>'; }
+function skillTags(list){ return '<div class="skills">'+list.map(function(k){ return '<span class="skill">'+k+'</span>'; }).join('')+'</div>'; }
+function barRow(label, pct){
+  return '<div><div class="kv"><span>'+label+'</span><span class="strong">'+pct+'%</span></div><div class="bar" role="img" aria-label="'+label+' '+pct+' percent"><div class="bar__fill" style="width:'+pct+'%"></div><div class="bar__target" style="left:80%"></div></div></div>';
 }
+var CHECK = '<svg aria-hidden="true" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 8.5l3.2 3.2L13 5"/></svg>';
 
-const pct = (n: number) => `${Math.round(n * 100)}%`;
-const tier = (n: number) => (n >= 0.8 ? 'high' : n >= 0.6 ? 'mid' : 'low');
+/* ================= 2. Mock content ================= */
+var STEPS = [
+  { id:1, name:'Plan', outputs:'Work Plan', skills:['AX-ai-workflow'], tasks:['Reading the feature request','Scanning the codebase for impacted modules','Breaking the work into tasks','Writing the Work Plan'] },
+  { id:2, name:'Design', outputs:'SRS + SAD + Traceability', skills:['AX-ai-workflow'], tasks:['Deriving requirements from the Work Plan','Writing the SRS','Writing the SAD','Building the traceability matrix'] },
+  { id:3, name:'Implement', outputs:'Code + Unit Test + Coverage', skills:['AX-ai-workflow'], tasks:['Generating code that follows the existing patterns','Writing unit tests','Running unit tests','Measuring coverage'] },
+  { id:4, name:'Test (Dev)', outputs:'E2E TCs + Mock E2E', skills:['AX-ai-workflow'], tasks:['Writing E2E test cases from the SRS','Setting up mocked services','Running E2E against mocks','Collecting results'] },
+  { id:5, name:'Review and PR', outputs:'AI Code Review + Bitbucket PR', skills:['AX-ai-workflow','AX-pull-request'], tasks:['Reviewing the code changes','Fixing review findings','Opening the Bitbucket pull request','Linking the PR to the ticket'] }
+];
+var VERIF = [
+  { id:'e2e', name:'System E2E testing', what:'Run E2E tests on the real running application (not mocks)', skills:['AX-e2e-execution'], cta:'Run system E2E tests',
+    tasks:['Connecting to the staging application','Running 26 E2E tests on the real application','Collecting logs and screenshots'] },
+  { id:'bugs', name:'Bug reporting', what:'Analyze failures, create bug report and JIRA issues, update the work plan', skills:['AX-bug-report','AX-DOC-to-item'], cta:'Analyze failures and file bugs',
+    tasks:['Analyzing 2 failures','Writing the bug report','Creating JIRA issues','Updating the work plan'] },
+  { id:'nightly', name:'Nightly testing', what:'Autonomous test generation, hallucination detection, coverage improvement', skills:['AX-test-expert'], cta:'Simulate tonight\'s run',
+    tasks:['Generating new tests','Running generated tests','Checking tests for hallucinations','Measuring coverage'] }
+];
+var MODULES = [['auth/','Sign-in and sessions',14],['orders/','Order list and status',31],['notifications/','Email and in-app notices',18],['reports/','Exports',9],['shared/','Utilities and UI kit',22]];
 
-interface Props {
-  evaluationId: string;
-  // History's own id -> display-name lookup, so model names match the rest
-  // of the page.
-  modelName: (id: string) => string;
-}
-
-export default function HarnessScorecard({ evaluationId, modelName }: Props) {
-  const [data, setData] = useState<HarnessResultsResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [traceFilter, setTraceFilter] = useState<'all' | 'failed'>('all');
-  const [traceAgent, setTraceAgent] = useState<string>('all');
-  const [openTraceId, setOpenTraceId] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setData(null);
-    setOpenTraceId(null);
-    setTraceAgent('all');
-    harnessResultsApi
-      .get(evaluationId)
-      .then((res) => {
-        if (!cancelled) setData(res);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setError(
-          (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-            (err as Error)?.message ||
-            'Failed to load the scorecard.'
-        );
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [evaluationId]);
-
-  const agents: AgentSummary[] = useMemo(
-    () =>
-      (data?.agents ?? []).map((a) => ({
-        id: a.id,
-        title: a.title,
-        ...summarize((data?.cells ?? []).filter((c) => c.agent === a.id)),
-      })),
-    [data]
-  );
-
-  // Same roll-up, grouped by the model behind the agents instead.
-  const modelSums: AgentSummary[] = (data?.model_ids ?? []).map((id) => ({
-    id,
-    title: modelName(id),
-    ...summarize((data?.cells ?? []).filter((c) => c.model_id === id)),
-  }));
-
-  if (loading) {
-    return (
-      <div className={styles.hs__state}>
-        <Loader2 size={16} className={styles.hs__spin} /> Loading the agent scorecard…
-      </div>
-    );
-  }
-  if (error || !data) {
-    return <div className={styles.hs__state}>{error || 'No scorecard available.'}</div>;
-  }
-
-  const bestRate = Math.max(0, ...agents.map((a) => a.rate));
-  const agentTitle = (id: string) => data.agents.find((a) => a.id === id)?.title ?? id;
-  const suiteName = (id: string) => data.suites.find((s) => s.id === id)?.name ?? id;
-
-  // Comparison rows: label, formatted value per agent, and which direction
-  // is better (so the best cell can be marked).
-  const metricRows: {
-    label: string;
-    hint?: string;
-    value: (a: AgentSummary) => number | null;
-    format: (n: number) => string;
-    better: 'high' | 'low';
-  }[] = [
-    { label: 'Tool-call accuracy', hint: 'Right tool, right arguments, no extra calls', value: (a) => a.toolAcc, format: pct, better: 'high' },
-    { label: 'Answer faithfulness', hint: 'To the source document', value: (a) => a.faithfulness, format: pct, better: 'high' },
-    { label: 'Steps per task', value: (a) => a.steps, format: (n) => n.toFixed(1), better: 'low' },
-    { label: 'Wasted steps', hint: 'Per task', value: (a) => a.wasted, format: (n) => n.toFixed(1), better: 'low' },
-    { label: 'Cost per task', value: (a) => a.cost, format: (n) => `$${n.toFixed(3)}`, better: 'low' },
-    { label: 'Time per task', value: (a) => a.time, format: (n) => `${n.toFixed(1)}s`, better: 'low' },
+/* Deliverables for one step of one feature. Content is sample data shaped around the feature title. */
+function deliverables(f, n){
+  var T = esc(f.title), p = proj(f.pid), existing = p.repo.mode === 'existing', branch = 'feature/'+f.key;
+  if (n === 1) return [
+    { title:'Work Plan', summary:'6 tasks · 7.5 working days', html:
+      '<p class="note">'+(existing ? 'Based on a scan of the existing codebase. 3 existing modules are affected; everything else stays untouched.' : 'New codebase. The project scaffold is created as part of WP-03.')+'</p>' +
+      tbl(['Task','Description','Estimate'],[
+        [mono('WP-01'), existing ? 'Analyze existing code and impacted modules' : 'Choose stack and project structure','0.5 d'],
+        [mono('WP-02'),'Design the changes for "'+T+'"','1 d'],
+        [mono('WP-03'), existing ? 'Implement backend changes' : 'Create scaffold and backend','2 d'],
+        [mono('WP-04'),'Implement screen changes','2 d'],
+        [mono('WP-05'),'Unit tests and E2E tests','1.5 d'],
+        [mono('WP-06'),'Code review and pull request','0.5 d']]) +
+      (existing ? '<h3 class="strong">Impact on existing code</h3>'+tbl(['Module','Change'],[[mono('orders/'),'Modified: new service method and route'],[mono('notifications/'),'Modified: one new notice template'],[mono('shared/'),'Reused: form and table components'],[mono('auth/, reports/'),'No change']]) : '') }
   ];
-  const isBest = (row: (typeof metricRows)[number], a: AgentSummary, group: AgentSummary[] = agents) => {
-    if (group.length < 2) return false;
-    const own = row.value(a);
-    if (own === null) return false;
-    const all = group.map((x) => row.value(x)).filter((v): v is number => v !== null);
-    return row.better === 'high' ? own >= Math.max(...all) : own <= Math.min(...all);
-  };
+  if (n === 2) return [
+    { title:'SRS', summary:'5 requirements', html: tbl(['ID','Requirement','Priority'],[
+        [mono('SRS-01'),'A user can use "'+T+'" from the main screen','Must'],
+        [mono('SRS-02'),'Input is validated and errors are shown clearly','Must'],
+        [mono('SRS-03'),'The result is saved and still visible after reload','Must'],
+        [mono('SRS-04'),'Existing behaviour is unchanged','Must'],
+        [mono('SRS-05'),'Each action is written to the audit log','Should']]) },
+    { title:'SAD', summary:'4 components touched', html: tbl(['Component','Change'],[
+        ['Web client','One new screen, one changed screen'],
+        ['API gateway','One new route with authorization'],
+        ['Service layer','New logic for "'+T+'"'],
+        ['Database','One new table, one migration']]) },
+    { title:'Traceability', summary:'5 of 5 requirements traced', html: tbl(['Requirement','Component','Work plan task'],[
+        [mono('SRS-01'),'Web client, API gateway',mono('WP-04')],
+        [mono('SRS-02'),'Web client, Service layer',mono('WP-03')],
+        [mono('SRS-03'),'Service layer, Database',mono('WP-03')],
+        [mono('SRS-04'),'All',mono('WP-05')],
+        [mono('SRS-05'),'Service layer',mono('WP-03')]]) }
+  ];
+  if (n === 3) return [
+    { title:'Code', summary:'14 files changed on '+branch, html: tbl(['Area','New files','Modified files','Lines'],[
+        ['Backend','4', existing ? '3' : '0','+486 −22'],['Screens','3', existing ? '2' : '0','+352 −14'],['Database','1','0','+38'],['Tests','1','0','+410']]) },
+    { title:'Unit tests', summary:'48 passing, 0 failing', html: tbl(['Area','Tests','Passed','Failed'],[['Backend','27','27','0'],['Screens','15','15','0'],['Database','6','6','0']]) },
+    { title:'Coverage', summary:'87% lines · target 80%', html: barRow('Overall',87)+barRow('Backend',90)+barRow('Screens',84)+barRow('Database',88)+'<p class="muted small">The orange mark is the 80% target.</p>' }
+  ];
+  if (n === 4) return [
+    { title:'E2E test cases', summary:'8 test cases for 5 requirements', html: tbl(['ID','Scenario','Requirement'],[
+        [mono('TC-01'),'Happy path for "'+T+'"',mono('SRS-01')],
+        [mono('TC-02'),'Entry point is visible only to signed-in users',mono('SRS-01')],
+        [mono('TC-03'),'Empty input is rejected with a clear message',mono('SRS-02')],
+        [mono('TC-04'),'Invalid input is rejected with a clear message',mono('SRS-02')],
+        [mono('TC-05'),'Result is still there after reload',mono('SRS-03')],
+        [mono('TC-06'),'Existing main flow still works',mono('SRS-04')],
+        [mono('TC-07'),'Existing reports still export',mono('SRS-04')],
+        [mono('TC-08'),'Audit log entry is written',mono('SRS-05')]]) },
+    { title:'Mock E2E results', summary:'8 of 8 passed against mocks', html: '<p class="note">Run against mocked services. The real application is tested in the verification phase.</p>' +
+        tbl(['Test case','Result','Duration'],[[mono('TC-01'),'Pass','1.4 s'],[mono('TC-02'),'Pass','0.9 s'],[mono('TC-03'),'Pass','1.1 s'],[mono('TC-04'),'Pass','1.0 s'],[mono('TC-05'),'Pass','2.1 s'],[mono('TC-06'),'Pass','2.4 s'],[mono('TC-07'),'Pass','1.8 s'],[mono('TC-08'),'Pass','1.2 s']]) }
+  ];
+  return [
+    { title:'AI code review', summary:'0 critical · 1 major (fixed) · 2 minor', html: tbl(['Severity','Finding','State'],[
+        ['Major','New query loads all rows before filtering','Fixed'],['Minor','Duplicate validation helper','Open'],['Minor','Missing doc comment on the new service method','Open']]) },
+    { title:'Bitbucket PR', summary:'PR #'+(40+f.num)+' · '+branch+' → '+esc(p.repo.branch), html: '<ul class="list">' +
+        '<li><span class="strong">Title</span><span>'+f.key+' '+T+'</span></li>' +
+        '<li><span class="strong">Branch</span><span class="mono">'+branch+' → '+esc(p.repo.branch)+'</span></li>' +
+        '<li><span class="strong">Changes</span><span>14 files · +1,286 −36</span></li>' +
+        '<li><span class="strong">Build</span><span>Passing</span></li>' +
+        '<li><span class="strong">Reviewers</span><span>2 requested</span></li></ul>' }
+  ];
+}
+function verResult(f, id){
+  var p = proj(f.pid), k1 = p.key+'-'+(f.num*2+300), k2 = p.key+'-'+(f.num*2+301);
+  if (id === 'e2e') return '<div class="tiles"><div class="tile"><span class="muted small">Passed</span><span class="stat">24 / 26</span></div><div class="tile"><span class="muted small">Failed</span><span class="stat">2</span></div><div class="tile"><span class="muted small">Environment</span><span class="stat">Staging</span></div></div>' +
+    tbl(['Suite','Passed','Failed','Result'],[['New feature flow',7,1,pill('Fail','fail')],['Validation',5,0,'Pass'],['Persistence',4,1,pill('Fail','fail')],['Regression: existing features',6,0,'Pass'],['Audit log',2,0,'Pass']]);
+  if (id === 'bugs') return '<p class="note note--done">Bug report created with steps to reproduce, logs and a suspected cause for each failure.</p>' +
+    tbl(['JIRA issue','Bug','Severity','Work plan'],[
+      ['<span class="strong">'+k1+'</span>','Second save within one second is lost','High',mono('WP-07')],
+      ['<span class="strong">'+k2+'</span>','Result missing after reload on a slow connection','Medium',mono('WP-08')]]);
+  return '<div class="tiles"><div class="tile"><span class="muted small">Tests generated</span><span class="stat">12</span><span class="muted small">9 kept</span></div><div class="tile"><span class="muted small">Hallucinations</span><span class="stat">3</span><span class="muted small">discarded</span></div><div class="tile"><span class="muted small">Coverage</span><span class="stat">87% → 90%</span></div></div>' +
+    '<h3 class="strong">Discarded as hallucinated</h3><ul class="list">' +
+    [['test_feature_sends_sms','No SMS channel in the SAD'],['test_feature_bulk_import','No bulk import in the SRS'],['test_feature_undo_endpoint','Calls an endpoint that does not exist']].map(function(r){ return '<li>'+mono(r[0])+'<span class="muted small">'+r[1]+'</span></li>'; }).join('')+'</ul>';
+}
 
-  const bestModelRate = Math.max(0, ...modelSums.map((m) => m.rate));
+/* ================= 3. State ================= */
+var KEY = 'aidlc-workspace-demo-v1', TICK = 750;
+var S, runs = {}, ui = { tab:{}, changeOpen:false, error:'' };
 
-  const maxErrorCount = Math.max(1, ...agents.flatMap((a) => ERROR_TYPES.map((t) => a.errors[t])));
-  const totalFailed = agents.reduce((n, a) => n + (a.tasks - a.passed), 0);
+function seed(){
+  var s = { seq:2, projects:[], features:[], threads:{ home:[] } };
+  var day = 86400000, t0 = Date.now() - 6*day;
+  s.projects.push({ id:'p1', name:'Sample Project', key:'SMP', repo:{ mode:'existing', url:'bitbucket.org/sample-org/sample-project', branch:'develop', scanned:new Date(t0).toISOString() }, created:new Date(t0).toISOString(), nextNum:102 });
+  var f = newFeatureObj('f1','p1','SMP',101,'Order tracking page','Customers can see the status of their orders on one page.');
+  STEPS.forEach(function(x, i){ f.steps[x.id] = 'approved'; f.gates[x.id] = { at:new Date(t0 + (i+1)*day/2).toISOString() }; });
+  f.ver = { e2e:'done', bugs:'done', nightly:'done' }; f.updated = new Date(t0 + 4*day).toISOString();
+  f.msgs = [{ from:'ai', html:'This feature is complete: all 5 gates were approved and verification has run. Open any step on the left to see what was produced.', t:f.updated }];
+  s.features.push(f);
+  s.threads.home.push({ from:'ai', html:'Welcome. Pick a project on the left, or create a new one. Inside a project, tell me the feature you want and I\'ll take it through the 5 steps, stopping for your approval after each.', t:now() });
+  s.threads.p1 = [{ from:'ai', html:'I\'ve scanned the <span class="strong">Sample Project</span> codebase. Describe a new feature here and I\'ll start with Step 1 · Plan.', t:now() }];
+  return s;
+}
+function newFeatureObj(id, pid, key, num, title, request){
+  var f = { id:id, pid:pid, num:num, key:key+'-'+num, title:title, request:request, steps:{}, rev:{}, gates:{}, feedback:{}, ver:{ e2e:'idle', bugs:'idle', nightly:'idle' }, busy:null, msgs:[], created:now(), updated:now() };
+  STEPS.forEach(function(x){ f.steps[x.id] = 'locked'; f.rev[x.id] = 0; f.feedback[x.id] = []; });
+  return f;
+}
+function load(){ try { var o = JSON.parse(localStorage.getItem(KEY)); if (o && Array.isArray(o.projects) && Array.isArray(o.features) && o.threads) return o; } catch(e){} return null; }
+function save(){ try { localStorage.setItem(KEY, JSON.stringify(S)); } catch(e){} }
 
-  const visibleTraces = data.traces.filter(
-    (t) => (traceFilter === 'all' || !t.passed) && (traceAgent === 'all' || t.agent === traceAgent)
-  );
+function proj(id){ return S.projects.filter(function(p){ return p.id === id; })[0]; }
+function feat(id){ return S.features.filter(function(f){ return f.id === id; })[0]; }
+function featsOf(pid){ return S.features.filter(function(f){ return f.pid === pid; }); }
+function step(n){ return STEPS[n-1]; }
+function verif(id){ return VERIF.filter(function(v){ return v.id === id; })[0]; }
+function approvedCount(f){ return STEPS.filter(function(s){ return f.steps[s.id] === 'approved'; }).length; }
+function gateStep(f){ var g = STEPS.filter(function(s){ return f.steps[s.id] === 'awaiting'; })[0]; return g ? g.id : 0; }
+function runningStep(f){ var g = STEPS.filter(function(s){ return f.steps[s.id] === 'running'; })[0]; return g ? g.id : 0; }
+function nextVer(f){ if (approvedCount(f) < 5) return null; var v = VERIF.filter(function(x){ return f.ver[x.id] === 'idle'; })[0]; return v ? v.id : null; }
+function complete(f){ return approvedCount(f) === 5 && !nextVer(f) && !f.busy; }
+function featStatus(f){
+  if (f.busy) return { label:'AI working', kind:'run' };
+  if (gateStep(f)) return { label:'Needs your approval', kind:'wait' };
+  if (complete(f)) return { label:'Complete', kind:'done' };
+  if (approvedCount(f) === 5) return { label:'Verification', kind:'idle' };
+  return { label:'Not started', kind:'idle' };
+}
+function makeKey(name){ var k = name.replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase(); return k.length ? k : 'PRJ'; }
 
-  return (
-    <div className={styles.hs}>
-      {/* ---------- 1. Agent scorecard ---------- */}
-      <section className={styles.hs__sec}>
-        <div className={styles['hs__sec-head']}>
-          <h3>Agent scorecard</h3>
-          <span>
-            Same {data.suites.length} suite{data.suites.length === 1 ? '' : 's'}, same harness, averaged over{' '}
-            {data.model_ids.length} model{data.model_ids.length === 1 ? '' : 's'}
-          </span>
-        </div>
+/* ================= 4. Lifecycle engine (simulated AI work) ================= */
+function say(f, html, go, goLabel){ f.msgs.push({ from:'ai', html:html, go:go, goLabel:goLabel, t:now() }); f.updated = now(); }
+function simulate(f, tasks, title, skills, done){
+  if (runs[f.id]) clearInterval(runs[f.id].timer);
+  var r = runs[f.id] = { i:0, tasks:tasks, title:title, skills:skills, timer:setInterval(function(){
+    r.i++;
+    if (r.i >= r.tasks.length){ clearInterval(r.timer); delete runs[f.id]; f.busy = null; done(); f.updated = now(); save(); render(); }
+    else if (route().fid === f.id) render();
+  }, TICK) };
+}
+function startStep(f, n, rework){
+  var st = step(n);
+  f.steps[n] = 'running'; f.busy = { type:'step', n:n, rework:!!rework };
+  simulate(f, rework ? ['Reading your feedback','Updating the deliverables','Re-running the checks'] : st.tasks, (rework ? 'Reworking' : 'Working on')+' Step '+n+' · '+st.name, st.skills, function(){
+    f.steps[n] = 'awaiting';
+    say(f, 'Step '+n+' · '+st.name+(f.rev[n] ? ' (revision '+(f.rev[n]+1)+')' : '')+' is ready. I\'ve paused at stage gate '+n+' and need your approval to continue.', f.id+'-step-'+n, 'Review Step '+n+' · '+st.name);
+  });
+}
+function approve(f, n){
+  if (f.steps[n] !== 'awaiting') return;
+  f.steps[n] = 'approved'; f.gates[n] = { at:now() };
+  if (n < 5){ say(f, 'Gate '+n+' approved. Starting Step '+(n+1)+' · '+step(n+1).name+'.'); startStep(f, n+1); }
+  else say(f, 'All 5 gates are approved, so development is complete. The verification phase is open. Shall I run the E2E tests on the real running application?', f.id+'-verify', 'Open verification');
+}
+function requestChanges(f, n, text){
+  if (f.steps[n] !== 'awaiting') return;
+  f.feedback[n].unshift({ t:now(), text:text }); f.rev[n]++;
+  say(f, 'Understood. I\'ll rework Step '+n+' · '+step(n).name+' with your feedback and bring it back to this gate.');
+  startStep(f, n, true);
+}
+function runVer(f, id){
+  var v = verif(id);
+  f.ver[id] = 'running'; f.busy = { type:'ver', v:id };
+  simulate(f, v.tasks, v.name, v.skills, function(){
+    f.ver[id] = 'done';
+    if (id === 'e2e') say(f, 'System E2E finished: 24 of 26 passed, 2 failed on the real application. Shall I analyze them and file bugs?', f.id+'-verify', 'See E2E results');
+    if (id === 'bugs') say(f, 'Bug report written, 2 JIRA issues created and the work plan updated. Nightly testing runs on its own at 02:00. Want to see a simulated run?', f.id+'-verify', 'See bug report');
+    if (id === 'nightly') say(f, 'Nightly run finished: 12 tests generated, 3 discarded as hallucinated, coverage 87% → 90%. This feature is complete.', f.id+'-verify', 'See nightly results');
+  });
+}
+function createProject(name, mode, url, branch){
+  var id = 'p'+(S.seq++);
+  var p = { id:id, name:name, key:makeKey(name), repo:{ mode:mode, url: mode === 'existing' ? url : '', branch: branch || 'main', scanned: mode === 'existing' ? now() : null }, created:now(), nextNum:101 };
+  S.projects.push(p);
+  S.threads[id] = [{ from:'ai', t:now(), html: mode === 'existing' ?
+    'Project created. I connected to the repository and scanned the codebase. Describe a new feature here and I\'ll start with Step 1 · Plan.' :
+    'Project created with a new, empty codebase. Describe the first feature here and I\'ll start with Step 1 · Plan.' }];
+  return p;
+}
+function createFeature(p, title, request){
+  var f = newFeatureObj('f'+(S.seq++), p.id, p.key, p.nextNum++, title, request || title);
+  S.features.push(f);
+  f.msgs.push({ from:'user', text:request || title, t:now() });
+  say(f, 'Got it. I created '+f.key+' in '+esc(p.name)+' and I\'m starting Step 1 · Plan'+(p.repo.mode === 'existing' ? ' using the existing codebase' : '')+'.');
+  startStep(f, 1);
+  return f;
+}
 
-        <div className={styles.hs__agents} style={{ gridTemplateColumns: `repeat(${Math.max(1, agents.length)}, minmax(0, 1fr))` }}>
-          {agents.map((a) => {
-            const best = agents.length > 1 && a.rate === bestRate;
-            return (
-              <div key={a.id} className={`${styles.hs__agent} ${best ? styles['hs__agent--best'] : ''}`}>
-                <div className={styles['hs__agent-top']}>
-                  <span className={styles['hs__agent-name']}>{a.title}</span>
-                  {best && (
-                    <span className={styles.hs__badge}>
-                      <Award size={11} /> Best success rate
-                    </span>
-                  )}
-                </div>
-                <div className={styles['hs__agent-rate']}>{pct(a.rate)}</div>
-                <div className={styles['hs__agent-label']}>
-                  Task success rate · {a.passed.toLocaleString()} of {a.tasks.toLocaleString()} tasks
-                </div>
-                <div className={styles.hs__bar}>
-                  <div className={styles['hs__bar-fill']} style={{ width: pct(a.rate) }} />
-                </div>
-              </div>
-            );
-          })}
-        </div>
+/* ================= 5. Chat assistant (scripted) ================= */
+var YES = /^(approve|approved|yes|yep|ok|okay|sure|looks good|lgtm|go ahead|go|proceed|continue|next|run it|do it)\b/i;
+function statusText(f){
+  var g = gateStep(f);
+  if (f.busy) return 'I\'m working right now. I\'ll pause and ask you when I\'m done.';
+  if (g) return approvedCount(f)+' of 5 gates approved. Step '+g+' · '+step(g).name+' is waiting for your approval.';
+  if (nextVer(f)) return 'All 5 gates approved. Next in verification: '+verif(nextVer(f)).name+'.';
+  return 'This feature is complete: 5 approved steps and the verification phase.';
+}
+function chatSend(text){
+  var r = route(), t = text.trim(); if (!t) return;
+  if (r.v === 'feature'){
+    var f = feat(r.fid); if (f.busy) return;
+    f.msgs.push({ from:'user', text:t, t:now() });
+    if (/^(help|\?)$/i.test(t) || /how does/i.test(t)) say(f, 'I do the work for each step, then stop at a stage gate. Nothing continues until you approve. You can approve here or with the button on the left. '+statusText(f));
+    else if (/\b(status|where are we|progress)\b/i.test(t)) say(f, statusText(f));
+    else if (gateStep(f)){ if (YES.test(t)) approve(f, gateStep(f)); else requestChanges(f, gateStep(f), t); }
+    else if (nextVer(f)){
+      var nv = nextVer(f), want = /night/i.test(t) ? 'nightly' : /bug|jira|file/i.test(t) ? 'bugs' : /e2e|test/i.test(t) ? 'e2e' : YES.test(t) ? nv : null;
+      if (want === nv) runVer(f, nv); else say(f, 'The next thing I can do is: '+verif(nv).cta.toLowerCase()+'. Say "yes" or use the button.');
+    }
+    else say(f, 'This feature is complete. To build something else, go back to the project and describe a new feature.', f.pid, 'Back to project');
+  } else if (r.v === 'project'){
+    var p = proj(r.pid), th = S.threads[p.id] = S.threads[p.id] || [];
+    th.push({ from:'user', text:t, t:now() });
+    if (/^(help|\?)$/i.test(t) || /how does/i.test(t)){ th.push({ from:'ai', t:now(), html:'Describe a feature in a sentence or two. I\'ll create it in this project and take it through Plan, Design, Implement, Test and Review, stopping for your approval after each step.' }); }
+    else {
+      var title = t.replace(/\s+/g,' '), cut = title.split(/[,.;:]| with | so that | that | for the /)[0].trim(); if (cut.length >= 12) title = cut; title = title.charAt(0).toUpperCase() + title.slice(1); if (title.length > 60) title = title.slice(0,57).trim()+'…';
+      var nf = createFeature(p, title, t);
+      th.push({ from:'ai', t:now(), html:'Created feature '+nf.key+'. I\'m working on it now.', go:nf.id, goLabel:'Open '+nf.key });
+      location.hash = nf.id;
+    }
+  } else {
+    S.threads.home.push({ from:'user', text:t, t:now() });
+    S.threads.home.push({ from:'ai', t:now(), html:'Open a project first, then describe the feature you want. You can also create a new project with the button on the left.' });
+  }
+  save(); render();
+}
 
-        <div className={styles['hs__table-wrap']}>
-          <table className={styles.hs__table}>
-            <thead>
-              <tr>
-                <th>Metric</th>
-                {agents.map((a) => (
-                  <th key={a.id} className={styles.hs__num}>
-                    {a.title}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {metricRows.map((row) => (
-                <tr key={row.label}>
-                  <td>
-                    <b>{row.label}</b>
-                    {row.hint && <small>{row.hint}</small>}
-                  </td>
-                  {agents.map((a) => {
-                    const v = row.value(a);
-                    return (
-                      <td key={a.id} className={`${styles.hs__num} ${isBest(row, a) ? styles['hs__num--best'] : ''}`}>
-                        {v === null ? '—' : row.format(v)}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+/* ================= 6. Views ================= */
+function route(){
+  var h = (location.hash || '').replace('#',''), m;
+  if ((m = /^(p\d+)(-repo)?$/.exec(h)) && proj(m[1])) return { v:'project', pid:m[1], tab:m[2] ? 'repo' : 'features' };
+  if ((m = /^(f\d+)(?:-step-([1-5])|-(verify))?$/.exec(h)) && feat(m[1])){
+    var f = feat(m[1]), sel = m[2] ? +m[2] : m[3] ? 'verify' : (gateStep(f) || runningStep(f) || (approvedCount(f) === 5 ? 'verify' : Math.min(approvedCount(f)+1, 5)));
+    return { v:'feature', fid:f.id, pid:f.pid, sel:sel };
+  }
+  return { v:'home' };
+}
 
-      {/* ---------- Model comparison — same numbers, grouped by model ---------- */}
-      {modelSums.length > 1 && (
-        <section className={styles.hs__sec}>
-          <div className={styles['hs__sec-head']}>
-            <h3>Model comparison</h3>
-            <span>
-              {modelSums.map((m) => m.title).join(' vs ')}, averaged over {agents.length} agent
-              {agents.length === 1 ? '' : 's'}
-            </span>
-          </div>
+function renderCrumbs(r){
+  var h = '<a href="#projects"'+(r.v === 'home' ? ' class="here"' : '')+'>Projects</a>';
+  if (r.pid){ var p = proj(r.pid); h += '<span aria-hidden="true">/</span><a href="#'+p.id+'"'+(r.v === 'project' ? ' class="here"' : '')+'>'+esc(p.name)+'</a>'; }
+  if (r.fid){ h += '<span aria-hidden="true">/</span><span class="here">'+esc(feat(r.fid).title)+'</span>'; }
+  $('crumbs').innerHTML = h;
+}
 
-          <div
-            className={styles.hs__agents}
-            style={{ gridTemplateColumns: `repeat(${modelSums.length}, minmax(0, 1fr))` }}
-          >
-            {modelSums.map((m) => {
-              const best = m.rate === bestModelRate;
-              return (
-                <div key={m.id} className={`${styles.hs__agent} ${best ? styles['hs__agent--best'] : ''}`}>
-                  <div className={styles['hs__agent-top']}>
-                    <span className={styles['hs__agent-name']}>{m.title}</span>
-                    {best && (
-                      <span className={styles.hs__badge}>
-                        <Award size={11} /> Best success rate
-                      </span>
-                    )}
-                  </div>
-                  <div className={styles['hs__agent-rate']}>{pct(m.rate)}</div>
-                  <div className={styles['hs__agent-label']}>
-                    Task success rate · {m.passed.toLocaleString()} of {m.tasks.toLocaleString()} tasks
-                  </div>
-                  <div className={styles.hs__bar}>
-                    <div className={styles['hs__bar-fill']} style={{ width: pct(m.rate) }} />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+function renderSidebar(r){
+  var h = '<div class="side-label">PROJECTS</div>';
+  S.projects.forEach(function(p){
+    var fs = featsOf(p.id), need = fs.filter(function(f){ return gateStep(f) && !f.busy; }).length, open = r.pid === p.id;
+    h += '<a class="side-link" href="#'+p.id+'"'+(r.v === 'project' && open && r.tab === 'features' ? ' aria-current="page"' : '')+'><span>'+esc(p.name)+'</span>'+(need ? '<span class="tag tag--wait">'+need+'</span>' : '')+'</a>';
+    if (open){
+      h += '<div class="side-sub"><a class="side-link" href="#'+p.id+'-repo"'+(r.v === 'project' && r.tab === 'repo' ? ' aria-current="page"' : '')+'><span>Repository</span></a>';
+      if (fs.length) h += '<div class="side-label">FEATURES</div>';
+      fs.forEach(function(f){ var st = featStatus(f), tag = st.kind === 'wait' ? '<span class="tag tag--wait">Needs you</span>' : st.kind === 'run' ? '<span class="tag tag--run">Working</span>' : st.kind === 'done' ? '<span class="tag tag--done">Done</span>' : '';
+        h += '<a class="side-link" href="#'+f.id+'"'+(r.fid === f.id ? ' aria-current="page"' : '')+'><span>'+esc(f.title)+'</span>'+tag+'</a>'; });
+      h += '</div>';
+    }
+  });
+  h += '<button type="button" class="btn side-new" data-act="new-project">New project</button>';
+  $('sidebar').innerHTML = h;
+}
 
-          <div className={styles['hs__table-wrap']}>
-            <table className={styles.hs__table}>
-              <thead>
-                <tr>
-                  <th>Metric</th>
-                  {modelSums.map((m) => (
-                    <th key={m.id} className={styles.hs__num}>
-                      {m.title}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {metricRows.map((row) => (
-                  <tr key={row.label}>
-                    <td>
-                      <b>{row.label}</b>
-                      {row.hint && <small>{row.hint}</small>}
-                    </td>
-                    {modelSums.map((m) => {
-                      const v = row.value(m);
-                      return (
-                        <td
-                          key={m.id}
-                          className={`${styles.hs__num} ${isBest(row, m, modelSums) ? styles['hs__num--best'] : ''}`}
-                        >
-                          {v === null ? '—' : row.format(v)}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
+function viewHome(){
+  var h = '<div class="row between"><div><h1 class="page-title">Projects</h1><p class="muted">Each project has its own repository and features.</p></div><button type="button" class="btn btn--primary" data-act="new-project">New project</button></div><div class="grid">';
+  S.projects.forEach(function(p){
+    var fs = featsOf(p.id), need = fs.filter(function(f){ return gateStep(f) && !f.busy; }).length, busy = fs.filter(function(f){ return f.busy; }).length;
+    h += '<a class="pcard" href="#'+p.id+'"><span class="pcard__name">'+esc(p.name)+'</span>' +
+      '<span class="muted small">'+(p.repo.mode === 'existing' ? 'Existing codebase · '+esc(p.repo.url) : 'New codebase')+'</span>' +
+      '<span class="pcard__foot"><span class="pill pill--idle">'+fs.length+' feature'+(fs.length === 1 ? '' : 's')+'</span>'+(need ? pill(need+' need'+(need === 1 ? 's' : '')+' approval','wait') : '')+(busy ? pill(busy+' in progress','run') : '')+'</span></a>';
+  });
+  return h + '</div>';
+}
 
-      {/* ---------- 2. By use case, per agent and model ---------- */}
-      <section className={styles.hs__sec}>
-        <div className={styles['hs__sec-head']}>
-          <h3>Success rate by use case</h3>
-          <span>Per agent and the model behind it</span>
-        </div>
-        <div className={styles['hs__table-wrap']}>
-          <table className={styles.hs__table}>
-            <thead>
-              <tr>
-                <th>Agent</th>
-                <th>Model</th>
-                {data.suites.map((s) => (
-                  <th key={s.id} className={styles.hs__num} title={s.name}>
-                    {s.use_case || s.name}
-                    <small>{s.name}</small>
-                  </th>
-                ))}
-                <th className={styles.hs__num}>Overall</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.agents.map((a) =>
-                data.model_ids.map((modelId, mi) => {
-                  const own = data.cells.filter((c) => c.agent === a.id && c.model_id === modelId);
-                  const overall = summarize(own);
-                  return (
-                    <tr key={`${a.id}-${modelId}`}>
-                      {mi === 0 && (
-                        <td rowSpan={data.model_ids.length} className={styles['hs__cell-agent']}>
-                          <b>{a.title}</b>
-                        </td>
-                      )}
-                      <td>{modelName(modelId)}</td>
-                      {data.suites.map((s) => {
-                        const cell = own.find((c) => c.suite_id === s.id);
-                        if (!cell || cell.tasks === 0) {
-                          return (
-                            <td key={s.id} className={styles.hs__num}>
-                              —
-                            </td>
-                          );
-                        }
-                        const rate = cell.passed / cell.tasks;
-                        return (
-                          <td key={s.id} className={styles.hs__num} title={`${cell.passed} of ${cell.tasks} tasks passed`}>
-                            <span className={`${styles.hs__rate} ${styles[`hs__rate--${tier(rate)}`]}`}>{pct(rate)}</span>
-                          </td>
-                        );
-                      })}
-                      <td className={`${styles.hs__num} ${styles['hs__num--strong']}`}>{pct(overall.rate)}</td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-        <p className={styles.hs__legend}>
-          <span className={`${styles.hs__rate} ${styles['hs__rate--high']}`}>80%+</span>
-          <span className={`${styles.hs__rate} ${styles['hs__rate--mid']}`}>60–79%</span>
-          <span className={`${styles.hs__rate} ${styles['hs__rate--low']}`}>Below 60%</span>
-        </p>
-      </section>
+function viewProject(r){
+  var p = proj(r.pid), fs = featsOf(p.id);
+  var h = '<div class="stack" style="gap:6px"><span class="muted small">Project · '+p.key+'</span><h1 class="page-title">'+esc(p.name)+'</h1></div>' +
+    '<nav class="tabs" aria-label="Project sections"><a class="tab" href="#'+p.id+'"'+(r.tab === 'features' ? ' aria-current="page"' : '')+'>Features</a><a class="tab" href="#'+p.id+'-repo"'+(r.tab === 'repo' ? ' aria-current="page"' : '')+'>Repository</a></nav>';
+  if (r.tab === 'repo'){
+    if (p.repo.mode === 'existing'){
+      h += '<section class="card"><div class="row between"><h2 class="section-title">Connected repository</h2>'+pill('Connected','done')+'</div>' +
+        '<ul class="list"><li><span class="strong">Repository</span><span class="mono">'+esc(p.repo.url)+'</span></li><li><span class="strong">Base branch</span><span class="mono">'+esc(p.repo.branch)+'</span></li><li><span class="strong">Last scanned</span><span>'+when(p.repo.scanned)+'</span></li></ul>' +
+        '<div><button type="button" class="btn" data-act="rescan" data-id="'+p.id+'">Scan again</button></div></section>' +
+        '<section class="card"><h2 class="section-title">What the AI found in the codebase</h2><p class="muted small">New features reuse these modules and follow the existing patterns. Sample scan data.</p>' +
+        '<div class="tiles"><div class="tile"><span class="muted small">Files</span><span class="stat">94</span></div><div class="tile"><span class="muted small">Modules</span><span class="stat">5</span></div><div class="tile"><span class="muted small">Existing tests</span><span class="stat">212</span></div><div class="tile"><span class="muted small">Coverage</span><span class="stat">81%</span></div></div>' +
+        tbl(['Module','Purpose','Files'], MODULES.map(function(m){ return [mono(m[0]), m[1], m[2]]; }))+'</section>';
+    } else {
+      h += '<div class="empty"><p class="strong" style="color:var(--ink)">New codebase</p><p>This project has no existing code. The AI creates the project scaffold in Step 3 of the first feature.</p></div>';
+    }
+    return h;
+  }
+  h += '<div class="row between"><p class="muted">Each feature goes through 5 steps and a verification phase.</p><button type="button" class="btn btn--primary" data-act="new-feature" data-id="'+p.id+'">New feature</button></div>';
+  if (!fs.length) return h + '<div class="empty"><p class="strong" style="color:var(--ink)">No features yet</p><p>Describe the feature you want in the chat on the right, or use the New feature button.</p></div>';
+  h += '<div class="stack" style="gap:10px">';
+  fs.slice().reverse().forEach(function(f){
+    var st = featStatus(f), a = approvedCount(f);
+    h += '<a class="frow" href="#'+f.id+'"><span class="frow__text"><span class="frow__title">'+esc(f.title)+'</span><span class="muted small">'+f.key+' · updated '+when(f.updated)+'</span></span>' +
+      '<span class="row" style="gap:10px"><span class="muted small">'+a+' of 5 steps</span><span class="minibar" role="img" aria-label="'+a+' of 5 steps approved"><div style="width:'+(a*20)+'%"></div></span>'+pill(st.label, st.kind)+'</span></a>';
+  });
+  return h + '</div>';
+}
 
-      {/* ---------- 3. Error analysis ---------- */}
-      <section className={styles.hs__sec}>
-        <div className={styles['hs__sec-head']}>
-          <h3>Error analysis</h3>
-          <span>
-            {totalFailed.toLocaleString()} failed task{totalFailed === 1 ? '' : 's'}, by what went wrong
-          </span>
-        </div>
-        <div className={styles['hs__table-wrap']}>
-          <table className={styles.hs__table}>
-            <thead>
-              <tr>
-                <th>Error type</th>
-                {agents.map((a) => (
-                  <th key={a.id}>{a.title}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {ERROR_TYPES.map((t) => (
-                <tr key={t}>
-                  <td>
-                    <b>{ERROR_LABEL[t]}</b>
-                  </td>
-                  {agents.map((a) => (
-                    <td key={a.id}>
-                      <span className={styles.hs__errbar}>
-                        <span className={styles['hs__errbar-track']}>
-                          <span
-                            className={styles['hs__errbar-fill']}
-                            style={{ width: `${(a.errors[t] / maxErrorCount) * 100}%` }}
-                          />
-                        </span>
-                        <span className={styles['hs__errbar-n']}>{a.errors[t]}</span>
-                      </span>
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+function taskList(f){
+  var r = runs[f.id]; if (!r) return '';
+  return '<section class="card"><div class="row between"><h2 class="section-title">'+r.title+'</h2>'+skillTags(r.skills)+'</div><ul class="tasks">' +
+    r.tasks.map(function(t, i){ var c = i < r.i ? 'dot dot--done' : i === r.i ? 'dot dot--doing' : 'dot'; return '<li><span class="'+c+'">'+(i < r.i ? CHECK : '')+'</span><span'+(i > r.i ? ' class="muted"' : '')+'>'+t+'</span></li>'; }).join('') +
+    '</ul><p class="muted small">The AI will pause and ask for your approval when this is done.</p></section>';
+}
 
-      {/* ---------- 4. Trace store ---------- */}
-      <section className={styles.hs__sec}>
-        <div className={styles['hs__sec-head']}>
-          <h3>Trace store</h3>
-          <span>
-            {data.settings.save_traces
-              ? `Sample of stored runs · limits ${data.settings.max_steps} steps, ${data.settings.task_timeout}s per task`
-              : 'Traces were not saved for this run'}
-          </span>
-        </div>
+function viewFeature(r){
+  var f = feat(r.fid), p = proj(f.pid), st = featStatus(f), nv = nextVer(f);
+  var h = '<div class="stack" style="gap:6px"><span class="muted small">'+f.key+' · '+esc(p.name)+'</span><div class="row"><h1 class="page-title">'+esc(f.title)+'</h1>'+pill(st.label, st.kind)+'</div>' +
+    (f.request && f.request !== f.title ? '<p class="muted">'+esc(f.request)+'</p>' : '')+'</div>';
 
-        {data.settings.save_traces && (
-          <>
-            <div className={styles.hs__filters}>
-              {(['all', 'failed'] as const).map((f) => (
-                <button
-                  key={f}
-                  type="button"
-                  className={`${styles.hs__chip} ${traceFilter === f ? styles['hs__chip--on'] : ''}`}
-                  onClick={() => setTraceFilter(f)}
-                >
-                  {f === 'all' ? 'All runs' : 'Failed only'}
-                </button>
-              ))}
-              <span className={styles['hs__filters-sep']} />
-              <button
-                type="button"
-                className={`${styles.hs__chip} ${traceAgent === 'all' ? styles['hs__chip--on'] : ''}`}
-                onClick={() => setTraceAgent('all')}
-              >
-                All agents
-              </button>
-              {data.agents.map((a) => (
-                <button
-                  key={a.id}
-                  type="button"
-                  className={`${styles.hs__chip} ${traceAgent === a.id ? styles['hs__chip--on'] : ''}`}
-                  onClick={() => setTraceAgent(a.id)}
-                >
-                  {a.title}
-                </button>
-              ))}
-            </div>
+  h += '<nav class="stepper" aria-label="Steps">';
+  STEPS.forEach(function(s){
+    var x = f.steps[s.id], label = x === 'approved' ? 'Approved' : x === 'awaiting' ? 'Needs you' : x === 'running' ? 'AI working' : 'Locked';
+    h += '<a class="stp is-'+x+'" href="#'+f.id+'-step-'+s.id+'"'+(r.sel === s.id ? ' aria-current="true"' : '')+'><span class="stp__top"><span class="num">'+(x === 'approved' ? CHECK : s.id)+'</span><span class="stp__name">'+s.name+'</span></span><span class="stp__status">'+label+'</span></a>';
+  });
+  var vAll = approvedCount(f) === 5, vDone = vAll && !nv && !(f.busy && f.busy.type === 'ver'), vRun = f.busy && f.busy.type === 'ver';
+  var vc = !vAll ? 'locked' : vDone ? 'done' : vRun ? 'running' : 'ready';
+  h += '<a class="stp is-'+vc+'" href="#'+f.id+'-verify"'+(r.sel === 'verify' ? ' aria-current="true"' : '')+'><span class="stp__top"><span class="num">'+(vDone ? CHECK : 'V')+'</span><span class="stp__name">Verification</span></span><span class="stp__status">'+(vc === 'locked' ? 'Locked' : vc === 'done' ? 'Done' : vc === 'running' ? 'AI working' : 'Ready')+'</span></a></nav>';
 
-            <div className={styles['hs__table-wrap']}>
-              <table className={`${styles.hs__table} ${styles['hs__table--rows']}`}>
-                <thead>
-                  <tr>
-                    <th />
-                    <th>Task</th>
-                    <th>Agent · Model</th>
-                    <th>Result</th>
-                    <th className={styles.hs__num}>Steps</th>
-                    <th className={styles.hs__num}>Tokens</th>
-                    <th className={styles.hs__num}>Time</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleTraces.map((t) => {
-                    const open = openTraceId === t.id;
-                    return (
-                      <Fragment key={t.id}>
-                        <tr
-                          className={open ? styles['hs__row--open'] : ''}
-                          onClick={() => setOpenTraceId(open ? null : t.id)}
-                        >
-                          <td className={styles.hs__toggle}>
-                            <button
-                              type="button"
-                              aria-expanded={open}
-                              aria-label={open ? 'Hide trace' : 'Show trace'}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setOpenTraceId(open ? null : t.id);
-                              }}
-                            >
-                              {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                            </button>
-                          </td>
-                          <td>
-                            <b>{t.task}</b>
-                            <small>{suiteName(t.suite_id)}</small>
-                          </td>
-                          <td>
-                            {agentTitle(t.agent)}
-                            <small>{modelName(t.model_id)}</small>
-                          </td>
-                          <td>
-                            <span className={`${styles.hs__result} ${t.passed ? styles['hs__result--pass'] : styles['hs__result--fail']}`}>
-                              {t.passed ? <CheckCircle2 size={12} /> : <XCircle size={12} />}
-                              {t.passed ? 'Passed' : t.error_type ? ERROR_LABEL[t.error_type] : 'Failed'}
-                            </span>
-                          </td>
-                          <td className={styles.hs__num}>{t.steps.length}</td>
-                          <td className={styles.hs__num}>{t.tokens.toLocaleString()}</td>
-                          <td className={styles.hs__num}>{t.time_sec}s</td>
-                        </tr>
-                        {open &&
-                          (() => {
-                            const maxMs = Math.max(1, ...t.steps.map((st) => st.ms));
-                            const slowest = t.steps.reduce((x, st) => (st.ms > x.ms ? st : x), t.steps[0]);
-                            const repeats = t.steps.filter((st, i) => i > 0 && st.tool === t.steps[i - 1].tool).length;
-                            const stepShare = Math.min(1, t.steps.length / Math.max(1, data.settings.max_steps));
-                            const timeShare = Math.min(1, t.time_sec / Math.max(1, data.settings.task_timeout));
-                            return (
-                              <tr className={styles['hs__row--trace']}>
-                                <td colSpan={7}>
-                                  <div className={styles.hs__trace}>
-                                    {/* verdict: what happened, in one sentence */}
-                                    <div
-                                      className={`${styles['hs__trace-verdict']} ${
-                                        t.passed ? '' : styles['hs__trace-verdict--fail']
-                                      }`}
-                                    >
-                                      <span className={styles['hs__trace-verdict-icon']}>
-                                        {t.passed ? <Check size={15} strokeWidth={3} /> : <X size={15} strokeWidth={3} />}
-                                      </span>
-                                      <div>
-                                        <b>
-                                          {t.passed
-                                            ? 'Task completed'
-                                            : `Task failed${t.error_type ? `: ${ERROR_LABEL[t.error_type].toLowerCase()}` : ''}`}
-                                        </b>
-                                        <p>
-                                          {t.passed
-                                            ? `${agentTitle(t.agent)} finished in ${t.steps.length} steps and the checker accepted the result.`
-                                            : t.error_type
-                                              ? ERROR_HELP[t.error_type]
-                                              : 'The checker did not accept the result.'}
-                                        </p>
-                                      </div>
-                                    </div>
+  if (r.sel === 'verify') return h + viewVerify(f);
 
-                                    {/* how much of the budget this run used */}
-                                    <div className={styles['hs__trace-stats']}>
-                                      <div className={styles['hs__trace-stat']}>
-                                        <span><Footprints size={12} /> Steps</span>
-                                        <b>
-                                          {t.steps.length} <small>of {data.settings.max_steps} allowed</small>
-                                        </b>
-                                        <i><em style={{ width: pct(stepShare) }} /></i>
-                                      </div>
-                                      <div className={styles['hs__trace-stat']}>
-                                        <span><Clock size={12} /> Time</span>
-                                        <b>
-                                          {t.time_sec}s <small>of {data.settings.task_timeout}s allowed</small>
-                                        </b>
-                                        <i><em style={{ width: pct(timeShare) }} /></i>
-                                      </div>
-                                      <div className={styles['hs__trace-stat']}>
-                                        <span><Coins size={12} /> Tokens</span>
-                                        <b>{t.tokens.toLocaleString()}</b>
-                                      </div>
-                                      <div className={styles['hs__trace-stat']}>
-                                        <span><Timer size={12} /> Slowest step</span>
-                                        <b>
-                                          {(slowest.ms / 1000).toFixed(1)}s <small>{slowest.tool}</small>
-                                        </b>
-                                      </div>
-                                    </div>
+  var n = r.sel, s = step(n), x = f.steps[n];
+  h += '<div class="row between"><div><h2 class="section-title">Step '+n+' · '+s.name+(f.rev[n] ? ' · revision '+(f.rev[n]+1) : '')+'</h2><p class="muted small">Outputs: '+s.outputs+'</p></div>'+skillTags(s.skills)+'</div>';
+  if (x === 'locked') return h + '<div class="empty"><p>Locked. This step opens after stage gate '+(n-1)+' is approved.</p></div>';
+  if (x === 'running') return h + taskList(f);
 
-                                    {/* the steps, in order */}
-                                    <div className={styles['hs__trace-head']}>
-                                      <span>What the agent did, step by step</span>
-                                      {repeats > 0 && (
-                                        <span className={styles['hs__trace-repeat']}>
-                                          <Repeat size={11} /> {repeats} repeated call{repeats === 1 ? '' : 's'}
-                                        </span>
-                                      )}
-                                    </div>
-                                    <ol className={styles.hs__steps}>
-                                      {t.steps.map((st, i) => {
-                                        const repeat = i > 0 && st.tool === t.steps[i - 1].tool;
-                                        return (
-                                          <li key={i} className={st.ok ? '' : styles['hs__step--fail']}>
-                                            <span className={styles['hs__step-dot']}>
-                                              {st.ok ? i + 1 : <X size={11} strokeWidth={3} />}
-                                            </span>
-                                            <div className={styles['hs__step-card']}>
-                                              <div className={styles['hs__step-main']}>
-                                                <code>{st.tool}</code>
-                                                {repeat && (
-                                                  <span className={styles['hs__step-tag']}>
-                                                    <Repeat size={10} /> Same as previous
-                                                  </span>
-                                                )}
-                                                <span className={styles['hs__step-sum']}>{st.summary}</span>
-                                              </div>
-                                              <div className={styles['hs__step-time']}>
-                                                <i><em style={{ width: pct(st.ms / maxMs) }} /></i>
-                                                <span className={styles['hs__step-ms']}>{(st.ms / 1000).toFixed(1)}s</span>
-                                              </div>
-                                            </div>
-                                          </li>
-                                        );
-                                      })}
-                                    </ol>
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })()}
-                      </Fragment>
-                    );
-                  })}
-                  {visibleTraces.length === 0 && (
-                    <tr>
-                      <td colSpan={7} className={styles.hs__none}>
-                        No stored runs match this filter.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
-      </section>
+  if (x === 'awaiting'){
+    h += '<section class="card card--wait"><h2 class="section-title">Stage gate '+n+' · your approval is needed</h2><p>The AI has paused. Review the deliverables below, then approve to start '+(n < 5 ? 'Step '+(n+1)+' · '+step(n+1).name : 'the verification phase')+'.</p>';
+    if (ui.changeOpen) h += '<div class="field"><label for="gate-comment">What should change?</label><textarea id="gate-comment" rows="3"></textarea>'+(ui.error ? '<span class="error" role="alert">'+ui.error+'</span>' : '')+'</div>' +
+      '<div class="row"><button type="button" class="btn btn--primary" data-act="send-changes" data-id="'+f.id+'" data-n="'+n+'">Send back to the AI</button><button type="button" class="btn" data-act="cancel-changes">Cancel</button></div>';
+    else h += '<div class="row"><button type="button" class="btn btn--primary" data-act="approve" data-id="'+f.id+'" data-n="'+n+'">Approve</button><button type="button" class="btn" data-act="open-changes">Request changes</button></div>';
+    h += '</section>';
+  } else {
+    h += '<p class="note note--done"><span class="strong">Stage gate '+n+' approved by you</span> · '+when(f.gates[n].at)+'</p>';
+  }
+
+  var ds = deliverables(f, n), tk = f.id+'-'+n, ti = Math.min(ui.tab[tk] || 0, ds.length-1);
+  h += '<section class="card"><h2 class="section-title">Deliverables</h2>';
+  if (ds.length > 1) h += '<div class="tabs" role="tablist">'+ds.map(function(d, i){ return '<button type="button" class="tab" role="tab" aria-selected="'+(i === ti)+'" data-act="tab" data-k="'+tk+'" data-i="'+i+'">'+d.title+'</button>'; }).join('')+'</div>';
+  h += '<div class="stack" role="tabpanel"><p><span class="strong">'+ds[ti].title+'</span> <span class="muted">· '+ds[ti].summary+'</span></p>'+ds[ti].html+'</div></section>';
+
+  if (f.feedback[n].length) h += '<section class="card"><h2 class="section-title">Changes you requested</h2><ul class="list">'+f.feedback[n].map(function(fb){ return '<li><span>"'+esc(fb.text)+'"</span><span class="muted small">'+when(fb.t)+'</span></li>'; }).join('')+'</ul></section>';
+  return h;
+}
+
+function viewVerify(f){
+  var h = '<div><h2 class="section-title">Verification phase</h2><p class="muted small">Begins after stage gate 5. Each stage runs when you ask for it.</p></div>';
+  if (approvedCount(f) < 5) return h + '<div class="empty"><p>Locked. Verification opens after all 5 gates are approved ('+approvedCount(f)+' of 5 so far).</p></div>';
+  var nv = nextVer(f);
+  VERIF.forEach(function(v, i){
+    var x = f.ver[v.id];
+    h += '<section class="card"><div class="row between"><div><h2 class="section-title">'+(i+1)+' · '+v.name+'</h2><p class="muted small">'+v.what+'</p></div><div class="row" style="gap:8px">'+(x === 'done' ? pill('Done','done') : x === 'running' ? pill('AI working','run') : pill('Not run','idle'))+skillTags(v.skills)+'</div></div>';
+    if (x === 'done') h += verResult(f, v.id);
+    else if (x === 'running'){ var r = runs[f.id]; if (r) h += '<ul class="tasks">'+r.tasks.map(function(t, k){ var c = k < r.i ? 'dot dot--done' : k === r.i ? 'dot dot--doing' : 'dot'; return '<li><span class="'+c+'">'+(k < r.i ? CHECK : '')+'</span><span'+(k > r.i ? ' class="muted"' : '')+'>'+t+'</span></li>'; }).join('')+'</ul>'; }
+    else if (v.id === nv && !f.busy) h += '<div><button type="button" class="btn btn--primary" data-act="ver" data-id="'+f.id+'" data-v="'+v.id+'">'+v.cta+'</button></div>';
+    else h += '<p class="muted small">Available after the previous stage.</p>';
+    h += '</section>';
+  });
+  return h;
+}
+
+function renderChat(r){
+  var f = r.fid ? feat(r.fid) : null, p = r.pid ? proj(r.pid) : null;
+  var msgs = f ? f.msgs : p ? (S.threads[p.id] = S.threads[p.id] || []) : S.threads.home;
+  $('chat-head').innerHTML = '<span class="chat__title">AI assistant</span><span class="chat__ctx">'+(f ? 'Feature · '+esc(f.title) : p ? 'Project · '+esc(p.name) : 'All projects')+'</span>';
+  var box = $('chat-msgs'), sig = (f ? f.id : p ? p.id : 'home')+':'+msgs.length;
+  if (box.getAttribute('data-sig') !== sig){
+    box.innerHTML = msgs.map(function(m){
+      if (m.from === 'user') return '<div class="msg msg--user"><div class="bubble">'+esc(m.text)+'</div></div>';
+      return '<div class="msg msg--ai"><div class="bubble">'+m.html+'</div>'+(m.go ? '<a class="msg__link" href="#'+m.go+'">'+esc(m.goLabel)+' →</a>' : '')+'</div>';
+    }).join('');
+    box.setAttribute('data-sig', sig);
+    var sc = $('chat-scroll'); sc.scrollTop = sc.scrollHeight;
+  }
+  var chips = '', ph = 'Ask a question', dis = false;
+  if (f){
+    var g = gateStep(f), nv = nextVer(f);
+    if (f.busy){ ph = 'The AI is working…'; dis = true; }
+    else if (g){ ph = 'Type "approve" or your changes'; chips = '<button type="button" class="chip chip--primary" data-act="approve" data-id="'+f.id+'" data-n="'+g+'">Approve step '+g+'</button><button type="button" class="chip" data-act="chat-focus">Request changes</button><button type="button" class="chip" data-send="What\'s the status?">Status</button>'; }
+    else if (nv){ ph = 'Type "yes" to continue'; chips = '<button type="button" class="chip chip--primary" data-act="ver" data-id="'+f.id+'" data-v="'+nv+'">'+verif(nv).cta+'</button><button type="button" class="chip" data-send="What\'s the status?">Status</button>'; }
+    else { ph = 'This feature is complete'; }
+  } else if (p){
+    ph = 'Describe a new feature for '+p.name; chips = '<button type="button" class="chip" data-send="Build a KPI dashboard page with revenue, orders and active users for the last 30 days, with a date filter and a trend chart">Example: Build a KPI dashboard page with revenue, orders and active users</button><button type="button" class="chip" data-send="How does this work?">How does this work?</button>';
+  } else { ph = 'Open a project to start'; chips = '<button type="button" class="chip" data-act="new-project">New project</button>'; }
+  var input = $('chat-input'); input.placeholder = ph; input.disabled = dis; $('chat-send').disabled = dis;
+  if ($('chips').getAttribute('data-h') !== chips){ $('chips').innerHTML = chips; $('chips').setAttribute('data-h', chips); }
+}
+
+function render(){
+  var r = route();
+  renderCrumbs(r); renderSidebar(r);
+  var ta = $('gate-comment'), keep = ta ? { v:ta.value, focus:document.activeElement === ta } : null;
+  $('main').innerHTML = '<div class="main__inner">'+(r.v === 'feature' ? viewFeature(r) : r.v === 'project' ? viewProject(r) : viewHome())+'</div>';
+  var ta2 = $('gate-comment'); if (ta2 && keep){ ta2.value = keep.v; if (keep.focus) ta2.focus(); }
+  renderChat(r);
+}
+
+/* ================= 7. Events ================= */
+function openDialog(html){ var d = $('dlg'); d.innerHTML = html; if (d.showModal) d.showModal(); else d.setAttribute('open',''); var first = d.querySelector('input[type=text],textarea'); if (first) first.focus(); }
+function closeDialog(){ var d = $('dlg'); if (d.close) d.close(); else d.removeAttribute('open'); }
+
+var actions = {
+  'new-project':function(){
+    openDialog('<form data-form="project" novalidate><h2>New project</h2>' +
+      '<div class="field"><label for="np-name">Project name</label><input type="text" id="np-name" maxlength="60"><span class="error" id="np-err" role="alert" hidden>Enter a project name.</span></div>' +
+      '<fieldset class="field"><legend>Codebase</legend><label class="choice"><input type="radio" name="mode" value="existing" checked><span><span class="strong">Use an existing codebase</span><br><span class="muted small">Connect a repository. The AI scans it and builds new features on top.</span></span></label>' +
+      '<label class="choice"><input type="radio" name="mode" value="new"><span><span class="strong">Start a new codebase</span><br><span class="muted small">The AI creates the project scaffold with the first feature.</span></span></label></fieldset>' +
+      '<div id="np-repo" class="stack" style="gap:12px"><div class="field"><label for="np-url">Repository URL</label><input type="text" id="np-url" placeholder="bitbucket.org/your-team/your-repo"><span class="error" id="np-url-err" role="alert" hidden>Enter the repository URL.</span></div>' +
+      '<div class="field"><label for="np-branch">Base branch</label><input type="text" id="np-branch" value="main"></div></div>' +
+      '<div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-act="close-dialog">Cancel</button><button type="submit" class="btn btn--primary">Create project</button></div></form>');
+  },
+  'new-feature':function(el){
+    openDialog('<form data-form="feature" data-id="'+el.getAttribute('data-id')+'" novalidate><h2>New feature</h2>' +
+      '<div class="field"><label for="nf-title">Feature name</label><input type="text" id="nf-title" maxlength="60" placeholder="KPI dashboard page"><span class="error" id="nf-err" role="alert" hidden>Enter a feature name.</span></div>' +
+      '<div class="field"><label for="nf-desc">What should it do? (optional)</label><textarea id="nf-desc" rows="3"></textarea></div>' +
+      '<p class="muted small">The AI starts Step 1 · Plan right away and stops for your approval when the plan is ready.</p>' +
+      '<div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-act="close-dialog">Cancel</button><button type="submit" class="btn btn--primary">Create and start</button></div></form>');
+  },
+  'close-dialog':closeDialog,
+  rescan:function(el){ proj(el.getAttribute('data-id')).repo.scanned = now(); },
+  approve:function(el){ var f = feat(el.getAttribute('data-id')), n = +el.getAttribute('data-n'); if (f.busy) return; f.msgs.push({ from:'user', text:'Approve', t:now() }); ui.changeOpen = false; approve(f, n); },
+  'open-changes':function(){ ui.changeOpen = true; ui.error = ''; setTimeout(function(){ var t = $('gate-comment'); if (t) t.focus(); }, 0); },
+  'cancel-changes':function(){ ui.changeOpen = false; ui.error = ''; },
+  'send-changes':function(el){
+    var f = feat(el.getAttribute('data-id')), n = +el.getAttribute('data-n'), text = ($('gate-comment').value || '').trim();
+    if (!text){ ui.error = 'Describe what should change.'; return; }
+    f.msgs.push({ from:'user', text:text, t:now() }); ui.changeOpen = false; ui.error = ''; $('gate-comment').value = ''; requestChanges(f, n, text);
+  },
+  ver:function(el){ var f = feat(el.getAttribute('data-id')), v = el.getAttribute('data-v'); if (f.busy || nextVer(f) !== v) return; f.msgs.push({ from:'user', text:verif(v).cta, t:now() }); runVer(f, v); },
+  tab:function(el){ ui.tab[el.getAttribute('data-k')] = +el.getAttribute('data-i'); },
+  'chat-focus':function(){ $('chat-input').focus(); },
+  reset:function(){ Object.keys(runs).forEach(function(k){ clearInterval(runs[k].timer); delete runs[k]; }); S = seed(); ui = { tab:{}, changeOpen:false, error:'' }; location.hash = 'projects'; }
+};
+
+document.addEventListener('click', function(e){
+  var el = e.target.closest('[data-act],[data-send]'); if (!el) return;
+  if (el.hasAttribute('data-send')) return chatSend(el.getAttribute('data-send'));
+  var a = actions[el.getAttribute('data-act')]; if (!a) return;
+  a(el); save(); render();
+});
+document.addEventListener('input', function(e){ var er = e.target.parentNode && e.target.parentNode.querySelector('.error'); if (er && e.target.closest('.dialog')) er.hidden = true; });
+document.addEventListener('change', function(e){
+  if (e.target.name === 'mode'){ var box = $('np-repo'); if (box) box.hidden = e.target.value !== 'existing'; }
+});
+document.addEventListener('submit', function(e){
+  var form = e.target, kind = form.getAttribute('data-form');
+  e.preventDefault();
+  if (form.id === 'chat-form'){ var i = $('chat-input'); chatSend(i.value); i.value = ''; i.style.height = ''; return; }
+  if (kind === 'project'){
+    var name = $('np-name').value.trim(), mode = form.querySelector('input[name=mode]:checked').value, url = $('np-url').value.trim();
+    $('np-err').hidden = !!name; $('np-url-err').hidden = !(mode === 'existing' && !url);
+    if (!name){ $('np-name').focus(); return; }
+    if (mode === 'existing' && !url){ $('np-url').focus(); return; }
+    var p = createProject(name, mode, url, $('np-branch').value.trim());
+    closeDialog(); save(); location.hash = p.id; render();
+  }
+  if (kind === 'feature'){
+    var title = $('nf-title').value.trim();
+    $('nf-err').hidden = !!title;
+    if (!title){ $('nf-title').focus(); return; }
+    var f = createFeature(proj(form.getAttribute('data-id')), title, $('nf-desc').value.trim());
+    closeDialog(); save(); location.hash = f.id; render();
+  }
+});
+$('chat-input').addEventListener('keydown', function(e){ if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); $('chat-send').click(); } });
+$('chat-input').addEventListener('input', function(){ this.style.height = ''; this.style.height = Math.min(this.scrollHeight, 120)+'px'; });
+window.addEventListener('hashchange', function(){ ui.changeOpen = false; ui.error = ''; render(); $('main').scrollTop = 0; });
+
+/* ================= Start ================= */
+S = load() || seed();
+S.features.forEach(function(f){ if (f.busy){ if (f.busy.type === 'step') startStep(f, f.busy.n, f.busy.rework); else runVer(f, f.busy.v); } });
+save(); render();
+})();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//index.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIDLC Workspace</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar">
+    <a class="brand" href="#projects">
+      <svg aria-hidden="true" width="26" height="26" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="22" height="22" rx="6"/><path d="M9 14h10M14 9v10"/></svg>
+      <span>AIDLC</span>
+    </a>
+    <nav class="crumbs" id="crumbs" aria-label="Breadcrumb"></nav>
+    <button type="button" class="btn btn--quiet" data-act="reset">Reset demo</button>
+  </header>
+
+  <aside class="sidebar" id="sidebar" aria-label="Projects"></aside>
+
+  <main class="main" id="main"></main>
+
+  <section class="chat" aria-label="AI assistant">
+    <div class="chat__head" id="chat-head"></div>
+    <div class="chat__scroll" id="chat-scroll"><div class="chat__msgs" id="chat-msgs"></div></div>
+    <div class="composer">
+      <div class="chips" id="chips"></div>
+      <form class="composer__form" id="chat-form" autocomplete="off">
+        <label class="sr-only" for="chat-input">Message the AI assistant</label>
+        <textarea id="chat-input" rows="1"></textarea>
+        <button type="submit" class="btn btn--primary" id="chat-send">Send</button>
+      </form>
+      <p class="composer__note">Demo with mock data. Replies are scripted.</p>
     </div>
-  );
+  </section>
+
+</div>
+
+<dialog id="dlg" class="dialog"></dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//styles.css
+/* AIDLC Workspace — demo */
+:root{
+  --bg:#F4F5F7; --surface:#FFFFFF; --border:#DDE1E8; --border-strong:#A9B1BF;
+  --ink:#141A23; --muted:#566173;
+  --accent:#1D55C4; --accent-hover:#143D8F; --accent-bg:#E4ECFB;
+  --wait:#B4570A; --wait-text:#8A4104; --wait-bg:#FFF1DE;
+  --done-bg:#E6EAF0; --fail-text:#9C1F17; --fail-bg:#FDECEA;
+  --font-display:"Segoe UI",Roboto,Arial,sans-serif; --font-mono:ui-monospace,Menlo,monospace;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Harnessscorecard.module.scss
-@use '../../styles/_variables' as *;
-
-// ===========================================================================
-// HarnessScorecard — detail view for a Document-agent harness run, shown in
-// History's detail panel. Same "ink" tokens and em-based type scale as the
-// New run wizard (NewEvaluation.module.scss); nothing is redeclared here.
-// ===========================================================================
-
-$mono:    $font-mono;
-$sans:    $font-body;
-$display: $font-display;
-
-.hs {
-  font-size: 0.8125rem; // base every em below is relative to
-  display: flex;
-  flex-direction: column;
-  gap: 26px;
-  margin-top: 20px;
-
-  @media (min-width: 1800px) {
-    font-size: 1rem;
-  }
-
-  &__state {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: 20px;
-    padding: 18px;
-    border: 1px dashed $line;
-    border-radius: 12px;
-    background: $paper;
-    color: $ink-2;
-    font-size: 0.875rem;
-  }
-
-  &__spin { animation: hs-spin 0.8s linear infinite; }
-
-  // ---- section ------------------------------------------------------------
-  &__sec { display: flex; flex-direction: column; gap: 12px; }
-
-  &__sec-head {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 6px 16px;
-
-    h3 { font-family: $display; font-size: 1.1538em; font-weight: 800; letter-spacing: -0.01em; color: $ink; }
-    span { font-size: 0.9615em; color: $ink-2; }
-  }
-
-  // ---- agent cards --------------------------------------------------------
-  &__agents { display: grid; gap: 12px; }
-
-  &__agent {
-    padding: 16px 18px;
-    border: 1px solid $line;
-    border-radius: 12px;
-    background: $card;
-
-    &--best { border-color: $signal; background: $wash; }
-  }
-
-  &__agent-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-  &__agent-name { font-family: $display; font-size: 1.1538em; font-weight: 700; color: $ink; }
-
-  &__badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 3px 9px;
-    border-radius: 999px;
-    background: $signal;
-    color: #fff;
-    font-size: 0.8462em;
-    font-weight: 650;
-    white-space: nowrap;
-  }
-
-  &__agent-rate {
-    margin-top: 10px;
-    font-family: $display;
-    font-size: 2.4615em;
-    font-weight: 800;
-    letter-spacing: -0.03em;
-    line-height: 1;
-    color: $ink;
-  }
-  &__agent-label { margin-top: 6px; font-size: 0.9615em; color: $ink-2; }
-
-  &__bar { margin-top: 12px; height: 6px; border-radius: 999px; background: $line; overflow: hidden; }
-  &__bar-fill { height: 100%; border-radius: 999px; background: $signal; }
-
-  // ---- tables -------------------------------------------------------------
-  &__table-wrap { overflow-x: auto; border: 1px solid $line; border-radius: 12px; }
-
-  &__table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 1em;
-
-    th {
-      padding: 10px 14px;
-      background: $paper;
-      border-bottom: 1px solid $line;
-      text-align: left;
-      font-family: $sans;
-      font-size: 0.9231em;
-      font-weight: 650;
-      color: $ink-2;
-      white-space: nowrap;
-      vertical-align: bottom;
-
-      small { display: block; font-weight: 500; color: $ink-3; }
-    }
-
-    td {
-      padding: 11px 14px;
-      border-bottom: 1px solid $line-2;
-      color: $ink;
-      vertical-align: middle;
-
-      b { display: block; font-weight: 700; }
-      small { display: block; font-size: 0.9231em; color: $ink-2; }
-    }
-    tbody tr:last-child td { border-bottom: 0; }
-
-    th.hs__num,
-    td.hs__num { text-align: right; white-space: nowrap; }
-    td.hs__num { font-family: $mono; font-size: 0.9615em; }
-    td.hs__num--best { font-weight: 700; color: $signal; }
-    td.hs__num--strong { font-weight: 700; }
-    td.hs__cell-agent { vertical-align: top; border-right: 1px solid $line-2; }
-    td.hs__none { text-align: center; color: $ink-2; }
-
-    // clickable rows (trace store)
-    &--rows tbody tr { cursor: pointer; transition: background 0.12s ease; }
-    &--rows tbody tr:hover td { background: $paper; }
-    &--rows tbody tr.hs__row--open td { background: $wash; border-bottom-color: transparent; }
-    &--rows tbody tr.hs__row--trace { cursor: default; }
-    &--rows tbody tr.hs__row--trace td,
-    &--rows tbody tr.hs__row--trace:hover td { background: $wash; padding-top: 0; }
-    &--rows tbody tr.hs__row--trace b,
-    &--rows tbody tr.hs__row--trace small { display: revert; }
-  }
-
-  // success-rate pill, three tiers (legend under the table)
-  &__rate {
-    display: inline-block;
-    min-width: 46px;
-    padding: 3px 8px;
-    border-radius: 6px;
-    text-align: center;
-    font-family: $mono;
-    font-size: 0.9615em;
-    font-weight: 700;
-
-    &--high { color: $ok; background: $ok-wash; }
-    &--mid { color: $ink-2; background: $paper; }
-    &--low { color: $danger; background: $danger-wash; }
-  }
-
-  &__legend { display: flex; flex-wrap: wrap; gap: 8px; }
-
-  // ---- error bars ---------------------------------------------------------
-  &__errbar { display: flex; align-items: center; gap: 10px; }
-  &__errbar-track { flex: 1; min-width: 60px; height: 8px; border-radius: 999px; background: $line-2; overflow: hidden; }
-  &__errbar-fill { display: block; height: 100%; border-radius: 999px; background: $danger; }
-  &__errbar-n { min-width: 22px; text-align: right; font-family: $mono; font-size: 0.9615em; font-weight: 700; color: $ink; }
-
-  // ---- trace store --------------------------------------------------------
-  &__filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-  &__filters-sep { width: 1px; height: 18px; background: $line; }
-
-  &__chip {
-    padding: 6px 12px;
-    border: 1.5px solid $line;
-    border-radius: 999px;
-    background: $card;
-    font-family: $sans;
-    font-size: 0.9615em;
-    font-weight: 650;
-    color: $ink-2;
-    cursor: pointer;
-    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
-
-    &:hover { border-color: $ink-3; color: $ink; }
-    &--on { border-color: $signal; background: $wash; color: $signal; }
-  }
-
-  &__toggle {
-    width: 34px;
-
-    button {
-      display: inline-flex;
-      padding: 2px;
-      border: 0;
-      background: transparent;
-      color: $ink-2;
-      cursor: pointer;
-    }
-  }
-
-  &__result {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 3px 9px;
-    border-radius: 999px;
-    font-size: 0.9231em;
-    font-weight: 650;
-    white-space: nowrap;
-
-    &--pass { color: $ok; background: $ok-wash; }
-    &--fail { color: $danger; background: $danger-wash; }
-  }
-
-  // ---- opened trace: verdict, budget tiles, step timeline -----------------
-  &__trace {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    margin: 4px 0 14px;
-    padding: 16px;
-    border: 1px solid $line;
-    border-radius: 12px;
-    background: $card;
-    animation: hs-open 0.2s ease;
-  }
-
-  &__trace-verdict {
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-    padding: 12px 14px;
-    border-radius: 10px;
-    background: $ok-wash;
-
-    b { display: block; font-family: $display; font-size: 1.0769em; font-weight: 700; color: $ink; }
-    p { margin-top: 2px; font-size: 0.9615em; color: $ink-2; line-height: 1.45; }
-
-    &--fail { background: $danger-wash; }
-    &--fail .hs__trace-verdict-icon { background: $danger; }
-  }
-  &__trace-verdict-icon {
-    flex-shrink: 0;
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    display: grid;
-    place-items: center;
-    background: $ok;
-    color: #fff;
-  }
-
-  &__trace-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-  &__trace-stat {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    padding: 10px 12px;
-    border: 1px solid $line;
-    border-radius: 10px;
-    background: $paper;
-
-    > span { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8846em; font-weight: 650; color: $ink-2; }
-    > b {
-      display: block;
-      font-family: $mono;
-      font-size: 1.1538em;
-      font-weight: 700;
-      color: $ink;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    small { display: inline; font-family: $sans; font-size: 0.7333em; font-weight: 500; color: $ink-2; }
-    // budget meter
-    > i { display: block; height: 4px; border-radius: 999px; background: $line; overflow: hidden; }
-    > i em { display: block; height: 100%; border-radius: 999px; background: $signal; }
-  }
-
-  &__trace-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    font-size: 0.9615em;
-    font-weight: 700;
-    color: $ink;
-  }
-  &__trace-repeat,
-  &__step-tag {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 2px 8px;
-    border-radius: 999px;
-    background: $danger-wash;
-    font-family: $sans;
-    font-size: 0.8462em;
-    font-weight: 650;
-    color: $danger;
-    white-space: nowrap;
-  }
-
-  &__steps {
-    display: flex;
-    flex-direction: column;
-    list-style: none;
-
-    li {
-      position: relative;
-      display: grid;
-      grid-template-columns: 24px minmax(0, 1fr);
-      gap: 12px;
-      padding-bottom: 8px;
-      font-size: 0.9615em;
-      color: $ink;
-
-      &:last-child { padding-bottom: 0; }
-      // rail joining one step to the next
-      &:not(:last-child)::before {
-        content: '';
-        position: absolute;
-        left: 11px;
-        top: 26px;
-        bottom: -4px;
-        width: 2px;
-        background: $line;
-      }
-    }
-
-    code { font-family: $mono; font-weight: 700; white-space: nowrap; }
-  }
-  &__step-dot {
-    position: relative;
-    z-index: 1;
-    width: 24px;
-    height: 24px;
-    margin-top: 5px;
-    border-radius: 50%;
-    display: grid;
-    place-items: center;
-    border: 1.5px solid $line;
-    background: $card;
-    font-family: $mono;
-    font-size: 0.8462em;
-    font-weight: 700;
-    color: $ink-2;
-  }
-  &__step-card {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 14px;
-    min-width: 0;
-    padding: 8px 12px;
-    border: 1px solid $line;
-    border-radius: 8px;
-    background: $paper;
-  }
-  &__step-main { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
-  &__step-sum { color: $ink-2; }
-  &__step-time {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-
-    // how long this step took, relative to the slowest step
-    i { display: block; width: 72px; height: 4px; border-radius: 999px; background: $line; overflow: hidden; }
-    em { display: block; height: 100%; border-radius: 999px; background: $ink-3; }
-  }
-  &__step-ms { min-width: 34px; text-align: right; font-family: $mono; font-size: 0.9231em; color: $ink-2; }
-
-  &__steps li.hs__step--fail {
-    .hs__step-dot { border-color: $danger; background: $danger; color: #fff; }
-    .hs__step-card { border-color: rgba($danger, 0.35); background: $danger-wash; }
-    .hs__step-sum { color: $danger; font-weight: 650; }
-  }
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Segoe UI",Roboto,Arial,sans-serif;font-size:14px;line-height:1.5}
+h1,h2,h3,p{margin:0}
+button,input,textarea{font:inherit;color:inherit}
+a{color:var(--accent)}a:hover{color:var(--accent-hover)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+[hidden]{display:none!important}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.muted{color:var(--muted)}.small{font-size:13px}.strong{font-weight:600}
+.mono{font-family:var(--font-mono);font-size:12px}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.between{justify-content:space-between}
+.stack{display:flex;flex-direction:column;gap:16px}
+
+/* ---------- Frame: sidebar | main | chat (400px) ---------- */
+.app{height:100vh;height:100dvh;display:grid;grid-template-columns:240px minmax(0,1fr) 400px;grid-template-rows:auto minmax(0,1fr)}
+.topbar{grid-column:1 / -1;background:var(--surface);border-bottom:1px solid var(--border);padding:0 20px;min-height:56px;display:flex;align-items:center;gap:20px}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--font-display);font-weight:600;font-size:18px;color:var(--ink);text-decoration:none}
+.brand:hover{color:var(--ink)}
+.crumbs{flex:1;min-width:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:13px;color:var(--muted)}
+.crumbs a{color:var(--muted);text-decoration:none;font-weight:500;padding:8px 2px}
+.crumbs a:hover{color:var(--ink)}
+.crumbs .here{color:var(--ink);font-weight:600}
+
+.btn{min-height:44px;padding:0 18px;border-radius:10px;border:1px solid var(--border-strong);background:var(--surface);color:var(--ink);font-weight:600;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:8px}
+.btn:hover{background:var(--bg);color:var(--ink)}
+.btn--primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn--primary:hover{background:var(--accent-hover);border-color:var(--accent-hover);color:#fff}
+.btn--quiet{min-height:38px;padding:0 14px;border-color:var(--border);font-weight:500}
+.btn:disabled{background:var(--done-bg);border-color:var(--done-bg);color:var(--muted);cursor:not-allowed}
+
+/* ---------- Sidebar ---------- */
+.sidebar{background:var(--surface);border-right:1px solid var(--border);padding:16px 12px;overflow-y:auto;display:flex;flex-direction:column;gap:4px}
+.side-label{font-size:12px;font-weight:600;letter-spacing:.06em;color:var(--muted);padding:8px 8px 6px;display:flex;justify-content:space-between;align-items:center}
+.side-link{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:40px;padding:6px 8px;border-radius:8px;color:var(--ink);text-decoration:none;font-weight:500}
+.side-link:hover{background:var(--bg);color:var(--ink)}
+.side-link[aria-current="page"]{background:var(--accent-bg);color:var(--accent-hover);font-weight:600}
+.side-link span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.side-sub{margin:0 0 6px 10px;padding-left:8px;border-left:1px solid var(--border);display:flex;flex-direction:column;gap:2px}
+.side-sub .side-link{font-size:13px;min-height:36px}
+.side-sub .side-label{padding:8px 8px 2px;font-size:11px}
+.tag{flex:none;font-size:11px;font-weight:600;padding:1px 7px;border-radius:999px}
+.tag--wait{background:var(--wait-bg);color:var(--wait-text)}
+.tag--run{background:var(--accent-bg);color:var(--accent-hover)}
+.tag--done{background:var(--done-bg);color:var(--ink)}
+.side-new{margin-top:8px}
+
+/* ---------- Main ---------- */
+.main{overflow-y:auto;padding:28px 28px 48px}
+.main__inner{max-width:900px;margin:0 auto;display:flex;flex-direction:column;gap:22px}
+.page-title{font-family:var(--font-display);font-weight:600;font-size:28px;line-height:1.2;overflow-wrap:anywhere}
+.section-title{font-family:var(--font-display);font-weight:600;font-size:17px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;display:flex;flex-direction:column;gap:14px}
+.card--wait{border:2px solid var(--wait);padding:19px}
+.pill{padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.pill--done{background:var(--done-bg)}
+.pill--wait{background:var(--wait-bg);color:var(--wait-text)}
+.pill--run{background:var(--accent-bg);color:var(--accent-hover)}
+.pill--idle{border:1px solid var(--border-strong);color:var(--muted)}
+.pill--fail{background:var(--fail-bg);color:var(--fail-text)}
+.skill{padding:2px 8px;border-radius:6px;background:var(--bg);border:1px solid var(--border);font-family:var(--font-mono);font-size:12px}
+.skills{display:flex;flex-wrap:wrap;gap:6px}
+.note{padding:12px 14px;border-radius:10px;background:var(--bg);font-size:13px}
+.note--done{background:var(--done-bg)}
+.empty{padding:32px;border:1px dashed var(--border-strong);border-radius:14px;text-align:center;color:var(--muted);display:flex;flex-direction:column;align-items:center;gap:14px}
+
+/* project cards and feature rows */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px}
+.pcard{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:8px;text-decoration:none;color:var(--ink);min-height:150px}
+.pcard:hover{border-color:var(--border-strong);color:var(--ink)}
+.pcard__name{font-family:var(--font-display);font-weight:600;font-size:19px;overflow-wrap:anywhere}
+.pcard__foot{margin-top:auto;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.frow{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px 16px;text-decoration:none;color:var(--ink)}
+.frow:hover{border-color:var(--border-strong);color:var(--ink)}
+.frow__text{display:flex;flex-direction:column;min-width:0;flex:1 1 240px}
+.frow__title{font-weight:600;overflow-wrap:anywhere}
+.minibar{width:90px;height:6px;border-radius:3px;background:var(--border)}
+.minibar>div{height:100%;border-radius:3px;background:var(--ink)}
+
+/* tabs */
+.tabs{display:flex;flex-wrap:wrap;gap:4px;border-bottom:1px solid var(--border)}
+.tab{min-height:44px;padding:0 14px;border:0;border-bottom:2px solid transparent;background:none;font-weight:500;color:var(--muted);cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
+.tab:hover{color:var(--ink)}
+.tab[aria-selected="true"],.tab[aria-current="page"]{color:var(--ink);font-weight:600;border-bottom-color:var(--accent)}
+
+/* stepper */
+.stepper{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px}
+.stp{min-width:0;display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid var(--border);border-radius:12px;background:var(--surface);text-decoration:none;color:var(--ink)}
+.stp:hover{border-color:var(--border-strong);color:var(--ink)}
+.stp__top{display:flex;align-items:center;gap:6px}
+.stp .num{width:24px;height:24px;font-size:12px}
+.num{flex:none;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:13px;border:2px solid var(--border-strong);color:var(--muted);background:var(--surface)}
+.stp__name{font-weight:600;font-size:13px}
+.stp__status{font-size:12px;color:var(--muted);font-weight:500}
+.stp.is-locked{background:var(--bg);border-style:dashed}
+.stp.is-locked .stp__name{color:var(--muted);font-weight:500}
+.stp.is-approved .num,.stp.is-done .num{background:var(--ink);border-color:var(--ink);color:#fff}
+.stp.is-running .num{border-color:var(--accent);border-top-color:transparent;color:transparent;animation:spin .8s linear infinite}
+.stp.is-running .stp__status{color:var(--accent-hover);font-weight:600}
+.stp.is-awaiting .num{background:var(--wait);border-color:var(--wait);color:#fff}
+.stp.is-awaiting .stp__status{color:var(--wait-text);font-weight:600}
+.stp.is-ready .num{border-color:var(--accent);color:var(--accent)}
+.stp[aria-current="true"]{border:2px solid var(--accent);padding:9px}
+.stp.is-awaiting[aria-current="true"]{border-color:var(--wait)}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.stp.is-running .num,.dot--doing{animation:none!important}}
+
+/* tables, lists, bars */
+.table-wrap{overflow-x:auto}
+table{width:100%;min-width:460px;border-collapse:collapse;font-size:13px}
+th{text-align:left;color:var(--muted);font-weight:600;padding:8px 10px;border-bottom:1px solid var(--border)}
+td{padding:10px;border-bottom:1px solid var(--border);vertical-align:top;overflow-wrap:anywhere}
+th:first-child,td:first-child{padding-left:0}th:last-child,td:last-child{padding-right:0}
+tbody tr:last-child td{border-bottom:0}
+.list{margin:0;padding:0;list-style:none;border:1px solid var(--border);border-radius:10px}
+.list>li{padding:10px 14px;display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;border-bottom:1px solid var(--border)}
+.list>li:last-child{border-bottom:0}
+.kv{display:flex;justify-content:space-between;gap:8px;font-size:13px}
+.bar{position:relative;height:10px;border-radius:5px;background:var(--border)}
+.bar__fill{height:100%;border-radius:5px;background:var(--ink)}
+.bar__target{position:absolute;top:-4px;width:2px;height:18px;background:var(--wait)}
+.tiles{display:flex;flex-wrap:wrap;gap:12px}
+.tile{flex:1 1 140px;min-width:0;padding:14px;border-radius:10px;background:var(--bg);display:flex;flex-direction:column;gap:2px}
+.stat{font-family:var(--font-display);font-weight:600;font-size:22px}
+.tasks{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:10px}
+.tasks li{display:flex;align-items:center;gap:10px}
+.dot{width:18px;height:18px;border-radius:50%;border:2px solid var(--border-strong);flex:none;display:flex;align-items:center;justify-content:center;color:#fff}
+.dot--done{background:var(--ink);border-color:var(--ink)}
+.dot--doing{border-color:var(--accent);border-top-color:transparent;animation:spin .8s linear infinite}
+
+/* forms */
+.field{display:flex;flex-direction:column;gap:6px}
+.field label,.field legend{font-size:13px;font-weight:600;padding:0}
+.field input[type=text],.field textarea{width:100%;min-height:44px;padding:10px 12px;border:1px solid var(--border-strong);border-radius:10px;background:var(--surface)}
+.field textarea{resize:vertical}
+.error{color:var(--fail-text);font-size:13px;font-weight:500}
+.choice{display:flex;align-items:flex-start;gap:10px;padding:12px;margin-top:8px;line-height:1.4;border:1px solid var(--border);border-radius:10px;cursor:pointer}
+.choice input{flex:none;margin-top:2px;width:18px;height:18px;accent-color:var(--accent)}
+fieldset{margin:0;padding:0;border:0}
+
+.dialog{width:min(520px,calc(100vw - 32px));border:1px solid var(--border);border-radius:16px;padding:24px;color:var(--ink)}
+.dialog::backdrop{background:rgba(20,26,35,.45)}
+.dialog form{display:flex;flex-direction:column;gap:16px}
+.dialog h2{font-family:var(--font-display);font-weight:600;font-size:20px}
+
+/* ---------- Chat (right, 400px) ---------- */
+.chat{background:var(--surface);border-left:1px solid var(--border);display:flex;flex-direction:column;min-height:0}
+.chat__head{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:2px}
+.chat__title{font-family:var(--font-display);font-weight:600;font-size:16px}
+.chat__ctx{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat__scroll{flex:1;min-height:0;overflow-y:auto}
+.chat__msgs{padding:16px;display:flex;flex-direction:column;gap:14px}
+.msg{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.msg--user{align-items:flex-end}
+.bubble{max-width:88%;padding:9px 13px;border-radius:14px;overflow-wrap:anywhere}
+.msg--user .bubble{background:var(--accent);color:#fff;border-bottom-right-radius:4px;white-space:pre-wrap}
+.msg--ai .bubble{background:var(--bg);border-bottom-left-radius:4px}
+.msg__link{font-weight:600;font-size:13px;padding:6px 0}
+.composer{border-top:1px solid var(--border);padding:12px 16px 10px;display:flex;flex-direction:column;gap:10px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chips:empty{display:none}
+.chip{min-height:38px;padding:0 13px;border-radius:999px;border:1px solid var(--border-strong);background:var(--surface);font-weight:500;font-size:13px;cursor:pointer}
+.chip:hover{background:var(--bg)}
+.chip--primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.chip--primary:hover{background:var(--accent-hover)}
+.composer__form{display:flex;gap:8px;align-items:flex-end}
+.composer__form textarea{flex:1;min-height:44px;max-height:120px;padding:10px 12px;border:1px solid var(--border-strong);border-radius:12px;resize:none;background:var(--surface)}
+.composer__form textarea:disabled{background:var(--bg)}
+.composer__note{font-size:12px;color:var(--muted);text-align:center}
+
+/* ---------- Smaller screens ---------- */
+@media (max-width:1180px){
+  .stepper{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .app{grid-template-columns:minmax(0,1fr) 400px}
+  .sidebar{display:none}
 }
-
-@keyframes hs-spin { to { transform: rotate(360deg); } }
-@keyframes hs-open { from { opacity: 0; transform: translateY(-4px); } }
-
-@media (max-width: 900px) {
-  .hs__agents { grid-template-columns: 1fr !important; }
-  .hs__trace-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .hs * { animation: none !important; transition: none !important; }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Harnessresultsmock.ts
-// api/mock/harnessResultsMock.ts
-//
-// MOCK results for Document-agent harness runs, so the whole flow can be
-// tested without a backend: launch a harness run in the wizard -> it shows
-// up in History -> its scorecard renders.
-//
-// Everything is generated deterministically from the launch payload (which
-// agents / models / suites / sample size were picked), seeded by the run
-// id — the same run always shows the same numbers. Nothing here is real
-// measurement data.
-import { HARNESS_AGENTS, MOCK_HARNESS_SUITES, listMockHarnessRuns, type MockHarnessRun } from './harnessMock';
-import type { EvaluationListItem } from '../../types';
-import type {
-  HarnessCell,
-  HarnessErrorType,
-  HarnessResultsResponse,
-  HarnessTrace,
-  HarnessTraceStep,
-} from '../endpoints/harnessResults';
-
-const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-// ---- seeded randomness ----------------------------------------------------
-function hash(str: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < str.length; i += 1) {
-    h ^= str.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
-}
-function rng(seed: string): () => number {
-  let a = hash(seed);
-  return () => {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-const clamp01 = (n: number) => Math.min(0.99, Math.max(0.05, n));
-
-// ---- what the mock "knows" about each agent / use case ---------------------
-// Baseline task success by agent and use case — Hermes is tuned as the
-// stronger tool caller, SEMCo-Work as the stronger document worker, so the
-// scorecard has a visible shape to it.
-const BASE_SUCCESS: Record<string, Record<string, number>> = {
-  hermes: { 'Tool Calling': 0.88, 'Document reading': 0.71, 'Spreadsheet editing': 0.62, 'Document editing': 0.55 },
-  cowork: { 'Tool Calling': 0.79, 'Document reading': 0.83, 'Spreadsheet editing': 0.74, 'Document editing': 0.81 },
-};
-const STEP_RANGE: Record<string, [number, number]> = {
-  'Tool Calling': [3, 5],
-  'Document reading': [6, 9],
-  'Spreadsheet editing': [9, 14],
-  'Document editing': [11, 16],
-};
-const ERROR_WEIGHTS: Record<string, Record<HarnessErrorType, number>> = {
-  hermes: { wrong_tool: 0.2, wrong_argument: 0.3, gave_up: 0.15, loop: 0.25, file_broken: 0.1 },
-  cowork: { wrong_tool: 0.15, wrong_argument: 0.2, gave_up: 0.3, loop: 0.1, file_broken: 0.25 },
-};
-const ERROR_TYPES: HarnessErrorType[] = ['wrong_tool', 'wrong_argument', 'gave_up', 'loop', 'file_broken'];
-
-const TASKS: Record<string, string[]> = {
-  'Tool Calling': [
-    'Book the cheapest direct flight and add it to the calendar',
-    'Convert 250 EUR to JPY, then email the result',
-    'Answer without tools: what is the capital of Australia?',
-    'Look up two orders in parallel and compare delivery dates',
-  ],
-  'Document reading': [
-    'What was FY2023 operating margin in the annual report?',
-    'Find the year-over-year change in free cash flow',
-    'Which segment had the highest capital expenditure?',
-  ],
-  'Spreadsheet editing': [
-    'Add a VLOOKUP column for region and total by quarter',
-    'Remove duplicate customer rows and fix the date format',
-    'Rebuild the broken SUMIFS on the summary sheet',
-  ],
-  'Document editing': [
-    'Update the pricing table in the Word proposal',
-    'Make a 6-slide deck from the quarterly report',
-    'Write a one-page user guide from the release notes',
-    'Summarise the incident review for leadership',
-  ],
-};
-const TOOLS: Record<string, string[]> = {
-  'Tool Calling': ['search_flights', 'get_exchange_rate', 'send_email', 'calendar.create', 'orders.lookup'],
-  'Document reading': ['pdf.open', 'pdf.search', 'pdf.read_page', 'calculator'],
-  'Spreadsheet editing': ['xlsx.open', 'xlsx.read_range', 'xlsx.write_formula', 'xlsx.delete_rows', 'xlsx.save'],
-  'Document editing': ['docx.open', 'docx.find_table', 'docx.update_cell', 'pptx.add_slide', 'file.save'],
-};
-const ERROR_NOTE: Record<HarnessErrorType, string> = {
-  wrong_tool: 'Called a tool that cannot do this step',
-  wrong_argument: 'Right tool, wrong argument value',
-  gave_up: 'Stopped before the task was finished',
-  loop: 'Repeated the same call again, then was stopped',
-  file_broken: 'Output file could not be opened by the checker',
-};
-
-// ---- generator --------------------------------------------------------------
-function buildResults(run: MockHarnessRun): HarnessResultsResponse {
-  const { payload } = run;
-  const suites = payload.suites
-    .map((s) => ({ run: s, meta: MOCK_HARNESS_SUITES.find((m) => m.id === s.dataset_id) }))
-    .filter((s): s is { run: (typeof payload.suites)[number]; meta: (typeof MOCK_HARNESS_SUITES)[number] } => Boolean(s.meta));
-
-  const cells: HarnessCell[] = [];
-  const traces: HarnessTrace[] = [];
-
-  payload.agents.forEach((agent) => {
-    payload.model_ids.forEach((modelId) => {
-      suites.forEach(({ run: suiteRun, meta }) => {
-        const useCase = meta.use_case || 'Tool Calling';
-        const rand = rng(`${run.id}|${agent}|${modelId}|${meta.id}`);
-        // run_samples 0 = the full suite (same convention as the launch payload)
-        const tasks =
-          suiteRun.run_samples > 0 ? Math.min(suiteRun.run_samples, meta.question_count) : meta.question_count;
-
-        const modelShift = ((hash(modelId) % 9) - 4) / 100; // -0.04 … +0.04 per model
-        const success = clamp01((BASE_SUCCESS[agent]?.[useCase] ?? 0.7) + modelShift + (rand() - 0.5) * 0.06);
-        const passed = Math.round(tasks * success);
-        const failed = tasks - passed;
-
-        const [minSteps, maxSteps] = STEP_RANGE[useCase] ?? [5, 9];
-        const avgSteps = minSteps + rand() * (maxSteps - minSteps);
-        const wasted = avgSteps * (0.08 + rand() * 0.17);
-        const tokens = Math.round(avgSteps * (1500 + rand() * 700));
-
-        // spread the failed tasks over the error types
-        const weights = { ...(ERROR_WEIGHTS[agent] ?? ERROR_WEIGHTS.hermes) };
-        if (useCase === 'Tool Calling') weights.file_broken = 0; // no output file to break
-        const weightSum = ERROR_TYPES.reduce((n, t) => n + weights[t], 0);
-        const errors = { wrong_tool: 0, wrong_argument: 0, gave_up: 0, loop: 0, file_broken: 0 };
-        let left = failed;
-        ERROR_TYPES.forEach((t, i) => {
-          const n = i === ERROR_TYPES.length - 1 ? left : Math.min(left, Math.round((failed * weights[t]) / weightSum));
-          errors[t] = n;
-          left -= n;
-        });
-        if (useCase === 'Tool Calling' && errors.file_broken > 0) {
-          errors.wrong_argument += errors.file_broken;
-          errors.file_broken = 0;
-        }
-
-        cells.push({
-          agent,
-          model_id: modelId,
-          suite_id: meta.id,
-          tasks,
-          passed,
-          tool_call_accuracy: clamp01(success + 0.04 + (rand() - 0.5) * 0.05),
-          avg_steps: Number(avgSteps.toFixed(1)),
-          wasted_steps: Number(wasted.toFixed(1)),
-          faithfulness:
-            useCase === 'Document reading' || useCase === 'Document editing' ? clamp01(0.8 + rand() * 0.15) : null,
-          tokens_per_task: tokens,
-          cost_per_task: Number(((tokens / 1_000_000) * 6).toFixed(4)),
-          time_per_task: Number((avgSteps * (3.4 + rand() * 1.6)).toFixed(1)),
-          errors,
-        });
-
-        // trace store sample: one passing and (if any) one failing task per cell
-        if (payload.harness.save_traces) {
-          const taskPool = TASKS[useCase] ?? TASKS['Tool Calling'];
-          const toolPool = TOOLS[useCase] ?? TOOLS['Tool Calling'];
-          // pick one of the error types this cell actually had, so the sample varies
-          const present = ERROR_TYPES.filter((t) => errors[t] > 0);
-          const failType = present.length > 0 ? present[Math.floor(rand() * present.length)] : null;
-          [true, ...(failed > 0 ? [false] : [])].forEach((ok, k) => {
-            const stepCount = Math.max(2, Math.round(avgSteps + (ok ? -1 : 2)));
-            const steps: HarnessTraceStep[] = Array.from({ length: stepCount }).map((_, i) => {
-              const last = i === stepCount - 1;
-              const tool =
-                !ok && failType === 'loop' && i > 1 ? toolPool[1 % toolPool.length] : toolPool[i % toolPool.length];
-              return {
-                tool,
-                summary: last && !ok && failType ? ERROR_NOTE[failType] : last ? 'Returned the final answer' : `Step ${i + 1} completed`,
-                ms: Math.round(400 + rand() * 4200),
-                ok: ok || !last,
-              };
-            });
-            traces.push({
-              id: `${run.id}-${agent}-${hash(modelId + meta.id) % 1000}-${k}`,
-              agent,
-              model_id: modelId,
-              suite_id: meta.id,
-              task: taskPool[Math.floor(rand() * taskPool.length)],
-              passed: ok,
-              tokens: Math.round(stepCount * (1500 + rand() * 700)),
-              time_sec: Number((steps.reduce((n, s) => n + s.ms, 0) / 1000).toFixed(1)),
-              error_type: ok ? null : failType,
-              steps,
-            });
-          });
-        }
-      });
-    });
-  });
-
-  return {
-    evaluation_id: run.id,
-    name: payload.evaluation_name,
-    agents: payload.agents.map((id) => ({ id, title: HARNESS_AGENTS.find((a) => a.id === id)?.title ?? id })),
-    model_ids: payload.model_ids,
-    suites: suites.map(({ meta }) => ({ id: meta.id, name: meta.name, use_case: meta.use_case || '' })),
-    selected_metrics: payload.selected_metrics,
-    settings: payload.harness,
-    cells,
-    traces,
-  };
-}
-
-// ---- mock "API" ---------------------------------------------------------------
-export async function mockGetHarnessResults(evaluationId: string): Promise<HarnessResultsResponse> {
-  await delay(500);
-  const run = listMockHarnessRuns().find((r) => r.id === evaluationId);
-  if (!run) throw new Error('Harness run not found.');
-  return buildResults(run);
-}
-
-// History list rows for the mock runs (newest first). In the real flow these
-// come back from GET /evaluations like any other evaluation; while mocked,
-// History.tsx merges them in on page 1.
-export function listMockHarnessEvaluations(): EvaluationListItem[] {
-  return listMockHarnessRuns().map((run) => {
-    const res = buildResults(run);
-    const byAgent = res.agents.map((a) => {
-      const own = res.cells.filter((c) => c.agent === a.id);
-      const tasks = own.reduce((n, c) => n + c.tasks, 0);
-      const passed = own.reduce((n, c) => n + c.passed, 0);
-      return { title: a.title, rate: tasks > 0 ? passed / tasks : 0 };
-    });
-    const best = [...byAgent].sort((x, y) => y.rate - x.rate)[0];
-    return {
-      id: run.id,
-      name: run.payload.evaluation_name,
-      description: 'Document-agent harness (mock)',
-      eval_type: 'agent_harness',
-      dataset_id: res.suites[0]?.id ?? '',
-      datasets_config: res.suites.map((s) => ({ dataset_id: s.id })),
-      benchmark: res.suites.map((s) => s.name).join(', '),
-      model_ids: run.payload.model_ids,
-      selected_metrics: run.payload.selected_metrics,
-      run_samples: run.payload.suites[0]?.run_samples ?? 0,
-      selected_category: [],
-      status: 'completed',
-      progress: 100,
-      total_questions: res.cells.reduce((n, c) => n + c.tasks, 0),
-      top_model: best ? best.title : null,
-      top_score: best ? Math.round(best.rate * 100) : null,
-      created_at: run.created_at,
-      started_at: run.created_at,
-      completed_at: run.created_at,
-      report: null,
-    };
-  });
+@media (max-width:820px){
+  html,body{height:auto}
+  .app{height:auto;display:flex;flex-direction:column}
+  .main{overflow:visible;padding:20px 16px 28px}
+  .chat{border-left:0;border-top:1px solid var(--border);height:75vh}
+  .topbar{flex-wrap:wrap;padding:8px 16px}
 }
