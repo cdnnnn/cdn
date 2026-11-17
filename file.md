@@ -357,30 +357,20 @@ const ModelRow = memo(function ModelRow({ m, on, health, providerName, category,
       </td>
       <td>
         {health === 'success' && (
-          <span className={`${styles['ev__health-badge']} ${styles['ev__health-badge--success']}`}>
-            <ShieldCheck size={12} /> Available
-          </span>
+          <span className={`${styles['ev__health-badge']} ${styles['ev__health-badge--success']}`}>Healthy</span>
         )}
         {health === 'failed' && (
-          <button
-            type="button"
-            className={`${styles['ev__health-badge']} ${styles['ev__health-badge--failed']}`}
-            onClick={() => onCheck(m.id)}
-            title="Retry health check"
-          >
-            <ShieldAlert size={12} /> Unavailable, retry
-          </button>
-        )}
-        {health === 'loading' && (
-          <span className={`${styles['ev__health-badge']} ${styles['ev__health-badge--loading']}`}>
-            <Loader2 size={12} className={styles.ev__spin} /> Checking…
+          <span className={styles['ev__health-fail']}>
+            <span className={`${styles['ev__health-badge']} ${styles['ev__health-badge--failed-pill']}`}>Failed</span>
+            <button type="button" className={styles['ev__health-retry']} onClick={() => onCheck(m.id)}>
+              Retry
+            </button>
           </span>
         )}
-        {health === 'idle' && (
-          <button type="button" className={styles['ev__health-check-btn']} onClick={() => onCheck(m.id)}>
-            <HeartPulse size={12} /> Check health
-          </button>
+        {health === 'loading' && (
+          <span className={`${styles['ev__health-badge']} ${styles['ev__health-badge--loading']}`}>Checking</span>
         )}
+        {health === 'idle' && <span className={styles['ev__health-idle']}>Not checked</span>}
       </td>
       <td className={styles.ev__tnum}>{formatContextWindow(m.context_window)}</td>
       <td className={styles.ev__tnum}>{formatPrice(inputPrice)}</td>
@@ -847,14 +837,16 @@ export default function NewEvaluation() {
   // into its own columns via modelsByCategory below, not through this).
   // Typing stays instant: the filtered list follows the search box a beat
   // later (useDeferredValue) instead of re-filtering on every keystroke.
+  const [modelProvider, setModelProvider] = useState<string>('all');
   const deferredModelSearch = useDeferredValue(modelSearch);
   const deferredRagSearch = useDeferredValue(ragCategorySearch);
   const filteredModels = useMemo(
     () =>
       availableModels
         .filter((m) => (m?.category ?? '').toLowerCase() === 'llm')
+        .filter((m) => modelProvider === 'all' || m.provider_id === modelProvider)
         .filter((m) => (m?.name ?? '').toLowerCase().includes(deferredModelSearch.trim().toLowerCase())),
-    [availableModels, deferredModelSearch]
+    [availableModels, deferredModelSearch, modelProvider]
   );
 
   // RAG-only: exactly three model categories are possible — Embedding,
@@ -883,6 +875,20 @@ export default function NewEvaluation() {
     return map;
   }, [modelsByCategory, deferredRagSearch]);
 
+  const modelProviderChips = useMemo(() => {
+    const llm = availableModels.filter((m) => (m?.category ?? '').toLowerCase() === 'llm');
+    const counts = new Map<string, number>();
+    llm.forEach((m) => counts.set(m.provider_id, (counts.get(m.provider_id) ?? 0) + 1));
+    return [
+      { id: 'all', label: 'All', count: llm.length },
+      ...Array.from(counts.entries()).map(([id, count]) => ({
+        id,
+        label: providers.find((p) => p?.id === id)?.name ?? id,
+        count,
+      })),
+    ];
+  }, [availableModels, providers]);
+
   // Only the first page of each list is drawn (and health-checked); "Show
   // more" adds another page. Searching starts again from the first page.
   const [refreshTick, setRefreshTick] = useState(0);
@@ -890,7 +896,7 @@ export default function NewEvaluation() {
   const limitFor = (key: string) => modelLimit[key] ?? MODEL_PAGE_SIZE;
   const showMoreModels = (key: string) =>
     setModelLimit((prev) => ({ ...prev, [key]: (prev[key] ?? MODEL_PAGE_SIZE) + MODEL_PAGE_SIZE }));
-  useEffect(() => setModelLimit({}), [deferredModelSearch, deferredRagSearch]);
+  useEffect(() => setModelLimit({}), [deferredModelSearch, deferredRagSearch, modelProvider]);
   const visibleModelIds = useMemo(() => {
     const ids: string[] = [];
     if (draft.type === 'rag') {
@@ -2365,7 +2371,6 @@ export default function NewEvaluation() {
                         <p className={styles['ev__q-title']}>System under test</p>
                         <div className={styles.ev__tiles} role="radiogroup" aria-label="System under test">
                           {TYPE_OPTIONS.map((o) => {
-                            const Icon = o.icon;
                             const on = draft.type === o.value;
                             return (
                               <button
@@ -2383,7 +2388,6 @@ export default function NewEvaluation() {
                                   <span className={`${styles.ev__radio} ${on ? styles['ev__radio--on'] : ''}`} />
                                   <span className={styles['ev__tile-name']}>{o.label}</span>
                                   {o.disabled && <span className={styles.ev__badge}>Soon</span>}
-                                  <Icon size={16} className={styles['ev__tile-icon']} />
                                 </span>
                                 <span className={styles['ev__tile-desc']}>{o.sub}</span>
                               </button>
@@ -2626,6 +2630,21 @@ export default function NewEvaluation() {
                                   value={modelSearch}
                                   onChange={(e) => setModelSearch(e.target.value)}
                                 />
+                              </div>
+                            )}
+                            {!isRag && modelProviderChips.length > 2 && (
+                              <div className={styles['ev__pills']} role="group" aria-label="Filter by provider">
+                                {modelProviderChips.map((c) => (
+                                  <button
+                                    key={c.id}
+                                    type="button"
+                                    aria-pressed={modelProvider === c.id}
+                                    className={`${styles.ev__pill} ${modelProvider === c.id ? styles['ev__pill--on'] : ''}`}
+                                    onClick={() => setModelProvider(c.id)}
+                                  >
+                                    {c.label} <span>{c.count}</span>
+                                  </button>
+                                ))}
                               </div>
                             )}
                             <button
@@ -4232,10 +4251,6 @@ export default function NewEvaluation() {
     </div>
   );
 }
-
-
-
-
 
 
 
@@ -7763,5 +7778,83 @@ $ev-base-font: 0.8125rem;
   @media (max-width: 640px) {
     &__review-line { flex-wrap: wrap; }
     &__review-k { width: 100%; }
+  }
+}
+
+// ---- match the approved mocks -------------------------------------------------
+.ev {
+  &__pills { display: flex; flex-wrap: wrap; gap: 8px; }
+  &__pill {
+    min-height: 36px;
+    padding: 0 14px;
+    font: inherit;
+    font-weight: 600;
+    border: 1px solid $line;
+    border-radius: 999px;
+    background: $card;
+    color: $ink-2;
+    cursor: pointer;
+
+    span { margin-left: 4px; font-weight: 500; }
+    &:hover { border-color: $ink-3; }
+    &:focus-visible { outline: 2px solid $signal; outline-offset: 2px; }
+    &--on { border-color: $signal; background: $wash; color: $signal; }
+  }
+
+  &__table &__health-badge {
+    font-family: inherit;
+    font-size: 0.92em;
+    font-weight: 600;
+    letter-spacing: 0;
+    padding: 3px 10px;
+  }
+  &__health-badge--failed-pill { color: $danger; background: $danger-wash; }
+  &__health-fail { display: inline-flex; align-items: center; gap: 10px; }
+  &__health-retry {
+    min-height: 32px;
+    padding: 0 4px;
+    font: inherit;
+    font-weight: 600;
+    border: 0;
+    background: transparent;
+    color: $signal;
+    cursor: pointer;
+
+    &:focus-visible { outline: 2px solid $signal; outline-offset: 1px; }
+  }
+  &__health-idle { color: $ink-2; }
+  &__table &__health-badge--loading { background: $card; border-color: $line; color: $ink; }
+
+  // grey panels with white items, as in the mocks
+  &__side { border: 0; background: $paper; border-radius: 14px; padding: 18px; }
+  &__side-item { background: $card; border: 1px solid $line; border-radius: 10px; padding: 10px 12px; }
+  &__follow { border-left: 0; background: $paper; border-radius: 14px; padding: 20px; }
+  &__follow-lead { color: $ink-2; font-weight: 600; font-size: 0.95em; }
+  &__cover-item {
+    padding: 10px 14px;
+    border: 1px solid $line;
+    border-radius: 10px;
+    background: $card;
+    font-weight: 600;
+
+    &--off { border-style: dashed; background: transparent; font-weight: 400; }
+  }
+  &__cover-item + &__cover-item { margin-top: 0; }
+  &__srow-count { background: transparent; padding: 0; color: $ink; font-weight: 700; }
+  &__srow-count--empty { color: $danger; }
+  &__tile-head .ev__radio { flex-shrink: 0; }
+}
+
+.ev {
+  &__cover-item .ev__check { border-radius: 50%; }
+  &__srow-side { flex-direction: column; align-items: flex-end; gap: 6px; }
+  &__srow-side .ev__dcard-preview-btn {
+    border: 0;
+    background: transparent;
+    padding: 4px 0;
+    min-height: 32px;
+    color: $signal;
+    font-weight: 600;
+    box-shadow: none;
   }
 }
