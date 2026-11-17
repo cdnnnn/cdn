@@ -1,30 +1,17 @@
-import {
-  Component,
-  memo,
-  useCallback,
-  useDeferredValue,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ErrorInfo,
-  type ReactNode,
-} from 'react';
+import { Component, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ChevronLeft,
   ChevronRight,
   Check,
+  Minus,
+  Timer,
+  RotateCw,
   Cpu,
   Bot,
   Database,
-  Play,
-  Clock3,
   Tag,
   LayoutGrid,
-  Plug,
-  Target,
-  ClipboardCheck,
   Gavel,
   Layers,
   Loader2,
@@ -38,17 +25,9 @@ import {
   ShieldAlert,
   RefreshCw,
   Search,
-  Eye,
   X,
   AlertTriangle,
   Info,
-  Sparkles,
-  SlidersHorizontal,
-  NotebookPen,
-  ListChecks,
-  FlaskConical,
-  RotateCcw,
-  Repeat2,
   Image as ImageIcon,
   type LucideIcon,
 } from 'lucide-react';
@@ -124,11 +103,14 @@ import styles from './NewEvaluation.module.scss';
 //   - checkModelHealth(modelId: string) — GET /models/health/{model_id}
 //     Response: { success, message, model_id, response }
 //   - state.models.healthById: Record<string, 'idle'|'loading'|'success'|'failed'>
-//   - Fired automatically, in parallel, for every model in the current
-//     provider selection as soon as Step 3's model list is available (see
-//     the auto health-check effect below) — a model can't be selected
-//     until its check resolves to 'success'. The manual "Check health"
-//     button on each card still works too, e.g. to retry a failure.
+//   - Run automatically for every model in the current provider selection
+//     once Step 3's model list is available, but through a small queue
+//     (HEALTH_CONCURRENCY at a time, selected and on-screen models first —
+//     see the health-check queue below) rather than all at once, so a long
+//     model list doesn't flood the network or freeze the page. A model
+//     can't be selected until its check resolves to 'success'. The badge
+//     on each card still works too: it checks a queued model right away,
+//     or retries a failure.
 //
 // datasetsSlice:
 //   - fetchDatasets(type: string) — GET /datasets?eval_type={type}
@@ -158,13 +140,14 @@ const STAGE = [
   { title: 'Name your run', sub: 'A recognizable name makes this run easy to find later in your history.' },
   { title: 'What are you evaluating?', sub: 'The system under test shapes which datasets and metrics you can pick.' },
   { title: 'Select providers', sub: 'Choose which connected providers to draw candidate models from.' },
-  { title: 'Choose models', sub: 'Check a model\u2019s health before selecting it — only models that pass the check can be added to the run.' },
+  {
+    title: 'Choose models',
+    sub: 'Tick a model to add it. Health is checked automatically, and only models that pass can join the run.',
+  },
   { title: 'Pick a test suite', sub: 'Select a dataset to evaluate against, or upload your own.' },
-  { title: 'Configure metrics', sub: 'Choose what to measure, and optionally a model to judge open-ended answers.' },
-  { title: 'Review & launch', sub: 'Confirm the run manifest, then launch.' },
+  { title: 'Set up scoring', sub: 'Work top to bottom. Each part shows what is still missing.' },
+  { title: 'Review and launch', sub: 'This is exactly what will run. Use Edit to change any part.' },
 ];
-
-const STEP_ICONS: LucideIcon[] = [Tag, LayoutGrid, Plug, Cpu, Database, Target, ClipboardCheck];
 
 // `value` matches draft.type exactly (lowercase); `label` is for display.
 const TYPE_OPTIONS: {
@@ -202,6 +185,12 @@ const TYPE_OPTIONS: {
 ];
 
 // Only Hermes remains as a selectable framework once "Agent" is chosen.
+// Models step: how many health checks run at once, how often their results
+// are written to state, and how many model cards are added per batch.
+const HEALTH_CONCURRENCY = 4;
+const HEALTH_FLUSH_MS = 150;
+const MODEL_PAGE_SIZE = 24;
+
 const AGENT_FRAMEWORKS = [
   { id: 'hermes', title: 'Hermes', desc: 'Lightweight tool-calling agent runtime' },
 ];
@@ -300,6 +289,65 @@ const SUGGESTED_NAMES = [
   'GLM-4.6 vs Claude',
 ];
 
+// Type step: what each system under test is about — shown in the "About"
+// panel under the three cards for whichever one is selected.
+const TYPE_ABOUT: Record<string, { tagline: string; measures: string[]; goodFor: string[]; flow: string[] }> = {
+  model: {
+    tagline: 'Models answer the same questions directly, with no tools and no retrieval.',
+    measures: [
+      'Answer quality on every question, per model',
+      'Pass and fail counts for each metric you pick',
+      'A side-by-side ranking with a top model',
+    ],
+    goodFor: [
+      'Choosing between models or providers',
+      'Checking a new model version against the current one',
+      'Benchmarking on standard suites or your own dataset',
+    ],
+    flow: [
+      'Every selected model answers the same set of questions.',
+      'Answers are scored by your metrics, with a judge model.',
+      'Models are ranked side by side in History.',
+    ],
+  },
+  agent: {
+    tagline: 'An agent plans, calls tools and works through a task over several steps.',
+    measures: [
+      'Whether multi-step tasks are actually completed',
+      'Tool use: the right tool with the right arguments',
+      'Steps, cost and time per task in the document-agent harness',
+    ],
+    goodFor: [
+      'Testing an agent before rolling it out',
+      'Comparing agents on the same tasks, such as Hermes and SEMCo-Work',
+      'Comparing the models behind an agent',
+    ],
+    flow: [
+      'The agent receives a task and plans its approach.',
+      'It calls tools and works through the steps.',
+      'The outcome is scored on task completion.',
+    ],
+  },
+  rag: {
+    tagline: 'A retrieval pipeline finds documents first, then an LLM answers from them.',
+    measures: [
+      'Whether answers stay faithful to the retrieved context',
+      'How well retrieval surfaces the right documents',
+      'The combined quality of embedding, reranker and LLM',
+    ],
+    goodFor: [
+      'Comparing LLMs on the same retrieval setup',
+      'Trying different Top K values',
+      'Checking grounding for a knowledge assistant',
+    ],
+    flow: [
+      'The embedding model and reranker fetch the Top K documents for each question.',
+      'Each LLM answers using that retrieved context.',
+      'Answers are scored for accuracy and grounding.',
+    ],
+  },
+};
+
 const NAMING_TIPS = [
   "Include what you're testing — a model, a product feature, or a use case.",
   'Add a date or version so you can track changes over time (e.g. "Q3", "v2").',
@@ -316,68 +364,6 @@ function formatContextWindow(tokens: number | null | undefined): string {
 function formatPrice(price: number | null | undefined): string {
   return price === null || price === undefined || Number.isNaN(price) ? '—' : `$${price.toFixed(2)}`;
 }
-
-// One row of the Models table. Memoised on plain values and stable callbacks,
-// so a health result for one model re-renders that row only — not the whole
-// list or the wizard around it.
-type ModelRowProps = {
-  m: Model;
-  on: boolean;
-  health: HealthStatus;
-  providerName: string;
-  category?: string; // set for RAG single-select categories
-  onToggle: (id: string, category?: string) => void;
-  onCheck: (id: string) => void;
-};
-
-const ModelRow = memo(function ModelRow({ m, on, health, providerName, category, onToggle, onCheck }: ModelRowProps) {
-  const locked = health === 'failed' && !on;
-  const caps = (m as any).capabilities as string[] | undefined;
-  const inputPrice = (m as any).input_price as number | null | undefined;
-  const outputPrice = (m as any).output_price as number | null | undefined;
-  const accuracy = (m as any).accuracy_score as number | null | undefined;
-  const meta = [
-    providerName,
-    ...(caps ?? []).slice(0, 3),
-    typeof accuracy === 'number' && Number.isFinite(accuracy) ? `${accuracy.toFixed(1)}% accuracy` : '',
-  ]
-    .filter(Boolean)
-    .join(', ');
-
-  return (
-    <tr className={`${on ? styles['ev__trow--on'] : ''} ${locked ? styles['ev__trow--locked'] : ''}`}>
-      <td>
-        <label className={styles['ev__tcell-model']}>
-          <input type="checkbox" checked={on} disabled={locked} onChange={() => onToggle(m.id, category)} />
-          <span className={styles['ev__tcell-text']}>
-            <span className={styles.ev__tname}>{m.name || 'Unnamed model'}</span>
-            <span className={styles.ev__tsub}>{meta}</span>
-          </span>
-        </label>
-      </td>
-      <td>
-        {health === 'success' && (
-          <span className={`${styles['ev__health-badge']} ${styles['ev__health-badge--success']}`}>Healthy</span>
-        )}
-        {health === 'failed' && (
-          <span className={styles['ev__health-fail']}>
-            <span className={`${styles['ev__health-badge']} ${styles['ev__health-badge--failed-pill']}`}>Failed</span>
-            <button type="button" className={styles['ev__health-retry']} onClick={() => onCheck(m.id)}>
-              Retry
-            </button>
-          </span>
-        )}
-        {health === 'loading' && (
-          <span className={`${styles['ev__health-badge']} ${styles['ev__health-badge--loading']}`}>Checking</span>
-        )}
-        {health === 'idle' && <span className={styles['ev__health-idle']}>Not checked</span>}
-      </td>
-      <td className={styles.ev__tnum}>{formatContextWindow(m.context_window)}</td>
-      <td className={styles.ev__tnum}>{formatPrice(inputPrice)}</td>
-      <td className={styles.ev__tnum}>{formatPrice(outputPrice)}</td>
-    </tr>
-  );
-});
 
 function providerInitials(name: string | null | undefined): string {
   const safeName = name?.trim() || '';
@@ -421,22 +407,6 @@ const DATASET_TYPE_FILTERS: { value: DatasetTypeFilter; label: string }[] = [
 // Skeleton placeholder counts — just enough to plausibly fill the grid
 // while a refresh is in flight, not meant to match the real result count.
 const SKELETON_CARD_COUNT = 6;
-
-// Models are drawn and health-checked a page at a time. Checks run through a
-// small queue (a few at once) so a long model list never fires hundreds of
-// requests together.
-const SCORER_GROUPS: { label: string; names: string[] }[] = [
-  { label: 'Outcome', names: ['Task Success Rate', 'Task Completion', 'Answer Faithfulness'] },
-  { label: 'Tool use', names: ['Tool Correctness', 'Tool-call Accuracy'] },
-  { label: 'Efficiency', names: ['Steps per Task', 'Wasted Steps'] },
-  { label: 'Cost and time', names: ['Cost per Task', 'Time per Task'] },
-  { label: 'Errors', names: ['Error Types'] },
-];
-
-const MODEL_PAGE_SIZE = 15;
-const HEALTH_CONCURRENCY = 4;
-const HEALTH_TIMEOUT_MS = 20000;
-const HEALTH_FRESH_MS = 5 * 60 * 1000;
 const SKELETON_CHIP_COUNT = 8;
 
 // ---------------------------------------------------------------------------
@@ -518,6 +488,9 @@ export default function NewEvaluation() {
   // per searchable step: Providers, Models, Test Suite, Metrics. ----------
   const [providerSearch, setProviderSearch] = useState('');
   const [modelSearch, setModelSearch] = useState('');
+  // Models table: view-only provider filter (All / one provider). Doesn't
+  // change draft.providers — that's still set on the Providers step.
+  const [modelProviderFilter, setModelProviderFilter] = useState<string>('all');
   // RAG-only: one independent search box per category (Embedding/
   // Reranker/LLM) instead of the single global model search used by the
   // Model/Agent grid — see RAG_CATEGORIES below.
@@ -541,6 +514,9 @@ export default function NewEvaluation() {
   // NotReady).
   const [verifiedModelIds, setVerifiedModelIds] = useState<Record<string, true>>({});
   const [modelsFetchedThisVisit, setModelsFetchedThisVisit] = useState(false);
+  // True while GET /models is in flight — the health-check queue waits for
+  // the fresh list instead of checking models that are about to be replaced.
+  const modelsBusyRef = useRef(false);
   const [datasetsRefreshing, setDatasetsRefreshing] = useState(false);
   const [metricsRefreshing, setMetricsRefreshing] = useState(false);
   // Tracked locally rather than read from the datasets slice's own `error`
@@ -665,8 +641,10 @@ export default function NewEvaluation() {
     if (step !== 3 || modelsFetchedRef.current) return;
     modelsFetchedRef.current = true;
     (async () => {
+      modelsBusyRef.current = true;
       setModelsLoading(true);
       const result = await dispatch(fetchModels());
+      modelsBusyRef.current = false;
       setModelsLoading(false);
       if (fetchModels.rejected.match(result)) {
         modelsFetchedRef.current = false;
@@ -835,18 +813,12 @@ export default function NewEvaluation() {
   // Model/Agent grid: LLM-category models only — Embedding and Reranker
   // models are only meaningful for RAG (which groups all three categories
   // into its own columns via modelsByCategory below, not through this).
-  // Typing stays instant: the filtered list follows the search box a beat
-  // later (useDeferredValue) instead of re-filtering on every keystroke.
-  const [modelProvider, setModelProvider] = useState<string>('all');
-  const deferredModelSearch = useDeferredValue(modelSearch);
-  const deferredRagSearch = useDeferredValue(ragCategorySearch);
   const filteredModels = useMemo(
     () =>
       availableModels
         .filter((m) => (m?.category ?? '').toLowerCase() === 'llm')
-        .filter((m) => modelProvider === 'all' || m.provider_id === modelProvider)
-        .filter((m) => (m?.name ?? '').toLowerCase().includes(deferredModelSearch.trim().toLowerCase())),
-    [availableModels, deferredModelSearch, modelProvider]
+        .filter((m) => (m?.name ?? '').toLowerCase().includes(modelSearch.trim().toLowerCase())),
+    [availableModels, modelSearch]
   );
 
   // RAG-only: exactly three model categories are possible — Embedding,
@@ -869,45 +841,11 @@ export default function NewEvaluation() {
   const filteredModelsByCategory = useMemo(() => {
     const map = new Map<string, Model[]>();
     RAG_CATEGORIES.forEach((cat) => {
-      const term = (deferredRagSearch[cat] ?? '').trim().toLowerCase();
+      const term = (ragCategorySearch[cat] ?? '').trim().toLowerCase();
       map.set(cat, (modelsByCategory.get(cat) ?? []).filter((m) => (m?.name ?? '').toLowerCase().includes(term)));
     });
     return map;
-  }, [modelsByCategory, deferredRagSearch]);
-
-  const modelProviderChips = useMemo(() => {
-    const llm = availableModels.filter((m) => (m?.category ?? '').toLowerCase() === 'llm');
-    const counts = new Map<string, number>();
-    llm.forEach((m) => counts.set(m.provider_id, (counts.get(m.provider_id) ?? 0) + 1));
-    return [
-      { id: 'all', label: 'All', count: llm.length },
-      ...Array.from(counts.entries()).map(([id, count]) => ({
-        id,
-        label: providers.find((p) => p?.id === id)?.name ?? id,
-        count,
-      })),
-    ];
-  }, [availableModels, providers]);
-
-  // Only the first page of each list is drawn (and health-checked); "Show
-  // more" adds another page. Searching starts again from the first page.
-  const [refreshTick, setRefreshTick] = useState(0);
-  const [modelLimit, setModelLimit] = useState<Record<string, number>>({});
-  const limitFor = (key: string) => modelLimit[key] ?? MODEL_PAGE_SIZE;
-  const showMoreModels = (key: string) =>
-    setModelLimit((prev) => ({ ...prev, [key]: (prev[key] ?? MODEL_PAGE_SIZE) + MODEL_PAGE_SIZE }));
-  useEffect(() => setModelLimit({}), [deferredModelSearch, deferredRagSearch, modelProvider]);
-  const visibleModelIds = useMemo(() => {
-    const ids: string[] = [];
-    if (draft.type === 'rag') {
-      RAG_CATEGORIES.forEach((cat) =>
-        (filteredModelsByCategory.get(cat) ?? []).slice(0, modelLimit[cat] ?? MODEL_PAGE_SIZE).forEach((m) => ids.push(m.id))
-      );
-    } else {
-      filteredModels.slice(0, modelLimit.all ?? MODEL_PAGE_SIZE).forEach((m) => ids.push(m.id));
-    }
-    return ids;
-  }, [draft.type, filteredModels, filteredModelsByCategory, modelLimit]);
+  }, [modelsByCategory, ragCategorySearch]);
 
   // Counts per dataset_type, for the filter chip labels — computed off the
   // full (unsearched, unfiltered) list so the counts don't shift as the
@@ -968,16 +906,12 @@ export default function NewEvaluation() {
   };
 
   const refreshModels = async () => {
+    modelsBusyRef.current = true;
     setModelsLoading(true);
-    // A fresh list means every earlier result is stale: forget them so the
-    // visible rows are checked again.
-    healthQueueRef.current = [];
-    healthCheckedAtRef.current = {};
-    setVerifiedModelIds({});
     const result = await dispatch(fetchModels());
+    modelsBusyRef.current = false;
     setModelsLoading(false);
     if (!fetchModels.rejected.match(result)) setModelsFetchedThisVisit(true);
-    setRefreshTick((n) => n + 1);
   };
 
   const refreshDatasets = async () => {
@@ -1197,101 +1131,133 @@ export default function NewEvaluation() {
     }
   };
 
-  // Health checks go through one queue: at most HEALTH_CONCURRENCY run at a
-  // time, selected and on-screen models go first, and a result that is still
-  // fresh is never fetched again. A result only counts as verified once it
-  // has completed this visit (verifiedModelIds); a stale 'success' left in
-  // Redux from an earlier visit doesn't count until it is re-confirmed.
-  // Completed checks are flushed to state in batches so ten results landing
-  // together cause one re-render, not ten.
-  const healthQueueRef = useRef<string[]>([]);
-  const healthInFlightRef = useRef<Set<string>>(new Set());
-  const healthCheckedAtRef = useRef<Record<string, number>>({});
-  const verifiedBatchRef = useRef<Record<string, true>>({});
-  const verifiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const aliveRef = useRef(true);
+  // Manual, single-model health check — still available via the "Check
+  // health" button on each card, alongside the automatic parallel check
+  // below.
+  // Every health check goes through here so we know when one has actually
+  // *completed this visit* (verifiedModelIds) — a stale 'success' left in
+  // Redux from an earlier visit doesn't count until it's re-confirmed.
+  //
+  // Completions are collected and written to state together (one render
+  // for a burst of results instead of one per model).
+  const mountedRef = useRef(true);
   useEffect(() => {
-    aliveRef.current = true;
+    mountedRef.current = true;
     return () => {
-      aliveRef.current = false;
-      healthQueueRef.current = [];
-      if (verifiedTimerRef.current) clearTimeout(verifiedTimerRef.current);
+      mountedRef.current = false;
     };
   }, []);
-
-  const pumpHealthQueue = useCallback(() => {
-    while (healthInFlightRef.current.size < HEALTH_CONCURRENCY && healthQueueRef.current.length > 0) {
-      const id = healthQueueRef.current.shift() as string;
-      if (healthInFlightRef.current.has(id)) continue;
-      healthInFlightRef.current.add(id);
-      let settled = false;
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        healthInFlightRef.current.delete(id);
-        if (!aliveRef.current) return;
-        healthCheckedAtRef.current[id] = Date.now();
-        verifiedBatchRef.current[id] = true;
-        if (!verifiedTimerRef.current) {
-          verifiedTimerRef.current = setTimeout(() => {
-            verifiedTimerRef.current = null;
-            const batch = verifiedBatchRef.current;
-            verifiedBatchRef.current = {};
-            if (aliveRef.current) setVerifiedModelIds((prev) => ({ ...prev, ...batch }));
-          }, 120);
-        }
-        pumpHealthQueue();
-      };
-      // A hung request must not hold a slot forever.
-      const timer = setTimeout(finish, HEALTH_TIMEOUT_MS);
-      Promise.resolve(dispatch(checkModelHealth(id)))
-        .catch(() => undefined)
-        .then(() => {
-          clearTimeout(timer);
-          finish();
-        });
-    }
-  }, [dispatch]);
-
-  const enqueueHealthChecks = (ids: string[], opts?: { first?: boolean; force?: boolean }) => {
-    const now = Date.now();
-    const wanted = Array.from(new Set(ids)).filter((id) => {
-      if (healthInFlightRef.current.has(id)) return false;
-      if (opts?.force) return true;
-      const fresh =
-        healthById?.[id] === 'success' &&
-        verifiedModelIds[id] &&
-        now - (healthCheckedAtRef.current[id] ?? 0) < HEALTH_FRESH_MS;
-      return !fresh;
-    });
-    if (wanted.length === 0) return;
+  const verifiedBufferRef = useRef<string[]>([]);
+  const verifiedFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const trackedHealthCheck = (modelId: string): Promise<void> => {
+    healthStartedRef.current.add(modelId);
     setVerifiedModelIds((prev) => {
-      if (!wanted.some((id) => prev[id])) return prev;
+      if (!prev[modelId]) return prev;
       const next = { ...prev };
-      wanted.forEach((id) => delete next[id]);
+      delete next[modelId];
       return next;
     });
-    const rest = healthQueueRef.current.filter((id) => !wanted.includes(id));
-    healthQueueRef.current = opts?.first ? [...wanted, ...rest] : [...rest, ...wanted];
-    pumpHealthQueue();
+    return Promise.resolve(dispatch(checkModelHealth(modelId)))
+      .catch(() => undefined)
+      .then(() => {
+        verifiedBufferRef.current.push(modelId);
+        if (verifiedFlushRef.current) return;
+        verifiedFlushRef.current = setTimeout(() => {
+          verifiedFlushRef.current = null;
+          const ids = verifiedBufferRef.current;
+          verifiedBufferRef.current = [];
+          if (!mountedRef.current) return;
+          setVerifiedModelIds((prev) => {
+            const next = { ...prev };
+            ids.forEach((id) => (next[id] = true));
+            return next;
+          });
+        }, HEALTH_FLUSH_MS);
+      });
   };
 
-  // "Check health" / "Retry" on a single row jumps the queue.
-  const runHealthCheck = (modelId: string) => enqueueHealthChecks([modelId], { first: true, force: true });
-  const runHealthCheckRef = useRef(runHealthCheck);
-  runHealthCheckRef.current = runHealthCheck;
-  const onRowCheck = useCallback((id: string) => runHealthCheckRef.current(id), []);
+  // Manual check from a card's badge: runs right away, outside the queue.
+  const runHealthCheck = (modelId: string) => {
+    void trackedHealthCheck(modelId);
+  };
 
-  // While Step 3 is open: selected models first, then the rows on screen.
-  // Re-runs when the list is fetched again, when more rows are shown, or when
-  // the search changes which rows are visible.
+  // Health-check queue. Every model in the current provider selection still
+  // gets checked automatically while Step 3 is open, but only
+  // HEALTH_CONCURRENCY at a time instead of all at once — a long model list
+  // used to fire one request per model in the same tick, which flooded the
+  // network and re-rendered the page for every response.
+  //
+  // There is no queue array: whenever a slot frees up, the next model is the
+  // first one in healthPriorityRef that hasn't been started yet. That list
+  // is rebuilt on every render (selected models, then the models on screen
+  // in their current order, then everything else), so searching, filtering
+  // or scrolling re-prioritises the remaining checks for free.
+  const autoHealthCheckedForModelsRef = useRef<typeof models | null>(null);
+  const healthStartedRef = useRef<Set<string>>(new Set());
+  const healthActiveRef = useRef(0);
+  const healthPriorityRef = useRef<string[]>([]);
+  const healthStepRef = useRef(step);
+  healthStepRef.current = step;
+  const pumpHealthQueueRef = useRef<() => void>(() => undefined);
+  pumpHealthQueueRef.current = () => {
+    if (!mountedRef.current || healthStepRef.current !== 3 || modelsBusyRef.current) return;
+    while (healthActiveRef.current < HEALTH_CONCURRENCY) {
+      const nextId = healthPriorityRef.current.find((id) => !healthStartedRef.current.has(id));
+      if (!nextId) return;
+      healthActiveRef.current += 1;
+      trackedHealthCheck(nextId).then(() => {
+        healthActiveRef.current -= 1;
+        pumpHealthQueueRef.current();
+      });
+    }
+  };
   useEffect(() => {
     if (step !== 3 || availableModels.length === 0) return;
-    const selected = draft.models.filter((id) => availableModels.some((m) => m.id === id));
-    enqueueHealthChecks(selected, { first: true });
-    enqueueHealthChecks(visibleModelIds);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, models, availableModels, visibleModelIds, refreshTick]);
+    // a fresh fetch (first visit to the step, or a manual refresh) re-checks everything
+    if (autoHealthCheckedForModelsRef.current !== models) {
+      autoHealthCheckedForModelsRef.current = models;
+      healthStartedRef.current = new Set();
+    }
+    pumpHealthQueueRef.current();
+  }, [step, models, availableModels, modelsLoading, dispatch]);
+
+  // How far the automatic checks have got, for the progress strip.
+  const healthProgress = useMemo(() => {
+    let done = 0;
+    let ok = 0;
+    availableModels.forEach((m) => {
+      const st = healthById?.[m.id];
+      if (st === 'success' || st === 'failed') done += 1;
+      if (st === 'success') ok += 1;
+    });
+    return { total: availableModels.length, done, ok };
+  }, [availableModels, healthById]);
+
+  // Model cards are added to the page in batches as the list is scrolled
+  // (MODEL_PAGE_SIZE at a time), so a long list doesn't have to build
+  // every card up front. Any change to what's listed starts again from
+  // the first batch.
+  const [modelsShown, setModelsShown] = useState(MODEL_PAGE_SIZE);
+  useEffect(() => {
+    setModelsShown(MODEL_PAGE_SIZE);
+  }, [modelSearch, modelProviderFilter, models, draft.providers]);
+  const modelsMoreRef = useRef<HTMLDivElement | null>(null);
+  const modelsHasMoreRef = useRef(false);
+  useEffect(() => {
+    const el = modelsMoreRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting) && modelsHasMoreRef.current) {
+          setModelsShown((n) => n + MODEL_PAGE_SIZE);
+        }
+      },
+      { rootMargin: '400px 0px' }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+    // re-attach when the sentinel is (re)mounted: step change, loading, or a new batch
+  }, [step, modelsLoading, modelsShown, modelSearch, modelProviderFilter, draft.type]);
 
   const toggle = (list: string[], value: string) =>
     list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
@@ -1475,10 +1441,6 @@ export default function NewEvaluation() {
     [judgeCandidateModels, judgeSearch]
   );
 
-  // Closes the Judge Model info popover on any click outside it (the
-  // toggle button itself is excluded so clicking it again still just
-  // toggles, rather than closing-then-immediately-reopening).
-
   // Auto-scrolls down to the launch error message on the Review & Launch
   // step whenever a launch attempt fails — the error renders at the very
   // bottom of that step's content, below the whole review summary, so
@@ -1497,15 +1459,9 @@ export default function NewEvaluation() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [judgeCandidateModels, draft.judgeModelId]);
 
-  // A model that has not been checked yet can still be ticked: ticking moves
-  // it to the front of the health queue, and Continue stays blocked until the
-  // check passes. Only a model whose check already failed is locked.
-  const canTickModel = (modelId: string) => healthById?.[modelId] !== 'failed';
-
   const toggleModel = (modelId: string) => {
     const alreadySelected = draft.models.includes(modelId);
-    if (!alreadySelected && !canTickModel(modelId)) return;
-    if (!alreadySelected) enqueueHealthChecks([modelId], { first: true });
+    if (!alreadySelected && !isModelSelectable(modelId)) return;
     dispatch(setDraft({ models: toggle(draft.models, modelId) }));
     if (alreadySelected) {
       // Deselecting — drop its retry config so draft.modelRetryConfig
@@ -1533,8 +1489,7 @@ export default function NewEvaluation() {
   // toggleModel.
   const toggleModelForCategory = (modelId: string, categoryIds: string[]) => {
     const alreadySelected = draft.models.includes(modelId);
-    if (!alreadySelected && !canTickModel(modelId)) return;
-    if (!alreadySelected) enqueueHealthChecks([modelId], { first: true });
+    if (!alreadySelected && !isModelSelectable(modelId)) return;
 
     const categoryIdSet = new Set(categoryIds);
     const nextModels = alreadySelected
@@ -1555,69 +1510,281 @@ export default function NewEvaluation() {
     dispatch(setDraft({ models: nextModels, modelRetryConfig: nextRetryConfig }));
   };
 
-  // Stable handler for ModelRow (latest toggle functions via a ref, so the
-  // rows' props don't change on every render and memoisation holds).
-  const rowToggleRef = useRef<(id: string, category?: string) => void>(() => undefined);
-  rowToggleRef.current = (id, category) => {
-    if (category && category !== 'LLM') {
-      toggleModelForCategory(id, (modelsByCategory.get(category) ?? []).map((x) => x.id));
-    } else {
-      toggleModel(id);
-    }
-  };
-  const onRowToggle = useCallback((id: string, category?: string) => rowToggleRef.current(id, category), []);
+  // Shared model-card renderer — used by both the normal grid (Model/Agent,
+  // and RAG's own toggle behavior isn't baked in here) and the RAG
+  // per-category columns below. `onToggle` is whichever selection rule
+  // applies (toggleModel vs. toggleModelForCategory); everything else
+  // about the card (health check, stats, retry/timeout panel) is
+  // identical either way.
+  // inlineRetry: show the per-model retry/timeout fields inside the card
+  // (RAG columns). The Model/Agent view passes false — those fields live in
+  // the "In this run" side panel instead.
+  const renderModelCard = (m: Model, onToggle: () => void, inlineRetry = true) => {
+    const on = draft.models.includes(m.id);
+    const health: HealthStatus = healthById?.[m.id] ?? 'idle';
+    const selectable = health === 'success';
+    const caps = (m as any).capabilities as string[] | undefined;
+    const inputPrice = (m as any).input_price as number | null | undefined;
+    const outputPrice = (m as any).output_price as number | null | undefined;
+    const accuracy = (m as any).accuracy_score as number | null | undefined;
+    const providerName = providers.find((p) => p?.id === m.provider_id)?.name ?? m.provider_id;
+    // Why this card can't be selected yet. Shown as a line inside the card in
+    // the RAG columns; in the Model/Agent grid it's the card's tooltip
+    // instead, so every card keeps the same content and the same size.
+    const lockedHint =
+      !selectable && !on
+        ? health === 'loading'
+          ? 'Waiting for health check to complete…'
+          : health === 'failed'
+            ? 'This model failed its health check and can\u2019t be selected.'
+            : 'Waiting in the queue for its health check. Use the badge to check it now.'
+        : undefined;
 
-  // Model table: renders one page of `list`, with a "Show more" footer.
-  const providerNameById = useMemo(() => {
-    const map = new Map<string, string>();
-    providers.forEach((p) => p?.id && map.set(p.id, p.name));
-    return map;
-  }, [providers]);
+    // Health badge / action — shared by both card layouts below.
+    const healthBadge = (
+      <>
+        {health === 'success' && (
+          <span className={`${styles['ev__health-badge']} ${styles['ev__health-badge--success']}`}>
+            <ShieldCheck size={12} /> Available
+          </span>
+        )}
+        {health === 'failed' && (
+          <button
+            type="button"
+            className={`${styles['ev__health-badge']} ${styles['ev__health-badge--failed']}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              runHealthCheck(m.id);
+            }}
+            title="Retry health check"
+          >
+            <ShieldAlert size={12} /> Unavailable
+          </button>
+        )}
+        {health === 'loading' && (
+          <span className={`${styles['ev__health-badge']} ${styles['ev__health-badge--loading']}`}>
+            <Loader2 size={12} className={styles.ev__spin} /> Checking…
+          </span>
+        )}
+        {health === 'idle' && (
+          <button
+            type="button"
+            className={styles['ev__health-check-btn']}
+            onClick={(e) => {
+              e.stopPropagation();
+              runHealthCheck(m.id);
+            }}
+          >
+            <HeartPulse size={12} /> {step === 3 ? 'Queued · check now' : 'Check health'}
+          </button>
+        )}
+      </>
+    );
 
-  const renderModelTable = (list: Model[], limitKey: string, category?: string) => {
-    const shown = list.slice(0, limitFor(limitKey));
-    const remaining = list.length - shown.length;
-    return (
-      <div className={styles.ev__tablewrap}>
-        <table className={styles.ev__table}>
-          <thead>
-            <tr>
-              <th scope="col">Model</th>
-              <th scope="col">Health</th>
-              <th scope="col" className={styles.ev__tnum}>Context</th>
-              <th scope="col" className={styles.ev__tnum}>Input / 1M</th>
-              <th scope="col" className={styles.ev__tnum}>Output / 1M</th>
-            </tr>
-          </thead>
-          <tbody>
-            {shown.map((m) => (
-              <ModelRow
-                key={m.id}
-                m={m}
-                on={draft.models.includes(m.id)}
-                health={healthById?.[m.id] ?? 'idle'}
-                providerName={providerNameById.get(m.provider_id) ?? m.provider_id}
-                category={category}
-                onToggle={onRowToggle}
-                onCheck={onRowCheck}
-              />
-            ))}
-          </tbody>
-        </table>
-        {remaining > 0 && (
-          <div className={styles['ev__table-more']}>
-            <span>
-              Showing {shown.length} of {list.length}
+    // Model / Agent grid: same card design as the Test Suite step — header
+    // (selection control, icon tile, name), tags, a labelled chip section,
+    // and a footer of figures. Retries and timeout live in the side panel.
+    if (!inlineRetry) {
+      return (
+        <div
+          key={m.id}
+          role="button"
+          tabIndex={0}
+          className={`${styles.ev__srow} ${styles['ev__srow--model']} ${on ? styles['ev__srow--on'] : ''} ${
+            !selectable && !on ? styles['ev__srow--locked'] : ''
+          } ${health === 'loading' ? styles['ev__mcard--checking'] : ''}`}
+          onClick={onToggle}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onToggle();
+            }
+          }}
+          aria-pressed={on}
+          aria-disabled={!selectable && !on}
+          title={lockedHint}
+        >
+          <div className={styles['ev__srow-head']}>
+            <span className={`${styles.ev__check} ${on ? styles['ev__check--on'] : ''}`}>
+              {on && <Check size={11} strokeWidth={3} />}
             </span>
-            <button type="button" className={styles['ev__table-more-btn']} onClick={() => showMoreModels(limitKey)}>
-              Show {Math.min(MODEL_PAGE_SIZE, remaining)} more
-            </button>
+            <span className={styles['ev__srow-icon']}>
+              <Cpu size={15} />
+            </span>
+            <span className={styles['ev__srow-name']} title={m.name || 'Unnamed model'}>
+              {m.name || 'Unnamed model'}
+            </span>
+          </div>
+
+          <div className={styles['ev__srow-tags']}>
+            <span className={`${styles.ev__pilltag} ${styles['ev__pilltag--muted']}`}>{providerName}</span>
+            {m.category && <span className={`${styles.ev__pilltag} ${styles['ev__pilltag--muted']}`}>{m.category}</span>}
+            <span className={styles['ev__srow-health']}>{healthBadge}</span>
+          </div>
+
+          <div className={styles['ev__srow-subs']}>
+            <span className={styles['ev__srow-k']}>Capabilities</span>
+            <div className={styles['ev__srow-chips']}>
+              {caps && caps.length > 0 ? (
+                <>
+                  {caps.slice(0, 4).map((c) => (
+                    <span key={c} className={styles.ev__cap}>
+                      {c}
+                    </span>
+                  ))}
+                  {caps.length > 4 && (
+                    <span className={styles.ev__cap} title={caps.slice(4).join(', ')}>
+                      +{caps.length - 4} more
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span className={styles['ev__srow-none']}>Not listed</span>
+              )}
+            </div>
+          </div>
+
+          <div className={styles['ev__srow-side']}>
+            <div className={styles.ev__stat}>
+              <span className={styles['ev__stat-k']}>Context</span>
+              <span className={styles['ev__stat-v']}>{formatContextWindow(m.context_window)}</span>
+            </div>
+            <div className={styles.ev__stat}>
+              <span className={styles['ev__stat-k']}>Input /1M</span>
+              <span className={styles['ev__stat-v']}>{formatPrice(inputPrice)}</span>
+            </div>
+            <div className={styles.ev__stat}>
+              <span className={styles['ev__stat-k']}>Output /1M</span>
+              <span className={styles['ev__stat-v']}>{formatPrice(outputPrice)}</span>
+            </div>
+            {typeof accuracy === 'number' && Number.isFinite(accuracy) && (
+              <div className={styles.ev__stat}>
+                <span className={styles['ev__stat-k']}>Accuracy</span>
+                <span className={styles['ev__stat-v']}>{accuracy.toFixed(1)}%</span>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      // Not a <button> — it contains a nested "Check health" control, so
+      // it's a clickable div with keyboard support instead (nested
+      // interactive elements aren't valid HTML).
+      <div
+        key={m.id}
+        role="button"
+        tabIndex={0}
+        className={`${styles.ev__mcard} ${on ? styles['ev__mcard--on'] : ''} ${
+          !selectable && !on ? styles['ev__mcard--locked'] : ''
+        } ${health === 'loading' ? styles['ev__mcard--checking'] : ''}`}
+        onClick={onToggle}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onToggle();
+          }
+        }}
+        aria-pressed={on}
+        aria-disabled={!selectable && !on}
+      >
+        <div className={styles['ev__mcard-top']}>
+          <div className={styles['ev__mcard-name']}>{m.name || 'Unnamed model'}</div>
+          {on && (
+            <span className={styles['ev__mcard-mark']}>
+              <Check size={12} strokeWidth={3} />
+            </span>
+          )}
+        </div>
+
+        {/* Provider name + health badge, same line, badge on the right */}
+        <div className={styles['ev__mcard-provider-row']}>
+          <span className={styles['ev__mcard-provider']}>{providerName}</span>
+          {healthBadge}
+        </div>
+
+        {caps && caps.length > 0 && (
+          <div className={styles.ev__caps}>
+            {caps.slice(0, 3).map((c) => (
+              <span key={c} className={styles.ev__cap}>
+                {c}
+              </span>
+            ))}
+          </div>
+        )}
+        <div className={styles['ev__mcard-stats']}>
+          <span className={styles.ev__stat}>
+            <span className={styles['ev__stat-k']}>Context</span>
+            <span className={styles['ev__stat-v']}>{formatContextWindow(m.context_window)}</span>
+          </span>
+          {(inputPrice !== undefined || outputPrice !== undefined) && (
+            <span className={styles.ev__stat}>
+              <span className={styles['ev__stat-k']}>Price /1M</span>
+              <span className={styles['ev__stat-v']}>
+                {formatPrice(inputPrice)}/{formatPrice(outputPrice)}
+              </span>
+            </span>
+          )}
+          {typeof accuracy === 'number' && Number.isFinite(accuracy) && (
+            <span className={styles.ev__stat}>
+              <span className={styles['ev__stat-k']}>Accuracy</span>
+              <span className={styles['ev__stat-v']}>{accuracy.toFixed(1)}%</span>
+            </span>
+          )}
+        </div>
+
+        {inlineRetry && lockedHint && <p className={styles['ev__mcard-hint']}>{lockedHint}</p>}
+
+        {/* Per-model retry/timeout — only rendered once the card is
+            selected AND the user has chosen "Individually" mode (in
+            "Apply to all" mode, the shared config above the grid covers
+            every selected model, so no per-card panel is needed at all).
+            Unselected cards stay compact since this only exists in the
+            DOM for selected ones — &__grid's align-items: start keeps the
+            taller selected card from stretching its unselected neighbors
+            in the same row. stopPropagation on the wrapper (and the
+            inputs themselves) keeps clicks here from also toggling the
+            card's selection via the outer onClick. */}
+        {inlineRetry && on && draft.retryConfigMode === 'individual' && (
+          <div
+            className={styles['ev__mcard-retry']}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            <div className={styles['ev__mcard-retry-fields']}>
+              <div className={styles['ev__mcard-retry-field']}>
+                <label>Max retries</label>
+                <input
+                  type="number"
+                  min={MIN_MAX_RETRIES}
+                  max={MAX_MAX_RETRIES}
+                  value={displayNumInput(draft.modelRetryConfig[m.id]?.max_retries ?? DEFAULT_MAX_RETRIES)}
+                  onChange={(e) => updateModelRetryConfig(m.id, 'max_retries', parseNumInput(e.target.value))}
+                  onBlur={() => clampModelRetryConfig(m.id, 'max_retries')}
+                />
+              </div>
+              <div className={styles['ev__mcard-retry-field']}>
+                <label>Timeout (s)</label>
+                <input
+                  type="number"
+                  min={MIN_TIMEOUT}
+                  max={MAX_TIMEOUT}
+                  value={displayNumInput(draft.modelRetryConfig[m.id]?.timeout ?? DEFAULT_TIMEOUT)}
+                  onChange={(e) => updateModelRetryConfig(m.id, 'timeout', parseNumInput(e.target.value))}
+                  onBlur={() => clampModelRetryConfig(m.id, 'timeout')}
+                />
+              </div>
+            </div>
+            <p className={styles['ev__mcard-retry-hint']}>
+              <Info size={11} /> Retries {MIN_MAX_RETRIES}–{MAX_MAX_RETRIES} · Timeout {MIN_TIMEOUT}
+              –{MAX_TIMEOUT}s
+            </p>
           </div>
         )}
       </div>
     );
   };
-
 
   // Update a selected model's retry config field while the user is typing —
   // stores exactly what's on screen (no clamping) so intermediate/out-of-
@@ -1662,96 +1829,69 @@ export default function NewEvaluation() {
     dispatch(setDraft({ retryConfigAll: { ...draft.retryConfigAll, [field]: clamped } }));
   };
 
-  const canGo = () => {
-    if (step === 0) return Boolean(draft.name.trim());
-    // Harness mode additionally needs at least one agent to compare.
-    if (step === 1) return Boolean(draft.type) && (!isHarness || draft.harnessAgents.length > 0);
-    if (step === 2) return draft.providers.length > 0;
-    if (step === 3) {
-      if (modelsLoading || !modelsFetchedThisVisit || selectedModelsNotReady.length > 0) return false;
-      // RAG: Embedding and Reranker each require exactly one selection;
-      // LLM is multi-select and just needs at least one (same "at least
-      // one" rule as Model/Agent below).
-      if (draft.type === 'rag') {
-        const embeddingCount = (modelsByCategory.get('Embedding') ?? []).filter((m) =>
-          draft.models.includes(m.id)
-        ).length;
-        const rerankerCount = (modelsByCategory.get('Reranker') ?? []).filter((m) =>
-          draft.models.includes(m.id)
-        ).length;
-        const llmCount = (modelsByCategory.get('LLM') ?? []).filter((m) => draft.models.includes(m.id)).length;
-        return embeddingCount === 1 && rerankerCount === 1 && llmCount > 0;
-      }
-      return draft.models.length > 0;
+  // Why the current step can't be continued yet — null means good to go.
+  // Same rules as the old canGo(), but each one carries its reason, shown
+  // next to the (disabled) Next button.
+  const stepBlocker = (): string | null => {
+    if (step === 0) return draft.name.trim() ? null : 'Give the run a name.';
+    if (step === 1) {
+      if (!draft.type) return 'Choose a system under test.';
+      if (isHarness && draft.harnessAgents.length === 0) return 'Select at least one agent.';
+      return null;
     }
-    // A dataset with 0 questions can't actually be run against — block
-    // continuing until one with at least one question is picked.
-    if (step === 4) {
-      // Harness: at least one suite, and every picked suite must have questions.
-      if (isHarness) {
-        return (
-          selectedHarnessSuites.length > 0 && selectedHarnessSuites.every((d) => (d.question_count ?? 0) > 0)
-        );
-      }
-      return Boolean(draft.dataset) && (suite?.question_count ?? 0) > 0;
-    }
-    if (step === 5) {
-      // Judge model is mandatory for every type now — no more LLM_Judge /
-      // hideMetricsStep / agent-framework gating.
-      if (!draft.judgeModelId) return false;
-      // If the metrics catalog (built-in or custom) actually has anything
-      // in it for this type, picking at least one is mandatory too. When
-      // the whole metrics section is hidden (hideMetricsStep) or the
-      // catalog is genuinely empty, there's nothing to require.
-      const metricsAvailable = !hideMetricsStep && (metricsCatalog.length > 0 || customMetricsForType.length > 0);
-      if (metricsAvailable && draft.metrics.length === 0) return false;
-      // Retest on Wrong requires a verify metric — Model and RAG always,
-      // Agent only when a framework is selected (that's the only agent
-      // path with a metrics-capable endpoint; POST /agent-benchmark/run
-      // has none).
-      const retestApplies =
-        draft.type === 'model' || draft.type === 'rag' || (draft.type === 'agent' && Boolean(draft.agentFramework));
-      if (retestApplies && draft.retestOnWrong && !draft.retestVerifyMetric) return false;
-      // Harness settings must be filled in (NaN = emptied field, mid-edit).
-      if (isHarness && (Number.isNaN(draft.harnessSettings.max_steps) || Number.isNaN(draft.harnessSettings.task_timeout))) {
-        return false;
-      }
-      return true;
-    }
-    return true;
-  };
-
-  // Plain-language reason "Next" is disabled on the current step, shown
-  // beside the button in the footer so nobody has to guess what is missing.
-  // Mirrors canGo() branch for branch; null whenever canGo() is true.
-  const blockReason = (): string | null => {
-    if (canGo()) return null;
-    if (step === 0) return 'Give the run a name to continue.';
-    if (step === 1) return !draft.type ? 'Choose what you are evaluating.' : 'Select at least one agent to compare.';
-    if (step === 2) return 'Select at least one provider.';
+    if (step === 2) return draft.providers.length > 0 ? null : 'Select at least one provider.';
     if (step === 3) {
       if (modelsLoading || !modelsFetchedThisVisit) return 'Loading models…';
-      if (selectedModelsNotReady.length > 0) return 'Every selected model needs a passed health check.';
-      if (draft.type === 'rag') return 'Select one embedding model, one reranker and at least one LLM.';
-      return 'Select at least one model.';
+      if (draft.type === 'rag') {
+        const countIn = (cat: string) =>
+          (modelsByCategory.get(cat) ?? []).filter((m) => draft.models.includes(m.id)).length;
+        if (countIn('Embedding') !== 1 || countIn('Reranker') !== 1 || countIn('LLM') === 0) {
+          return 'Select one Embedding, one Reranker and at least one LLM.';
+        }
+      } else if (draft.models.length === 0) {
+        return 'Tick at least one model.';
+      }
+      if (selectedModelsNotReady.length > 0) {
+        const id = selectedModelsNotReady[0];
+        const name = models.find((m) => m?.id === id)?.name || id;
+        return healthById?.[id] === 'failed'
+          ? `${name} failed its health check. Retry it or untick it.`
+          : `Waiting for the health check on ${name}.`;
+      }
+      return null;
     }
     if (step === 4) {
       if (isHarness) {
-        return selectedHarnessSuites.length === 0
-          ? 'Select at least one suite.'
-          : 'Deselect the suites that have no questions.';
+        if (selectedHarnessSuites.length === 0) return 'Select at least one suite.';
+        if (!selectedHarnessSuites.every((d) => (d.question_count ?? 0) > 0)) {
+          return 'Untick the suites that have no questions.';
+        }
+        return null;
       }
-      return !draft.dataset ? 'Select a test suite.' : 'This suite has no questions. Select another one.';
+      if (!draft.dataset) return 'Select a test suite.';
+      if ((suite?.question_count ?? 0) <= 0) return 'This suite has no questions. Pick another.';
+      return null;
     }
     if (step === 5) {
-      if (!draft.judgeModelId) return 'Select a judge model.';
       const metricsAvailable = !hideMetricsStep && (metricsCatalog.length > 0 || customMetricsForType.length > 0);
-      if (metricsAvailable && draft.metrics.length === 0) return 'Select at least one metric.';
-      if (draft.retestOnWrong && !draft.retestVerifyMetric) return 'Choose a verify metric for Retest on Wrong.';
-      if (isHarness) return 'Fill in the harness settings.';
+      if (metricsAvailable && draft.metrics.length === 0) {
+        return isHarness ? 'Select at least one scorer.' : 'Select at least one metric.';
+      }
+      if (!draft.judgeModelId) return 'Select a judge model.';
+      const retestApplies =
+        draft.type === 'model' || draft.type === 'rag' || (draft.type === 'agent' && Boolean(draft.agentFramework));
+      if (retestApplies && draft.retestOnWrong && !draft.retestVerifyMetric) {
+        return 'Pick a verify metric for Retest on wrong.';
+      }
+      if (isHarness && (Number.isNaN(draft.harnessSettings.max_steps) || Number.isNaN(draft.harnessSettings.task_timeout))) {
+        return 'Fill in the limits per task.';
+      }
+      return null;
     }
-    return 'Complete this step to continue.';
+    return null;
   };
+  const blocker = stepBlocker();
+  const canGo = () => blocker === null;
 
   const goNext = () => {
     if (!canGo()) return;
@@ -2032,7 +2172,7 @@ export default function NewEvaluation() {
 
   // ---- live Run Manifest values (one per step) ----------------------------
   const providerNames = draft.providers.map((id) => providers.find((p) => p?.id === id)?.name || id);
-  const mf = (value: string, filled: boolean) => ({ value: filled ? value : '—', empty: !filled });
+  const mf = (value: string, filled: boolean) => ({ value: filled ? value : 'Not set', empty: !filled });
   const typeLabel = TYPE_OPTIONS.find((o) => o.value === draft.type)?.label ?? '';
   const frameworkTitle = draft.agentFramework ? AGENT_FRAMEWORKS.find((f) => f.id === draft.agentFramework)?.title : null;
   const harnessAgentTitles = draft.harnessAgents.map((id) => HARNESS_AGENTS.find((a) => a.id === id)?.title || id);
@@ -2044,174 +2184,600 @@ export default function NewEvaluation() {
     : frameworkTitle
       ? `${typeLabel} · ${frameworkTitle}`
       : typeLabel;
+  const scoringManifestValue = [
+    hideMetricsStep || draft.metrics.length === 0
+      ? null
+      : `${draft.metrics.length} ${isHarness ? 'scorer' : 'metric'}${draft.metrics.length === 1 ? '' : 's'}`,
+    judgeModel ? `Judge: ${judgeModel.name || 'Unnamed model'}` : null,
+  ]
+    .filter(Boolean)
+    .join(', ');
   const manifest = [
     mf(draft.name, Boolean(draft.name)),
     mf(typeManifestValue, Boolean(draft.type)),
-    mf(draft.providers.length === 1 ? providerNames[0] : `${draft.providers.length} providers`, draft.providers.length > 0),
-    mf(`${draft.models.length} models`, draft.models.length > 0),
+    mf(providerNames.join(', '), draft.providers.length > 0),
+    mf(`${draft.models.length} model${draft.models.length === 1 ? '' : 's'}`, draft.models.length > 0),
     isHarness
       ? mf(
           selectedHarnessSuites.length === 1 ? selectedHarnessSuites[0].name : `${selectedHarnessSuites.length} suites`,
           selectedHarnessSuites.length > 0
         )
       : mf(suite?.name || '', Boolean(suite)),
-    mf(hideMetricsStep ? 'Not required' : `${draft.metrics.length} metrics`, hideMetricsStep || draft.metrics.length > 0),
-    mf(
-      judgeModel ? `Judge · ${judgeModel.name || 'Unnamed model'}` : 'Judge required',
-      Boolean(judgeModel)
-    ),
+    mf(scoringManifestValue, scoringManifestValue !== ''),
+    mf('Ready to launch', step === totalSteps - 1),
   ];
 
-  const CrumbIcon = STEP_ICONS[step];
-  const continueBlockedReason = blockReason();
+  const stageTitle = step === 4 && isHarness ? 'Pick test suites' : STAGE[step].title;
+  const stageSub =
+    step === 4 && isHarness
+      ? 'Each suite covers one kind of work. Pick one per use case for a full scorecard.'
+      : STAGE[step].sub;
+  const scorerWord = isHarness ? 'scorers' : 'metrics';
 
-  // ---- derived values shown on the Metrics and Review steps ----------------
-  const runSamplesValue = Number.isNaN(draft.runSamples) ? 0 : draft.runSamples;
-  // Questions actually taken from a suite with `available` questions.
-  const sampleCountFor = (available: number) =>
-    draft.runSamplesMode === 'full' ? available : Math.min(runSamplesValue, available);
-  // Harness: questions in one pass over the selected suites, and the total
-  // task count (every agent runs every model on every one of them).
-  const harnessQuestionsPerPass = selectedHarnessSuites.reduce((t, s) => t + sampleCountFor(s.question_count ?? 0), 0);
+  // ---- run size (Scoring step formula, Review banner + run matrix) ---------
+  // sampleN null = every question. Per suite, a sample larger than the suite
+  // simply runs the whole suite.
+  const sampleN = draft.runSamplesMode === 'full' || Number.isNaN(draft.runSamples) ? null : draft.runSamples;
+  const suiteQuestions = (count: number) => (sampleN === null ? count : Math.min(sampleN, count));
+  const harnessQuestionsPerPass = selectedHarnessSuites.reduce((n, s) => n + suiteQuestions(s.question_count ?? 0), 0);
   const harnessTaskCount = harnessQuestionsPerPass * draft.models.length * draft.harnessAgents.length;
-  // Retest on Wrong applies to Model and RAG always, and to Agent only when a
-  // framework is selected (same rule as canGo / launch).
-  const showRetest =
-    draft.type === 'model' || draft.type === 'rag' || (draft.type === 'agent' && Boolean(draft.agentFramework));
-  const metricsRequiredMissing =
-    !hideMetricsStep && (metricsCatalog.length > 0 || customMetricsForType.length > 0) && draft.metrics.length === 0;
-  // draft.metrics mixes built-in metric names with custom metric ids.
-  const metricDisplayName = (m: string) => customMetricsCatalog.find((c) => c.id === m)?.name ?? m;
-  // Built-in metrics as labelled groups. Harness scorers are grouped by
-  // purpose (SCORER_GROUPS; anything unrecognised lands in "Other"); every
-  // other type is one unlabelled group.
-  const scorerGroups: { label: string; items: string[] }[] = (() => {
-    const all = filteredMetrics as string[];
-    if (!isHarness) return [{ label: '', items: all }];
-    const known = new Set(SCORER_GROUPS.reduce<string[]>((acc, g) => acc.concat(g.names), []));
-    return [
-      ...SCORER_GROUPS.map((g) => ({ label: g.label, items: all.filter((n) => g.names.includes(n)) })),
-      { label: 'Other', items: all.filter((n) => !known.has(n)) },
-    ].filter((g) => g.items.length > 0);
+  const coveredUseCases = harnessUseCases.filter((u) => selectedHarnessSuites.some((s) => s.use_case === u));
+  const uncoveredUseCases = harnessUseCases.filter((u) => !coveredUseCases.includes(u));
+
+  // ---- Models step (Model / Agent): table + "In this run" panel ------------
+  const llmAvailable = availableModels.filter((m) => (m?.category ?? '').toLowerCase() === 'llm');
+  const tableModels = filteredModels.filter(
+    (m) => modelProviderFilter === 'all' || m.provider_id === modelProviderFilter
+  );
+  const shownTableModels = tableModels.slice(0, modelsShown);
+  modelsHasMoreRef.current = tableModels.length > modelsShown;
+  // Order for the health-check queue: selected models, then what's listed
+  // right now (in the order it's shown), then every other model.
+  healthPriorityRef.current = [
+    ...draft.models.filter((id) => availableModels.some((m) => m.id === id)),
+    ...(draft.type === 'rag' ? filteredModels : tableModels).map((m) => m.id),
+    ...availableModels.map((m) => m.id),
+  ];
+  // ---- Type step: "About" panel -------------------------------------------
+  // What the selected type measures, what it's good for, and how a run of
+  // that type works (copy in TYPE_ABOUT).
+  const typeAboutPanel = (() => {
+    const opt = TYPE_OPTIONS.find((o) => o.value === draft.type);
+    const about = draft.type ? TYPE_ABOUT[draft.type] : undefined;
+    if (!opt || !about) {
+      return (
+        <p className={styles['ev__about-empty']}>
+          <Info size={14} /> Select a system under test to see what it measures and when to use it.
+        </p>
+      );
+    }
+    const Icon = opt.icon;
+    return (
+      <div className={`${styles.ev__about} ${styles.ev__anim}`} key={opt.label}>
+        <div className={styles['ev__about-head']}>
+          <span
+            className={`${styles['ev__option-icon']} ${
+              opt.variant ? styles[`ev__option-icon--${opt.variant}`] : ''
+            }`}
+          >
+            <Icon size={18} />
+          </span>
+          <div>
+            <h3>About {opt.label} evaluation</h3>
+            <p>{about.tagline}</p>
+          </div>
+        </div>
+        <div className={styles['ev__about-cols']}>
+          <div className={styles['ev__about-col']}>
+            <p className={styles['ev__about-k']}>What it measures</p>
+            <ul className={styles['ev__about-list']}>
+              {about.measures.map((t) => (
+                <li key={t}>
+                  <Check size={13} strokeWidth={3} /> {t}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div className={styles['ev__about-col']}>
+            <p className={styles['ev__about-k']}>Good for</p>
+            <ul className={styles['ev__about-list']}>
+              {about.goodFor.map((t) => (
+                <li key={t}>
+                  <ChevronRight size={13} strokeWidth={3} /> {t}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div className={styles['ev__about-col']}>
+            <p className={styles['ev__about-k']}>How a run works</p>
+            <ol className={styles['ev__about-flow']}>
+              {about.flow.map((t, n) => (
+                <li key={t}>
+                  <span>{n + 1}</span> {t}
+                </li>
+              ))}
+            </ol>
+          </div>
+        </div>
+      </div>
+    );
   })();
 
-  // ---- shared "Run samples" control (A sample / Every question) ------------
-  // 'full' means "use the whole dataset" — run_samples is sent as 0 (or null
-  // for POST /evaluations) in that case (see `launch`), regardless of
-  // whatever number was last typed into the sample field.
-  const runSamplesControl = (
-    <div className={styles.ev__samples}>
-      <div className={styles.ev__seg} role="group" aria-label="Sample size">
-        <button
-          type="button"
-          aria-pressed={draft.runSamplesMode === 'custom'}
-          className={`${styles['ev__seg-btn']} ${draft.runSamplesMode === 'custom' ? styles['ev__seg-btn--on'] : ''}`}
-          onClick={() => dispatch(setDraft({ runSamplesMode: 'custom' }))}
+  // ---- Name step: quick-add tokens ----------------------------------------
+  // One-click suffixes for the run name: this quarter, a version, today's
+  // date. Clicking a token that's already in the name takes it back out.
+  const nameTokens = (() => {
+    const now = new Date();
+    return [
+      `Q${Math.floor(now.getMonth() / 3) + 1} ${now.getFullYear()}`,
+      'v1',
+      now.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }),
+    ];
+  })();
+  const toggleNameToken = (token: string) => {
+    const at = draft.name.toLowerCase().indexOf(token.toLowerCase());
+    const next =
+      at === -1
+        ? `${draft.name.trim()} ${token}`.trim()
+        : `${draft.name.slice(0, at)}${draft.name.slice(at + token.length)}`.replace(/\s{2,}/g, ' ').trim();
+    dispatch(setDraft({ name: next }));
+  };
+
+  // Search field of whichever list header is on screen (one step at a time).
+  // Pressing "/" anywhere outside a text field jumps to it.
+  const listSearchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (!listSearchRef.current) return;
+      e.preventDefault();
+      listSearchRef.current.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // ---- list header ---------------------------------------------------------
+  // Shared header for the Providers, Models and Test Suite lists: a title
+  // with a live count on the left, search + refresh on the right, an optional
+  // row of filter chips underneath, and a rule separating it from the list.
+  const listHead = (o: {
+    title: string;
+    meta: ReactNode;
+    // how many items the list is showing right now (drives the result chip)
+    count: number;
+    search: { placeholder: string; value: string; onChange: (v: string) => void };
+    refresh: { onClick: () => void; busy: boolean; title: string };
+    filters?: ReactNode;
+    sticky?: boolean;
+  }) => {
+    const hasQuery = o.search.value.trim() !== '';
+    return (
+      <div className={`${styles.ev__lhead} ${o.sticky ? styles['ev__lhead--sticky'] : ''}`}>
+        <div className={styles['ev__lhead-row']}>
+        <div className={styles['ev__lhead-title']}>
+          <h3>{o.title}</h3>
+          <span>{o.meta}</span>
+        </div>
+
+        {/* Search bar: one compact control holding the icon, the field, a
+            live result count, the "/" hint or clear button, and refresh. */}
+        <div
+          className={`${styles.ev__sbar} ${hasQuery ? styles['ev__sbar--active'] : ''}`}
+          onMouseDown={(e) => {
+            // clicking anywhere on the bar (not on its buttons) focuses the field
+            if ((e.target as HTMLElement).closest('button, input')) return;
+            e.preventDefault();
+            listSearchRef.current?.focus();
+          }}
         >
-          A sample
-        </button>
-        <button
-          type="button"
-          aria-pressed={draft.runSamplesMode === 'full'}
-          className={`${styles['ev__seg-btn']} ${draft.runSamplesMode === 'full' ? styles['ev__seg-btn--on'] : ''}`}
-          onClick={() => dispatch(setDraft({ runSamplesMode: 'full' }))}
-        >
-          Every question
-        </button>
-      </div>
-      {draft.runSamplesMode === 'custom' && (
-        <label className={styles['ev__samples-field']}>
+          <span className={styles['ev__sbar-icon']}>
+            <Search size={13} strokeWidth={2.6} />
+          </span>
           <input
-            type="number"
-            min={0}
-            max={maxRunSamples}
-            className={`${styles.ev__input} ${styles['ev__input--num']}`}
-            value={displayNumInput(draft.runSamples)}
-            onChange={(e) => {
-              // An emptied field is held as NaN so it shows blank instead
-              // of snapping to 0; onBlur below (and launch) resolve it.
-              const raw = parseNumInput(e.target.value);
-              const val = Number.isNaN(raw) ? NaN : Math.min(maxRunSamples, Math.max(0, raw));
-              dispatch(setDraft({ runSamples: val }));
-            }}
-            onBlur={() => {
-              if (Number.isNaN(draft.runSamples)) dispatch(setDraft({ runSamples: 0 }));
+            ref={listSearchRef}
+            type="text"
+            placeholder={o.search.placeholder}
+            aria-label={o.search.placeholder}
+            value={o.search.value}
+            onChange={(e) => o.search.onChange(e.target.value)}
+            onKeyDown={(e) => {
+              // Esc clears first, then leaves the field
+              if (e.key !== 'Escape') return;
+              if (o.search.value) o.search.onChange('');
+              else e.currentTarget.blur();
             }}
           />
-          {isHarness ? 'questions per suite' : 'questions'}
-        </label>
-      )}
+          {hasQuery && (
+            <span
+              className={`${styles['ev__sbar-count']} ${o.count === 0 ? styles['ev__sbar-count--none'] : ''}`}
+              aria-live="polite"
+            >
+              {o.count === 0 ? 'No matches' : `${o.count} result${o.count === 1 ? '' : 's'}`}
+            </span>
+          )}
+          {o.search.value ? (
+            <button
+              type="button"
+              className={styles['ev__sbar-clear']}
+              onClick={() => {
+                o.search.onChange('');
+                listSearchRef.current?.focus();
+              }}
+              aria-label="Clear search"
+            >
+              <X size={12} strokeWidth={2.5} />
+            </button>
+          ) : (
+            <kbd className={styles['ev__sbar-kbd']} title="Press / to search">
+              /
+            </kbd>
+          )}
+          <span className={styles['ev__sbar-sep']} />
+          <button
+            type="button"
+            className={styles['ev__sbar-refresh']}
+            onClick={o.refresh.onClick}
+            disabled={o.refresh.busy}
+            title={o.refresh.title}
+            aria-label={o.refresh.title}
+          >
+            <RefreshCw size={14} className={o.refresh.busy ? styles.ev__spin : ''} />
+          </button>
+        </div>
+        </div>
+
+        {o.filters && <div className={styles['ev__lhead-filters']}>{o.filters}</div>}
+      </div>
+    );
+  };
+
+  // One − / value / + control. The buttons step by `step` and clamp to the
+  // field's range straight away; typing still works as before (free typing,
+  // clamped on blur).
+  const retryStepper = (
+    field: keyof ModelRetryConfig,
+    label: string,
+    icon: ReactNode,
+    step: number,
+    value: ModelRetryConfig | undefined,
+    onChange: (field: keyof ModelRetryConfig, raw: number) => void,
+    onBlur: (field: keyof ModelRetryConfig) => void
+  ) => {
+    const min = field === 'max_retries' ? MIN_MAX_RETRIES : MIN_TIMEOUT;
+    const max = field === 'max_retries' ? MAX_MAX_RETRIES : MAX_TIMEOUT;
+    const fallback = field === 'max_retries' ? DEFAULT_MAX_RETRIES : DEFAULT_TIMEOUT;
+    const raw = value?.[field] ?? fallback;
+    const current = Number.isNaN(raw) ? fallback : raw;
+    const bump = (dir: 1 | -1) => onChange(field, clampRetryField(field, current + dir * step));
+    return (
+      <div className={styles.ev__stepfield}>
+        <span className={styles['ev__stepfield-label']}>
+          {icon} {label}
+        </span>
+        <div className={styles.ev__stepper}>
+          <button type="button" onClick={() => bump(-1)} disabled={current <= min} aria-label={`Decrease ${label}`}>
+            <Minus size={13} />
+          </button>
+          <input
+            type="number"
+            min={min}
+            max={max}
+            aria-label={label}
+            value={displayNumInput(raw)}
+            onChange={(e) => onChange(field, parseNumInput(e.target.value))}
+            onBlur={() => onBlur(field)}
+          />
+          <button type="button" onClick={() => bump(1)} disabled={current >= max} aria-label={`Increase ${label}`}>
+            <Plus size={13} />
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const retryFields = (
+    value: ModelRetryConfig | undefined,
+    onChange: (field: keyof ModelRetryConfig, raw: number) => void,
+    onBlur: (field: keyof ModelRetryConfig) => void
+  ) => (
+    <div className={styles.ev__stepfields}>
+      {retryStepper('max_retries', 'Max retries', <RotateCw size={12} />, 1, value, onChange, onBlur)}
+      {retryStepper('timeout', 'Timeout (s)', <Timer size={12} />, 30, value, onChange, onBlur)}
     </div>
   );
 
+  const modelsTableView = (
+    <div className={styles.ev__split}>
+      <div className={styles['ev__split-main']}>
+        {listHead({
+          title: 'Available models',
+          meta: (
+            <>
+              {tableModels.length} of {llmAvailable.length} shown · <b>{draft.models.length}</b> selected
+            </>
+          ),
+          count: tableModels.length,
+          search: { placeholder: 'Search models', value: modelSearch, onChange: setModelSearch },
+          refresh: { onClick: refreshModels, busy: modelsLoading, title: 'Refresh models' },
+          filters: (
+            <>
+            <button
+              type="button"
+              className={`${styles['ev__filter-chip']} ${modelProviderFilter === 'all' ? styles['ev__filter-chip--on'] : ''}`}
+              onClick={() => setModelProviderFilter('all')}
+            >
+              All <span className={styles['ev__filter-chip-count']}>{llmAvailable.length}</span>
+            </button>
+            {draft.providers.map((id) => {
+              const on = modelProviderFilter === id;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  className={`${styles['ev__filter-chip']} ${on ? styles['ev__filter-chip--on'] : ''}`}
+                  onClick={() => setModelProviderFilter(on ? 'all' : id)}
+                >
+                  {providers.find((p) => p?.id === id)?.name || id}
+                  <span className={styles['ev__filter-chip-count']}>
+                    {llmAvailable.filter((m) => m.provider_id === id).length}
+                  </span>
+                </button>
+              );
+            })}
+            </>
+          ),
+        })}
 
-  // ---- Review step: rows of the settings list --------------------------------
-  const harnessUncoveredCases = isHarness
-    ? HARNESS_USE_CASES.filter((u) => !selectedHarnessSuites.some((s) => s.use_case === u))
-    : [];
-  const reviewRows: { label: string; value: string; step: number }[] = [
-    { label: 'Providers', value: providerNames.join(', ') || '—', step: 2 },
+        {/* Progress of the automatic availability checks (hidden once done) */}
+        {!modelsLoading && healthProgress.total > 0 && healthProgress.done < healthProgress.total && (
+          <div className={styles.ev__hq} role="status">
+            <Loader2 size={13} className={styles.ev__spin} />
+            <span className={styles['ev__hq-text']}>
+              Checking availability · <b>{healthProgress.done}</b> of {healthProgress.total} models checked
+            </span>
+            <span className={styles['ev__hq-bar']}>
+              <span style={{ width: `${Math.round((healthProgress.done / healthProgress.total) * 100)}%` }} />
+            </span>
+            <span className={styles['ev__hq-note']}>Pick models as they turn Available</span>
+          </div>
+        )}
+
+        {/* Model cards (original card design). Retries and timeout for the
+            selected models are managed in the side panel, so the cards
+            don't carry those fields here. */}
+        <div className={styles['ev__models-scroll']}>
+          {modelsLoading ? (
+            <div className={`${styles.ev__grid} ${styles['ev__grid--wide']}`} aria-busy="true" aria-label="Refreshing models">
+              {Array.from({ length: SKELETON_CARD_COUNT }).map((_, i) => (
+                <div key={i} className={styles['ev__skel-mcard']}>
+                  <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '60%', height: 14 }} />
+                  <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '35%' }} />
+                  <span className={styles['ev__skel-caps']}>
+                    <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--tag']}`} />
+                    <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--tag']}`} />
+                  </span>
+                  <span className={styles['ev__skel-stats']}>
+                    <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--stat']}`} />
+                    <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--stat']}`} />
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className={`${styles.ev__grid} ${styles['ev__grid--wide']}`}>
+              {shownTableModels.map((m) => renderModelCard(m, () => toggleModel(m.id), false))}
+              {tableModels.length === 0 && (
+                <p className={styles.ev__empty}>
+                  {modelSearch ? `No models match "${modelSearch}".` : 'No models for this filter.'}
+                </p>
+              )}
+            </div>
+          )}
+          {/* scrolling this into view adds the next batch of cards */}
+          {!modelsLoading && tableModels.length > modelsShown && (
+            <div ref={modelsMoreRef} className={styles['ev__models-more']}>
+              <Loader2 size={13} className={styles.ev__spin} /> Showing {shownTableModels.length} of {tableModels.length} · scroll for more
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Retries and timeout stay pinned at the top of the panel; the list
+          of selected models scrolls underneath. */}
+      <aside className={`${styles.ev__panel} ${styles['ev__panel--pinned']}`}>
+        <div className={styles['ev__panel-fixed']}>
+          <p className={styles['ev__panel-title']}>Retries and timeout</p>
+          <div className={`${styles.ev__segctl} ${styles['ev__segctl--full']}`}>
+            {[
+              { v: 'all' as const, l: 'Same for all' },
+              { v: 'individual' as const, l: 'Per model' },
+            ].map((o) => (
+              <button
+                key={o.v}
+                type="button"
+                className={`${styles.ev__segbtn} ${draft.retryConfigMode === o.v ? styles['ev__segbtn--on'] : ''}`}
+                onClick={() => dispatch(setDraft({ retryConfigMode: o.v }))}
+              >
+                {o.l}
+              </button>
+            ))}
+          </div>
+          {draft.retryConfigMode === 'all' && retryFields(draft.retryConfigAll, updateRetryConfigAll, clampRetryConfigAll)}
+          <p className={styles['ev__panel-note']}>
+            {draft.retryConfigMode === 'individual' ? 'Set on each model below. ' : ''}Retries {MIN_MAX_RETRIES} to{' '}
+            {MAX_MAX_RETRIES}. Timeout {MIN_TIMEOUT} to {MAX_TIMEOUT} seconds.
+          </p>
+        </div>
+        <div className={styles['ev__panel-scroll']}>
+          <p className={styles['ev__panel-title']}>
+            In this run: {selectedModels.length} model{selectedModels.length === 1 ? '' : 's'}
+          </p>
+          {selectedModels.length === 0 ? (
+            <p className={styles['ev__panel-note']}>Nothing selected yet. Pick a healthy model card.</p>
+          ) : (
+            <div className={styles['ev__panel-list']}>
+              {selectedModels.map((m) => {
+                const health: HealthStatus = healthById?.[m.id] ?? 'idle';
+                const ready = health === 'success' && Boolean(verifiedModelIds[m.id]);
+                return (
+                  <div key={m.id} className={styles.ev__pm}>
+                    <div className={styles['ev__pm-head']}>
+                      <span
+                        className={`${styles['ev__pm-dot']} ${
+                          ready ? styles['ev__pm-dot--ok'] : health === 'failed' ? styles['ev__pm-dot--fail'] : ''
+                        }`}
+                        title={ready ? 'Healthy' : health === 'failed' ? 'Health check failed' : 'Waiting for health check'}
+                      />
+                      <span className={styles['ev__pm-name']}>
+                        {m.name || 'Unnamed model'}
+                        <small>
+                          {providers.find((p) => p?.id === m.provider_id)?.name ?? m.provider_id}
+                          {!ready && (health === 'failed' ? ' · health check failed' : ' · waiting for health check')}
+                        </small>
+                      </span>
+                      <button
+                        type="button"
+                        className={styles['ev__panel-x']}
+                        onClick={() => toggleModel(m.id)}
+                        aria-label={`Remove ${m.name || 'model'}`}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                    {draft.retryConfigMode === 'individual' && (
+                      <div className={styles['ev__pm-body']}>
+                        {retryFields(
+                          draft.modelRetryConfig[m.id],
+                          (field, raw) => updateModelRetryConfig(m.id, field, raw),
+                          (field) => clampModelRetryConfig(m.id, field)
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </aside>
+    </div>
+  );
+
+  // ---- Test Suite step (harness): scorecard coverage panel ----------------
+  const coveragePanel = (
+    <aside className={styles.ev__panel}>
+      <p className={styles['ev__panel-title']}>Scorecard coverage</p>
+      <p className={styles['ev__panel-sub']}>
+        {coveredUseCases.length} of {harnessUseCases.length} use cases covered
+      </p>
+      <div className={styles['ev__panel-list']}>
+        {harnessUseCases.map((u) => {
+          const on = coveredUseCases.includes(u);
+          return (
+            <div key={u} className={`${styles['ev__panel-item']} ${on ? '' : styles['ev__panel-item--off']}`}>
+              <div className={styles['ev__panel-cov']}>
+                <span className={`${styles.ev__dot} ${on ? styles['ev__dot--on'] : ''}`}>
+                  {on && <Check size={10} strokeWidth={3.5} />}
+                </span>
+                {on ? u : `${u}: not covered`}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className={styles['ev__panel-stats']}>
+        <div>
+          <span>Suites selected</span>
+          <b>{selectedHarnessSuites.length}</b>
+        </div>
+        <div>
+          <span>Questions available</span>
+          <b>{selectedHarnessSuites.reduce((n, d) => n + (d.question_count ?? 0), 0).toLocaleString()}</b>
+        </div>
+      </div>
+      <p className={styles['ev__panel-note']}>You choose how many questions to run in the next step.</p>
+    </aside>
+  );
+
+  // ---- Review step: banner + settings rows --------------------------------
+  const metricDisplayNames = draft.metrics.map((m) => customMetricsCatalog.find((c) => c.id === m)?.name ?? m);
+  const reviewStats = isHarness
+    ? [
+        { k: 'Runs', v: harnessRunCount.toLocaleString() },
+        { k: 'Tasks', v: harnessTaskCount.toLocaleString() },
+        { k: 'Scorers', v: String(draft.metrics.length) },
+      ]
+    : [
+        { k: 'Questions', v: suite ? suiteQuestions(suite.question_count ?? 0).toLocaleString() : '—' },
+        { k: 'Models', v: String(selectedModels.length) },
+        { k: 'Metrics', v: hideMetricsStep ? '—' : String(draft.metrics.length) },
+      ];
+  const reviewSummaryLine = isHarness
+    ? `Agent harness comparing ${harnessAgentTitles.join(' and ') || 'no agents yet'}`
+    : `${typeLabel || 'Evaluation'}${frameworkTitle ? ` (${frameworkTitle})` : ''} on ${suite?.name ?? 'no suite yet'}`;
+  const retryText =
+    draft.retryConfigMode === 'all'
+      ? `${clampRetryField('max_retries', draft.retryConfigAll.max_retries)} ${
+          clampRetryField('max_retries', draft.retryConfigAll.max_retries) === 1 ? 'retry' : 'retries'
+        }, ${clampRetryField('timeout', draft.retryConfigAll.timeout)} second timeout`
+      : 'Retries and timeout set per model';
+  const retestShown =
+    draft.type === 'model' || draft.type === 'rag' || (draft.type === 'agent' && Boolean(draft.agentFramework));
+  const reviewRows: { k: string; v: string; step: number }[] = [
+    { k: 'Type', v: typeManifestValue || '—', step: 1 },
+    { k: 'Providers', v: providerNames.join(', ') || '—', step: 2 },
     {
-      label: 'Models',
-      value: draft.models.length
-        ? `${selectedModels.map((m) => m!.name || 'Unnamed model').join(', ')}. ${
-            draft.retryConfigMode === 'all'
-              ? `${draft.retryConfigAll.max_retries} ${draft.retryConfigAll.max_retries === 1 ? 'retry' : 'retries'}, ${draft.retryConfigAll.timeout} second timeout`
-              : 'Retries and timeout set per model'
-          }`
-        : '—',
+      k: 'Models',
+      v: selectedModels.length > 0 ? `${selectedModels.map((m) => m.name || 'Unnamed model').join(', ')}. ${retryText}` : '—',
       step: 3,
     },
-    ...(!isHarness
-      ? [
-          {
-            label: 'Test suite',
-            value: [suite?.name ?? '—', draft.subgroup.length ? `Subgroups: ${draft.subgroup.join(', ')}` : '', isRag ? `Top K ${draft.topK}` : '']
-              .filter(Boolean)
-              .join('. '),
-            step: 4,
-          },
-        ]
-      : []),
-    ...(!hideMetricsStep
-      ? [
-          {
-            label: 'Sample size',
-            value:
-              draft.runSamplesMode === 'full'
-                ? 'Every question'
-                : `${runSamplesValue} question${runSamplesValue === 1 ? '' : 's'}${isHarness ? ' per suite' : ''}`,
-            step: 5,
-          },
-          { label: isHarness ? 'Scorers' : 'Metrics', value: draft.metrics.map(metricDisplayName).join(', ') || '—', step: 5 },
-        ]
-      : []),
-    ...(showRetest && draft.retestOnWrong
-      ? [
-          {
-            label: 'Retest wrong answers',
-            value: `Up to ${clampRetestRounds(draft.retestMaxRounds)} rounds, verified by ${
-              draft.retestVerifyMetric ? metricDisplayName(draft.retestVerifyMetric) : '—'
-            }`,
-            step: 5,
-          },
-        ]
-      : []),
-    { label: 'Judge model', value: judgeModel ? judgeModel.name || 'Unnamed model' : '—', step: 5 },
+    {
+      k: isHarness ? 'Test suites' : 'Test suite',
+      v: isHarness
+        ? selectedHarnessSuites.map((d) => d.name).join(', ') || '—'
+        : [
+            suite?.name ?? '—',
+            draft.subgroup.length > 0 ? `${draft.subgroup.length} subgroup${draft.subgroup.length === 1 ? '' : 's'}` : null,
+            isRag ? `Top K ${draft.topK}` : null,
+          ]
+            .filter(Boolean)
+            .join(', '),
+      step: 4,
+    },
+    {
+      k: 'Sample size',
+      v: sampleN === null ? 'Every question' : `${sampleN} questions per ${isHarness ? 'suite' : 'model'}`,
+      step: 5,
+    },
+    ...(hideMetricsStep
+      ? []
+      : [{ k: isHarness ? 'Scorers' : 'Metrics', v: metricDisplayNames.join(', ') || '—', step: 5 }]),
+    { k: 'Judge model', v: judgeModel ? judgeModel.name || 'Unnamed model' : '—', step: 5 },
     ...(isHarness
       ? [
           {
-            label: 'Limits per task',
-            value: `${clampHarnessSteps(draft.harnessSettings.max_steps)} steps, ${clampRetryField(
+            k: 'Limits per task',
+            v: `${clampHarnessSteps(draft.harnessSettings.max_steps)} steps, ${clampRetryField(
               'timeout',
               draft.harnessSettings.task_timeout
             )} seconds, ${draft.harnessSettings.save_traces ? 'traces saved for replay' : 'traces not saved'}`,
             step: 5,
           },
         ]
-      : draft.instruction.trim()
-        ? [{ label: 'Instruction', value: draft.instruction.trim(), step: 5 }]
-        : []),
+      : []),
+    ...(retestShown && draft.retestOnWrong
+      ? [
+          {
+            k: 'Retest on wrong',
+            v: `Up to ${clampRetestRounds(draft.retestMaxRounds)} rounds, verified by ${draft.retestVerifyMetric ?? '—'}`,
+            step: 5,
+          },
+        ]
+      : []),
+    ...(draft.instruction.trim() ? [{ k: 'Instruction', v: draft.instruction.trim(), step: 5 }] : []),
   ];
 
   return (
@@ -2227,9 +2793,6 @@ export default function NewEvaluation() {
           <span className={styles['ev__header-status']} data-state={launching ? 'live' : 'draft'}>
             {launching ? 'Launching' : 'Draft'}
           </span>
-          <span className={styles['ev__header-eta']}>
-            <Clock3 size={13} /> ~5 min
-          </span>
         </div>
       </div>
 
@@ -2237,45 +2800,49 @@ export default function NewEvaluation() {
         <div className={styles.ev}>
           {/* ---- shell ---- */}
           <div className={styles.ev__shell}>
-            {/* Step checklist: sits directly on the page, the stage is the only card */}
-            <aside className={styles.ev__manifest} aria-label="Run steps">
+            {/* SIGNATURE: Run Manifest */}
+            <aside className={styles.ev__manifest}>
               <div className={styles['ev__manifest-head']}>
+                <div className={styles['ev__manifest-eyebrow']}>
+                  <span>Run manifest</span>
+                  <span className={styles['ev__manifest-pct']}>{Math.round((step / totalSteps) * 100)}%</span>
+                </div>
                 <div className={styles['ev__manifest-title']} data-empty={!draft.name}>
                   {draft.name || 'Untitled run'}
                 </div>
-                <div className={styles['ev__manifest-eyebrow']}>
-                  {step} of {totalSteps} steps done
-                </div>
-                <div className={styles.ev__meter} aria-hidden="true">
-                  {STEPS.map((s, i) => (
+                <div className={styles.ev__segs}>
+                  {STEPS.map((st, i) => (
                     <span
-                      key={s.label}
-                      className={styles['ev__meter-seg']}
-                      data-state={i < step ? 'done' : i === step ? 'active' : 'todo'}
+                      key={st.label}
+                      className={`${styles.ev__seg} ${
+                        i < step ? styles['ev__seg--done'] : i === step ? styles['ev__seg--active'] : ''
+                      }`}
                     />
                   ))}
                 </div>
+                <p className={styles['ev__manifest-done']}>
+                  {step} of {totalSteps} steps done
+                </p>
               </div>
               <div className={styles.ev__spec}>
-                {STEPS.map((s, i) => {
+                {STEPS.map((st, i) => {
                   const state = i === step ? 'active' : i < step ? 'done' : 'todo';
                   const row = manifest[i];
                   return (
                     <button
-                      key={s.label}
+                      key={st.label}
                       type="button"
                       className={`${styles['ev__spec-row']} ${styles[`ev__spec-row--${state}`]}`}
                       onClick={() => goToStep(i)}
                       disabled={i > step}
-                      aria-current={state === 'active' ? 'step' : undefined}
                     >
                       <span className={styles['ev__spec-tick']}>
                         {state === 'done' ? <Check size={13} strokeWidth={3} /> : i + 1}
                       </span>
                       <span className={styles['ev__spec-body']}>
-                        <span className={styles['ev__spec-label']}>{s.label}</span>
+                        <span className={styles['ev__spec-label']}>{st.label}</span>
                         <span className={styles['ev__spec-value']} data-empty={row.empty}>
-                          {row.empty ? (state === 'active' ? 'In progress' : 'Not set') : row.value}
+                          {row.value}
                         </span>
                       </span>
                       {state === 'done' && <span className={styles['ev__spec-edit']}>Edit</span>}
@@ -2283,21 +2850,17 @@ export default function NewEvaluation() {
                   );
                 })}
               </div>
+              <p className={styles['ev__manifest-foot']}>Select a completed step to go back and edit it.</p>
             </aside>
 
             {/* STAGE */}
             <section className={styles.ev__stage}>
               <div className={styles['ev__stage-head']}>
-                <span className={styles['ev__stage-icon']} aria-hidden="true">
-                  <CrumbIcon size={18} />
-                </span>
-                <div className={styles['ev__stage-head-text']}>
-                  <p className={styles.ev__crumb}>
-                    Step {step + 1} of {totalSteps}
-                  </p>
-                  <h2 className={styles['ev__stage-title']}>{STAGE[step].title}</h2>
-                  <p className={styles['ev__stage-sub']}>{STAGE[step].sub}</p>
-                </div>
+                <p className={styles['ev__stage-step']}>
+                  Step {step + 1} of {totalSteps}
+                </p>
+                <h2 className={styles['ev__stage-title']}>{stageTitle}</h2>
+                <p className={styles['ev__stage-sub']}>{stageSub}</p>
               </div>
 
               <div className={styles['ev__stage-body']}>
@@ -2309,259 +2872,412 @@ export default function NewEvaluation() {
                 >
                 <div className={styles.ev__anim} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
                   {/* STEP 0 — NAME */}
+                  {/* Left: the name field, quick-add tokens, presets and naming
+                      tips. Right: a live preview of the row this run will get in
+                      History, so "how it appears in your history" is something
+                      you can see while typing. */}
                   {step === 0 && (
-                    <>
-                      <div className={styles.ev__field} style={{ maxWidth: 620 }}>
-                        <label className={styles.ev__label}>Run name</label>
-                        <input
-                          className={styles['ev__name-input']}
-                          placeholder="Untitled run"
-                          value={draft.name}
-                          onChange={(e) => dispatch(setDraft({ name: e.target.value }))}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' && canGo()) goNext();
-                          }}
-                          autoFocus
-                        />
-                        <p className={styles['ev__name-caption']}>
-                          <Tag size={13} /> This is how the run appears in your history.
-                        </p>
-                      </div>
-
-                      <div className={styles.ev__quick}>
-                        <p className={styles['ev__quick-head']}>Presets</p>
-                        <div className={styles['ev__quick-row']}>
-                          {SUGGESTED_NAMES.map((s) => {
-                            const on = draft.name === s;
-                            return (
+                    <div className={styles.ev__namegrid}>
+                      <div className={styles['ev__namegrid-main']}>
+                        <div className={styles.ev__field}>
+                          <label className={styles.ev__label}>Run name</label>
+                          <div className={styles['ev__name-wrap']}>
+                            <input
+                              className={styles['ev__name-input']}
+                              placeholder="Untitled run"
+                              value={draft.name}
+                              onChange={(e) => dispatch(setDraft({ name: e.target.value }))}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && canGo()) goNext();
+                              }}
+                              autoFocus
+                            />
+                            {draft.name && (
                               <button
-                                key={s}
                                 type="button"
-                                className={`${styles.ev__preset} ${on ? styles['ev__preset--on'] : ''}`}
-                                onClick={() => dispatch(setDraft({ name: s }))}
+                                className={styles['ev__name-clear']}
+                                onClick={() => dispatch(setDraft({ name: '' }))}
+                                aria-label="Clear name"
                               >
-                                {on ? <Check size={13} strokeWidth={3} /> : <Plus size={13} strokeWidth={2.5} />} {s}
+                                <X size={14} />
                               </button>
-                            );
-                          })}
+                            )}
+                          </div>
+                          {draft.name.trim() ? (
+                            <p className={`${styles['ev__name-caption']} ${styles['ev__name-caption--ok']}`}>
+                              <Check size={13} strokeWidth={3} /> Ready. Press Enter to continue, or keep refining.
+                            </p>
+                          ) : (
+                            <p className={styles['ev__name-caption']}>
+                              <Tag size={13} /> This is how the run appears in your history.
+                            </p>
+                          )}
                         </div>
-                      </div>
 
-                      <div className={styles.ev__note}>
-                        <span className={styles['ev__note-icon']}>
-                          <Lightbulb size={16} />
-                        </span>
-                        <div>
-                          <p className={styles['ev__note-title']}>What makes a good name</p>
-                          <ul className={styles['ev__note-list']}>
-                            {NAMING_TIPS.map((tip) => (
-                              <li key={tip}>{tip}</li>
-                            ))}
-                          </ul>
+                        {/* Quick add: append a period, version or date to the name
+                            in one click (click again to take it back off). */}
+                        <div className={styles.ev__quick}>
+                          <p className={styles['ev__quick-head']}>Quick add</p>
+                          <div className={styles['ev__quick-row']}>
+                            {nameTokens.map((t) => {
+                              const on = draft.name.toLowerCase().includes(t.toLowerCase());
+                              return (
+                                <button
+                                  key={t}
+                                  type="button"
+                                  className={`${styles.ev__preset} ${on ? styles['ev__preset--on'] : ''}`}
+                                  aria-pressed={on}
+                                  onClick={() => toggleNameToken(t)}
+                                >
+                                  {on ? <Check size={13} strokeWidth={3} /> : <Plus size={13} strokeWidth={2.5} />} {t}
+                                </button>
+                              );
+                            })}
+                          </div>
                         </div>
-                      </div>
-                    </>
-                  )}
 
-                  {step === 1 && (
-                    <div className={styles.ev__flow}>
-                      {/* Question 1: system under test. Picking one reveals the
-                          follow-up questions for that type underneath. */}
-                      <div className={styles.ev__q}>
-                        <p className={styles['ev__q-title']}>System under test</p>
-                        <div className={styles.ev__tiles} role="radiogroup" aria-label="System under test">
-                          {TYPE_OPTIONS.map((o) => {
-                            const on = draft.type === o.value;
-                            return (
-                              <button
-                                key={o.value}
-                                type="button"
-                                role="radio"
-                                aria-checked={on}
-                                className={`${styles.ev__tile} ${on ? styles['ev__tile--on'] : ''} ${
-                                  o.disabled ? styles['ev__tile--off'] : ''
-                                }`}
-                                onClick={() => !o.disabled && !on && dispatch(setDraftType(o.value))}
-                                disabled={o.disabled}
-                              >
-                                <span className={styles['ev__tile-head']}>
-                                  <span className={`${styles.ev__radio} ${on ? styles['ev__radio--on'] : ''}`} />
-                                  <span className={styles['ev__tile-name']}>{o.label}</span>
-                                  {o.disabled && <span className={styles.ev__badge}>Soon</span>}
-                                </span>
-                                <span className={styles['ev__tile-desc']}>{o.sub}</span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      {draft.type === 'agent' && (
-                        <div className={styles.ev__follow}>
-                          <p className={styles['ev__follow-lead']}>Because you chose Agent</p>
-
-                          {/* Standard keeps the benchmark / Hermes-framework flows;
-                              the harness compares agents on the same tasks. The two
-                              are mutually exclusive, so switching clears the other
-                              mode's picks (and the metric picks, whose catalog differs). */}
-                          <div className={styles.ev__q}>
-                            <p className={styles['ev__q-title']}>How should the agents be tested?</p>
-                            <div className={styles['ev__opt-list']} role="radiogroup" aria-label="Agent evaluation mode">
-                              {[
-                                {
-                                  v: false,
-                                  name: 'One agent on a benchmark',
-                                  desc: 'Run a single agent on one agent benchmark. You can add a framework below.',
-                                  tags: [] as string[],
-                                },
-                                {
-                                  v: true,
-                                  name: 'Compare agents on document work',
-                                  desc: 'Every agent runs the same tasks in a clean sandbox and gets one scorecard.',
-                                  tags: [...HARNESS_USE_CASES] as string[],
-                                },
-                              ].map((o) => {
-                                const on = draft.agentHarness === o.v;
+                          <div className={styles.ev__quick}>
+                            <p className={styles['ev__quick-head']}>Presets</p>
+                            <div className={styles['ev__quick-row']}>
+                              {SUGGESTED_NAMES.map((s) => {
+                                const on = draft.name === s;
                                 return (
                                   <button
-                                    key={String(o.v)}
+                                    key={s}
                                     type="button"
-                                    role="radio"
-                                    aria-checked={on}
-                                    className={`${styles['ev__opt-row']} ${on ? styles['ev__opt-row--on'] : ''}`}
-                                    onClick={() =>
-                                      !on &&
-                                      dispatch(
-                                        setDraft({
-                                          agentHarness: o.v,
-                                          agentFramework: o.v ? null : draft.agentFramework,
-                                          harnessAgents: o.v ? draft.harnessAgents : [],
-                                          harnessSuiteIds: [],
-                                          // the scorer catalog differs per mode, so drop stale picks
-                                          metrics: [],
-                                          retestOnWrong: false,
-                                          retestVerifyMetric: null,
-                                        })
-                                      )
-                                    }
+                                    className={`${styles.ev__preset} ${on ? styles['ev__preset--on'] : ''}`}
+                                    onClick={() => dispatch(setDraft({ name: s }))}
                                   >
-                                    <span className={`${styles.ev__radio} ${on ? styles['ev__radio--on'] : ''}`} />
-                                    <span className={styles['ev__opt-text']}>
-                                      <span className={styles['ev__opt-name']}>{o.name}</span>
-                                      <span className={styles['ev__opt-desc']}>{o.desc}</span>
-                                      {o.tags.length > 0 && (
-                                        <span className={styles['ev__opt-tags']}>
-                                          {o.tags.map((t) => (
-                                            <span key={t} className={styles['ev__opt-tag']}>
-                                              {t}
-                                            </span>
-                                          ))}
-                                        </span>
-                                      )}
-                                    </span>
+                                    {on ? <Check size={13} strokeWidth={3} /> : <Plus size={13} strokeWidth={2.5} />} {s}
                                   </button>
                                 );
                               })}
                             </div>
                           </div>
 
-                          {isHarness && (
-                            <div className={styles.ev__q}>
-                              <p className={styles['ev__q-title']}>
-                                Which agents? <span className={styles['ev__q-note']}>Pick one or more</span>
-                              </p>
-                              <div className={`${styles['ev__opt-list']} ${styles['ev__opt-list--cols']}`}>
-                                {HARNESS_AGENTS.map((a) => {
-                                  const on = draft.harnessAgents.includes(a.id);
+                          <div className={styles.ev__note}>
+                            <span className={styles['ev__note-icon']}>
+                              <Lightbulb size={16} />
+                            </span>
+                            <div>
+                              <p className={styles['ev__note-title']}>What makes a good name</p>
+                              <ul className={styles['ev__note-list']}>
+                                {NAMING_TIPS.map((tip) => (
+                                  <li key={tip}>{tip}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          </div>
+                      </div>
+
+                      <aside className={styles.ev__hprev}>
+                        <p className={styles['ev__hprev-head']}>Preview in History</p>
+                        <div className={`${styles['ev__hprev-card']} ${draft.name.trim() ? styles['ev__hprev-card--live'] : ''}`}>
+                          <div className={styles['ev__hprev-top']}>
+                            <span className={styles['ev__hprev-icon']}>
+                              <Tag size={15} />
+                            </span>
+                            <span className={styles['ev__hprev-name']} data-empty={!draft.name.trim()}>
+                              {draft.name.trim() || 'Untitled run'}
+                            </span>
+                          </div>
+                          <div className={styles['ev__hprev-badges']}>
+                            <span className={styles.ev__tag}>{typeLabel || 'Type not set'}</span>
+                            <span className={styles['ev__hprev-status']}>Draft</span>
+                          </div>
+                          <div className={styles['ev__hprev-meta']}>
+                            <span>{new Date().toLocaleDateString()}</span>
+                            <span>
+                              {draft.models.length} model{draft.models.length === 1 ? '' : 's'}
+                            </span>
+                          </div>
+                        </div>
+                        <p className={styles['ev__hprev-note']}>
+                          Updates as you type. The type and models fill in as you complete the next steps.
+                        </p>
+                      </aside>
+                    </div>
+                  )}
+
+                  {/* STEP 1 — TYPE */}
+                  {step === 1 && (
+                    <>
+                      <div className={styles.ev__options}>
+                        {TYPE_OPTIONS.map((o) => {
+                          const Icon = o.icon;
+                          const on = draft.type === o.value;
+                          return (
+                            <button
+                              key={o.value}
+                              type="button"
+                              className={`${styles.ev__option} ${on ? styles['ev__option--on'] : ''} ${
+                                o.disabled ? styles['ev__option--off'] : ''
+                              }`}
+                              onClick={() => !o.disabled && dispatch(setDraftType(o.value))}
+                              disabled={o.disabled}
+                            >
+                              <span
+                                className={`${styles['ev__option-icon']} ${
+                                  o.variant ? styles[`ev__option-icon--${o.variant}`] : ''
+                                }`}
+                              >
+                                <Icon size={20} />
+                              </span>
+                              <span className={styles['ev__option-main']}>
+                                <span className={styles['ev__option-name']}>
+                                  {o.label}
+                                  {o.disabled && <span className={styles.ev__badge}>Soon</span>}
+                                </span>
+                                <span className={styles['ev__option-desc']}>{o.sub}</span>
+                              </span>
+                              {on && (
+                                <span className={styles.ev__mark}>
+                                  <Check size={13} strokeWidth={3} />
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* About the selected type. For Agent it goes below the
+                          agent options instead, so those stay near the top. */}
+                      {draft.type !== 'agent' && typeAboutPanel}
+
+                      {/* Agent setup — the two follow-up choices that only apply to
+                          Agent, as one panel with numbered steps:
+                            1. how to test (Standard benchmark / Document-agent harness)
+                            2. harness: which agents to compare (required)
+                               standard: which framework (optional)
+                          The two modes are mutually exclusive, so switching clears
+                          agentFramework (harness) / harness picks (standard). */}
+                      {draft.type === 'agent' && (
+                        <div className={`${styles.ev__asetup} ${styles.ev__anim}`}>
+                          <div className={styles['ev__asetup-head']}>
+                            <span className={`${styles['ev__option-icon']} ${styles['ev__option-icon--agent']}`}>
+                              <Bot size={18} />
+                            </span>
+                            <div className={styles['ev__asetup-title']}>
+                              <h3>Agent setup</h3>
+                              <p>Two more choices, because you picked Agent.</p>
+                            </div>
+                            {isHarness && draft.harnessAgents.length === 0 ? (
+                              <span className={`${styles['ev__asetup-status']} ${styles['ev__asetup-status--todo']}`}>
+                                1 choice left
+                              </span>
+                            ) : (
+                              <span className={styles['ev__asetup-status']}>
+                                <Check size={12} strokeWidth={3} /> All set
+                              </span>
+                            )}
+                          </div>
+
+                          {/* 1 — how to test */}
+                          <div className={styles['ev__asetup-step']}>
+                            <span className={`${styles['ev__asetup-n']} ${styles['ev__asetup-n--done']}`}>
+                              <Check size={12} strokeWidth={3} />
+                            </span>
+                            <div className={styles['ev__asetup-body']}>
+                              <p className={styles['ev__asetup-q']}>How should the agent be tested?</p>
+                              <div className={styles['ev__asetup-grid']}>
+                                {[
+                                  {
+                                    v: false,
+                                    icon: Bot,
+                                    l: 'Standard benchmark',
+                                    d: 'Run one agent on a single agent benchmark. You can add the framework it runs on.',
+                                    tags: ['One benchmark', 'Optional framework'],
+                                  },
+                                  {
+                                    v: true,
+                                    icon: Layers,
+                                    l: 'Document-agent harness',
+                                    d: 'Compare agents on the same document tasks, each in a clean sandbox, with one scorecard.',
+                                    tags: [...HARNESS_USE_CASES],
+                                  },
+                                ].map((o) => {
+                                  const on = draft.agentHarness === o.v;
+                                  const ModeIcon = o.icon;
                                   return (
                                     <button
-                                      key={a.id}
+                                      key={String(o.v)}
                                       type="button"
-                                      role="checkbox"
-                                      aria-checked={on}
-                                      className={`${styles['ev__opt-row']} ${on ? styles['ev__opt-row--on'] : ''}`}
-                                      onClick={() =>
+                                      className={`${styles.ev__acard} ${on ? styles['ev__acard--on'] : ''}`}
+                                      aria-pressed={on}
+                                      onClick={() => {
+                                        if (on) return;
                                         dispatch(
-                                          setDraft({ harnessAgents: toggle(draft.harnessAgents, a.id) as HarnessAdapterId[] })
-                                        )
-                                      }
+                                          setDraft({
+                                            agentHarness: o.v,
+                                            agentFramework: o.v ? null : draft.agentFramework,
+                                            harnessAgents: o.v ? draft.harnessAgents : [],
+                                            harnessSuiteIds: [],
+                                            // the scorer catalog differs per mode, so drop stale picks
+                                            metrics: [],
+                                            retestOnWrong: false,
+                                            retestVerifyMetric: null,
+                                          })
+                                        );
+                                      }}
                                     >
-                                      <span className={`${styles.ev__check} ${on ? styles['ev__check--on'] : ''}`}>
-                                        {on && <Check size={11} strokeWidth={3} />}
+                                      <span className={styles['ev__acard-head']}>
+                                        <span className={`${styles.ev__radio} ${on ? styles['ev__radio--on'] : ''}`} />
+                                        <span className={styles['ev__srow-icon']}>
+                                          <ModeIcon size={15} />
+                                        </span>
+                                        <span className={styles['ev__acard-name']}>{o.l}</span>
                                       </span>
-                                      <span className={styles['ev__opt-text']}>
-                                        <span className={styles['ev__opt-name']}>{a.title}</span>
-                                        <span className={styles['ev__opt-desc']}>{a.desc}</span>
+                                      <span className={styles['ev__acard-desc']}>{o.d}</span>
+                                      <span className={styles['ev__acard-tags']}>
+                                        {o.tags.map((t) => (
+                                          <span key={t} className={`${styles.ev__pilltag} ${on ? '' : styles['ev__pilltag--muted']}`}>
+                                            {t}
+                                          </span>
+                                        ))}
                                       </span>
                                     </button>
                                   );
                                 })}
                               </div>
                             </div>
+                          </div>
+
+                          {/* 2 — harness: agents to compare (required) */}
+                          {isHarness && (
+                            <div className={styles['ev__asetup-step']}>
+                              <span
+                                className={`${styles['ev__asetup-n']} ${
+                                  draft.harnessAgents.length > 0 ? styles['ev__asetup-n--done'] : styles['ev__asetup-n--active']
+                                }`}
+                              >
+                                {draft.harnessAgents.length > 0 ? <Check size={12} strokeWidth={3} /> : 2}
+                              </span>
+                              <div className={styles['ev__asetup-body']}>
+                                <p className={styles['ev__asetup-q']}>
+                                  Which agents should be compared? <span>Pick one or more</span>
+                                </p>
+                                <div className={styles['ev__asetup-grid']}>
+                                  {HARNESS_AGENTS.map((a) => {
+                                    const on = draft.harnessAgents.includes(a.id);
+                                    return (
+                                      <button
+                                        key={a.id}
+                                        type="button"
+                                        className={`${styles.ev__acard} ${on ? styles['ev__acard--on'] : ''}`}
+                                        aria-pressed={on}
+                                        onClick={() =>
+                                          dispatch(
+                                            setDraft({ harnessAgents: toggle(draft.harnessAgents, a.id) as HarnessAdapterId[] })
+                                          )
+                                        }
+                                      >
+                                        <span className={styles['ev__acard-head']}>
+                                          <span className={`${styles.ev__check} ${on ? styles['ev__check--on'] : ''}`}>
+                                            {on && <Check size={11} strokeWidth={3} />}
+                                          </span>
+                                          <span className={styles['ev__srow-icon']}>
+                                            <Waypoints size={15} />
+                                          </span>
+                                          <span className={styles['ev__acard-name']}>{a.title}</span>
+                                        </span>
+                                        <span className={styles['ev__acard-desc']}>{a.desc}</span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                                {draft.harnessAgents.length === 0 ? (
+                                  <p className={`${styles['ev__asetup-sum']} ${styles['ev__asetup-sum--req']}`}>
+                                    <AlertTriangle size={13} /> Select at least one agent to continue.
+                                  </p>
+                                ) : (
+                                  <p className={styles['ev__asetup-sum']}>
+                                    <Info size={13} />
+                                    {draft.harnessAgents.length === 1 ? (
+                                      <span>
+                                        <b>{harnessAgentTitles[0]}</b> runs alone. Add another agent to compare them side by side.
+                                      </span>
+                                    ) : (
+                                      <span>
+                                        <b>{harnessAgentTitles.join(' vs ')}</b>: same tasks, same sandbox, one scorecard.
+                                      </span>
+                                    )}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
                           )}
 
-                          {!draft.agentHarness && (
-                            <div className={styles.ev__q}>
-                              <p className={styles['ev__q-title']}>
-                                Agent framework <span className={styles['ev__q-note']}>Optional</span>
-                              </p>
-                              <p className={styles['ev__q-hint']}>
-                                Tell us which framework the agent runs on, if any. It also decides which test suites the
-                                next steps offer.
-                              </p>
-                              <div className={`${styles['ev__opt-list']} ${styles['ev__opt-list--cols']}`}>
-                                {AGENT_FRAMEWORKS.map((f) => {
-                                  const on = draft.agentFramework === f.id;
-                                  return (
-                                    <button
-                                      key={f.id}
-                                      type="button"
-                                      role="checkbox"
-                                      aria-checked={on}
-                                      className={`${styles['ev__opt-row']} ${on ? styles['ev__opt-row--on'] : ''}`}
-                                      onClick={() => dispatch(setDraft({ agentFramework: on ? null : f.id }))}
-                                    >
-                                      <span className={`${styles.ev__check} ${on ? styles['ev__check--on'] : ''}`}>
-                                        {on && <Check size={11} strokeWidth={3} />}
-                                      </span>
-                                      <span className={styles['ev__opt-text']}>
-                                        <span className={styles['ev__opt-name']}>{f.title}</span>
-                                        <span className={styles['ev__opt-desc']}>{f.desc}</span>
-                                      </span>
-                                    </button>
-                                  );
-                                })}
+                          {/* 2 — standard: framework (optional) */}
+                          {!isHarness && (
+                            <div className={styles['ev__asetup-step']}>
+                              <span
+                                className={`${styles['ev__asetup-n']} ${draft.agentFramework ? styles['ev__asetup-n--done'] : ''}`}
+                              >
+                                {draft.agentFramework ? <Check size={12} strokeWidth={3} /> : 2}
+                              </span>
+                              <div className={styles['ev__asetup-body']}>
+                                <p className={styles['ev__asetup-q']}>
+                                  Which framework does the agent run on? <span>Optional</span>
+                                </p>
+                                <div className={styles['ev__asetup-grid']}>
+                                  {AGENT_FRAMEWORKS.map((f) => {
+                                    const on = draft.agentFramework === f.id;
+                                    return (
+                                      <button
+                                        key={f.id}
+                                        type="button"
+                                        className={`${styles.ev__acard} ${on ? styles['ev__acard--on'] : ''}`}
+                                        aria-pressed={on}
+                                        onClick={() => dispatch(setDraft({ agentFramework: on ? null : f.id }))}
+                                      >
+                                        <span className={styles['ev__acard-head']}>
+                                          <span className={`${styles.ev__check} ${on ? styles['ev__check--on'] : ''}`}>
+                                            {on && <Check size={11} strokeWidth={3} />}
+                                          </span>
+                                          <span className={styles['ev__srow-icon']}>
+                                            <Waypoints size={15} />
+                                          </span>
+                                          <span className={styles['ev__acard-name']}>{f.title}</span>
+                                        </span>
+                                        <span className={styles['ev__acard-desc']}>{f.desc}</span>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                                <p className={styles['ev__asetup-sum']}>
+                                  <Info size={13} />
+                                  {draft.agentFramework ? (
+                                    <span>
+                                      Runs on <b>{frameworkTitle}</b>. This also decides which test suites the next steps offer.
+                                    </span>
+                                  ) : (
+                                    <span>No framework selected. The run uses an agent benchmark, and scoring needs only a judge model.</span>
+                                  )}
+                                </p>
                               </div>
                             </div>
                           )}
                         </div>
                       )}
-                    </div>
-                  )}
 
+                      {draft.type === 'agent' && typeAboutPanel}
+                    </>
+                  )}
 
                   {/* STEP 2 — PROVIDERS */}
                   {step === 2 && (
                     <div className={styles.ev__scroll}>
-                      <div className={styles['ev__step-toolbar']}>
-                        <div className={styles['ev__toolbar-search']}>
-                          <Search size={14} />
-                          <input
-                            placeholder="Search providers…"
-                            value={providerSearch}
-                            onChange={(e) => setProviderSearch(e.target.value)}
-                          />
-                        </div>
-                        <button
-                          type="button"
-                          className={styles['ev__toolbar-refresh']}
-                          onClick={refreshProviders}
-                          disabled={providersLoading}
-                          title="Refresh providers"
-                        >
-                          <RefreshCw size={14} className={providersLoading ? styles.ev__spin : ''} />
-                        </button>
-                      </div>
+                      {listHead({
+                        title: 'Connected providers',
+                        meta: (
+                          <>
+                            {filteredProviders.length} of {connectedProviders.length} shown · <b>{draft.providers.length}</b> selected
+                          </>
+                        ),
+                        count: filteredProviders.length,
+                        search: { placeholder: 'Search providers', value: providerSearch, onChange: setProviderSearch },
+                        refresh: { onClick: refreshProviders, busy: providersLoading, title: 'Refresh providers' },
+                      })}
                       {providersLoading ? (
                         <div className={styles.ev__grid} aria-busy="true" aria-label="Refreshing providers">
                           {Array.from({ length: SKELETON_CARD_COUNT }).map((_, i) => (
@@ -2576,25 +3292,40 @@ export default function NewEvaluation() {
                           ))}
                         </div>
                       ) : (
-                        <div className={styles.ev__grid}>
+                        <div className={`${styles.ev__grid} ${styles['ev__grid--providers']}`}>
                           {filteredProviders.map((p) => {
                             const on = draft.providers.includes(p.id);
                             return (
                               <button
                                 key={p.id}
                                 type="button"
-                                className={`${styles.ev__pcard} ${on ? styles['ev__pcard--on'] : ''}`}
+                                className={`${styles.ev__option} ${styles['ev__option--provider']} ${
+                                  on ? styles['ev__option--on'] : ''
+                                }`}
                                 onClick={() => dispatch(setDraft({ providers: toggle(draft.providers, p.id) }))}
+                                aria-pressed={on}
                               >
-                                <span className={styles['ev__pcard-icon']}>{providerInitials(p.name)}</span>
-                                <span className={styles['ev__pcard-body']}>
-                                  <span className={styles['ev__pcard-name']}>{p.name || 'Unnamed provider'}</span>
-                                  <span className={styles['ev__pcard-meta']}>{p.model_count ?? 0} models available</span>
-                                  <span className={styles.ev__pill}>Connected</span>
+                                {/* Same card as the Type step: icon tile, name,
+                                    description, selection mark on the right. */}
+                                <span className={styles['ev__option-icon']}>{providerInitials(p.name)}</span>
+                                <span className={styles['ev__option-main']}>
+                                  <span className={styles['ev__option-name']}>
+                                    {p.name || 'Unnamed provider'}
+                                    <span className={styles['ev__pv-status']}>Connected</span>
+                                  </span>
+                                  {p.description && (
+                                    <span className={styles['ev__option-desc']} title={p.description}>
+                                      {p.description}
+                                    </span>
+                                  )}
+                                  <span className={styles['ev__option-meta']}>
+                                    <Cpu size={13} />
+                                    <b>{p.model_count ?? 0}</b> model{(p.model_count ?? 0) === 1 ? '' : 's'} available
+                                  </span>
                                 </span>
                                 {on && (
                                   <span className={styles.ev__mark}>
-                                    <Check size={12} strokeWidth={3} />
+                                    <Check size={13} strokeWidth={3} />
                                   </span>
                                 )}
                               </button>
@@ -2611,81 +3342,162 @@ export default function NewEvaluation() {
                     </div>
                   )}
 
-                  {/* STEP 3 — MODELS: a comparison table on the left (health,
-                      context and price line up column by column) and an "In this
-                      run" panel on the right that lists the picks and holds the
-                      retry/timeout settings in one place. */}
+                  {/* STEP 3 — MODELS */}
                   {step === 3 &&
                     (availableModels.length > 0 ? (
-                      <div className={styles.ev__split}>
-                        <div className={styles['ev__split-main']}>
-                          <div className={styles['ev__step-toolbar']}>
-                            {/* RAG uses per-category search boxes instead. */}
-                            {!isRag && (
-                              <div className={styles['ev__toolbar-search']}>
-                                <Search size={14} />
-                                <input
-                                  placeholder="Search models…"
-                                  aria-label="Search models"
-                                  value={modelSearch}
-                                  onChange={(e) => setModelSearch(e.target.value)}
-                                />
-                              </div>
-                            )}
-                            {!isRag && modelProviderChips.length > 2 && (
-                              <div className={styles['ev__pills']} role="group" aria-label="Filter by provider">
-                                {modelProviderChips.map((c) => (
-                                  <button
-                                    key={c.id}
-                                    type="button"
-                                    aria-pressed={modelProvider === c.id}
-                                    className={`${styles.ev__pill} ${modelProvider === c.id ? styles['ev__pill--on'] : ''}`}
-                                    onClick={() => setModelProvider(c.id)}
-                                  >
-                                    {c.label} <span>{c.count}</span>
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                            <button
-                              type="button"
-                              className={styles['ev__toolbar-refresh']}
-                              onClick={refreshModels}
-                              disabled={modelsLoading}
-                              title="Refresh models"
-                              aria-label="Refresh models"
-                            >
-                              <RefreshCw size={14} className={modelsLoading ? styles.ev__spin : ''} />
-                            </button>
-                          </div>
-
-                          {(!modelsFetchedThisVisit || selectedModelsNotReady.length > 0) && (
-                            <p className={styles['ev__metrics-required']}>
-                              {!modelsFetchedThisVisit || selectedModelsChecking
-                                ? 'Checking the health of your selected models. You can continue once they are all available.'
-                                : 'Some selected models are not available. Retry their health check or remove them to continue.'}
-                            </p>
-                          )}
-
-                          {modelsLoading ? (
-                            <div className={styles['ev__skel-rows']} aria-busy="true" aria-label="Refreshing models">
-                              {Array.from({ length: SKELETON_CARD_COUNT }).map((_, i) => (
-                                <span key={i} className={`${styles['ev__skel-block']} ${styles['ev__skel-block--row']}`} />
-                              ))}
+                      !isRag ? (
+                        modelsTableView
+                      ) : (
+                      <div className={styles['ev__models-panel']}>
+                        <div className={styles['ev__step-toolbar']}>
+                          {/* RAG uses per-category search boxes instead (see
+                              the Embedding/Reranker/LLM columns below) — no
+                              shared global search box for it. */}
+                          {!isRag && (
+                            <div className={styles['ev__toolbar-search']}>
+                              <Search size={14} />
+                              <input
+                                placeholder="Search models…"
+                                value={modelSearch}
+                                onChange={(e) => setModelSearch(e.target.value)}
+                              />
                             </div>
-                          ) : isRag ? (
-                            // RAG: three tables, always in this order — Embedding,
-                            // Reranker, LLM. Embedding/Reranker take one model each
-                            // (toggleModelForCategory); LLM takes one or more.
-                            RAG_CATEGORIES.map((category) => {
+                          )}
+                          <button
+                            type="button"
+                            className={styles['ev__toolbar-refresh']}
+                            onClick={refreshModels}
+                            disabled={modelsLoading}
+                            title="Refresh models"
+                          >
+                            <RefreshCw size={14} className={modelsLoading ? styles.ev__spin : ''} />
+                          </button>
+                        </div>
+
+                        {(!modelsFetchedThisVisit || selectedModelsNotReady.length > 0) && (
+                          <p className={styles['ev__metrics-required']}>
+                            {!modelsFetchedThisVisit || selectedModelsChecking
+                              ? 'Checking the health of your selected models — you can continue once they\u2019re all available.'
+                              : 'Some selected models aren\u2019t available yet — run a health check on them (or deselect them) to continue.'}
+                          </p>
+                        )}
+
+                        {/* Retry/timeout mode — lets the user apply one shared
+                            max_retries/timeout to every selected model at once
+                            ("Apply to all"), or set it per model on each card
+                            below ("Individually"). Only relevant once at least
+                            one model is selected. */}
+                        {draft.models.length > 0 && (
+                          <div className={styles['ev__retry-mode']}>
+                            <div className={styles['ev__retry-mode-head']}>
+                              <label className={styles.ev__label}>Retries &amp; timeout</label>
+                              <div className={styles['ev__radio-row']}>
+                                <button
+                                  type="button"
+                                  className={`${styles['ev__radio-opt']} ${
+                                    draft.retryConfigMode === 'all' ? styles['ev__radio-opt--on'] : ''
+                                  }`}
+                                  onClick={() => dispatch(setDraft({ retryConfigMode: 'all' }))}
+                                >
+                                  <span
+                                    className={`${styles.ev__radio} ${
+                                      draft.retryConfigMode === 'all' ? styles['ev__radio--on'] : ''
+                                    }`}
+                                  />
+                                  Apply to all
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`${styles['ev__radio-opt']} ${
+                                    draft.retryConfigMode === 'individual' ? styles['ev__radio-opt--on'] : ''
+                                  }`}
+                                  onClick={() => dispatch(setDraft({ retryConfigMode: 'individual' }))}
+                                >
+                                  <span
+                                    className={`${styles.ev__radio} ${
+                                      draft.retryConfigMode === 'individual' ? styles['ev__radio--on'] : ''
+                                    }`}
+                                  />
+                                  Individually
+                                </button>
+                              </div>
+                            </div>
+
+                            {draft.retryConfigMode === 'all' ? (
+                              <div className={styles['ev__retry-mode-all']}>
+                                <div className={styles['ev__mcard-retry-field']}>
+                                  <label>Max retries</label>
+                                  <input
+                                    type="number"
+                                    min={MIN_MAX_RETRIES}
+                                    max={MAX_MAX_RETRIES}
+                                    value={displayNumInput(draft.retryConfigAll.max_retries)}
+                                    onChange={(e) => updateRetryConfigAll('max_retries', parseNumInput(e.target.value))}
+                                    onBlur={() => clampRetryConfigAll('max_retries')}
+                                  />
+                                </div>
+                                <div className={styles['ev__mcard-retry-field']}>
+                                  <label>Timeout (s)</label>
+                                  <input
+                                    type="number"
+                                    min={MIN_TIMEOUT}
+                                    max={MAX_TIMEOUT}
+                                    value={displayNumInput(draft.retryConfigAll.timeout)}
+                                    onChange={(e) => updateRetryConfigAll('timeout', parseNumInput(e.target.value))}
+                                    onBlur={() => clampRetryConfigAll('timeout')}
+                                  />
+                                </div>
+                                <p className={styles['ev__retry-mode-note']}>
+                                  <Info size={11} /> Retries {MIN_MAX_RETRIES}–{MAX_MAX_RETRIES} · Timeout {MIN_TIMEOUT}
+                                  –{MAX_TIMEOUT}s — applied to all {draft.models.length} selected model
+                                  {draft.models.length === 1 ? '' : 's'}.
+                                </p>
+                              </div>
+                            ) : (
+                              <p className={styles['ev__retry-mode-note']}>
+                                <Info size={11} /> Retries {MIN_MAX_RETRIES}–{MAX_MAX_RETRIES} · Timeout {MIN_TIMEOUT}
+                                –{MAX_TIMEOUT}s — set on each selected model's card below.
+                              </p>
+                            )}
+                          </div>
+                        )}
+                        <div className={styles['ev__models-scroll']}>
+                        {modelsLoading ? (
+                          <div className={`${styles.ev__grid} ${styles['ev__grid--wide']}`} aria-busy="true" aria-label="Refreshing models">
+                            {Array.from({ length: SKELETON_CARD_COUNT }).map((_, i) => (
+                              <div key={i} className={styles['ev__skel-mcard']}>
+                                <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '60%', height: 14 }} />
+                                <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '35%' }} />
+                                <span className={styles['ev__skel-caps']}>
+                                  <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--tag']}`} />
+                                  <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--tag']}`} />
+                                </span>
+                                <span className={styles['ev__skel-stats']}>
+                                  <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--stat']}`} />
+                                  <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--stat']}`} />
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : draft.type === 'rag' ? (
+                          // RAG: exactly three columns, always in this order
+                          // — Embedding, Reranker, LLM. Embedding/Reranker
+                          // are single-select (toggleModelForCategory);
+                          // LLM is multi-select (plain toggleModel). Each
+                          // column has its own search box (ragCategorySearch)
+                          // instead of the shared global search used by the
+                          // Model/Agent grid.
+                          <div className={styles['ev__rag-columns']}>
+                            {RAG_CATEGORIES.map((category) => {
                               const allCategoryModels = modelsByCategory.get(category) ?? [];
                               const categoryModels = filteredModelsByCategory.get(category) ?? [];
+                              const allCategoryIds = allCategoryModels.map((m) => m.id);
                               const selectedCount = allCategoryModels.filter((m) => draft.models.includes(m.id)).length;
                               const isMultiSelect = category === 'LLM';
                               return (
-                                <section key={category} className={styles.ev__group}>
-                                  <div className={styles['ev__group-head']}>
-                                    <h3 className={styles['ev__group-title']}>{category}</h3>
+                                <div key={category} className={styles['ev__rag-col']}>
+                                  <div className={styles['ev__rag-col-head']}>
+                                    <span className={styles['ev__rag-col-title']}>{category}</span>
                                     <span
                                       className={`${styles['ev__rag-col-status']} ${
                                         selectedCount > 0 ? styles['ev__rag-col-status--on'] : ''
@@ -2701,169 +3513,55 @@ export default function NewEvaluation() {
                                         'Select one'
                                       )}
                                     </span>
-                                    <div className={styles['ev__group-search']}>
-                                      <Search size={12} />
-                                      <input
-                                        placeholder={`Search ${category.toLowerCase()}…`}
-                                        aria-label={`Search ${category} models`}
-                                        value={ragCategorySearch[category] ?? ''}
-                                        onChange={(e) =>
-                                          setRagCategorySearch((prev) => ({ ...prev, [category]: e.target.value }))
-                                        }
-                                      />
-                                    </div>
                                   </div>
-                                  {categoryModels.length > 0 &&
-                                    renderModelTable(categoryModels, category, isMultiSelect ? undefined : category)}
-                                  {categoryModels.length === 0 && allCategoryModels.length > 0 && (
-                                    <p className={styles.ev__empty}>No models match "{ragCategorySearch[category]}".</p>
-                                  )}
-                                  {allCategoryModels.length === 0 && (
-                                    <p className={styles.ev__empty}>No {category} models available.</p>
-                                  )}
-                                </section>
+
+                                  <div className={styles['ev__rag-col-search']}>
+                                    <Search size={12} />
+                                    <input
+                                      placeholder={`Search ${category.toLowerCase()}…`}
+                                      value={ragCategorySearch[category] ?? ''}
+                                      onChange={(e) =>
+                                        setRagCategorySearch((prev) => ({ ...prev, [category]: e.target.value }))
+                                      }
+                                    />
+                                  </div>
+
+                                  <div className={styles['ev__rag-col-list']}>
+                                    {categoryModels.map((m) =>
+                                      renderModelCard(
+                                        m,
+                                        isMultiSelect
+                                          ? () => toggleModel(m.id)
+                                          : () => toggleModelForCategory(m.id, allCategoryIds)
+                                      )
+                                    )}
+                                    {categoryModels.length === 0 && allCategoryModels.length > 0 && (
+                                      <p className={styles.ev__empty}>
+                                        No models match "{ragCategorySearch[category]}".
+                                      </p>
+                                    )}
+                                    {allCategoryModels.length === 0 && (
+                                      <p className={styles.ev__empty}>No {category} models available.</p>
+                                    )}
+                                  </div>
+                                </div>
                               );
-                            })
-                          ) : filteredModels.length > 0 ? (
-                            renderModelTable(filteredModels, 'all')
-                          ) : (
+                            })}
+                          </div>
+                        ) : (
+                        <div className={`${styles.ev__grid} ${styles['ev__grid--wide']}`}>
+                          {filteredModels.map((m) => renderModelCard(m, () => toggleModel(m.id)))}
+                          {filteredModels.length === 0 && (
                             <p className={styles.ev__empty}>No models match "{modelSearch}".</p>
                           )}
                         </div>
-
-                        <aside className={styles.ev__side} aria-label="Models in this run">
-                          <p className={styles['ev__side-title']}>
-                            In this run: {selectedModels.length} model{selectedModels.length === 1 ? '' : 's'}
-                          </p>
-                          {selectedModels.length === 0 ? (
-                            <p className={styles['ev__side-sub']}>
-                              Tick a model in the table to add it. A model can be added once its health check passes.
-                            </p>
-                          ) : (
-                            <ul className={styles['ev__side-list']}>
-                              {selectedModels.map((m) => {
-                                const ready = healthById?.[m.id] === 'success' && verifiedModelIds[m.id];
-                                return (
-                                  <li key={m.id} className={styles['ev__side-item']}>
-                                    <div className={styles['ev__side-item-top']}>
-                                      <span className={styles['ev__tcell-text']}>
-                                        <span className={styles.ev__tname}>{m.name || 'Unnamed model'}</span>
-                                        {!ready && (
-                                          <span className={styles.ev__tsub}>
-                                            {healthById?.[m.id] === 'failed' ? 'Health check failed' : 'Waiting for health check'}
-                                          </span>
-                                        )}
-                                      </span>
-                                      <button
-                                        type="button"
-                                        className={styles['ev__side-remove']}
-                                        onClick={() => toggleModel(m.id)}
-                                        aria-label={`Remove ${m.name || 'model'}`}
-                                        title="Remove from run"
-                                      >
-                                        <X size={14} />
-                                      </button>
-                                    </div>
-                                    {/* Per-model retry/timeout — only in "Per model" mode. */}
-                                    {draft.retryConfigMode === 'individual' && (
-                                      <div className={styles['ev__mcard-retry-fields']}>
-                                        <div className={styles['ev__mcard-retry-field']}>
-                                          <label>Max retries</label>
-                                          <input
-                                            type="number"
-                                            min={MIN_MAX_RETRIES}
-                                            max={MAX_MAX_RETRIES}
-                                            aria-label={`Max retries for ${m.name || 'model'}`}
-                                            value={displayNumInput(draft.modelRetryConfig[m.id]?.max_retries ?? DEFAULT_MAX_RETRIES)}
-                                            onChange={(e) => updateModelRetryConfig(m.id, 'max_retries', parseNumInput(e.target.value))}
-                                            onBlur={() => clampModelRetryConfig(m.id, 'max_retries')}
-                                          />
-                                        </div>
-                                        <div className={styles['ev__mcard-retry-field']}>
-                                          <label>Timeout (s)</label>
-                                          <input
-                                            type="number"
-                                            min={MIN_TIMEOUT}
-                                            max={MAX_TIMEOUT}
-                                            aria-label={`Timeout in seconds for ${m.name || 'model'}`}
-                                            value={displayNumInput(draft.modelRetryConfig[m.id]?.timeout ?? DEFAULT_TIMEOUT)}
-                                            onChange={(e) => updateModelRetryConfig(m.id, 'timeout', parseNumInput(e.target.value))}
-                                            onBlur={() => clampModelRetryConfig(m.id, 'timeout')}
-                                          />
-                                        </div>
-                                      </div>
-                                    )}
-                                  </li>
-                                );
-                              })}
-                            </ul>
-                          )}
-
-                          {draft.models.length > 0 && (
-                            <div className={styles['ev__side-block']}>
-                              <p className={styles['ev__side-heading']}>Retries and timeout</p>
-                              <div className={styles.ev__seg} role="group" aria-label="Apply retries and timeout">
-                                <button
-                                  type="button"
-                                  aria-pressed={draft.retryConfigMode === 'all'}
-                                  className={`${styles['ev__seg-btn']} ${
-                                    draft.retryConfigMode === 'all' ? styles['ev__seg-btn--on'] : ''
-                                  }`}
-                                  onClick={() => dispatch(setDraft({ retryConfigMode: 'all' }))}
-                                >
-                                  Same for all
-                                </button>
-                                <button
-                                  type="button"
-                                  aria-pressed={draft.retryConfigMode === 'individual'}
-                                  className={`${styles['ev__seg-btn']} ${
-                                    draft.retryConfigMode === 'individual' ? styles['ev__seg-btn--on'] : ''
-                                  }`}
-                                  onClick={() => dispatch(setDraft({ retryConfigMode: 'individual' }))}
-                                >
-                                  Per model
-                                </button>
-                              </div>
-                              {draft.retryConfigMode === 'all' && (
-                                <div className={styles['ev__mcard-retry-fields']}>
-                                  <div className={styles['ev__mcard-retry-field']}>
-                                    <label>Max retries</label>
-                                    <input
-                                      type="number"
-                                      min={MIN_MAX_RETRIES}
-                                      max={MAX_MAX_RETRIES}
-                                      aria-label="Max retries for all models"
-                                      value={displayNumInput(draft.retryConfigAll.max_retries)}
-                                      onChange={(e) => updateRetryConfigAll('max_retries', parseNumInput(e.target.value))}
-                                      onBlur={() => clampRetryConfigAll('max_retries')}
-                                    />
-                                  </div>
-                                  <div className={styles['ev__mcard-retry-field']}>
-                                    <label>Timeout (s)</label>
-                                    <input
-                                      type="number"
-                                      min={MIN_TIMEOUT}
-                                      max={MAX_TIMEOUT}
-                                      aria-label="Timeout in seconds for all models"
-                                      value={displayNumInput(draft.retryConfigAll.timeout)}
-                                      onChange={(e) => updateRetryConfigAll('timeout', parseNumInput(e.target.value))}
-                                      onBlur={() => clampRetryConfigAll('timeout')}
-                                    />
-                                  </div>
-                                </div>
-                              )}
-                              <p className={styles['ev__side-sub']}>
-                                Retries {MIN_MAX_RETRIES} to {MAX_MAX_RETRIES}. Timeout {MIN_TIMEOUT} to {MAX_TIMEOUT} seconds.
-                                {draft.retryConfigMode === 'individual' ? ' Set them on each model above.' : ''}
-                              </p>
-                            </div>
-                          )}
-                        </aside>
+                        )}
+                        </div>
                       </div>
+                      )
                     ) : (
                       <p className={styles.ev__empty}>Select providers first to see their available models.</p>
                     ))}
-
 
                   {/* STEP 4 — TEST SUITE */}
                   {step === 4 && (
@@ -2914,40 +3612,24 @@ export default function NewEvaluation() {
                       )}
 
                       {datasetTab === 'browse' && (
-                        <>
-                      {/* Browse: one full-width row per suite (what it tests, how
-                          it is scored, how many questions) with a summary panel on
-                          the right. Harness mode is multi-select and the panel shows
-                          which scorecard use cases are covered; every other mode is
-                          single-select and the chosen suite's subgroups open inside
-                          its own row. */}
-                      {datasetTab === 'browse' && (
-                        <div className={styles.ev__split}>
-                          <div className={styles['ev__split-main']}>
-                            <div className={styles['ev__step-toolbar']}>
-                              <div className={styles['ev__toolbar-search']}>
-                                <Search size={14} />
-                                <input
-                                  placeholder="Search test suites…"
-                                  aria-label="Search test suites"
-                                  value={datasetSearch}
-                                  onChange={(e) => setDatasetSearch(e.target.value)}
-                                />
-                              </div>
-                              <button
-                                type="button"
-                                className={styles['ev__toolbar-refresh']}
-                                onClick={refreshDatasets}
-                                disabled={datasetsRefreshing}
-                                title="Refresh test suites"
-                                aria-label="Refresh test suites"
-                              >
-                                <RefreshCw size={14} className={datasetsRefreshing ? styles.ev__spin : ''} />
-                              </button>
-                            </div>
-
-                            {isHarness ? (
-                              <div className={styles['ev__filter-row']}>
+                        <div className={styles.ev__suite}>
+                          <div className={styles['ev__suite-scroll']}>
+                            {listHead({
+                              title: 'Test suites',
+                              meta: (
+                                <>
+                                  {filteredDatasets.length} shown ·{' '}
+                                  <b>{isHarness ? draft.harnessSuiteIds.length : draft.dataset ? 1 : 0}</b> selected
+                                </>
+                              ),
+                              count: filteredDatasets.length,
+                              search: { placeholder: 'Search test suites', value: datasetSearch, onChange: setDatasetSearch },
+                              refresh: { onClick: refreshDatasets, busy: datasetsRefreshing, title: 'Refresh test suites' },
+                              sticky: true,
+                              // Harness mode filters by use case; every other mode keeps
+                              // the All / Custom / Deepeval chips.
+                              filters: isHarness ? (
+                                <>
                                 {['all', ...harnessUseCases].map((u) => {
                                   const on = useCaseFilter === u;
                                   const count =
@@ -2956,7 +3638,6 @@ export default function NewEvaluation() {
                                     <button
                                       key={u}
                                       type="button"
-                                      aria-pressed={on}
                                       className={`${styles['ev__filter-chip']} ${on ? styles['ev__filter-chip--on'] : ''}`}
                                       onClick={() => setUseCaseFilter(u)}
                                     >
@@ -2965,36 +3646,49 @@ export default function NewEvaluation() {
                                     </button>
                                   );
                                 })}
-                              </div>
-                            ) : (
-                              <div className={styles['ev__filter-row']}>
-                                {DATASET_TYPE_FILTERS.map((f) => {
-                                  const on = datasetTypeFilter === f.value;
-                                  const count = datasetTypeCounts[f.value];
-                                  return (
-                                    <button
-                                      key={f.value}
-                                      type="button"
-                                      aria-pressed={on}
-                                      className={`${styles['ev__filter-chip']} ${on ? styles['ev__filter-chip--on'] : ''}`}
-                                      onClick={() => setDatasetTypeFilter(f.value)}
-                                    >
-                                      {f.label}
-                                      <span className={styles['ev__filter-chip-count']}>{count}</span>
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            )}
+                                </>
+                              ) : (
+                                <>
+                              {DATASET_TYPE_FILTERS.map((f) => {
+                                const on = datasetTypeFilter === f.value;
+                                const count = datasetTypeCounts[f.value];
+                                return (
+                                  <button
+                                    key={f.value}
+                                    type="button"
+                                    className={`${styles['ev__filter-chip']} ${on ? styles['ev__filter-chip--on'] : ''}`}
+                                    onClick={() => setDatasetTypeFilter(f.value)}
+                                  >
+                                    {f.label}
+                                    <span className={styles['ev__filter-chip-count']}>{count}</span>
+                                  </button>
+                                );
+                              })}
+                                </>
+                              ),
+                            })}
 
                             {(() => {
-                              // Busy flag and error message are tracked locally
-                              // (see datasetsErrorLocal above for why).
+                              // Both the busy flag and the error message are
+                              // tracked locally (set from the outcome of our
+                              // own dispatch calls) rather than read from the
+                              // datasets slice's own status/error fields —
+                              // see datasetsErrorLocal above for why.
                               if (datasetsRefreshing) {
                                 return (
-                                  <div className={styles['ev__skel-rows']} aria-busy="true" aria-label="Loading test suites">
+                                  <div className={styles.ev__dgrid} aria-busy="true" aria-label="Loading test suites">
                                     {Array.from({ length: SKELETON_CARD_COUNT }).map((_, i) => (
-                                      <span key={i} className={`${styles['ev__skel-block']} ${styles['ev__skel-block--row']}`} />
+                                      <div key={i} className={styles['ev__skel-dcard']}>
+                                        <span className={styles['ev__skel-dcard-top']}>
+                                          <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--icon-sm']}`} />
+                                          <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--line']}`} style={{ width: '55%' }} />
+                                        </span>
+                                        <span className={styles['ev__skel-caps']}>
+                                          <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--tag']}`} />
+                                          <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--tag']}`} />
+                                          <span className={`${styles['ev__skel-block']} ${styles['ev__skel-block--tag']}`} />
+                                        </span>
+                                      </div>
                                     ))}
                                   </div>
                                 );
@@ -3005,126 +3699,147 @@ export default function NewEvaluation() {
                               }
 
                               return (
-                                <div className={styles.ev__srows}>
+                                <div className={styles.ev__slist}>
                                   {filteredDatasets.map((d) => {
                                     const on = isSuiteOn(d.id);
-                                    const isCustom = (d as any)?.dataset_type === 'custom';
-                                    const isDeepeval = (d as any)?.dataset_type === 'deepeval';
+                                    const isCustom = d?.dataset_type === 'custom';
+                                    const isDeepeval = d?.dataset_type === 'deepeval';
                                     const hasNoQuestions = (d.question_count ?? 0) <= 0;
-                                    const categories: string[] = (d as any)?.dataset_categories ?? [];
-                                    // Preview isn't offered for agent_benchmark runs except
-                                    // the datasets in AGENT_BENCHMARK_PREVIEWABLE_DATASETS,
-                                    // and is hidden for harness suites while their catalog
-                                    // is mocked (drop `!isHarness &&` once it is real).
+                                    const subgroups = d.dataset_categories || [];
+                                    // Preview: hidden for harness suites while the catalog is
+                                    // mocked, and for agent_benchmark except the three
+                                    // previewable datasets (same rules as before).
                                     const canPreview =
                                       !isHarness &&
                                       (!isAgentBenchmarkNoFramework || AGENT_BENCHMARK_PREVIEWABLE_DATASETS.has(d.name));
                                     return (
                                       <div
                                         key={d.id}
+                                        role="button"
+                                        tabIndex={0}
                                         className={`${styles.ev__srow} ${on ? styles['ev__srow--on'] : ''} ${
                                           hasNoQuestions ? styles['ev__srow--empty'] : ''
                                         }`}
+                                        onClick={() => pickSuite(d.id)}
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter' || e.key === ' ') {
+                                            e.preventDefault();
+                                            pickSuite(d.id);
+                                          }
+                                        }}
+                                        aria-pressed={on}
                                       >
-                                        <div className={styles['ev__srow-top']}>
-                                          <label className={styles['ev__srow-pick']}>
-                                            <input
-                                              type={isHarness ? 'checkbox' : 'radio'}
-                                              name="ev-test-suite"
-                                              checked={on}
-                                              onChange={() => pickSuite(d.id)}
-                                            />
-                                            <span className={styles['ev__srow-main']}>
-                                              <span className={styles['ev__srow-head']}>
-                                                <span className={styles['ev__srow-name']}>{d.name || 'Untitled dataset'}</span>
-                                                {isHarness && d.use_case && (
-                                                  <span className={`${styles.ev__tag} ${styles['ev__tag--custom']}`}>{d.use_case}</span>
-                                                )}
-                                                {!isHarness && d.category && <span className={styles.ev__tag}>{d.category}</span>}
-                                                {!isHarness && d.eval_type && <span className={styles.ev__tag}>{d.eval_type}</span>}
-                                                {isCustom && (
-                                                  <span className={`${styles.ev__tag} ${styles['ev__tag--custom']}`}>Custom</span>
-                                                )}
-                                                {isDeepeval && (
-                                                  <span className={`${styles.ev__tag} ${styles['ev__tag--deepeval']}`}>Deepeval</span>
-                                                )}
-                                              </span>
-                                              {d.description && <span className={styles['ev__srow-desc']}>{d.description}</span>}
-                                              {d.scoring && (
-                                                <span className={styles['ev__srow-score']}>
-                                                  <b>Scored by</b> {d.scoring}
+                                        {/* Header: selection control + name */}
+                                        <div className={styles['ev__srow-head']}>
+                                          {isHarness ? (
+                                            <span className={`${styles.ev__check} ${on ? styles['ev__check--on'] : ''}`}>
+                                              {on && <Check size={11} strokeWidth={3} />}
+                                            </span>
+                                          ) : (
+                                            <span className={`${styles.ev__radio} ${on ? styles['ev__radio--on'] : ''}`} />
+                                          )}
+                                          <span className={styles['ev__srow-icon']}>
+                                            <Database size={15} />
+                                          </span>
+                                          <span className={styles['ev__srow-name']} title={d.name || 'Untitled dataset'}>
+                                            {d.name || 'Untitled dataset'}
+                                          </span>
+                                        </div>
+
+                                        {/* Tags: use case / category, source, images */}
+                                        <div className={styles['ev__srow-tags']}>
+                                          {isHarness && d.use_case && (
+                                            <span className={`${styles.ev__pilltag} ${on ? '' : styles['ev__pilltag--muted']}`}>
+                                              {d.use_case}
+                                            </span>
+                                          )}
+                                          {/* category tag, unless it would just repeat the Custom / Deepeval tag */}
+                                          {!isHarness && d.category && d.category.toLowerCase() !== String(d.dataset_type ?? '').toLowerCase() && (
+                                            <span className={`${styles.ev__pilltag} ${styles['ev__pilltag--muted']}`}>
+                                              {d.category}
+                                            </span>
+                                          )}
+                                          {isCustom && <span className={styles.ev__pilltag}>Custom</span>}
+                                          {isDeepeval && (
+                                            <span className={`${styles.ev__pilltag} ${styles['ev__pilltag--muted']}`}>Deepeval</span>
+                                          )}
+                                          {d.has_images && (
+                                            <span
+                                              className={`${styles.ev__pilltag} ${styles['ev__pilltag--muted']}`}
+                                              title="Questions include images, so every selected model must accept image input"
+                                            >
+                                              <ImageIcon size={11} /> Images
+                                            </span>
+                                          )}
+                                        </div>
+
+                                        <p
+                                          className={`${styles['ev__srow-desc']} ${
+                                            d.description ? '' : styles['ev__srow-desc--none']
+                                          }`}
+                                          title={d.description || undefined}
+                                        >
+                                          {d.description || 'No description provided.'}
+                                        </p>
+                                        {d.scoring && (
+                                          <p className={styles['ev__srow-scoring']}>
+                                            <b>Scored by</b> {d.scoring}
+                                          </p>
+                                        )}
+
+                                        {/* Subgroups this suite is split into (first few) */}
+                                        {subgroups.length > 0 && (
+                                          <div className={styles['ev__srow-subs']}>
+                                            <span className={styles['ev__srow-k']}>Subgroups</span>
+                                            <div className={styles['ev__srow-chips']}>
+                                              {subgroups.slice(0, 3).map((g) => (
+                                                <span key={g} className={styles.ev__cap}>
+                                                  {g}
+                                                </span>
+                                              ))}
+                                              {subgroups.length > 3 && (
+                                                <span className={styles.ev__cap} title={subgroups.slice(3).join(', ')}>
+                                                  +{subgroups.length - 3} more
                                                 </span>
                                               )}
-                                            </span>
-                                          </label>
-                                          <div className={styles['ev__srow-side']}>
+                                            </div>
+                                          </div>
+                                        )}
+
+                                        {/* Footer: numbers on the left, Preview on the right */}
+                                        <div className={styles['ev__srow-side']}>
+                                          <div className={styles.ev__stat}>
+                                            <span className={styles['ev__stat-k']}>Questions</span>
                                             <span
-                                              className={`${styles['ev__srow-count']} ${
+                                              className={`${styles['ev__stat-v']} ${
                                                 hasNoQuestions ? styles['ev__srow-count--empty'] : ''
                                               }`}
                                               title={
                                                 hasNoQuestions
-                                                  ? 'This test suite has no questions yet, so it cannot be used.'
+                                                  ? "This test suite has no questions yet, so it can't be used."
                                                   : undefined
                                               }
                                             >
-                                              {(d.question_count ?? 0).toLocaleString()} questions
+                                              {(d.question_count ?? 0).toLocaleString()}
                                             </span>
-                                            {canPreview && (
-                                              <button
-                                                type="button"
-                                                className={styles['ev__dcard-preview-btn']}
-                                                onClick={() => openPreview(d.id, d.name, d.question_count ?? 0)}
-                                                title="Preview sample questions"
-                                              >
-                                                <Eye size={13} /> Preview
-                                              </button>
-                                            )}
                                           </div>
+                                          <div className={styles.ev__stat}>
+                                            <span className={styles['ev__stat-k']}>Subgroups</span>
+                                            <span className={styles['ev__stat-v']}>{subgroups.length || '—'}</span>
+                                          </div>
+                                          {canPreview && (
+                                            <button
+                                              type="button"
+                                              className={styles['ev__srow-preview']}
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                openPreview(d.id, d.name, d.question_count ?? 0);
+                                              }}
+                                            >
+                                              <FileText size={13} /> Preview
+                                            </button>
+                                          )}
                                         </div>
-
-                                        {/* Subgroups of the chosen suite, inline (single-select
-                                            modes only; all are selected by default). */}
-                                        {!isHarness && on && categories.length > 0 && (
-                                          <div className={styles['ev__srow-sub']}>
-                                            <div className={styles['ev__srow-sub-head']}>
-                                              <span>
-                                                Subgroups: {draft.subgroup.length} of {categories.length} selected
-                                              </span>
-                                              <span className={styles['ev__metrics-actions']}>
-                                                <button type="button" className={styles.ev__link} onClick={selectAllSubgroups}>
-                                                  Select all
-                                                </button>
-                                                <button type="button" className={styles.ev__link} onClick={clearAllSubgroups}>
-                                                  Unselect all
-                                                </button>
-                                              </span>
-                                            </div>
-                                            <div className={styles.ev__chips}>
-                                              {categories.map((cat) => {
-                                                const catOn = draft.subgroup.includes(cat);
-                                                return (
-                                                  <button
-                                                    key={cat}
-                                                    type="button"
-                                                    aria-pressed={catOn}
-                                                    className={`${styles.ev__chip} ${styles['ev__chip--sm']} ${
-                                                      catOn ? styles['ev__chip--on'] : ''
-                                                    }`}
-                                                    onClick={() => dispatch(setDraft({ subgroup: toggle(draft.subgroup, cat) }))}
-                                                  >
-                                                    {catOn && (
-                                                      <span className={styles['ev__chip-tick']}>
-                                                        <Check size={11} strokeWidth={3} />
-                                                      </span>
-                                                    )}
-                                                    {cat}
-                                                  </button>
-                                                );
-                                              })}
-                                            </div>
-                                          </div>
-                                        )}
                                       </div>
                                     );
                                   })}
@@ -3141,72 +3856,59 @@ export default function NewEvaluation() {
                             })()}
                           </div>
 
-                          {isHarness ? (
-                            <aside className={styles.ev__side} aria-label="Scorecard coverage">
-                              <p className={styles['ev__side-title']}>Scorecard coverage</p>
-                              <p className={styles['ev__side-sub']}>
-                                {HARNESS_USE_CASES.filter((u) => selectedHarnessSuites.some((s) => s.use_case === u)).length} of{' '}
-                                {HARNESS_USE_CASES.length} use cases covered
+                          {/* Subgroups apply to a single dataset — not shown for the
+                              multi-suite harness. */}
+                          {isHarness && coveragePanel}
+                          {!isHarness && (
+                          <aside className={styles.ev__rail}>
+                            <div className={styles['ev__rail-head']}>
+                              <div className={styles['ev__rail-head-row']}>
+                                <p className={styles['ev__rail-title']}>
+                                  <Layers size={13} /> Subgroups
+                                </p>
+                                {suite && (suite as any).dataset_categories?.length > 0 && (
+                                  <div className={styles['ev__rail-actions']}>
+                                    <button type="button" className={styles.ev__link} onClick={selectAllSubgroups}>
+                                      Select all
+                                    </button>
+                                    <button type="button" className={styles.ev__link} onClick={clearAllSubgroups}>
+                                      Unselect all
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                              <p className={styles['ev__rail-sub']}>
+                                {suite
+                                  ? `All of "${suite.name}"'s categories are selected by default — narrow as needed.`
+                                  : 'Select a suite to see its subgroups.'}
                               </p>
-                              <ul className={styles['ev__side-list']}>
-                                {HARNESS_USE_CASES.map((u) => {
-                                  const covered = selectedHarnessSuites.some((s) => s.use_case === u);
+                            </div>
+                            <div className={styles['ev__rail-scroll']}>
+                              {!suite && <p className={styles['ev__rail-empty']}>No suite selected yet.</p>}
+                              {suite && (suite as any).dataset_categories?.length === 0 && (
+                                <p className={styles['ev__rail-empty']}>This suite has no subgroups.</p>
+                              )}
+                              {suite &&
+                                ((suite as any).dataset_categories ?? []).map((cat: string) => {
+                                  const on = draft.subgroup.includes(cat);
                                   return (
-                                    <li
-                                      key={u}
-                                      className={`${styles['ev__cover-item']} ${covered ? '' : styles['ev__cover-item--off']}`}
+                                    <button
+                                      key={cat}
+                                      type="button"
+                                      className={`${styles['ev__check-row']} ${on ? styles['ev__check-row--on'] : ''}`}
+                                      onClick={() => dispatch(setDraft({ subgroup: toggle(draft.subgroup, cat) }))}
                                     >
-                                      <span className={`${styles.ev__check} ${covered ? styles['ev__check--on'] : ''}`}>
-                                        {covered && <Check size={11} strokeWidth={3} />}
+                                      <span className={`${styles.ev__check} ${on ? styles['ev__check--on'] : ''}`}>
+                                        {on && <Check size={11} strokeWidth={3} />}
                                       </span>
-                                      {covered ? u : `${u}: not covered`}
-                                    </li>
+                                      <span className={styles['ev__check-label']}>{cat}</span>
+                                    </button>
                                   );
                                 })}
-                              </ul>
-                              <dl className={styles.ev__kv}>
-                                <div>
-                                  <dt>Suites selected</dt>
-                                  <dd>{selectedHarnessSuites.length}</dd>
-                                </div>
-                                <div>
-                                  <dt>Questions available</dt>
-                                  <dd>
-                                    {selectedHarnessSuites.reduce((n, s) => n + (s.question_count ?? 0), 0).toLocaleString()}
-                                  </dd>
-                                </div>
-                              </dl>
-                              <p className={styles['ev__side-sub']}>You choose how many questions to run in the next step.</p>
-                            </aside>
-                          ) : (
-                            <aside className={styles.ev__side} aria-label="Selected test suite">
-                              <p className={styles['ev__side-title']}>{suite ? suite.name || 'Untitled dataset' : 'No suite selected'}</p>
-                              {suite ? (
-                                <dl className={styles.ev__kv}>
-                                  <div>
-                                    <dt>Questions</dt>
-                                    <dd>{(suite.question_count ?? 0).toLocaleString()}</dd>
-                                  </div>
-                                  {((suite as any).dataset_categories ?? []).length > 0 && (
-                                    <div>
-                                      <dt>Subgroups</dt>
-                                      <dd>
-                                        {draft.subgroup.length} of {((suite as any).dataset_categories ?? []).length}
-                                      </dd>
-                                    </div>
-                                  )}
-                                </dl>
-                              ) : (
-                                <p className={styles['ev__side-sub']}>Pick one suite from the list. Its subgroups open under it.</p>
-                              )}
-                              <p className={styles['ev__side-sub']}>You choose how many questions to run in the next step.</p>
-                            </aside>
+                            </div>
+                          </aside>
                           )}
                         </div>
-                      )}
-
-
-                        </>
                       )}
 
                       {isHarness && selectedHarnessSuites.some((s) => (s.question_count ?? 0) <= 0) && (
@@ -3311,560 +4013,601 @@ export default function NewEvaluation() {
                     </>
                   )}
 
-                  {/* STEP 5 — METRICS: one column of decisions in reading order.
-                      Each section has its title and guidance on the left and its
-                      controls on the right; anything still missing is flagged in
-                      the section it belongs to. */}
+                  {/* STEP 5 — SCORING */}
                   {step === 5 && (
-                    <div className={styles.ev__secs}>
+                    <div className={styles.ev__split}>
+                    <div className={`${styles.ev__form} ${styles['ev__form--scroll']}`}>
                       {/* How much to run */}
-                      <section className={styles.ev__sec}>
-                        <div className={styles['ev__sec-aside']}>
-                          <h3 className={styles['ev__sec-title']}>How much to run</h3>
-                          <p className={styles['ev__sec-hint']}>
+                      <section className={styles.ev__frow}>
+                        <div className={styles['ev__frow-side']}>
+                          <h3>How much to run</h3>
+                          <p>
                             {isHarness
                               ? 'Questions taken from each suite, for every agent and model.'
-                              : 'How many questions each model answers.'}
+                              : 'Questions taken from the suite, for every model.'}
                           </p>
                         </div>
-                        <div className={styles['ev__sec-body']}>
-                          {runSamplesControl}
-                          {draft.runSamplesMode === 'custom' ? (
-                            <p className={styles['ev__sec-note']}>
-                              Up to {maxRunSamples.toLocaleString()} questions available
-                              {isHarness ? ' in the largest selected suite. Smaller suites run in full.' : ' in this suite.'}
+                        <div className={styles['ev__frow-main']}>
+                          <div className={styles.ev__inline}>
+                            <div className={styles.ev__segctl}>
+                              {[
+                                { v: 'custom' as const, l: 'A sample' },
+                                { v: 'full' as const, l: 'Every question' },
+                              ].map((o) => (
+                                <button
+                                  key={o.v}
+                                  type="button"
+                                  className={`${styles.ev__segbtn} ${
+                                    draft.runSamplesMode === o.v ? styles['ev__segbtn--on'] : ''
+                                  }`}
+                                  onClick={() => dispatch(setDraft({ runSamplesMode: o.v }))}
+                                >
+                                  {o.l}
+                                </button>
+                              ))}
+                            </div>
+                            {draft.runSamplesMode === 'custom' && (
+                              <>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={maxRunSamples}
+                                  className={styles.ev__num}
+                                  value={displayNumInput(draft.runSamples)}
+                                  onChange={(e) => {
+                                    // An emptied field is held as NaN so it shows blank instead
+                                    // of snapping to 0; onBlur below (and launch) resolve it.
+                                    const raw = parseNumInput(e.target.value);
+                                    const val = Number.isNaN(raw) ? NaN : Math.min(maxRunSamples, Math.max(0, raw));
+                                    dispatch(setDraft({ runSamples: val }));
+                                  }}
+                                  onBlur={() => {
+                                    if (Number.isNaN(draft.runSamples)) dispatch(setDraft({ runSamples: 0 }));
+                                  }}
+                                />
+                                <span className={styles['ev__inline-note']}>
+                                  questions per {isHarness ? 'suite' : 'model'}
+                                </span>
+                              </>
+                            )}
+                          </div>
+                          {isHarness ? (
+                            <p className={styles.ev__formula}>
+                              {sampleN !== null &&
+                              selectedHarnessSuites.every((d) => (d.question_count ?? 0) >= sampleN)
+                                ? `${sampleN} questions × ${selectedHarnessSuites.length} suites`
+                                : `${harnessQuestionsPerPass.toLocaleString()} questions across ${
+                                    selectedHarnessSuites.length
+                                  } suites`}{' '}
+                              × {draft.models.length} models × {draft.harnessAgents.length} agents ={' '}
+                              <b>{harnessTaskCount.toLocaleString()} tasks</b>
                             </p>
                           ) : (
-                            <p className={styles['ev__sec-note']}>Every question will be used, so no count is needed.</p>
-                          )}
-                          {isHarness && (
-                            <p className={styles.ev__calc}>
-                              {harnessQuestionsPerPass.toLocaleString()} question{harnessQuestionsPerPass === 1 ? '' : 's'} across{' '}
-                              {selectedHarnessSuites.length} suite{selectedHarnessSuites.length === 1 ? '' : 's'} ×{' '}
-                              {draft.models.length} model{draft.models.length === 1 ? '' : 's'} × {draft.harnessAgents.length}{' '}
-                              agent{draft.harnessAgents.length === 1 ? '' : 's'} = <b>{harnessTaskCount.toLocaleString()} tasks</b>
+                            <p className={styles['ev__inline-note']}>
+                              {draft.runSamplesMode === 'full'
+                                ? 'Every question in the suite will be used.'
+                                : `Up to ${maxRunSamples.toLocaleString()} questions available in this suite.`}
                             </p>
                           )}
                         </div>
                       </section>
 
                       {/* What to score */}
-                      {hideMetricsStep ? (
-                        <section className={styles.ev__sec}>
-                          <div className={styles['ev__sec-aside']}>
-                            <h3 className={styles['ev__sec-title']}>What to score</h3>
-                          </div>
-                          <div className={styles['ev__sec-body']}>
-                            <p className={styles['ev__sec-note']}>
-                              {isAgentBenchmarkNoFramework
-                                ? 'Metrics are fixed when no framework is selected. A judge model is still required.'
-                                : 'Metrics are fixed for standard (non-custom) benchmarks. A judge model is still required.'}
-                            </p>
-                          </div>
-                        </section>
-                      ) : (
-                        <section className={styles.ev__sec}>
-                          <div className={styles['ev__sec-aside']}>
-                            <h3 className={styles['ev__sec-title']}>What to score</h3>
-                            <p className={styles['ev__sec-hint']}>
-                              {draft.metrics.filter((m) => metricsCatalog.includes(m)).length} of {metricsCatalog.length}{' '}
-                              {isHarness ? 'scorers' : 'metrics'} selected.
-                            </p>
-                            <div className={styles['ev__metrics-actions']}>
-                              <button type="button" className={styles.ev__link} onClick={selectAllBuiltinMetrics}>
-                                Select all
-                              </button>
-                              <button type="button" className={styles.ev__link} onClick={clearBuiltinMetrics}>
-                                Clear
-                              </button>
-                            </div>
-                            {metricsRequiredMissing && <p className={styles['ev__sec-need']}>Required: select at least one.</p>}
-                          </div>
-                          <div className={styles['ev__sec-body']}>
-                            <div className={styles['ev__step-toolbar']}>
-                              <div className={styles['ev__toolbar-search']}>
-                                <Search size={14} />
-                                <input
-                                  placeholder="Search metrics…"
-                                  aria-label="Search metrics"
-                                  value={metricSearch}
-                                  onChange={(e) => setMetricSearch(e.target.value)}
-                                />
+                      <section className={styles.ev__frow}>
+                        <div className={styles['ev__frow-side']}>
+                          <h3>What to score</h3>
+                          {hideMetricsStep ? (
+                            <p>Fixed for this run.</p>
+                          ) : (
+                            <>
+                              <p>
+                                {draft.metrics.length} of {metricsCatalog.length + customMetricsForType.length} {scorerWord}{' '}
+                                selected.
+                              </p>
+                              <div className={styles['ev__metrics-actions']}>
+                                <button type="button" className={styles.ev__link} onClick={selectAllBuiltinMetrics}>
+                                  Select all
+                                </button>
+                                <button type="button" className={styles.ev__link} onClick={clearBuiltinMetrics}>
+                                  Clear
+                                </button>
                               </div>
-                              <button
-                                type="button"
-                                className={styles['ev__toolbar-refresh']}
-                                onClick={refreshMetrics}
-                                disabled={metricsRefreshing}
-                                title="Refresh metrics"
-                                aria-label="Refresh metrics"
-                              >
-                                <RefreshCw size={14} className={metricsRefreshing ? styles.ev__spin : ''} />
-                              </button>
-                            </div>
-
-                            {metricsRefreshing ? (
-                              <div className={styles.ev__chips} aria-busy="true" aria-label="Loading metrics">
-                                {Array.from({ length: SKELETON_CHIP_COUNT }).map((_, i) => (
-                                  <span
-                                    key={i}
-                                    className={`${styles['ev__skel-block']} ${styles['ev__skel-block--chip']}`}
-                                    style={{ width: 64 + ((i * 37) % 90) }}
-                                  />
-                                ))}
-                              </div>
-                            ) : (
-                              <>
-                                {scorerGroups.map((g) => (
-                                  <div key={g.label || 'all'} className={styles['ev__chip-group']}>
-                                    {g.label && <span className={styles['ev__chip-group-label']}>{g.label}</span>}
-                                    <div className={styles.ev__chips}>
-                                      {g.items.map((name) => {
-                                        const on = draft.metrics.includes(name);
-                                        return (
-                                          <button
-                                            key={name}
-                                            type="button"
-                                            aria-pressed={on}
-                                            className={`${styles.ev__chip} ${on ? styles['ev__chip--on'] : ''}`}
-                                            onClick={() => dispatch(setDraft({ metrics: toggle(draft.metrics, name) }))}
-                                          >
-                                            {on && (
-                                              <span className={styles['ev__chip-tick']}>
-                                                <Check size={12} strokeWidth={3} />
-                                              </span>
-                                            )}
-                                            {name}
-                                          </button>
-                                        );
-                                      })}
-                                    </div>
-                                  </div>
-                                ))}
-                                {metricsCatalog.length === 0 && <p className={styles.ev__empty}>No metrics available for this type.</p>}
-                                {metricsCatalog.length > 0 && filteredMetrics.length === 0 && (
-                                  <p className={styles.ev__empty}>No metrics match "{metricSearch}".</p>
+                              {(metricsCatalog.length > 0 || customMetricsForType.length > 0) &&
+                                draft.metrics.length === 0 && (
+                                  <p className={styles['ev__frow-req']}>Required: pick at least one</p>
                                 )}
-                              </>
-                            )}
+                            </>
+                          )}
+                        </div>
+                        <div className={styles['ev__frow-main']}>
+                          {hideMetricsStep ? (
+                            <p className={styles['ev__inline-note']}>
+                              {isAgentBenchmarkNoFramework
+                                ? 'Metrics are not configurable without a selected framework. A judge model is still required.'
+                                : 'Metrics are not configurable for standard (non-custom) benchmarks. A judge model is still required.'}
+                            </p>
+                          ) : (
+                            <>
+                              <div className={styles['ev__step-toolbar']} style={{ marginBottom: 0 }}>
+                                <div className={styles['ev__toolbar-search']}>
+                                  <Search size={14} />
+                                  <input
+                                    placeholder={`Search ${scorerWord}`}
+                                    value={metricSearch}
+                                    onChange={(e) => setMetricSearch(e.target.value)}
+                                  />
+                                </div>
+                                <button
+                                  type="button"
+                                  className={styles['ev__toolbar-refresh']}
+                                  onClick={refreshMetrics}
+                                  disabled={metricsRefreshing}
+                                  title={`Refresh ${scorerWord}`}
+                                >
+                                  <RefreshCw size={14} className={metricsRefreshing ? styles.ev__spin : ''} />
+                                </button>
+                              </div>
 
-                            {/* Custom metrics — shown whenever the raw catalog has any
-                                entries, so "0 for this type" is visible rather than
-                                looking like the section never loaded. They store the
-                                metric's `id` in draft.metrics, not its name. */}
-                            {customMetricsCatalog.length > 0 && (
-                              <div className={styles['ev__chip-group']}>
-                                <span className={styles['ev__chip-group-label']}>
-                                  Custom ({draft.metrics.filter((m) => customMetricIdSet.has(m)).length} of{' '}
-                                  {customMetricsForType.length})
-                                </span>
+                              {metricsRefreshing ? (
+                                <div className={styles.ev__chips} aria-busy="true" aria-label="Loading metrics">
+                                  {Array.from({ length: SKELETON_CHIP_COUNT }).map((_, i) => (
+                                    <span
+                                      key={i}
+                                      className={`${styles['ev__skel-block']} ${styles['ev__skel-block--chip']}`}
+                                      style={{ width: 64 + ((i * 37) % 90) }}
+                                    />
+                                  ))}
+                                </div>
+                              ) : (
                                 <div className={styles.ev__chips}>
-                                  {filteredCustomMetrics.map((c) => {
-                                    const on = draft.metrics.includes(c.id);
+                                  {filteredMetrics.map((name: string) => {
+                                    const on = draft.metrics.includes(name);
                                     return (
                                       <button
-                                        key={c.id}
+                                        key={name}
                                         type="button"
+                                        className={`${styles.ev__chip} ${on ? styles['ev__chip--on'] : ''}`}
                                         aria-pressed={on}
-                                        className={`${styles.ev__chip} ${styles['ev__chip--custom']} ${on ? styles['ev__chip--on'] : ''}`}
-                                        onClick={() => dispatch(setDraft({ metrics: toggle(draft.metrics, c.id) }))}
-                                        title={c.description || c.name}
+                                        onClick={() => dispatch(setDraft({ metrics: toggle(draft.metrics, name) }))}
                                       >
-                                        {on && (
-                                          <span className={styles['ev__chip-tick']}>
-                                            <Check size={12} strokeWidth={3} />
-                                          </span>
-                                        )}
-                                        {c.name}
-                                        {c.required_judge && <Gavel size={11} className={styles['ev__chip-judge-icon']} />}
+                                        {name}
                                       </button>
                                     );
                                   })}
-                                  {customMetricsForType.length === 0 && (
-                                    <p className={styles.ev__empty}>No custom metrics available for this type.</p>
+                                  {metricsCatalog.length === 0 && (
+                                    <p className={styles['ev__inline-note']}>No {scorerWord} available for this type.</p>
                                   )}
-                                  {customMetricsForType.length > 0 && filteredCustomMetrics.length === 0 && (
-                                    <p className={styles.ev__empty}>No custom metrics match "{metricSearch}".</p>
+                                  {metricsCatalog.length > 0 && filteredMetrics.length === 0 && (
+                                    <p className={styles['ev__inline-note']}>Nothing matches "{metricSearch}".</p>
                                   )}
                                 </div>
-                                {customMetricsForType.length > 0 && (
-                                  <div className={styles['ev__metrics-actions']}>
+                              )}
+
+                              {/* Custom metrics: stored by id in draft.metrics, alongside
+                                  the built-in names. Shown whenever the catalog has any. */}
+                              {customMetricsCatalog.length > 0 && (
+                                <>
+                                  <p className={styles.ev__sublabel}>
+                                    Custom
                                     <button type="button" className={styles.ev__link} onClick={selectAllCustomMetrics}>
-                                      Select all custom
+                                      Select all
                                     </button>
                                     <button type="button" className={styles.ev__link} onClick={clearCustomMetrics}>
-                                      Clear custom
+                                      Clear
                                     </button>
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        </section>
-                      )}
-
-                      {/* Retest on Wrong — Model and RAG always; Agent only when a
-                          framework is selected. */}
-                      {showRetest && (
-                        <section className={styles.ev__sec}>
-                          <div className={styles['ev__sec-aside']}>
-                            <h3 className={styles['ev__sec-title']}>Retest wrong answers</h3>
-                            <p className={styles['ev__sec-hint']}>Re-grade a wrong answer before marking it failed.</p>
-                            {draft.retestOnWrong && !draft.retestVerifyMetric && (
-                              <p className={styles['ev__sec-need']}>Required: choose a verify metric.</p>
-                            )}
-                          </div>
-                          <div className={styles['ev__sec-body']}>
-                            <div className={styles.ev__seg} role="group" aria-label="Retest wrong answers">
-                              <button
-                                type="button"
-                                aria-pressed={!draft.retestOnWrong}
-                                className={`${styles['ev__seg-btn']} ${!draft.retestOnWrong ? styles['ev__seg-btn--on'] : ''}`}
-                                onClick={() =>
-                                  dispatch(
-                                    setDraft({
-                                      retestOnWrong: false,
-                                      retestMaxRounds: DEFAULT_RETEST_ROUNDS,
-                                      retestVerifyMetric: null,
-                                    })
-                                  )
-                                }
-                              >
-                                Off
-                              </button>
-                              <button
-                                type="button"
-                                aria-pressed={draft.retestOnWrong}
-                                className={`${styles['ev__seg-btn']} ${draft.retestOnWrong ? styles['ev__seg-btn--on'] : ''}`}
-                                onClick={() => dispatch(setDraft({ retestOnWrong: true }))}
-                              >
-                                On
-                              </button>
-                            </div>
-                            {draft.retestOnWrong && (
-                              <>
-                                <label className={styles.ev__numfield}>
-                                  Max rounds
-                                  <input
-                                    type="number"
-                                    min={MIN_RETEST_ROUNDS}
-                                    max={MAX_RETEST_ROUNDS}
-                                    className={`${styles.ev__input} ${styles['ev__input--num']}`}
-                                    value={displayNumInput(draft.retestMaxRounds)}
-                                    onChange={(e) => updateRetestMaxRounds(parseNumInput(e.target.value))}
-                                    onBlur={clampRetestMaxRoundsOnBlur}
-                                  />
-                                  <span className={styles['ev__sec-note']}>
-                                    {MIN_RETEST_ROUNDS} to {MAX_RETEST_ROUNDS} rounds
-                                  </span>
-                                </label>
-                                <div className={styles['ev__chip-group']}>
-                                  <span className={styles['ev__chip-group-label']}>Verify metric (pick one)</span>
+                                  </p>
                                   <div className={styles.ev__chips}>
-                                    {metricsCatalog.map((name: string) => {
-                                      const on = draft.retestVerifyMetric === name;
+                                    {filteredCustomMetrics.map((c) => {
+                                      const on = draft.metrics.includes(c.id);
                                       return (
                                         <button
-                                          key={name}
+                                          key={c.id}
                                           type="button"
+                                          className={`${styles.ev__chip} ${styles['ev__chip--custom']} ${
+                                            on ? styles['ev__chip--on'] : ''
+                                          }`}
                                           aria-pressed={on}
-                                          className={`${styles.ev__chip} ${on ? styles['ev__chip--on'] : ''}`}
-                                          onClick={() => dispatch(setDraft({ retestVerifyMetric: on ? null : name }))}
+                                          onClick={() => dispatch(setDraft({ metrics: toggle(draft.metrics, c.id) }))}
+                                          title={c.description || c.name}
                                         >
-                                          {on && (
-                                            <span className={styles['ev__chip-tick']}>
-                                              <Check size={12} strokeWidth={3} />
-                                            </span>
-                                          )}
-                                          {name}
+                                          {c.name}
+                                          {c.required_judge && <Gavel size={11} className={styles['ev__chip-judge-icon']} />}
                                         </button>
                                       );
                                     })}
-                                    {metricsCatalog.length === 0 && (
-                                      <p className={styles.ev__empty}>No metrics available to verify against.</p>
+                                    {customMetricsForType.length === 0 && (
+                                      <p className={styles['ev__inline-note']}>No custom metrics for this type.</p>
+                                    )}
+                                    {customMetricsForType.length > 0 && filteredCustomMetrics.length === 0 && (
+                                      <p className={styles['ev__inline-note']}>Nothing matches "{metricSearch}".</p>
                                     )}
                                   </div>
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        </section>
-                      )}
-
-                      {/* Who judges — mandatory for every type, regardless of which
-                          metrics are selected. */}
-                      <section className={styles.ev__sec}>
-                        <div className={styles['ev__sec-aside']}>
-                          <h3 className={styles['ev__sec-title']}>Who judges</h3>
-                          <p className={styles['ev__sec-hint']}>
-                            One model grades the metrics that need a judge. It is ignored by the others, but a selection is
-                            required to launch.
-                          </p>
-                          {!draft.judgeModelId && <p className={styles['ev__sec-need']}>Required: no judge selected yet.</p>}
-                        </div>
-                        <div className={styles['ev__sec-body']}>
-                          <div className={styles['ev__step-toolbar']}>
-                            <div className={styles['ev__toolbar-search']}>
-                              <Search size={14} />
-                              <input
-                                placeholder="Search judge models…"
-                                aria-label="Search judge models"
-                                value={judgeSearch}
-                                onChange={(e) => setJudgeSearch(e.target.value)}
-                              />
-                            </div>
-                          </div>
-                          {judgeCandidateModels.length === 0 ? (
-                            <p className={styles.ev__empty}>No available models yet.</p>
-                          ) : filteredJudgeModels.length === 0 ? (
-                            <p className={styles.ev__empty}>No models match "{judgeSearch}".</p>
-                          ) : (
-                            <div className={styles['ev__judge-grid']} role="radiogroup" aria-label="Judge model">
-                              {filteredJudgeModels.map((m) => {
-                                const on = draft.judgeModelId === m.id;
-                                const inputPrice = (m as any).input_price as number | null | undefined;
-                                const outputPrice = (m as any).output_price as number | null | undefined;
-                                const hasPrice = inputPrice !== undefined || outputPrice !== undefined;
-                                const underTest = draft.models.includes(m.id);
-                                return (
-                                  <button
-                                    key={m.id}
-                                    type="button"
-                                    role="radio"
-                                    aria-checked={on}
-                                    className={`${styles['ev__judge-row']} ${on ? styles['ev__judge-row--on'] : ''}`}
-                                    onClick={() => dispatch(setDraft({ judgeModelId: on ? null : m.id }))}
-                                  >
-                                    <span className={`${styles.ev__radio} ${on ? styles['ev__radio--on'] : ''}`} />
-                                    <span className={styles['ev__tcell-text']} style={{ flex: 1 }}>
-                                      <span className={styles['ev__judge-name']} title={m.name || 'Unnamed model'}>
-                                        {m.name || 'Unnamed model'}
-                                      </span>
-                                      <span className={styles['ev__judge-meta']}>
-                                        {providers.find((p) => p?.id === m.provider_id)?.name ?? m.provider_id}
-                                        {underTest ? ', also under test' : ''}
-                                      </span>
-                                    </span>
-                                    {hasPrice && (
-                                      <span className={styles['ev__judge-price']} title="Price per 1M tokens, input/output">
-                                        {formatPrice(inputPrice)}/{formatPrice(outputPrice)}
-                                      </span>
-                                    )}
-                                  </button>
-                                );
-                              })}
-                            </div>
+                                </>
+                              )}
+                            </>
                           )}
                         </div>
                       </section>
 
-                      {/* Harness: limits per task. Every other type: the optional
-                          instruction (harness suites carry their own task instructions). */}
-                      {isHarness ? (
-                        <section className={styles.ev__sec}>
-                          <div className={styles['ev__sec-aside']}>
-                            <h3 className={styles['ev__sec-title']}>Limits per task</h3>
-                            <p className={styles['ev__sec-hint']}>
-                              When the harness stops an agent, and what it keeps afterwards. Every task runs in its own clean
-                              sandbox.
+                      {/* Limits per task — harness only */}
+                      {isHarness && (
+                        <section className={styles.ev__frow}>
+                          <div className={styles['ev__frow-side']}>
+                            <h3>Limits per task</h3>
+                            <p>When the harness stops an agent, and what it keeps afterwards.</p>
+                          </div>
+                          <div className={styles['ev__frow-main']}>
+                            <div className={styles.ev__inline} style={{ alignItems: 'flex-end' }}>
+                              <div className={styles.ev__numfield}>
+                                <label>Max steps</label>
+                                <input
+                                  type="number"
+                                  className={styles.ev__num}
+                                  min={MIN_HARNESS_STEPS}
+                                  max={MAX_HARNESS_STEPS}
+                                  value={displayNumInput(draft.harnessSettings.max_steps)}
+                                  onChange={(e) =>
+                                    dispatch(
+                                      setDraft({
+                                        harnessSettings: { ...draft.harnessSettings, max_steps: parseNumInput(e.target.value) },
+                                      })
+                                    )
+                                  }
+                                  onBlur={() =>
+                                    dispatch(
+                                      setDraft({
+                                        harnessSettings: {
+                                          ...draft.harnessSettings,
+                                          max_steps: clampHarnessSteps(draft.harnessSettings.max_steps),
+                                        },
+                                      })
+                                    )
+                                  }
+                                />
+                              </div>
+                              <div className={styles.ev__numfield}>
+                                <label>Timeout (seconds)</label>
+                                <input
+                                  type="number"
+                                  className={styles.ev__num}
+                                  min={MIN_TIMEOUT}
+                                  max={MAX_TIMEOUT}
+                                  value={displayNumInput(draft.harnessSettings.task_timeout)}
+                                  onChange={(e) =>
+                                    dispatch(
+                                      setDraft({
+                                        harnessSettings: {
+                                          ...draft.harnessSettings,
+                                          task_timeout: parseNumInput(e.target.value),
+                                        },
+                                      })
+                                    )
+                                  }
+                                  onBlur={() =>
+                                    dispatch(
+                                      setDraft({
+                                        harnessSettings: {
+                                          ...draft.harnessSettings,
+                                          task_timeout: clampRetryField('timeout', draft.harnessSettings.task_timeout),
+                                        },
+                                      })
+                                    )
+                                  }
+                                />
+                              </div>
+                              <button
+                                type="button"
+                                role="checkbox"
+                                aria-checked={draft.harnessSettings.save_traces}
+                                className={styles.ev__checkline}
+                                onClick={() =>
+                                  dispatch(
+                                    setDraft({
+                                      harnessSettings: {
+                                        ...draft.harnessSettings,
+                                        save_traces: !draft.harnessSettings.save_traces,
+                                      },
+                                    })
+                                  )
+                                }
+                              >
+                                <span
+                                  className={`${styles.ev__check} ${
+                                    draft.harnessSettings.save_traces ? styles['ev__check--on'] : ''
+                                  }`}
+                                >
+                                  {draft.harnessSettings.save_traces && <Check size={11} strokeWidth={3} />}
+                                </span>
+                                Save traces for replay
+                              </button>
+                            </div>
+                            <p className={styles['ev__inline-note']}>
+                              Steps {MIN_HARNESS_STEPS} to {MAX_HARNESS_STEPS}. Timeout {MIN_TIMEOUT} to {MAX_TIMEOUT} seconds.
                             </p>
                           </div>
-                          <div className={`${styles['ev__sec-body']} ${styles['ev__sec-body--row']}`}>
-                            <label className={styles.ev__numfield}>
-                              Max steps
-                              <input
-                                type="number"
-                                min={MIN_HARNESS_STEPS}
-                                max={MAX_HARNESS_STEPS}
-                                className={`${styles.ev__input} ${styles['ev__input--num']}`}
-                                value={displayNumInput(draft.harnessSettings.max_steps)}
-                                onChange={(e) =>
-                                  dispatch(
-                                    setDraft({
-                                      harnessSettings: { ...draft.harnessSettings, max_steps: parseNumInput(e.target.value) },
-                                    })
-                                  )
-                                }
-                                onBlur={() =>
-                                  dispatch(
-                                    setDraft({
-                                      harnessSettings: {
-                                        ...draft.harnessSettings,
-                                        max_steps: clampHarnessSteps(draft.harnessSettings.max_steps),
-                                      },
-                                    })
-                                  )
-                                }
-                              />
-                              <span className={styles['ev__sec-note']}>
-                                {MIN_HARNESS_STEPS} to {MAX_HARNESS_STEPS}. Past this the task counts as "gave up".
-                              </span>
-                            </label>
-                            <label className={styles.ev__numfield}>
-                              Timeout (seconds)
-                              <input
-                                type="number"
-                                min={MIN_TIMEOUT}
-                                max={MAX_TIMEOUT}
-                                className={`${styles.ev__input} ${styles['ev__input--num']}`}
-                                value={displayNumInput(draft.harnessSettings.task_timeout)}
-                                onChange={(e) =>
-                                  dispatch(
-                                    setDraft({
-                                      harnessSettings: { ...draft.harnessSettings, task_timeout: parseNumInput(e.target.value) },
-                                    })
-                                  )
-                                }
-                                onBlur={() =>
-                                  dispatch(
-                                    setDraft({
-                                      harnessSettings: {
-                                        ...draft.harnessSettings,
-                                        task_timeout: clampRetryField('timeout', draft.harnessSettings.task_timeout),
-                                      },
-                                    })
-                                  )
-                                }
-                              />
-                              <span className={styles['ev__sec-note']}>
-                                {MIN_TIMEOUT} to {MAX_TIMEOUT} per task.
-                              </span>
-                            </label>
-                            <label className={styles.ev__switch}>
-                              <input
-                                type="checkbox"
-                                checked={draft.harnessSettings.save_traces}
-                                onChange={(e) =>
-                                  dispatch(
-                                    setDraft({ harnessSettings: { ...draft.harnessSettings, save_traces: e.target.checked } })
-                                  )
-                                }
-                              />
-                              <span>
-                                Save traces for replay
-                                <span className={styles['ev__sec-note']}>Tool calls, steps, tokens and time for every run.</span>
-                              </span>
-                            </label>
-                          </div>
                         </section>
-                      ) : (
-                        <section className={styles.ev__sec}>
-                          <div className={styles['ev__sec-aside']}>
-                            <h3 className={styles['ev__sec-title']}>
-                              Instruction <span className={styles['ev__q-note']}>Optional</span>
-                            </h3>
-                            <p className={styles['ev__sec-hint']}>Extra context for how the models should approach this run.</p>
-                            <button
-                              type="button"
-                              className={styles['ev__instruction-generate-btn']}
-                              onClick={generateInstruction}
-                              disabled={instructionGenerating || !draft.dataset || draft.models.length === 0}
-                              title="Generate a default instruction from a sample of this dataset"
-                            >
-                              {instructionGenerating ? (
+                      )}
+
+                      {/* Retest on wrong — Model and RAG always; Agent only with a framework */}
+                      {retestShown && (
+                        <section className={styles.ev__frow}>
+                          <div className={styles['ev__frow-side']}>
+                            <h3>Retest on wrong</h3>
+                            <p>Re-grade a wrong answer before marking it failed.</p>
+                            {draft.retestOnWrong && !draft.retestVerifyMetric && (
+                              <p className={styles['ev__frow-req']}>Required: pick a verify metric</p>
+                            )}
+                          </div>
+                          <div className={styles['ev__frow-main']}>
+                            <div className={styles.ev__inline}>
+                              <div className={styles.ev__segctl}>
+                                <button
+                                  type="button"
+                                  className={`${styles.ev__segbtn} ${!draft.retestOnWrong ? styles['ev__segbtn--on'] : ''}`}
+                                  onClick={() =>
+                                    dispatch(
+                                      setDraft({
+                                        retestOnWrong: false,
+                                        retestMaxRounds: DEFAULT_RETEST_ROUNDS,
+                                        retestVerifyMetric: null,
+                                      })
+                                    )
+                                  }
+                                >
+                                  Off
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`${styles.ev__segbtn} ${draft.retestOnWrong ? styles['ev__segbtn--on'] : ''}`}
+                                  onClick={() => dispatch(setDraft({ retestOnWrong: true }))}
+                                >
+                                  On
+                                </button>
+                              </div>
+                              {draft.retestOnWrong && (
                                 <>
-                                  <Loader2 size={13} className={styles.ev__spin} /> Generating…
-                                </>
-                              ) : (
-                                <>
-                                  <Sparkles size={13} /> Generate from the suite
+                                  <input
+                                    type="number"
+                                    className={styles.ev__num}
+                                    min={MIN_RETEST_ROUNDS}
+                                    max={MAX_RETEST_ROUNDS}
+                                    value={displayNumInput(draft.retestMaxRounds)}
+                                    onChange={(e) => updateRetestMaxRounds(parseNumInput(e.target.value))}
+                                    onBlur={clampRetestMaxRoundsOnBlur}
+                                  />
+                                  <span className={styles['ev__inline-note']}>
+                                    rounds at most ({MIN_RETEST_ROUNDS} to {MAX_RETEST_ROUNDS})
+                                  </span>
                                 </>
                               )}
-                            </button>
+                            </div>
+                            {draft.retestOnWrong && (
+                              <>
+                                <p className={styles.ev__sublabel}>Verify each retest with one metric</p>
+                                <div className={styles.ev__chips}>
+                                  {metricsCatalog.map((name: string) => {
+                                    const on = draft.retestVerifyMetric === name;
+                                    return (
+                                      <button
+                                        key={name}
+                                        type="button"
+                                        className={`${styles.ev__chip} ${on ? styles['ev__chip--on'] : ''}`}
+                                        aria-pressed={on}
+                                        onClick={() => dispatch(setDraft({ retestVerifyMetric: on ? null : name }))}
+                                      >
+                                        {name}
+                                      </button>
+                                    );
+                                  })}
+                                  {metricsCatalog.length === 0 && (
+                                    <p className={styles['ev__inline-note']}>No metrics available to verify against.</p>
+                                  )}
+                                </div>
+                              </>
+                            )}
                           </div>
-                          <div className={styles['ev__sec-body']}>
+                        </section>
+                      )}
+
+                      {/* Instruction — optional; harness suites carry their own */}
+                      {!isHarness && (
+                        <section className={styles.ev__frow}>
+                          <div className={styles['ev__frow-side']}>
+                            <h3>Instruction</h3>
+                            <p>Optional. Extra context for how the models should approach this run.</p>
+                            <div className={styles['ev__metrics-actions']}>
+                              <button
+                                type="button"
+                                className={styles.ev__link}
+                                onClick={generateInstruction}
+                                disabled={instructionGenerating || !draft.dataset || draft.models.length === 0}
+                                title="Generate a default instruction from a sample of this dataset"
+                              >
+                                {instructionGenerating ? 'Generating…' : 'Generate a draft'}
+                              </button>
+                            </div>
+                          </div>
+                          <div className={styles['ev__frow-main']}>
                             <textarea
                               className={styles['ev__instruction-textarea']}
-                              aria-label="Instruction"
-                              placeholder="Describe how the models should approach this evaluation, or generate a starting point you can edit."
+                              placeholder="Describe how the models should approach this evaluation, or generate a draft to edit."
                               value={draft.instruction}
                               onChange={(e) => dispatch(setDraft({ instruction: e.target.value }))}
-                              rows={5}
+                              rows={4}
                             />
                             {instructionError && <p className={styles.ev__error}>{instructionError}</p>}
                           </div>
                         </section>
                       )}
                     </div>
-                  )}
 
-
-                  {/* STEP 6 — REVIEW: a summary band, the run matrix (harness)
-                      and one settings list where every row has an Edit button
-                      that jumps back to the step that owns it. */}
-                  {step === 6 && (
-                    <div className={styles.ev__review}>
-                      <section className={styles['ev__review-band']}>
-                        <div>
-                          <h3 className={styles['ev__review-name']}>{draft.name || 'Untitled evaluation'}</h3>
-                          <p className={styles['ev__review-mode']}>
-                            {isHarness
-                              ? `Agent harness comparing ${harnessAgentTitles.join(' and ') || 'agents'}`
-                              : `${typeLabel || 'Evaluation'}${frameworkTitle ? `, ${frameworkTitle}` : ''}`}
-                          </p>
-                        </div>
-                        <dl className={styles['ev__review-stats']}>
-                          {isHarness ? (
-                            <>
-                              <div>
-                                <dt>Runs</dt>
-                                <dd>{harnessRunCount.toLocaleString()}</dd>
-                              </div>
-                              <div>
-                                <dt>Tasks</dt>
-                                <dd>{harnessTaskCount.toLocaleString()}</dd>
-                              </div>
-                            </>
+                    {/* Who judges — mandatory for every type. Its own side panel,
+                        same pattern as the Models step's "In this run". */}
+                    <aside className={`${styles.ev__panel} ${styles['ev__panel--pinned']}`}>
+                      {/* Pinned: heading, guidance, required note and search.
+                          Only the list of candidate models below scrolls. */}
+                      <div className={styles['ev__panel-fixed']}>
+                        <div className={styles['ev__panel-headrow']}>
+                          <p className={styles['ev__panel-title']}>Who judges</p>
+                          {judgeModel ? (
+                            <span className={styles['ev__panel-chip']}>
+                              <Gavel size={11} /> {judgeModel.name || 'Unnamed model'}
+                            </span>
                           ) : (
+                            <span className={`${styles['ev__panel-chip']} ${styles['ev__panel-chip--req']}`}>Required</span>
+                          )}
+                        </div>
+                        <p className={styles['ev__panel-note']}>
+                          One model grades open-ended answers. Pick one that is not under test if you can.
+                        </p>
+                        <div className={styles.ev__sbar}>
+                          <span className={styles['ev__sbar-icon']}>
+                            <Search size={13} strokeWidth={2.6} />
+                          </span>
+                          <input
+                            type="text"
+                            placeholder="Search judge models"
+                            aria-label="Search judge models"
+                            value={judgeSearch}
+                            onChange={(e) => setJudgeSearch(e.target.value)}
+                          />
+                          {judgeSearch && (
                             <>
-                              <div>
-                                <dt>Questions</dt>
-                                <dd>{suite ? sampleCountFor(suite.question_count ?? 0).toLocaleString() : '—'}</dd>
-                              </div>
-                              <div>
-                                <dt>Models</dt>
-                                <dd>{selectedModels.length}</dd>
-                              </div>
+                              <span
+                                className={`${styles['ev__sbar-count']} ${
+                                  filteredJudgeModels.length === 0 ? styles['ev__sbar-count--none'] : ''
+                                }`}
+                              >
+                                {filteredJudgeModels.length === 0
+                                  ? 'No matches'
+                                  : `${filteredJudgeModels.length} result${filteredJudgeModels.length === 1 ? '' : 's'}`}
+                              </span>
+                              <button
+                                type="button"
+                                className={styles['ev__sbar-clear']}
+                                onClick={() => setJudgeSearch('')}
+                                aria-label="Clear search"
+                              >
+                                <X size={12} strokeWidth={2.5} />
+                              </button>
                             </>
                           )}
-                          <div>
-                            <dt>{isHarness ? 'Scorers' : 'Metrics'}</dt>
-                            <dd>{hideMetricsStep ? '—' : draft.metrics.length}</dd>
-                          </div>
-                        </dl>
-                      </section>
+                        </div>
+                      </div>
 
+                      <div className={styles['ev__panel-scroll']}>
+                        {judgeCandidateModels.length === 0 ? (
+                          <p className={styles['ev__panel-note']}>No healthy models available yet.</p>
+                        ) : filteredJudgeModels.length === 0 ? (
+                          <p className={styles['ev__panel-note']}>No models match "{judgeSearch}".</p>
+                        ) : (
+                          filteredJudgeModels.map((m) => {
+                            const on = draft.judgeModelId === m.id;
+                            const providerName = providers.find((p) => p?.id === m.provider_id)?.name ?? m.provider_id;
+                            const underTest = draft.models.includes(m.id);
+                            return (
+                              <button
+                                key={m.id}
+                                type="button"
+                                className={`${styles.ev__jcard} ${on ? styles['ev__jcard--on'] : ''}`}
+                                aria-pressed={on}
+                                onClick={() => dispatch(setDraft({ judgeModelId: on ? null : m.id }))}
+                              >
+                                <span className={styles['ev__jcard-head']}>
+                                  <span className={`${styles.ev__radio} ${on ? styles['ev__radio--on'] : ''}`} />
+                                  <span className={styles['ev__srow-icon']}>
+                                    <Gavel size={14} />
+                                  </span>
+                                  <span className={styles['ev__jcard-id']}>
+                                    <span className={styles['ev__jcard-name']} title={m.name || 'Unnamed model'}>
+                                      {m.name || 'Unnamed model'}
+                                    </span>
+                                    <span className={styles['ev__jcard-provider']}>{providerName}</span>
+                                  </span>
+                                  {underTest && (
+                                    <span
+                                      className={styles['ev__jcard-flag']}
+                                      title="This model is also being evaluated in this run"
+                                    >
+                                      Under test
+                                    </span>
+                                  )}
+                                </span>
+                                <span className={styles['ev__jcard-stats']}>
+                                  <span className={styles.ev__stat}>
+                                    <span className={styles['ev__stat-k']}>Context</span>
+                                    <span className={styles['ev__stat-v']}>{formatContextWindow(m.context_window)}</span>
+                                  </span>
+                                  <span className={styles.ev__stat}>
+                                    <span className={styles['ev__stat-k']}>Input /1M</span>
+                                    <span className={styles['ev__stat-v']}>{formatPrice(m.input_price)}</span>
+                                  </span>
+                                  <span className={styles.ev__stat}>
+                                    <span className={styles['ev__stat-k']}>Output /1M</span>
+                                    <span className={styles['ev__stat-v']}>{formatPrice(m.output_price)}</span>
+                                  </span>
+                                </span>
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+                    </aside>
+                    </div>
+                  )}
+
+                  {/* STEP 6 — REVIEW */}
+                  {step === 6 && (
+                    <>
+                      <div className={styles.ev__banner}>
+                        <div style={{ minWidth: 0 }}>
+                          <p className={styles['ev__banner-title']}>{draft.name || 'Untitled run'}</p>
+                          <p className={styles['ev__banner-sub']}>{reviewSummaryLine}</p>
+                        </div>
+                        <div className={styles['ev__banner-stats']}>
+                          {reviewStats.map((st) => (
+                            <div key={st.k}>
+                              <span>{st.k}</span>
+                              <b>{st.v}</b>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Run matrix — every agent runs every selected model on every
+                          selected suite; each cell is that agent's task count. */}
                       {isHarness && (
-                        <section className={styles['ev__review-sec']}>
-                          <div className={styles['ev__review-sec-head']}>
+                        <>
+                          <div className={styles.ev__sechead}>
                             <h3>Run matrix</h3>
                             <span>
-                              Each cell runs on {selectedModels.map((m) => m!.name).join(' and ') || 'your models'}
+                              Each cell runs on{' '}
+                              {selectedModels.map((m) => m.name || 'Unnamed model').join(' and ') || 'no models yet'}
                             </span>
                           </div>
-                          <div className={styles.ev__tablewrap}>
-                            <table className={styles.ev__table}>
+                          <div className={`${styles['ev__table-wrap']} ${styles['ev__table-wrap--static']}`}>
+                            <table className={`${styles.ev__table} ${styles['ev__table--static']}`}>
                               <thead>
                                 <tr>
-                                  <th scope="col">Suite</th>
-                                  <th scope="col">Use case</th>
-                                  {harnessAgentTitles.map((a) => (
-                                    <th key={a} scope="col" className={styles.ev__tnum}>
-                                      {a}
+                                  <th>Suite</th>
+                                  <th>Use case</th>
+                                  {harnessAgentTitles.map((t) => (
+                                    <th key={t} className={styles['ev__table-num']}>
+                                      {t}
                                     </th>
                                   ))}
                                 </tr>
                               </thead>
                               <tbody>
-                                {selectedHarnessSuites.map((s) => (
-                                  <tr key={s.id}>
-                                    <th scope="row" className={styles['ev__review-rowhead']}>
-                                      {s.name}
-                                    </th>
-                                    <td className={styles.ev__tsub}>{s.use_case || '—'}</td>
-                                    {harnessAgentTitles.map((a) => (
-                                      <td key={a} className={styles.ev__tnum}>
-                                        {sampleCountFor(s.question_count ?? 0)} tasks
+                                {selectedHarnessSuites.map((d) => (
+                                  <tr key={d.id}>
+                                    <td>
+                                      <b>{d.name}</b>
+                                    </td>
+                                    <td>{d.use_case || '—'}</td>
+                                    {harnessAgentTitles.map((t) => (
+                                      <td key={t} className={styles['ev__table-num']}>
+                                        {(suiteQuestions(d.question_count ?? 0) * draft.models.length).toLocaleString()} tasks
                                       </td>
                                     ))}
                                   </tr>
@@ -3872,42 +4615,36 @@ export default function NewEvaluation() {
                               </tbody>
                             </table>
                           </div>
-                          {harnessUncoveredCases.length > 0 && (
-                            <p className={styles['ev__review-note']}>
-                              Not covered by this run: {harnessUncoveredCases.join(', ')}.
+                          {uncoveredUseCases.length > 0 && (
+                            <p className={styles.ev__secnote}>
+                              {uncoveredUseCases.join(', ')} {uncoveredUseCases.length === 1 ? 'is' : 'are'} not covered by
+                              this run.
                             </p>
                           )}
-                        </section>
+                        </>
                       )}
 
-                      <section className={styles['ev__review-sec']}>
-                        <div className={styles['ev__review-sec-head']}>
-                          <h3>Settings</h3>
-                        </div>
-                        <div className={styles['ev__review-list']}>
-                          {reviewRows.map((r) => (
-                            <div key={r.label} className={styles['ev__review-line']}>
-                              <span className={styles['ev__review-k']}>{r.label}</span>
-                              <span className={styles['ev__review-v']}>{r.value}</span>
-                              <button
-                                type="button"
-                                className={styles['ev__review-edit']}
-                                onClick={() => goToStep(r.step)}
-                                aria-label={`Edit ${r.label.toLowerCase()}`}
-                              >
-                                Edit
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      </section>
+                      <div className={styles.ev__sechead}>
+                        <h3>Settings</h3>
+                      </div>
+                      <div className={styles.ev__settings}>
+                        {reviewRows.map((r) => (
+                          <div key={r.k} className={styles['ev__settings-row']}>
+                            <span className={styles['ev__settings-k']}>{r.k}</span>
+                            <span className={styles['ev__settings-v']}>{r.v}</span>
+                            <button type="button" className={styles.ev__link} onClick={() => goToStep(r.step)} disabled={launching}>
+                              Edit
+                            </button>
+                          </div>
+                        ))}
+                      </div>
 
                       {launchError && (
                         <p className={styles.ev__error} ref={launchErrorRef}>
                           {launchError}
                         </p>
                       )}
-                    </div>
+                    </>
                   )}
                 </div>
                 </StepErrorBoundary>
@@ -3921,36 +4658,45 @@ export default function NewEvaluation() {
                   onClick={() => (step > 0 ? goBack() : navigate('/app/dashboard'))}
                   disabled={launching}
                 >
-                  <ChevronLeft size={16} /> {step === 0 ? 'Cancel' : 'Back'}
+                  {step === 0 ? 'Cancel' : 'Back'}
                 </button>
 
-                <div className={styles['ev__footer-actions']}>
-                  {continueBlockedReason && step < totalSteps - 1 && (
-                    <span className={styles['ev__footer-reason']} role="status">
-                      <Info size={14} /> {continueBlockedReason}
-                    </span>
-                  )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
                   {step === 0 && canGo() && (
                     <span className={styles.ev__hint}>
                       <kbd>↵</kbd> Enter to continue
                     </span>
                   )}
                   {step < totalSteps - 1 ? (
-                    <button type="button" className={`${styles.ev__btn} ${styles['ev__btn--primary']}`} onClick={goNext} disabled={!canGo()}>
-                      Next: {STEPS[step + 1].label} <ChevronRight size={16} />
-                    </button>
+                    <>
+                      {blocker && <span className={styles.ev__blocker}>{blocker}</span>}
+                      <button
+                        type="button"
+                        className={`${styles.ev__btn} ${styles['ev__btn--primary']}`}
+                        onClick={goNext}
+                        disabled={!canGo()}
+                      >
+                        Next
+                      </button>
+                    </>
                   ) : (
-                    <button type="button" className={`${styles.ev__btn} ${styles['ev__btn--launch']}`} onClick={launch} disabled={launching}>
-                      {launching ? (
-                        <>
-                          <Loader2 size={16} className={styles.ev__spin} /> Launching…
-                        </>
-                      ) : (
-                        <>
-                          <Play size={16} /> Launch run
-                        </>
-                      )}
-                    </button>
+                    <>
+                      <span className={styles.ev__blocker}>You can follow progress in History after launch.</span>
+                      <button
+                        type="button"
+                        className={`${styles.ev__btn} ${styles['ev__btn--launch']}`}
+                        onClick={launch}
+                        disabled={launching}
+                      >
+                        {launching ? (
+                          <>
+                            <Loader2 size={16} className={styles.ev__spin} /> Launching…
+                          </>
+                        ) : (
+                          'Launch run'
+                        )}
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
@@ -4272,6 +5018,15 @@ export default function NewEvaluation() {
 
 
 
+
+
+
+
+
+
+
+
+
 @use '../../styles/_variables' as *;
 
 // ===========================================================================
@@ -4310,19 +5065,7 @@ $ring:  0 0 0 3px rgba(43, 43, 245, 0.16);
 // itself so inheritance covers everything nested inside it.
 $ev-base-font: 0.8125rem;
 
-// Small field/section labels inside the wizard: plain sentence-case sans.
-// (Was tracked uppercase mono, which made every label shout at 9-11px.)
 %micro {
-  font-family: $sans;
-  font-size: 0.8462em; // 0.6875rem / 0.8125rem
-  font-weight: 600;
-  letter-spacing: 0;
-  text-transform: none;
-}
-
-// The page header eyebrow keeps the tracked uppercase mono treatment so it
-// still matches the History / Reports / Comparison headers.
-%micro-caps {
   font-family: $mono;
   font-size: 0.8462em; // 0.6875rem / 0.8125rem
   font-weight: 700;
@@ -4361,7 +5104,7 @@ $ev-base-font: 0.8125rem;
 }
 
 .ev__header-eyebrow {
-  @extend %micro-caps;
+  @extend %micro;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -4462,106 +5205,115 @@ $ev-base-font: 0.8125rem;
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: 268px 1fr;
-    gap: 22px;
+    grid-template-columns: 288px 1fr;
+    gap: 16px;
   }
 
   // ========================================================================
-  // Step checklist (left rail)
-  // Sits directly on the page with no card of its own, so the stage is the
-  // one surface on screen. Each row is a step: number, name, and the value
-  // chosen so far. Done rows are links back to that step.
+  // SIGNATURE: Run Manifest
   // ========================================================================
   &__manifest {
+    background: $card;
+    border: 1px solid $line;
+    border-radius: 16px;
+    box-shadow: $soft;
     display: flex;
     flex-direction: column;
     min-height: 0;
+    overflow: hidden;
   }
 
   &__manifest-head {
     flex-shrink: 0;
-    padding: 6px 12px 18px;
+    padding: 18px 20px 16px;
+    border-bottom: 1px solid $line-2;
   }
 
+  &__manifest-eyebrow {
+    @extend %micro;
+    color: $ink-3;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  &__manifest-pct {
+    color: $signal;
+    font-size: 0.9231em; letter-spacing: 0.06em; } // 0.75rem / 0.8125rem
+
   &__manifest-title {
+    margin-top: 8px;
     font-family: $display;
-    font-size: 1.3846em; // 1.125rem / 0.8125rem
+    font-size: 1.2308em; // 1rem / 0.8125rem
     font-weight: 800;
-    letter-spacing: -0.02em;
+    letter-spacing: -0.015em;
     color: $ink;
-    line-height: 1.2;
+    line-height: 1.15;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 
-    &[data-empty='true'] { color: $ink-3; }
+    &[data-empty='true'] { color: $ink-3; font-style: normal; }
   }
 
-  &__manifest-eyebrow {
-    margin-top: 4px;
-    font-size: 0.9615em; // 0.78125rem / 0.8125rem
-    font-weight: 500;
-    color: $ink-2;
-  }
-
-  // one segment per step, so the bar reads as "which steps", not a percent
   &__meter {
     margin-top: 12px;
-    display: flex;
-    gap: 4px;
-  }
-
-  &__meter-seg {
-    flex: 1;
     height: 4px;
     border-radius: 999px;
     background: $line;
-    transition: background 0.25s ease;
-
-    &[data-state='done'] { background: $signal; }
-    &[data-state='active'] { background: rgba($signal, 0.35); }
+    overflow: hidden;
   }
 
+  &__meter-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, $signal, $signal-2);
+    transition: width 0.4s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+
+  // ---- the spec list (each row = a step, with its live value) -------------
   &__spec {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 2px;
+    padding: 14px 12px 16px;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 24px;
   }
 
   &__spec-row {
     position: relative;
     display: grid;
-    grid-template-columns: 28px 1fr auto;
-    align-items: center;
+    grid-template-columns: 30px 1fr;
+    align-items: start;
     gap: 12px;
     width: 100%;
     text-align: left;
-    border: 1px solid transparent;
+    border: 0;
     background: transparent;
-    padding: 10px 12px 10px 10px;
+    padding: 12px 12px 12px 4px;
     border-radius: 12px;
     cursor: pointer;
-    transition: background 0.15s ease, border-color 0.15s ease;
+    transition: background 0.15s ease;
 
-    // connector from this tick down to the next one (rows are 2px apart)
+    // Extends past this row's own bottom edge by exactly the flex `gap`
+    // above (24px), so the line still reaches the next row's tick — the
+    // larger the gap, the more this needs to stretch to stay unbroken.
     &::before {
       content: '';
       position: absolute;
-      left: 23px;
-      top: calc(50% + 17px);
-      height: calc(100% - 32px);
+      left: 18px;
+      top: 38px;
+      bottom: -24px;
       width: 2px;
-      border-radius: 2px;
       background: $line;
       transition: background 0.2s ease;
     }
     &:last-child::before { display: none; }
 
     &:disabled { cursor: default; }
+    &:not(:disabled):hover { background: $paper; }
   }
 
   &__spec-tick {
@@ -4569,75 +5321,67 @@ $ev-base-font: 0.8125rem;
     z-index: 1;
     width: 28px;
     height: 28px;
-    border-radius: 50%;
+    border-radius: 9px;
     display: grid;
     place-items: center;
-    background: $paper;
+    background: $card;
     border: 1.5px solid $line;
     color: $ink-3;
     font-family: $mono;
-    font-size: 0.9231em; // 0.75rem / 0.8125rem
+    font-size: 0.8462em; // 0.6875rem / 0.8125rem
     font-weight: 700;
-    transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+    transition: all 0.18s ease;
   }
 
   &__spec-body {
     min-width: 0;
+    padding-top: 1px;
     display: flex;
     flex-direction: column;
-    gap: 1px;
+    gap: 2px;
   }
 
   &__spec-label {
+    @extend %micro;
     font-size: 0.9231em; // 0.75rem / 0.8125rem
-    font-weight: 600;
-    color: $ink-2;
+    color: $ink-3;
     transition: color 0.18s ease;
   }
 
   &__spec-value {
-    font-size: 1.0769em; // 0.875rem / 0.8125rem
+    font-size: 1.1538em; // 0.9375rem / 0.8125rem
     font-weight: 600;
     color: $ink;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 
-    &[data-empty='true'] { color: $ink-3; font-weight: 500; }
-  }
-
-  // "Edit" appears on a finished row when it is hovered or focused
-  &__spec-edit {
-    font-size: 0.8462em; // 0.6875rem / 0.8125rem
-    font-weight: 600;
-    color: $signal;
-    opacity: 0;
-    transition: opacity 0.15s ease;
+    &[data-empty='true'] {
+      color: $ink-3;
+      font-weight: 500;
+      font-family: $mono;
+    }
   }
 
   &__spec-row--done {
     &::before { background: $signal; }
     .ev__spec-tick { background: $signal; border-color: $signal; color: #fff; }
-
-    &:hover,
-    &:focus-visible {
-      background: $card;
-      border-color: $line;
-      .ev__spec-edit { opacity: 1; }
-    }
+    .ev__spec-label { color: $ink-3; }
   }
 
   &__spec-row--active {
-    background: $card;
-    border-color: $line;
-    box-shadow: $soft;
-    .ev__spec-tick { background: $wash; border-color: $signal; color: $signal; }
+    background: $wash;
+    .ev__spec-tick {
+      background: $card;
+      border-color: $signal;
+      color: $signal;
+      box-shadow: 0 0 0 4px rgba($signal, 0.14);
+    }
     .ev__spec-label { color: $signal; }
+    &:not(:disabled):hover { background: $wash; }
   }
 
-  &__spec-row--todo {
-    .ev__spec-label { color: $ink-3; }
-  }
+  &__spec-row--todo { opacity: 0.9; }
 
   // ========================================================================
   // Stage (the working area for the current step)
@@ -4655,48 +5399,50 @@ $ev-base-font: 0.8125rem;
 
   &__stage-head {
     flex-shrink: 0;
-    display: flex;
-    align-items: flex-start;
-    gap: 14px;
     padding: 22px 28px 18px;
     border-bottom: 1px solid $line-2;
   }
 
-  &__stage-icon {
-    flex-shrink: 0;
-    width: 40px;
-    height: 40px;
-    border-radius: 11px;
-    display: grid;
-    place-items: center;
-    background: $wash;
-    color: $signal;
+  &__crumb {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    @extend %micro;
+    color: $ink-3;
+
+    b { color: $signal; font-weight: 700; }
+
+    span:first-child {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: $signal;
+    }
   }
 
-  &__stage-head-text { min-width: 0; }
-
-  &__crumb {
-    font-size: 0.9231em; // 0.75rem / 0.8125rem
-    font-weight: 600;
-    color: $signal;
+  &__crumb-sep {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: $ink-3;
   }
 
   &__stage-title {
-    margin-top: 2px;
+    margin-top: 12px;
     font-family: $display;
     font-size: 1.6923em; // 1.375rem / 0.8125rem
     font-weight: 800;
     letter-spacing: -0.025em;
     color: $ink;
-    line-height: 1.15;
+    line-height: 1.1;
   }
 
   &__stage-sub {
-    margin-top: 5px;
+    margin-top: 6px;
     font-size: 1.0385em; // 0.84375rem / 0.8125rem
     color: $ink-2;
     line-height: 1.5;
-    max-width: 68ch;
+    max-width: 60ch;
   }
 
   &__stage-body {
@@ -4721,28 +5467,6 @@ $ev-base-font: 0.8125rem;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-  }
-
-  &__footer-actions {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    min-width: 0;
-  }
-
-  // why "Next" is disabled, in plain words
-  &__footer-reason {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    min-width: 0;
-    font-size: 0.9615em; // 0.78125rem / 0.8125rem
-    font-weight: 500;
-    color: $ink-2;
-    line-height: 1.35;
-    text-align: right;
-
-    svg { flex-shrink: 0; color: $ink-3; }
   }
 
   &__hint {
@@ -4793,14 +5517,14 @@ $ev-base-font: 0.8125rem;
       background: $ink-solid;
       color: #fff;
       box-shadow: $soft;
-      &:not(:disabled):hover { background: $ink-solid-hover; }
+      &:not(:disabled):hover { background: $ink-solid-hover; transform: translateY(-1px); box-shadow: $lift; }
     }
 
     &--launch {
       background: $signal;
       color: #fff;
       box-shadow: 0 8px 20px -8px rgba($signal, 0.7);
-      &:not(:disabled):hover { background: $signal-2; }
+      &:not(:disabled):hover { background: $signal-2; transform: translateY(-1px); }
     }
   }
 
@@ -4896,7 +5620,7 @@ $ev-base-font: 0.8125rem;
 
   &__quick-head {
     @extend %micro;
-    font-size: 0.8462em; // 0.625rem / 0.8125rem
+    font-size: 0.7692em; // 0.625rem / 0.8125rem
     color: $ink-3;
     margin-bottom: 11px;
   }
@@ -4927,6 +5651,7 @@ $ev-base-font: 0.8125rem;
     &:hover {
       border-color: $ink;
       color: $ink;
+      transform: translateY(-1px);
       svg { color: $signal; }
     }
 
@@ -4985,9 +5710,7 @@ $ev-base-font: 0.8125rem;
   // ========================================================================
   &__options {
     display: flex;
-    flex-direction: column;
     gap: 10px;
-    max-width: 720px;
   }
 
   &__option {
@@ -5004,12 +5727,15 @@ $ev-base-font: 0.8125rem;
     cursor: pointer;
     transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease, background 0.18s ease;
 
-    &:hover { border-color: $ink-3; }
+    &:hover {
+      border-color: $ink-3;
+      box-shadow: $lift;
+      transform: translateY(-2px);
+    }
 
     &--on {
       border-color: $signal;
       background: $wash;
-      box-shadow: inset 0 0 0 1px $signal;
       &:hover { border-color: $signal; }
     }
 
@@ -5064,7 +5790,7 @@ $ev-base-font: 0.8125rem;
 
   &__badge {
     @extend %micro;
-    font-size: 0.8462em; // 0.5625rem / 0.8125rem
+    font-size: 0.6923em; // 0.5625rem / 0.8125rem
     color: $ink-3;
     background: $paper;
     border: 1px solid $line;
@@ -5126,8 +5852,8 @@ $ev-base-font: 0.8125rem;
     cursor: pointer;
     transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
 
-    &:hover { border-color: $ink-3; }
-    &--on { border-color: $signal; background: $wash; box-shadow: inset 0 0 0 1px $signal; }
+    &:hover { border-color: $ink-3; transform: translateY(-2px); box-shadow: $lift; }
+    &--on { border-color: $signal; background: $wash; }
   }
 
   &__fw-icon {
@@ -5501,8 +6227,8 @@ $ev-base-font: 0.8125rem;
     cursor: pointer;
     transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
 
-    &:hover { border-color: $ink-3; }
-    &--on { border-color: $signal; background: $wash; box-shadow: inset 0 0 0 1px $signal; &:hover { border-color: $signal; } }
+    &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
+    &--on { border-color: $signal; background: $wash; &:hover { border-color: $signal; } }
   }
 
   &__pcard-icon {
@@ -5557,8 +6283,8 @@ $ev-base-font: 0.8125rem;
     cursor: pointer;
     transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
 
-    &:hover { border-color: $ink-3; }
-    &--on { border-color: $signal; background: $wash; box-shadow: inset 0 0 0 1px $signal; &:hover { border-color: $signal; } }
+    &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
+    &--on { border-color: $signal; background: $wash; &:hover { border-color: $signal; } }
   }
 
   // locked = provider chosen but health not yet confirmed successful;
@@ -5703,7 +6429,7 @@ $ev-base-font: 0.8125rem;
   }
 
   &__stat { display: flex; flex-direction: column; gap: 1px; }
-  &__stat-k { @extend %micro; font-size: 0.8462em; color: $ink-3; } // 0.5625rem / 0.8125rem
+  &__stat-k { @extend %micro; font-size: 0.6923em; color: $ink-3; } // 0.5625rem / 0.8125rem
   &__stat-v { font-family: $mono; font-size: 0.9615em; font-weight: 700; color: $ink; letter-spacing: -0.01em; } // 0.78125rem / 0.8125rem
 
   // Per-model retry/timeout — shown on a model card once it's selected.
@@ -5740,7 +6466,7 @@ $ev-base-font: 0.8125rem;
 
     label {
       @extend %micro;
-      font-size: 0.8462em; // 0.5625rem / 0.8125rem
+      font-size: 0.6923em; // 0.5625rem / 0.8125rem
       color: $ink-3;
     }
 
@@ -5901,13 +6627,10 @@ $ev-base-font: 0.8125rem;
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: 1fr 300px;
-    gap: 16px;
+    grid-template-columns: minmax(0, 1fr) 390px;
+    grid-template-rows: minmax(0, 1fr);
+    gap: 20px;
   }
-
-  // Document-agent harness: multi-select suites, no Subgroups rail, so the
-  // grid collapses to a single column.
-  &__suite--single { grid-template-columns: 1fr; }
 
   // "N suites selected" counter, pushed to the right of the use-case chips.
   &__suite-selected {
@@ -5930,7 +6653,7 @@ $ev-base-font: 0.8125rem;
     p + p { margin-top: 5px; }
     p span {
       @extend %micro;
-      font-size: 0.8462em;
+      font-size: 0.7692em;
       color: $ink-3;
       margin-right: 6px;
     }
@@ -5967,8 +6690,8 @@ $ev-base-font: 0.8125rem;
     cursor: pointer;
     transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
 
-    &:hover { border-color: $ink-3; }
-    &--on { border-color: $signal; background: $wash; box-shadow: inset 0 0 0 1px $signal; &:hover { border-color: $signal; } }
+    &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
+    &--on { border-color: $signal; background: $wash; &:hover { border-color: $signal; } }
 
     // A dataset with 0 questions can still be picked (so the info icon
     // and warning banner are reachable), but reads visibly muted/flagged
@@ -6698,7 +7421,7 @@ $ev-base-font: 0.8125rem;
     align-items: center;
     gap: 6px;
     @extend %micro;
-    font-size: 0.8462em; // 0.5625rem / 0.8125rem
+    font-size: 0.6923em; // 0.5625rem / 0.8125rem
     color: $ink-3;
     margin-bottom: 8px;
     svg { color: $signal; }
@@ -6714,7 +7437,7 @@ $ev-base-font: 0.8125rem;
     align-items: center;
     gap: 7px;
     @extend %micro;
-    font-size: 0.8462em; // 0.625rem / 0.8125rem
+    font-size: 0.7692em; // 0.625rem / 0.8125rem
     color: $ink-2;
     margin-bottom: 12px;
     svg { color: $signal; }
@@ -6736,7 +7459,7 @@ $ev-base-font: 0.8125rem;
     border-bottom: 1px solid $line-2;
     font-size: 1.0385em; &:last-child { border-bottom: 0; } // 0.84375rem / 0.8125rem
 
-    span:first-child { @extend %micro; font-size: 0.8462em; color: $ink-3; } // 0.625rem / 0.8125rem
+    span:first-child { @extend %micro; font-size: 0.7692em; color: $ink-3; } // 0.625rem / 0.8125rem
     span:last-child { color: $ink; font-weight: 600; text-align: right; }
   }
 
@@ -6804,6 +7527,1557 @@ $ev-base-font: 0.8125rem;
   }
 
   &__spin { animation: ev-spin 0.8s linear infinite; }
+
+  // ========================================================================
+  // REDESIGN LAYER
+  // Everything below restyles the wizard to the reference screens: numbered
+  // stepper, radio/checkbox cards, table + side panel, sectioned form rows,
+  // review banner. Only existing tokens are used ($signal, $wash, $ink*,
+  // $paper, $card, $line*, $ok, $danger, $sans/$display/$mono). Rules here
+  // sit last in the block so they win over the earlier ones they refine.
+  // ========================================================================
+
+  // ---- sidebar stepper ----------------------------------------------------
+  // Quiet timeline: completed steps recede (soft tick, their value still
+  // readable), the current step is the only filled element, upcoming steps
+  // are muted. The connector is a short segment between ticks rather than
+  // one continuous rule, coloured only where the path has been walked.
+  &__manifest-head { padding: 18px 20px 16px; }
+  &__manifest-title { margin-top: 8px; }
+  &__manifest-done { margin-top: 8px; font-size: 1.0385em; color: $ink-3; }
+
+  &__segs { display: flex; gap: 4px; margin-top: 14px; }
+  &__seg {
+    flex: 1;
+    height: 4px;
+    border-radius: 999px;
+    background: $line;
+    transition: background 0.2s ease;
+
+    &--done { background: $signal; }
+    &--active { background: rgba($signal, 0.4); }
+  }
+
+  // shell: tighter gutter; the sidebar (aside) and stage (section) keep
+  // their original 16px radius (set on &__manifest / &__stage above)
+  &__shell { gap: 6px; }
+
+  &__spec { gap: 4px; padding: 12px 10px 14px; }
+
+  &__spec-row {
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px 10px 10px;
+    border-radius: 10px;
+
+    // segment from this tick to the next one, with a 3px breath at each end
+    // (rows share one height, so the percentages line up)
+    &::before {
+      left: 23px;
+      top: calc(50% + 17px);
+      bottom: calc(-50% + 13px);
+      width: 2px;
+      border-radius: 2px;
+      background: $line;
+    }
+  }
+
+  &__spec-tick {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 1.5px solid $line;
+    background: $card;
+    color: $ink-3;
+    font-size: 1em;
+  }
+
+  &__spec-label {
+    font-family: $sans;
+    font-size: 1.0769em;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+    color: $ink-3;
+  }
+
+  &__spec-value {
+    font-size: 1.2692em;
+    font-weight: 650;
+
+    &[data-empty='true'] { font-family: $sans; font-weight: 500; color: $ink-3; }
+  }
+
+  &__spec-row--done {
+    &::before { background: rgba($signal, 0.45); }
+    .ev__spec-tick { background: $wash; border-color: transparent; color: $signal; }
+    .ev__spec-label { color: $ink-3; }
+    &:not(:disabled):hover { background: $paper; }
+  }
+
+  &__spec-row--active {
+    background: $wash;
+    box-shadow: none;
+    .ev__spec-tick {
+      background: $signal;
+      border-color: $signal;
+      color: #fff;
+      box-shadow: 0 0 0 4px rgba($signal, 0.16);
+    }
+    .ev__spec-label { color: $signal; }
+    &:not(:disabled):hover { background: $wash; }
+  }
+
+  &__spec-row--todo { opacity: 1; }
+
+  // "Edit" pill, revealed on hover / keyboard focus of a completed step
+  &__spec-edit {
+    align-self: center;
+    padding: 3px 9px;
+    border: 1px solid rgba($signal, 0.25);
+    border-radius: 999px;
+    background: $card;
+    font-family: $sans;
+    font-size: 0.7692em;
+    font-weight: 650;
+    color: $signal;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
+  &__spec-row:hover &__spec-edit,
+  &__spec-row:focus-visible &__spec-edit { opacity: 1; }
+
+  &__manifest-foot {
+    flex-shrink: 0;
+    padding: 12px 20px;
+    border-top: 1px solid $line-2;
+    font-size: 0.9615em;
+    color: $ink-3;
+    line-height: 1.4;
+  }
+
+  // ---- stage head / footer ------------------------------------------------
+  &__stage-step {
+    font-family: $sans;
+    font-size: 0.9231em;
+    font-weight: 700;
+    color: $signal;
+  }
+  &__stage-title { margin-top: 4px; }
+
+  &__blocker { font-size: 1em; color: $ink-2; }
+
+  // ---- question label -----------------------------------------------------
+  &__q {
+    font-family: $sans;
+    font-size: 1.0769em;
+    font-weight: 700;
+    color: $ink;
+    margin-bottom: 10px;
+
+    span { font-weight: 500; color: $ink-2; }
+  }
+
+  // ---- radio / checkbox cards --------------------------------------------
+  &__choice-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  &__choice-col { display: flex; flex-direction: column; gap: 10px; }
+  &__choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+
+  &__choice {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    padding: 16px;
+    border: 1.5px solid $line;
+    border-radius: 14px;
+    background: $card;
+    font-family: $sans;
+    cursor: pointer;
+    transition: border-color 0.16s ease, background 0.16s ease;
+
+    &:hover { border-color: $ink-3; }
+    &:disabled { opacity: 0.55; cursor: not-allowed; }
+
+    &--on {
+      border-color: $signal;
+      background: $wash;
+      &:hover { border-color: $signal; }
+      .ev__pilltag { background: $card; }
+    }
+
+    &--row {
+      flex-direction: row;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 13px 16px;
+
+      > .ev__radio, > .ev__check { margin-top: 3px; }
+    }
+  }
+
+  &__choice-head { display: flex; align-items: center; gap: 10px; }
+  &__choice-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  &__choice-name {
+    font-family: $display;
+    font-size: 1.1538em;
+    font-weight: 700;
+    color: $ink;
+  }
+  &__choice-desc { font-size: 1em; color: $ink-2; line-height: 1.45; }
+  &__choice-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  &__choice-price {
+    flex-shrink: 0;
+    align-self: center;
+    font-family: $mono;
+    font-size: 0.9231em;
+    font-weight: 600;
+    color: $ink-2;
+    white-space: nowrap;
+  }
+
+  &__pilltag {
+    font-family: $sans;
+    font-size: 0.8462em;
+    font-weight: 650;
+    color: $signal;
+    background: $wash;
+    border-radius: 6px;
+    padding: 2px 8px;
+    white-space: nowrap;
+
+    &--muted { color: $ink-2; background: $paper; }
+  }
+
+  // "Because you chose …" follow-up block
+  &__followup {
+    margin-top: 20px;
+    padding: 18px 20px 20px;
+    border-radius: 14px;
+    background: $paper;
+
+    .ev__q { margin-top: 16px; }
+  }
+  &__followup-eyebrow { font-size: 0.9231em; font-weight: 650; color: $ink-2; }
+
+  // checkbox used as a real <button> (models table, "save traces")
+  &__check {
+    padding: 0;
+    &:disabled { opacity: 0.45; cursor: not-allowed; }
+  }
+  button#{&}__check { cursor: pointer; }
+
+  // ---- main + side panel split (Models step) ------------------------------
+  &__split {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 390px;
+    grid-template-rows: minmax(0, 1fr);
+    gap: 20px;
+  }
+  &__split-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+  // model cards inside the split: slightly narrower minimum so two or more
+  // fit beside the 390px panel, and every card is the same size — equal
+  // row heights, cards stretched to fill, stats pinned to the bottom edge
+  &__split &__models-scroll { margin-top: 0; }
+  &__split &__grid--wide {
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    grid-auto-rows: 1fr;
+    align-items: stretch;
+  }
+  &__split &__mcard { height: 100%; }
+  &__split &__mcard-stats { margin-top: auto; }
+
+  &__step-toolbar { flex-wrap: wrap; }
+  &__viewchips { flex: 0 1 auto; display: flex; flex-wrap: wrap; gap: 8px; }
+  &__split &__toolbar-search { flex: 1 1 200px; }
+  &__split &__toolbar-refresh { margin-left: auto; }
+
+  // Side panel: square corners, bordered on all sides, runs the full height
+  // of the step.
+  &__panel {
+    align-self: stretch;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 18px;
+    border: 1px solid $line;
+    border-radius: 0;
+    background: $paper;
+  }
+  // Pinned variant (Models step): the top block stays put, the rest scrolls.
+  &__panel--pinned { overflow: hidden; padding: 0; gap: 0; }
+  &__panel-fixed {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 18px;
+    border-bottom: 1px solid $line;
+    background: $paper;
+  }
+  &__panel-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 18px;
+  }
+  // ---- per-model item ("In this run") ------------------------------------
+  // Header: health dot, model name + provider, remove. In "Per model" mode a
+  // tinted body underneath holds that model's two steppers, so each model
+  // reads as one self-contained unit.
+  &__pm {
+    border: 1px solid $line;
+    border-radius: 10px;
+    background: $card;
+    overflow: hidden;
+  }
+  &__pm-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
+  &__pm-dot {
+    flex-shrink: 0;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: $ink-3;
+
+    &--ok { background: $ok; }
+    &--fail { background: $danger; }
+  }
+  &__pm-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 1em;
+    font-weight: 700;
+    color: $ink;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    small { display: block; font-size: 0.8846em; font-weight: 500; color: $ink-2; overflow: hidden; text-overflow: ellipsis; }
+  }
+  &__pm-body { padding: 10px 12px 12px; border-top: 1px solid $line-2; background: $paper; }
+
+  // ---- stepper fields (retries / timeout) --------------------------------
+  &__stepfields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  &__stepfield { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  &__stepfield-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.8846em;
+    font-weight: 650;
+    color: $ink-2;
+
+    svg { color: $signal; }
+  }
+
+  &__stepper {
+    display: flex;
+    align-items: stretch;
+    height: 34px;
+    border: 1.5px solid $line;
+    border-radius: 9px;
+    background: $card;
+    overflow: hidden;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+
+    &:focus-within { border-color: $signal; box-shadow: $ring; }
+
+    button {
+      flex: 0 0 30px;
+      display: grid;
+      place-items: center;
+      border: 0;
+      background: $paper;
+      color: $ink-2;
+      cursor: pointer;
+      transition: background 0.12s ease, color 0.12s ease;
+
+      &:hover:not(:disabled) { background: $wash; color: $signal; }
+      &:disabled { opacity: 0.35; cursor: not-allowed; }
+    }
+
+    input {
+      flex: 1;
+      min-width: 0;
+      width: 100%;
+      border: 0;
+      border-left: 1px solid $line-2;
+      border-right: 1px solid $line-2;
+      background: transparent;
+      text-align: center;
+      font-family: $mono;
+      font-size: 1em;
+      font-weight: 700;
+      color: $ink;
+      -moz-appearance: textfield;
+      appearance: textfield;
+
+      &:focus { outline: none; }
+      &::-webkit-outer-spin-button,
+      &::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    }
+  }
+
+  // ---- judge panel (Metrics step) ----------------------------------------
+  // Heading row with a chip showing the current judge (or "Required").
+  &__panel-headrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  &__panel-chip {
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: $wash;
+    font-size: 0.8846em;
+    font-weight: 700;
+    color: $signal;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+
+    svg { flex-shrink: 0; }
+    &--req { background: $danger-wash; color: $danger; }
+  }
+  &__panel-fixed .ev__sbar { flex: none; min-width: 0; }
+
+  // Judge candidate card: radio, icon tile, name + provider, an "Under test"
+  // flag where it applies, and a row of figures underneath.
+  &__jcard {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+    text-align: left;
+    padding: 12px 14px;
+    border: 1.5px solid $line;
+    border-radius: 12px;
+    background: $card;
+    font-family: $sans;
+    cursor: pointer;
+    transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+
+    &:hover { border-color: $ink-3; box-shadow: $soft; }
+
+    &--on {
+      border-color: $signal;
+      background: $wash;
+      box-shadow: 0 8px 18px -12px rgba($signal, 0.6);
+      &:hover { border-color: $signal; }
+      .ev__srow-icon { background: $signal; border-color: $signal; color: #fff; }
+      .ev__jcard-stats { border-top-color: rgba($signal, 0.18); }
+      .ev__jcard-flag { background: $card; }
+    }
+  }
+  &__jcard-head { display: flex; align-items: center; gap: 10px; }
+  &__jcard-id { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  &__jcard-name {
+    font-family: $display;
+    font-size: 1.0769em;
+    font-weight: 700;
+    color: $ink;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  &__jcard-provider { font-size: 0.9231em; color: $ink-2; }
+  &__jcard-flag {
+    flex-shrink: 0;
+    padding: 2px 8px;
+    border: 1px solid $line;
+    border-radius: 999px;
+    background: $paper;
+    font-size: 0.8077em;
+    font-weight: 650;
+    color: $ink-2;
+    white-space: nowrap;
+  }
+  &__jcard-stats {
+    display: flex;
+    gap: 18px;
+    padding-top: 10px;
+    border-top: 1px solid $line-2;
+  }
+
+  &__panel-title { font-family: $display; font-size: 1.0769em; font-weight: 800; color: $ink; }
+  &__panel-sub { margin-top: -6px; font-size: 0.9231em; color: $ink-2; }
+  &__panel-list { display: flex; flex-direction: column; gap: 8px; }
+  &__panel-item {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid $line;
+    border-radius: 10px;
+    background: $card;
+    font-size: 1em;
+    font-weight: 600;
+    color: $ink;
+
+    small { display: block; font-size: 0.9231em; font-weight: 500; color: $ink-2; }
+
+    &--off { background: transparent; border-style: dashed; font-weight: 500; color: $ink-2; }
+  }
+  &__panel-item-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  &__panel-cov { display: flex; align-items: center; gap: 10px; }
+  &__panel-x {
+    flex-shrink: 0;
+    display: inline-flex;
+    padding: 2px;
+    border: 0;
+    background: transparent;
+    color: $ink-2;
+    cursor: pointer;
+    &:hover { color: $ink; }
+  }
+  &__panel-divider { height: 1px; margin: 6px 0; background: $line; }
+  &__panel-stats {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+    padding-top: 12px;
+    border-top: 1px solid $line;
+
+    div { display: flex; justify-content: space-between; gap: 12px; font-size: 1em; color: $ink-2; }
+    b { font-family: $mono; font-weight: 700; color: $ink; }
+  }
+  &__panel-note { font-size: 0.9231em; color: $ink-2; line-height: 1.45; }
+
+  &__dot {
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 1.5px solid $ink-3;
+    display: grid;
+    place-items: center;
+    color: #fff;
+
+    &--on { background: $signal; border-color: $signal; }
+  }
+
+  // ---- Models step: health-check progress strip + "more cards" sentinel ---
+  &__hq {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+    padding: 8px 12px;
+    border: 1px solid $line;
+    border-radius: 10px;
+    background: $paper;
+    font-size: 0.9615em;
+    color: $ink-2;
+
+    > svg { flex-shrink: 0; color: $signal; }
+    b { font-weight: 700; color: $ink; }
+  }
+  &__hq-text { white-space: nowrap; }
+  &__hq-bar {
+    flex: 1;
+    min-width: 60px;
+    height: 4px;
+    border-radius: 999px;
+    background: $line;
+    overflow: hidden;
+
+    span { display: block; height: 100%; border-radius: 999px; background: $signal; transition: width 0.3s ease; }
+  }
+  &__hq-note { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: $ink-3; }
+  &__models-more {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 16px 0 8px;
+    font-size: 0.9231em;
+    color: $ink-2;
+  }
+
+  // ---- Type step: "Agent setup" panel -------------------------------------
+  // The follow-up choices for Agent, as one panel: a header with a status
+  // chip, then numbered steps joined by a rail (1 how to test, 2 agents or
+  // framework). Choice cards use the same anatomy as the suite/model cards.
+  &__asetup {
+    flex-shrink: 0;
+    margin-top: 16px;
+    border: 1px solid $line;
+    border-radius: 14px;
+    background: $paper;
+    overflow: hidden;
+  }
+  &__asetup-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 16px 20px;
+    border-bottom: 1px solid $line;
+    background: $card;
+
+    .ev__option-icon { width: 40px; height: 40px; border-radius: 11px; }
+  }
+  &__asetup-title {
+    flex: 1;
+    min-width: 0;
+
+    h3 { font-family: $display; font-size: 1.2308em; font-weight: 800; letter-spacing: -0.01em; color: $ink; }
+    p { margin-top: 2px; font-size: 1.0385em; color: $ink-2; }
+  }
+  &__asetup-status {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 11px;
+    border-radius: 999px;
+    background: $ok-wash;
+    font-size: 0.9231em;
+    font-weight: 700;
+    color: $ok;
+
+    &--todo { background: $danger-wash; color: $danger; }
+  }
+
+  &__asetup-step {
+    position: relative;
+    display: grid;
+    grid-template-columns: 26px minmax(0, 1fr);
+    gap: 14px;
+    padding: 18px 20px 0;
+
+    &:last-child { padding-bottom: 20px; }
+
+    // rail down to the next step's marker
+    &:not(:last-child)::before {
+      content: '';
+      position: absolute;
+      left: 32px;
+      top: 50px;
+      bottom: -14px;
+      width: 2px;
+      border-radius: 2px;
+      background: $line;
+    }
+  }
+  &__asetup-n {
+    position: relative;
+    z-index: 1;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    border: 1.5px solid $line;
+    background: $card;
+    font-family: $mono;
+    font-size: 0.9231em;
+    font-weight: 700;
+    color: $ink-3;
+
+    &--active { border-color: $signal; color: $signal; box-shadow: 0 0 0 4px rgba($signal, 0.14); }
+    &--done { border-color: $signal; background: $signal; color: #fff; }
+  }
+  &__asetup-body { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+  &__asetup-q {
+    padding-top: 3px;
+    font-family: $display;
+    font-size: 1.1538em;
+    font-weight: 700;
+    color: $ink;
+
+    span {
+      margin-left: 8px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: $card;
+      border: 1px solid $line;
+      font-family: $sans;
+      font-size: 0.7667em;
+      font-weight: 650;
+      color: $ink-2;
+      vertical-align: 2px;
+    }
+  }
+  &__asetup-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+
+  &__acard {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    text-align: left;
+    padding: 14px 16px;
+    border: 1.5px solid $line;
+    border-radius: 12px;
+    background: $card;
+    font-family: $sans;
+    cursor: pointer;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
+
+    &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
+
+    &--on {
+      border-color: $signal;
+      background: $wash;
+      &:hover { border-color: $signal; }
+      .ev__srow-icon { background: $signal; border-color: $signal; color: #fff; }
+      .ev__pilltag { background: $card; }
+    }
+  }
+  &__acard-head { display: flex; align-items: center; gap: 10px; }
+  &__acard-name { font-family: $display; font-size: 1.1538em; font-weight: 700; color: $ink; }
+  &__acard-desc { font-size: 1.0385em; color: $ink-2; line-height: 1.5; }
+  &__acard-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
+
+  // one-line consequence of the current choice
+  &__asetup-sum {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: $card;
+    border: 1px solid $line;
+    font-size: 1em;
+    color: $ink-2;
+    line-height: 1.45;
+
+    svg { flex-shrink: 0; margin-top: 2px; color: $signal; }
+    b { font-weight: 700; color: $ink; }
+
+    &--req {
+      border-color: rgba($danger, 0.3);
+      background: $danger-wash;
+      color: $danger;
+      font-weight: 650;
+      svg { color: $danger; }
+    }
+  }
+  &__asetup + &__about { margin-top: 16px; margin-bottom: 22px; }
+
+  // ---- Type step: "About" panel -------------------------------------------
+  // Sits under the three type cards and describes the selected one: what it
+  // measures, what it's good for, and how a run of that type works.
+  &__about {
+    // the stage body is a flex column; without this the panel (overflow:
+    // hidden) would be squeezed to nothing when the step's content is tall
+    flex-shrink: 0;
+    margin-top: 16px;
+    border: 1px solid $line;
+    border-radius: 14px;
+    background: $paper;
+    overflow: hidden;
+  }
+  &__about-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 16px 20px;
+    border-bottom: 1px solid $line;
+    background: $card;
+
+    .ev__option-icon { width: 40px; height: 40px; border-radius: 11px; }
+    h3 { font-family: $display; font-size: 1.2308em; font-weight: 800; letter-spacing: -0.01em; color: $ink; }
+    p { margin-top: 2px; font-size: 1.0385em; color: $ink-2; }
+  }
+  &__about-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  &__about-col {
+    padding: 18px 20px 20px;
+    & + & { border-left: 1px solid $line; }
+  }
+  &__about-k { @extend %micro; font-size: 0.7692em; color: $ink-3; margin-bottom: 12px; }
+
+  &__about-list,
+  &__about-flow {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    list-style: none;
+    font-size: 1.0385em;
+    color: $ink;
+    line-height: 1.45;
+
+    li { display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: start; gap: 8px; }
+    svg { margin-top: 3px; color: $signal; }
+  }
+  &__about-flow span {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: $signal;
+    color: #fff;
+    font-family: $mono;
+    font-size: 0.7692em;
+    font-weight: 700;
+  }
+  // below the agent options it needs a little more room above
+  &__section + &__about { margin-top: 26px; margin-bottom: 22px; }
+
+  &__about-empty {
+    flex-shrink: 0;
+    margin-top: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 16px 18px;
+    border: 1px dashed $line;
+    border-radius: 12px;
+    background: $paper;
+    font-size: 1em;
+    color: $ink-2;
+
+    svg { flex-shrink: 0; color: $signal; }
+  }
+
+  // ---- Name step ----------------------------------------------------------
+  // Two columns: the form on the left, a live "Preview in History" card on
+  // the right.
+  &__namegrid {
+    display: grid;
+    grid-template-columns: minmax(0, 620px) minmax(260px, 340px);
+    justify-content: space-between;
+    align-items: start;
+    gap: 40px;
+
+    .ev__quick { margin-top: 24px; }
+    .ev__quick + .ev__quick { margin-top: 18px; }
+  }
+  &__namegrid-main { min-width: 0; }
+
+  &__name-wrap {
+    position: relative;
+
+    .ev__name-input { padding-right: 34px; }
+  }
+  &__name-clear {
+    position: absolute;
+    right: 2px;
+    top: 50%;
+    transform: translateY(-60%);
+    width: 26px;
+    height: 26px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 50%;
+    background: $paper;
+    color: $ink-2;
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease;
+
+    &:hover { background: $line; color: $ink; }
+  }
+  &__name-caption--ok { color: $ok; font-weight: 600; }
+
+  &__hprev {
+    position: sticky;
+    top: 0;
+    padding: 18px;
+    border: 1px solid $line;
+    border-radius: 14px;
+    background: $paper;
+  }
+  &__hprev-head { @extend %micro; font-size: 0.7692em; color: $ink-3; margin-bottom: 12px; }
+
+  &__hprev-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px;
+    border: 1.5px solid $line;
+    border-radius: 12px;
+    background: $card;
+    box-shadow: $soft;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+
+    &--live { border-color: $signal; box-shadow: 0 10px 22px -14px rgba($signal, 0.6); }
+  }
+  &__hprev-top { display: flex; align-items: center; gap: 10px; }
+  &__hprev-icon {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+    display: grid;
+    place-items: center;
+    background: $wash;
+    color: $signal;
+  }
+  &__hprev-name {
+    min-width: 0;
+    font-family: $display;
+    font-size: 1.1538em;
+    font-weight: 700;
+    color: $ink;
+    overflow-wrap: anywhere;
+
+    &[data-empty='true'] { color: $ink-3; font-weight: 600; }
+  }
+  &__hprev-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  &__hprev-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: $wash;
+    font-family: $mono;
+    font-size: 0.7692em;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: $signal;
+
+    &::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: $signal; }
+  }
+  &__hprev-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    padding-top: 10px;
+    border-top: 1px solid $line-2;
+    font-size: 0.9231em;
+    color: $ink-2;
+  }
+  &__hprev-note { margin-top: 12px; font-size: 0.9231em; color: $ink-3; line-height: 1.45; }
+
+  // ---- list header (Providers / Models / Test Suite) ---------------------
+  // Title + live count on the left, search and refresh on the right, filter
+  // chips on a second row, and a rule underneath separating it from the list.
+  &__lhead {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 16px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid $line;
+
+    // inside a scrolling list (Test Suite) the header stays in view
+    &--sticky {
+      position: sticky;
+      top: -2px;
+      z-index: 2;
+      padding-top: 2px;
+      background: $card;
+      // soft edge so the rule still reads when cards scroll underneath
+      box-shadow: 0 8px 10px -10px rgba(20, 22, 27, 0.28);
+    }
+
+
+  }
+
+  &__lhead-row { display: flex; align-items: center; gap: 16px; }
+
+  &__lhead-title {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+
+    h3 { font-family: $display; font-size: 1.1538em; font-weight: 800; letter-spacing: -0.01em; color: $ink; }
+    span { font-size: 0.9231em; color: $ink-2; }
+    b { font-weight: 700; color: $signal; }
+  }
+
+  // ---- search bar ---------------------------------------------------------
+  // A compact "command bar" on the right of the list title: gradient icon
+  // tile, field, live result count, "/" hint or clear button, then refresh
+  // behind a divider. Resting
+  // it's a white bar with a soft shadow; on focus the border becomes a
+  // signal gradient, the bar lifts and a glow spreads under it.
+  &__sbar {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex: 0 1 340px;
+    min-width: 220px;
+    gap: 9px;
+    height: 38px;
+    padding: 0 5px 0 5px;
+    border: 1.5px solid transparent;
+    border-radius: 11px;
+    // two layers: the fill (padding-box) and the border colour (border-box),
+    // so the border can be a gradient on focus
+    background:
+      linear-gradient($card, $card) padding-box,
+      linear-gradient($line, $line) border-box;
+    box-shadow: 0 1px 2px rgba(20, 22, 27, 0.05), 0 6px 16px -10px rgba(20, 22, 27, 0.18);
+    cursor: text;
+    transition: box-shadow 0.2s ease, transform 0.2s ease;
+
+    &:hover {
+      background:
+        linear-gradient($card, $card) padding-box,
+        linear-gradient($ink-3, $ink-3) border-box;
+    }
+
+    &:focus-within,
+    &--active {
+      background:
+        linear-gradient($card, $card) padding-box,
+        linear-gradient(120deg, $signal, $signal-2 55%, rgba($signal, 0.35)) border-box;
+    }
+
+    &:focus-within {
+      transform: translateY(-1px);
+      box-shadow: 0 0 0 3px rgba($signal, 0.12), 0 10px 20px -12px rgba($signal, 0.55);
+    }
+
+    input {
+      flex: 1;
+      min-width: 0;
+      height: 100%;
+      border: 0;
+      background: transparent;
+      font-family: $sans;
+      font-size: 1em;
+      font-weight: 500;
+      color: $ink;
+      outline: none;
+
+      &::placeholder { color: $ink-3; font-weight: 400; }
+    }
+  }
+
+  &__sbar-icon {
+    flex-shrink: 0;
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+    display: grid;
+    place-items: center;
+    background: linear-gradient(140deg, $signal, $signal-2);
+    color: #fff;
+    box-shadow: 0 4px 8px -4px rgba($signal, 0.7);
+    transition: transform 0.2s ease;
+  }
+  &__sbar:focus-within &__sbar-icon { transform: scale(1.06) rotate(-6deg); }
+
+  // live result count, shown while there's a query
+  &__sbar-count {
+    flex-shrink: 0;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: $wash;
+    font-family: $sans;
+    font-size: 0.8077em;
+    font-weight: 700;
+    color: $signal;
+    white-space: nowrap;
+    animation: ev-rise 0.2s ease both;
+
+    &--none { background: $danger-wash; color: $danger; }
+  }
+
+  &__sbar-kbd {
+    flex-shrink: 0;
+    min-width: 20px;
+    padding: 1px 5px;
+    border: 1px solid $line;
+    border-bottom-width: 2px;
+    border-radius: 6px;
+    background: $paper;
+    text-align: center;
+    font-family: $mono;
+    font-size: 0.7692em;
+    font-weight: 700;
+    color: $ink-3;
+  }
+  &__sbar:focus-within &__sbar-kbd { display: none; }
+
+  &__sbar-clear {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 50%;
+    background: $line;
+    color: $ink-2;
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease;
+
+    &:hover { background: $ink-2; color: #fff; }
+  }
+
+  &__sbar-sep { flex-shrink: 0; width: 1px; height: 18px; background: $line; }
+
+  &__sbar-refresh {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: $ink-2;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+
+    &:hover:not(:disabled) { background: $wash; color: $signal; }
+    &:disabled { cursor: default; color: $signal; }
+  }
+
+  &__lhead-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+  // ---- provider cards (Providers step) -----------------------------------
+  // Same card as the Type step's options (&__option: icon tile on the left,
+  // name + description, selection mark on the right), with the provider's
+  // initials in the tile, a "Connected" status beside the name and the model
+  // count as a last line.
+  &__grid--providers {
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    grid-auto-rows: 1fr;
+    gap: 10px;
+  }
+
+  &__option--provider {
+    height: 100%;
+
+    .ev__option-icon {
+      font-family: $display;
+      font-size: 1.3846em;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+    .ev__option-name { flex-wrap: wrap; gap: 4px 10px; }
+    .ev__option-desc {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 3;
+      line-clamp: 3;
+      overflow: hidden;
+    }
+  }
+  &__option--provider.ev__option--on .ev__option-icon { background: $signal; }
+
+  &__pv-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: $sans;
+    font-size: 0.6944em; // back to ~0.96em of the base inside the larger name
+    font-weight: 650;
+    color: $ok;
+
+    &::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: $ok; }
+  }
+
+  &__option-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+    font-size: 1em;
+    color: $ink-2;
+
+    svg { color: $ink-3; }
+    b { font-family: $mono; font-weight: 700; color: $ink; }
+  }
+
+  // ---- segmented control --------------------------------------------------
+  &__segctl {
+    display: inline-flex;
+    gap: 2px;
+    padding: 3px;
+    border: 1px solid $line;
+    border-radius: 10px;
+    background: $paper;
+
+    &--full { display: flex; background: $card; .ev__segbtn { flex: 1; } }
+  }
+  &__segbtn {
+    border: 0;
+    border-radius: 8px;
+    padding: 8px 14px;
+    background: transparent;
+    font-family: $sans;
+    font-size: 1em;
+    font-weight: 650;
+    color: $ink-2;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+
+    &:hover { color: $ink; }
+    &--on { background: $signal; color: #fff; &:hover { color: #fff; } }
+  }
+
+  // ---- data table ---------------------------------------------------------
+  &__table-wrap {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow: auto;
+    border: 1px solid $line;
+    border-radius: 0;
+
+    &--static { flex: none; overflow: visible; }
+  }
+
+  &__table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 1em;
+
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      padding: 10px 14px;
+      background: $paper;
+      border-bottom: 1px solid $line;
+      text-align: left;
+      font-family: $sans;
+      font-size: 0.9231em;
+      font-weight: 650;
+      color: $ink-2;
+      white-space: nowrap;
+    }
+
+    td {
+      padding: 11px 14px;
+      border-bottom: 1px solid $line-2;
+      color: $ink;
+      vertical-align: middle;
+    }
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr { cursor: pointer; transition: background 0.12s ease; }
+    tbody tr:hover td { background: $paper; }
+
+    th.ev__table-num,
+    td.ev__table-num { text-align: right; white-space: nowrap; }
+    td.ev__table-num { font-family: $mono; font-size: 0.9615em; }
+
+    tbody tr.ev__table-row--on td { background: $wash; }
+    tbody tr.ev__table-row--locked { cursor: default; }
+
+    // Health check in flight: a soft signal sheen sweeps across the whole
+    // row and a bar pulses on its left edge. The sheen lives on the <tr>
+    // (cells go transparent) so it travels as one band, not per cell.
+    tbody tr.ev__table-row--checking {
+      background-image: linear-gradient(100deg, transparent 30%, rgba($signal, 0.1) 50%, transparent 70%);
+      background-size: 200% 100%;
+      background-repeat: no-repeat;
+      animation: ev-mcard-sheen 1.6s ease-in-out infinite;
+
+      td { background: transparent; }
+      td:first-child { animation: ev-row-bar 1.6s ease-in-out infinite; }
+      &:hover td { background: transparent; }
+    }
+    tbody tr.ev__table-row--checking.ev__table-row--on { background-color: $wash; }
+
+    &--static {
+      th { position: static; }
+      tbody tr { cursor: default; }
+      tbody tr:hover td { background: transparent; }
+      td.ev__table-num { font-family: $sans; font-size: 1em; }
+    }
+  }
+
+  &__table-model {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+
+    b { display: block; font-family: $display; font-weight: 700; color: $ink; }
+    small { display: block; font-size: 0.9231em; color: $ink-2; }
+  }
+  &__table-health { display: flex; align-items: center; gap: 8px; color: $ink-2; white-space: nowrap; }
+
+  // ---- suite rows (Test Suite step) --------------------------------------
+  // Suite cards: as many per row as fit, all the same height. Each card
+  // shows everything the dataset carries — name, tags, description, how it's
+  // scored (harness), its subgroups, and question / subgroup counts.
+  &__slist {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    grid-auto-rows: 1fr;
+    gap: 12px;
+  }
+
+  &__srow {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    height: 100%;
+    min-height: 236px;
+    padding: 16px;
+    border: 1.5px solid $line;
+    border-radius: 14px;
+    background: $card;
+    cursor: pointer;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease, background 0.16s ease;
+
+    &:hover { border-color: $ink-3; box-shadow: $lift; transform: translateY(-2px); }
+
+    &--on {
+      border-color: $signal;
+      background: $wash;
+      &:hover { border-color: $signal; }
+      .ev__pilltag { background: $card; }
+      .ev__srow-icon { background: $signal; border-color: $signal; color: #fff; }
+      .ev__srow-side { border-top-color: rgba($signal, 0.18); }
+    }
+    &--empty { border-color: rgba($danger, 0.3); }
+  }
+
+  &__srow-head { display: flex; align-items: center; gap: 10px; }
+  &__srow-icon {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+    display: grid;
+    place-items: center;
+    border: 1px solid $line;
+    background: $paper;
+    color: $ink;
+    transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+  }
+  &__srow-name {
+    min-width: 0;
+    font-family: $display;
+    font-size: 1.2308em;
+    font-weight: 700;
+    color: $ink;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__srow-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+  &__srow-tags .ev__pilltag { display: inline-flex; align-items: center; gap: 4px; }
+
+  &__srow-desc {
+    font-size: 1.0385em;
+    color: $ink-2;
+    line-height: 1.5;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    overflow: hidden;
+
+    &--none { color: $ink-3; font-style: italic; }
+  }
+  &__srow-scoring {
+    font-size: 0.9615em;
+    color: $ink-2;
+    line-height: 1.45;
+    b { font-weight: 700; color: $ink; }
+  }
+
+  &__srow-subs { display: flex; flex-direction: column; gap: 6px; }
+  &__srow-k { @extend %micro; font-size: 0.6923em; color: $ink-3; }
+  &__srow-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+
+  // Model cards (Models step) use this same card at the same size (they
+  // inherit &__srow's minimum height; the grid below matches the suite
+  // grid's column width). Locked = can't be selected until its health check
+  // passes.
+  &__srow--model { gap: 12px; }
+  &__srow--locked {
+    cursor: default;
+    &:hover { border-color: $line; box-shadow: none; transform: none; }
+  }
+  // health badge sits at the end of the tags row
+  &__srow-health { margin-left: auto; display: inline-flex; }
+  &__srow-none { font-size: 0.9231em; color: $ink-3; }
+
+  // footer: stats on the left, Preview pushed to the right
+  &__srow-side {
+    margin-top: auto;
+    display: flex;
+    align-items: flex-end;
+    gap: 18px;
+    padding-top: 12px;
+    border-top: 1px solid $line-2;
+
+    .ev__stat-v { font-size: 1.1538em; }
+  }
+  &__srow-side .ev__stat-v.ev__srow-count--empty { color: $danger; }
+  &__srow-preview {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border: 1px solid $line;
+    border-radius: 999px;
+    background: $card;
+    font-family: $sans;
+    font-size: 0.9231em;
+    font-weight: 650;
+    color: $ink-2;
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+
+    &:hover { border-color: $signal; color: $signal; background: $wash; }
+  }
+
+  // the Subgroups rail matches the side panel: square, bordered on all sides
+  &__rail { border: 1px solid $line; border-radius: 0; }
+
+  // ---- sectioned form rows (Scoring step) --------------------------------
+  &__form { display: flex; flex-direction: column; }
+
+  // Scoring step: the form is the main column of an &__split (judge panel
+  // on the right), so it scrolls on its own.
+  &__form--scroll { min-width: 0; min-height: 0; overflow-y: auto; padding-right: 8px; }
+  &__split &__frow { grid-template-columns: 180px minmax(0, 1fr); gap: 22px; }
+  &__form &__toolbar-refresh { margin-left: 0; }
+  &__panel &__toolbar-search { flex: none; max-width: none; }
+  &__panel-req { font-size: 0.9231em; font-weight: 700; color: $danger; }
+
+  &__frow {
+    display: grid;
+    grid-template-columns: 200px minmax(0, 1fr);
+    gap: 28px;
+    padding: 22px 0;
+    border-bottom: 1px solid $line-2;
+
+    &:first-child { padding-top: 0; }
+    &:last-child { border-bottom: 0; padding-bottom: 0; }
+  }
+
+  &__frow-side {
+    h3 { font-family: $display; font-size: 1.1538em; font-weight: 800; color: $ink; }
+    p { margin-top: 4px; font-size: 1em; color: $ink-2; line-height: 1.45; }
+    .ev__metrics-actions { margin-top: 10px; }
+    .ev__frow-req { margin-top: 8px; font-weight: 700; color: $danger; }
+    .ev__link:disabled { opacity: 0.5; cursor: not-allowed; text-decoration: none; }
+  }
+
+  &__frow-main { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+
+  &__inline { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+  &__inline-note { font-size: 1em; color: $ink-2; line-height: 1.45; }
+
+  &__num {
+    width: 88px;
+    border: 1.5px solid $line;
+    border-radius: 10px;
+    padding: 9px 12px;
+    font-family: $sans;
+    font-size: 1.0769em;
+    font-weight: 650;
+    color: $ink;
+    background: $card;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+
+    &:focus { outline: none; border-color: $signal; box-shadow: $ring; }
+  }
+  &__numfield {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+
+    label { font-size: 0.9231em; font-weight: 650; color: $ink; }
+    .ev__num { width: 100%; }
+  }
+  &__inline &__numfield { flex: 0 0 120px; }
+
+  &__formula {
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: $wash;
+    font-size: 1em;
+    color: $ink;
+    b { font-weight: 800; }
+  }
+
+  &__sublabel {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font-size: 0.9231em;
+    font-weight: 650;
+    color: $ink-2;
+  }
+
+  &__chips { flex: none; margin: 0; padding: 0; }
+
+  &__jgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 8px; }
+
+  &__checkline {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    padding: 0 0 10px;
+    border: 0;
+    background: transparent;
+    font-family: $sans;
+    font-size: 1em;
+    font-weight: 650;
+    color: $ink;
+    cursor: pointer;
+  }
+
+  // ---- review -------------------------------------------------------------
+  &__banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    padding: 18px 20px;
+    border-radius: 14px;
+    background: $wash;
+  }
+  &__banner-title { font-family: $display; font-size: 1.3846em; font-weight: 800; color: $ink; overflow-wrap: anywhere; }
+  &__banner-sub { margin-top: 4px; font-size: 1em; color: $ink-2; }
+  &__banner-stats {
+    flex-shrink: 0;
+    display: flex;
+    gap: 28px;
+
+    div { display: flex; flex-direction: column; gap: 2px; }
+    span { font-size: 0.9231em; color: $ink-2; }
+    b { font-family: $display; font-size: 1.6923em; font-weight: 800; line-height: 1.1; color: $ink; }
+  }
+
+  &__sechead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    margin: 24px 0 10px;
+
+    h3 { font-family: $display; font-size: 1.1538em; font-weight: 800; color: $ink; }
+    span { font-size: 1em; color: $ink-2; text-align: right; }
+  }
+  &__secnote { margin-top: 10px; font-size: 1em; color: $ink-2; }
+
+  &__settings { border: 1px solid $line; border-radius: 12px; overflow: hidden; }
+  &__settings-row {
+    display: grid;
+    grid-template-columns: 140px minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: 16px;
+    padding: 14px 16px;
+    border-bottom: 1px solid $line-2;
+
+    &:last-child { border-bottom: 0; }
+  }
+  &__settings-k { font-size: 1em; color: $ink-2; }
+  &__settings-v { font-size: 1em; font-weight: 700; color: $ink; line-height: 1.45; overflow-wrap: anywhere; }
 }
 
 // ===========================================================================
@@ -6855,7 +9129,7 @@ $ev-base-font: 0.8125rem;
 
 .ev-preview-eyebrow {
   @extend %micro;
-  font-size: 0.8462em; color: $signal; } // 0.625rem / 0.8125rem
+  font-size: 0.7692em; color: $signal; } // 0.625rem / 0.8125rem
 
 .ev-preview-title {
   margin-top: 6px;
@@ -7037,7 +9311,7 @@ $ev-base-font: 0.8125rem;
 
 .ev-preview-limit-label {
   @extend %micro;
-  font-size: 0.8462em; // 0.625rem / 0.8125rem
+  font-size: 0.7692em; // 0.625rem / 0.8125rem
   color: $ink-2;
   display: block;
   margin-bottom: 8px;
@@ -7147,7 +9421,7 @@ $ev-base-font: 0.8125rem;
 
   span {
     @extend %micro;
-    font-size: 0.8462em; // 0.59375rem / 0.8125rem
+    font-size: 0.7308em; // 0.59375rem / 0.8125rem
     color: $ink-3;
     margin-right: 6px;
   }
@@ -7214,7 +9488,7 @@ $ev-base-font: 0.8125rem;
 
   span {
     @extend %micro;
-    font-size: 0.8462em; // 0.59375rem / 0.8125rem
+    font-size: 0.7308em; // 0.59375rem / 0.8125rem
     color: $ink-3;
     margin-right: 7px;
   }
@@ -7248,7 +9522,7 @@ $ev-base-font: 0.8125rem;
 
   b {
     @extend %micro;
-    font-size: 0.8462em; // 0.625rem / 0.8125rem
+    font-size: 0.7692em; // 0.625rem / 0.8125rem
     color: $ink-3;
     font-weight: 700;
   }
@@ -7313,6 +9587,10 @@ $ev-base-font: 0.8125rem;
   0%, 100% { box-shadow: 0 0 0 0 rgba(43, 43, 245, 0.16); }
   50% { box-shadow: 0 0 0 5px rgba(43, 43, 245, 0); }
 }
+@keyframes ev-row-bar {
+  0%, 100% { box-shadow: inset 3px 0 0 rgba(43, 43, 245, 0.25); }
+  50% { box-shadow: inset 3px 0 0 rgba(43, 43, 245, 0.9); }
+}
 @keyframes ev-mcard-sheen {
   0% { background-position: 140% 0; }
   100% { background-position: -40% 0; }
@@ -7332,6 +9610,14 @@ $ev-base-font: 0.8125rem;
   .ev__manifest { display: none; }
   .ev__suite, .ev__metrics { grid-template-columns: 1fr; }
   .ev__samples-instruction-row { grid-template-columns: 1fr; }
+  .ev__split, .ev__frow, .ev__choice-row, .ev__namegrid { grid-template-columns: 1fr; }
+  .ev__hq-note { display: none; }
+  .ev__asetup-grid { grid-template-columns: 1fr; }
+  .ev__about-cols { grid-template-columns: 1fr; }
+  .ev__about-col + .ev__about-col { border-left: 0; border-top: 1px solid $line; }
+  .ev__hprev { position: static; }
+  .ev__split { grid-template-rows: none; }
+  .ev__frow { gap: 12px; }
   .ev__rail, .ev__judge { max-height: 15rem; }
 }
 
@@ -7341,7 +9627,11 @@ $ev-base-font: 0.8125rem;
   .ev__stage-head { padding: 18px 18px 15px; }
   .ev__stage-body { padding: 18px; }
   .ev__footer { padding: 14px 18px; }
-  .ev__fw-grid { grid-template-columns: 1fr; }
+  .ev__fw-grid, .ev__choice-grid { grid-template-columns: 1fr; }
+  .ev__blocker { display: none; }
+  .ev__banner { flex-direction: column; align-items: flex-start; }
+  .ev__settings-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .ev__settings-k { grid-column: 1 / -1; }
   .ev__summary { grid-template-columns: 1fr; }
   .ev__hint { display: none; }
   .ev__name-input { font-size: 1.6923em; } // 1.375rem / 0.8125rem
@@ -7358,503 +9648,4 @@ $ev-base-font: 0.8125rem;
 
 @media (prefers-reduced-motion: reduce) {
   .ev *, .ev-toast { animation: none !important; transition: none !important; }
-}
-
-
-// Visible keyboard focus on every control in the wizard.
-.ev,
-.ev__header {
-  button:focus-visible,
-  [role='button']:focus-visible,
-  a:focus-visible {
-    outline: 2px solid $signal;
-    outline-offset: 2px;
-  }
-}
-
-// ===========================================================================
-// Step content (redesign): questions, tables, side panels, sections, review.
-// Colours come from the same tokens as the rest of the file.
-// ===========================================================================
-.ev {
-  // ---- step 1: questions, tiles, option rows ------------------------------
-  &__flow { display: flex; flex-direction: column; gap: 26px; }
-
-  &__q { display: flex; flex-direction: column; gap: 10px; }
-  &__q-title { margin: 0; font-size: 1.1em; font-weight: 700; color: $ink; }
-  &__q-note { margin-left: 8px; font-size: 0.9em; font-weight: 500; color: $ink-3; }
-  &__q-hint { margin: 0; color: $ink-2; line-height: 1.5; max-width: 62ch; }
-
-  &__tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
-
-  &__tile {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 14px 16px;
-    text-align: left;
-    font: inherit;
-    border: 1.5px solid $line;
-    border-radius: 12px;
-    background: $card;
-    color: $ink;
-    cursor: pointer;
-    transition: border-color 0.15s ease, background 0.15s ease;
-
-    &:hover { border-color: $ink-3; }
-    &:focus-visible { outline: 2px solid $signal; outline-offset: 2px; }
-    &--on { border-color: $signal; background: $wash; }
-    &--off { opacity: 0.55; cursor: not-allowed; }
-  }
-  &__tile-head { display: flex; align-items: center; gap: 10px; }
-  &__tile-name { flex: 1; font-weight: 700; }
-  &__tile-icon { color: $ink-3; flex-shrink: 0; }
-  &__tile-desc { color: $ink-2; line-height: 1.45; }
-
-  &__follow {
-    display: flex;
-    flex-direction: column;
-    gap: 22px;
-    padding: 18px 20px;
-    border-left: 3px solid $signal;
-    background: $wash;
-    border-radius: 0 12px 12px 0;
-  }
-  &__follow-lead { margin: 0; font-weight: 600; color: $signal; }
-
-  &__opt-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-
-    &--cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
-  }
-  &__opt-row {
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-    padding: 12px 14px;
-    min-height: 44px;
-    text-align: left;
-    font: inherit;
-    border: 1.5px solid $line;
-    border-radius: 10px;
-    background: $card;
-    color: $ink;
-    cursor: pointer;
-    transition: border-color 0.15s ease, background 0.15s ease;
-
-    &:hover { border-color: $ink-3; }
-    &:focus-visible { outline: 2px solid $signal; outline-offset: 2px; }
-    &--on { border-color: $signal; background: $wash; }
-  }
-  &__opt-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-  &__opt-name { font-weight: 600; }
-  &__opt-desc { color: $ink-2; line-height: 1.45; }
-  &__opt-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
-  &__opt-tag {
-    padding: 2px 8px;
-    border-radius: 999px;
-    background: $line-2;
-    color: $ink-2;
-    font-size: 0.92em;
-  }
-
-  // ---- split layout: main column + "In this run" panel -----------------------
-  &__split {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 300px;
-    gap: 22px;
-    align-items: start;
-
-    @media (max-width: 1100px) { grid-template-columns: minmax(0, 1fr); }
-  }
-  &__split-main { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
-
-  &__side {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding: 16px;
-    border: 1px solid $line;
-    border-radius: 12px;
-    background: $card;
-    position: sticky;
-    top: 0;
-  }
-  &__side-title { margin: 0; font-weight: 700; color: $ink; }
-  &__side-sub { margin: 0; color: $ink-2; line-height: 1.45; }
-  &__side-heading { margin: 0; font-weight: 600; color: $ink; }
-  &__side-block { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid $line-2; }
-  &__side-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; }
-  &__side-item { display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; border-radius: 8px; background: $wash; }
-  &__side-item-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  &__side-remove {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    border: 0;
-    border-radius: 8px;
-    background: transparent;
-    color: $ink-3;
-    cursor: pointer;
-
-    &:hover { background: $line-2; color: $ink; }
-    &:focus-visible { outline: 2px solid $signal; outline-offset: 1px; }
-  }
-
-  &__seg {
-    display: inline-flex;
-    padding: 3px;
-    gap: 2px;
-    border-radius: 10px;
-    background: $line-2;
-  }
-  &__seg-btn {
-    min-height: 34px;
-    padding: 0 12px;
-    font: inherit;
-    font-weight: 600;
-    border: 0;
-    border-radius: 8px;
-    background: transparent;
-    color: $ink-2;
-    cursor: pointer;
-
-    &:focus-visible { outline: 2px solid $signal; outline-offset: 1px; }
-    &--on { background: $card; color: $ink; box-shadow: $soft; }
-  }
-
-  // ---- model table -------------------------------------------------------------
-  &__group { display: flex; flex-direction: column; gap: 10px; }
-  &__group-head { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-  &__group-title { margin: 0; font-size: 1.05em; font-weight: 700; }
-  &__group-search {
-    margin-left: auto;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 0 10px;
-    height: 34px;
-    border: 1px solid $line;
-    border-radius: 8px;
-    background: $card;
-    color: $ink-3;
-
-    input { border: 0; outline: 0; background: transparent; font: inherit; color: $ink; width: 150px; }
-    &:focus-within { border-color: $signal; box-shadow: $ring; }
-  }
-
-  &__tablewrap { overflow-x: auto; border: 1px solid $line; border-radius: 12px; background: $card; }
-  &__table {
-    width: 100%;
-    min-width: 560px;
-    border-collapse: collapse;
-
-    thead tr { background: $wash; }
-    th { padding: 10px 14px; text-align: left; font-weight: 600; font-size: 0.92em; color: $ink-2; }
-    td { padding: 10px 14px; vertical-align: middle; }
-    tbody tr { border-top: 1px solid $line-2; }
-    tbody th { color: $ink; }
-    .ev__tnum { text-align: right; }
-  }
-  &__tnum { font-variant-numeric: tabular-nums; white-space: nowrap; }
-  &__trow--on { background: $wash; }
-  &__trow--locked { opacity: 0.6; }
-  &__tcell-model { display: flex; align-items: center; gap: 12px; cursor: pointer; min-height: 40px; }
-  &__tcell-model input { width: 16px; height: 16px; accent-color: $signal; flex-shrink: 0; }
-  &__tcell-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-  &__tname { font-weight: 600; color: $ink; overflow: hidden; text-overflow: ellipsis; }
-  &__tsub { color: $ink-2; font-size: 0.92em; }
-
-  &__table-more {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 10px 14px;
-    border-top: 1px solid $line-2;
-    color: $ink-2;
-  }
-  &__table-more-btn {
-    min-height: 36px;
-    padding: 0 14px;
-    font: inherit;
-    font-weight: 600;
-    border: 1px solid $line;
-    border-radius: 8px;
-    background: $card;
-    color: $signal;
-    cursor: pointer;
-
-    &:hover { border-color: $signal; }
-    &:focus-visible { outline: 2px solid $signal; outline-offset: 2px; }
-  }
-
-  &__skel-rows { display: flex; flex-direction: column; gap: 8px; }
-  &__skel-block--row { display: block; height: 52px; border-radius: 10px; }
-
-  // ---- step 4: suite rows --------------------------------------------------------
-  &__srows { display: flex; flex-direction: column; gap: 10px; }
-  &__srow {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 14px 16px;
-    border: 1.5px solid $line;
-    border-radius: 12px;
-    background: $card;
-    transition: border-color 0.15s ease, background 0.15s ease;
-
-    &:hover { border-color: $ink-3; }
-    &--on { border-color: $signal; background: $wash; }
-    &--empty { opacity: 0.6; }
-  }
-  &__srow-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-  &__srow-pick { display: flex; align-items: flex-start; gap: 12px; flex: 1; min-width: 240px; cursor: pointer; }
-  &__srow-pick input { margin-top: 3px; width: 16px; height: 16px; accent-color: $signal; flex-shrink: 0; }
-  &__srow-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-  &__srow-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-  &__srow-name { font-weight: 700; color: $ink; }
-  &__srow-desc { color: $ink-2; line-height: 1.5; max-width: 70ch; }
-  &__srow-score { color: $ink-2; b { font-weight: 600; color: $ink; } }
-  &__srow-side { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
-  &__srow-count {
-    padding: 3px 10px;
-    border-radius: 999px;
-    background: $line-2;
-    color: $ink-2;
-    font-weight: 600;
-    white-space: nowrap;
-
-    &--empty { background: $danger-wash; color: $danger; }
-  }
-  &__srow-sub { padding-top: 10px; border-top: 1px solid $line-2; display: flex; flex-direction: column; gap: 8px; }
-  &__srow-sub-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: $ink-2; font-weight: 600; }
-  &__chip--sm { padding: 6px 12px; font-size: 0.9em; }
-
-  &__cover-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 6px 0;
-    color: $ink;
-
-    &--off { color: $ink-3; }
-  }
-  &__kv {
-    margin: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding-top: 12px;
-    border-top: 1px solid $line-2;
-
-    > div { display: flex; justify-content: space-between; gap: 12px; }
-    dt { color: $ink-2; }
-    dd { margin: 0; font-weight: 700; font-variant-numeric: tabular-nums; }
-  }
-
-  // ---- step 5: sections -----------------------------------------------------------
-  &__secs { display: flex; flex-direction: column; }
-  &__sec {
-    display: grid;
-    grid-template-columns: 240px minmax(0, 1fr);
-    gap: 24px;
-    padding: 22px 0;
-    border-top: 1px solid $line-2;
-
-    &:first-child { border-top: 0; padding-top: 4px; }
-    @media (max-width: 900px) { grid-template-columns: minmax(0, 1fr); gap: 12px; }
-  }
-  &__sec-aside { display: flex; flex-direction: column; gap: 6px; }
-  &__sec-title { margin: 0; font-size: 1.05em; font-weight: 700; color: $ink; }
-  &__sec-hint { margin: 0; color: $ink-2; line-height: 1.5; }
-  &__sec-need { margin: 0; color: $danger; font-weight: 600; }
-  &__sec-note { display: block; margin-top: 2px; color: $ink-2; font-weight: 400; }
-  &__sec-body {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    min-width: 0;
-
-    &--row { flex-direction: row; flex-wrap: wrap; align-items: flex-end; gap: 20px; }
-  }
-  &__calc {
-    margin: 0;
-    padding: 10px 14px;
-    border-radius: 10px;
-    background: $wash;
-    color: $ink;
-    font-weight: 600;
-    line-height: 1.5;
-  }
-
-  &__chip-group { display: flex; flex-direction: column; gap: 8px; }
-  &__chip-group-label { font-weight: 600; color: $ink-2; }
-
-  &__samples { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
-  &__samples-field { display: inline-flex; align-items: center; gap: 10px; color: $ink-2; }
-  &__input--num { width: 110px; }
-  &__numfield { display: flex; flex-direction: column; gap: 6px; font-weight: 600; color: $ink-2; input { width: 130px; } }
-
-  &__switch {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    min-height: 44px;
-    font-weight: 600;
-    color: $ink;
-    cursor: pointer;
-
-    input { margin-top: 3px; width: 16px; height: 16px; accent-color: $signal; }
-  }
-
-  &__judge-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; max-height: 360px; overflow-y: auto; }
-
-  // ---- step 6: review ------------------------------------------------------------
-  &__review { display: flex; flex-direction: column; gap: 22px; }
-  &__review-band {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 14px;
-    padding: 18px 20px;
-    border-radius: 14px;
-    background: $wash;
-  }
-  &__review-name { margin: 0; font-size: 1.45em; font-weight: 800; letter-spacing: -0.02em; color: $ink; }
-  &__review-mode { margin: 4px 0 0; color: $ink-2; }
-  &__review-stats {
-    margin: 0;
-    display: flex;
-    gap: 28px;
-
-    dt { color: $ink-2; }
-    dd { margin: 2px 0 0; font-size: 1.7em; font-weight: 800; font-variant-numeric: tabular-nums; color: $ink; }
-  }
-  &__review-sec { display: flex; flex-direction: column; gap: 10px; }
-  &__review-sec-head {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 12px;
-    flex-wrap: wrap;
-
-    h3 { margin: 0; font-size: 1.1em; font-weight: 700; }
-    span { color: $ink-2; }
-  }
-  &__review-rowhead { font-weight: 700; color: $ink; }
-  &__review-note { margin: 0; color: $ink-2; }
-  &__review-list { border: 1px solid $line; border-radius: 12px; background: $card; }
-  &__review-line {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 6px 8px 6px 16px;
-
-    & + & { border-top: 1px solid $line-2; }
-  }
-  &__review-k { width: 150px; flex-shrink: 0; color: $ink-2; }
-  &__review-v { flex: 1; min-width: 0; font-weight: 600; color: $ink; overflow-wrap: anywhere; }
-  &__review-edit {
-    min-height: 40px;
-    padding: 0 12px;
-    font: inherit;
-    font-weight: 600;
-    border: 0;
-    border-radius: 8px;
-    background: transparent;
-    color: $signal;
-    cursor: pointer;
-
-    &:hover { background: $wash; }
-    &:focus-visible { outline: 2px solid $signal; outline-offset: 1px; }
-  }
-
-  @media (max-width: 640px) {
-    &__review-line { flex-wrap: wrap; }
-    &__review-k { width: 100%; }
-  }
-}
-
-// ---- match the approved mocks -------------------------------------------------
-.ev {
-  &__pills { display: flex; flex-wrap: wrap; gap: 8px; }
-  &__pill {
-    min-height: 36px;
-    padding: 0 14px;
-    font: inherit;
-    font-weight: 600;
-    border: 1px solid $line;
-    border-radius: 999px;
-    background: $card;
-    color: $ink-2;
-    cursor: pointer;
-
-    span { margin-left: 4px; font-weight: 500; }
-    &:hover { border-color: $ink-3; }
-    &:focus-visible { outline: 2px solid $signal; outline-offset: 2px; }
-    &--on { border-color: $signal; background: $wash; color: $signal; }
-  }
-
-  &__table &__health-badge {
-    font-family: inherit;
-    font-size: 0.92em;
-    font-weight: 600;
-    letter-spacing: 0;
-    padding: 3px 10px;
-  }
-  &__health-badge--failed-pill { color: $danger; background: $danger-wash; }
-  &__health-fail { display: inline-flex; align-items: center; gap: 10px; }
-  &__health-retry {
-    min-height: 32px;
-    padding: 0 4px;
-    font: inherit;
-    font-weight: 600;
-    border: 0;
-    background: transparent;
-    color: $signal;
-    cursor: pointer;
-
-    &:focus-visible { outline: 2px solid $signal; outline-offset: 1px; }
-  }
-  &__health-idle { color: $ink-2; }
-  &__table &__health-badge--loading { background: $card; border-color: $line; color: $ink; }
-
-  // grey panels with white items, as in the mocks
-  &__side { border: 0; background: $paper; border-radius: 14px; padding: 18px; }
-  &__side-item { background: $card; border: 1px solid $line; border-radius: 10px; padding: 10px 12px; }
-  &__follow { border-left: 0; background: $paper; border-radius: 14px; padding: 20px; }
-  &__follow-lead { color: $ink-2; font-weight: 600; font-size: 0.95em; }
-  &__cover-item {
-    padding: 10px 14px;
-    border: 1px solid $line;
-    border-radius: 10px;
-    background: $card;
-    font-weight: 600;
-
-    &--off { border-style: dashed; background: transparent; font-weight: 400; }
-  }
-  &__cover-item + &__cover-item { margin-top: 0; }
-  &__srow-count { background: transparent; padding: 0; color: $ink; font-weight: 700; }
-  &__srow-count--empty { color: $danger; }
-  &__tile-head .ev__radio { flex-shrink: 0; }
-}
-
-.ev {
-  &__cover-item .ev__check { border-radius: 50%; }
-  &__srow-side { flex-direction: column; align-items: flex-end; gap: 6px; }
-  &__srow-side .ev__dcard-preview-btn {
-    border: 0;
-    background: transparent;
-    padding: 4px 0;
-    min-height: 32px;
-    color: $signal;
-    font-weight: 600;
-    box-shadow: none;
-  }
 }
