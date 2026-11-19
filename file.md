@@ -2360,6 +2360,8 @@ export default function NewEvaluation() {
     rich?: {
       stats: { label: string; value: number; tone?: 'ok' | 'bad' | 'signal'; icon: ReactNode }[];
       filtersLabel?: string;
+      // fixed-width figure cards from the left instead of sharing the full row
+      compactStats?: boolean;
       progress?: { done: number; total: number } | null;
     };
   }) => {
@@ -2444,7 +2446,9 @@ export default function NewEvaluation() {
         </div>
 
         {o.rich && (
-          <div className={styles['ev__lhead-stats']}>
+          <div
+            className={`${styles['ev__lhead-stats']} ${o.rich.compactStats ? styles['ev__lhead-stats--compact'] : ''}`}
+          >
             {o.rich.stats.map((st) => (
               <div
                 key={st.label}
@@ -3299,6 +3303,7 @@ export default function NewEvaluation() {
                           </>
                         ),
                         rich: {
+                          compactStats: true,
                           stats: [
                             { label: 'Providers', value: connectedProviders.length, icon: <Layers size={14} /> },
                             {
@@ -8667,6 +8672,14 @@ $ev-base-font: 0.8125rem;
   }
   // one equal column per figure, however many there are
   &__lhead-stats { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 10px; }
+  // Providers step: 200px cards from the left, any spare room stays empty
+  &__lhead-stats--compact {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+
+    .ev__lhead-stat { flex: 0 0 200px; }
+  }
   &__lhead-stat {
     display: flex;
     align-items: center;
