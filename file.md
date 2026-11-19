@@ -490,7 +490,6 @@ export default function NewEvaluation() {
   const [modelSearch, setModelSearch] = useState('');
   // Models table: view-only provider filter (All / one provider). Doesn't
   // change draft.providers — that's still set on the Providers step.
-  const [modelProviderFilter, setModelProviderFilter] = useState<string>('all');
   // RAG-only: one independent search box per category (Embedding/
   // Reranker/LLM) instead of the single global model search used by the
   // Model/Agent grid — see RAG_CATEGORIES below.
@@ -1240,7 +1239,7 @@ export default function NewEvaluation() {
   const [modelsShown, setModelsShown] = useState(MODEL_PAGE_SIZE);
   useEffect(() => {
     setModelsShown(MODEL_PAGE_SIZE);
-  }, [modelSearch, modelProviderFilter, models, draft.providers]);
+  }, [modelSearch, models, draft.providers]);
   const modelsMoreRef = useRef<HTMLDivElement | null>(null);
   const modelsHasMoreRef = useRef(false);
   useEffect(() => {
@@ -1257,7 +1256,7 @@ export default function NewEvaluation() {
     io.observe(el);
     return () => io.disconnect();
     // re-attach when the sentinel is (re)mounted: step change, loading, or a new batch
-  }, [step, modelsLoading, modelsShown, modelSearch, modelProviderFilter, draft.type]);
+  }, [step, modelsLoading, modelsShown, modelSearch, draft.type]);
 
   const toggle = (list: string[], value: string) =>
     list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
@@ -2232,9 +2231,7 @@ export default function NewEvaluation() {
     },
     { ok: 0, failed: 0 }
   );
-  const tableModels = filteredModels.filter(
-    (m) => modelProviderFilter === 'all' || m.provider_id === modelProviderFilter
-  );
+  const tableModels = filteredModels;
   const shownTableModels = tableModels.slice(0, modelsShown);
   modelsHasMoreRef.current = tableModels.length > modelsShown;
   // Order for the health-check queue: selected models, then what's listed
@@ -2557,7 +2554,6 @@ export default function NewEvaluation() {
             </>
           ),
           rich: {
-            filtersLabel: 'Provider',
             progress: modelsLoading ? null : { done: healthProgress.done, total: healthProgress.total },
             stats: [
               { label: 'Models', value: llmAvailable.length, icon: <Layers size={14} /> },
@@ -2569,36 +2565,6 @@ export default function NewEvaluation() {
           count: tableModels.length,
           search: { placeholder: 'Search models', value: modelSearch, onChange: setModelSearch },
           refresh: { onClick: refreshModels, busy: modelsLoading, title: 'Refresh models' },
-          filters: (
-            <>
-            <button
-              type="button"
-              className={`${styles['ev__filter-chip']} ${modelProviderFilter === 'all' ? styles['ev__filter-chip--on'] : ''}`}
-              onClick={() => setModelProviderFilter('all')}
-            >
-              All <span className={styles['ev__filter-chip-count']}>{llmAvailable.length}</span>
-            </button>
-            {draft.providers.map((id) => {
-              const on = modelProviderFilter === id;
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  className={`${styles['ev__filter-chip']} ${on ? styles['ev__filter-chip--on'] : ''}`}
-                  onClick={() => setModelProviderFilter(on ? 'all' : id)}
-                >
-                  <span className={styles['ev__filter-chip-av']}>
-                    {providerInitials(providers.find((p) => p?.id === id)?.name || id)}
-                  </span>
-                  {providers.find((p) => p?.id === id)?.name || id}
-                  <span className={styles['ev__filter-chip-count']}>
-                    {llmAvailable.filter((m) => m.provider_id === id).length}
-                  </span>
-                </button>
-              );
-            })}
-            </>
-          ),
         })}
 
         {/* Model cards (original card design). Retries and timeout for the
@@ -2627,7 +2593,7 @@ export default function NewEvaluation() {
               {shownTableModels.map((m) => renderModelCard(m, () => toggleModel(m.id), false))}
               {tableModels.length === 0 && (
                 <p className={styles.ev__empty}>
-                  {modelSearch ? `No models match "${modelSearch}".` : 'No models for this filter.'}
+                  {modelSearch ? `No models match "${modelSearch}".` : 'No models to show.'}
                 </p>
               )}
             </div>
@@ -5054,7 +5020,6 @@ export default function NewEvaluation() {
     </div>
   );
 }
-
 
 
 
@@ -9084,53 +9049,60 @@ $ev-base-font: 0.8125rem;
   &__panel-req { font-size: 0.9231em; font-weight: 700; color: $danger; }
 
   // ---- side panels, clean pass ---------------------------------------------
-  // (Retries and timeout / Scorecard coverage / Who judges.) One white
-  // surface with a single border. Inside it nothing is boxed twice: lists
-  // are plain rows split by hairlines, controls use one thin border, and
-  // colour is kept for state (selected, healthy, required).
-  &__panel { gap: 14px; padding: 20px; background: $card; }
+  // (Retries and timeout / Scorecard coverage / Who judges.) Clean, but with
+  // clear layers: the panel is a white card with a firm border, its settings
+  // block on top is a tinted band, and controls are white fields on that
+  // tint. The active choice is filled in the signal colour.
+  &__panel { gap: 14px; padding: 20px; border-color: $line; background: $card; box-shadow: 0 1px 2px rgba($ink, 0.05); }
   &__panel--pinned { padding: 0; gap: 0; }
-  &__panel-fixed { gap: 14px; padding: 20px; background: $card; border-bottom-color: $line-2; }
-  &__panel-scroll { gap: 6px; padding: 18px 20px 20px; }
-  &__panel-title { font-size: 1.0769em; font-weight: 700; letter-spacing: -0.005em; }
+  &__panel-fixed { gap: 14px; padding: 20px; background: $paper; border-bottom: 1px solid $line; }
+  &__panel-scroll { gap: 6px; padding: 18px 20px 20px; background: $card; }
+  &__panel-title { font-size: 1.0769em; font-weight: 800; }
   &__panel-sub { margin-top: -10px; }
-  &__panel-note { color: $ink-3; }
+  &__panel-note { color: $ink-2; }
 
-  // segmented control: grey track, white thumb
-  &__panel &__segctl--full { padding: 3px; border: 0; background: $paper; }
+  // segmented control: white track with a border, signal-filled choice
+  &__panel &__segctl--full { padding: 3px; border: 1px solid $line; background: $card; }
   &__panel &__segbtn { padding: 7px 12px; color: $ink-2; }
   &__panel &__segbtn--on {
-    background: $card;
-    color: $ink;
-    box-shadow: 0 1px 2px rgba($ink, 0.12);
-    &:hover { color: $ink; }
+    background: $signal;
+    color: #fff;
+    &:hover { color: #fff; }
   }
 
-  // steppers: one thin border, no filled buttons or inner dividers
-  &__panel &__stepfield-label { font-weight: 500; svg { color: $ink-3; } }
+  // steppers: white fields on the tint, thin dividers between − value +
+  &__panel &__stepfield-label { font-weight: 650; color: $ink; svg { color: $signal; } }
   &__panel &__stepper {
     height: 36px;
-    border-width: 1px;
+    border: 1px solid $line;
     border-radius: 8px;
+    background: $card;
 
-    button { background: transparent; color: $ink-3; }
-    input { border-left: 0; border-right: 0; }
+    button { background: $card; color: $ink-2; }
+    button:hover:not(:disabled) { background: $wash; color: $signal; }
+    input { border-left: 1px solid $line; border-right: 1px solid $line; }
   }
 
-  // selected models: rows, not cards
+  // selected models: rows split by a line; per-model fields sit in a tinted box
   &__panel &__panel-list { gap: 0; }
   &__panel &__pm {
     border: 0;
-    border-bottom: 1px solid $line-2;
+    border-bottom: 1px solid $line;
     border-radius: 0;
     background: transparent;
     overflow: visible;
 
     &:last-child { border-bottom: 0; }
   }
-  &__panel &__pm-head { padding: 11px 0; }
-  &__panel &__pm-name { font-weight: 600; small { color: $ink-3; } }
-  &__panel &__pm-body { padding: 0 0 14px 18px; border-top: 0; background: transparent; }
+  &__panel &__pm-head { padding: 12px 0; }
+  &__panel &__pm-name { font-weight: 700; small { color: $ink-2; } }
+  &__panel &__pm-body {
+    margin: 0 0 14px;
+    padding: 12px;
+    border: 1px solid $line-2;
+    border-radius: 10px;
+    background: $paper;
+  }
   &__panel-x {
     width: 24px;
     height: 24px;
@@ -9138,10 +9110,10 @@ $ev-base-font: 0.8125rem;
     justify-content: center;
     padding: 0;
     border-radius: 6px;
-    color: $ink-3;
+    color: $ink-2;
     transition: background 0.12s ease, color 0.12s ease;
 
-    &:hover { background: $paper; color: $ink; }
+    &:hover { background: $danger-wash; color: $danger; }
   }
 
   // coverage: rows with the state at the end
@@ -9151,16 +9123,16 @@ $ev-base-font: 0.8125rem;
     justify-content: space-between;
     padding: 11px 0;
     border: 0;
-    border-bottom: 1px solid $line-2;
+    border-bottom: 1px solid $line;
     border-radius: 0;
     background: transparent;
 
     &:last-child { border-bottom: 0; }
     &--off { color: $ink-2; }
   }
-  &__panel-state { font-size: 0.8846em; font-weight: 600; color: $ok; }
-  &__panel-item--off &__panel-state { font-weight: 500; color: $ink-3; }
-  &__panel-stats { margin-top: 0; padding-top: 14px; border-top-color: $line-2; gap: 8px; }
+  &__panel-state { padding: 2px 8px; border-radius: 999px; background: $ok-wash; font-size: 0.8462em; font-weight: 650; color: $ok; }
+  &__panel-item--off &__panel-state { background: $paper; color: $ink-2; }
+  &__panel-stats { margin-top: 0; padding-top: 14px; border-top-color: $line; gap: 8px; }
 
   // judge cards: thin border, no glow
   &__panel &__jcard {
