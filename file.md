@@ -3294,9 +3294,26 @@ export default function NewEvaluation() {
                         title: 'Connected providers',
                         meta: (
                           <>
-                            {filteredProviders.length} of {connectedProviders.length} shown · <b>{draft.providers.length}</b> selected
+                            Showing {filteredProviders.length} of {connectedProviders.length}. Pick the providers whose
+                            models you want to test.
                           </>
                         ),
+                        rich: {
+                          stats: [
+                            { label: 'Providers', value: connectedProviders.length, icon: <Layers size={14} /> },
+                            {
+                              label: 'Models offered',
+                              value: connectedProviders.reduce((n, p) => n + (p.model_count ?? 0), 0),
+                              icon: <Cpu size={14} />,
+                            },
+                            {
+                              label: 'Selected',
+                              value: draft.providers.length,
+                              tone: 'signal',
+                              icon: <Check size={14} strokeWidth={3} />,
+                            },
+                          ],
+                        },
                         count: filteredProviders.length,
                         search: { placeholder: 'Search providers', value: providerSearch, onChange: setProviderSearch },
                         refresh: { onClick: refreshProviders, busy: providersLoading, title: 'Refresh providers' },
@@ -5020,8 +5037,6 @@ export default function NewEvaluation() {
     </div>
   );
 }
-
-
 
 
 
@@ -8650,7 +8665,8 @@ $ev-base-font: 0.8125rem;
     .ev__lhead-title h3 { font-size: 1.2692em; }
     .ev__lhead-filters { padding-top: 12px; border-top: 1px dashed $line; }
   }
-  &__lhead-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+  // one equal column per figure, however many there are
+  &__lhead-stats { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 10px; }
   &__lhead-stat {
     display: flex;
     align-items: center;
@@ -9810,7 +9826,7 @@ $ev-base-font: 0.8125rem;
   .ev__samples-instruction-row { grid-template-columns: 1fr; }
   .ev__split, .ev__frow, .ev__choice-row, .ev__namegrid { grid-template-columns: 1fr; }
   .ev__hq-note { display: none; }
-  .ev__lhead-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ev__lhead-stats { grid-auto-flow: row; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ev__lhead-progress-note { display: none; }
   .ev__asetup-grid { grid-template-columns: 1fr; }
   .ev__about-cols { grid-template-columns: 1fr; }
