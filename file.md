@@ -2358,10 +2358,9 @@ export default function NewEvaluation() {
     refresh: { onClick: () => void; busy: boolean; title: string };
     filters?: ReactNode;
     sticky?: boolean;
-    // Rich variant (Models step): the header becomes a card with an icon
-    // tile, a row of figures, labelled filters and a progress footer.
+    // Rich variant (Models step): the header becomes a card with a row of
+    // figures, labelled filters and a progress footer.
     rich?: {
-      icon: ReactNode;
       stats: { label: string; value: number; tone?: 'ok' | 'bad' | 'signal'; icon: ReactNode }[];
       filtersLabel?: string;
       progress?: { done: number; total: number } | null;
@@ -2375,7 +2374,6 @@ export default function NewEvaluation() {
         }`}
       >
         <div className={styles['ev__lhead-row']}>
-        {o.rich && <span className={styles['ev__lhead-icon']}>{o.rich.icon}</span>}
         <div className={styles['ev__lhead-title']}>
           <h3>{o.title}</h3>
           <span>{o.meta}</span>
@@ -2393,7 +2391,7 @@ export default function NewEvaluation() {
           }}
         >
           <span className={styles['ev__sbar-icon']}>
-            <Search size={13} strokeWidth={2.6} />
+            <Search size={15} strokeWidth={2.2} />
           </span>
           <input
             ref={listSearchRef}
@@ -2559,7 +2557,6 @@ export default function NewEvaluation() {
             </>
           ),
           rich: {
-            icon: <Cpu size={18} />,
             filtersLabel: 'Provider',
             progress: modelsLoading ? null : { done: healthProgress.done, total: healthProgress.total },
             stats: [
@@ -4521,7 +4518,7 @@ export default function NewEvaluation() {
                         </p>
                         <div className={styles.ev__sbar}>
                           <span className={styles['ev__sbar-icon']}>
-                            <Search size={13} strokeWidth={2.6} />
+                            <Search size={15} strokeWidth={2.2} />
                           </span>
                           <input
                             type="text"
@@ -5056,6 +5053,9 @@ export default function NewEvaluation() {
     </div>
   );
 }
+
+
+
 
 
 
@@ -8546,48 +8546,28 @@ $ev-base-font: 0.8125rem;
   }
 
   // ---- search bar ---------------------------------------------------------
-  // A compact "command bar" on the right of the list title: gradient icon
-  // tile, field, live result count, "/" hint or clear button, then refresh
-  // behind a divider. Resting
-  // it's a white bar with a soft shadow; on focus the border becomes a
-  // signal gradient, the bar lifts and a glow spreads under it.
+  // A plain, compact search field on the right of the list title: magnifier,
+  // field, live result count, "/" hint or clear button, then refresh behind
+  // a divider. One flat border at rest; on focus the border turns signal
+  // with a soft ring. No gradients, shadows or movement.
   &__sbar {
     position: relative;
     display: flex;
     align-items: center;
     flex: 0 1 340px;
     min-width: 220px;
-    gap: 9px;
+    gap: 8px;
     height: 38px;
-    padding: 0 5px 0 5px;
-    border: 1.5px solid transparent;
-    border-radius: 11px;
-    // two layers: the fill (padding-box) and the border colour (border-box),
-    // so the border can be a gradient on focus
-    background:
-      linear-gradient($card, $card) padding-box,
-      linear-gradient($line, $line) border-box;
-    box-shadow: 0 1px 2px rgba(20, 22, 27, 0.05), 0 6px 16px -10px rgba(20, 22, 27, 0.18);
+    padding: 0 5px 0 12px;
+    border: 1px solid $line;
+    border-radius: 10px;
+    background: $card;
     cursor: text;
-    transition: box-shadow 0.2s ease, transform 0.2s ease;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
 
-    &:hover {
-      background:
-        linear-gradient($card, $card) padding-box,
-        linear-gradient($ink-3, $ink-3) border-box;
-    }
-
-    &:focus-within,
-    &--active {
-      background:
-        linear-gradient($card, $card) padding-box,
-        linear-gradient(120deg, $signal, $signal-2 55%, rgba($signal, 0.35)) border-box;
-    }
-
-    &:focus-within {
-      transform: translateY(-1px);
-      box-shadow: 0 0 0 3px rgba($signal, 0.12), 0 10px 20px -12px rgba($signal, 0.55);
-    }
+    &:hover { border-color: $ink-3; }
+    &--active { border-color: $signal; }
+    &:focus-within { border-color: $signal; box-shadow: 0 0 0 3px rgba($signal, 0.12); }
 
     input {
       flex: 1;
@@ -8607,17 +8587,13 @@ $ev-base-font: 0.8125rem;
 
   &__sbar-icon {
     flex-shrink: 0;
-    width: 26px;
-    height: 26px;
-    border-radius: 8px;
     display: grid;
     place-items: center;
-    background: linear-gradient(140deg, $signal, $signal-2);
-    color: #fff;
-    box-shadow: 0 4px 8px -4px rgba($signal, 0.7);
-    transition: transform 0.2s ease;
+    color: $ink-3;
+    transition: color 0.15s ease;
   }
-  &__sbar:focus-within &__sbar-icon { transform: scale(1.06) rotate(-6deg); }
+  &__sbar:focus-within &__sbar-icon,
+  &__sbar--active &__sbar-icon { color: $signal; }
 
   // live result count, shown while there's a query
   &__sbar-count {
@@ -8640,8 +8616,7 @@ $ev-base-font: 0.8125rem;
     min-width: 20px;
     padding: 1px 5px;
     border: 1px solid $line;
-    border-bottom-width: 2px;
-    border-radius: 6px;
+    border-radius: 5px;
     background: $paper;
     text-align: center;
     font-family: $mono;
@@ -8689,7 +8664,7 @@ $ev-base-font: 0.8125rem;
   &__lhead-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 
   // ---- rich list header (Models step) -------------------------------------
-  // The header as a card: icon tile + title + search, a row of figures,
+  // The header as a card: title + search, a row of figures,
   // labelled provider filters, and a progress footer while availability
   // checks are running.
   &__lhead--rich {
@@ -8705,18 +8680,6 @@ $ev-base-font: 0.8125rem;
     .ev__lhead-title h3 { font-size: 1.2692em; }
     .ev__lhead-filters { padding-top: 12px; border-top: 1px dashed $line; }
   }
-  &__lhead-icon {
-    flex-shrink: 0;
-    width: 42px;
-    height: 42px;
-    border-radius: 12px;
-    display: grid;
-    place-items: center;
-    background: linear-gradient(140deg, $signal, $signal-2);
-    color: #fff;
-    box-shadow: 0 8px 16px -8px rgba($signal, 0.75);
-  }
-
   &__lhead-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
   &__lhead-stat {
     display: flex;
