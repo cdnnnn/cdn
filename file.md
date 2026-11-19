@@ -2756,7 +2756,7 @@ $ev-base-font: 0.8125rem;
   &__split &__models-scroll { margin-top: 0; }
   &__split &__grid--wide {
     gap: 10px;
-    grid-template-columns: repeat(auto-fill, minmax(264px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(282px, 1fr));
     grid-auto-rows: 1fr;
     align-items: stretch;
   }
@@ -3778,7 +3778,7 @@ $ev-base-font: 0.8125rem;
   // scored (harness), its subgroups, and question / subgroup counts.
   &__slist {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(264px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(282px, 1fr));
     grid-auto-rows: 1fr;
     gap: 10px;
   }
@@ -3786,12 +3786,12 @@ $ev-base-font: 0.8125rem;
   &__srow {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 9px;
     height: 100%;
-    min-height: 196px;
-    padding: 13px 14px;
+    min-height: 216px;
+    padding: 15px;
     // everything inside is sized in em, so this scales the whole card's text
-    font-size: 0.92em;
+    font-size: 0.965em;
     border: 1.5px solid $line;
     border-radius: 12px;
     background: $card;
@@ -3814,8 +3814,8 @@ $ev-base-font: 0.8125rem;
   &__srow-head { display: flex; align-items: center; gap: 10px; }
   &__srow-icon {
     flex-shrink: 0;
-    width: 28px;
-    height: 28px;
+    width: 30px;
+    height: 30px;
     border-radius: 8px;
     display: grid;
     place-items: center;
@@ -3865,7 +3865,7 @@ $ev-base-font: 0.8125rem;
   // inherit &__srow's minimum height; the grid below matches the suite
   // grid's column width). Locked = can't be selected until its health check
   // passes.
-  &__srow--model { gap: 9px; }
+  &__srow--model { gap: 10px; }
   &__srow--locked {
     cursor: default;
     &:hover { border-color: $line; box-shadow: none; transform: none; }
@@ -3879,8 +3879,8 @@ $ev-base-font: 0.8125rem;
     margin-top: auto;
     display: flex;
     align-items: flex-end;
-    gap: 16px;
-    padding-top: 9px;
+    gap: 17px;
+    padding-top: 11px;
     border-top: 1px solid $line-2;
 
     .ev__stat-v { font-size: 1.1538em; }
