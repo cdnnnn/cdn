@@ -173,7 +173,6 @@ $ev-base-font: 0.8125rem;
   // the rail + working area sit inside the page padding as one bordered
   // block; the two panes stay flush against each other inside it
   border: 1px solid $line;
-  border-radius: 16px;
   background: $card;
   overflow: hidden;
 
@@ -2539,7 +2538,7 @@ $ev-base-font: 0.8125rem;
   // (Datasets). A fixed-range rail on the left and the working area on the
   // right, flush against each other and the page edges, split by one line —
   // no gutter, no rounded outer cards, no shadows.
-  &__shell { grid-template-columns: minmax(320px, 380px) 1fr; gap: 0; }
+  &__shell { grid-template-columns: 272px 1fr; gap: 0; }
   &__manifest {
     border: 0;
     border-right: 1px solid $line;
@@ -2566,74 +2565,73 @@ $ev-base-font: 0.8125rem;
   &__stage-body { padding: 22px 30px 26px; }
   &__footer { padding: 16px 30px; }
 
-  &__spec { gap: 4px; padding: 12px 10px 14px; }
+  // Step list: a plain navigation list. One row per step with a small
+  // square marker, the step name and its current value underneath. No
+  // connector line or halo; the current step is marked by a signal bar on
+  // the left edge and a wash, finished steps by a green check.
+  &__spec { gap: 0; padding: 8px 0; }
 
   &__spec-row {
-    grid-template-columns: 28px minmax(0, 1fr) auto;
+    grid-template-columns: 22px minmax(0, 1fr) auto;
     align-items: center;
     gap: 12px;
-    padding: 10px 12px 10px 10px;
-    border-radius: 10px;
+    padding: 11px 16px 11px 15px;
+    border-left: 3px solid transparent;
+    border-radius: 0;
 
-    // segment from this tick to the next one, with a 3px breath at each end
-    // (rows share one height, so the percentages line up)
-    &::before {
-      left: 23px;
-      top: calc(50% + 17px);
-      bottom: calc(-50% + 13px);
-      width: 2px;
-      border-radius: 2px;
-      background: $line;
-    }
+    &::before { display: none; }
   }
 
   &__spec-tick {
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    border: 1.5px solid $line;
-    background: $card;
+    width: 22px;
+    height: 22px;
+    border: 0;
+    border-radius: 6px;
+    background: $paper;
+    box-shadow: none;
+    font-family: $mono;
+    font-size: 0.8462em;
+    font-weight: 700;
     color: $ink-3;
-    font-size: 1em;
   }
 
   &__spec-label {
     font-family: $sans;
-    font-size: 1.0769em;
-    font-weight: 600;
+    font-size: 1.0385em;
+    font-weight: 650;
     letter-spacing: 0;
     text-transform: none;
-    color: $ink-3;
+    color: $ink;
   }
 
   &__spec-value {
-    font-size: 1.2692em;
-    font-weight: 650;
+    font-family: $sans;
+    font-size: 0.9231em;
+    font-weight: 500;
+    color: $ink-2;
 
     &[data-empty='true'] { font-family: $sans; font-weight: 500; color: $ink-3; }
   }
 
   &__spec-row--done {
-    &::before { background: rgba($signal, 0.45); }
-    .ev__spec-tick { background: $wash; border-color: transparent; color: $signal; }
-    .ev__spec-label { color: $ink-3; }
+    .ev__spec-tick { background: $ok-wash; color: $ok; }
+    .ev__spec-label { color: $ink; }
     &:not(:disabled):hover { background: $paper; }
   }
 
   &__spec-row--active {
+    border-left-color: $signal;
     background: $wash;
     box-shadow: none;
-    .ev__spec-tick {
-      background: $signal;
-      border-color: $signal;
-      color: #fff;
-      box-shadow: 0 0 0 4px rgba($signal, 0.16);
-    }
+    .ev__spec-tick { background: $signal; color: #fff; box-shadow: none; }
     .ev__spec-label { color: $signal; }
     &:not(:disabled):hover { background: $wash; }
   }
 
-  &__spec-row--todo { opacity: 1; }
+  &__spec-row--todo {
+    opacity: 1;
+    .ev__spec-label { color: $ink-2; }
+  }
 
   // "Edit" pill, revealed on hover / keyboard focus of a completed step
   &__spec-edit {
