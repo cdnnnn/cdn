@@ -2538,7 +2538,7 @@ $ev-base-font: 0.8125rem;
   // (Datasets). A fixed-range rail on the left and the working area on the
   // right, flush against each other and the page edges, split by one line —
   // no gutter, no rounded outer cards, no shadows.
-  &__shell { grid-template-columns: 272px 1fr; gap: 0; }
+  &__shell { grid-template-columns: 290px 1fr; gap: 0; }
   &__manifest {
     border: 0;
     border-right: 1px solid $line;
@@ -2572,10 +2572,10 @@ $ev-base-font: 0.8125rem;
   &__spec { gap: 0; padding: 8px 0; }
 
   &__spec-row {
-    grid-template-columns: 22px minmax(0, 1fr) auto;
+    grid-template-columns: 24px minmax(0, 1fr) auto;
     align-items: center;
     gap: 12px;
-    padding: 11px 16px 11px 15px;
+    padding: 12px 16px 12px 15px;
     border-left: 3px solid transparent;
     border-radius: 0;
 
@@ -2583,21 +2583,21 @@ $ev-base-font: 0.8125rem;
   }
 
   &__spec-tick {
-    width: 22px;
-    height: 22px;
+    width: 24px;
+    height: 24px;
     border: 0;
-    border-radius: 6px;
+    border-radius: 7px;
     background: $paper;
     box-shadow: none;
     font-family: $mono;
-    font-size: 0.8462em;
+    font-size: 0.9231em;
     font-weight: 700;
     color: $ink-3;
   }
 
   &__spec-label {
     font-family: $sans;
-    font-size: 1.0385em;
+    font-size: 1.1538em;
     font-weight: 650;
     letter-spacing: 0;
     text-transform: none;
@@ -2606,7 +2606,7 @@ $ev-base-font: 0.8125rem;
 
   &__spec-value {
     font-family: $sans;
-    font-size: 0.9231em;
+    font-size: 1.0385em;
     font-weight: 500;
     color: $ink-2;
 
@@ -3642,20 +3642,29 @@ $ev-base-font: 0.8125rem;
 
     .ev__lhead-stat { flex: 0 0 200px; }
   }
+  // Each figure sits on a light tint of its own meaning: neutral for plain
+  // counts, green for healthy, red for failing, signal for the selection.
+  // The icon is a white tile on that tint.
   &__lhead-stat {
     display: flex;
     align-items: center;
     gap: 10px;
     min-width: 0;
-    padding: 9px 12px;
-    border: 1px solid $line;
+    padding: 10px 12px;
+    border: 1px solid $line-2;
     border-radius: 11px;
-    background: $card;
+    background: $paper;
 
-    &--ok .ev__lhead-stat-icon { background: $ok-wash; color: $ok; }
-    &--bad .ev__lhead-stat-icon { background: $danger-wash; color: $danger; }
-    &--signal { border-color: rgba($signal, 0.35); background: $wash; }
-    &--signal .ev__lhead-stat-icon { background: $signal; color: #fff; }
+    &--ok { border-color: rgba($ok, 0.18); background: $ok-wash; }
+    &--ok .ev__lhead-stat-icon { color: $ok; }
+    &--ok b { color: $ok; }
+
+    &--bad { border-color: rgba($danger, 0.16); background: $danger-wash; }
+    &--bad .ev__lhead-stat-icon { color: $danger; }
+    &--bad b { color: $danger; }
+
+    &--signal { border-color: rgba($signal, 0.2); background: $wash; }
+    &--signal .ev__lhead-stat-icon { color: $signal; }
     &--signal b { color: $signal; }
   }
   &__lhead-stat-icon {
@@ -3665,7 +3674,8 @@ $ev-base-font: 0.8125rem;
     border-radius: 8px;
     display: grid;
     place-items: center;
-    background: $paper;
+    background: $card;
+    box-shadow: 0 1px 2px rgba($ink, 0.06);
     color: $ink-2;
   }
   &__lhead-stat-text {
