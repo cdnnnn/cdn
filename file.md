@@ -2542,11 +2542,21 @@ $ev-base-font: 0.8125rem;
     border-radius: 0;
     box-shadow: none;
   }
+  // like the Datasets detail pane, the working area sits on the page tint
+  // while the rail stays white
   &__stage {
     border: 0;
     border-radius: 0;
     box-shadow: none;
+    background: $paper;
   }
+  // containers that used the tint to stand out on white now flip to white
+  // so they still read as cards on the tinted working area
+  &__stage &__hprev,
+  &__stage &__lhead--rich,
+  &__stage &__asetup,
+  &__stage &__settings,
+  &__stage &__table-wrap { background: $card; }
   &__stage-head { padding: 26px 30px 18px; }
   &__stage-body { padding: 22px 30px 26px; }
   &__footer { padding: 16px 30px; }
