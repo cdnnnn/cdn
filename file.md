@@ -2738,8 +2738,9 @@ export default function NewEvaluation() {
                 <span className={`${styles.ev__dot} ${on ? styles['ev__dot--on'] : ''}`}>
                   {on && <Check size={10} strokeWidth={3.5} />}
                 </span>
-                {on ? u : `${u}: not covered`}
+                {u}
               </div>
+              <span className={styles['ev__panel-state']}>{on ? 'Covered' : 'Not covered'}</span>
             </div>
           );
         })}
@@ -5053,6 +5054,10 @@ export default function NewEvaluation() {
     </div>
   );
 }
+
+
+
+
 
 
 
@@ -9077,6 +9082,94 @@ $ev-base-font: 0.8125rem;
   &__form &__toolbar-refresh { margin-left: 0; }
   &__panel &__toolbar-search { flex: none; max-width: none; }
   &__panel-req { font-size: 0.9231em; font-weight: 700; color: $danger; }
+
+  // ---- side panels, clean pass ---------------------------------------------
+  // (Retries and timeout / Scorecard coverage / Who judges.) One white
+  // surface with a single border. Inside it nothing is boxed twice: lists
+  // are plain rows split by hairlines, controls use one thin border, and
+  // colour is kept for state (selected, healthy, required).
+  &__panel { gap: 14px; padding: 20px; background: $card; }
+  &__panel--pinned { padding: 0; gap: 0; }
+  &__panel-fixed { gap: 14px; padding: 20px; background: $card; border-bottom-color: $line-2; }
+  &__panel-scroll { gap: 6px; padding: 18px 20px 20px; }
+  &__panel-title { font-size: 1.0769em; font-weight: 700; letter-spacing: -0.005em; }
+  &__panel-sub { margin-top: -10px; }
+  &__panel-note { color: $ink-3; }
+
+  // segmented control: grey track, white thumb
+  &__panel &__segctl--full { padding: 3px; border: 0; background: $paper; }
+  &__panel &__segbtn { padding: 7px 12px; color: $ink-2; }
+  &__panel &__segbtn--on {
+    background: $card;
+    color: $ink;
+    box-shadow: 0 1px 2px rgba($ink, 0.12);
+    &:hover { color: $ink; }
+  }
+
+  // steppers: one thin border, no filled buttons or inner dividers
+  &__panel &__stepfield-label { font-weight: 500; svg { color: $ink-3; } }
+  &__panel &__stepper {
+    height: 36px;
+    border-width: 1px;
+    border-radius: 8px;
+
+    button { background: transparent; color: $ink-3; }
+    input { border-left: 0; border-right: 0; }
+  }
+
+  // selected models: rows, not cards
+  &__panel &__panel-list { gap: 0; }
+  &__panel &__pm {
+    border: 0;
+    border-bottom: 1px solid $line-2;
+    border-radius: 0;
+    background: transparent;
+    overflow: visible;
+
+    &:last-child { border-bottom: 0; }
+  }
+  &__panel &__pm-head { padding: 11px 0; }
+  &__panel &__pm-name { font-weight: 600; small { color: $ink-3; } }
+  &__panel &__pm-body { padding: 0 0 14px 18px; border-top: 0; background: transparent; }
+  &__panel-x {
+    width: 24px;
+    height: 24px;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border-radius: 6px;
+    color: $ink-3;
+    transition: background 0.12s ease, color 0.12s ease;
+
+    &:hover { background: $paper; color: $ink; }
+  }
+
+  // coverage: rows with the state at the end
+  &__panel &__panel-item {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding: 11px 0;
+    border: 0;
+    border-bottom: 1px solid $line-2;
+    border-radius: 0;
+    background: transparent;
+
+    &:last-child { border-bottom: 0; }
+    &--off { color: $ink-2; }
+  }
+  &__panel-state { font-size: 0.8846em; font-weight: 600; color: $ok; }
+  &__panel-item--off &__panel-state { font-weight: 500; color: $ink-3; }
+  &__panel-stats { margin-top: 0; padding-top: 14px; border-top-color: $line-2; gap: 8px; }
+
+  // judge cards: thin border, no glow
+  &__panel &__jcard {
+    border-width: 1px;
+    border-radius: 10px;
+    &:hover { box-shadow: none; }
+    &--on { box-shadow: none; }
+  }
+  &__panel &__jcard-stats { border-top-color: $line-2; }
 
   &__frow {
     display: grid;
