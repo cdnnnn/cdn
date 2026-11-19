@@ -4122,6 +4122,47 @@ $ev-base-font: 0.8125rem;
   &__panel-item--off &__panel-state { background: $paper; color: $ink-2; }
   &__panel-stats { margin-top: 0; padding-top: 14px; border-top-color: $line; gap: 8px; }
 
+  // ---- two-pane steps (Models / Test Suite / Metrics) ----------------------
+  // Same structure as the Datasets detail split (&__detail-scroll--split
+  // with &__detail-col and &__detail-col--rag): the step fills the working
+  // area edge to edge, each column scrolls on its own with its own padding,
+  // and the side column is a flush pane — a left border and its own
+  // background, no rounded card.
+  &__split,
+  &__suite {
+    margin: 0 -30px -26px;
+    grid-template-columns: minmax(0, 1fr) minmax(340px, 440px);
+    gap: 0;
+
+    // flush under the step header when nothing sits above it
+    &:first-child { margin-top: -22px; }
+    // otherwise (tabs or a field above) a rule closes off what's above
+    &:not(:first-child) { margin-top: 16px; border-top: 1px solid $line; }
+  }
+
+  // main column
+  &__split-main { padding: 26px 30px 0; }
+  &__split &__models-scroll { margin: 0 -6px; padding: 4px 6px 26px; }
+  &__split > &__form--scroll,
+  &__suite-scroll { margin: 0; padding: 26px 30px 40px; }
+
+  // side column
+  &__split > &__panel,
+  &__suite > &__panel,
+  &__suite > &__rail {
+    border: 0;
+    border-left: 1px solid $line;
+    border-radius: 0;
+    box-shadow: none;
+    background: $card;
+  }
+  &__split > &__panel:not(&__panel--pinned),
+  &__suite > &__panel:not(&__panel--pinned) { padding: 26px 24px 40px; }
+  &__split > &__panel &__panel-fixed,
+  &__suite > &__panel &__panel-fixed { padding: 26px 24px 20px; }
+  &__split > &__panel &__panel-scroll,
+  &__suite > &__panel &__panel-scroll { padding: 20px 24px 40px; }
+
   // judge cards: thin border, no glow
   &__panel &__jcard {
     border-width: 1px;
@@ -4798,6 +4839,8 @@ $ev-base-font: 0.8125rem;
   .ev__samples-instruction-row { grid-template-columns: 1fr; }
   .ev__split, .ev__frow, .ev__choice-row, .ev__namegrid { grid-template-columns: 1fr; }
   .ev__hq-note { display: none; }
+  // stacked: the side pane drops under the main column
+  .ev__split > .ev__panel, .ev__suite > .ev__panel, .ev__suite > .ev__rail { border-left: 0; border-top: 1px solid $line; }
   .ev__lhead-stats { grid-auto-flow: row; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ev__lhead-progress-note { display: none; }
   .ev__asetup-grid { grid-template-columns: 1fr; }
