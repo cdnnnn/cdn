@@ -3663,14 +3663,43 @@ export default function NewEvaluation() {
                               title: 'Test suites',
                               meta: (
                                 <>
-                                  {filteredDatasets.length} shown ·{' '}
-                                  <b>{isHarness ? draft.harnessSuiteIds.length : draft.dataset ? 1 : 0}</b> selected
+                                  Showing {filteredDatasets.length} of {isHarness ? harnessSuites.length : datasets.length}{' '}
+                                  {isHarness ? 'suites. Pick one or more.' : 'suites. Pick one.'}
                                 </>
                               ),
+                              rich: {
+                                filtersLabel: isHarness ? 'Use case' : 'Source',
+                                stats: isHarness
+                                  ? [
+                                      { label: 'Suites', value: harnessSuites.length, icon: <Database size={14} /> },
+                                      {
+                                        label: 'Questions',
+                                        value: harnessSuites.reduce((n, d) => n + (d.question_count ?? 0), 0),
+                                        icon: <FileText size={14} />,
+                                      },
+                                      { label: 'Use cases', value: harnessUseCases.length, icon: <Layers size={14} /> },
+                                      {
+                                        label: 'Selected',
+                                        value: draft.harnessSuiteIds.length,
+                                        tone: 'signal',
+                                        icon: <Check size={14} strokeWidth={3} />,
+                                      },
+                                    ]
+                                  : [
+                                      { label: 'Suites', value: datasetTypeCounts.all, icon: <Database size={14} /> },
+                                      { label: 'Custom', value: datasetTypeCounts.custom, icon: <Upload size={14} /> },
+                                      { label: 'Deepeval', value: datasetTypeCounts.deepeval, icon: <FileText size={14} /> },
+                                      {
+                                        label: 'Selected',
+                                        value: draft.dataset ? 1 : 0,
+                                        tone: 'signal',
+                                        icon: <Check size={14} strokeWidth={3} />,
+                                      },
+                                    ],
+                              },
                               count: filteredDatasets.length,
                               search: { placeholder: 'Search test suites', value: datasetSearch, onChange: setDatasetSearch },
                               refresh: { onClick: refreshDatasets, busy: datasetsRefreshing, title: 'Refresh test suites' },
-                              sticky: true,
                               // Harness mode filters by use case; every other mode keeps
                               // the All / Custom / Deepeval chips.
                               filters: isHarness ? (
@@ -5042,6 +5071,7 @@ export default function NewEvaluation() {
     </div>
   );
 }
+
 
 
 
@@ -9063,8 +9093,8 @@ $ev-base-font: 0.8125rem;
     &:hover { border-color: $signal; color: $signal; background: $wash; }
   }
 
-  // the Subgroups rail matches the side panel: rounded, bordered on all sides
-  &__rail { border: 1px solid $line; border-radius: 14px; }
+  // the Subgroups rail matches the side panel: white, rounded, bordered
+  &__rail { border: 1px solid $line; border-radius: 14px; background: $card; box-shadow: 0 1px 2px rgba($ink, 0.05); }
 
   // ---- sectioned form rows (Scoring step) --------------------------------
   &__form { display: flex; flex-direction: column; }
