@@ -1,5 +1,6 @@
 //styles.css
-/* SLM-Finetuning · data generation — clean light theme */
+/* SLM Studio · data generation — clean light theme */
+@import "./fonts.css";
 
 /* ================================================================== tokens */
 :root {
@@ -71,10 +72,15 @@
   --shadow-lg: 0 24px 48px -12px rgba(16, 24, 40, .18);
   --ring: 0 0 0 3px rgba(var(--accent-rgb), .16);
 
-  --font: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  /* ── FONTS: main text in Plus Jakarta Sans, IDs / numbers / file names / code in JetBrains Mono (--mono).
+     To go back to the system font, change --font to var(--font-system). ── */
+  --font-jakarta: "Plus Jakarta Sans", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-system: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font: var(--font-jakarta);
   --mono: "JetBrains Mono", "Cascadia Mono", "SFMono-Regular", Consolas, ui-monospace, monospace;
 
   font-family: var(--font);
+  letter-spacing: .005em;
   color: var(--ink);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
@@ -96,7 +102,8 @@ a { color: var(--accent); }
 .grow { flex: 1; }
 .muted { color: var(--muted); }
 .small { font-size: 13px; }
-.mono { font-family: var(--mono); font-size: 13.5px; }
+.mono { font-family: var(--mono); font-size: 13px; letter-spacing: -.01em; }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .ico { flex: none; display: block; }
 .err-t { color: var(--red); }
@@ -451,7 +458,7 @@ select.compact { width: auto; height: 34px; font-size: 14px; }
 .stat-ico.blue { background: var(--accent-50); color: var(--accent); } .stat-ico.green { background: var(--green-50); color: var(--green-600); }
 .stat-ico.violet { background: var(--violet-50); color: var(--violet); } .stat-ico.orange { background: var(--orange-50); color: var(--orange); }
 .stat-b { display: grid; gap: 2px; min-width: 0; flex: 1; align-content: start; }
-.stat-b > b { font-size: 28px; font-weight: 700; letter-spacing: -.6px; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.stat-b > b { font-size: 28px; font-weight: 700; letter-spacing: -.3px; line-height: 1.15; font-variant-numeric: tabular-nums; }
 .stat-b > span { font-size: 14px; color: var(--ink-2); font-weight: 500; }
 .stat-b > small { font-size: 13px; color: var(--muted); }
 .stat-b .mix { margin-top: 8px; }
@@ -627,6 +634,184 @@ div.md { background: var(--surface-2); border: 1px solid var(--line); border-rad
 
 
 
+
+
+
+//fonts.css
+/* Fonts bundled locally (no CDN, no npm install needed).
+   Plus Jakarta Sans: main text, weights 200–800. Licence: assets/fonts/PlusJakartaSans-OFL.txt
+   JetBrains Mono: IDs, numbers, file names, code, weights 100–800. Licence: assets/fonts/JetBrainsMono-OFL.txt */
+
+/* jetbrains-mono-latin-ext-wght-normal */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url(./assets/fonts/jetbrains-mono-latin-ext-wght-normal.woff2) format('woff2-variations');
+  unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+
+/* jetbrains-mono-latin-wght-normal */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url(./assets/fonts/jetbrains-mono-latin-wght-normal.woff2) format('woff2-variations');
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+
+/* plus-jakarta-sans-latin-ext-wght-normal */
+@font-face {
+  font-family: 'Plus Jakarta Sans';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 200 800;
+  src: url(./assets/fonts/plus-jakarta-sans-latin-ext-wght-normal.woff2) format('woff2-variations');
+  unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+
+/* plus-jakarta-sans-latin-wght-normal */
+@font-face {
+  font-family: 'Plus Jakarta Sans';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 200 800;
+  src: url(./assets/fonts/plus-jakarta-sans-latin-wght-normal.woff2) format('woff2-variations');
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//landing.css
+/* Landing page and logo placeholder. Uses the tokens from styles.css. */
+
+/* ---- logo (the file is public/assets/logo.svg) */
+.logo { display: inline-flex; align-items: center; gap: 11px; min-width: 0; color: inherit; text-decoration: none; }
+.logo-img { display: block; flex: none; width: auto; max-width: 200px; object-fit: contain; }
+.logo-text { display: grid; min-width: 0; line-height: 1.25; }
+.logo-text b { font-size: 16px; font-weight: 650; letter-spacing: -.2px; color: var(--ink); }
+.logo-text small { font-size: 13px; color: var(--muted); }
+
+/* ---- page */
+.landing { height: 100vh; overflow: auto; background: var(--surface); scroll-behavior: smooth; }
+.lp-wrap { max-width: 1160px; margin: 0 auto; padding: 0 32px; }
+.lp-eyebrow { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 600; color: var(--accent-600); }
+.btn.lg { height: 44px; padding: 0 20px; font-size: 15px; border-radius: 10px; }
+
+/* nav */
+.lp-nav { position: sticky; top: 0; z-index: 10; background: rgba(255, 255, 255, .85); backdrop-filter: saturate(1.4) blur(10px); border-bottom: 1px solid var(--line-2); }
+.lp-nav-in { display: flex; align-items: center; gap: 28px; height: 68px; }
+.lp-links { display: flex; gap: 4px; margin-left: auto; }
+.lp-links a { padding: 7px 12px; border-radius: 8px; color: var(--ink-2); text-decoration: none; font-weight: 500; font-size: 15px; }
+.lp-links a:hover { background: var(--surface-3); color: var(--ink); }
+
+/* hero */
+.lp-hero { position: relative; overflow: hidden; padding: 84px 0 96px;
+  background: radial-gradient(900px 420px at 85% 10%, rgba(var(--grad-a-rgb), .12), transparent 70%),
+              radial-gradient(700px 380px at 0% 100%, rgba(var(--grad-b-rgb), .08), transparent 70%), var(--surface); }
+.lp-hero::before { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .5;
+  background-image: linear-gradient(var(--line-2) 1px, transparent 1px), linear-gradient(90deg, var(--line-2) 1px, transparent 1px);
+  background-size: 44px 44px; mask-image: radial-gradient(ellipse at 50% 0%, #000 30%, transparent 75%); }
+.lp-hero-in { position: relative; display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 56px; align-items: center; }
+.lp-hero-text .lp-eyebrow { padding: 5px 12px; border-radius: 99px; background: var(--accent-50); border: 1px solid var(--accent-100); }
+.lp-hero h1 { margin: 20px 0 16px; font-size: 54px; line-height: 1.08; letter-spacing: -.7px; font-weight: 700; }
+.lp-hero h1 em { font-style: normal; background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.lp-hero p { margin: 0; font-size: 18.5px; line-height: 1.6; color: var(--muted); max-width: 520px; }
+.lp-cta { display: flex; gap: 10px; margin-top: 32px; flex-wrap: wrap; }
+
+/* hero preview */
+.lp-preview { position: relative; padding: 10px 28px 36px 0; }
+.pv-card { background: var(--surface); border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 30px 60px -20px rgba(16, 24, 40, .22), 0 0 0 6px rgba(255, 255, 255, .6);
+  padding: 16px 18px 18px; display: grid; gap: 14px; }
+.pv-head { display: flex; align-items: center; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line-2); }
+.pv-dots { display: inline-flex; gap: 5px; } .pv-dots i { width: 9px; height: 9px; border-radius: 50%; background: var(--line); }
+.pv-files { display: flex; gap: 8px; flex-wrap: wrap; }
+.pv-file { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px 6px 6px; border: 1px solid var(--line); border-radius: 10px; font-size: 13.5px; font-weight: 500; background: var(--surface-2); }
+.pv-arrow { display: grid; place-items: center; color: var(--accent-400); transform: rotate(90deg); height: 16px; }
+.pv-qa { display: grid; gap: 8px; }
+.pv-q, .pv-a { padding: 10px 12px; border-radius: 4px 12px 12px 12px; font-size: 14px; line-height: 1.5; }
+.pv-q small, .pv-a small { display: block; font-size: 11px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; margin-bottom: 2px; }
+.pv-q { background: var(--surface-3); font-weight: 500; } .pv-q small { color: var(--faint); }
+.pv-a { background: var(--accent-50); color: var(--accent-ink); box-shadow: inset 0 0 0 1px var(--accent-100); } .pv-a small { color: var(--accent); }
+.pv-scores { display: flex; gap: 6px; flex-wrap: wrap; }
+.pv-stat { position: absolute; right: 0; bottom: 0; display: flex; gap: 10px; align-items: center; background: var(--surface); border: 1px solid var(--line);
+  border-radius: 14px; padding: 10px 16px 10px 10px; box-shadow: var(--shadow-lg); }
+.pv-stat b { display: block; font-size: 19.5px; letter-spacing: -.3px; } .pv-stat small { color: var(--muted); font-size: 13px; }
+
+/* sections */
+.lp-ico { width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center; background: var(--accent-50); color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent-100); flex: none; }
+.lp-ico.green { background: var(--green-50); color: var(--green-600); box-shadow: inset 0 0 0 1px #d1f2e4; }
+.lp-sec { padding: 88px 0; }
+.lp-sec.alt { background: var(--bg); border-top: 1px solid var(--line-2); border-bottom: 1px solid var(--line-2); }
+.lp-sec-h { text-align: center; margin-bottom: 44px; }
+.lp-sec-h h2 { margin: 8px 0 0; font-size: 34.5px; letter-spacing: -.2px; font-weight: 700; }
+.lp-sec h3 { margin: 0 0 6px; font-size: 17.5px; font-weight: 650; letter-spacing: -.2px; }
+.lp-sec p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.6; }
+
+.lp-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+.lp-step { padding: 24px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow); }
+.lp-step-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+.lp-step-n { font-size: 14px; font-weight: 700; color: var(--faint); width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; border: 1px solid var(--line); }
+
+.lp-features { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.lp-feature { display: flex; gap: 14px; padding: 22px; border-radius: 16px; background: var(--surface); border: 1px solid var(--line); transition: box-shadow .15s, border-color .15s; }
+.lp-feature:hover { border-color: var(--line-strong); box-shadow: var(--shadow-md); }
+
+.lp-band { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 40px 44px; border-radius: 20px;
+  background: linear-gradient(120deg, var(--tint-1), var(--tint-2) 60%, var(--surface)); border: 1px solid var(--accent-100); }
+.lp-band h2 { margin: 0 0 6px; font-size: 28px; letter-spacing: -.3px; font-weight: 700; }
+
+.lp-foot { border-top: 1px solid var(--line-2); padding: 26px 0; }
+.lp-foot-in { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+
+@media (max-width: 960px) {
+  .lp-hero-in { grid-template-columns: minmax(0, 1fr); }
+  .lp-hero h1 { font-size: 41px; }
+  .lp-steps, .lp-features { grid-template-columns: minmax(0, 1fr); }
+  .lp-band { flex-direction: column; align-items: flex-start; }
+  .lp-links { display: none; }
+  .lp-nav-in .btn { margin-left: auto; }
+}
+
+/* JetBrains Mono for file names and numbers in the preview */
+.pv-file, .pv-stat b { font-family: var(--mono); letter-spacing: -.02em; }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 //generate.css
 /* Generate Dataset page. Uses the tokens from styles.css (coral theme). */
 
@@ -657,7 +842,7 @@ div.md { background: var(--surface-2); border: 1px solid var(--line); border-rad
 .gen-hd { display: flex; gap: 16px; align-items: flex-start; padding: 22px 26px 18px; border-bottom: 1px solid var(--line-2); }
 .gen-hd-ico { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; flex: none; background: var(--surface-2); color: var(--ink-2);
   border: 1px solid var(--line); }
-.gen-hd h2 { margin: 2px 0 4px; font-size: 22px; font-weight: 700; letter-spacing: -.4px; }
+.gen-hd h2 { margin: 2px 0 4px; font-size: 22px; font-weight: 700; letter-spacing: -.2px; }
 .gen-hd p { margin: 0; color: var(--muted); font-size: 14.5px; max-width: 640px; }
 .gen-bd { padding: 22px 26px 26px; display: grid; gap: 26px; align-content: start; }
 .gen-ft { display: flex; align-items: center; gap: 10px; padding: 14px 26px; border-top: 1px solid var(--line-2); background: var(--surface-2);
@@ -805,7 +990,7 @@ div.md { background: var(--surface-2); border: 1px solid var(--line); border-rad
 @keyframes spin { to { transform: rotate(360deg); } }
 .run-title .crumb { font-size: 12.5px; color: var(--muted); }
 .run-title .mono { background: var(--surface-3); padding: 1px 6px; border-radius: 5px; }
-.run-title h2 { margin: 4px 0 2px; font-size: 24px; font-weight: 700; letter-spacing: -.5px; }
+.run-title h2 { margin: 4px 0 2px; font-size: 24px; font-weight: 700; letter-spacing: -.25px; }
 .run-title p { margin: 0; font-size: 15px; color: var(--ink-2); }
 .run-meter { display: grid; gap: 8px; }
 .run-bar { height: 12px; border-radius: 99px; background: rgba(17, 24, 39, .06); overflow: hidden; }
@@ -858,244 +1043,6 @@ div.md { background: var(--surface-2); border: 1px solid var(--line); border-rad
 .gen .chip.on .ico { color: var(--accent); }
 .gen .seg button.on { color: var(--ink); }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//GeneratePage.jsx
-// Generate Dataset page: a guided, step-by-step setup with a live summary, and a progress view once a job runs.
-// Same API as the original UI (/api/datagen); the form <-> JobRequest logic is in ../model.js.
-import { useCallback, useEffect, useRef, useState } from "react";
-import { API, api, post, upload } from "../api.js";
-import { buildRequest, defaultForm, endpointsForTest, formFromRequest, visionUsed } from "../model.js";
-import { Icon, useToast } from "../ui.jsx";
-import { AdvancedStep, DocumentsStep, MixStep, ModelsStep, QuestionsStep } from "./steps.jsx";
-import Summary from "./Summary.jsx";
-import RunProgress from "./RunProgress.jsx";
-import "./generate.css";
-
-export const STEPS = [
-  { key: "documents", title: "Documents", icon: "doc", lead: "Upload the files the model should learn from, or point to a folder on the server." },
-  { key: "models", title: "Models", icon: "server", lead: "The teacher model writes and judges the Q&A pairs; the vision model reads images. Both must already be running." },
-  { key: "questions", title: "Questions", icon: "chat", lead: "Choose which kinds of questions to ask, how long the answers are, and how the dataset is split." },
-  { key: "mix", title: "Training mix", icon: "mix", lead: "Add extra rows next to the document Q&A, so the model stays helpful and well-behaved." },
-  { key: "advanced", title: "Advanced", icon: "gear", lead: "Everything here has sensible defaults. Change only what you need." },
-];
-
-const jobFromUrl = () => new URL(location.href).searchParams.get("job");
-
-export default function GeneratePage({ openResults }) {
-  const toast = useToast();
-  const [defaults, setDefaults] = useState(null);
-  const [form, setForm] = useState(() => defaultForm(null));
-  const [files, setFiles] = useState([]);
-  const [step, setStep] = useState(0);
-  const [ep, setEp] = useState({ state: "idle" });
-  const [models, setModels] = useState({ teacher: [], vision: [] });
-  const [jobId, setJobId] = useState(jobFromUrl);
-  const [job, setJob] = useState(null);
-  const [progress, setProgress] = useState({});
-  const [starting, setStarting] = useState(false);
-  const [startErr, setStartErr] = useState("");
-  const formRef = useRef(form);
-  formRef.current = form;
-  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
-  const setIn = (group, k, v) => setForm((f) => ({ ...f, [group]: { ...f[group], [k]: v } }));
-
-  // ---- start-up: defaults, and follow a job that is already running
-  useEffect(() => {
-    (async () => {
-      let d = null;
-      try { d = await api("/defaults"); } catch (e) { toast(`API not reachable: ${e.message}`, "error"); }
-      setDefaults(d || { input_roots: [] });
-      setForm(defaultForm(d));
-      if (!jobFromUrl()) {
-        try {
-          const list = await api("/jobs");
-          const active = list.find((j) => j.status === "queued" || j.status === "running");
-          if (active) setJobId(active.id);
-        } catch { /* the toast above already says the API is down */ }
-      }
-    })();
-  }, []); // eslint-disable-line
-
-  // keep ?job= in the address bar so a refresh comes back to the same job
-  useEffect(() => {
-    const u = new URL(location.href);
-    jobId ? u.searchParams.set("job", jobId) : u.searchParams.delete("job");
-    history.replaceState(null, "", u);
-  }, [jobId]);
-
-  // ---- the selected job and its live progress (server-sent events)
-  const refreshJob = useCallback(async (id) => {
-    if (!id) return;
-    try { setJob(await api(`/jobs/${id}`)); } catch (e) { if (e.status === 404) setJobId(null); }
-  }, []);
-  useEffect(() => { setJob(null); setProgress({}); if (jobId) refreshJob(jobId); }, [jobId, refreshJob]);
-  useEffect(() => {
-    if (!jobId) return undefined;
-    const es = new EventSource(`${API}/jobs/${encodeURIComponent(jobId)}/events`);
-    let t;
-    es.onmessage = (m) => {
-      const ev = JSON.parse(m.data);
-      if (ev.type === "end") { es.close(); refreshJob(jobId); return; }
-      if (ev.type === "step_progress") setProgress((p) => ({ ...p, [ev.step]: { done: ev.done, total: ev.total } }));
-      else { clearTimeout(t); t = setTimeout(() => refreshJob(jobId), 250); }
-    };
-    return () => { clearTimeout(t); es.close(); };
-  }, [jobId, refreshJob]);
-
-  // ---- endpoints: test now, and again whenever an endpoint setting changes
-  const testSeq = useRef(0);
-  const testEndpoints = useCallback(async (f = formRef.current) => {
-    if (!f.teacherUrl.trim()) { setEp({ state: "done", message: "Enter the teacher URL.", bad: true }); return; }
-    const seq = ++testSeq.current;
-    setEp((e) => ({ ...e, state: "testing" }));
-    try {
-      const res = await post("/endpoints/test", { endpoints: endpointsForTest(f) });
-      if (seq !== testSeq.current) return;
-      const t = res.find((x) => x.role === "teacher"), v = res.find((x) => x.role === "vision");
-      setModels({ teacher: t?.models || [], vision: v?.models || [] });
-      const pick = (list, re) => list.find((m) => re.test(m)) || list[0];
-      setForm((cur) => {
-        const next = { ...cur };
-        if (t?.ok && t.models.length && !t.models.includes(cur.teacherModel)) next.teacherModel = pick(t.models, /^(?!.*(vl|vision)).*/i);
-        if (v?.ok && v.models.length && !v.models.includes(cur.visionModel)) next.visionModel = pick(v.models, /vl|vision/i);
-        return next;
-      });
-      const why = (x, role) => (x.ok ? (x.models.length ? "" : `${role}: no models served`) : `${role}: ${x.error || "not reachable"}`);
-      const problems = [why(t, "Teacher"), v ? why(v, "Vision") : visionUsed(f) ? "Vision: enter the URL, or turn vision analysis off" : ""].filter(Boolean);
-      setEp({ state: "done", teacher: t, vision: v, message: problems.join(" · "), bad: problems.length > 0 });
-    } catch (e) {
-      if (seq === testSeq.current) setEp({ state: "done", message: `Test failed: ${e.message}`, bad: true });
-    }
-  }, []);
-  const epKey = [form.teacherUrl, form.visionUrl, form.apiKey, visionUsed(form)].join("|");
-  const firstTest = useRef(true);
-  useEffect(() => {
-    if (!defaults) return undefined;
-    const t = setTimeout(() => testEndpoints(), firstTest.current ? 0 : 700);
-    firstTest.current = false;
-    return () => clearTimeout(t);
-  }, [epKey, defaults, testEndpoints]);
-
-  // ---- what is missing before a job can start
-  const folders = form.folders.split(/\n/).map((s) => s.trim()).filter(Boolean);
-  const issues = [];
-  if (!files.length && !folders.length) issues.push({ step: 0, text: "Add documents: upload files or enter a server folder." });
-  try { buildRequest(form, ["check"]); } catch (e) {
-    const s = /endpoint|vision/i.test(e.message) ? 1 : /question types|split/i.test(e.message) ? 2 : /decline|paraphrase|general/i.test(e.message) ? 3 : 4;
-    issues.push({ step: s, text: e.message });
-  }
-
-  // ---- actions
-  const startJob = async (preview) => {
-    setStartErr("");
-    if (issues.length) { setStep(issues[0].step); setStartErr(issues[0].text); return; }
-    setStarting(true);
-    try {
-      const list = [...folders];
-      if (files.length) list.unshift((await upload(files)).folder);
-      const res = await post(`/jobs${preview ? "?preview=3" : ""}`, buildRequest(form, list));
-      setFiles([]);
-      toast(`Job ${res.job_id} started${preview ? " (preview on 3 chunks)" : ""}`);
-      setJobId(res.job_id);
-    } catch (e) {
-      setStartErr(e.message);
-    } finally { setStarting(false); }
-  };
-  const cancelJob = async () => { await post(`/jobs/${jobId}/cancel`); toast("Cancel requested: the job stops after the current item"); };
-  const retryJob = async () => { await post(`/jobs/${jobId}/retry`); toast("Job re-queued: finished steps are skipped"); setProgress({}); refreshJob(jobId); };
-  const newJob = () => { setJobId(null); setStep(0); setStartErr(""); };
-  const reuseSettings = () => { if (job) { setForm(formFromRequest(job.request, defaults)); toast(`Settings of ${job.job_id} loaded`); } newJob(); };
-  const resetForm = () => { setForm(defaultForm(defaults)); toast("Settings reset to the defaults"); };
-
-  if (jobId) {
-    return <RunProgress job={job} jobId={jobId} progress={progress} onCancel={cancelJob} onRetry={retryJob}
-      onNew={newJob} onReuse={reuseSettings} openResults={openResults} />;
-  }
-
-  const stepProps = { form, set, setIn, setForm, files, setFiles, defaults, ep, models, testEndpoints, onReset: resetForm };
-  const cur = STEPS[step];
-  const status = stepStatus(form, files, folders, ep);
-  return (
-    <div className="gen">
-      <nav className="stepper" aria-label="Setup steps">
-        {STEPS.map((s, i) => {
-          const st = status[s.key];
-          return (
-            <button type="button" key={s.key} className={`stp${i === step ? " on" : ""}${st.ok ? " ok" : ""}${st.warn ? " warn" : ""}`} onClick={() => setStep(i)}>
-              <span className="stp-n">{st.ok && i !== step ? <Icon name="check" size={14} stroke={2.6} /> : i + 1}</span>
-              <span className="stp-t"><b>{s.title}</b><small>{st.note}</small></span>
-            </button>
-          );
-        })}
-      </nav>
-
-      <div className="gen-grid">
-        <section className="card gen-main">
-          <header className="gen-hd">
-            <span className="gen-hd-ico"><Icon name={cur.icon} size={20} /></span>
-            <div><span className="step-n">Step {step + 1} of {STEPS.length}</span><h2>{cur.title}</h2><p>{cur.lead}</p></div>
-          </header>
-          <div className="gen-bd">
-            {cur.key === "documents" && <DocumentsStep {...stepProps} />}
-            {cur.key === "models" && <ModelsStep {...stepProps} />}
-            {cur.key === "questions" && <QuestionsStep {...stepProps} />}
-            {cur.key === "mix" && <MixStep {...stepProps} />}
-            {cur.key === "advanced" && <AdvancedStep {...stepProps} />}
-          </div>
-          <footer className="gen-ft">
-            <button type="button" className="btn ghost" disabled={step === 0} onClick={() => setStep(step - 1)}><Icon name="back" size={15} />Back</button>
-            <div className="grow" />
-            {step < STEPS.length - 1
-              ? <button type="button" className="btn dark" onClick={() => setStep(step + 1)}>Next: {STEPS[step + 1].title}<Icon name="arrow" size={15} /></button>
-              : <button type="button" className="btn primary" disabled={starting} onClick={() => startJob(false)}><Icon name="play" size={13} />{starting ? "Starting…" : "Start job"}</button>}
-          </footer>
-        </section>
-
-        <Summary form={form} files={files} folders={folders} ep={ep} issues={issues} starting={starting} startErr={startErr}
-          onStart={startJob} goStep={setStep} />
-      </div>
-    </div>
-  );
-}
-
-function stepStatus(form, files, folders, ep) {
-  const n = files.length + folders.length;
-  const split = form.split.reduce((a, b) => a + (Number(b) || 0), 0);
-  const extras = [form.para.enabled, form.decline.enabled, form.general.enabled].filter(Boolean).length;
-  const epOk = ep.state === "done" && !ep.bad;
-  return {
-    documents: n ? { ok: true, note: [files.length && `${files.length} file${files.length > 1 ? "s" : ""}`, folders.length && `${folders.length} folder${folders.length > 1 ? "s" : ""}`].filter(Boolean).join(" · ") } : { note: "Add your files" },
-    models: ep.state === "testing" ? { note: "Testing…" } : epOk ? { ok: true, note: "Endpoints online" } : { warn: ep.state === "done", note: ep.state === "done" ? "Check the endpoints" : "Not tested yet" },
-    questions: form.types.length && split === 100 ? { ok: true, note: `${form.types.length} question type${form.types.length > 1 ? "s" : ""}` } : { warn: true, note: !form.types.length ? "Pick a question type" : "Split must total 100" },
-    mix: { ok: true, note: extras ? `${extras} extra${extras > 1 ? "s" : ""} on` : "Document Q&A only" },
-    advanced: { ok: false, note: "Optional" },
-  };
-}
+/* ---- JetBrains Mono for IDs, numbers and file names */
+.fcard-n, .fcard-n small, .tl-time, .run-meta b, .mixleg b, .split4 input, .sum-ep b, .run-title .mono { font-family: var(--mono); letter-spacing: -.02em; }
+.fcard-n { font-size: 13.5px; font-weight: 500; }
