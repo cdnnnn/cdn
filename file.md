@@ -1,4 +1,3 @@
-//styles.css
 /* SLM Studio · data generation — clean light theme */
 
 /* ================================================================== tokens */
@@ -71,12 +70,12 @@
   --shadow-lg: 0 24px 48px -12px rgba(16, 24, 40, .18);
   --ring: 0 0 0 3px rgba(var(--accent-rgb), .16);
 
-  /* ── FONTS: main text in Plus Jakarta Sans, IDs / numbers / file names / code in JetBrains Mono (--mono).
-     To go back to the system font, change --font to var(--font-system). ── */
-  --font-jakarta: "Plus Jakarta Sans Variable", "Plus Jakarta Sans", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
-  --font-system: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
-  --font: var(--font-jakarta);
-  --mono: "JetBrains Mono Variable", "JetBrains Mono", "Cascadia Mono", "SFMono-Regular", Consolas, ui-monospace, monospace;
+  /* ── FONTS: the Windows system font (Segoe UI), with system fallbacks on other platforms.
+     --font-jakarta is kept for reference; to try it again set --font to var(--font-jakarta). ── */
+  --font-system: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-jakarta: "Plus Jakarta Sans Variable", "Plus Jakarta Sans", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font: var(--font-system);
+  --mono: "Cascadia Mono", Consolas, "SFMono-Regular", ui-monospace, monospace;
 
   font-family: var(--font);
   letter-spacing: .005em;
@@ -611,118 +610,3 @@ div.md { background: var(--surface-2); border: 1px solid var(--line); border-rad
 @media (min-width: 1800px) {
   html { --zoom: 1.07; zoom: var(--zoom); --vh: calc(1vh / var(--zoom)); --vw: calc(1vw / var(--zoom)); }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//landing.css
-/* Landing page and logo placeholder. Uses the tokens from styles.css. */
-
-/* ---- logo (the file is public/assets/logo.svg) */
-.logo { display: inline-flex; align-items: center; gap: 11px; min-width: 0; color: inherit; text-decoration: none; }
-.logo-img { display: block; flex: none; width: auto; max-width: 200px; object-fit: contain; }
-.logo-text { display: grid; min-width: 0; line-height: 1.25; }
-.logo-text b { font-size: 16px; font-weight: 650; letter-spacing: -.2px; color: var(--ink); }
-.logo-text small { font-size: 13px; color: var(--muted); }
-
-/* ---- page */
-.landing { height: calc(100 * var(--vh, 1vh)); overflow: auto; background: var(--surface); scroll-behavior: smooth; }
-.lp-wrap { max-width: 1160px; margin: 0 auto; padding: 0 32px; }
-.lp-eyebrow { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 600; color: var(--accent-600); }
-.btn.lg { height: 44px; padding: 0 20px; font-size: 15px; border-radius: 10px; }
-
-/* nav */
-.lp-nav { position: sticky; top: 0; z-index: 10; background: rgba(255, 255, 255, .85); backdrop-filter: saturate(1.4) blur(10px); border-bottom: 1px solid var(--line-2); }
-.lp-nav-in { display: flex; align-items: center; gap: 28px; height: 68px; }
-.lp-links { display: flex; gap: 4px; margin-left: auto; }
-.lp-links a { padding: 7px 12px; border-radius: 8px; color: var(--ink-2); text-decoration: none; font-weight: 500; font-size: 15px; }
-.lp-links a:hover { background: var(--surface-3); color: var(--ink); }
-
-/* hero */
-.lp-hero { position: relative; overflow: hidden; padding: 84px 0 96px;
-  background: radial-gradient(900px 420px at 85% 10%, rgba(var(--grad-a-rgb), .12), transparent 70%),
-              radial-gradient(700px 380px at 0% 100%, rgba(var(--grad-b-rgb), .08), transparent 70%), var(--surface); }
-.lp-hero::before { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .5;
-  background-image: linear-gradient(var(--line-2) 1px, transparent 1px), linear-gradient(90deg, var(--line-2) 1px, transparent 1px);
-  background-size: 44px 44px; mask-image: radial-gradient(ellipse at 50% 0%, #000 30%, transparent 75%); }
-.lp-hero-in { position: relative; display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 56px; align-items: center; }
-.lp-hero-text .lp-eyebrow { padding: 5px 12px; border-radius: 99px; background: var(--accent-50); border: 1px solid var(--accent-100); }
-.lp-hero h1 { margin: 20px 0 16px; font-size: 54px; line-height: 1.08; letter-spacing: -.7px; font-weight: 700; }
-.lp-hero h1 em { font-style: normal; background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
-.lp-hero p { margin: 0; font-size: 18.5px; line-height: 1.6; color: var(--muted); max-width: 520px; }
-.lp-cta { display: flex; gap: 10px; margin-top: 32px; flex-wrap: wrap; }
-
-/* hero preview */
-.lp-preview { position: relative; padding: 10px 28px 36px 0; }
-.pv-card { background: var(--surface); border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 30px 60px -20px rgba(16, 24, 40, .22), 0 0 0 6px rgba(255, 255, 255, .6);
-  padding: 16px 18px 18px; display: grid; gap: 14px; }
-.pv-head { display: flex; align-items: center; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line-2); }
-.pv-dots { display: inline-flex; gap: 5px; } .pv-dots i { width: 9px; height: 9px; border-radius: 50%; background: var(--line); }
-.pv-files { display: flex; gap: 8px; flex-wrap: wrap; }
-.pv-file { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px 6px 6px; border: 1px solid var(--line); border-radius: 10px; font-size: 13.5px; font-weight: 500; background: var(--surface-2); }
-.pv-arrow { display: grid; place-items: center; color: var(--accent-400); transform: rotate(90deg); height: 16px; }
-.pv-qa { display: grid; gap: 8px; }
-.pv-q, .pv-a { padding: 10px 12px; border-radius: 4px 12px 12px 12px; font-size: 14px; line-height: 1.5; }
-.pv-q small, .pv-a small { display: block; font-size: 11px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; margin-bottom: 2px; }
-.pv-q { background: var(--surface-3); font-weight: 500; } .pv-q small { color: var(--faint); }
-.pv-a { background: var(--accent-50); color: var(--accent-ink); box-shadow: inset 0 0 0 1px var(--accent-100); } .pv-a small { color: var(--accent); }
-.pv-scores { display: flex; gap: 6px; flex-wrap: wrap; }
-.pv-stat { position: absolute; right: 0; bottom: 0; display: flex; gap: 10px; align-items: center; background: var(--surface); border: 1px solid var(--line);
-  border-radius: 14px; padding: 10px 16px 10px 10px; box-shadow: var(--shadow-lg); }
-.pv-stat b { display: block; font-size: 19.5px; letter-spacing: -.3px; } .pv-stat small { color: var(--muted); font-size: 13px; }
-
-/* sections */
-.lp-ico { width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center; background: var(--accent-50); color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent-100); flex: none; }
-.lp-ico.green { background: var(--green-50); color: var(--green-600); box-shadow: inset 0 0 0 1px #d1f2e4; }
-.lp-sec { padding: 88px 0; }
-.lp-sec.alt { background: var(--bg); border-top: 1px solid var(--line-2); border-bottom: 1px solid var(--line-2); }
-.lp-sec-h { text-align: center; margin-bottom: 44px; }
-.lp-sec-h h2 { margin: 8px 0 0; font-size: 34.5px; letter-spacing: -.2px; font-weight: 700; }
-.lp-sec h3 { margin: 0 0 6px; font-size: 17.5px; font-weight: 650; letter-spacing: -.2px; }
-.lp-sec p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.6; }
-
-.lp-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
-.lp-step { padding: 24px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow); }
-.lp-step-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
-.lp-step-n { font-size: 14px; font-weight: 700; color: var(--faint); width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; border: 1px solid var(--line); }
-
-.lp-features { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
-.lp-feature { display: flex; gap: 14px; padding: 22px; border-radius: 16px; background: var(--surface); border: 1px solid var(--line); transition: box-shadow .15s, border-color .15s; }
-.lp-feature:hover { border-color: var(--line-strong); box-shadow: var(--shadow-md); }
-
-.lp-band { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 40px 44px; border-radius: 20px;
-  background: linear-gradient(120deg, var(--tint-1), var(--tint-2) 60%, var(--surface)); border: 1px solid var(--accent-100); }
-.lp-band h2 { margin: 0 0 6px; font-size: 28px; letter-spacing: -.3px; font-weight: 700; }
-
-.lp-foot { border-top: 1px solid var(--line-2); padding: 26px 0; }
-.lp-foot-in { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-
-@media (max-width: 960px) {
-  .lp-hero-in { grid-template-columns: minmax(0, 1fr); }
-  .lp-hero h1 { font-size: 41px; }
-  .lp-steps, .lp-features { grid-template-columns: minmax(0, 1fr); }
-  .lp-band { flex-direction: column; align-items: flex-start; }
-  .lp-links { display: none; }
-  .lp-nav-in .btn { margin-left: auto; }
-}
-
-/* JetBrains Mono for file names and numbers in the preview */
-.pv-file, .pv-stat b { font-family: var(--mono); letter-spacing: -.02em; }
