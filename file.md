@@ -1,4 +1,4 @@
-//logo.jsx
+//Logo.jsx
 import "./logo.css";
 
 /* SLM Studio logo, built in HTML/CSS.
@@ -17,11 +17,6 @@ export default function Logo({ size = 36, markOnly = false, animated = true }) {
     </span>
   );
 }
-
-
-
-
-
 
 
 
