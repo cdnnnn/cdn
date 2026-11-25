@@ -1,70 +1,20 @@
-//theme.js
-// Light / dark theme. The choice is saved in this browser; until you pick one, the app follows the system setting.
-import { useEffect, useState } from "react";
+//ThemeToggle.jsx
+// Sun / moon switch for light and dark mode.
+import { useTheme } from "./theme.js";
 
-const KEY = "slm-theme";
-const media = () => window.matchMedia("(prefers-color-scheme: dark)");
-export const savedTheme = () => { try { return localStorage.getItem(KEY); } catch { return null; } };
-export const currentTheme = () => savedTheme() || (media().matches ? "dark" : "light");
-
-// Switching to dark sweeps in diagonally from the bottom-left corner to the top right;
-// switching to light sweeps from the top-right corner to the bottom left.
-// Uses the View Transitions API where the browser has it (Chrome, Edge); elsewhere the colors simply fade.
-const SWEEP = {
-  dark: ["polygon(0% 100%, 0% 100%, 0% 100%)", "polygon(0% 100%, 0% -100%, 200% 100%)"],
-  light: ["polygon(100% 0%, 100% 0%, 100% 0%)", "polygon(100% 0%, 100% 200%, -100% 0%)"],
-};
-
-function setTheme(t) {
-  document.documentElement.dataset.theme = t;
-  window.dispatchEvent(new CustomEvent("slm:theme", { detail: t }));
+export default function ThemeToggle() {
+  const [theme, toggle] = useTheme();
+  const dark = theme === "dark";
+  return (
+    <button type="button" className={`theme-toggle${dark ? " is-dark" : ""}`} onClick={toggle}
+      title={dark ? "Switch to light mode" : "Switch to dark mode"} aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}>
+      <span className="tt-knob">
+        <svg className="tt-sun" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="4" /><path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4" /></svg>
+        <svg className="tt-moon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" /></svg>
+      </span>
+    </button>
+  );
 }
-
-export function applyTheme(t, { animate = true } = {}) {
-  const el = document.documentElement;
-  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  if (animate && !reduce && document.startViewTransition) {
-    el.classList.add("theme-sweep");
-    const vt = document.startViewTransition(() => setTheme(t));
-    vt.ready.then(() => {
-      el.animate({ clipPath: SWEEP[t] }, { duration: 750, easing: "cubic-bezier(.65, 0, .35, 1)", pseudoElement: "::view-transition-new(root)" });
-    }).catch(() => {});
-    vt.finished.finally(() => el.classList.remove("theme-sweep"));
-    return;
-  }
-  el.classList.add("theme-switching");                 // fallback: fade colors for a moment
-  setTheme(t);
-  setTimeout(() => el.classList.remove("theme-switching"), 450);
-}
-
-export function useTheme() {
-  const [theme, setTheme] = useState(currentTheme);
-  useEffect(() => {
-    const onTheme = (e) => setTheme(e.detail);
-    const onSystem = () => { if (!savedTheme()) applyTheme(media().matches ? "dark" : "light", { animate: false }); };
-    window.addEventListener("slm:theme", onTheme);
-    media().addEventListener("change", onSystem);
-    return () => { window.removeEventListener("slm:theme", onTheme); media().removeEventListener("change", onSystem); };
-  }, []);
-  const toggle = () => {
-    const t = theme === "dark" ? "light" : "dark";
-    try { localStorage.setItem(KEY, t); } catch { /* private mode */ }
-    applyTheme(t);
-  };
-  return [theme, toggle];
-}
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -227,260 +177,99 @@ export function useTheme() {
 
 
 
+//Logo.jsx
+// SLM Studio logo, built in HTML and CSS (styles in logo.css), so it can animate and follow light / dark mode.
+// The mark: two chat bubbles and a sparkle on the coral gradient tile; the word mark: "SLM" in ink and "Studio" in the gradient.
+// size is the logo height in px; everything scales from it. markOnly shows just the tile, without the name.
+// (withName is accepted for older call sites and ignored: the name is part of the logo.)
+// (The favicon in the browser tab still uses public/assets/logo-slm-studio.svg, because browsers need an image file there.)
+import "./logo.css";
 
-
-
-
-
-
-
-
-
-
-//GeneratePage.jsx
-// Generate Dataset page: a guided, step-by-step setup with a live summary, and a progress view once a job runs.
-// Same API as the original UI (/api/datagen); the form <-> JobRequest logic is in ../model.js.
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { API, api, post, upload } from "../api.js";
-import { buildRequest, defaultForm, endpointsForTest, formFromRequest, visionUsed } from "../model.js";
-import { Icon, useToast } from "../ui.jsx";
-import { emit, useBus } from "../bus.js";
-import { AdvancedStep, DocumentsStep, MixStep, ModelsStep, QuestionsStep } from "./steps.jsx";
-import Summary from "./Summary.jsx";
-import RunProgress from "./RunProgress.jsx";
-import "./generate.css";
-
-export const STEPS = [
-  { key: "documents", title: "Documents", icon: "doc", lead: "Upload the files the model should learn from, or point to a folder on the server." },
-  { key: "models", title: "Models", icon: "server", lead: "The teacher model writes and judges the Q&A pairs; the vision model reads images. Both must already be running." },
-  { key: "questions", title: "Questions", icon: "chat", lead: "Choose which kinds of questions to ask, how long the answers are, and how the dataset is split." },
-  { key: "mix", title: "Training mix", icon: "mix", lead: "Add extra rows next to the document Q&A, so the model stays helpful and well-behaved." },
-  { key: "advanced", title: "Advanced", icon: "gear", lead: "Everything here has sensible defaults. Change only what you need." },
-];
-
-const jobFromUrl = () => new URL(location.href).searchParams.get("job");
-
-export default function GeneratePage({ openResults }) {
-  const toast = useToast();
-  const [defaults, setDefaults] = useState(null);
-  const [form, setForm] = useState(() => defaultForm(null));
-  const [files, setFiles] = useState([]);
-  const [step, setStep] = useState(0);
-  const [ep, setEp] = useState({ state: "idle" });
-  const [models, setModels] = useState({ teacher: [], vision: [] });
-  const [jobId, setJobId] = useState(jobFromUrl);
-  // remember the previous step, so the step content slides in from the right direction
-  const prevStep = useRef(0);
-  const dir = step >= prevStep.current ? "fwd" : "back";
-  useEffect(() => { prevStep.current = step; }, [step]);
-  // the soft card behind the active step is placed by measuring that step, so it always sits under the right one
-  const stepperRef = useRef(null);
-  const [ind, setInd] = useState(null);
-  useLayoutEffect(() => {
-    const place = () => {
-      const el = stepperRef.current?.querySelector(".stp.on");
-      const next = el ? { left: el.offsetLeft, top: el.offsetTop, width: el.offsetWidth, height: el.offsetHeight } : null;
-      setInd((cur) => (cur && next && cur.left === next.left && cur.top === next.top && cur.width === next.width && cur.height === next.height) || cur === next ? cur : next);
-    };
-    place();
-    window.addEventListener("resize", place);
-    return () => window.removeEventListener("resize", place);
-  });
-  const [job, setJob] = useState(null);
-  const [progress, setProgress] = useState({});
-  const [starting, setStarting] = useState(false);
-  const [startErr, setStartErr] = useState("");
-  const formRef = useRef(form);
-  formRef.current = form;
-  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
-  const setIn = (group, k, v) => setForm((f) => ({ ...f, [group]: { ...f[group], [k]: v } }));
-
-  // ---- start-up: defaults, and follow a job that is already running
-  useEffect(() => {
-    (async () => {
-      let d = null;
-      try { d = await api("/defaults"); } catch (e) { toast(`API not reachable: ${e.message}`, "error"); }
-      setDefaults(d || { input_roots: [] });
-      setForm(defaultForm(d));
-      if (!jobFromUrl()) {
-        try {
-          const list = await api("/jobs");
-          const active = list.find((j) => j.status === "queued" || j.status === "running");
-          if (active) setJobId(active.id);
-        } catch { /* the toast above already says the API is down */ }
-      }
-    })();
-  }, []); // eslint-disable-line
-
-  // keep ?job= in the address bar so a refresh comes back to the same job
-  useEffect(() => {
-    const u = new URL(location.href);
-    jobId ? u.searchParams.set("job", jobId) : u.searchParams.delete("job");
-    history.replaceState(null, "", u);
-  }, [jobId]);
-
-  // ---- the selected job and its live progress (server-sent events)
-  const refreshJob = useCallback(async (id) => {
-    if (!id) return;
-    try { setJob(await api(`/jobs/${id}`)); } catch (e) { if (e.status === 404) setJobId(null); }
-  }, []);
-  useEffect(() => { setJob(null); setProgress({}); if (jobId) refreshJob(jobId); }, [jobId, refreshJob]);
-  useEffect(() => {
-    if (!jobId) return undefined;
-    const es = new EventSource(`${API}/jobs/${encodeURIComponent(jobId)}/events`);
-    let t;
-    es.onmessage = (m) => {
-      const ev = JSON.parse(m.data);
-      if (ev.type === "end") { es.close(); refreshJob(jobId); return; }
-      if (ev.type === "step_progress") setProgress((p) => ({ ...p, [ev.step]: { done: ev.done, total: ev.total } }));
-      else { clearTimeout(t); t = setTimeout(() => refreshJob(jobId), 250); }
-    };
-    return () => { clearTimeout(t); es.close(); };
-  }, [jobId, refreshJob]);
-
-  // ---- endpoints: test now, and again whenever an endpoint setting changes
-  const testSeq = useRef(0);
-  const testEndpoints = useCallback(async (f = formRef.current) => {
-    if (!f.teacherUrl.trim()) { setEp({ state: "done", message: "Enter the teacher URL.", bad: true }); return; }
-    const seq = ++testSeq.current;
-    setEp((e) => ({ ...e, state: "testing" }));
-    try {
-      const res = await post("/endpoints/test", { endpoints: endpointsForTest(f) });
-      if (seq !== testSeq.current) return;
-      const t = res.find((x) => x.role === "teacher"), v = res.find((x) => x.role === "vision");
-      setModels({ teacher: t?.models || [], vision: v?.models || [] });
-      const pick = (list, re) => list.find((m) => re.test(m)) || list[0];
-      setForm((cur) => {
-        const next = { ...cur };
-        if (t?.ok && t.models.length && !t.models.includes(cur.teacherModel)) next.teacherModel = pick(t.models, /^(?!.*(vl|vision)).*/i);
-        if (v?.ok && v.models.length && !v.models.includes(cur.visionModel)) next.visionModel = pick(v.models, /vl|vision/i);
-        return next;
-      });
-      const why = (x, role) => (x.ok ? (x.models.length ? "" : `${role}: no models served`) : `${role}: ${x.error || "not reachable"}`);
-      const problems = [why(t, "Teacher"), v ? why(v, "Vision") : visionUsed(f) ? "Vision: enter the URL, or turn vision analysis off" : ""].filter(Boolean);
-      setEp({ state: "done", teacher: t, vision: v, message: problems.join(" · "), bad: problems.length > 0 });
-    } catch (e) {
-      if (seq === testSeq.current) setEp({ state: "done", message: `Test failed: ${e.message}`, bad: true });
-    }
-  }, []);
-  const epKey = [form.teacherUrl, form.visionUrl, form.apiKey, visionUsed(form)].join("|");
-  const firstTest = useRef(true);
-  useEffect(() => {
-    if (!defaults) return undefined;
-    const t = setTimeout(() => testEndpoints(), firstTest.current ? 0 : 700);
-    firstTest.current = false;
-    return () => clearTimeout(t);
-  }, [epKey, defaults, testEndpoints]);
-
-  // ---- what is missing before a job can start
-  const folders = form.folders.split(/\n/).map((s) => s.trim()).filter(Boolean);
-  const issues = [];
-  if (!files.length && !folders.length) issues.push({ step: 0, text: "Add documents: upload files or enter a server folder." });
-  try { buildRequest(form, ["check"]); } catch (e) {
-    const s = /endpoint|vision/i.test(e.message) ? 1 : /question types|split/i.test(e.message) ? 2 : /decline|paraphrase|general/i.test(e.message) ? 3 : 4;
-    issues.push({ step: s, text: e.message });
-  }
-
-  // ---- actions
-  const startJob = async (preview) => {
-    setStartErr("");
-    if (issues.length) { setStep(issues[0].step); setStartErr(issues[0].text); return; }
-    setStarting(true);
-    try {
-      const list = [...folders];
-      if (files.length) list.unshift((await upload(files)).folder);
-      const res = await post(`/jobs${preview ? "?preview=3" : ""}`, buildRequest(form, list));
-      setFiles([]);
-      toast(`Job ${res.job_id} started${preview ? " (preview on 3 chunks)" : ""}`);
-      setJobId(res.job_id);
-    } catch (e) {
-      setStartErr(e.message);
-    } finally { setStarting(false); }
-  };
-  const cancelJob = async () => { await post(`/jobs/${jobId}/cancel`); toast("Cancel requested: the job stops after the current item"); };
-  const retryJob = async () => { await post(`/jobs/${jobId}/retry`); toast("Job re-queued: finished steps are skipped"); setProgress({}); refreshJob(jobId); };
-  const newJob = () => { setJobId(null); setStep(0); setStartErr(""); };
-  const reuseSettings = () => { if (job) { setForm(formFromRequest(job.request, defaults)); toast(`Settings of ${job.job_id} loaded`); } newJob(); };
-  const resetForm = () => { setForm(defaultForm(defaults)); toast("Settings reset to the defaults"); };
-
-  // ---- tell the sidebar and header what is going on, and listen to them
-  const vUsed = visionUsed(form);
-  useEffect(() => { emit("ep", { ...ep, teacherModel: form.teacherModel, visionModel: vUsed ? form.visionModel : "" }); }, [ep, form.teacherModel, form.visionModel, vUsed]);
-  useEffect(() => { emit("job", { id: jobId, name: job?.name || job?.request?.name, status: job?.status, step, ready: issues.length === 0 }); });
-  useEffect(() => { emit("jobs-changed"); }, [jobId, job?.status]);
-  useBus("open-job", useCallback((id) => { setStartErr(""); setJobId(id); }, []));
-  useBus("new-job", useCallback(() => { setJobId(null); setStep(0); setStartErr(""); }, []));
-  useBus("retest", useCallback(() => testEndpoints(), [testEndpoints]));
-
-  if (jobId) {
-    return <RunProgress job={job} jobId={jobId} progress={progress} onCancel={cancelJob} onRetry={retryJob}
-      onNew={newJob} onReuse={reuseSettings} openResults={openResults} />;
-  }
-
-  const stepProps = { form, set, setIn, setForm, files, setFiles, defaults, ep, models, testEndpoints, onReset: resetForm };
-  const cur = STEPS[step];
-  const status = stepStatus(form, files, folders, ep);
+export default function Logo({ size = 36, markOnly = false, animated = true }) {
   return (
-    <div className="gen">
-      <nav className="stepper" aria-label="Setup steps" ref={stepperRef} style={{ "--p": step / (STEPS.length - 1) }}>
-        <span className="stp-progress" aria-hidden="true"><i /></span>
-        {ind && <span className="stp-ind" aria-hidden="true" style={{ transform: `translate(${ind.left}px, ${ind.top}px)`, width: ind.width, height: ind.height }} />}
-        {STEPS.map((s, i) => {
-          const st = status[s.key];
-          return (
-            <button type="button" key={s.key} className={`stp${i === step ? " on" : ""}${st.ok ? " ok" : ""}${st.warn ? " attn" : ""}`} onClick={() => setStep(i)}>
-              <span className="stp-n">{st.ok && i !== step ? <Icon name="check" size={14} stroke={2.6} className="pop" /> : <span className="pop">{i + 1}</span>}</span>
-              <span className="stp-t"><b>{s.title}</b><small>{st.note}</small></span>
-            </button>
-          );
-        })}
-      </nav>
-
-      <div className="gen-grid">
-        <section className="card gen-main">
-          <header className={`gen-hd anim-${dir}`} key={`hd${step}`}>
-            <span className="gen-hd-ico"><Icon name={cur.icon} size={20} /></span>
-            <div className="gen-hd-t">
-              <div className="gen-hd-meta">
-                <span className="step-n">Step {step + 1} of {STEPS.length}</span>
-                <span className="step-dots" aria-hidden="true">{STEPS.map((s2, i) => <i key={s2.key} className={i < step ? "done" : i === step ? "on" : ""} />)}</span>
-              </div>
-              <h2>{cur.title}</h2><p>{cur.lead}</p>
-            </div>
-          </header>
-          <div className={`gen-bd anim-${dir}`} key={`bd${step}`}>
-            {cur.key === "documents" && <DocumentsStep {...stepProps} />}
-            {cur.key === "models" && <ModelsStep {...stepProps} />}
-            {cur.key === "questions" && <QuestionsStep {...stepProps} />}
-            {cur.key === "mix" && <MixStep {...stepProps} />}
-            {cur.key === "advanced" && <AdvancedStep {...stepProps} />}
-          </div>
-          <footer className="gen-ft">
-            <button type="button" className="btn ghost" disabled={step === 0} onClick={() => setStep(step - 1)}><Icon name="back" size={15} />Back</button>
-            <div className="grow" />
-            {step < STEPS.length - 1
-              ? <button type="button" className="btn dark" onClick={() => setStep(step + 1)}>Next: {STEPS[step + 1].title}<Icon name="arrow" size={15} /></button>
-              : <button type="button" className="btn primary" disabled={starting} onClick={() => startJob(false)}><Icon name="play" size={13} />{starting ? "Starting…" : "Start job"}</button>}
-          </footer>
-        </section>
-
-        <Summary form={form} files={files} folders={folders} ep={ep} issues={issues} starting={starting} startErr={startErr}
-          onStart={startJob} goStep={setStep} />
-      </div>
-    </div>
+    <span className={`slm-logo${animated ? " is-animated" : ""}`} style={{ "--s": `${size}px` }} role="img" aria-label="SLM Studio">
+      <span className="slm-mark" aria-hidden="true">
+        <span className="slm-glow" />
+        <span className="slm-bubble back" />
+        <span className="slm-bubble front" />
+        <span className="slm-spark" />
+        <span className="slm-shine" />
+      </span>
+      {!markOnly && <span className="slm-word" aria-hidden="true"><b>SLM</b><em>Studio</em></span>}
+    </span>
   );
 }
 
-function stepStatus(form, files, folders, ep) {
-  const n = files.length + folders.length;
-  const split = form.split.reduce((a, b) => a + (Number(b) || 0), 0);
-  const extras = [form.para.enabled, form.decline.enabled, form.general.enabled].filter(Boolean).length;
-  const epOk = ep.state === "done" && !ep.bad;
-  return {
-    documents: n ? { ok: true, note: [files.length && `${files.length} file${files.length > 1 ? "s" : ""}`, folders.length && `${folders.length} folder${folders.length > 1 ? "s" : ""}`].filter(Boolean).join(" · ") } : { note: "Add your files" },
-    models: ep.state === "testing" ? { note: "Testing…" } : epOk ? { ok: true, note: "Endpoints online" } : { warn: ep.state === "done", note: ep.state === "done" ? "Check the endpoints" : "Not tested yet" },
-    questions: form.types.length && split === 100 ? { ok: true, note: `${form.types.length} question type${form.types.length > 1 ? "s" : ""}` } : { warn: true, note: !form.types.length ? "Pick a question type" : "Split must total 100" },
-    mix: { ok: true, note: extras ? `${extras} extra${extras > 1 ? "s" : ""} on` : "Document Q&A only" },
-    advanced: { ok: false, note: "Optional" },
-  };
-}
+
+
+
+
+
+
+
+
+
+
+
+
+//logo.css
+/* SLM Studio logo in HTML/CSS. --s is the logo height; --u is one unit of a 64-unit grid. */
+.slm-logo { --u: calc(var(--s) / 64); display: inline-flex; align-items: center; gap: calc(var(--u) * 13); line-height: 1; text-decoration: none; user-select: none; }
+
+/* ---- the mark: a rounded coral tile */
+.slm-mark { position: relative; flex: none; width: var(--s); height: var(--s); border-radius: calc(var(--u) * 17); overflow: hidden; isolation: isolate;
+  background: linear-gradient(135deg, #F97316 0%, #F43F5E 55%, #EC4899 100%);
+  box-shadow: inset 0 calc(var(--u) * 1.5) 0 rgba(255, 255, 255, .28), inset 0 calc(var(--u) * -2) calc(var(--u) * 4) rgba(124, 18, 60, .25),
+    0 calc(var(--u) * 4) calc(var(--u) * 12) calc(var(--u) * -3) rgba(236, 72, 153, .55);
+  transition: transform .35s cubic-bezier(.34, 1.4, .64, 1), box-shadow .35s; }
+.slm-glow { position: absolute; inset: 0; background: radial-gradient(circle at 28% 22%, rgba(255, 255, 255, .45), transparent 55%); }
+
+/* chat bubbles: a soft one behind, a white one in front; each has a little tail */
+.slm-bubble { position: absolute; width: calc(var(--u) * 27); height: calc(var(--u) * 19); border-radius: calc(var(--u) * 6); }
+.slm-bubble::after { content: ""; position: absolute; bottom: calc(var(--u) * -5.5); width: calc(var(--u) * 7); height: calc(var(--u) * 7); background: inherit; }
+.slm-bubble.back { left: calc(var(--u) * 12); top: calc(var(--u) * 12); background: rgba(255, 255, 255, .42); }
+.slm-bubble.back::after { left: calc(var(--u) * 5); clip-path: polygon(0 0, 100% 0, 0 100%); }
+.slm-bubble.front { right: calc(var(--u) * 12); top: calc(var(--u) * 28); background: #fff;
+  box-shadow: 0 calc(var(--u) * 2) calc(var(--u) * 5) rgba(124, 18, 60, .25); }
+.slm-bubble.front::after { right: calc(var(--u) * 5); clip-path: polygon(0 0, 100% 0, 100% 100%); }
+
+/* the sparkle inside the front bubble */
+.slm-spark { position: absolute; left: calc(var(--u) * 31); top: calc(var(--u) * 31.5); width: calc(var(--u) * 12); height: calc(var(--u) * 12);
+  background: linear-gradient(135deg, #F97316, #EC4899);
+  clip-path: polygon(50% 0, 61% 39%, 100% 50%, 61% 61%, 50% 100%, 39% 61%, 0 50%, 39% 39%); }
+
+/* a light sweep that passes over the tile now and then */
+.slm-shine { position: absolute; top: -20%; bottom: -20%; left: -60%; width: 40%; transform: skewX(-20deg);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .55), transparent); opacity: 0; }
+
+/* ---- the word mark */
+.slm-word { display: inline-flex; align-items: baseline; gap: calc(var(--u) * 7); font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  font-size: calc(var(--u) * 30); font-weight: 800; letter-spacing: calc(var(--u) * -.8); white-space: nowrap; }
+.slm-word b { font-weight: 800; color: var(--ink, #111827); transition: color .35s; }
+.slm-word em { font-style: normal; font-weight: 700; background: linear-gradient(90deg, #F97316, #EC4899, #F97316); background-size: 200% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+/* ---- motion: bubbles float, the sparkle twinkles, the shine sweeps, the gradient text drifts */
+.slm-logo.is-animated .slm-bubble.back { animation: slm-float 4.5s ease-in-out infinite; }
+.slm-logo.is-animated .slm-bubble.front { animation: slm-float 4.5s ease-in-out infinite -2.25s; }
+.slm-logo.is-animated .slm-spark { animation: slm-twinkle 3.2s ease-in-out infinite; }
+.slm-logo.is-animated .slm-shine { animation: slm-shine 7s ease-in-out infinite 1.2s; }
+.slm-logo.is-animated .slm-word em { animation: slm-text 8s ease-in-out infinite; }
+@keyframes slm-float { 0%, 100% { translate: 0 0; } 50% { translate: 0 calc(var(--u) * -2); } }
+@keyframes slm-twinkle { 0%, 100% { transform: scale(1) rotate(0deg); filter: none; } 45% { transform: scale(1.22) rotate(45deg); filter: brightness(1.15); } 60% { transform: scale(.95) rotate(45deg); } }
+@keyframes slm-shine { 0%, 70% { left: -60%; opacity: 0; } 72% { opacity: 1; } 90% { left: 130%; opacity: 1; } 91%, 100% { left: 130%; opacity: 0; } }
+@keyframes slm-text { 0%, 100% { background-position: 0% 0; } 50% { background-position: 100% 0; } }
+
+/* hover: the tile lifts and tilts a touch, the sparkle spins */
+a:hover > .slm-logo .slm-mark, .slm-logo:hover .slm-mark { transform: translateY(calc(var(--u) * -1.5)) rotate(-4deg);
+  box-shadow: inset 0 calc(var(--u) * 1.5) 0 rgba(255, 255, 255, .28), 0 calc(var(--u) * 7) calc(var(--u) * 16) calc(var(--u) * -3) rgba(236, 72, 153, .6); }
+a:hover > .slm-logo .slm-spark, .slm-logo:hover .slm-spark { animation: slm-spin .8s cubic-bezier(.34, 1.4, .64, 1); }
+@keyframes slm-spin { from { transform: rotate(0) scale(1); } 50% { transform: rotate(180deg) scale(1.3); } to { transform: rotate(360deg) scale(1); } }
+
+/* dark mode: a slightly stronger glow so the tile still pops */
+[data-theme="dark"] .slm-mark { box-shadow: inset 0 calc(var(--u) * 1.5) 0 rgba(255, 255, 255, .25), 0 calc(var(--u) * 4) calc(var(--u) * 16) calc(var(--u) * -2) rgba(236, 72, 153, .5); }
+
+@media (prefers-reduced-motion: reduce) { .slm-logo * { animation: none !important; } }
+
+/* never inherit link underline */
+.sb-brand, .sb-brand:hover, .slm-logo, .slm-logo * { text-decoration: none !important; }
