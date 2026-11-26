@@ -1,4 +1,3 @@
-//fields.css
 /* Sharp form fields: inputs, dropdowns, text areas and segmented controls.
    Crisp 1px borders with real contrast, tighter corners, flat backgrounds (no soft inner shadow),
    solid text and a clear two-tone focus ring in the current palette's accent.
@@ -66,115 +65,24 @@
 :root .search { border-radius: var(--field-radius); border-color: var(--field-line); background: var(--field-bg); }
 :root .search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 0 4px rgba(var(--accent-rgb), .16); }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//App.jsx
-// Routing: the landing page at #/ (the first screen), and the app shell with sidebar and top bar at #/generate and #/results.
-// Features are added one piece at a time; see README.md for the build order.
-import { useCallback, useEffect, useState } from "react";
-import { Icon } from "./ui.jsx";
-import Landing from "./Landing.jsx";
-import Sidebar from "./Sidebar.jsx";
-import { emit, lastOf, useBus } from "./bus.js";
-import GeneratePage, { STEPS } from "./generate/GeneratePage.jsx";
-import "./shell.css";
-import "./rich.css";
-import "./theme-dark.css";
-import "./fields.css";
-import ThemeToggle from "./ThemeToggle.jsx";
-import { CustomizeButton } from "./Customize.jsx";
-import ResultsPage from "./results/ResultsPage.jsx";
-
-const PAGES = {
-  generate: { label: "Generate", nav: "Generate Dataset", icon: "spark", title: "Generate Dataset",
-    sub: "Turn your documents into grounded question-and-answer pairs for fine-tuning." },
-  results: { label: "Results", nav: "Results", icon: "results", title: "Results",
-    sub: "Review the generated pairs, their scores, and download the dataset." },
-};
-// "#how" and "#features" are anchors on the landing page, so anything that is not an app page shows the landing page.
-const routeFromHash = () => { const r = (location.hash || "").replace(/^#\/?/, ""); return PAGES[r] ? r : "home"; };
-
-export default function App() {
-  const [route, setRoute] = useState(routeFromHash);
-  useEffect(() => {
-    const h = () => setRoute(routeFromHash());
-    window.addEventListener("hashchange", h);
-    return () => window.removeEventListener("hashchange", h);
-  }, []);
-  if (route === "home") return <Landing />;
-  const page = PAGES[route];
-
-  return (
-    <div className="app">
-      <Sidebar route={route} pages={PAGES} />
-
-      <main className="main">
-        <PageHeader route={route} page={page} />
-        <div className="content" key={route}>
-          {route === "generate" ? <GeneratePage openResults={() => { location.hash = "#/results"; }} /> : <ResultsPage />}
-        </div>
-      </main>
-    </div>
-  );
+/* ---- field widths: each control is as wide as its content needs, not as wide as the column.
+   Only max-widths (plus fit-content for toggles), so narrow screens behave exactly as before. */
+:root {
+  --w-num: 200px;      /* numbers: chunk sizes, temperatures, counts */
+  --w-text: 560px;     /* URLs, names, keys, short text */
+  --w-select: 480px;   /* dropdowns */
+  --w-area: 820px;     /* prompts and other multi-line text */
 }
-
-// Page header: breadcrumb, title and one line of context on the left; the state of the current job and actions on the right.
-function PageHeader({ route, page }) {
-  const [job, setJob] = useState(() => lastOf("job") || null);
-  useBus("job", useCallback((j) => setJob(j), []));
-  const [rjob, setRjob] = useState(() => lastOf("results-job") || null);
-  useBus("results-job", useCallback((j) => setRjob(j), []));
-  const onGen = route === "generate";
-  const open = onGen && job?.id;
-  return (
-    <header className="ph">
-      <div className="ph-main">
-        <span className="ph-ico"><Icon name={page.icon} size={20} /></span>
-        <div className="ph-t">
-          <div className="ph-crumbs">
-            <a href="#/">SLM Studio</a><Icon name="chevron" size={12} />
-            <a href={`#/${route}`}>{page.nav}</a>
-            {onGen && <><Icon name="chevron" size={12} />{open ? <span className="num">{job.id}</span> : <span>New job</span>}</>}
-            {!onGen && rjob?.id && <><Icon name="chevron" size={12} /><span className="num">{rjob.name || rjob.id}</span></>}
-          </div>
-          <h1>{page.title}</h1>
-          <p>{open ? <>Following <b>{job.name || job.id}</b>. You can leave this page; the job keeps running on the server.</> : page.sub}</p>
-        </div>
-      </div>
-      <div className="ph-side">
-        {onGen && !open && job && (
-          <span className="ph-state">
-            <span className="ph-state-l">Draft</span>
-            <span className="ph-state-v">Step <b className="num">{(job.step ?? 0) + 1}</b> of {STEPS.length}</span>
-            <span className={`ph-state-dot ${job.ready ? "ok" : ""}`} title={job.ready ? "Ready to start" : "Something still needs your input"} />
-          </span>
-        )}
-        {open && <button type="button" className="btn" onClick={() => emit("new-job")}><Icon name="plus" size={14} />New job</button>}
-        {onGen && !open && <a className="btn ghost" href="#/results"><Icon name="results" size={14} />Results</a>}
-        {!onGen && <a className="btn" href="#/generate"><Icon name="plus" size={14} />New dataset</a>}
-        <span className="ph-sep" aria-hidden="true" />
-        <CustomizeButton />
-        <ThemeToggle />
-      </div>
-    </header>
-  );
-}
+.field > input[type=number] { max-width: var(--w-num); }
+.field > input:not([type=number]):not([type=checkbox]):not([type=file]) { max-width: var(--w-text); }
+.field > select { max-width: var(--w-select); }
+.field > textarea { max-width: var(--w-area); }
+/* On / Off, Fact / Section, No / Yes: just wide enough for the options */
+.field > .seg { width: fit-content; min-width: 200px; max-width: 100%; }
+.field > .seg button { min-width: 92px; }
+/* grouped number boxes */
+.split4 { max-width: 640px; }
+.tpl-minmax { max-width: 320px; }
+/* template window: it is already bounded, so text fields use its full column; only the short id is compact */
+.tpl-form .field > input:not([type=number]):not([type=checkbox]):not([type=file]) { max-width: none; }
+.tpl-form .field > input.mono:not([type=number]):not([type=checkbox]):not([type=file]) { max-width: 300px; }
