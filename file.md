@@ -1,23 +1,89 @@
-//environment.js
-// Environment settings of the UI. Change the API server here.
-// Plain constants only: vite.config.js imports this file too, so keep it free of browser or Vite-only code.
+//jobs.js
+// Live list of every job, shared by the sidebar badge, the Jobs page and the "job finished" toasts.
+// One poller for the whole app: every 3 s while a job is queued or running, every 15 s otherwise.
+import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { api, post } from "../api.js";
+import { STEP_TITLES } from "../model.js";
+import { useBus } from "../bus.js";
+import { useToast } from "../ui.jsx";
+import "./jobs.css";
 
-// Address of the data generation API server (uvicorn app.main:app).
-export const API_HOST = "http://107.99.131.90:8080";
+export const isActive = (s) => s === "queued" || s === "running";
 
-// Path prefix of the data generation API on that server.
-export const API_PATH = "/api/datagen";
+let state = { jobs: null, details: {}, error: null };
+const subs = new Set();
+const setState = (p) => { state = { ...state, ...p }; subs.forEach((f) => f()); };
+const subscribe = (f) => { subs.add(f); return () => subs.delete(f); };
+export const useJobs = () => useSyncExternalStore(subscribe, () => state);
 
-// How the browser reaches API_HOST:
-//   false (default): calls go to /api/datagen on the page's own origin. `npm run dev` / `npm run preview`
-//                    forward them to API_HOST, and a build served by the API server itself is same-origin.
-//                    No CORS setup is needed on the server.
-//   true:            calls go straight to API_HOST from the browser. Use it when the built UI is hosted
-//                    somewhere else; the API server must then allow this origin (CORS).
-export const CALL_API_HOST_DIRECTLY = false;
+let timer = null;
+let running = false;
+let onFinish = null;
 
-// Results page data: false = the real API above; true = built-in dummy data (to try the screens without a server).
-export const USE_DEMO_RESULTS = false;
+export async function refreshJobs() {
+  if (running) return;
+  running = true;
+  clearTimeout(timer);
+  try {
+    const list = await api("/jobs");
+    const prev = state.jobs;
+    const details = { ...state.details };
+    // step-by-step progress of the jobs that are still going, and a last look at the ones that just ended
+    const ended = prev ? list.filter((j) => isActive(prev.find((x) => x.id === j.id)?.status) && !isActive(j.status)) : [];
+    await Promise.all([...list.filter((j) => isActive(j.status)), ...ended].map(async (j) => {
+      try { details[j.id] = await api(`/jobs/${encodeURIComponent(j.id)}`); } catch { /* keep the last one */ }
+    }));
+    setState({ jobs: list, details, error: null });
+    ended.forEach((j) => onFinish?.(j, details[j.id]));
+  } catch (e) {
+    setState({ jobs: state.jobs || [], error: e.message });
+  } finally {
+    running = false;
+    const busy = !state.error && (state.jobs || []).some((j) => isActive(j.status));
+    timer = setTimeout(refreshJobs, busy ? 3000 : 15000);
+  }
+}
+
+// mounted once in the app shell: starts the poller and shows a toast when a job ends, whatever page is open
+export function JobWatcher() {
+  const toast = useToast();
+  useEffect(() => {
+    onFinish = (j, d) => {
+      const name = j.name || j.id;
+      if (j.status === "done") {
+        const n = d?.counts?.pairs_kept;
+        toast(`"${name}" finished${n != null ? `: ${Number(n).toLocaleString()} rows kept` : ""}. Open Jobs or Results to see it.`);
+      } else if (j.status === "failed") toast(`"${name}" failed${j.error ? `: ${j.error}` : ""}`, "error");
+      else if (j.status === "cancelled") toast(`"${name}" was cancelled`);
+    };
+    refreshJobs();
+    return () => { onFinish = null; clearTimeout(timer); };
+  }, [toast]);
+  // the Generate page says when it starts, cancels or retries a job: look again right away
+  useBus("jobs-changed", useCallback(() => { setTimeout(refreshJobs, 400); }, []));
+  return null;
+}
+
+// ---- small helpers for the page
+export const stepTitleOf = (key) => STEP_TITLES.find(([k]) => k === key)?.[1] || key || "";
+
+// how far a job is: { done, total, pct, label }
+export function progressOf(j, d) {
+  const steps = d?.steps?.length ? d.steps : null;
+  const total = steps ? steps.length : STEP_TITLES.length;
+  if (j.status === "done") return { done: total, total, pct: 100, label: "All steps done" };
+  let done;
+  if (steps) done = steps.filter((s) => s.status === "done" || s.status === "skipped").length;
+  else done = Math.max(0, STEP_TITLES.findIndex(([k]) => k === j.current_step));
+  const pct = Math.round((100 * done) / total);
+  if (j.status === "queued") return { done, total, pct, label: "Waiting to start" };
+  const cur = stepTitleOf(j.current_step);
+  if (j.status === "running") return { done, total, pct, label: `Step ${Math.min(done + 1, total)} of ${total}${cur ? ` · ${cur}` : ""}` };
+  return { done, total, pct, label: `Stopped at step ${Math.min(done + 1, total)} of ${total}${cur ? ` · ${cur}` : ""}` };
+}
+
+export const cancelJob = (id) => post(`/jobs/${encodeURIComponent(id)}/cancel`);
+export const retryJob = (id) => post(`/jobs/${encodeURIComponent(id)}/retry`);
 
 
 
@@ -27,19 +93,498 @@ export const USE_DEMO_RESULTS = false;
 
 
 
-//source.js
-// Where the Results page gets its data from: the real /api/datagen backend (API_HOST in ../environment.js),
-// or the dummy data in demoData.js when USE_DEMO_RESULTS is true there (handy without a server).
-import { USE_DEMO_RESULTS } from "../environment.js";
-import { api as realApi, fileUrl as realFileUrl, imageUrl as realImageUrl, post as realPost } from "../api.js";
-import { demoApi, demoFileUrl, demoImageUrl, demoPost } from "./demoData.js";
 
-export const DEMO = USE_DEMO_RESULTS;
 
-export const api = DEMO ? demoApi : realApi;
-export const post = DEMO ? demoPost : realPost;
-export const fileUrl = DEMO ? demoFileUrl : realFileUrl;
-export const imageUrl = DEMO ? demoImageUrl : realImageUrl;
+
+
+
+
+
+
+
+//JobsPage.jsx
+// Jobs page: every dataset job with its live status, progress, start time and duration, and what you can do with it.
+import { useEffect, useState } from "react";
+import { Icon, useToast } from "../ui.jsx";
+import { emit } from "../bus.js";
+import { cancelJob, isActive, progressOf, refreshJobs, retryJob, useJobs } from "./jobs.js";
+
+const STATUS = {
+  running: { label: "Running", cls: "run", icon: "refresh" },
+  queued: { label: "Queued", cls: "wait", icon: "clock" },
+  done: { label: "Finished", cls: "ok", icon: "check" },
+  failed: { label: "Failed", cls: "bad", icon: "alert" },
+  cancelled: { label: "Cancelled", cls: "off", icon: "stop" },
+};
+const FILTERS = [
+  ["all", "All", () => true],
+  ["active", "In progress", (j) => isActive(j.status)],
+  ["done", "Finished", (j) => j.status === "done"],
+  ["failed", "Failed", (j) => j.status === "failed"],
+  ["cancelled", "Cancelled", (j) => j.status === "cancelled"],
+];
+
+const toDate = (s) => (s ? new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : `${s}Z`) : null);
+function when(s) {
+  const d = toDate(s);
+  if (!d || isNaN(d)) return "";
+  const today = new Date(); const y = new Date(); y.setDate(today.getDate() - 1);
+  const t = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (d.toDateString() === today.toDateString()) return `Today, ${t}`;
+  if (d.toDateString() === y.toDateString()) return `Yesterday, ${t}`;
+  return `${d.toLocaleDateString([], { day: "numeric", month: "short" })}, ${t}`;
+}
+function took(ms) {
+  if (!(ms >= 0)) return "";
+  const s = Math.round(ms / 1000), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h ? `${h} h ${m} min` : m ? `${m} min ${s % 60} s` : `${s} s`;
+}
+
+const openOn = (route, id) => {
+  const u = new URL(location.href);
+  u.searchParams.set("job", id);
+  if (route === "results") localStorage.setItem("slm-results-job", id);
+  u.hash = `#/${route}`;
+  location.href = u.toString();
+};
+
+export default function JobsPage() {
+  const { jobs, details, error } = useJobs();
+  const [filter, setFilter] = useState("all");
+  const [q, setQ] = useState("");
+  const [, tick] = useState(0);
+  const anyActive = (jobs || []).some((j) => isActive(j.status));
+  // running durations count up every second
+  useEffect(() => { if (!anyActive) return undefined; const t = setInterval(() => tick((x) => x + 1), 1000); return () => clearInterval(t); }, [anyActive]);
+  useEffect(() => { refreshJobs(); }, []);
+
+  const list = jobs || [];
+  const count = (k) => list.filter(FILTERS.find((f) => f[0] === k)[2]).length;
+  const shown = list.filter(FILTERS.find((f) => f[0] === filter)[2])
+    .filter((j) => !q.trim() || `${j.name} ${j.id}`.toLowerCase().includes(q.trim().toLowerCase()));
+
+  return (
+    <div className="jobs">
+      <div className="jb-stats">
+        {[["active", "In progress", "refresh", "run"], ["done", "Finished", "check", "ok"], ["failed", "Failed", "alert", "bad"], ["cancelled", "Cancelled", "stop", "off"]].map(([k, l, ic, cls]) => (
+          <button type="button" key={k} className={`jb-stat ${cls}${filter === k ? " on" : ""}`} onClick={() => setFilter(filter === k ? "all" : k)}>
+            <span className="jb-stat-ico"><Icon name={ic} size={16} /></span>
+            <span><b className="num">{jobs ? count(k) : "–"}</b><small>{l}</small></span>
+          </button>
+        ))}
+      </div>
+
+      <section className="card jb-card">
+        <div className="jb-bar">
+          <div className="pilltabs" role="tablist" aria-label="Filter jobs by status">
+            {FILTERS.map(([k, l]) => (
+              <button type="button" role="tab" key={k} aria-selected={filter === k} className={filter === k ? "on" : ""} onClick={() => setFilter(k)}>
+                {l}<span className="num">{jobs ? count(k) : 0}</span>
+              </button>
+            ))}
+          </div>
+          <div className="grow" />
+          <label className="search"><Icon name="search" size={15} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by name or id" /></label>
+          <button type="button" className="btn ghost small" onClick={() => refreshJobs()} title="Refresh now"><Icon name="refresh" size={14} />Refresh</button>
+        </div>
+
+        {anyActive && (
+          <p className="jb-note"><Icon name="clock" size={14} />The list updates by itself every few seconds. The server runs one job at a time, so start the next one when this one has finished.</p>
+        )}
+        {error && <p className="jb-note bad"><Icon name="alert" size={14} />Could not reach the API: {error}. Trying again shortly.</p>}
+
+        {!jobs ? <div className="jb-empty"><span className="spin" />Loading jobs…</div>
+          : shown.length === 0 ? (
+            <div className="jb-empty">
+              <span className="jb-empty-ico"><Icon name="layers" size={22} /></span>
+              <b>{list.length ? "No jobs match" : "No jobs yet"}</b>
+              <small>{list.length ? "Try another filter or search." : "Jobs you start on Generate Dataset show up here."}</small>
+              {!list.length && <a className="btn primary" href="#/generate"><Icon name="plus" size={14} />New dataset</a>}
+            </div>
+          ) : (
+            <ul className="jb-list">
+              {shown.map((j) => <JobRow key={j.id} j={j} d={details[j.id]} />)}
+            </ul>
+          )}
+      </section>
+    </div>
+  );
+}
+
+function JobRow({ j, d }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const st = STATUS[j.status] || STATUS.queued;
+  const p = progressOf(j, d);
+  const start = toDate(j.created), end = isActive(j.status) ? new Date() : toDate(j.updated);
+  const dur = start && end ? took(end - start) : "";
+  const kept = d?.counts?.pairs_kept;
+  const act = async (fn, okText) => {
+    setBusy(true);
+    try { await fn(); toast(okText); emit("jobs-changed"); await refreshJobs(); } catch (e) { toast(e.message, "error"); } finally { setBusy(false); }
+  };
+  return (
+    <li className={`jb-row ${st.cls}`}>
+      <span className="jb-ico"><Icon name={st.icon} size={16} className={j.status === "running" ? "spin-slow" : ""} /></span>
+      <div className="jb-main">
+        <div className="jb-top">
+          <b className="jb-name" title={j.name}>{j.name || j.id}</b>
+          <span className="jb-id num">{j.id}</span>
+          {j.mode && <span className="jb-mode">{j.mode === "reasoning" ? "Reasoning" : "Chat"}</span>}
+          <span className={`jb-status ${st.cls}`}><i />{st.label}</span>
+        </div>
+        <div className="jb-meta">
+          <span><Icon name="clock" size={13} />Started {when(j.created) || "–"}</span>
+          {dur && <span>{isActive(j.status) ? (j.status === "queued" ? `Waiting ${dur}` : `Running for ${dur}`) : `Took ${dur}`}</span>}
+          {j.status === "done" && kept != null && <span><b className="num">{Number(kept).toLocaleString()}</b> rows kept</span>}
+        </div>
+        <div className="jb-prog">
+          <div className="jb-track" role="progressbar" aria-valuenow={p.pct} aria-valuemin={0} aria-valuemax={100} aria-label={`${j.name} progress`}>
+            <i style={{ width: `${Math.max(p.pct, j.status === "running" ? 3 : 0)}%` }} />
+          </div>
+          <span className="jb-pct num">{p.pct}%</span>
+          <span className="jb-prog-t">{p.label}</span>
+        </div>
+        {j.status === "failed" && j.error && <p className="jb-err" title={j.error}>{j.error}</p>}
+      </div>
+      <div className="jb-acts">
+        {j.status === "done" && <button type="button" className="btn small primary" onClick={() => openOn("results", j.id)}><Icon name="results" size={13} />Open results</button>}
+        {isActive(j.status) && <button type="button" className="btn small" onClick={() => openOn("generate", j.id)}><Icon name="eye" size={13} />Follow</button>}
+        {isActive(j.status) && <button type="button" className="btn small ghost danger" disabled={busy} onClick={() => act(() => cancelJob(j.id), "Cancel requested: the job stops after the current item")}><Icon name="stop" size={13} />Cancel</button>}
+        {(j.status === "failed" || j.status === "cancelled") && <button type="button" className="btn small" disabled={busy} onClick={() => act(() => retryJob(j.id), "Job re-queued: finished steps are skipped")}><Icon name="repeat" size={13} />Retry</button>}
+        {!isActive(j.status) && <button type="button" className="btn small ghost" onClick={() => openOn("generate", j.id)} title="See the steps and settings of this job"><Icon name="list" size={13} />Details</button>}
+      </div>
+    </li>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//jobs.css
+/* Jobs page: status tiles, filter bar and the live list of jobs. Colours come from the theme tokens,
+   so every palette and light/dark mode work; the "in progress" colour is the palette accent. */
+.jobs { display: grid; gap: 18px; max-width: 1360px; margin: 0 auto; }
+
+/* ---- status tiles (also filters) */
+.jb-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.jb-stat { --c: var(--accent-600); --bg: var(--accent-50); display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-radius: 14px;
+  border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow-xs); cursor: pointer; text-align: left; font: inherit; color: var(--ink);
+  transition: border-color .15s, box-shadow .2s, transform .2s; }
+.jb-stat:hover { transform: translateY(-1px); border-color: var(--line-strong); }
+.jb-stat.on { border-color: var(--c); box-shadow: 0 0 0 1px var(--c), var(--shadow-xs); }
+.jb-stat.ok { --c: var(--green-600); --bg: var(--green-50); }
+.jb-stat.bad { --c: var(--red); --bg: var(--red-50); }
+.jb-stat.off { --c: var(--muted); --bg: var(--surface-3); }
+.jb-stat-ico { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; background: var(--bg); color: var(--c); flex: none; }
+.jb-stat b { display: block; font-size: 22px; font-weight: 700; line-height: 1.1; }
+.jb-stat small { font-size: 12.5px; color: var(--muted); font-weight: 550; }
+
+/* ---- list card */
+.jb-card { padding: 0; overflow: hidden; }
+.jb-bar { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line-2); flex-wrap: wrap; }
+.jb-bar .search input { width: 200px !important; }
+.jb-note { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 16px; font-size: 13px; color: var(--muted); background: var(--surface-2); border-bottom: 1px solid var(--line-2); }
+.jb-note.bad { color: var(--red); background: var(--red-50); }
+
+.jb-list { list-style: none; margin: 0; padding: 0; }
+.jb-row { --c: var(--accent); display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 16px; border-bottom: 1px solid var(--line-2);
+  position: relative; animation: jb-in .35s cubic-bezier(.22, 1, .36, 1) both; }
+.jb-row:last-child { border-bottom: 0; }
+.jb-row::before { content: ""; position: absolute; left: 0; top: 12px; bottom: 12px; width: 3px; border-radius: 0 3px 3px 0; background: var(--c); opacity: .9; }
+.jb-row:hover { background: var(--surface-2); }
+.jb-row.ok { --c: var(--green); }
+.jb-row.bad { --c: var(--red); }
+.jb-row.off, .jb-row.wait { --c: var(--line-strong); }
+@keyframes jb-in { from { opacity: 0; transform: translateY(4px); } }
+
+.jb-ico { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-50); color: var(--accent-600); }
+.jb-row.ok .jb-ico { background: var(--green-50); color: var(--green-600); }
+.jb-row.bad .jb-ico { background: var(--red-50); color: var(--red); }
+.jb-row.off .jb-ico, .jb-row.wait .jb-ico { background: var(--surface-3); color: var(--muted); }
+.spin-slow { animation: jb-spin 1.6s linear infinite; }
+@keyframes jb-spin { to { transform: rotate(360deg); } }
+
+.jb-main { display: grid; gap: 6px; min-width: 0; }
+.jb-top { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
+.jb-name { font-size: 15px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 360px; }
+.jb-id { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.jb-mode { font-size: 11.5px; font-weight: 600; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+.jb-status { --c: var(--accent-600); --bg: var(--accent-50); display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-size: 12.5px; font-weight: 650;
+  padding: 2px 10px; border-radius: 99px; color: var(--c); background: var(--bg); }
+.jb-status i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.jb-status.run i { animation: pulse 1.6s infinite; }
+.jb-status.ok { --c: var(--green-600); --bg: var(--green-50); }
+.jb-status.bad { --c: var(--red); --bg: var(--red-50); }
+.jb-status.off, .jb-status.wait { --c: var(--muted); --bg: var(--surface-3); }
+
+.jb-meta { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 13px; color: var(--muted); }
+.jb-meta span { display: inline-flex; align-items: center; gap: 5px; }
+.jb-meta b { color: var(--ink-2); }
+.jb-prog { display: grid; grid-template-columns: minmax(120px, 360px) 36px minmax(0, 1fr); align-items: center; gap: 10px; }
+.jb-track { height: 6px; border-radius: 99px; background: var(--line-2); overflow: hidden; }
+.jb-track i { display: block; height: 100%; border-radius: 99px; background: var(--grad); transition: width .6s cubic-bezier(.22, 1, .36, 1); }
+.jb-row.run .jb-track i { background-size: 200% 100%; animation: jb-flow 2.2s linear infinite; }
+.jb-row.ok .jb-track i { background: var(--green); }
+.jb-row.bad .jb-track i { background: var(--red); }
+.jb-row.off .jb-track i, .jb-row.wait .jb-track i { background: var(--line-strong); }
+@keyframes jb-flow { to { background-position: -200% 0; } }
+.jb-prog-t { font-size: 12.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.jb-pct { font-size: 12.5px; font-weight: 650; color: var(--ink-2); text-align: right; }
+.jb-err { margin: 0; font-size: 12.5px; color: var(--red); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.jb-acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+
+.jb-empty { display: grid; justify-items: center; gap: 6px; padding: 48px 20px; text-align: center; color: var(--muted); }
+.jb-empty b { color: var(--ink); font-size: 15px; }
+.jb-empty .btn { margin-top: 8px; }
+.jb-empty-ico { width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center; background: var(--accent-50); color: var(--accent-600); }
+.jb-empty .spin { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent); animation: jb-spin .8s linear infinite; }
+
+@media (max-width: 1100px) {
+  .jb-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .jb-row { grid-template-columns: auto minmax(0, 1fr); }
+  .jb-acts { grid-column: 2; justify-content: flex-start; }
+}
+@media (prefers-reduced-motion: reduce) { .spin-slow, .jb-row.run .jb-track i, .jb-row { animation: none; } }
+
+/* ---- sidebar: running-jobs badge on the Jobs item */
+.sb-badge { margin-left: auto; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 99px; display: inline-grid; place-items: center; font-size: 11.5px; font-weight: 700;
+  color: #fff; background: var(--grad); box-shadow: 0 2px 6px -2px rgba(var(--accent-rgb), .6); animation: sb-badge-in .3s cubic-bezier(.22, 1, .36, 1); }
+@keyframes sb-badge-in { from { transform: scale(.4); opacity: 0; } }
+aside.sidebar.is-collapsed .sb-badge { position: absolute; top: 5px; left: 34px; min-width: 16px; height: 16px; padding: 0 4px; font-size: 10px; margin: 0;
+  box-shadow: 0 0 0 2px var(--surface); }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+
+//App.jsx
+// Routing: the landing page at #/ (the first screen), and the app shell with sidebar and top bar at #/generate, #/jobs and #/results.
+// Features are added one piece at a time; see README.md for the build order.
+import { useCallback, useEffect, useState } from "react";
+import { Icon } from "./ui.jsx";
+import Landing from "./Landing.jsx";
+import Sidebar from "./Sidebar.jsx";
+import { emit, lastOf, useBus } from "./bus.js";
+import GeneratePage, { STEPS } from "./generate/GeneratePage.jsx";
+import "./shell.css";
+import "./rich.css";
+import "./theme-dark.css";
+import "./fields.css";
+import ThemeToggle from "./ThemeToggle.jsx";
+import { CustomizeButton } from "./Customize.jsx";
+import ResultsPage from "./results/ResultsPage.jsx";
+import JobsPage from "./jobs/JobsPage.jsx";
+import { JobWatcher } from "./jobs/jobs.js";
+
+const PAGES = {
+  generate: { label: "Generate", nav: "Generate Dataset", icon: "spark", title: "Generate Dataset",
+    sub: "Turn your documents into grounded question-and-answer pairs for fine-tuning." },
+  jobs: { label: "Jobs", nav: "Jobs", icon: "list", title: "Jobs",
+    sub: "Every dataset job and how it is doing. The list updates by itself." },
+  results: { label: "Results", nav: "Results", icon: "results", title: "Results",
+    sub: "Review the generated pairs, their scores, and download the dataset." },
+};
+// "#how" and "#features" are anchors on the landing page, so anything that is not an app page shows the landing page.
+const routeFromHash = () => { const r = (location.hash || "").replace(/^#\/?/, ""); return PAGES[r] ? r : "home"; };
+
+export default function App() {
+  const [route, setRoute] = useState(routeFromHash);
+  useEffect(() => {
+    const h = () => setRoute(routeFromHash());
+    window.addEventListener("hashchange", h);
+    return () => window.removeEventListener("hashchange", h);
+  }, []);
+  if (route === "home") return <Landing />;
+  const page = PAGES[route];
+
+  return (
+    <div className="app">
+      <JobWatcher />
+      <Sidebar route={route} pages={PAGES} />
+
+      <main className="main">
+        <PageHeader route={route} page={page} />
+        <div className="content" key={route}>
+          {route === "generate" ? <GeneratePage openResults={() => { location.hash = "#/results"; }} /> : route === "jobs" ? <JobsPage /> : <ResultsPage />}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+// Page header: breadcrumb, title and one line of context on the left; the state of the current job and actions on the right.
+function PageHeader({ route, page }) {
+  const [job, setJob] = useState(() => lastOf("job") || null);
+  useBus("job", useCallback((j) => setJob(j), []));
+  const [rjob, setRjob] = useState(() => lastOf("results-job") || null);
+  useBus("results-job", useCallback((j) => setRjob(j), []));
+  const onGen = route === "generate";
+  const open = onGen && job?.id;
+  return (
+    <header className="ph">
+      <div className="ph-main">
+        <span className="ph-ico"><Icon name={page.icon} size={20} /></span>
+        <div className="ph-t">
+          <div className="ph-crumbs">
+            <a href="#/">SLM Studio</a><Icon name="chevron" size={12} />
+            <a href={`#/${route}`}>{page.nav}</a>
+            {onGen && <><Icon name="chevron" size={12} />{open ? <span className="num">{job.id}</span> : <span>New job</span>}</>}
+            {route === "results" && rjob?.id && <><Icon name="chevron" size={12} /><span className="num">{rjob.name || rjob.id}</span></>}
+          </div>
+          <h1>{page.title}</h1>
+          <p>{open ? <>Following <b>{job.name || job.id}</b>. You can leave this page; the job keeps running on the server.</> : page.sub}</p>
+        </div>
+      </div>
+      <div className="ph-side">
+        {onGen && !open && job && (
+          <span className="ph-state">
+            <span className="ph-state-l">Draft</span>
+            <span className="ph-state-v">Step <b className="num">{(job.step ?? 0) + 1}</b> of {STEPS.length}</span>
+            <span className={`ph-state-dot ${job.ready ? "ok" : ""}`} title={job.ready ? "Ready to start" : "Something still needs your input"} />
+          </span>
+        )}
+        {open && <button type="button" className="btn" onClick={() => emit("new-job")}><Icon name="plus" size={14} />New job</button>}
+        {onGen && !open && <a className="btn ghost" href="#/results"><Icon name="results" size={14} />Results</a>}
+        {!onGen && <a className="btn" href="#/generate"><Icon name="plus" size={14} />New dataset</a>}
+        <span className="ph-sep" aria-hidden="true" />
+        <CustomizeButton />
+        <ThemeToggle />
+      </div>
+    </header>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//Sidebar.jsx
+// Sidebar: the logo, the pages (Jobs shows how many jobs are in progress) and the signed-in user. It can be collapsed to icons only; the choice is remembered.
+import { useEffect, useRef, useState } from "react";
+import { openCustomize } from "./Customize.jsx";
+import { Icon, useToast } from "./ui.jsx";
+import Logo from "./Logo.jsx";
+import { isActive, useJobs } from "./jobs/jobs.js";
+import "./sidebar.css";
+
+const KEY = "slm-sidebar";
+// a dummy user until sign-in exists
+const USER = { name: "Prakash", role: "AI Department", initials: "P" };
+
+export default function Sidebar({ route, pages }) {
+  const { jobs } = useJobs();
+  const active = (jobs || []).filter((j) => isActive(j.status)).length;
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(KEY) === "collapsed");
+  useEffect(() => { localStorage.setItem(KEY, collapsed ? "collapsed" : "open"); }, [collapsed]);
+  // keyboard shortcut: Ctrl/Cmd + B toggles the sidebar
+  useEffect(() => {
+    const k = (e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") { e.preventDefault(); setCollapsed((c) => !c); } };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, []);
+
+  return (
+    <aside className={`sidebar${collapsed ? " is-collapsed" : ""}`}>
+      <div className="sb-top">
+        <a className="sb-brand" href="#/" title="Back to the home page"><Logo size={42} /></a>
+      </div>
+      <button type="button" className="sb-toggle" onClick={() => setCollapsed((c) => !c)}
+        aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!collapsed} data-tip={collapsed ? "Expand (Ctrl+B)" : "Collapse (Ctrl+B)"}>
+        <Icon name="chevron" size={14} stroke={2.2} />
+      </button>
+
+      <nav className="sb-nav" style={{ "--i": Math.max(0, Object.keys(pages).indexOf(route)) }}>
+        <span className="sb-ind" aria-hidden="true" />
+        {Object.entries(pages).map(([k, p]) => (
+          <a key={k} className={route === k ? "on" : ""} href={`#/${k}`} data-tip={k === "jobs" && active ? `${p.nav} · ${active} in progress` : p.nav}
+            aria-label={k === "jobs" && active ? `${p.nav}, ${active} in progress` : p.nav}>
+            <span className="sb-nav-ico"><Icon name={p.icon} size={17} /></span><span className="sb-label">{p.nav}</span>
+            {k === "jobs" && active > 0 && <span className="sb-badge num" title={`${active} job${active > 1 ? "s" : ""} in progress`}>{active}</span>}
+          </a>
+        ))}
+      </nav>
+
+      <UserCard collapsed={collapsed} />
+    </aside>
+  );
+}
+
+function UserCard({ collapsed }) {
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const h = (e) => { if (!ref.current?.contains(e.target)) setOpen(false); };
+    const k = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", h); document.addEventListener("keydown", k);
+    return () => { document.removeEventListener("mousedown", h); document.removeEventListener("keydown", k); };
+  }, [open]);
+  const demo = (what) => { setOpen(false); toast(`${what} is not available in this demo yet`); };
+  return (
+    <div className="sb-user" ref={ref}>
+      {open && (
+        <div className="sb-user-menu" role="menu">
+          <div className="sb-user-menu-h"><span className="sb-avatar sm">{USER.initials}</span><div><b>{USER.name}</b><small>{USER.role}</small></div></div>
+          <button type="button" role="menuitem" onClick={() => demo("Your profile")}><Icon name="eye" size={15} />Your profile</button>
+          <button type="button" role="menuitem" onClick={() => { setOpen(false); openCustomize(); }}><Icon name="palette" size={15} />Customize</button>
+          <div className="sb-user-sep" />
+          <button type="button" role="menuitem" className="danger" onClick={() => demo("Sign out")}><Icon name="back" size={15} />Sign out</button>
+        </div>
+      )}
+      <button type="button" className={`sb-user-btn${open ? " on" : ""}`} onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open}
+        data-tip={collapsed && !open ? USER.name : undefined}>
+        <span className="sb-avatar">{USER.initials}<i className="sb-online" aria-label="Online" /></span>
+        <span className="sb-user-t sb-label"><b>{USER.name}</b><small>{USER.role}</small></span>
+        <span className="sb-user-chev sb-label"><Icon name="chevron" size={14} /></span>
+      </button>
+    </div>
+  );
+}
+
+
+
+
+
 
 
 
@@ -64,6 +609,7 @@ import { Empty, Icon, useBusy, useToast } from "../ui.jsx";
 import { Bars, Funnel, ImagePath, ScoreStacks, SplitTable, StackBar, TypeDonut, useCount } from "./Insights.jsx";
 import Pair from "./Pair.jsx";
 import SourceDrawer from "./SourceDrawer.jsx";
+import { isActive, useJobs } from "../jobs/jobs.js";
 import "./results.css";
 
 const STEPS = [
@@ -86,7 +632,12 @@ const when = (iso) => { try { return new Date(iso).toLocaleString(undefined, { d
 export default function ResultsPage() {
   const toast = useToast();
   const [jobs, setJobs] = useState(null);
+  // the app-wide job poller: keeps the list and the picked job's status current while this page is open
+  const { jobs: liveJobs } = useJobs();
+  useEffect(() => { if (!DEMO && liveJobs && jobs) setJobs(liveJobs); }, [liveJobs]); // eslint-disable-line react-hooks/exhaustive-deps
   const [jobId, setJobId] = useState(firstJob);
+  // flips when the picked job finishes, so its results load without a page refresh
+  const pickedActive = !DEMO && isActive(liveJobs?.find((j) => j.id === jobId)?.status);
   const [job, setJob] = useState(null);
   const [report, setReport] = useState(null);
   const [problem, setProblem] = useState(null); // { kind: "running" | "failed", text }
@@ -122,7 +673,7 @@ export default function ResultsPage() {
           : { kind: "failed", text: st === "cancelled" ? "This job was cancelled before it produced a dataset." : st === "failed" ? "This job failed before it produced a dataset." : e.message });
       }));
     return () => { live = false; };
-  }, [jobId]);
+  }, [jobId, pickedActive]); // eslint-disable-line react-hooks/exhaustive-deps
   // counts of the review tabs, loaded once so the steps can show progress
   useEffect(() => {
     if (!report) return;
