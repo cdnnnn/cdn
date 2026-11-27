@@ -1,89 +1,454 @@
-//jobs.js
-// Live list of every job, shared by the sidebar badge, the Jobs page and the "job finished" toasts.
-// One poller for the whole app: every 3 s while a job is queued or running, every 15 s otherwise.
-import { useCallback, useEffect, useSyncExternalStore } from "react";
-import { api, post } from "../api.js";
-import { STEP_TITLES } from "../model.js";
-import { useBus } from "../bus.js";
-import { useToast } from "../ui.jsx";
-import "./jobs.css";
+//nav.js
+// In-app navigation. Page links are "#/<page>"; a job is opened with "?job=<id>" in front of the hash.
+// Going to a page through a link (sidebar, header, buttons) drops ?job=, so Generate opens a fresh
+// New Dataset form instead of the job that was opened last. Opening a job on purpose uses go(page, { job }).
+// Each move is a real history entry, so back/forward still return to the job that was open.
+const JOB_PARAMS = ["job"];
 
-export const isActive = (s) => s === "queued" || s === "running";
-
-let state = { jobs: null, details: {}, error: null };
-const subs = new Set();
-const setState = (p) => { state = { ...state, ...p }; subs.forEach((f) => f()); };
-const subscribe = (f) => { subs.add(f); return () => subs.delete(f); };
-export const useJobs = () => useSyncExternalStore(subscribe, () => state);
-
-let timer = null;
-let running = false;
-let onFinish = null;
-
-export async function refreshJobs() {
-  if (running) return;
-  running = true;
-  clearTimeout(timer);
-  try {
-    const list = await api("/jobs");
-    const prev = state.jobs;
-    const details = { ...state.details };
-    // step-by-step progress of the jobs that are still going, and a last look at the ones that just ended
-    const ended = prev ? list.filter((j) => isActive(prev.find((x) => x.id === j.id)?.status) && !isActive(j.status)) : [];
-    await Promise.all([...list.filter((j) => isActive(j.status)), ...ended].map(async (j) => {
-      try { details[j.id] = await api(`/jobs/${encodeURIComponent(j.id)}`); } catch { /* keep the last one */ }
-    }));
-    setState({ jobs: list, details, error: null });
-    ended.forEach((j) => onFinish?.(j, details[j.id]));
-  } catch (e) {
-    setState({ jobs: state.jobs || [], error: e.message });
-  } finally {
-    running = false;
-    const busy = !state.error && (state.jobs || []).some((j) => isActive(j.status));
-    timer = setTimeout(refreshJobs, busy ? 3000 : 15000);
-  }
+export function go(route, { job } = {}) {
+  const u = new URL(location.href);
+  JOB_PARAMS.forEach((p) => u.searchParams.delete(p));
+  if (job) u.searchParams.set("job", job);
+  u.hash = `#/${route}`;
+  if (u.href === location.href) { window.dispatchEvent(new CustomEvent("slm:navigate")); return; }
+  history.pushState(null, "", u);
+  window.dispatchEvent(new CustomEvent("slm:navigate"));
 }
 
-// mounted once in the app shell: starts the poller and shows a toast when a job ends, whatever page is open
-export function JobWatcher() {
-  const toast = useToast();
+// Catches clicks on any "#/<page>" link in the app and routes them through go(), without the job.
+export function interceptPageLinks() {
+  const onClick = (e) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const a = e.target.closest?.("a[href^='#/']");
+    if (!a || a.target) return;
+    const route = a.getAttribute("href").replace(/^#\/?/, "");
+    if (!route) return; // "#/" is the landing page: let the browser handle it
+    e.preventDefault();
+    go(route);
+  };
+  document.addEventListener("click", onClick);
+  return () => document.removeEventListener("click", onClick);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//App.jsx
+// Routing: the landing page at #/ (the first screen), and the app shell with sidebar and top bar at #/generate, #/jobs and #/results.
+// Features are added one piece at a time; see README.md for the build order.
+import { useCallback, useEffect, useState } from "react";
+import { Icon } from "./ui.jsx";
+import Landing from "./Landing.jsx";
+import Sidebar from "./Sidebar.jsx";
+import { emit, lastOf, useBus } from "./bus.js";
+import GeneratePage, { STEPS } from "./generate/GeneratePage.jsx";
+import "./shell.css";
+import "./rich.css";
+import "./theme-dark.css";
+import "./fields.css";
+import ThemeToggle from "./ThemeToggle.jsx";
+import { CustomizeButton } from "./Customize.jsx";
+import ResultsPage from "./results/ResultsPage.jsx";
+import JobsPage from "./jobs/JobsPage.jsx";
+import { JobWatcher } from "./jobs/jobs.js";
+import { go, interceptPageLinks } from "./nav.js";
+
+const PAGES = {
+  generate: { label: "Generate", nav: "Generate Dataset", icon: "spark", title: "Generate Dataset",
+    sub: "Turn your documents into grounded question-and-answer pairs for fine-tuning." },
+  jobs: { label: "Jobs", nav: "Jobs", icon: "list", title: "Jobs",
+    sub: "Every dataset job and how it is doing. The list updates by itself." },
+  results: { label: "Results", nav: "Results", icon: "results", title: "Results",
+    sub: "Review the generated pairs, their scores, and download the dataset." },
+};
+// "#how" and "#features" are anchors on the landing page, so anything that is not an app page shows the landing page.
+const routeFromHash = () => { const r = (location.hash || "").replace(/^#\/?/, ""); return PAGES[r] ? r : "home"; };
+const jobFromUrl = () => new URL(location.href).searchParams.get("job") || "";
+
+export default function App() {
+  const [route, setRoute] = useState(routeFromHash);
+  // the job in the address bar when this page was reached; a new value (link, back/forward) re-opens the page fresh
+  const [urlJob, setUrlJob] = useState(jobFromUrl);
+  // bumps on every in-app link or button, so clicking the page you are on (e.g. Generate while a job is open) starts it fresh
+  const [visit, setVisit] = useState(0);
   useEffect(() => {
-    onFinish = (j, d) => {
-      const name = j.name || j.id;
-      if (j.status === "done") {
-        const n = d?.counts?.pairs_kept;
-        toast(`"${name}" finished${n != null ? `: ${Number(n).toLocaleString()} rows kept` : ""}. Open Jobs or Results to see it.`);
-      } else if (j.status === "failed") toast(`"${name}" failed${j.error ? `: ${j.error}` : ""}`, "error");
-      else if (j.status === "cancelled") toast(`"${name}" was cancelled`);
+    const h = () => { setRoute(routeFromHash()); setUrlJob(jobFromUrl()); };
+    const nav = () => { h(); setVisit((v) => v + 1); };
+    window.addEventListener("hashchange", h);
+    window.addEventListener("popstate", h);
+    window.addEventListener("slm:navigate", nav);
+    const stop = interceptPageLinks();
+    return () => { window.removeEventListener("hashchange", h); window.removeEventListener("popstate", h); window.removeEventListener("slm:navigate", nav); stop(); };
+  }, []);
+  if (route === "home") return <Landing />;
+  const page = PAGES[route];
+
+  return (
+    <div className="app">
+      <JobWatcher />
+      <Sidebar route={route} pages={PAGES} />
+
+      <main className="main">
+        <PageHeader route={route} page={page} />
+        <div className="content" key={`${route}:${urlJob}:${visit}`}>
+          {route === "generate" ? <GeneratePage openResults={() => go("results")} /> : route === "jobs" ? <JobsPage /> : <ResultsPage />}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+// Page header: breadcrumb, title and one line of context on the left; the state of the current job and actions on the right.
+function PageHeader({ route, page }) {
+  const [job, setJob] = useState(() => lastOf("job") || null);
+  useBus("job", useCallback((j) => setJob(j), []));
+  const [rjob, setRjob] = useState(() => lastOf("results-job") || null);
+  useBus("results-job", useCallback((j) => setRjob(j), []));
+  const onGen = route === "generate";
+  const open = onGen && job?.id;
+  return (
+    <header className="ph">
+      <div className="ph-main">
+        <span className="ph-ico"><Icon name={page.icon} size={20} /></span>
+        <div className="ph-t">
+          <div className="ph-crumbs">
+            <a href="#/">SLM Studio</a><Icon name="chevron" size={12} />
+            <a href={`#/${route}`}>{page.nav}</a>
+            {onGen && <><Icon name="chevron" size={12} />{open ? <span className="num">{job.id}</span> : <span>New job</span>}</>}
+            {route === "results" && rjob?.id && <><Icon name="chevron" size={12} /><span className="num">{rjob.name || rjob.id}</span></>}
+          </div>
+          <h1>{page.title}</h1>
+          <p>{open ? <>Following <b>{job.name || job.id}</b>. You can leave this page; the job keeps running on the server.</> : page.sub}</p>
+        </div>
+      </div>
+      <div className="ph-side">
+        {onGen && !open && job && (
+          <span className="ph-state">
+            <span className="ph-state-l">Draft</span>
+            <span className="ph-state-v">Step <b className="num">{(job.step ?? 0) + 1}</b> of {STEPS.length}</span>
+            <span className={`ph-state-dot ${job.ready ? "ok" : ""}`} title={job.ready ? "Ready to start" : "Something still needs your input"} />
+          </span>
+        )}
+        {open && <button type="button" className="btn" onClick={() => emit("new-job")}><Icon name="plus" size={14} />New job</button>}
+        {onGen && !open && <a className="btn ghost" href="#/results"><Icon name="results" size={14} />Results</a>}
+        {!onGen && <a className="btn" href="#/generate"><Icon name="plus" size={14} />New dataset</a>}
+        <span className="ph-sep" aria-hidden="true" />
+        <CustomizeButton />
+        <ThemeToggle />
+      </div>
+    </header>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//GeneratePage.jsx
+// Generate Dataset page: a guided, step-by-step setup with a live summary, and a progress view once a job runs.
+// Same API as the original UI (/api/datagen); the form <-> JobRequest logic is in ../model.js.
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useStepper } from "../stepper.js";
+import { API, api, post, upload } from "../api.js";
+import { QA_TEMPLATE, T_FORMATS, T_INPUTS, T_OUTPUTS, buildRequest, defaultForm, endpointsForTest, formFromRequest, isQa, visionUsed } from "../model.js";
+import { Icon, useToast } from "../ui.jsx";
+import { emit, useBus } from "../bus.js";
+import { AdvancedStep, DatasetTypeStep, DocumentsStep, MixStep, ModelsStep, SizeStep } from "./steps.jsx";
+import Summary from "./Summary.jsx";
+import RunProgress from "./RunProgress.jsx";
+import "./generate.css";
+
+export const STEPS = [
+  { key: "documents", title: "Documents", icon: "doc", lead: "Upload the files the model should learn from, and choose what happens to the pictures inside them." },
+  { key: "models", title: "Models", icon: "server", lead: "The teacher model writes and judges the Q&A pairs; the vision model reads images. Both must already be running." },
+  { key: "dataset", title: "Dataset type", icon: "layers", lead: "Choose what one training row looks like. Each card shows an example made from an HR leave-policy document." },
+  { key: "size", title: "Size & split", icon: "chart", lead: "Choose how many rows to create, and how they are shared between training and testing." },
+  { key: "mix", title: "Training mix", icon: "mix", lead: "Add extra rows next to the document Q&A, so the model stays helpful and well-behaved." },
+  { key: "advanced", title: "Advanced", icon: "gear", lead: "Everything here has sensible defaults. Change only what you need." },
+];
+
+const jobFromUrl = () => new URL(location.href).searchParams.get("job");
+
+export default function GeneratePage({ openResults }) {
+  const toast = useToast();
+  const [defaults, setDefaults] = useState(null);
+  // dataset templates: Q&A until GET /templates answers (an older server has Q&A only)
+  const [tpl, setTpl] = useState({ templates: [QA_TEMPLATE], inputs: T_INPUTS, outputs: T_OUTPUTS, formats: T_FORMATS });
+  const loadTemplates = useCallback(async () => {
+    try { const r = await api("/templates"); if (r?.templates?.length) setTpl(r); } catch { /* older server: Q&A only */ }
+  }, []);
+  useEffect(() => { loadTemplates(); }, [loadTemplates]);
+  const [form, setForm] = useState(() => defaultForm(null));
+  const [files, setFiles] = useState([]);
+  const [step, setStep] = useState(0);
+  const [ep, setEp] = useState({ state: "idle" });
+  const [models, setModels] = useState({ teacher: [], vision: [] });
+  const [jobId, setJobId] = useState(jobFromUrl);
+  // remember the previous step, so the step content slides in from the right direction
+  const prevStep = useRef(0);
+  const dir = step >= prevStep.current ? "fwd" : "back";
+  useEffect(() => { prevStep.current = step; }, [step]);
+  // the soft card behind the active step and the progress line are measured from the real step buttons
+  const [stepperRef, ind] = useStepper();
+  const [job, setJob] = useState(null);
+  const [progress, setProgress] = useState({});
+  const [starting, setStarting] = useState(false);
+  const [startErr, setStartErr] = useState("");
+  const formRef = useRef(form);
+  formRef.current = form;
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const setIn = (group, k, v) => setForm((f) => ({ ...f, [group]: { ...f[group], [k]: v } }));
+
+  // ---- start-up: defaults, and follow a job that is already running
+  useEffect(() => {
+    (async () => {
+      let d = null;
+      try { d = await api("/defaults"); } catch (e) { toast(`API not reachable: ${e.message}`, "error"); }
+      setDefaults(d || { input_roots: [] });
+      setForm(defaultForm(d));
+      // with no ?job=, pick up a job that is still running (a job only viewed on Jobs does not count)
+      if (!jobFromUrl()) {
+        try {
+          const list = await api("/jobs");
+          const active = list.find((j) => j.status === "queued" || j.status === "running");
+          if (active) setJobId(active.id);
+        } catch { /* the toast above already says the API is down */ }
+      }
+    })();
+  }, []); // eslint-disable-line
+
+  // keep ?job= in the address bar so a refresh comes back to the same job
+  useEffect(() => {
+    const u = new URL(location.href);
+    jobId ? u.searchParams.set("job", jobId) : u.searchParams.delete("job");
+    history.replaceState(null, "", u);
+  }, [jobId]);
+
+  // ---- the selected job and its live progress (server-sent events)
+  const refreshJob = useCallback(async (id) => {
+    if (!id) return;
+    try { setJob(await api(`/jobs/${id}`)); } catch (e) { if (e.status === 404) setJobId(null); }
+  }, []);
+  useEffect(() => { setJob(null); setProgress({}); if (jobId) refreshJob(jobId); }, [jobId, refreshJob]);
+  useEffect(() => {
+    if (!jobId) return undefined;
+    const es = new EventSource(`${API}/jobs/${encodeURIComponent(jobId)}/events`);
+    let t;
+    es.onmessage = (m) => {
+      const ev = JSON.parse(m.data);
+      if (ev.type === "end") { es.close(); refreshJob(jobId); return; }
+      if (ev.type === "step_progress") setProgress((p) => ({ ...p, [ev.step]: { done: ev.done, total: ev.total } }));
+      else { clearTimeout(t); t = setTimeout(() => refreshJob(jobId), 250); }
     };
-    refreshJobs();
-    return () => { onFinish = null; clearTimeout(timer); };
-  }, [toast]);
-  // the Generate page says when it starts, cancels or retries a job: look again right away
-  useBus("jobs-changed", useCallback(() => { setTimeout(refreshJobs, 400); }, []));
-  return null;
+    return () => { clearTimeout(t); es.close(); };
+  }, [jobId, refreshJob]);
+
+  // ---- endpoints: test now, and again whenever an endpoint setting changes
+  const testSeq = useRef(0);
+  const testEndpoints = useCallback(async (f = formRef.current) => {
+    if (!f.teacherUrl.trim()) { setEp({ state: "done", message: "Enter the teacher URL.", bad: true }); return; }
+    const seq = ++testSeq.current;
+    setEp((e) => ({ ...e, state: "testing" }));
+    try {
+      const res = await post("/endpoints/test", { endpoints: endpointsForTest(f) });
+      if (seq !== testSeq.current) return;
+      const t = res.find((x) => x.role === "teacher"), v = res.find((x) => x.role === "vision");
+      setModels({ teacher: t?.models || [], vision: v?.models || [] });
+      const pick = (list, re) => list.find((m) => re.test(m)) || list[0];
+      setForm((cur) => {
+        const next = { ...cur };
+        if (t?.ok && t.models.length && !t.models.includes(cur.teacherModel)) next.teacherModel = pick(t.models, /^(?!.*(vl|vision)).*/i);
+        if (v?.ok && v.models.length && !v.models.includes(cur.visionModel)) next.visionModel = pick(v.models, /vl|vision/i);
+        return next;
+      });
+      const why = (x, role) => (x.ok ? (x.models.length ? "" : `${role}: no models served`) : `${role}: ${x.error || "not reachable"}`);
+      const problems = [why(t, "Teacher"), v ? why(v, "Vision") : visionUsed(f) ? "Vision: enter the URL, or turn vision analysis off" : ""].filter(Boolean);
+      setEp({ state: "done", teacher: t, vision: v, message: problems.join(" · "), bad: problems.length > 0 });
+    } catch (e) {
+      if (seq === testSeq.current) setEp({ state: "done", message: `Test failed: ${e.message}`, bad: true });
+    }
+  }, []);
+  const epKey = [form.teacherUrl, form.visionUrl, form.apiKey, visionUsed(form)].join("|");
+  const firstTest = useRef(true);
+  useEffect(() => {
+    if (!defaults) return undefined;
+    const t = setTimeout(() => testEndpoints(), firstTest.current ? 0 : 700);
+    firstTest.current = false;
+    return () => clearTimeout(t);
+  }, [epKey, defaults, testEndpoints]);
+
+  // ---- what is missing before a job can start
+  const folders = form.folders.split(/\n/).map((s) => s.trim()).filter(Boolean);
+  const issues = [];
+  if (!files.length && !folders.length) issues.push({ step: 0, text: "Add documents: upload files or enter a server folder." });
+  try { buildRequest(form, ["check"]); } catch (e) {
+    const m = e.message;
+    const key = /endpoint|vision/i.test(m) ? "models" : /split/i.test(m) ? "size" : /question types|template|input|output|label|json|variety|checks/i.test(m) ? "dataset"
+      : /decline|paraphrase|general/i.test(m) ? "mix" : "advanced";
+    issues.push({ step: STEPS.findIndex((x) => x.key === key), text: m });
+  }
+
+  // ---- actions
+  const startJob = async (preview) => {
+    setStartErr("");
+    if (issues.length) { setStep(issues[0].step); setStartErr(issues[0].text); return; }
+    setStarting(true);
+    try {
+      const list = [...folders];
+      if (files.length) list.unshift((await upload(files)).folder);
+      const res = await post(`/jobs${preview ? "?preview=3" : ""}`, buildRequest(form, list));
+      setFiles([]);
+      toast(`Job ${res.job_id} started${preview ? " (preview on 3 chunks)" : ""}`);
+      setJobId(res.job_id);
+    } catch (e) {
+      setStartErr(e.message);
+    } finally { setStarting(false); }
+  };
+  const cancelJob = async () => { await post(`/jobs/${jobId}/cancel`); toast("Cancel requested: the job stops after the current item"); };
+  const retryJob = async () => { await post(`/jobs/${jobId}/retry`); toast("Job re-queued: finished steps are skipped"); setProgress({}); refreshJob(jobId); };
+  const newJob = () => { setJobId(null); setStep(0); setStartErr(""); };
+  const reuseSettings = () => { if (job) { setForm(formFromRequest(job.request, defaults)); toast(`Settings of ${job.job_id} loaded`); } newJob(); };
+  const resetForm = () => { setForm(defaultForm(defaults)); toast("Settings reset to the defaults"); };
+
+  // ---- tell the sidebar and header what is going on, and listen to them
+  const vUsed = visionUsed(form);
+  useEffect(() => { emit("ep", { ...ep, teacherModel: form.teacherModel, visionModel: vUsed ? form.visionModel : "" }); }, [ep, form.teacherModel, form.visionModel, vUsed]);
+  useEffect(() => { emit("job", { id: jobId, name: job?.name || job?.request?.name, status: job?.status, step, ready: issues.length === 0 }); });
+  useEffect(() => { emit("jobs-changed"); }, [jobId, job?.status]);
+  useBus("open-job", useCallback((id) => { setStartErr(""); setJobId(id); }, []));
+  useBus("new-job", useCallback(() => { setJobId(null); setStep(0); setStartErr(""); }, []));
+  useBus("retest", useCallback(() => testEndpoints(), [testEndpoints]));
+
+  if (jobId) {
+    return <RunProgress job={job} jobId={jobId} progress={progress} onCancel={cancelJob} onRetry={retryJob}
+      onNew={newJob} onReuse={reuseSettings} openResults={openResults} />;
+  }
+
+  const stepProps = { form, set, setIn, setForm, files, setFiles, defaults, ep, models, testEndpoints, onReset: resetForm, tpl, reloadTemplates: loadTemplates, goStep: setStep };
+  const cur = STEPS[step];
+  const status = stepStatus(form, files, folders, ep);
+  return (
+    <div className="gen">
+      <nav className="stepper" aria-label="Setup steps" ref={stepperRef} style={{ "--p": step / (STEPS.length - 1) }}>
+        <span className="stp-progress" aria-hidden="true"><i style={ind ? { width: ind.end } : undefined} /></span>
+        {ind && <span className="stp-ind" aria-hidden="true" style={{ transform: `translate(${ind.left}px, ${ind.top}px)`, width: ind.width, height: ind.height }} />}
+        {STEPS.map((s, i) => {
+          const st = status[s.key];
+          return (
+            <button type="button" key={s.key} className={`stp${i === step ? " on" : ""}${st.ok ? " ok" : ""}${st.warn ? " attn" : ""}`} onClick={() => setStep(i)}>
+              <span className="stp-n">{st.ok && i !== step ? <Icon name="check" size={14} stroke={2.6} className="pop" /> : <span className="pop">{i + 1}</span>}</span>
+              <span className="stp-t"><b>{s.title}</b><small>{st.note}</small></span>
+            </button>
+          );
+        })}
+      </nav>
+
+      <div className="gen-grid">
+        <section className="card gen-main">
+          <header className={`gen-hd anim-${dir}`} key={`hd${step}`}>
+            <span className="gen-hd-ico"><Icon name={cur.icon} size={20} /></span>
+            <div className="gen-hd-t">
+              <div className="gen-hd-meta">
+                <span className="step-n">Step {step + 1} of {STEPS.length}</span>
+                <span className="step-dots" aria-hidden="true">{STEPS.map((s2, i) => <i key={s2.key} className={i < step ? "done" : i === step ? "on" : ""} />)}</span>
+              </div>
+              <h2>{cur.title}</h2><p>{cur.lead}</p>
+            </div>
+          </header>
+          <div className={`gen-bd anim-${dir}`} key={`bd${step}`}>
+            {cur.key === "documents" && <DocumentsStep {...stepProps} />}
+            {cur.key === "models" && <ModelsStep {...stepProps} />}
+            {cur.key === "dataset" && <DatasetTypeStep {...stepProps} />}
+            {cur.key === "size" && <SizeStep {...stepProps} />}
+            {cur.key === "mix" && <MixStep {...stepProps} />}
+            {cur.key === "advanced" && <AdvancedStep {...stepProps} />}
+          </div>
+          <footer className="gen-ft">
+            <button type="button" className="btn ghost" disabled={step === 0} onClick={() => setStep(step - 1)}><Icon name="back" size={15} />Back</button>
+            <div className="grow" />
+            {step < STEPS.length - 1
+              ? <button type="button" className="btn primary next" onClick={() => setStep(step + 1)}>Next: {STEPS[step + 1].title}<Icon name="arrow" size={15} /></button>
+              : <button type="button" className="btn primary" disabled={starting} onClick={() => startJob(false)}><Icon name="play" size={13} />{starting ? "Starting…" : "Start job"}</button>}
+          </footer>
+        </section>
+
+        <Summary form={form} files={files} folders={folders} ep={ep} issues={issues} starting={starting} startErr={startErr}
+          onStart={startJob} goStep={setStep} />
+      </div>
+    </div>
+  );
 }
 
-// ---- small helpers for the page
-export const stepTitleOf = (key) => STEP_TITLES.find(([k]) => k === key)?.[1] || key || "";
-
-// how far a job is: { done, total, pct, label }
-export function progressOf(j, d) {
-  const steps = d?.steps?.length ? d.steps : null;
-  const total = steps ? steps.length : STEP_TITLES.length;
-  if (j.status === "done") return { done: total, total, pct: 100, label: "All steps done" };
-  let done;
-  if (steps) done = steps.filter((s) => s.status === "done" || s.status === "skipped").length;
-  else done = Math.max(0, STEP_TITLES.findIndex(([k]) => k === j.current_step));
-  const pct = Math.round((100 * done) / total);
-  if (j.status === "queued") return { done, total, pct, label: "Waiting to start" };
-  const cur = stepTitleOf(j.current_step);
-  if (j.status === "running") return { done, total, pct, label: `Step ${Math.min(done + 1, total)} of ${total}${cur ? ` · ${cur}` : ""}` };
-  return { done, total, pct, label: `Stopped at step ${Math.min(done + 1, total)} of ${total}${cur ? ` · ${cur}` : ""}` };
+function stepStatus(form, files, folders, ep) {
+  const n = files.length + folders.length;
+  const split = form.split.reduce((a, b) => a + (Number(b) || 0), 0);
+  const extras = [form.para.enabled, form.decline.enabled, form.general.enabled].filter(Boolean).length;
+  const epOk = ep.state === "done" && !ep.bad;
+  return {
+    documents: n ? { ok: true, note: [files.length && `${files.length} file${files.length > 1 ? "s" : ""}`, folders.length && `${folders.length} folder${folders.length > 1 ? "s" : ""}`].filter(Boolean).join(" · ") } : { note: "Add your files" },
+    models: ep.state === "testing" ? { note: "Testing…" } : epOk ? { ok: true, note: "Endpoints online" } : { warn: ep.state === "done", note: ep.state === "done" ? "Check the endpoints" : "Not tested yet" },
+    dataset: form.template?.input === "question" && !form.types.length ? { warn: true, note: "Pick a kind of question" }
+      : { ok: true, note: isQa(form.template) ? `Q&A · ${form.types.length} kind${form.types.length > 1 ? "s" : ""}` : form.template.name },
+    size: split !== 100 ? { warn: true, note: "Split must total 100" }
+      : { ok: true, note: `Up to ${Number(form.maxPairs || 0).toLocaleString()} ${isQa(form.template) ? "pairs" : "rows"}` },
+    mix: { ok: true, note: extras ? `${extras} extra${extras > 1 ? "s" : ""} on` : "No extras" },
+    advanced: { ok: false, note: "Optional" },
+  };
 }
 
-export const cancelJob = (id) => post(`/jobs/${encodeURIComponent(id)}/cancel`);
-export const retryJob = (id) => post(`/jobs/${encodeURIComponent(id)}/retry`);
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -107,6 +472,7 @@ export const retryJob = (id) => post(`/jobs/${encodeURIComponent(id)}/retry`);
 import { useEffect, useState } from "react";
 import { Icon, useToast } from "../ui.jsx";
 import { emit } from "../bus.js";
+import { go } from "../nav.js";
 import { cancelJob, isActive, progressOf, refreshJobs, retryJob, useJobs } from "./jobs.js";
 
 const STATUS = {
@@ -141,11 +507,8 @@ function took(ms) {
 }
 
 const openOn = (route, id) => {
-  const u = new URL(location.href);
-  u.searchParams.set("job", id);
   if (route === "results") localStorage.setItem("slm-results-job", id);
-  u.hash = `#/${route}`;
-  location.href = u.toString();
+  go(route, { job: id });
 };
 
 export default function JobsPage() {
@@ -277,319 +640,6 @@ function JobRow({ j, d }) {
 
 
 
-//jobs.css
-/* Jobs page: status tiles, filter bar and the live list of jobs. Colours come from the theme tokens,
-   so every palette and light/dark mode work; the "in progress" colour is the palette accent. */
-.jobs { display: grid; gap: 18px; max-width: 1360px; margin: 0 auto; }
-
-/* ---- status tiles (also filters) */
-.jb-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-.jb-stat { --c: var(--accent-600); --bg: var(--accent-50); display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-radius: 14px;
-  border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow-xs); cursor: pointer; text-align: left; font: inherit; color: var(--ink);
-  transition: border-color .15s, box-shadow .2s, transform .2s; }
-.jb-stat:hover { transform: translateY(-1px); border-color: var(--line-strong); }
-.jb-stat.on { border-color: var(--c); box-shadow: 0 0 0 1px var(--c), var(--shadow-xs); }
-.jb-stat.ok { --c: var(--green-600); --bg: var(--green-50); }
-.jb-stat.bad { --c: var(--red); --bg: var(--red-50); }
-.jb-stat.off { --c: var(--muted); --bg: var(--surface-3); }
-.jb-stat-ico { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; background: var(--bg); color: var(--c); flex: none; }
-.jb-stat b { display: block; font-size: 22px; font-weight: 700; line-height: 1.1; }
-.jb-stat small { font-size: 12.5px; color: var(--muted); font-weight: 550; }
-
-/* ---- list card */
-.jb-card { padding: 0; overflow: hidden; }
-.jb-bar { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line-2); flex-wrap: wrap; }
-.jb-bar .search input { width: 200px !important; }
-.jb-note { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 16px; font-size: 13px; color: var(--muted); background: var(--surface-2); border-bottom: 1px solid var(--line-2); }
-.jb-note.bad { color: var(--red); background: var(--red-50); }
-
-.jb-list { list-style: none; margin: 0; padding: 0; }
-.jb-row { --c: var(--accent); display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 16px; border-bottom: 1px solid var(--line-2);
-  position: relative; animation: jb-in .35s cubic-bezier(.22, 1, .36, 1) both; }
-.jb-row:last-child { border-bottom: 0; }
-.jb-row::before { content: ""; position: absolute; left: 0; top: 12px; bottom: 12px; width: 3px; border-radius: 0 3px 3px 0; background: var(--c); opacity: .9; }
-.jb-row:hover { background: var(--surface-2); }
-.jb-row.ok { --c: var(--green); }
-.jb-row.bad { --c: var(--red); }
-.jb-row.off, .jb-row.wait { --c: var(--line-strong); }
-@keyframes jb-in { from { opacity: 0; transform: translateY(4px); } }
-
-.jb-ico { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-50); color: var(--accent-600); }
-.jb-row.ok .jb-ico { background: var(--green-50); color: var(--green-600); }
-.jb-row.bad .jb-ico { background: var(--red-50); color: var(--red); }
-.jb-row.off .jb-ico, .jb-row.wait .jb-ico { background: var(--surface-3); color: var(--muted); }
-.spin-slow { animation: jb-spin 1.6s linear infinite; }
-@keyframes jb-spin { to { transform: rotate(360deg); } }
-
-.jb-main { display: grid; gap: 6px; min-width: 0; }
-.jb-top { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
-.jb-name { font-size: 15px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 360px; }
-.jb-id { font-family: var(--mono); font-size: 12px; color: var(--muted); }
-.jb-mode { font-size: 11.5px; font-weight: 600; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
-.jb-status { --c: var(--accent-600); --bg: var(--accent-50); display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-size: 12.5px; font-weight: 650;
-  padding: 2px 10px; border-radius: 99px; color: var(--c); background: var(--bg); }
-.jb-status i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-.jb-status.run i { animation: pulse 1.6s infinite; }
-.jb-status.ok { --c: var(--green-600); --bg: var(--green-50); }
-.jb-status.bad { --c: var(--red); --bg: var(--red-50); }
-.jb-status.off, .jb-status.wait { --c: var(--muted); --bg: var(--surface-3); }
-
-.jb-meta { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 13px; color: var(--muted); }
-.jb-meta span { display: inline-flex; align-items: center; gap: 5px; }
-.jb-meta b { color: var(--ink-2); }
-.jb-prog { display: grid; grid-template-columns: minmax(120px, 360px) 36px minmax(0, 1fr); align-items: center; gap: 10px; }
-.jb-track { height: 6px; border-radius: 99px; background: var(--line-2); overflow: hidden; }
-.jb-track i { display: block; height: 100%; border-radius: 99px; background: var(--grad); transition: width .6s cubic-bezier(.22, 1, .36, 1); }
-.jb-row.run .jb-track i { background-size: 200% 100%; animation: jb-flow 2.2s linear infinite; }
-.jb-row.ok .jb-track i { background: var(--green); }
-.jb-row.bad .jb-track i { background: var(--red); }
-.jb-row.off .jb-track i, .jb-row.wait .jb-track i { background: var(--line-strong); }
-@keyframes jb-flow { to { background-position: -200% 0; } }
-.jb-prog-t { font-size: 12.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.jb-pct { font-size: 12.5px; font-weight: 650; color: var(--ink-2); text-align: right; }
-.jb-err { margin: 0; font-size: 12.5px; color: var(--red); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.jb-acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-
-.jb-empty { display: grid; justify-items: center; gap: 6px; padding: 48px 20px; text-align: center; color: var(--muted); }
-.jb-empty b { color: var(--ink); font-size: 15px; }
-.jb-empty .btn { margin-top: 8px; }
-.jb-empty-ico { width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center; background: var(--accent-50); color: var(--accent-600); }
-.jb-empty .spin { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--accent); animation: jb-spin .8s linear infinite; }
-
-@media (max-width: 1100px) {
-  .jb-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .jb-row { grid-template-columns: auto minmax(0, 1fr); }
-  .jb-acts { grid-column: 2; justify-content: flex-start; }
-}
-@media (prefers-reduced-motion: reduce) { .spin-slow, .jb-row.run .jb-track i, .jb-row { animation: none; } }
-
-/* ---- sidebar: running-jobs badge on the Jobs item */
-.sb-badge { margin-left: auto; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 99px; display: inline-grid; place-items: center; font-size: 11.5px; font-weight: 700;
-  color: #fff; background: var(--grad); box-shadow: 0 2px 6px -2px rgba(var(--accent-rgb), .6); animation: sb-badge-in .3s cubic-bezier(.22, 1, .36, 1); }
-@keyframes sb-badge-in { from { transform: scale(.4); opacity: 0; } }
-aside.sidebar.is-collapsed .sb-badge { position: absolute; top: 5px; left: 34px; min-width: 16px; height: 16px; padding: 0 4px; font-size: 10px; margin: 0;
-  box-shadow: 0 0 0 2px var(--surface); }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-  
-
-
-//App.jsx
-// Routing: the landing page at #/ (the first screen), and the app shell with sidebar and top bar at #/generate, #/jobs and #/results.
-// Features are added one piece at a time; see README.md for the build order.
-import { useCallback, useEffect, useState } from "react";
-import { Icon } from "./ui.jsx";
-import Landing from "./Landing.jsx";
-import Sidebar from "./Sidebar.jsx";
-import { emit, lastOf, useBus } from "./bus.js";
-import GeneratePage, { STEPS } from "./generate/GeneratePage.jsx";
-import "./shell.css";
-import "./rich.css";
-import "./theme-dark.css";
-import "./fields.css";
-import ThemeToggle from "./ThemeToggle.jsx";
-import { CustomizeButton } from "./Customize.jsx";
-import ResultsPage from "./results/ResultsPage.jsx";
-import JobsPage from "./jobs/JobsPage.jsx";
-import { JobWatcher } from "./jobs/jobs.js";
-
-const PAGES = {
-  generate: { label: "Generate", nav: "Generate Dataset", icon: "spark", title: "Generate Dataset",
-    sub: "Turn your documents into grounded question-and-answer pairs for fine-tuning." },
-  jobs: { label: "Jobs", nav: "Jobs", icon: "list", title: "Jobs",
-    sub: "Every dataset job and how it is doing. The list updates by itself." },
-  results: { label: "Results", nav: "Results", icon: "results", title: "Results",
-    sub: "Review the generated pairs, their scores, and download the dataset." },
-};
-// "#how" and "#features" are anchors on the landing page, so anything that is not an app page shows the landing page.
-const routeFromHash = () => { const r = (location.hash || "").replace(/^#\/?/, ""); return PAGES[r] ? r : "home"; };
-
-export default function App() {
-  const [route, setRoute] = useState(routeFromHash);
-  useEffect(() => {
-    const h = () => setRoute(routeFromHash());
-    window.addEventListener("hashchange", h);
-    return () => window.removeEventListener("hashchange", h);
-  }, []);
-  if (route === "home") return <Landing />;
-  const page = PAGES[route];
-
-  return (
-    <div className="app">
-      <JobWatcher />
-      <Sidebar route={route} pages={PAGES} />
-
-      <main className="main">
-        <PageHeader route={route} page={page} />
-        <div className="content" key={route}>
-          {route === "generate" ? <GeneratePage openResults={() => { location.hash = "#/results"; }} /> : route === "jobs" ? <JobsPage /> : <ResultsPage />}
-        </div>
-      </main>
-    </div>
-  );
-}
-
-// Page header: breadcrumb, title and one line of context on the left; the state of the current job and actions on the right.
-function PageHeader({ route, page }) {
-  const [job, setJob] = useState(() => lastOf("job") || null);
-  useBus("job", useCallback((j) => setJob(j), []));
-  const [rjob, setRjob] = useState(() => lastOf("results-job") || null);
-  useBus("results-job", useCallback((j) => setRjob(j), []));
-  const onGen = route === "generate";
-  const open = onGen && job?.id;
-  return (
-    <header className="ph">
-      <div className="ph-main">
-        <span className="ph-ico"><Icon name={page.icon} size={20} /></span>
-        <div className="ph-t">
-          <div className="ph-crumbs">
-            <a href="#/">SLM Studio</a><Icon name="chevron" size={12} />
-            <a href={`#/${route}`}>{page.nav}</a>
-            {onGen && <><Icon name="chevron" size={12} />{open ? <span className="num">{job.id}</span> : <span>New job</span>}</>}
-            {route === "results" && rjob?.id && <><Icon name="chevron" size={12} /><span className="num">{rjob.name || rjob.id}</span></>}
-          </div>
-          <h1>{page.title}</h1>
-          <p>{open ? <>Following <b>{job.name || job.id}</b>. You can leave this page; the job keeps running on the server.</> : page.sub}</p>
-        </div>
-      </div>
-      <div className="ph-side">
-        {onGen && !open && job && (
-          <span className="ph-state">
-            <span className="ph-state-l">Draft</span>
-            <span className="ph-state-v">Step <b className="num">{(job.step ?? 0) + 1}</b> of {STEPS.length}</span>
-            <span className={`ph-state-dot ${job.ready ? "ok" : ""}`} title={job.ready ? "Ready to start" : "Something still needs your input"} />
-          </span>
-        )}
-        {open && <button type="button" className="btn" onClick={() => emit("new-job")}><Icon name="plus" size={14} />New job</button>}
-        {onGen && !open && <a className="btn ghost" href="#/results"><Icon name="results" size={14} />Results</a>}
-        {!onGen && <a className="btn" href="#/generate"><Icon name="plus" size={14} />New dataset</a>}
-        <span className="ph-sep" aria-hidden="true" />
-        <CustomizeButton />
-        <ThemeToggle />
-      </div>
-    </header>
-  );
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-//Sidebar.jsx
-// Sidebar: the logo, the pages (Jobs shows how many jobs are in progress) and the signed-in user. It can be collapsed to icons only; the choice is remembered.
-import { useEffect, useRef, useState } from "react";
-import { openCustomize } from "./Customize.jsx";
-import { Icon, useToast } from "./ui.jsx";
-import Logo from "./Logo.jsx";
-import { isActive, useJobs } from "./jobs/jobs.js";
-import "./sidebar.css";
-
-const KEY = "slm-sidebar";
-// a dummy user until sign-in exists
-const USER = { name: "Prakash", role: "AI Department", initials: "P" };
-
-export default function Sidebar({ route, pages }) {
-  const { jobs } = useJobs();
-  const active = (jobs || []).filter((j) => isActive(j.status)).length;
-  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(KEY) === "collapsed");
-  useEffect(() => { localStorage.setItem(KEY, collapsed ? "collapsed" : "open"); }, [collapsed]);
-  // keyboard shortcut: Ctrl/Cmd + B toggles the sidebar
-  useEffect(() => {
-    const k = (e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") { e.preventDefault(); setCollapsed((c) => !c); } };
-    window.addEventListener("keydown", k);
-    return () => window.removeEventListener("keydown", k);
-  }, []);
-
-  return (
-    <aside className={`sidebar${collapsed ? " is-collapsed" : ""}`}>
-      <div className="sb-top">
-        <a className="sb-brand" href="#/" title="Back to the home page"><Logo size={42} /></a>
-      </div>
-      <button type="button" className="sb-toggle" onClick={() => setCollapsed((c) => !c)}
-        aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!collapsed} data-tip={collapsed ? "Expand (Ctrl+B)" : "Collapse (Ctrl+B)"}>
-        <Icon name="chevron" size={14} stroke={2.2} />
-      </button>
-
-      <nav className="sb-nav" style={{ "--i": Math.max(0, Object.keys(pages).indexOf(route)) }}>
-        <span className="sb-ind" aria-hidden="true" />
-        {Object.entries(pages).map(([k, p]) => (
-          <a key={k} className={route === k ? "on" : ""} href={`#/${k}`} data-tip={k === "jobs" && active ? `${p.nav} · ${active} in progress` : p.nav}
-            aria-label={k === "jobs" && active ? `${p.nav}, ${active} in progress` : p.nav}>
-            <span className="sb-nav-ico"><Icon name={p.icon} size={17} /></span><span className="sb-label">{p.nav}</span>
-            {k === "jobs" && active > 0 && <span className="sb-badge num" title={`${active} job${active > 1 ? "s" : ""} in progress`}>{active}</span>}
-          </a>
-        ))}
-      </nav>
-
-      <UserCard collapsed={collapsed} />
-    </aside>
-  );
-}
-
-function UserCard({ collapsed }) {
-  const toast = useToast();
-  const [open, setOpen] = useState(false);
-  const ref = useRef(null);
-  useEffect(() => {
-    if (!open) return undefined;
-    const h = (e) => { if (!ref.current?.contains(e.target)) setOpen(false); };
-    const k = (e) => { if (e.key === "Escape") setOpen(false); };
-    document.addEventListener("mousedown", h); document.addEventListener("keydown", k);
-    return () => { document.removeEventListener("mousedown", h); document.removeEventListener("keydown", k); };
-  }, [open]);
-  const demo = (what) => { setOpen(false); toast(`${what} is not available in this demo yet`); };
-  return (
-    <div className="sb-user" ref={ref}>
-      {open && (
-        <div className="sb-user-menu" role="menu">
-          <div className="sb-user-menu-h"><span className="sb-avatar sm">{USER.initials}</span><div><b>{USER.name}</b><small>{USER.role}</small></div></div>
-          <button type="button" role="menuitem" onClick={() => demo("Your profile")}><Icon name="eye" size={15} />Your profile</button>
-          <button type="button" role="menuitem" onClick={() => { setOpen(false); openCustomize(); }}><Icon name="palette" size={15} />Customize</button>
-          <div className="sb-user-sep" />
-          <button type="button" role="menuitem" className="danger" onClick={() => demo("Sign out")}><Icon name="back" size={15} />Sign out</button>
-        </div>
-      )}
-      <button type="button" className={`sb-user-btn${open ? " on" : ""}`} onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open}
-        data-tip={collapsed && !open ? USER.name : undefined}>
-        <span className="sb-avatar">{USER.initials}<i className="sb-online" aria-label="Online" /></span>
-        <span className="sb-user-t sb-label"><b>{USER.name}</b><small>{USER.role}</small></span>
-        <span className="sb-user-chev sb-label"><Icon name="chevron" size={14} /></span>
-      </button>
-    </div>
-  );
-}
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -604,6 +654,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { useStepper } from "../stepper.js";
 import { api, DEMO, fileUrl, post } from "./source.js";
 import { emit } from "../bus.js";
+import { go } from "../nav.js";
 import { fmtN } from "../model.js";
 import { Empty, Icon, useBusy, useToast } from "../ui.jsx";
 import { Bars, Funnel, ImagePath, ScoreStacks, SplitTable, StackBar, TypeDonut, useCount } from "./Insights.jsx";
@@ -684,7 +735,7 @@ export default function ResultsPage() {
   // the soft card behind the active step and the progress line are measured from the real step buttons
   const [stepperRef, ind] = useStepper();
 
-  const openGenerate = (id) => { const u = new URL(location.href); id ? u.searchParams.set("job", id) : u.searchParams.delete("job"); u.hash = "#/generate"; location.href = u.toString(); };
+  const openGenerate = (id) => go("generate", { job: id });
   const onCounts = useCallback((c) => setCounts(c), []);
   const ready = !!report;
   const cur = STEPS[step];
